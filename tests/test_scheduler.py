@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -31,13 +31,13 @@ def _write_config(tmp_path, cron_schedule: str) -> str:
 
 
 def test_seconds_until_next_run_is_positive_and_bounded():
-    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    now = datetime(2026, 1, 1, tzinfo=UTC)
     seconds = scheduler._seconds_until_next_run("0 3 * * *", now)
     assert 0 < seconds <= 24 * 3600
 
 
 def test_seconds_until_next_run_at_exact_schedule_time_is_about_a_day():
-    now = datetime(2026, 1, 1, 3, 0, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 1, 1, 3, 0, 0, tzinfo=UTC)
     seconds = scheduler._seconds_until_next_run("0 3 * * *", now)
     assert seconds == pytest.approx(24 * 3600, abs=1)
 

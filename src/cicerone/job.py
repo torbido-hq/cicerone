@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from cicerone.config import load_settings
 from cicerone.dataset import build_dataset
@@ -31,10 +31,12 @@ def run() -> None:
     users = source.read_users()
     items = source.read_items()
 
-    logger.info("Loaded %d events, %s users, %s items",
-                len(events),
-                len(users) if users is not None else "n/a",
-                len(items) if items is not None else "n/a")
+    logger.info(
+        "Loaded %d events, %s users, %s items",
+        len(events),
+        len(users) if users is not None else "n/a",
+        len(items) if items is not None else "n/a",
+    )
 
     built = build_dataset(events, users, items, feature_config, half_life_days=settings.half_life_days)
 
@@ -44,7 +46,7 @@ def run() -> None:
     sink.write_recommendations(recommendations)
 
     manifest = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "n_events": int(len(events)),
         "n_target_users": len(target_users),
         "n_users_with_recommendations": int(recommendations["user_id"].nunique()),

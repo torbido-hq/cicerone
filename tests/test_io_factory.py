@@ -38,4 +38,3 @@ def test_build_output_sink_unknown_kind_raises():
     settings = IOSettings(kind="carrier-pigeon", options={})
     with pytest.raises(ValueError, match="Unknown output kind"):
         build_output_sink(settings)
-

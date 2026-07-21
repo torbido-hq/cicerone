@@ -9,8 +9,8 @@ from moto import mock_aws
 
 from cicerone.io.dataset_store import DatasetInputSource, DatasetOutputSink
 
-
 # --- local backend -----------------------------------------------------------
+
 
 def test_local_backend_round_trip(tmp_path):
     options = {"storage_backend": "local", "path": str(tmp_path)}
@@ -69,6 +69,7 @@ def test_s3_backend_missing_required_option_raises(missing_key):
 
 # --- s3 backend (mocked) ------------------------------------------------------
 
+
 @pytest.fixture
 def s3_options():
     with mock_aws():
@@ -121,4 +122,3 @@ def test_s3_backend_no_prefix_writes_flat_key(s3_options):
     client = boto3.client("s3", region_name="us-east-1")
     body = client.get_object(Bucket=flat_options["bucket"], Key="manifest.json")["Body"].read()
     assert json.loads(body) == {"ok": True}
-

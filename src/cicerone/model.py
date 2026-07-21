@@ -20,7 +20,9 @@ logger = logging.getLogger(__name__)
 RANDOM_STATE = 42
 
 
-def _recommendable_item_ids(items: pd.DataFrame | None, filter_columns: list[str], all_item_ids: pd.Index) -> list:
+def _recommendable_item_ids(
+    items: pd.DataFrame | None, filter_columns: list[str], all_item_ids: pd.Index
+) -> list:
     if items is None or not filter_columns:
         return list(all_item_ids)
     mask = pd.Series(True, index=items.index)
@@ -60,8 +62,11 @@ def train_and_recommend(
     warm_users = [u for u in target_users if u in known_users]
     cold_users = [u for u in target_users if u not in known_users]
     if cold_users:
-        logger.info("%d/%d users have no usable signal yet; falling back to popularity for them",
-                    len(cold_users), len(target_users))
+        logger.info(
+            "%d/%d users have no usable signal yet; falling back to popularity for them",
+            len(cold_users),
+            len(target_users),
+        )
 
     personalized = pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score])
     if warm_users:

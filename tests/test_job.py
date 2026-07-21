@@ -45,7 +45,13 @@ def test_job_run_end_to_end_with_local_dataset_backend(tmp_path, monkeypatch):
         [
             {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 2, "occurred_at": now},
             {"user_id": "u1", "item_id": "i2", "event_type": "view", "quantity": 1, "occurred_at": now},
-            {"user_id": "u2", "item_id": "i1", "event_type": "review_positive", "quantity": 1, "occurred_at": now},
+            {
+                "user_id": "u2",
+                "item_id": "i1",
+                "event_type": "review_positive",
+                "quantity": 1,
+                "occurred_at": now,
+            },
             {"user_id": "u2", "item_id": "i3", "event_type": "saved", "quantity": 1, "occurred_at": now},
         ]
     )
@@ -80,5 +86,5 @@ def test_job_run_raises_and_logs_on_failure(tmp_path, monkeypatch, caplog):
 
     import pytest
 
-    with pytest.raises(Exception):
+    with pytest.raises(FileNotFoundError):
         job.run()

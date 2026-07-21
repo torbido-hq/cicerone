@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import pandas as pd
+from rectools import Columns
 
 from cicerone.dataset import build_dataset
 from cicerone.model import _recommendable_item_ids, train_and_recommend
-from rectools import Columns
 
 
 def _synthetic_events() -> pd.DataFrame:
@@ -18,7 +18,15 @@ def _synthetic_events() -> pd.DataFrame:
     }
     for user, items in interactions.items():
         for item in items:
-            rows.append({"user_id": user, "item_id": item, "event_type": "purchase", "quantity": 1, "occurred_at": now})
+            rows.append(
+                {
+                    "user_id": user,
+                    "item_id": item,
+                    "event_type": "purchase",
+                    "quantity": 1,
+                    "occurred_at": now,
+                }
+            )
     return pd.DataFrame(rows)
 
 
@@ -49,7 +57,9 @@ def test_train_and_recommend_respects_top_k_and_availability_filter(sample_items
     events = _synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
 
-    recommendations = train_and_recommend(built, target_users=["u1", "u2", "u3"], config=feature_config, top_k=2)
+    recommendations = train_and_recommend(
+        built, target_users=["u1", "u2", "u3"], config=feature_config, top_k=2
+    )
 
     assert set(recommendations[Columns.User]) == {"u1", "u2", "u3"}
     assert (recommendations.groupby(Columns.User).size() <= 2).all()
@@ -58,15 +68,15 @@ def test_train_and_recommend_respects_top_k_and_availability_filter(sample_items
     assert set(recommendations["source"]) <= {"personalized", "popular_fallback"}
 
 
-def test_train_and_recommend_falls_back_to_popularity_for_cold_users(sample_items, feature_config, sample_users):
+def test_train_and_recommend_falls_back_to_popularity_for_cold_users(
+    sample_items, feature_config, sample_users
+):
     events = _synthetic_events()
     # u4 has features but never interacts -> rectools still knows it via
     # features (hybrid cold-start) and can produce personalized recs for it.
     built = build_dataset(events, sample_users, sample_items, feature_config, half_life_days=90)
 
-    recommendations = train_and_recommend(
-        built, target_users=["u1", "u4"], config=feature_config, top_k=2
-    )
+    recommendations = train_and_recommend(built, target_users=["u1", "u4"], config=feature_config, top_k=2)
 
     warm_via_features = recommendations[recommendations[Columns.User] == "u4"]
     assert not warm_via_features.empty
@@ -78,9 +88,7 @@ def test_train_and_recommend_falls_back_to_popularity_for_fully_unknown_users(sa
     # unknown to the dataset entirely -> must get the popularity fallback.
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
 
-    recommendations = train_and_recommend(
-        built, target_users=["u1", "ghost"], config=feature_config, top_k=2
-    )
+    recommendations = train_and_recommend(built, target_users=["u1", "ghost"], config=feature_config, top_k=2)
 
     cold_user_recos = recommendations[recommendations[Columns.User] == "ghost"]
     assert not cold_user_recos.empty

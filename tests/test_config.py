@@ -391,4 +391,3 @@ def test_load_settings_normalizes_kind_case(tmp_path):
 
     assert settings.input.kind == "dataset"
     assert settings.output.kind == "dataset"
-

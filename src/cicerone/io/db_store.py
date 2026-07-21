@@ -53,7 +53,10 @@ class DatabaseInputSource:
     def _read_optional(self, query: str | None, table: str, label: str) -> pd.DataFrame | None:
         if query is None and not inspect(self._engine).has_table(table):
             logger.warning(
-                "Optional %s source (table %r) does not exist — continuing without %s features.", label, table, label
+                "Optional %s source (table %r) does not exist — continuing without %s features.",
+                label,
+                table,
+                label,
             )
             return None
         try:

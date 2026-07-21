@@ -54,7 +54,9 @@ def _time_decay_multiplier(occurred_at: pd.Series, half_life_days: float) -> pd.
     return 0.5 ** (age_days / half_life_days)
 
 
-def _weighted_interactions(events: pd.DataFrame, config: FeatureConfig, half_life_days: float) -> pd.DataFrame:
+def _weighted_interactions(
+    events: pd.DataFrame, config: FeatureConfig, half_life_days: float
+) -> pd.DataFrame:
     df = events.copy()
     df["occurred_at"] = pd.to_datetime(df["occurred_at"], utc=True)
     df["quantity"] = df.get("quantity", 1)
@@ -83,9 +85,8 @@ def _weighted_interactions(events: pd.DataFrame, config: FeatureConfig, half_lif
     decay = _time_decay_multiplier(df["occurred_at"], half_life_days)
     df["weight"] = df["base_weight"] * df["_qty_multiplier"] * decay
 
-    aggregated = (
-        df.groupby(["user_id", "item_id"], as_index=False)
-        .agg(weight=("weight", "sum"), datetime=("occurred_at", "max"))
+    aggregated = df.groupby(["user_id", "item_id"], as_index=False).agg(
+        weight=("weight", "sum"), datetime=("occurred_at", "max")
     )
     # Negative reviews can push a pair below zero; rectools/LightFM expects
     # non-negative implicit weights, so floor at a small positive epsilon

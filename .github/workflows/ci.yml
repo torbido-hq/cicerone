@@ -6,6 +6,23 @@ on:
     branches: [main]
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same test image used for pytest (see the "test" job below), so lint
+      # runs against the exact dependency set installed there — nothing to
+      # install on the runner itself.
+      - name: Build test image
+        run: docker build --target test -t cicerone-test -f docker/Dockerfile .
+
+      - name: Ruff lint
+        run: docker run --rm cicerone-test ruff check src tests
+
+      - name: Ruff format check
+        run: docker run --rm cicerone-test ruff format --check src tests
+
   test:
     runs-on: ubuntu-latest
     steps:
