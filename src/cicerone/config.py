@@ -8,6 +8,13 @@ placeholders, resolved from the process environment at load time (see
 bucket/table, scheduling, tuning...) in version control while credentials
 stay in environment variables / secret stores.
 
+Every "${VAR_NAME}" occurrence is resolved, including partial ones embedded
+in a larger string (e.g. `prefix = "datasets/${ENV}/latest"`), and it is
+mandatory: a referenced variable that isn't set raises an error rather than
+silently leaving the placeholder in place. If you need a literal "${...}" in
+a value (no substitution), escape it by doubling the leading "$", e.g.
+`pattern = "$${LITERAL}"` resolves to the literal string "${LITERAL}".
+
 Input and output are each independently configurable, and are deliberately
 generic: a "kind" (e.g. "dataset", "db") plus a free-form "options" table
 interpreted by the corresponding backend in cicerone.io. This is what makes
@@ -27,31 +34,46 @@ from typing import Any
 
 DEFAULT_CONFIG_PATH = "/app/config/cicerone.toml"
 
-# Matches every "${VAR_NAME}" occurrence within a string, not just a string
-# that's *entirely* one placeholder — so both `bucket = "${BUCKET}"` and
-# `prefix = "datasets/${ENV}/latest"` are resolved the same way.
-_ENV_PLACEHOLDER = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+# Matches every "${VAR_NAME}" occurrence within a string (not just a string
+# that's *entirely* one placeholder, so `prefix = "datasets/${ENV}/latest"`
+# is resolved too), with an optional leading escape "$" — "$${VAR_NAME}"
+# is left as the literal "${VAR_NAME}", not resolved from the environment.
+_ENV_PLACEHOLDER = re.compile(r"\$(\$?)\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
-def _resolve_env_placeholders(value: Any) -> Any:
+def _resolve_env_placeholders(value: Any, path: str = "") -> Any:
     """Recursively replaces "${VAR_NAME}" occurrences with the matching
     environment variable, so secrets never have to be written into the
     (version-controlled) TOML config file itself. Supports partial
-    interpolation (e.g. "datasets/${ENV}/latest"), not just a string that is
-    exactly one placeholder."""
+    interpolation (e.g. "datasets/${ENV}/latest") and a "$${VAR_NAME}" escape
+    for a literal "${VAR_NAME}" that should not be substituted.
+
+    `path` is the dotted/indexed config location this value came from (e.g.
+    "input.options.access_key_id"), included in the error message if a
+    referenced environment variable is missing, to make misconfigurations
+    easier to track down.
+    """
     if isinstance(value, str):
 
         def _replace(match: re.Match[str]) -> str:
-            name = match.group(1)
+            escaped, name = match.group(1), match.group(2)
+            if escaped:
+                return f"${{{name}}}"
             if name not in os.environ:
-                raise RuntimeError(f"Config references ${{{name}}} but that environment variable is not set")
+                location = f" (at '{path}')" if path else ""
+                raise RuntimeError(
+                    f"Config references ${{{name}}}{location} but that environment variable is not set"
+                )
             return os.environ[name]
 
         return _ENV_PLACEHOLDER.sub(_replace, value)
     if isinstance(value, dict):
-        return {key: _resolve_env_placeholders(item) for key, item in value.items()}
+        return {
+            key: _resolve_env_placeholders(item, f"{path}.{key}" if path else str(key))
+            for key, item in value.items()
+        }
     if isinstance(value, list):
-        return [_resolve_env_placeholders(item) for item in value]
+        return [_resolve_env_placeholders(item, f"{path}[{index}]") for index, item in enumerate(value)]
     return value
 
 
@@ -82,7 +104,7 @@ def _load_io_settings(raw: dict[str, Any], section_name: str) -> IOSettings:
     section = raw.get(section_name)
     if not section or "kind" not in section:
         raise RuntimeError(f"Missing required config section: [{section_name}] with a 'kind' key")
-    options = _resolve_env_placeholders(section.get("options", {}))
+    options = _resolve_env_placeholders(section.get("options", {}), f"{section_name}.options")
     return IOSettings(kind=section["kind"], options=options)
 
 

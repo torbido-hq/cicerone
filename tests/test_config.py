@@ -175,6 +175,107 @@ def test_load_settings_missing_env_placeholder_raises(tmp_path, monkeypatch):
         load_settings(config_path)
 
 
+def test_load_settings_missing_env_placeholder_error_names_config_path(tmp_path, monkeypatch):
+    monkeypatch.delenv("SOME_UNSET_VAR", raising=False)
+    config_path = _write_toml(
+        tmp_path,
+        """
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "s3"
+        bucket = "${SOME_UNSET_VAR}"
+
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+
+    with pytest.raises(RuntimeError, match=r"input\.options\.bucket"):
+        load_settings(config_path)
+
+
+def test_load_settings_resolves_multiple_placeholders_in_one_string(tmp_path, monkeypatch):
+    monkeypatch.setenv("ENV_NAME", "staging")
+    monkeypatch.setenv("BUCKET_NAME", "my-bucket")
+    config_path = _write_toml(
+        tmp_path,
+        """
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+        prefix = "${ENV_NAME}/${BUCKET_NAME}"
+
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+
+    settings = load_settings(config_path)
+
+    assert settings.input.options["prefix"] == "staging/my-bucket"
+
+
+def test_load_settings_resolves_env_placeholders_in_nested_dicts(tmp_path, monkeypatch):
+    monkeypatch.setenv("NESTED_KEY", "resolved-key")
+    monkeypatch.setenv("NESTED_SECRET", "resolved-secret")
+    config_path = _write_toml(
+        tmp_path,
+        """
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+        [input.options.auth]
+        access_key = "${NESTED_KEY}"
+        secret_key = "${NESTED_SECRET}"
+
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+
+    settings = load_settings(config_path)
+
+    assert settings.input.options["auth"] == {"access_key": "resolved-key", "secret_key": "resolved-secret"}
+
+
+def test_load_settings_escaped_placeholder_is_left_literal(tmp_path):
+    config_path = _write_toml(
+        tmp_path,
+        """
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+        pattern = "$${NOT_A_VAR}"
+
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+
+    settings = load_settings(config_path)
+
+    assert settings.input.options["pattern"] == "${NOT_A_VAR}"
+
+
 def test_load_settings_resolves_env_placeholders_in_lists(tmp_path, monkeypatch):
     monkeypatch.setenv("MY_TAG", "resolved-tag")
     config_path = _write_toml(

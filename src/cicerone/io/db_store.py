@@ -27,12 +27,18 @@ import logging
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import create_engine, text
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from cicerone.io.options import require_option
 
 logger = logging.getLogger(__name__)
+
+# Raised by different dialects/drivers for "table/relation does not exist"
+# (e.g. Postgres -> ProgrammingError, SQLite -> OperationalError, MySQL ->
+# ProgrammingError) — used as a fallback for custom queries, where we can't
+# inspect a single table name up front (see _read_optional below).
+_MISSING_TABLE_ERRORS = (ProgrammingError, OperationalError)
 
 
 class DatabaseInputSource:
@@ -48,23 +54,36 @@ class DatabaseInputSource:
     def read_events(self) -> pd.DataFrame:
         return self._read(self._options.get("events_query"), self._options.get("events_table", "events"))
 
-    def read_users(self) -> pd.DataFrame | None:
+    def _read_optional(self, query: str | None, table: str, label: str) -> pd.DataFrame | None:
+        # No custom query: check the table's existence directly via
+        # SQLAlchemy's dialect-aware inspection API, so "not configured yet"
+        # is detected the same way on Postgres, MySQL, SQLite, ... instead of
+        # depending on one driver's specific "missing table" exception type.
+        if query is None and not inspect(self._engine).has_table(table):
+            logger.warning(
+                "Optional %s source (table %r) does not exist — continuing without %s features.", label, table, label
+            )
+            return None
         try:
-            return self._read(self._options.get("users_query"), self._options.get("users_table", "users"))
-        except ProgrammingError:
-            # Postgres raises ProgrammingError (UndefinedTable) for a missing
-            # relation — that's the expected "optional input not configured"
-            # case. Anything else (bad credentials, connection errors, ...)
-            # propagates so real failures aren't masked.
-            logger.warning("Optional users source unavailable — continuing without user features.")
+            return self._read(query, table)
+        except _MISSING_TABLE_ERRORS:
+            # A custom query referencing a table/view that isn't set up yet —
+            # same "optional input not configured" case, just not
+            # inspectable up front since it's arbitrary SQL. Anything else
+            # (bad credentials, connection errors, real SQL bugs) propagates
+            # so genuine failures aren't masked.
+            logger.warning("Optional %s source unavailable — continuing without %s features.", label, label)
             return None
 
+    def read_users(self) -> pd.DataFrame | None:
+        return self._read_optional(
+            self._options.get("users_query"), self._options.get("users_table", "users"), "users"
+        )
+
     def read_items(self) -> pd.DataFrame | None:
-        try:
-            return self._read(self._options.get("items_query"), self._options.get("items_table", "items"))
-        except ProgrammingError:
-            logger.warning("Optional items source unavailable — continuing without item features.")
-            return None
+        return self._read_optional(
+            self._options.get("items_query"), self._options.get("items_table", "items"), "items"
+        )
 
 
 class DatabaseOutputSink:

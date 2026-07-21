@@ -45,9 +45,26 @@ def test_unknown_storage_backend_raises():
 
 
 def test_local_backend_missing_path_raises():
-    source = DatasetInputSource({"storage_backend": "local"})
     with pytest.raises(RuntimeError, match="path"):
-        source.read_events()
+        DatasetInputSource({"storage_backend": "local"})
+    with pytest.raises(RuntimeError, match="path"):
+        DatasetOutputSink({"storage_backend": "local"})
+
+
+@pytest.mark.parametrize("missing_key", ["access_key_id", "secret_access_key", "bucket"])
+def test_s3_backend_missing_required_option_raises(missing_key):
+    options = {
+        "storage_backend": "s3",
+        "access_key_id": "test",
+        "secret_access_key": "test",
+        "bucket": "test-bucket",
+    }
+    del options[missing_key]
+
+    with pytest.raises(RuntimeError, match=missing_key):
+        DatasetInputSource(options)
+    with pytest.raises(RuntimeError, match=missing_key):
+        DatasetOutputSink(options)
 
 
 # --- s3 backend (mocked) ------------------------------------------------------

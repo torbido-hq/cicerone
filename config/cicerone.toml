@@ -3,7 +3,10 @@
 # This file is meant to be edited (and mounted read-only into the container,
 # see docker-compose.yml) without ever rebuilding the image. Secrets are
 # never written here directly — reference them with "${ENV_VAR_NAME}" and
-# set the actual value in your environment / .env (see .env.example).
+# set the actual value in your environment / .env (see .env.example). A
+# referenced variable that isn't set fails config loading immediately. If
+# you ever need a literal "${...}" value (no substitution), escape it with a
+# doubled leading "$", e.g. "$${NOT_A_VAR}" resolves to "${NOT_A_VAR}".
 #
 # Input and output are each independently configurable. Every backend
 # ("kind") interprets its own "options" table — see src/cicerone/io/ for the

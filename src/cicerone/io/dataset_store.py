@@ -47,14 +47,27 @@ def _full_key(options: dict[str, Any], filename: str) -> str:
     return f"{prefix}/{filename}" if prefix else filename
 
 
+def _validate_backend(options: dict[str, Any], backend: str) -> None:
+    """Validates the required options for `backend` upfront (at construction
+    time) so a misconfiguration fails immediately, rather than only once a
+    read/write is actually attempted."""
+    if backend not in ("s3", "local"):
+        raise ValueError(f"Unknown storage_backend: {backend!r} (expected 's3' or 'local')")
+    if backend == "local":
+        require_option(options, "path", "local")
+    else:
+        require_option(options, "access_key_id", "s3")
+        require_option(options, "secret_access_key", "s3")
+        require_option(options, "bucket", "s3")
+
+
 class DatasetInputSource:
     """Reads events/users/items parquet files from an S3-compatible store or local disk."""
 
     def __init__(self, options: dict[str, Any]):
         self._options = options
         self._backend = options.get("storage_backend", "local")
-        if self._backend not in ("s3", "local"):
-            raise ValueError(f"Unknown storage_backend: {self._backend!r} (expected 's3' or 'local')")
+        _validate_backend(options, self._backend)
 
     def _read(self, filename: str) -> pd.DataFrame:
         if self._backend == "local":
@@ -93,8 +106,7 @@ class DatasetOutputSink:
     def __init__(self, options: dict[str, Any]):
         self._options = options
         self._backend = options.get("storage_backend", "local")
-        if self._backend not in ("s3", "local"):
-            raise ValueError(f"Unknown storage_backend: {self._backend!r} (expected 's3' or 'local')")
+        _validate_backend(options, self._backend)
 
     def _write_bytes(self, filename: str, payload: bytes, content_type: str) -> None:
         if self._backend == "local":
