@@ -6,27 +6,30 @@ from cicerone.feature_config import load_feature_config
 
 
 def test_load_feature_config_parses_all_sections(tmp_path):
-    config_path = tmp_path / "features.yml"
+    config_path = tmp_path / "features.toml"
     config_path.write_text(
         """
-event_weights:
-  purchase: 4.0
-  view: 0.3
-quantity_scaled_events:
-  - purchase
-event_caps:
-  view: 5
-user_features:
-  - column: favorite_styles
-    type: list
-  - column: region_slug
-    type: categorical
-item_features:
-  - column: category
-    type: categorical
-item_availability_filters:
-  - published
-  - in_stock
+quantity_scaled_events = ["purchase"]
+item_availability_filters = ["published", "in_stock"]
+
+[event_weights]
+purchase = 4.0
+view = 0.3
+
+[event_caps]
+view = 5
+
+[[user_features]]
+column = "favorite_styles"
+type = "list"
+
+[[user_features]]
+column = "region_slug"
+type = "categorical"
+
+[[item_features]]
+column = "category"
+type = "categorical"
 """
     )
 
@@ -43,8 +46,8 @@ item_availability_filters:
 
 
 def test_load_feature_config_defaults_to_empty_sections(tmp_path):
-    config_path = tmp_path / "empty.yml"
-    config_path.write_text("{}")
+    config_path = tmp_path / "empty.toml"
+    config_path.write_text("")
 
     config = load_feature_config(config_path)
 
@@ -57,8 +60,8 @@ def test_load_feature_config_defaults_to_empty_sections(tmp_path):
 
 
 def test_load_feature_config_defaults_column_type_to_categorical(tmp_path):
-    config_path = tmp_path / "no_type.yml"
-    config_path.write_text("user_features:\n  - column: region_slug\n")
+    config_path = tmp_path / "no_type.toml"
+    config_path.write_text('[[user_features]]\ncolumn = "region_slug"\n')
 
     config = load_feature_config(config_path)
 
@@ -67,4 +70,4 @@ def test_load_feature_config_defaults_column_type_to_categorical(tmp_path):
 
 def test_load_feature_config_missing_file_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
-        load_feature_config(tmp_path / "does-not-exist.yml")
+        load_feature_config(tmp_path / "does-not-exist.toml")

@@ -7,7 +7,31 @@ import pandas as pd
 
 from cicerone import job
 
-REPO_FEATURES_YML = Path(__file__).resolve().parents[1] / "config" / "features.yml"
+REPO_FEATURES_CONFIG = Path(__file__).resolve().parents[1] / "config" / "features.toml"
+
+
+def _write_config(tmp_path, input_dir, output_dir, top_k: int = 10) -> str:
+    config_path = tmp_path / "cicerone.toml"
+    config_path.write_text(
+        f"""
+        [job]
+        top_k = {top_k}
+        feature_config_path = "{REPO_FEATURES_CONFIG}"
+
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "{input_dir}"
+
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "{output_dir}"
+        """
+    )
+    return str(config_path)
 
 
 def test_job_run_end_to_end_with_local_dataset_backend(tmp_path, monkeypatch):
@@ -35,14 +59,8 @@ def test_job_run_end_to_end_with_local_dataset_backend(tmp_path, monkeypatch):
     events.to_parquet(input_dir / "events.parquet", index=False)
     items.to_parquet(input_dir / "items.parquet", index=False)
 
-    monkeypatch.setenv("INPUT_KIND", "dataset")
-    monkeypatch.setenv("INPUT_STORAGE_BACKEND", "local")
-    monkeypatch.setenv("INPUT_LOCAL_PATH", str(input_dir))
-    monkeypatch.setenv("OUTPUT_KIND", "dataset")
-    monkeypatch.setenv("OUTPUT_STORAGE_BACKEND", "local")
-    monkeypatch.setenv("OUTPUT_LOCAL_PATH", str(output_dir))
-    monkeypatch.setenv("FEATURE_CONFIG_PATH", str(REPO_FEATURES_YML))
-    monkeypatch.setenv("TOP_K", "2")
+    config_path = _write_config(tmp_path, input_dir, output_dir, top_k=2)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
 
     job.run()
 
@@ -56,13 +74,9 @@ def test_job_run_end_to_end_with_local_dataset_backend(tmp_path, monkeypatch):
 
 
 def test_job_run_raises_and_logs_on_failure(tmp_path, monkeypatch, caplog):
-    monkeypatch.setenv("INPUT_KIND", "dataset")
-    monkeypatch.setenv("INPUT_STORAGE_BACKEND", "local")
-    monkeypatch.setenv("INPUT_LOCAL_PATH", str(tmp_path))  # no events.parquet present -> should fail
-    monkeypatch.setenv("OUTPUT_KIND", "dataset")
-    monkeypatch.setenv("OUTPUT_STORAGE_BACKEND", "local")
-    monkeypatch.setenv("OUTPUT_LOCAL_PATH", str(tmp_path))
-    monkeypatch.setenv("FEATURE_CONFIG_PATH", str(REPO_FEATURES_YML))
+    # no events.parquet present in tmp_path -> should fail
+    config_path = _write_config(tmp_path, tmp_path, tmp_path)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
 
     import pytest
 

@@ -1,18 +1,17 @@
-"""Loads the user-editable feature/weight configuration (config/features.yml).
+"""Loads the user-editable feature/weight configuration (config/features.toml).
 
-Kept as plain YAML instead of Python constants so event weights and which
+Kept as plain TOML instead of Python constants so event weights and which
 user/item columns feed the model can change without touching code or
 rebuilding the image.
 """
 
 from __future__ import annotations
 
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-import yaml
-
-DEFAULT_CONFIG_PATH = Path("/app/config/features.yml")
+DEFAULT_CONFIG_PATH = Path("/app/config/features.toml")
 
 
 @dataclass(frozen=True)
@@ -33,8 +32,8 @@ class FeatureConfig:
 
 def load_feature_config(path: Path | str | None = None) -> FeatureConfig:
     config_path = Path(path) if path else DEFAULT_CONFIG_PATH
-    with open(config_path, encoding="utf-8") as f:
-        raw = yaml.safe_load(f) or {}
+    with open(config_path, "rb") as f:
+        raw = tomllib.load(f)
 
     def _columns(key: str) -> list[FeatureColumn]:
         return [

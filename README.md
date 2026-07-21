@@ -1,80 +1,110 @@
-# cicerone
+# Cicerone
 
-Low-volume batch job that suggests drinks for **torbido**'s users. No API:
-it reads the input, trains a hybrid [rectools](https://github.com/MobileTeleSystems/RecTools)
-+ LightFM model, and writes out the recommendations. Everything runs in
-Docker (Python 3.11 only lives inside the image, nothing to install on the
-host).
+A generic, self-hosted batch recommender system. No API, no cache: it reads
+your interaction data, trains a hybrid [rectools](https://github.com/MobileTeleSystems/RecTools)
++ LightFM model, and writes out top-K recommendations per user. Everything
+runs in Docker (Python 3.11 only lives inside the image, nothing to install
+on the host).
+
+Cicerone isn't tied to any particular product, shop, or domain — it works
+for any catalog of "users" and "items" with interaction events (purchases,
+views, reviews, ...): drinks, books, courses, tracks, you name it. Input and
+output are pluggable and configured through a single TOML file, so wiring it
+up to your own data doesn't require touching any code.
+
+> **Why "Cicerone"?** In the world of beer, a [Cicerone](https://www.cicerone.org)
+> is a certified expert on beer's history, styles, ingredients, brewing, and
+> — most importantly — what to pair or recommend for a given taste. Think of
+> it as the beer world's equivalent of a wine sommelier. It felt like a
+> fitting name for a project whose whole job is recommending the right drink
+> to the right person, even though the underlying engine works just as well
+> for any other kind of product catalog.
 
 ## Flow
 
 ```
-input source (R2/S3/local dataset, or a Postgres DB)
+input source (S3-compatible/local dataset, or a database)
                                         |
                                         v
                               cicerone (container "recommender")
                                  1. reads events/users/items
                                  2. weighs interactions (see below,
-                                    config/features.yml)
+                                    config/features.toml)
                                  3. trains LightFMWrapperModel (rectools)
                                  4. generates top-K per user + popularity fallback
                                         |
                                         v
-                     output destination (R2/S3/local dataset, or a Postgres DB)
+                     output destination (S3-compatible/local dataset, or a database)
 ```
 
 Scheduling is handled in-process (`croniter`, no system cron): it runs once
-at boot, then again on `CRON_SCHEDULE` (default: every night at 03:00 UTC).
+at boot, then again on `[job].cron_schedule` in `config/cicerone.toml`
+(default: every night at 03:00 UTC).
 
-## I/O configuration (`INPUT_*` / `OUTPUT_*`)
+## Configuration (`config/cicerone.toml`)
 
-Input and output are configured **independently** of each other. Each side
-can be:
+All structural configuration — which backend to use for input/output,
+bucket/table names, scheduling, tuning — lives in one version-controlled
+TOML file, `config/cicerone.toml` (mounted read-only, see
+`docker-compose.yml`; override the path with `CICERONE_CONFIG_PATH`).
+Secrets are never written into it directly: reference them with
+`${ENV_VAR_NAME}` placeholders, resolved from the environment at load time
+(see [.env.example](.env.example)).
 
-- **`KIND=dataset`**: static parquet files, on S3-compatible object storage
-  (R2, AWS S3, MinIO — `STORAGE_BACKEND=s3`) or on a mounted local disk
-  (`STORAGE_BACKEND=local`, handy for tests or manual import/export).
-- **`KIND=db`**: a Postgres table/query via SQLAlchemy (`DATABASE_URL`),
-  with the option to override the read queries (`*_QUERY`) to read directly
-  from torbido's own schema instead of requiring materialized
-  `events`/`users`/`items` tables.
+Input and output are configured **independently** of each other, each with
+a `kind` and a backend-specific `options` table:
+
+- **`kind = "dataset"`**: static parquet files, on S3-compatible object
+  storage (R2, AWS S3, MinIO — `storage_backend = "s3"`) or on a mounted
+  local disk (`storage_backend = "local"`, handy for tests or manual
+  import/export).
+- **`kind = "db"`**: a database table/query via SQLAlchemy
+  (`database_url`), with the option to override the read queries
+  (`events_query` / `users_query` / `items_query`) to read directly from
+  your own schema instead of requiring materialized `events`/`users`/`items`
+  tables.
 
 The two sides can be freely mixed, e.g. read from a Postgres replica and
-write recommendations to R2, or vice versa. See [.env.example](.env.example)
-for the full list of variables.
+write recommendations to S3, or vice versa. New backends can be added under
+`src/cicerone/io/` without changing the configuration format — see
+`config/cicerone.toml` for the full annotated example (including the `db`
+variant, commented out).
 
-## Data contract (`INPUT_*`)
+## Data contract
 
 `events` (required):
 
-| column      | type      | notes                                                         |
-|-------------|-----------|----------------------------------------------------------------|
-| user_id     | str       | torbido user UUID                                               |
-| item_id     | str       | torbido product UUID                                            |
-| event_type  | str       | see `config/features.yml` → `event_weights`                     |
-| quantity    | int       | optional, used for the types listed in `quantity_scaled_events` |
-| occurred_at | datetime  | UTC                                                              |
+| column      | type      | notes                                                            |
+|-------------|-----------|-------------------------------------------------------------------|
+| user_id     | str       | any stable user identifier                                        |
+| item_id     | str       | any stable item/product identifier                                |
+| event_type  | str       | see `config/features.toml` → `event_weights`                       |
+| quantity    | int       | optional, used for the types listed in `quantity_scaled_events`   |
+| occurred_at | datetime  | UTC                                                                |
 
-Recommended mapping from torbido's models to `event_type` (customizable in
-`config/features.yml`):
-- `order_items` (via `orders` with a completed status) → `purchase` (quantity = order_items.quantity)
-- `reviews` with `feeling` in `ecstatic/delighted/satisfied` → `review_positive`
-- `reviews` with `feeling` in `disappointed/awful` → `review_negative`
-- `user_saved_products` → `saved`
-- `analytics_events` with `event_type: cart_add` → `cart_add`
-- `analytics_events` with `event_type: product_view` → `view`
+`event_type` is entirely up to you — map your own events to whatever names
+you list in `config/features.toml` → `event_weights`. A typical e-commerce
+mapping looks like:
+- a completed order line → `purchase` (quantity = line quantity)
+- a positive review/rating → `review_positive`
+- a negative review/rating → `review_negative`
+- a wishlist/save action → `saved`
+- an "add to cart" analytics event → `cart_add`
+- a "product viewed" analytics event → `view`
 
 `users` (optional, enables user features for cold-start): columns are
-configurable in `config/features.yml` → `user_features` (default:
-`favorite_styles` as a list, `region_slug` as categorical).
+configurable in `config/features.toml` → `user_features` (default:
+`favorite_styles` as a list, `region_slug` as categorical — rename/replace
+these for your own domain).
 
 `items` (optional, enables item features + the availability filter): columns
-are configurable in `config/features.yml` → `item_features` (default:
-`category`, `primary_style`, `producer_id`, `region_slug`, `abv_bucket`). The
-availability filter (`item_availability_filters`, default `published` +
-`in_stock`) always excludes unavailable products from the recommendations.
+are configurable in `config/features.toml` → `item_features` (default:
+`category`, `primary_style`, `producer_id`, `region_slug`, `abv_bucket` —
+again, adapt these to your catalog). The availability filter
+(`item_availability_filters`, default `published` + `in_stock`) always
+excludes unavailable items from the recommendations.
 
-## Output (`OUTPUT_*`)
+## Output
 
 `recommendations`: `user_id, item_id, rank, score, source`
 (`source` = `personalized` or `popular_fallback`).
@@ -84,18 +114,19 @@ availability filter (`item_availability_filters`, default `published` +
 ## Interaction weights & cold-start
 
 All weighting logic is configurable without rebuilding the image via
-`config/features.yml` (mounted as a volume, see `docker-compose.yml`):
+`config/features.toml` (mounted as a volume, see `docker-compose.yml`):
 `event_weights`, `quantity_scaled_events`, `event_caps`, `user_features`,
 `item_features`, `item_availability_filters`. Exponential decay with a
-configurable half-life (`INTERACTION_HALF_LIFE_DAYS`, default 90 days) gives
-more weight to recent activity. Users without enough interactions still get
-a fallback list from `PopularModel` (rectools), still honoring the
-availability filter.
+configurable half-life (`[job].half_life_days` in `config/cicerone.toml`,
+default 90 days) gives more weight to recent activity. Users without enough
+interactions still get a fallback list from `PopularModel` (rectools), still
+honoring the availability filter.
 
 ## Usage
 
 ```sh
-cp .env.example .env   # pick INPUT_KIND/OUTPUT_KIND and set credentials
+cp .env.example .env   # set the secrets referenced by config/cicerone.toml
+# edit config/cicerone.toml: pick input/output kind & backend for your setup
 docker compose up --build
 ```
 
@@ -114,13 +145,16 @@ is enforced on every PR by `.github/workflows/ci.yml`.
 
 - Credentials (S3/DB) should be scoped to the bare minimum (read on the
   input side, write on the output side, no delete/admin permissions).
-- No personal data other than `user_id` (a UUID) is ever read or written.
+- No personal data other than `user_id` (an opaque identifier) is ever read
+  or written.
 - No ports exposed: the container accepts no inbound connections.
-- Credentials only ever live in environment variables (`.env`, not committed).
+- Credentials only ever live in environment variables (`.env`, not
+  committed), referenced from `config/cicerone.toml` via `${...}`
+  placeholders — never written into the config file itself.
 
 ## License
 
 [Beerware](LICENSE) — if we meet someday and you find this useful, buy me a
-beer (or one on Torbido).
+beer (or, even better, one straight from [Torbido](https://torbido.it)).
 
 

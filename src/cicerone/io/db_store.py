@@ -1,29 +1,49 @@
 """Database input/output backend (SQLAlchemy). Lets the job read straight
-from a Postgres source (e.g. a torbido read-replica, via a table name or a
-custom SQL query) and/or write recommendations into a Postgres table that
+from any relational source (e.g. a read-replica, via a table name or a
+custom SQL query) and/or write recommendations into a database table that
 an application can query directly.
 
+Configured generically via an "options" dict (see cicerone.config.IOSettings)
+built from the [input.options] / [output.options] tables in cicerone.toml:
+
+  database_url             required (SQLAlchemy connection string)
+  events_table              optional, default "events"
+  users_table               optional, default "users"
+  items_table                optional, default "items"
+  recommendations_table      optional, default "recommendations"
+  manifest_table              optional, default "recommendation_runs"
+  events_query / users_query / items_query   optional raw SQL overrides —
+    use these to read straight from an application's own schema instead of
+    requiring it to materialize events/users/items tables verbatim (e.g.
+    JOIN orders+order_items+reviews into one query).
+
 Table/column identifiers used here come from trusted deploy-time
-configuration (environment variables), never from end-user input.
+configuration, never from end-user input.
 """
 
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import pandas as pd
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import ProgrammingError
 
-from cicerone.config import DatabaseLocation
-
 logger = logging.getLogger(__name__)
 
 
+def _require(options: dict[str, Any], key: str) -> Any:
+    value = options.get(key)
+    if not value:
+        raise RuntimeError(f"Missing required option '{key}' for the db backend")
+    return value
+
+
 class DatabaseInputSource:
-    def __init__(self, location: DatabaseLocation):
-        self._loc = location
-        self._engine = create_engine(location.url, pool_pre_ping=True)
+    def __init__(self, options: dict[str, Any]):
+        self._options = options
+        self._engine = create_engine(_require(options, "database_url"), pool_pre_ping=True)
 
     def _read(self, query: str | None, table: str) -> pd.DataFrame:
         sql = query or f'SELECT * FROM "{table}"'
@@ -31,30 +51,30 @@ class DatabaseInputSource:
         return pd.read_sql(text(sql), self._engine)
 
     def read_events(self) -> pd.DataFrame:
-        return self._read(self._loc.events_query, self._loc.events_table)
+        return self._read(self._options.get("events_query"), self._options.get("events_table", "events"))
 
     def read_users(self) -> pd.DataFrame | None:
         try:
-            return self._read(self._loc.users_query, self._loc.users_table)
+            return self._read(self._options.get("users_query"), self._options.get("users_table", "users"))
         except Exception:  # noqa: BLE001 - optional input, missing table/query is expected
             logger.warning("Optional users source unavailable — continuing without user features.")
             return None
 
     def read_items(self) -> pd.DataFrame | None:
         try:
-            return self._read(self._loc.items_query, self._loc.items_table)
+            return self._read(self._options.get("items_query"), self._options.get("items_table", "items"))
         except Exception:  # noqa: BLE001 - optional input, missing table/query is expected
             logger.warning("Optional items source unavailable — continuing without item features.")
             return None
 
 
 class DatabaseOutputSink:
-    def __init__(self, location: DatabaseLocation):
-        self._loc = location
-        self._engine = create_engine(location.url, pool_pre_ping=True)
+    def __init__(self, options: dict[str, Any]):
+        self._options = options
+        self._engine = create_engine(_require(options, "database_url"), pool_pre_ping=True)
 
     def write_recommendations(self, df: pd.DataFrame) -> None:
-        table = self._loc.recommendations_table
+        table = self._options.get("recommendations_table", "recommendations")
         logger.info("Writing %d rows to database table %r", len(df), table)
         with self._engine.begin() as conn:
             # Replace the previous "latest" snapshot. TRUNCATE is wrapped in
@@ -69,6 +89,6 @@ class DatabaseOutputSink:
             df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
 
     def write_manifest(self, manifest: dict) -> None:
-        table = self._loc.manifest_table
+        table = self._options.get("manifest_table", "recommendation_runs")
         logger.info("Appending run manifest to database table %r", table)
         pd.DataFrame([manifest]).to_sql(table, self._engine, if_exists="append", index=False)
