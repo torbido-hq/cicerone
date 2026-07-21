@@ -1,0 +1,44 @@
+version: "3.9"
+
+# cicerone — batch drink recommender for torbido (rectools + LightFM).
+# No API, no cache: a single low-volume scheduled job. Input and output are
+# each independently configurable as either "dataset" (parquet on R2/S3/local
+# disk) or "db" (a Postgres table/query) — see README.md and .env.example.
+# Defaults below wire it up as R2 in, R2 out; edit .env to change either side.
+
+services:
+  recommender:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    environment:
+      PYTHONUNBUFFERED: "1"
+      TZ: "Europe/Rome"
+      CRON_SCHEDULE: ${CRON_SCHEDULE:-0 3 * * *}
+      TOP_K: ${TOP_K:-10}
+      INTERACTION_HALF_LIFE_DAYS: ${INTERACTION_HALF_LIFE_DAYS:-90}
+      FEATURE_CONFIG_PATH: ${FEATURE_CONFIG_PATH:-/app/config/features.yml}
+
+      INPUT_KIND: ${INPUT_KIND:-dataset}
+      INPUT_STORAGE_BACKEND: ${INPUT_STORAGE_BACKEND:-s3}
+      INPUT_S3_ENDPOINT_URL: ${INPUT_S3_ENDPOINT_URL:-}
+      INPUT_S3_ACCESS_KEY_ID: ${INPUT_S3_ACCESS_KEY_ID:-}
+      INPUT_S3_SECRET_ACCESS_KEY: ${INPUT_S3_SECRET_ACCESS_KEY:-}
+      INPUT_S3_BUCKET: ${INPUT_S3_BUCKET:-}
+      INPUT_S3_PREFIX: ${INPUT_S3_PREFIX:-datasets/latest}
+      INPUT_LOCAL_PATH: ${INPUT_LOCAL_PATH:-}
+      INPUT_DATABASE_URL: ${INPUT_DATABASE_URL:-}
+
+      OUTPUT_KIND: ${OUTPUT_KIND:-dataset}
+      OUTPUT_STORAGE_BACKEND: ${OUTPUT_STORAGE_BACKEND:-s3}
+      OUTPUT_S3_ENDPOINT_URL: ${OUTPUT_S3_ENDPOINT_URL:-}
+      OUTPUT_S3_ACCESS_KEY_ID: ${OUTPUT_S3_ACCESS_KEY_ID:-}
+      OUTPUT_S3_SECRET_ACCESS_KEY: ${OUTPUT_S3_SECRET_ACCESS_KEY:-}
+      OUTPUT_S3_BUCKET: ${OUTPUT_S3_BUCKET:-}
+      OUTPUT_S3_PREFIX: ${OUTPUT_S3_PREFIX:-recommendations/latest}
+      OUTPUT_LOCAL_PATH: ${OUTPUT_LOCAL_PATH:-}
+      OUTPUT_DATABASE_URL: ${OUTPUT_DATABASE_URL:-}
+    volumes:
+      - ./config:/app/config:ro
+    restart: unless-stopped
+

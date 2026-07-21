@@ -1,0 +1,6 @@
+# Test-only dependencies (installed in the Dockerfile "test" stage, never
+# shipped in the production image).
+pytest==8.3.2
+pytest-cov==5.0.0
+pytest-mock==3.14.0
+moto[s3]==5.0.13

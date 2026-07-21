@@ -1,0 +1,18 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["cicerone"]
+omit = [
+    "*/cicerone/io/base.py",
+    "*/cicerone/__init__.py",
+    "*/cicerone/io/__init__.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 95
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+]

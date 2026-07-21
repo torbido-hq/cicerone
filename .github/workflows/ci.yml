@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Everything (including the test run itself) happens inside Docker —
+      # the runner only needs Docker, never a host Python install, so CI
+      # matches exactly how the service is built and deployed.
+      - name: Run test suite (>=95% coverage required)
+        run: |
+          docker compose -f docker-compose.ci.yml up \
+            --build --abort-on-container-exit --exit-code-from test
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.ci.yml down -v

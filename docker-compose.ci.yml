@@ -1,0 +1,32 @@
+version: "3.9"
+
+# CI-only stack: runs the pytest suite (>=95% coverage enforced by
+# pyproject.toml) against a real, throwaway Postgres instance for the
+# database-backend tests. Never used in production — see docker-compose.yml
+# for the actual deployed service.
+
+services:
+  db-test:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: cicerone
+      POSTGRES_PASSWORD: cicerone
+      POSTGRES_DB: cicerone_test
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cicerone -d cicerone_test"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    tmpfs:
+      - /var/lib/postgresql/data # throwaway, never persisted
+
+  test:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: test
+    environment:
+      TEST_DATABASE_URL: postgresql+psycopg://cicerone:cicerone@db-test:5432/cicerone_test
+    depends_on:
+      db-test:
+        condition: service_healthy
