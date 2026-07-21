@@ -1,0 +1,71 @@
+# Cicerone configuration.
+#
+# This file is meant to be edited (and mounted read-only into the container,
+# see docker-compose.yml) without ever rebuilding the image. Secrets are
+# never written here directly — reference them with "${ENV_VAR_NAME}" and
+# set the actual value in your environment / .env (see .env.example). A
+# referenced variable that isn't set fails config loading immediately. If
+# you ever need a literal "${...}" value (no substitution), escape it with a
+# doubled leading "$", e.g. "$${NOT_A_VAR}" resolves to "${NOT_A_VAR}".
+#
+# Input and output are each independently configurable. Every backend
+# ("kind") interprets its own "options" table — see src/cicerone/io/ for the
+# full list of options each one accepts. Built-in kinds:
+#   "dataset" -> static parquet files, on S3-compatible object storage or a
+#                local/mounted directory (src/cicerone/io/dataset_store.py)
+#   "db"      -> a relational database table/query, via SQLAlchemy
+#                (src/cicerone/io/db_store.py)
+
+[job]
+top_k = 10
+half_life_days = 90
+cron_schedule = "0 3 * * *" # 5-field cron expression, evaluated in UTC
+feature_config_path = "/app/config/features.toml"
+
+[input]
+kind = "dataset"
+
+[input.options]
+storage_backend = "s3" # "s3" | "local"
+endpoint_url = "${INPUT_S3_ENDPOINT_URL}"
+access_key_id = "${INPUT_S3_ACCESS_KEY_ID}"
+secret_access_key = "${INPUT_S3_SECRET_ACCESS_KEY}"
+bucket = "${INPUT_S3_BUCKET}"
+prefix = "datasets/latest"
+# storage_backend = "local" instead uses a single "path" option, e.g.:
+# storage_backend = "local"
+# path = "/data/input"
+
+[output]
+kind = "dataset"
+
+[output.options]
+storage_backend = "s3" # "s3" | "local"
+endpoint_url = "${OUTPUT_S3_ENDPOINT_URL}"
+access_key_id = "${OUTPUT_S3_ACCESS_KEY_ID}"
+secret_access_key = "${OUTPUT_S3_SECRET_ACCESS_KEY}"
+bucket = "${OUTPUT_S3_BUCKET}"
+prefix = "recommendations/latest"
+
+# --- "db" kind example (commented out) ----------------------------------
+# [input]
+# kind = "db"
+#
+# [input.options]
+# database_url = "${INPUT_DATABASE_URL}"
+# events_table = "events"
+# users_table = "users"
+# items_table = "items"
+# # Optional raw SQL overrides, e.g. to read straight from an application's
+# # own schema instead of requiring materialized events/users/items tables:
+# # events_query = "SELECT ... FROM analytics_events ..."
+# # users_query = "SELECT ... FROM users ..."
+# # items_query = "SELECT ... FROM products ..."
+#
+# [output]
+# kind = "db"
+#
+# [output.options]
+# database_url = "${OUTPUT_DATABASE_URL}"
+# recommendations_table = "recommendations"
+# manifest_table = "recommendation_runs"

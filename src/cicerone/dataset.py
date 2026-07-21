@@ -4,25 +4,25 @@ configured input source (see cicerone.io).
 Input contract:
 
   events   (required)
-    user_id       str   torbido user UUID
-    item_id       str   torbido product UUID
-    event_type    str   must have an entry in config/features.yml -> event_weights
+    user_id       str   stable user identifier
+    item_id       str   stable item/product identifier
+    event_type    str   must have an entry in config/features.toml -> event_weights
     quantity      int   optional, defaults to 1 (used by quantity_scaled_events)
     occurred_at   datetime64  UTC timestamp of the event
 
   users   (optional — enables warm/cold user features)
     user_id  str
-    + one column per entry in config/features.yml -> user_features
+    + one column per entry in config/features.toml -> user_features
 
   items   (optional — enables warm/cold item features + fallback ranking)
     item_id  str
-    + one column per entry in config/features.yml -> item_features
+    + one column per entry in config/features.toml -> item_features
     + boolean columns listed in item_availability_filters
 
 Only events is required; users/items features are best-effort and missing
 inputs degrade gracefully to an interactions-only model. Which event types
 carry weight, and which user/item columns feed the model, are NOT hardcoded
-here — see cicerone.feature_config / config/features.yml.
+here — see cicerone.feature_config / config/features.toml.
 """
 
 from __future__ import annotations

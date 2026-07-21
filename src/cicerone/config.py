@@ -1,72 +1,87 @@
-"""Configuration for the cicerone recommender job.
+"""Configuration for the Cicerone recommender job.
 
-Everything is read from environment variables (set in docker-compose.yml /
-.env). No secrets are hardcoded and nothing is read from the local host —
-this module only exists inside the container.
+Everything is loaded from a single TOML file (default:
+/app/config/cicerone.toml, override with CICERONE_CONFIG_PATH). Secrets are
+never stored in the TOML file itself: reference them with ${ENV_VAR_NAME}
+placeholders, resolved from the process environment at load time (see
+.env.example). This keeps the structural configuration (which backend, which
+bucket/table, scheduling, tuning...) in version control while credentials
+stay in environment variables / secret stores.
 
-Input and output are each independently configurable as either:
-  - "dataset": static parquet files, on an S3-compatible store (R2, AWS S3,
-               MinIO, ...) or on the local filesystem, or
-  - "db":      a database table/query (e.g. reading straight from a torbido
-               read-replica, or writing recommendations into a Postgres
-               table torbido's own app can query).
+Every "${VAR_NAME}" occurrence is resolved, including partial ones embedded
+in a larger string (e.g. `prefix = "datasets/${ENV}/latest"`), and it is
+mandatory: a referenced variable that isn't set raises an error rather than
+silently leaving the placeholder in place. If you need a literal "${...}" in
+a value (no substitution), escape it by doubling the leading "$", e.g.
+`pattern = "$${LITERAL}"` resolves to the literal string "${LITERAL}".
 
-This means input and output don't have to match: e.g. read events straight
-from a Postgres replica while writing recommendations back out as parquet
-to R2, or any other combination.
+Input and output are each independently configurable, and are deliberately
+generic: a "kind" (e.g. "dataset", "db") plus a free-form "options" table
+interpreted by the corresponding backend in cicerone.io. This is what makes
+Cicerone adaptable to any product catalog, not tied to one particular
+application: adding a new backend (a message queue, a different warehouse,
+...) never requires changing this module — see cicerone.io.factory.
 """
 
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+import re
+import tomllib
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+DEFAULT_CONFIG_PATH = "/app/config/cicerone.toml"
+
+_ENV_PLACEHOLDER = re.compile(r"\$(\$?)\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
-def _require(name: str) -> str:
-    value = os.environ.get(name)
-    if not value:
-        raise RuntimeError(f"Missing required environment variable: {name}")
+def _resolve_env_placeholders(value: Any, path: str = "") -> Any:
+    """Recursively replaces "${VAR_NAME}" occurrences with the matching
+    environment variable. Supports partial interpolation (e.g.
+    "datasets/${ENV}/latest") and a "$${VAR_NAME}" escape for a literal
+    "${VAR_NAME}" that should not be substituted. `path` is the config
+    location this value came from, included in the error message if a
+    referenced environment variable is missing.
+    """
+    if isinstance(value, str):
+
+        def _replace(match: re.Match[str]) -> str:
+            escaped, name = match.group(1), match.group(2)
+            if escaped:
+                return f"${{{name}}}"
+            if name not in os.environ:
+                location = f" (at '{path}')" if path else ""
+                raise RuntimeError(
+                    f"Config references ${{{name}}}{location} but that environment variable is not set"
+                )
+            return os.environ[name]
+
+        return _ENV_PLACEHOLDER.sub(_replace, value)
+    if isinstance(value, dict):
+        return {
+            key: _resolve_env_placeholders(item, f"{path}.{key}" if path else str(key))
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_resolve_env_placeholders(item, f"{path}[{index}]") for index, item in enumerate(value)]
     return value
 
 
 @dataclass(frozen=True)
-class DatasetLocation:
-    """A static-file data location: S3-compatible object storage or local disk."""
-
-    backend: str  # "s3" | "local"
-    # backend == "s3"
-    endpoint_url: str | None = None
-    access_key_id: str | None = None
-    secret_access_key: str | None = None
-    bucket: str | None = None
-    prefix: str = ""
-    # backend == "local"
-    path: str | None = None
-
-
-@dataclass(frozen=True)
-class DatabaseLocation:
-    """A database data location (SQLAlchemy connection string)."""
-
-    url: str
-    events_table: str = "events"
-    users_table: str = "users"
-    items_table: str = "items"
-    recommendations_table: str = "recommendations"
-    manifest_table: str = "recommendation_runs"
-    # Optional raw SQL overrides — use these to read straight from torbido's
-    # own schema instead of requiring it to materialize events/users/items
-    # tables verbatim (e.g. JOIN orders+order_items+reviews into one query).
-    events_query: str | None = None
-    users_query: str | None = None
-    items_query: str | None = None
-
-
-@dataclass(frozen=True)
 class IOSettings:
-    kind: str  # "dataset" | "db"
-    dataset: DatasetLocation | None
-    database: DatabaseLocation | None
+    """Generic I/O configuration: a backend "kind" plus its own options.
+
+    Deliberately untyped (``options`` is a plain dict) so new input/output
+    backends can be added under cicerone.io without ever touching this
+    module — see cicerone.io.factory.build_input_source/build_output_sink.
+    ``kind`` is normalized to lower case when loaded from TOML, so "Dataset"
+    / "DATASET" / "dataset" in the config all resolve the same way.
+    """
+
+    kind: str
+    options: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -76,55 +91,33 @@ class Settings:
     feature_config_path: str
     top_k: int
     half_life_days: float
+    cron_schedule: str
 
 
-def _load_dataset_location(prefix: str) -> DatasetLocation:
-    backend = os.environ.get(f"{prefix}_STORAGE_BACKEND", "s3").lower()
-    if backend == "local":
-        return DatasetLocation(
-            backend="local",
-            path=_require(f"{prefix}_LOCAL_PATH"),
-        )
-    if backend == "s3":
-        return DatasetLocation(
-            backend="s3",
-            endpoint_url=_require(f"{prefix}_S3_ENDPOINT_URL"),
-            access_key_id=_require(f"{prefix}_S3_ACCESS_KEY_ID"),
-            secret_access_key=_require(f"{prefix}_S3_SECRET_ACCESS_KEY"),
-            bucket=_require(f"{prefix}_S3_BUCKET"),
-            prefix=os.environ.get(f"{prefix}_S3_PREFIX", ""),
-        )
-    raise RuntimeError(f"Unknown {prefix}_STORAGE_BACKEND: {backend!r} (expected 's3' or 'local')")
+def _load_io_settings(raw: dict[str, Any], section_name: str) -> IOSettings:
+    section = raw.get(section_name)
+    if not section:
+        raise RuntimeError(f"Missing required config section: [{section_name}]")
+    if "kind" not in section:
+        raise RuntimeError(f"Missing required config key: [{section_name}].kind")
+    options = _resolve_env_placeholders(section.get("options", {}), f"{section_name}.options")
+    return IOSettings(kind=str(section["kind"]).lower(), options=options)
 
 
-def _load_database_location(prefix: str) -> DatabaseLocation:
-    return DatabaseLocation(
-        url=_require(f"{prefix}_DATABASE_URL"),
-        events_table=os.environ.get(f"{prefix}_EVENTS_TABLE", "events"),
-        users_table=os.environ.get(f"{prefix}_USERS_TABLE", "users"),
-        items_table=os.environ.get(f"{prefix}_ITEMS_TABLE", "items"),
-        recommendations_table=os.environ.get(f"{prefix}_RECOMMENDATIONS_TABLE", "recommendations"),
-        manifest_table=os.environ.get(f"{prefix}_MANIFEST_TABLE", "recommendation_runs"),
-        events_query=os.environ.get(f"{prefix}_EVENTS_QUERY"),
-        users_query=os.environ.get(f"{prefix}_USERS_QUERY"),
-        items_query=os.environ.get(f"{prefix}_ITEMS_QUERY"),
-    )
+def load_settings(config_path: str | None = None) -> Settings:
+    path = Path(config_path or os.environ.get("CICERONE_CONFIG_PATH", DEFAULT_CONFIG_PATH))
+    if not path.exists():
+        raise RuntimeError(f"Config file not found: {path}")
 
+    with path.open("rb") as f:
+        raw = tomllib.load(f)
 
-def _load_io_settings(prefix: str) -> IOSettings:
-    kind = os.environ.get(f"{prefix}_KIND", "dataset").lower()
-    if kind == "dataset":
-        return IOSettings(kind="dataset", dataset=_load_dataset_location(prefix), database=None)
-    if kind == "db":
-        return IOSettings(kind="db", dataset=None, database=_load_database_location(prefix))
-    raise RuntimeError(f"Unknown {prefix}_KIND: {kind!r} (expected 'dataset' or 'db')")
-
-
-def load_settings() -> Settings:
+    job = raw.get("job", {})
     return Settings(
-        input=_load_io_settings("INPUT"),
-        output=_load_io_settings("OUTPUT"),
-        feature_config_path=os.environ.get("FEATURE_CONFIG_PATH", "/app/config/features.yml"),
-        top_k=int(os.environ.get("TOP_K", "10")),
-        half_life_days=float(os.environ.get("INTERACTION_HALF_LIFE_DAYS", "90")),
+        input=_load_io_settings(raw, "input"),
+        output=_load_io_settings(raw, "output"),
+        feature_config_path=job.get("feature_config_path", "/app/config/features.toml"),
+        top_k=int(job.get("top_k", 10)),
+        half_life_days=float(job.get("half_life_days", 90)),
+        cron_schedule=job.get("cron_schedule", "0 3 * * *"),
     )

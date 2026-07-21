@@ -6,7 +6,6 @@ import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
 
-from cicerone.config import DatabaseLocation
 from cicerone.io.db_store import DatabaseInputSource, DatabaseOutputSink
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
@@ -22,7 +21,17 @@ pytestmark = pytest.mark.skipif(
 def _clean_tables():
     engine = create_engine(TEST_DATABASE_URL)
     with engine.begin() as conn:
-        for table in ("events", "users", "items", "recommendations", "recommendation_runs", "custom_events"):
+        for table in (
+            "events",
+            "users",
+            "items",
+            "recommendations",
+            "recommendation_runs",
+            "custom_events",
+            "custom_users",
+            "custom_recommendations",
+            "custom_manifest_runs",
+        ):
             conn.execute(text(f'DROP TABLE IF EXISTS "{table}"'))
     yield
     engine.dispose()
@@ -34,7 +43,7 @@ def test_database_input_reads_table():
         "events", engine, index=False
     )
 
-    source = DatabaseInputSource(DatabaseLocation(url=TEST_DATABASE_URL))
+    source = DatabaseInputSource({"database_url": TEST_DATABASE_URL})
     events = source.read_events()
 
     assert list(events["user_id"]) == ["u1"]
@@ -45,7 +54,7 @@ def test_database_input_reads_custom_query():
     pd.DataFrame([{"user_id": "u1", "item_id": "i1"}]).to_sql("custom_events", engine, index=False)
 
     source = DatabaseInputSource(
-        DatabaseLocation(url=TEST_DATABASE_URL, events_query='SELECT * FROM "custom_events"')
+        {"database_url": TEST_DATABASE_URL, "events_query": 'SELECT * FROM "custom_events"'}
     )
     events = source.read_events()
 
@@ -53,14 +62,22 @@ def test_database_input_reads_custom_query():
 
 
 def test_database_input_optional_tables_missing_return_none():
-    source = DatabaseInputSource(DatabaseLocation(url=TEST_DATABASE_URL))
+    source = DatabaseInputSource({"database_url": TEST_DATABASE_URL})
 
     assert source.read_users() is None
     assert source.read_items() is None
 
 
+def test_database_input_optional_custom_query_missing_table_returns_none():
+    source = DatabaseInputSource(
+        {"database_url": TEST_DATABASE_URL, "users_query": 'SELECT * FROM "does_not_exist_yet"'}
+    )
+
+    assert source.read_users() is None
+
+
 def test_database_output_writes_and_replaces_recommendations():
-    sink = DatabaseOutputSink(DatabaseLocation(url=TEST_DATABASE_URL))
+    sink = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})
 
     first = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"}])
     sink.write_recommendations(first)
@@ -76,7 +93,7 @@ def test_database_output_writes_and_replaces_recommendations():
 
 
 def test_database_output_writes_manifest_appends():
-    sink = DatabaseOutputSink(DatabaseLocation(url=TEST_DATABASE_URL))
+    sink = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})
 
     sink.write_manifest({"n_events": 1})
     sink.write_manifest({"n_events": 2})
@@ -85,3 +102,42 @@ def test_database_output_writes_manifest_appends():
     stored = pd.read_sql('SELECT * FROM "recommendation_runs"', engine)
 
     assert list(stored["n_events"]) == [1, 2]
+
+
+def test_missing_database_url_raises():
+    with pytest.raises(RuntimeError, match="database_url"):
+        DatabaseInputSource({})
+    with pytest.raises(RuntimeError, match="database_url"):
+        DatabaseOutputSink({})
+
+
+def test_database_output_custom_table_names_are_used():
+    options = {
+        "database_url": TEST_DATABASE_URL,
+        "recommendations_table": "custom_recommendations",
+        "manifest_table": "custom_manifest_runs",
+    }
+    sink = DatabaseOutputSink(options)
+
+    recos = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"}])
+    sink.write_recommendations(recos)
+    sink.write_manifest({"n_events": 1})
+
+    engine = create_engine(TEST_DATABASE_URL)
+    stored_recos = pd.read_sql('SELECT * FROM "custom_recommendations"', engine)
+    stored_manifest = pd.read_sql('SELECT * FROM "custom_manifest_runs"', engine)
+
+    assert list(stored_recos["user_id"]) == ["u1"]
+    assert list(stored_manifest["n_events"]) == [1]
+
+
+def test_database_input_custom_table_names_are_used():
+    engine = create_engine(TEST_DATABASE_URL)
+    pd.DataFrame([{"user_id": "u1", "favorite_style": "stout"}]).to_sql("custom_users", engine, index=False)
+
+    source = DatabaseInputSource({"database_url": TEST_DATABASE_URL, "users_table": "custom_users"})
+
+    users = source.read_users()
+
+    assert list(users["user_id"]) == ["u1"]
+
