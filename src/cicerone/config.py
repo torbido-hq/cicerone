@@ -27,21 +27,27 @@ from typing import Any
 
 DEFAULT_CONFIG_PATH = "/app/config/cicerone.toml"
 
-_ENV_PLACEHOLDER = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$")
+# Matches every "${VAR_NAME}" occurrence within a string, not just a string
+# that's *entirely* one placeholder — so both `bucket = "${BUCKET}"` and
+# `prefix = "datasets/${ENV}/latest"` are resolved the same way.
+_ENV_PLACEHOLDER = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
 def _resolve_env_placeholders(value: Any) -> Any:
-    """Recursively replaces "${VAR_NAME}" strings with the matching
+    """Recursively replaces "${VAR_NAME}" occurrences with the matching
     environment variable, so secrets never have to be written into the
-    (version-controlled) TOML config file itself."""
+    (version-controlled) TOML config file itself. Supports partial
+    interpolation (e.g. "datasets/${ENV}/latest"), not just a string that is
+    exactly one placeholder."""
     if isinstance(value, str):
-        match = _ENV_PLACEHOLDER.match(value)
-        if not match:
-            return value
-        name = match.group(1)
-        if name not in os.environ:
-            raise RuntimeError(f"Config references ${{{name}}} but that environment variable is not set")
-        return os.environ[name]
+
+        def _replace(match: re.Match[str]) -> str:
+            name = match.group(1)
+            if name not in os.environ:
+                raise RuntimeError(f"Config references ${{{name}}} but that environment variable is not set")
+            return os.environ[name]
+
+        return _ENV_PLACEHOLDER.sub(_replace, value)
     if isinstance(value, dict):
         return {key: _resolve_env_placeholders(item) for key, item in value.items()}
     if isinstance(value, list):

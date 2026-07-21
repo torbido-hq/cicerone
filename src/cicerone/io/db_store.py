@@ -30,20 +30,15 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import ProgrammingError
 
+from cicerone.io.options import require_option
+
 logger = logging.getLogger(__name__)
-
-
-def _require(options: dict[str, Any], key: str) -> Any:
-    value = options.get(key)
-    if not value:
-        raise RuntimeError(f"Missing required option '{key}' for the db backend")
-    return value
 
 
 class DatabaseInputSource:
     def __init__(self, options: dict[str, Any]):
         self._options = options
-        self._engine = create_engine(_require(options, "database_url"), pool_pre_ping=True)
+        self._engine = create_engine(require_option(options, "database_url", "db"), pool_pre_ping=True)
 
     def _read(self, query: str | None, table: str) -> pd.DataFrame:
         sql = query or f'SELECT * FROM "{table}"'
@@ -56,14 +51,18 @@ class DatabaseInputSource:
     def read_users(self) -> pd.DataFrame | None:
         try:
             return self._read(self._options.get("users_query"), self._options.get("users_table", "users"))
-        except Exception:  # noqa: BLE001 - optional input, missing table/query is expected
+        except ProgrammingError:
+            # Postgres raises ProgrammingError (UndefinedTable) for a missing
+            # relation — that's the expected "optional input not configured"
+            # case. Anything else (bad credentials, connection errors, ...)
+            # propagates so real failures aren't masked.
             logger.warning("Optional users source unavailable — continuing without user features.")
             return None
 
     def read_items(self) -> pd.DataFrame | None:
         try:
             return self._read(self._options.get("items_query"), self._options.get("items_table", "items"))
-        except Exception:  # noqa: BLE001 - optional input, missing table/query is expected
+        except ProgrammingError:
             logger.warning("Optional items source unavailable — continuing without item features.")
             return None
 
@@ -71,7 +70,7 @@ class DatabaseInputSource:
 class DatabaseOutputSink:
     def __init__(self, options: dict[str, Any]):
         self._options = options
-        self._engine = create_engine(_require(options, "database_url"), pool_pre_ping=True)
+        self._engine = create_engine(require_option(options, "database_url", "db"), pool_pre_ping=True)
 
     def write_recommendations(self, df: pd.DataFrame) -> None:
         table = self._options.get("recommendations_table", "recommendations")

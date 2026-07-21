@@ -26,22 +26,17 @@ import boto3
 import pandas as pd
 from botocore.config import Config
 
+from cicerone.io.options import require_option
+
 logger = logging.getLogger(__name__)
-
-
-def _require(options: dict[str, Any], key: str, backend: str) -> Any:
-    value = options.get(key)
-    if not value:
-        raise RuntimeError(f"Missing required option '{key}' for dataset storage_backend={backend!r}")
-    return value
 
 
 def _s3_client(options: dict[str, Any]):
     return boto3.client(
         "s3",
         endpoint_url=options.get("endpoint_url"),
-        aws_access_key_id=_require(options, "access_key_id", "s3"),
-        aws_secret_access_key=_require(options, "secret_access_key", "s3"),
+        aws_access_key_id=require_option(options, "access_key_id", "s3"),
+        aws_secret_access_key=require_option(options, "secret_access_key", "s3"),
         region_name="auto",
         config=Config(signature_version="s3v4", retries={"max_attempts": 3, "mode": "standard"}),
     )
@@ -63,11 +58,11 @@ class DatasetInputSource:
 
     def _read(self, filename: str) -> pd.DataFrame:
         if self._backend == "local":
-            path = Path(_require(self._options, "path", "local")) / filename
+            path = Path(require_option(self._options, "path", "local")) / filename
             logger.info("Reading %s", path)
             return pd.read_parquet(path)
 
-        bucket = _require(self._options, "bucket", "s3")
+        bucket = require_option(self._options, "bucket", "s3")
         key = _full_key(self._options, filename)
         logger.info("Reading s3://%s/%s", bucket, key)
         client = _s3_client(self._options)
@@ -103,13 +98,13 @@ class DatasetOutputSink:
 
     def _write_bytes(self, filename: str, payload: bytes, content_type: str) -> None:
         if self._backend == "local":
-            path = Path(_require(self._options, "path", "local")) / filename
+            path = Path(require_option(self._options, "path", "local")) / filename
             path.parent.mkdir(parents=True, exist_ok=True)
             logger.info("Writing %s", path)
             path.write_bytes(payload)
             return
 
-        bucket = _require(self._options, "bucket", "s3")
+        bucket = require_option(self._options, "bucket", "s3")
         key = _full_key(self._options, filename)
         logger.info("Writing s3://%s/%s", bucket, key)
         client = _s3_client(self._options)

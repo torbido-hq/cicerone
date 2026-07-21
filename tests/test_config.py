@@ -127,6 +127,31 @@ def test_load_settings_resolves_env_placeholders(tmp_path, monkeypatch):
     assert settings.input.options["bucket"] == "resolved-bucket"
 
 
+def test_load_settings_resolves_partial_env_placeholders(tmp_path, monkeypatch):
+    monkeypatch.setenv("ENV_NAME", "staging")
+    config_path = _write_toml(
+        tmp_path,
+        """
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "s3"
+        bucket = "bucket"
+        prefix = "datasets/${ENV_NAME}/latest"
+
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+
+    settings = load_settings(config_path)
+
+    assert settings.input.options["prefix"] == "datasets/staging/latest"
+
+
 def test_load_settings_missing_env_placeholder_raises(tmp_path, monkeypatch):
     monkeypatch.delenv("SOME_UNSET_VAR", raising=False)
     config_path = _write_toml(
