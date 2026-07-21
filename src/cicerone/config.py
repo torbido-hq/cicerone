@@ -34,24 +34,16 @@ from typing import Any
 
 DEFAULT_CONFIG_PATH = "/app/config/cicerone.toml"
 
-# Matches every "${VAR_NAME}" occurrence within a string (not just a string
-# that's *entirely* one placeholder, so `prefix = "datasets/${ENV}/latest"`
-# is resolved too), with an optional leading escape "$" — "$${VAR_NAME}"
-# is left as the literal "${VAR_NAME}", not resolved from the environment.
 _ENV_PLACEHOLDER = re.compile(r"\$(\$?)\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
 def _resolve_env_placeholders(value: Any, path: str = "") -> Any:
     """Recursively replaces "${VAR_NAME}" occurrences with the matching
-    environment variable, so secrets never have to be written into the
-    (version-controlled) TOML config file itself. Supports partial
-    interpolation (e.g. "datasets/${ENV}/latest") and a "$${VAR_NAME}" escape
-    for a literal "${VAR_NAME}" that should not be substituted.
-
-    `path` is the dotted/indexed config location this value came from (e.g.
-    "input.options.access_key_id"), included in the error message if a
-    referenced environment variable is missing, to make misconfigurations
-    easier to track down.
+    environment variable. Supports partial interpolation (e.g.
+    "datasets/${ENV}/latest") and a "$${VAR_NAME}" escape for a literal
+    "${VAR_NAME}" that should not be substituted. `path` is the config
+    location this value came from, included in the error message if a
+    referenced environment variable is missing.
     """
     if isinstance(value, str):
 
@@ -84,6 +76,8 @@ class IOSettings:
     Deliberately untyped (``options`` is a plain dict) so new input/output
     backends can be added under cicerone.io without ever touching this
     module — see cicerone.io.factory.build_input_source/build_output_sink.
+    ``kind`` is normalized to lower case when loaded from TOML, so "Dataset"
+    / "DATASET" / "dataset" in the config all resolve the same way.
     """
 
     kind: str
@@ -102,10 +96,12 @@ class Settings:
 
 def _load_io_settings(raw: dict[str, Any], section_name: str) -> IOSettings:
     section = raw.get(section_name)
-    if not section or "kind" not in section:
-        raise RuntimeError(f"Missing required config section: [{section_name}] with a 'kind' key")
+    if not section:
+        raise RuntimeError(f"Missing required config section: [{section_name}]")
+    if "kind" not in section:
+        raise RuntimeError(f"Missing required config key: [{section_name}].kind")
     options = _resolve_env_placeholders(section.get("options", {}), f"{section_name}.options")
-    return IOSettings(kind=section["kind"], options=options)
+    return IOSettings(kind=str(section["kind"]).lower(), options=options)
 
 
 def load_settings(config_path: str | None = None) -> Settings:

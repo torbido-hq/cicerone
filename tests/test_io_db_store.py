@@ -69,9 +69,6 @@ def test_database_input_optional_tables_missing_return_none():
 
 
 def test_database_input_optional_custom_query_missing_table_returns_none():
-    # A custom query (rather than a plain table name) can't be checked via
-    # table-existence inspection up front, so this exercises the fallback
-    # except-based path in _read_optional instead.
     source = DatabaseInputSource(
         {"database_url": TEST_DATABASE_URL, "users_query": 'SELECT * FROM "does_not_exist_yet"'}
     )

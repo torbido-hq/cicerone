@@ -349,7 +349,7 @@ def test_load_settings_missing_kind_raises(tmp_path):
         """,
     )
 
-    with pytest.raises(RuntimeError, match=r"\[input\]"):
+    with pytest.raises(RuntimeError, match=r"\[input\]\.kind"):
         load_settings(config_path)
 
 
@@ -365,6 +365,30 @@ def test_load_settings_missing_section_raises(tmp_path):
         """,
     )
 
-    with pytest.raises(RuntimeError, match=r"\[input\]"):
+    with pytest.raises(RuntimeError, match=r"Missing required config section: \[input\]$"):
         load_settings(config_path)
+
+
+def test_load_settings_normalizes_kind_case(tmp_path):
+    config_path = _write_toml(
+        tmp_path,
+        """
+        [input]
+        kind = "Dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+
+        [output]
+        kind = "DATASET"
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+
+    settings = load_settings(config_path)
+
+    assert settings.input.kind == "dataset"
+    assert settings.output.kind == "dataset"
 

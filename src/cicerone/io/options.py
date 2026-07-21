@@ -10,6 +10,6 @@ from typing import Any
 
 def require_option(options: dict[str, Any], key: str, backend: str) -> Any:
     value = options.get(key)
-    if not value:
+    if value is None:
         raise RuntimeError(f"Missing required option '{key}' for backend {backend!r}")
     return value
