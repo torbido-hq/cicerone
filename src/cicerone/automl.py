@@ -88,7 +88,12 @@ def _parse_candidates(raw: list[dict[str, Any]] | None) -> list[Candidate]:
             raise ValueError(
                 f"Unknown model(s) in automl candidate {unknown}; available: {sorted(STRATEGIES)}"
             )  # noqa: E501
-        weights = {str(k): float(v) for k, v in entry["weights"].items()} if "weights" in entry else None
+        weights_value = entry.get("weights")
+        if weights_value is not None and not isinstance(weights_value, dict):
+            raise ValueError(
+                f"automl candidate 'weights' must be a table of model name -> weight, got {weights_value!r}"
+            )
+        weights = {str(k): float(v) for k, v in weights_value.items()} if weights_value is not None else None
         if weights is not None:
             unknown_weights = [name for name in weights if name not in models]
             if unknown_weights:

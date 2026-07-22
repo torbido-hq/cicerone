@@ -84,6 +84,11 @@ def test_parse_candidates_rejects_unknown_weight_key():
         _parse_candidates([{"models": ["popular"], "weights": {"not_enabled": 1.0}}])
 
 
+def test_parse_candidates_rejects_non_mapping_weights():
+    with pytest.raises(ValueError, match="must be a table of model name -> weight"):
+        _parse_candidates([{"models": ["popular"], "weights": ["popular", 1.0]}])
+
+
 def test_parse_candidates_rejects_partial_weights():
     with pytest.raises(ValueError, match="latest"):
         _parse_candidates([{"models": ["popular", "latest"], "weights": {"popular": 1.0}}])
