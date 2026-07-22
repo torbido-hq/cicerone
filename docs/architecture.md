@@ -68,7 +68,17 @@ flowchart LR
    reciprocal rank fusion (`_combine_by_weighted_fusion`) — the fusion
    constant defaults to `model.RRF_K` but is overridable via
    `Settings.rrf_k`/`[job].rrf_k`; see the module docstring for the exact
-   formula.
+   formula. When a fused (user, item) pair was produced by more than one
+   strategy, its combined `source` label joins each contributing strategy's
+   label in `enabled_models`' order (not alphabetically), so the label
+   reflects the caller's configured priority.
+   An optional `strategy_cache` parameter (keyed by strategy name, caching
+   the *fitted model* rather than its `recommend()` output) lets a caller
+   evaluating multiple configs against the same `BuiltDataset` — namely
+   `automl.evaluate_candidates()` — skip re-fitting a strategy shared by
+   more than one candidate; a cache hit still calls `recommend()` fresh, so
+   it works even across candidates with different `top_k`/`weights`. Unused
+   (`None`) by the single-config `job.py` call path.
 4. If `Settings.automl_enabled` (`[job.automl].enabled`), before step 3
    `automl.evaluate_candidates()` backtests a list of candidate
    `models`/`weights`/`rrf_k` configs (defaults to `automl.DEFAULT_CANDIDATES`,
@@ -76,7 +86,11 @@ flowchart LR
    time-based folds of the raw event history — each fold trains a fresh
    `BuiltDataset` on everything before a `Settings.automl_test_days`-day
    held-out window and scores its recommendations against that window with
-   `rectools.metrics` (MAP@k/NDCG@k/Recall@k). `select_best_candidate()`
+   `rectools.metrics` (MAP@k/NDCG@k/Recall@k). Within a fold,
+   `evaluate_candidates()` passes a `strategy_cache` dict (reset per fold,
+   shared across every candidate scored against that fold) to
+   `train_and_recommend()` so candidates sharing a strategy reuse its fitted
+   model instead of retraining it per candidate. `select_best_candidate()`
    then picks the highest scorer by `Settings.automl_primary_metric`
    (matched by prefix, e.g. `"MAP"` matches `"MAP@10"`), and its
    `models`/`weights`/`rrf_k` replace the static config for that run's call

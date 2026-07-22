@@ -252,6 +252,69 @@ def test_job_run_with_automl_fusion_candidate_reports_effective_weights(tmp_path
     assert manifest["rrf_k"] == 30.0
 
 
+def test_job_run_with_manual_fusion_configuration_reports_manifest_fields(tmp_path, monkeypatch):
+    # AutoML disabled (no [job.automl] section at all): job.models,
+    # [job.model_weights] and job.rrf_k are configured directly in TOML, and
+    # the manifest should reflect those values end-to-end, exactly as it
+    # does when AutoML selects a fusion candidate.
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+
+    now = pd.Timestamp.utcnow()
+    events = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 2, "occurred_at": now},
+            {"user_id": "u2", "item_id": "i2", "event_type": "view", "quantity": 1, "occurred_at": now},
+        ]
+    )
+    items = pd.DataFrame(
+        [
+            {"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True},
+            {"item_id": "i2", "category": "beer", "producer_id": "p2", "published": True, "in_stock": True},
+        ]
+    )
+    events.to_parquet(input_dir / "events.parquet", index=False)
+    items.to_parquet(input_dir / "items.parquet", index=False)
+
+    config_path = tmp_path / "cicerone.toml"
+    config_path.write_text(
+        f"""
+        [job]
+        top_k = 2
+        feature_config_path = "{REPO_FEATURES_CONFIG}"
+        models = ["popular", "latest"]
+        rrf_k = 30
+
+        [job.model_weights]
+        popular = 1.0
+        latest = 0.5
+
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "{input_dir}"
+
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "{output_dir}"
+        """
+    )
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", str(config_path))
+
+    job.run()
+
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    assert manifest["automl_enabled"] is False
+    assert manifest["models"] == "popular,latest"
+    assert manifest["model_weights"] == "latest=0.5,popular=1.0"
+    assert manifest["rrf_k"] == 30.0
+
+
 def test_job_run_raises_on_failure(tmp_path, monkeypatch):
     # no events.parquet present in tmp_path -> should fail
     config_path = _write_config(tmp_path, tmp_path, tmp_path)

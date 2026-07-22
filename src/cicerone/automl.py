@@ -30,6 +30,7 @@ from cicerone.feature_config import FeatureConfig
 from cicerone.model import (
     DEFAULT_MODELS,
     STRATEGIES,
+    RecommenderModel,
     train_and_recommend,
     validate_model_weights,
     validate_rrf_k,
@@ -208,11 +209,13 @@ def evaluate_candidates(
         test_interactions = build_interactions(test_events, config, half_life_days=half_life_days)
         test_users = sorted(set(test_events["user_id"]))
         # Reset per fold (a fold's fitted models are only valid for that
-        # fold's built dataset/test_users) but shared across every candidate
-        # within this fold: candidates that enable the same strategy (e.g.
-        # "popular" alone and a fusion candidate that also enables "popular")
-        # reuse its fitted recommendations instead of re-fitting per candidate.
-        strategy_cache: dict[str, pd.DataFrame] = {}
+        # fold's built dataset) but shared across every candidate within
+        # this fold: candidates that enable the same strategy (e.g.
+        # "popular" alone and a fusion candidate that also enables
+        # "popular") reuse its fitted model -- refitting is skipped, but
+        # recommend() still runs fresh each time, so this works even across
+        # candidates with different top_k/weights.
+        strategy_cache: dict[str, RecommenderModel] = {}
         for idx, candidate in enumerate(parsed_candidates):
             reco = train_and_recommend(
                 built,

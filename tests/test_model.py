@@ -7,7 +7,9 @@ from rectools import Columns
 from cicerone.config import STRATEGY_NAMES
 from cicerone.dataset import build_dataset
 from cicerone.model import (
+    DEFAULT_MODELS,
     STRATEGIES,
+    RecommenderModel,
     Strategy,
     _recommendable_item_ids,
     _validate_strategy_names,
@@ -256,6 +258,33 @@ def test_train_and_recommend_rejects_non_positive_rrf_k(sample_items, feature_co
         )
 
 
+def test_train_and_recommend_weighted_fusion_with_default_models(sample_items, feature_config):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    # enabled_models omitted (None) but weights given -> fusion mode still
+    # applies, against DEFAULT_MODELS rather than an explicit list.
+    from_default = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=5,
+        weights={"collaborative": 1.0, "popular": 0.3},
+    )
+    from_explicit = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=5,
+        enabled_models=DEFAULT_MODELS,
+        weights={"collaborative": 1.0, "popular": 0.3},
+    )
+
+    fused_labels = {"personalized", "popular_fallback", "personalized+popular_fallback"}
+    assert set(from_default["source"]) <= fused_labels
+    pd.testing.assert_frame_equal(from_default.reset_index(drop=True), from_explicit.reset_index(drop=True))
+
+
 def test_train_and_recommend_weighted_fusion_respects_top_k_and_ranks_by_score(sample_items, feature_config):
     events = _synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
@@ -348,7 +377,7 @@ def test_train_and_recommend_reuses_strategy_cache_across_calls(sample_items, fe
         STRATEGIES, "popular", Strategy(counting_factory, personalized=False, source_label="popular_fallback")
     )
 
-    cache: dict[str, pd.DataFrame] = {}
+    cache: dict[str, RecommenderModel] = {}
     first = train_and_recommend(
         built,
         target_users=["u1", "u2", "u3"],
@@ -369,6 +398,61 @@ def test_train_and_recommend_reuses_strategy_cache_across_calls(sample_items, fe
     assert len(fit_calls) == 1
     assert "popular" in cache
     pd.testing.assert_frame_equal(first.reset_index(drop=True), second.reset_index(drop=True))
+
+
+def test_train_and_recommend_strategy_cache_reused_across_different_top_k_and_weights(
+    sample_items, feature_config, monkeypatch
+):
+    # The overall point of caching the *fitted model* (rather than its
+    # recommend() output): a cache hit must still be usable when a later
+    # call asks for a different top_k or weights than the call that
+    # populated the cache -- exactly what cicerone.automl does when
+    # backtesting candidates with different top_k/weights against the same
+    # fold.
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    fit_calls = []
+    original_factory = STRATEGIES["popular"].factory
+
+    def counting_factory():
+        model = original_factory()
+        original_fit = model.fit
+
+        def counting_fit(dataset):
+            fit_calls.append(1)
+            return original_fit(dataset)
+
+        model.fit = counting_fit
+        return model
+
+    monkeypatch.setitem(
+        STRATEGIES, "popular", Strategy(counting_factory, personalized=False, source_label="popular_fallback")
+    )
+
+    cache: dict[str, RecommenderModel] = {}
+    small_top_k = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=1,
+        enabled_models=["popular"],
+        strategy_cache=cache,
+    )
+    large_top_k = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=5,
+        enabled_models=["popular"],
+        weights={"popular": 2.0},
+        strategy_cache=cache,
+    )
+
+    # Only fit once despite the second call using a different top_k/weights.
+    assert len(fit_calls) == 1
+    assert (small_top_k.groupby(Columns.User).size() <= 1).all()
+    assert (large_top_k.groupby(Columns.User).size() <= 5).all()
 
 
 def test_train_and_recommend_without_cache_refits_every_call(sample_items, feature_config, monkeypatch):

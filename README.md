@@ -137,7 +137,12 @@ blend without needing to normalize their raw scores. `rrf_k` (`[job].rrf_k`,
 default `60`) is tunable and only applies when `model_weights` is set — it
 must be positive. An explicitly empty `[job.model_weights]` table still
 enables fusion mode, with every enabled strategy defaulting to weight `1.0`.
-Weight values must be non-negative.
+Weight values must be non-negative. When a fusion result's (user, item) pair
+was produced by more than one strategy, its `source` label joins each
+contributing strategy's label in `models`' configured order (e.g.
+`"popular_fallback+latest"` when `models = ["popular", "latest"]`), not
+alphabetically — so the label reflects your configured priority regardless
+of how the underlying strategy labels happen to sort.
 
 ## AutoML
 
@@ -172,6 +177,13 @@ default for an omitted model, to avoid silently backtesting a weighting you
 didn't intend. AutoML raises if there isn't enough event history for at
 least one fold — reduce `n_splits`/`test_days` or provide more historical
 events.
+
+Within each backtested fold, candidates that enable the same strategy (e.g.
+two fusion candidates that both include `popular`) reuse that strategy's
+already-fitted model instead of re-fitting it per candidate — fitting still
+happens once per fold per distinct strategy, and `recommend()` still runs
+fresh for every candidate, so this is purely a training-cost optimization
+and doesn't change scoring.
 
 ## Output
 

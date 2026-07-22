@@ -204,15 +204,18 @@ def train_and_recommend(
     enabled_models: list[str] | None = None,
     weights: dict[str, float] | None = None,
     rrf_k: float | None = None,
-    strategy_cache: dict[str, pd.DataFrame] | None = None,
+    strategy_cache: dict[str, RecommenderModel] | None = None,
 ) -> pd.DataFrame:
     """`strategy_cache`, if given, is read from and written to (keyed by
     strategy name) so a caller evaluating multiple candidates against the
-    *same* built dataset/target_users/top_k -- e.g. cicerone.automl
-    backtesting several candidates per fold -- can avoid re-fitting a
-    strategy that's shared by more than one candidate. Unused by the
-    single-config job.py call path (defaults to None: no caching, one fit
-    per call, exactly the prior behavior).
+    *same* built dataset -- e.g. cicerone.automl backtesting several
+    candidates per fold -- can avoid re-fitting a strategy that's shared by
+    more than one candidate. Caches the *fitted model*, not its recommend()
+    output, so a cache hit still calls recommend() fresh with this call's
+    own top_k/target_users -- reuse isn't tied to a specific top_k or
+    weights combination. Unused by the single-config job.py call path
+    (defaults to None: no caching, one fit per call, exactly the prior
+    behavior).
     """
     dataset = built.dataset
     enabled_models = enabled_models if enabled_models is not None else DEFAULT_MODELS
@@ -256,22 +259,21 @@ def train_and_recommend(
         if strategy.personalized and not warm_users:
             continue
         if strategy_cache is not None and name in strategy_cache:
-            recs = strategy_cache[name].copy()
+            model = strategy_cache[name]
         else:
             model = strategy.factory()
             logger.info("Fitting '%s' on %d interactions", name, len(built.interactions))
             model.fit(dataset)
-            recs = model.recommend(
-                users=warm_users if strategy.personalized else unique_target_users,
-                dataset=dataset,
-                k=top_k,
-                filter_viewed=strategy.personalized,
-                items_to_recommend=allowed_items,
-            )
-            recs[SOURCE_COLUMN] = strategy.source_label
             if strategy_cache is not None:
-                strategy_cache[name] = recs.copy()
-        recs = recs.copy()
+                strategy_cache[name] = model
+        recs = model.recommend(
+            users=warm_users if strategy.personalized else unique_target_users,
+            dataset=dataset,
+            k=top_k,
+            filter_viewed=strategy.personalized,
+            items_to_recommend=allowed_items,
+        )
+        recs[SOURCE_COLUMN] = strategy.source_label
         recs[WEIGHT_COLUMN] = weights.get(name, 1.0) if weights is not None else 1.0
         frames.append(recs)
 
