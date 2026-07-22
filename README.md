@@ -133,6 +133,40 @@ default `60`) is tunable and only applies when `model_weights` is set. An
 explicitly empty `[job.model_weights]` table still enables fusion mode, with
 every enabled strategy defaulting to weight `1.0`.
 
+## AutoML
+
+Instead of a fixed `models`/`model_weights` config, `[job.automl]` can pick
+the best combination automatically for every run:
+
+```toml
+[job.automl]
+enabled = true
+n_splits = 2       # time-based folds to backtest each candidate over
+test_days = 14     # size of each fold's held-out window, in days
+primary_metric = "MAP" # matched by prefix, e.g. "MAP@10"
+```
+
+Each run, `cicerone.automl.evaluate_candidates()` splits your event history
+into `n_splits` non-overlapping, most-recent-first `test_days`-day windows;
+for each candidate strategy/weight combination, it trains on everything
+before the window and scores the recommendations against what actually
+happened during it (`MAP@k`, `NDCG@k`, `Recall@k`, via `rectools.metrics`).
+`select_best_candidate()` then picks the highest-scoring candidate by
+`primary_metric`, and that candidate's `models`/`weights`/`rrf_k` are used
+for the run in place of the static config, ties broken by candidate order.
+
+The default candidate search space tries every strategy alone, the default
+priority combo, and one weighted-fusion blend across all four strategies —
+override it with `[[job.automl.candidates]]` (same shape as
+`models`/`model_weights`/`rrf_k` above, one array-of-tables entry per
+candidate) if you want to try a different set. Unlike top-level
+`[job.model_weights]`, a candidate's `weights` table (if present) must give
+an explicit weight for every one of its `models` — there's no implicit
+default for an omitted model, to avoid silently backtesting a weighting you
+didn't intend. AutoML raises if there isn't enough event history for at
+least one fold — reduce `n_splits`/`test_days` or provide more historical
+events.
+
 ## Output
 
 `recommendations`: `user_id, item_id, rank, score, source` (`source` is the

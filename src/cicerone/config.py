@@ -34,6 +34,13 @@ from typing import Any
 
 DEFAULT_CONFIG_PATH = "/app/config/cicerone.toml"
 
+# Centralized here (not in cicerone.automl, which config.py deliberately
+# doesn't import) so the [job.automl] TOML defaults and automl.py's function
+# defaults can't drift apart.
+AUTOML_DEFAULT_N_SPLITS = 2
+AUTOML_DEFAULT_TEST_DAYS = 14
+AUTOML_DEFAULT_PRIMARY_METRIC = "MAP"
+
 _ENV_PLACEHOLDER = re.compile(r"\$(\$?)\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
@@ -95,6 +102,11 @@ class Settings:
     models: list[str] | None
     model_weights: dict[str, float] | None
     rrf_k: float | None
+    automl_enabled: bool
+    automl_n_splits: int
+    automl_test_days: int
+    automl_primary_metric: str
+    automl_candidates: list[dict[str, Any]] | None
 
 
 def _load_io_settings(raw: dict[str, Any], section_name: str) -> IOSettings:
@@ -120,6 +132,7 @@ def load_settings(config_path: str | None = None) -> Settings:
         raw = tomllib.load(f)
 
     job = raw.get("job", {})
+    automl = job.get("automl", {})
     return Settings(
         input=_load_io_settings(raw, "input"),
         output=_load_io_settings(raw, "output"),
@@ -134,4 +147,11 @@ def load_settings(config_path: str | None = None) -> Settings:
             else None
         ),
         rrf_k=float(job["rrf_k"]) if "rrf_k" in job else None,
+        automl_enabled=bool(automl.get("enabled", False)),
+        automl_n_splits=int(automl.get("n_splits", AUTOML_DEFAULT_N_SPLITS)),
+        automl_test_days=int(automl.get("test_days", AUTOML_DEFAULT_TEST_DAYS)),
+        automl_primary_metric=automl.get("primary_metric", AUTOML_DEFAULT_PRIMARY_METRIC),
+        automl_candidates=(
+            [dict(candidate) for candidate in automl["candidates"]] if "candidates" in automl else None
+        ),
     )

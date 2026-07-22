@@ -48,6 +48,32 @@ feature_config_path = "/app/config/features.toml"
 # popular = 0.3
 # latest = 0.4
 
+# Optional: instead of a fixed "models"/"model_weights" config, automatically
+# backtest a set of candidate strategy/weight combinations over time-based
+# folds of your own event history and pick the best one (by "primary_metric")
+# for each run. Overrides "models"/"model_weights"/"rrf_k" above when enabled.
+# [job.automl]
+# enabled = true
+# n_splits = 2       # number of time-based folds to backtest each candidate over
+# test_days = 14     # size of each fold's held-out window, in days
+# primary_metric = "MAP" # matched by prefix against "MAP@<top_k>"/"NDCG@<top_k>"/"Recall@<top_k>"
+#
+# Optional: override the default candidate search space (every strategy
+# alone, the default priority combo, and a weighted-fusion blend). Each
+# candidate is the same shape as "models"/"model_weights"/"rrf_k" above,
+# except a candidate's "weights" table (if present) must give an explicit
+# weight for every one of its "models" -- unlike "job.model_weights" above,
+# there is no implicit default for an omitted model.
+# [[job.automl.candidates]]
+# models = ["popular"]
+# [[job.automl.candidates]]
+# models = ["collaborative", "item_based", "popular", "latest"]
+# [job.automl.candidates.weights]
+# collaborative = 1.0
+# item_based = 0.7
+# popular = 0.3
+# latest = 0.3
+
 [input]
 kind = "dataset"
 
