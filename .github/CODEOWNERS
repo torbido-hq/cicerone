@@ -1,0 +1,3 @@
+# Default owner for everything in the repo.
+# Required so "Require review from Code Owners" has someone to assign.
+* @ngw
