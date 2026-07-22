@@ -142,6 +142,13 @@ def test_train_and_recommend_combines_multiple_personalized_strategies(sample_it
     )
 
     assert set(recommendations["source"]) <= {"personalized", "item_based", "popular_fallback"}
+    assert set(recommendations.columns) == {
+        Columns.User,
+        Columns.Item,
+        Columns.Rank,
+        Columns.Score,
+        "source",
+    }
 
 
 def test_train_and_recommend_no_warm_users_and_only_personalized_strategies_returns_empty(
@@ -162,3 +169,138 @@ def test_train_and_recommend_no_warm_users_and_only_personalized_strategies_retu
         Columns.Score,
         "source",
     ]
+
+
+def test_train_and_recommend_rejects_unknown_weight_key(sample_items, feature_config):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    with pytest.raises(ValueError, match="not_enabled"):
+        train_and_recommend(
+            built,
+            target_users=["u1"],
+            config=feature_config,
+            top_k=2,
+            enabled_models=["popular"],
+            weights={"not_enabled": 1.0},
+        )
+
+
+def test_train_and_recommend_rejects_negative_weight(sample_items, feature_config):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    with pytest.raises(ValueError, match="non-negative"):
+        train_and_recommend(
+            built,
+            target_users=["u1"],
+            config=feature_config,
+            top_k=2,
+            enabled_models=["popular"],
+            weights={"popular": -1.0},
+        )
+
+
+def test_train_and_recommend_rejects_non_positive_rrf_k(sample_items, feature_config):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    with pytest.raises(ValueError, match="rrf_k must be positive"):
+        train_and_recommend(
+            built,
+            target_users=["u1"],
+            config=feature_config,
+            top_k=2,
+            enabled_models=["popular"],
+            weights={"popular": 1.0},
+            rrf_k=0,
+        )
+
+
+def test_train_and_recommend_weighted_fusion_respects_top_k_and_ranks_by_score(sample_items, feature_config):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    recommendations = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=2,
+        enabled_models=["collaborative", "item_based", "popular"],
+        weights={"collaborative": 1.0, "item_based": 0.5, "popular": 0.2},
+    )
+
+    assert (recommendations.groupby(Columns.User).size() <= 2).all()
+    for _, group in recommendations.groupby(Columns.User):
+        assert list(group[Columns.Rank]) == list(range(1, len(group) + 1))
+        assert list(group[Columns.Score]) == sorted(group[Columns.Score], reverse=True)
+
+
+def test_train_and_recommend_weighted_fusion_merges_sources_for_shared_items(sample_items, feature_config):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    recommendations = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=5,
+        enabled_models=["popular", "latest"],
+        weights={"popular": 1.0, "latest": 1.0},
+    )
+
+    # Both non-personalized strategies see every target user & all allowed
+    # items, so every recommended pair should be backed by both sources.
+    assert set(recommendations["source"]) == {"latest+popular_fallback"}
+
+
+def test_train_and_recommend_empty_weights_dict_enables_fusion(sample_items, feature_config):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    # An explicitly empty weights dict is not the same as omitting weights:
+    # it still opts into fusion mode (every strategy defaults to weight 1.0),
+    # so the merged "+"-joined source label should appear, same as when
+    # weights are given explicitly.
+    recommendations = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=5,
+        enabled_models=["popular", "latest"],
+        weights={},
+    )
+
+    assert set(recommendations["source"]) == {"latest+popular_fallback"}
+
+
+def test_train_and_recommend_custom_rrf_k_changes_fused_scores(sample_items, feature_config):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    small_k = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=5,
+        enabled_models=["popular", "latest"],
+        weights={"popular": 1.0, "latest": 1.0},
+        rrf_k=1,
+    )
+    large_k = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=5,
+        enabled_models=["popular", "latest"],
+        weights={"popular": 1.0, "latest": 1.0},
+        rrf_k=1000,
+    )
+
+    # RRF fused score is weight / (rrf_k + rank): for a fixed (positive) rank
+    # and weight, a larger rrf_k strictly lowers the score. Both runs recommend
+    # the same (user, item) pairs here (only 2 allowed items per user), so
+    # every pair should show this exact monotonic relationship.
+    merged = small_k.merge(large_k, on=[Columns.User, Columns.Item], suffixes=("_small_k", "_large_k"))
+    assert not merged.empty
+    assert (merged[Columns.Score + "_small_k"] > merged[Columns.Score + "_large_k"]).all()
