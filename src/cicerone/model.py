@@ -25,6 +25,9 @@ logger = logging.getLogger(__name__)
 RANDOM_STATE = 42
 DEFAULT_MODELS = ["collaborative", "popular"]
 LATEST_WINDOW_DAYS = 14
+# Reciprocal rank fusion constant (Cormack et al., 2009) — dampens the
+# influence of very low ranks without needing per-strategy score normalization.
+RRF_K = 60
 
 
 class RecommenderModel(Protocol):
@@ -100,18 +103,59 @@ def _recommendable_item_ids(
     return [i for i in all_item_ids if i in allowed] or list(all_item_ids)
 
 
+def _combine_by_priority(frames: list[pd.DataFrame], top_k: int) -> pd.DataFrame:
+    """Concatenates strategy outputs in list order; earlier strategies win
+    ties for the same (user, item) pair (e.g. a personalized hit takes
+    precedence over a popularity/latest backfill for that pair).
+    """
+    combined = pd.concat(frames, ignore_index=True)
+    combined = combined.drop_duplicates(subset=[Columns.User, Columns.Item], keep="first")
+    combined = combined.sort_values([Columns.User, Columns.Rank])
+    return combined.groupby(Columns.User, as_index=False).head(top_k)
+
+
+def _combine_by_weighted_fusion(
+    frames: list[pd.DataFrame], weights: dict[str, float], top_k: int
+) -> pd.DataFrame:
+    """Weighted reciprocal rank fusion: each strategy's contribution to an
+    item's fused score is `weight / (RRF_K + rank)`, summed across every
+    strategy that recommended that (user, item) pair. Rank-based (rather
+    than raw-score-based) so heterogeneous strategies — LightFM scores,
+    ItemKNN similarities, popularity counts — combine without normalization.
+    """
+    combined = pd.concat(frames, ignore_index=True)
+    combined[Columns.Score] = combined["_weight"] / (RRF_K + combined[Columns.Rank])
+    fused = combined.groupby([Columns.User, Columns.Item], as_index=False).agg(
+        **{
+            Columns.Score: (Columns.Score, "sum"),
+            "source": ("source", lambda labels: "+".join(sorted(set(labels)))),
+        }
+    )
+    fused = fused.sort_values([Columns.User, Columns.Score], ascending=[True, False])
+    fused[Columns.Rank] = fused.groupby(Columns.User).cumcount() + 1
+    fused = fused.groupby(Columns.User, as_index=False).head(top_k)
+    return fused[[Columns.User, Columns.Item, Columns.Rank, Columns.Score, "source"]]
+
+
 def train_and_recommend(
     built: BuiltDataset,
     target_users: list[str],
     config: FeatureConfig,
     top_k: int,
     enabled_models: list[str] | None = None,
+    weights: dict[str, float] | None = None,
 ) -> pd.DataFrame:
     dataset = built.dataset
     enabled_models = enabled_models if enabled_models is not None else DEFAULT_MODELS
     unknown_models = [name for name in enabled_models if name not in STRATEGIES]
     if unknown_models:
         raise ValueError(f"Unknown model(s) {unknown_models}; available: {sorted(STRATEGIES)}")
+    if weights:
+        unknown_weights = [name for name in weights if name not in enabled_models]
+        if unknown_weights:
+            raise ValueError(
+                f"model_weights key(s) {unknown_weights} are not in enabled_models {enabled_models}"
+            )
 
     all_item_ids = dataset.item_id_map.external_ids
     allowed_items = _recommendable_item_ids(built.items, config.item_availability_filters, all_item_ids)
@@ -143,13 +187,14 @@ def train_and_recommend(
             items_to_recommend=allowed_items,
         )
         recs["source"] = strategy.source_label
+        recs["_weight"] = weights.get(name, 1.0) if weights else 1.0
         frames.append(recs)
 
     if not frames:
         return pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, "source"])
 
-    combined = pd.concat(frames, ignore_index=True)
-    combined = combined.drop_duplicates(subset=[Columns.User, Columns.Item], keep="first")
-    combined = combined.sort_values([Columns.User, Columns.Rank])
-    combined = combined.groupby(Columns.User, as_index=False).head(top_k)
+    if weights:
+        combined = _combine_by_weighted_fusion(frames, weights, top_k)
+    else:
+        combined = _combine_by_priority(frames, top_k)
     return combined.reset_index(drop=True)

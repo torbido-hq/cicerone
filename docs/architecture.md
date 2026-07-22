@@ -59,8 +59,10 @@ flowchart LR
    the cold-start note below); non-personalized strategies (`popular`,
    `latest`) run for every target user and backfill any warm user who didn't
    get enough personalized results after the availability filter. Strategies
-   are combined in configured order — earlier ones win ties for the same
-   user/item pair.
+   are combined either by priority order (default — earlier ones win ties)
+   or, if `Settings.model_weights` is set, by weighted reciprocal rank fusion
+   (`_combine_by_weighted_fusion`) — see `model.RRF_K` and the module
+   docstring for the exact formula.
 4. `job.run()` writes the combined recommendations and a small run manifest
    (counts, timestamp) back out via the configured `OutputSink`.
 5. `scheduler.main()` is the container's actual entrypoint: it computes the

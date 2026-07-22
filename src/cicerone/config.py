@@ -93,6 +93,7 @@ class Settings:
     half_life_days: float
     cron_schedule: str
     models: list[str] | None
+    model_weights: dict[str, float] | None
 
 
 def _load_io_settings(raw: dict[str, Any], section_name: str) -> IOSettings:
@@ -126,4 +127,9 @@ def load_settings(config_path: str | None = None) -> Settings:
         half_life_days=float(job.get("half_life_days", 90)),
         cron_schedule=job.get("cron_schedule", "0 3 * * *"),
         models=list(job["models"]) if "models" in job else None,
+        model_weights=(
+            {name: float(weight) for name, weight in job["model_weights"].items()}
+            if "model_weights" in job
+            else None
+        ),
     )

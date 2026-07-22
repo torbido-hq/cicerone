@@ -122,6 +122,14 @@ user/item pair). Defaults to `["collaborative", "popular"]` if omitted:
   trending/recently active items. Non-personalized, same backfill role as
   `popular`.
 
+By default, strategies are combined in priority order: earlier ones win ties
+for the same user/item pair, non-personalized ones only backfill users who
+didn't get enough personalized results. Optionally, `[job.model_weights]`
+switches to a weighted reciprocal rank fusion instead — every enabled
+strategy's rank contributes `weight / (60 + rank)` to each item's fused
+score, summed across strategies, so results from heterogeneous strategies
+blend without needing to normalize their raw scores.
+
 ## Output
 
 `recommendations`: `user_id, item_id, rank, score, source` (`source` is the

@@ -28,6 +28,16 @@ feature_config_path = "/app/config/features.toml"
 # popularity fallback), "latest" (trending in the last two weeks).
 # models = ["collaborative", "item_based", "popular", "latest"]
 
+# Optional: combine the enabled strategies via weighted reciprocal rank
+# fusion instead of the default priority order (personalized results win
+# ties, non-personalized ones only backfill). If omitted, the priority
+# combiner above is used. Every key must be one of the enabled "models".
+# [job.model_weights]
+# collaborative = 1.0
+# item_based = 0.6
+# popular = 0.3
+# latest = 0.4
+
 [input]
 kind = "dataset"
 

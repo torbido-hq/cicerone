@@ -162,3 +162,55 @@ def test_train_and_recommend_no_warm_users_and_only_personalized_strategies_retu
         Columns.Score,
         "source",
     ]
+
+
+def test_train_and_recommend_rejects_unknown_weight_key(sample_items, feature_config):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    with pytest.raises(ValueError, match="not_enabled"):
+        train_and_recommend(
+            built,
+            target_users=["u1"],
+            config=feature_config,
+            top_k=2,
+            enabled_models=["popular"],
+            weights={"not_enabled": 1.0},
+        )
+
+
+def test_train_and_recommend_weighted_fusion_respects_top_k_and_ranks_by_score(sample_items, feature_config):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    recommendations = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=2,
+        enabled_models=["collaborative", "item_based", "popular"],
+        weights={"collaborative": 1.0, "item_based": 0.5, "popular": 0.2},
+    )
+
+    assert (recommendations.groupby(Columns.User).size() <= 2).all()
+    for _, group in recommendations.groupby(Columns.User):
+        assert list(group[Columns.Rank]) == list(range(1, len(group) + 1))
+        assert list(group[Columns.Score]) == sorted(group[Columns.Score], reverse=True)
+
+
+def test_train_and_recommend_weighted_fusion_merges_sources_for_shared_items(sample_items, feature_config):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    recommendations = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=5,
+        enabled_models=["popular", "latest"],
+        weights={"popular": 1.0, "latest": 1.0},
+    )
+
+    # Both non-personalized strategies see every target user & all allowed
+    # items, so every recommended pair should be backed by both sources.
+    assert set(recommendations["source"]) == {"latest+popular_fallback"}

@@ -42,7 +42,12 @@ def run() -> None:
 
     target_users = sorted(set(events["user_id"]) | (set(users["user_id"]) if users is not None else set()))
     recommendations = train_and_recommend(
-        built, target_users, feature_config, top_k=settings.top_k, enabled_models=settings.models
+        built,
+        target_users,
+        feature_config,
+        top_k=settings.top_k,
+        enabled_models=settings.models,
+        weights=settings.model_weights,
     )
 
     sink.write_recommendations(recommendations)
@@ -55,6 +60,11 @@ def run() -> None:
         "n_items": int(built.dataset.item_id_map.external_ids.shape[0]),
         "top_k": settings.top_k,
         "models": ",".join(settings.models or DEFAULT_MODELS),
+        "model_weights": (
+            ",".join(f"{name}={weight}" for name, weight in settings.model_weights.items())
+            if settings.model_weights
+            else ""
+        ),
     }
     sink.write_manifest(manifest)
     logger.info("Job finished: %s", json.dumps(manifest))
