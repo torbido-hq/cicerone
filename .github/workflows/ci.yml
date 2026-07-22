@@ -9,7 +9,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Same test image used for pytest (see the "test" job below), so lint
       # runs against the exact dependency set installed there — nothing to
@@ -32,7 +32,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Everything (including the test run itself) happens inside Docker —
       # the runner only needs Docker, never a host Python install, so CI
