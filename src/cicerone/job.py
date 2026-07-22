@@ -82,6 +82,19 @@ def run() -> None:
 
     sink.write_recommendations(recommendations)
 
+    resolved_models = enabled_models or DEFAULT_MODELS
+    # `weights is not None` (rather than truthiness) so fusion mode with an
+    # empty/partial `[job.model_weights]` still reports the *effective*
+    # weight (defaulting to 1.0) for every enabled model, instead of hiding
+    # implicit defaults behind an empty string in the manifest.
+    if weights is not None:
+        effective_weights = {name: weights.get(name, 1.0) for name in resolved_models}
+        model_weights_str = ",".join(
+            f"{name}={effective_weights[name]}" for name in sorted(effective_weights)
+        )
+    else:
+        model_weights_str = ""
+
     manifest = {
         "generated_at": datetime.now(UTC).isoformat(),
         "n_events": int(len(events)),
@@ -89,10 +102,8 @@ def run() -> None:
         "n_users_with_recommendations": int(recommendations["user_id"].nunique()),
         "n_items": int(built.dataset.item_id_map.external_ids.shape[0]),
         "top_k": settings.top_k,
-        "models": ",".join(enabled_models or DEFAULT_MODELS),
-        "model_weights": (
-            ",".join(f"{name}={weight}" for name, weight in weights.items()) if weights else ""
-        ),
+        "models": ",".join(resolved_models),
+        "model_weights": model_weights_str,
         "rrf_k": rrf_k if rrf_k is not None else RRF_K,
         "automl_enabled": settings.automl_enabled,
         "automl_metrics": (

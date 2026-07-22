@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 import pytest
+from rectools.metrics import calc_metrics
 
 from cicerone import automl
 from cicerone.automl import (
@@ -12,6 +13,8 @@ from cicerone.automl import (
     evaluate_candidates,
     select_best_candidate,
 )
+from cicerone.dataset import build_dataset, build_interactions
+from cicerone.model import train_and_recommend
 
 
 def _spread_events(n_days: int) -> pd.DataFrame:
@@ -129,6 +132,29 @@ def test_evaluate_candidates_raises_on_empty_candidates_list(sample_items, featu
         )
 
 
+def test_evaluate_candidates_warns_when_fewer_folds_than_requested(sample_items, feature_config, caplog):
+    # 21 days of history only supports 1 fold of test_days=7 (needs history
+    # before the test window too), but n_splits=3 is requested -- the run
+    # should still succeed with the folds it can build, while logging that
+    # backtest coverage is reduced instead of silently under-delivering.
+    events = _spread_events(n_days=21)
+    with caplog.at_level("WARNING", logger="cicerone.automl"):
+        results = evaluate_candidates(
+            events,
+            None,
+            sample_items,
+            feature_config,
+            top_k=2,
+            half_life_days=90,
+            candidates=[{"models": ["popular"]}],
+            n_splits=3,
+            test_days=7,
+        )
+
+    assert results[0].n_folds < 3
+    assert any("only" in record.message and "fold" in record.message for record in caplog.records)
+
+
 def test_evaluate_candidates_scores_each_candidate(sample_items, feature_config):
     events = _spread_events(n_days=21)
     candidates = [{"models": ["popular"]}, {"models": ["latest"]}]
@@ -151,6 +177,63 @@ def test_evaluate_candidates_scores_each_candidate(sample_items, feature_config)
         assert any(key.startswith("MAP") for key in result.metrics)
         assert any(key.startswith("NDCG") for key in result.metrics)
         assert any(key.startswith("Recall") for key in result.metrics)
+
+
+def test_evaluate_candidates_handles_weighted_rrf_and_averages_across_folds(sample_items, feature_config):
+    # 35 days gives 3 non-overlapping 7-day test folds plus enough leftover
+    # history for each fold's train side, so multi-fold averaging is
+    # actually exercised (not just a single fold repeated).
+    events = _spread_events(n_days=35)
+    candidate_cfg = {
+        "models": ["popular", "latest"],
+        "weights": {"popular": 1.0, "latest": 0.5},
+        "rrf_k": 30,
+    }
+
+    results = evaluate_candidates(
+        events,
+        None,
+        sample_items,
+        feature_config,
+        top_k=2,
+        half_life_days=90,
+        candidates=[candidate_cfg],
+        n_splits=3,
+        test_days=7,
+    )
+
+    assert len(results) == 1
+    result = results[0]
+    assert result.candidate.models == ["popular", "latest"]
+    assert result.candidate.weights == {"popular": 1.0, "latest": 0.5}
+    assert result.candidate.rrf_k == 30.0
+    assert result.n_folds > 1
+
+    # Independently recompute each fold's own metrics and confirm
+    # evaluate_candidates' averaged result is actually their mean -- i.e.
+    # multi-fold averaging isn't just echoing a single fold's numbers.
+    folds = _time_based_folds(events, n_splits=3, test_days=7)
+    assert len(folds) == result.n_folds
+    metrics_defs = automl._make_metrics(top_k=2)
+    per_fold_metrics = []
+    for train_events, test_events in folds:
+        built = build_dataset(train_events, None, sample_items, feature_config, half_life_days=90)
+        test_interactions = build_interactions(test_events, feature_config, half_life_days=90)
+        test_users = sorted(set(test_events["user_id"]))
+        reco = train_and_recommend(
+            built,
+            test_users,
+            feature_config,
+            top_k=2,
+            enabled_models=candidate_cfg["models"],
+            weights=candidate_cfg["weights"],
+            rrf_k=candidate_cfg["rrf_k"],
+        )
+        per_fold_metrics.append(calc_metrics(metrics_defs, reco=reco, interactions=test_interactions))
+
+    expected = pd.DataFrame(per_fold_metrics).mean()
+    for key, expected_value in expected.items():
+        assert result.metrics[key] == pytest.approx(expected_value)
 
 
 def test_select_best_candidate_picks_highest_primary_metric():

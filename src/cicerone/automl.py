@@ -176,6 +176,14 @@ def evaluate_candidates(
             f"Not enough event history for {n_splits} fold(s) of {test_days} day(s) each; "
             "reduce automl n_splits/test_days or provide more historical events"
         )
+    if len(folds) < n_splits:
+        logger.warning(
+            "AutoML requested %d fold(s) of %d day(s) each but only %d had enough event history; "
+            "backtest coverage is reduced",
+            n_splits,
+            test_days,
+            len(folds),
+        )
 
     metrics = _make_metrics(top_k)
     fold_metrics_by_candidate: list[list[dict[str, float]]] = [[] for _ in parsed_candidates]
