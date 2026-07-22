@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from cicerone import job
 
@@ -79,12 +80,10 @@ def test_job_run_end_to_end_with_local_dataset_backend(tmp_path, monkeypatch):
     assert manifest["top_k"] == 2
 
 
-def test_job_run_raises_and_logs_on_failure(tmp_path, monkeypatch, caplog):
+def test_job_run_raises_on_failure(tmp_path, monkeypatch):
     # no events.parquet present in tmp_path -> should fail
     config_path = _write_config(tmp_path, tmp_path, tmp_path)
     monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
 
-    import pytest
-
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(Exception, match="events.parquet"):
         job.run()

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from cicerone.config import load_settings
@@ -330,6 +332,15 @@ def test_load_settings_non_string_option_values_pass_through(tmp_path):
 def test_load_settings_missing_config_file_raises(tmp_path):
     with pytest.raises(RuntimeError, match="Config file not found"):
         load_settings(str(tmp_path / "does-not-exist.toml"))
+
+
+def test_load_settings_falls_back_to_default_path_when_env_var_is_empty(tmp_path, monkeypatch):
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", "")
+    default_path = tmp_path / "does-not-exist.toml"
+    monkeypatch.setattr("cicerone.config.DEFAULT_CONFIG_PATH", str(default_path))
+
+    with pytest.raises(RuntimeError, match=f"Config file not found: {re.escape(str(default_path))}"):
+        load_settings()
 
 
 def test_load_settings_missing_kind_raises(tmp_path):

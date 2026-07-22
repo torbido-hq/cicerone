@@ -61,7 +61,7 @@ docker run --rm cicerone-test mypy src
 docker run --rm cicerone-test pip-audit -r requirements.txt -r requirements-dev.txt
 ```
 
-If a vulnerability is found with no available fix yet, don't silence it
+If a vulnerability is found with no available fix yet, don't suppress it
 silently — open an issue tracking the upstream fix, and only add a
 `--ignore-vuln <ID>` (with a comment explaining why) as a last resort.
 
