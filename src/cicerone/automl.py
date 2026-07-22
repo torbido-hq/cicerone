@@ -157,12 +157,15 @@ def evaluate_candidates(
         )
 
     metrics = _make_metrics(top_k)
-    results = []
-    for candidate in parsed_candidates:
-        fold_metrics = []
-        for train_events, test_events in folds:
-            built = build_dataset(train_events, users, items, config, half_life_days=half_life_days)
-            test_users = sorted(set(test_events["user_id"]))
+    fold_metrics_by_candidate: list[list[dict[str, float]]] = [[] for _ in parsed_candidates]
+    for train_events, test_events in folds:
+        # Built once per fold and reused across every candidate below: the
+        # dataset only depends on the fold's events/users/items, not on which
+        # strategies/weights a candidate combines.
+        built = build_dataset(train_events, users, items, config, half_life_days=half_life_days)
+        test_built = build_dataset(test_events, users, items, config, half_life_days=half_life_days)
+        test_users = sorted(set(test_events["user_id"]))
+        for idx, candidate in enumerate(parsed_candidates):
             reco = train_and_recommend(
                 built,
                 test_users,
@@ -172,8 +175,12 @@ def evaluate_candidates(
                 weights=candidate.weights,
                 rrf_k=candidate.rrf_k,
             )
-            test_built = build_dataset(test_events, users, items, config, half_life_days=half_life_days)
-            fold_metrics.append(calc_metrics(metrics, reco=reco, interactions=test_built.interactions))
+            fold_metrics_by_candidate[idx].append(
+                calc_metrics(metrics, reco=reco, interactions=test_built.interactions)
+            )
+
+    results = []
+    for candidate, fold_metrics in zip(parsed_candidates, fold_metrics_by_candidate, strict=True):
         averaged = dict(pd.DataFrame(fold_metrics).mean()) if fold_metrics else dict.fromkeys(metrics, 0.0)
         results.append(CandidateResult(candidate=candidate, metrics=averaged, n_folds=len(fold_metrics)))
         logger.info(
