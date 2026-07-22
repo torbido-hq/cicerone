@@ -14,7 +14,7 @@ from cicerone.config import load_settings
 from cicerone.dataset import build_dataset
 from cicerone.feature_config import load_feature_config
 from cicerone.io.factory import build_input_source, build_output_sink
-from cicerone.model import DEFAULT_MODELS, train_and_recommend
+from cicerone.model import DEFAULT_MODELS, RRF_K, train_and_recommend
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -48,6 +48,7 @@ def run() -> None:
         top_k=settings.top_k,
         enabled_models=settings.models,
         weights=settings.model_weights,
+        rrf_k=settings.rrf_k,
     )
 
     sink.write_recommendations(recommendations)
@@ -65,6 +66,7 @@ def run() -> None:
             if settings.model_weights
             else ""
         ),
+        "rrf_k": settings.rrf_k if settings.rrf_k is not None else RRF_K,
     }
     sink.write_manifest(manifest)
     logger.info("Job finished: %s", json.dumps(manifest))

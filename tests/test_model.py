@@ -214,3 +214,49 @@ def test_train_and_recommend_weighted_fusion_merges_sources_for_shared_items(sam
     # Both non-personalized strategies see every target user & all allowed
     # items, so every recommended pair should be backed by both sources.
     assert set(recommendations["source"]) == {"latest+popular_fallback"}
+
+
+def test_train_and_recommend_empty_weights_dict_enables_fusion(sample_items, feature_config):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    # An explicitly empty weights dict is not the same as omitting weights:
+    # it still opts into fusion mode (every strategy defaults to weight 1.0),
+    # so the merged "+"-joined source label should appear, same as when
+    # weights are given explicitly.
+    recommendations = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=5,
+        enabled_models=["popular", "latest"],
+        weights={},
+    )
+
+    assert set(recommendations["source"]) == {"latest+popular_fallback"}
+
+
+def test_train_and_recommend_custom_rrf_k_changes_fused_scores(sample_items, feature_config):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    default_k = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=5,
+        enabled_models=["popular", "latest"],
+        weights={"popular": 1.0, "latest": 1.0},
+    )
+    custom_k = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=5,
+        enabled_models=["popular", "latest"],
+        weights={"popular": 1.0, "latest": 1.0},
+        rrf_k=1,
+    )
+
+    merged = default_k.merge(custom_k, on=[Columns.User, Columns.Item], suffixes=("_default", "_custom"))
+    assert not merged[Columns.Score + "_default"].equals(merged[Columns.Score + "_custom"])

@@ -54,6 +54,7 @@ def test_load_settings_dataset_backends(tmp_path):
     assert settings.feature_config_path == "/custom/features.toml"
     assert settings.models is None
     assert settings.model_weights is None
+    assert settings.rrf_k is None
 
 
 def test_load_settings_with_explicit_models(tmp_path):
@@ -88,6 +89,7 @@ def test_load_settings_with_explicit_model_weights(tmp_path):
         """
         [job]
         models = ["collaborative", "popular"]
+        rrf_k = 45
 
         [job.model_weights]
         collaborative = 1.0
@@ -110,6 +112,7 @@ def test_load_settings_with_explicit_model_weights(tmp_path):
     settings = load_settings(config_path)
 
     assert settings.model_weights == {"collaborative": 1.0, "popular": 0.3}
+    assert settings.rrf_k == 45.0
 
 
 def test_load_settings_defaults_when_job_section_missing(tmp_path):
@@ -138,6 +141,7 @@ def test_load_settings_defaults_when_job_section_missing(tmp_path):
     assert settings.feature_config_path == "/app/config/features.toml"
     assert settings.models is None
     assert settings.model_weights is None
+    assert settings.rrf_k is None
 
 
 def test_load_settings_db_backend_with_defaults(tmp_path):

@@ -94,6 +94,7 @@ class Settings:
     cron_schedule: str
     models: list[str] | None
     model_weights: dict[str, float] | None
+    rrf_k: float | None
 
 
 def _load_io_settings(raw: dict[str, Any], section_name: str) -> IOSettings:
@@ -132,4 +133,5 @@ def load_settings(config_path: str | None = None) -> Settings:
             if "model_weights" in job
             else None
         ),
+        rrf_k=float(job["rrf_k"]) if "rrf_k" in job else None,
     )

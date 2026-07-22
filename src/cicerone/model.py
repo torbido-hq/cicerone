@@ -27,7 +27,12 @@ DEFAULT_MODELS = ["collaborative", "popular"]
 LATEST_WINDOW_DAYS = 14
 # Reciprocal rank fusion constant (Cormack et al., 2009) — dampens the
 # influence of very low ranks without needing per-strategy score normalization.
+# Default when Settings.rrf_k / train_and_recommend(rrf_k=...) is not set.
 RRF_K = 60
+# Not a rectools-defined column (see rectools.Columns) — our own "which
+# strategy/strategies produced this row" tag, kept as a module constant so
+# it's not repeated as a string literal throughout this file.
+SOURCE_COLUMN = "source"
 
 
 class RecommenderModel(Protocol):
@@ -114,27 +119,27 @@ def _combine_by_priority(frames: list[pd.DataFrame], top_k: int) -> pd.DataFrame
     return combined.groupby(Columns.User, as_index=False).head(top_k)
 
 
-def _combine_by_weighted_fusion(
-    frames: list[pd.DataFrame], weights: dict[str, float], top_k: int
-) -> pd.DataFrame:
+def _combine_by_weighted_fusion(frames: list[pd.DataFrame], top_k: int, rrf_k: float) -> pd.DataFrame:
     """Weighted reciprocal rank fusion: each strategy's contribution to an
-    item's fused score is `weight / (RRF_K + rank)`, summed across every
+    item's fused score is `weight / (rrf_k + rank)`, summed across every
     strategy that recommended that (user, item) pair. Rank-based (rather
     than raw-score-based) so heterogeneous strategies — LightFM scores,
     ItemKNN similarities, popularity counts — combine without normalization.
+    Per-strategy weights are read from the "_weight" column each frame was
+    tagged with in train_and_recommend.
     """
     combined = pd.concat(frames, ignore_index=True)
-    combined[Columns.Score] = combined["_weight"] / (RRF_K + combined[Columns.Rank])
+    combined[Columns.Score] = combined["_weight"] / (rrf_k + combined[Columns.Rank])
     fused = combined.groupby([Columns.User, Columns.Item], as_index=False).agg(
         **{
             Columns.Score: (Columns.Score, "sum"),
-            "source": ("source", lambda labels: "+".join(sorted(set(labels)))),
+            SOURCE_COLUMN: (SOURCE_COLUMN, lambda labels: "+".join(sorted(set(labels)))),
         }
     )
     fused = fused.sort_values([Columns.User, Columns.Score], ascending=[True, False])
     fused[Columns.Rank] = fused.groupby(Columns.User).cumcount() + 1
     fused = fused.groupby(Columns.User, as_index=False).head(top_k)
-    return fused[[Columns.User, Columns.Item, Columns.Rank, Columns.Score, "source"]]
+    return fused[[Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN]]
 
 
 def train_and_recommend(
@@ -144,13 +149,17 @@ def train_and_recommend(
     top_k: int,
     enabled_models: list[str] | None = None,
     weights: dict[str, float] | None = None,
+    rrf_k: float | None = None,
 ) -> pd.DataFrame:
     dataset = built.dataset
     enabled_models = enabled_models if enabled_models is not None else DEFAULT_MODELS
     unknown_models = [name for name in enabled_models if name not in STRATEGIES]
     if unknown_models:
         raise ValueError(f"Unknown model(s) {unknown_models}; available: {sorted(STRATEGIES)}")
-    if weights:
+    # `weights is not None` (rather than truthiness) so an explicitly configured
+    # but empty `[job.model_weights]` still opts into fusion mode, just with
+    # every enabled strategy defaulting to weight 1.0.
+    if weights is not None:
         unknown_weights = [name for name in weights if name not in enabled_models]
         if unknown_weights:
             raise ValueError(
@@ -186,15 +195,15 @@ def train_and_recommend(
             filter_viewed=strategy.personalized,
             items_to_recommend=allowed_items,
         )
-        recs["source"] = strategy.source_label
-        recs["_weight"] = weights.get(name, 1.0) if weights else 1.0
+        recs[SOURCE_COLUMN] = strategy.source_label
+        recs["_weight"] = weights.get(name, 1.0) if weights is not None else 1.0
         frames.append(recs)
 
     if not frames:
-        return pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, "source"])
+        return pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN])
 
-    if weights:
-        combined = _combine_by_weighted_fusion(frames, weights, top_k)
+    if weights is not None:
+        combined = _combine_by_weighted_fusion(frames, top_k, rrf_k if rrf_k is not None else RRF_K)
     else:
         combined = _combine_by_priority(frames, top_k)
     return combined.reset_index(drop=True)

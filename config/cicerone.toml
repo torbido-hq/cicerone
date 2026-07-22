@@ -32,6 +32,16 @@ feature_config_path = "/app/config/features.toml"
 # fusion instead of the default priority order (personalized results win
 # ties, non-personalized ones only backfill). If omitted, the priority
 # combiner above is used. Every key must be one of the enabled "models".
+# Note: an explicitly empty [job.model_weights] section still enables
+# fusion mode, with every enabled strategy defaulting to weight 1.0.
+#
+# rrf_k tunes the reciprocal rank fusion constant used by model_weights
+# (higher = lower ranks are discounted more gently). Only relevant when
+# model_weights is set. Defaults to 60 (standard literature value).
+# NOTE: rrf_k is a [job] key, so it must stay above [job.model_weights] —
+# a bare key placed after a [table] header would be silently parsed as
+# nested under that table instead of under [job].
+# rrf_k = 60
 # [job.model_weights]
 # collaborative = 1.0
 # item_based = 0.6

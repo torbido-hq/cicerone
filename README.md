@@ -126,9 +126,12 @@ By default, strategies are combined in priority order: earlier ones win ties
 for the same user/item pair, non-personalized ones only backfill users who
 didn't get enough personalized results. Optionally, `[job.model_weights]`
 switches to a weighted reciprocal rank fusion instead — every enabled
-strategy's rank contributes `weight / (60 + rank)` to each item's fused
+strategy's rank contributes `weight / (rrf_k + rank)` to each item's fused
 score, summed across strategies, so results from heterogeneous strategies
-blend without needing to normalize their raw scores.
+blend without needing to normalize their raw scores. `rrf_k` (`[job].rrf_k`,
+default `60`) is tunable and only applies when `model_weights` is set. An
+explicitly empty `[job.model_weights]` table still enables fusion mode, with
+every enabled strategy defaulting to weight `1.0`.
 
 ## Output
 
