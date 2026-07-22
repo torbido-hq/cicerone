@@ -103,6 +103,23 @@ def test_parse_candidates_accepts_weights_covering_every_model():
     assert parsed[0].weights == {"popular": 1.0, "latest": 0.5}
 
 
+def test_parse_candidates_rejects_empty_models():
+    with pytest.raises(ValueError, match="must not be empty"):
+        _parse_candidates([{"models": []}])
+
+
+def test_parse_candidates_rejects_negative_weight():
+    entry = {"models": ["popular", "latest"], "weights": {"popular": -1.0, "latest": 0.5}}
+    with pytest.raises(ValueError, match="non-negative"):
+        _parse_candidates([entry])
+
+
+def test_parse_candidates_rejects_non_positive_rrf_k():
+    entry = {"models": ["popular"], "weights": {"popular": 1.0}, "rrf_k": 0}
+    with pytest.raises(ValueError, match="rrf_k must be positive"):
+        _parse_candidates([entry])
+
+
 def test_parse_candidates_defaults_to_default_candidates():
     assert _parse_candidates(None) == _parse_candidates(automl.DEFAULT_CANDIDATES)
 

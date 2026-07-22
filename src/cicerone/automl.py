@@ -27,7 +27,13 @@ from rectools.metrics.base import MetricAtK
 from cicerone.config import AUTOML_DEFAULT_N_SPLITS, AUTOML_DEFAULT_PRIMARY_METRIC, AUTOML_DEFAULT_TEST_DAYS
 from cicerone.dataset import build_dataset, build_interactions
 from cicerone.feature_config import FeatureConfig
-from cicerone.model import DEFAULT_MODELS, STRATEGIES, train_and_recommend
+from cicerone.model import (
+    DEFAULT_MODELS,
+    STRATEGIES,
+    train_and_recommend,
+    validate_model_weights,
+    validate_rrf_k,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +95,8 @@ def _parse_candidates(raw: list[dict[str, Any]] | None) -> list[Candidate]:
         if not all(isinstance(name, str) for name in models_value):
             raise ValueError(f"automl candidate 'models' must contain only strings, got {models_value!r}")
         models = list(models_value)
+        if not models:
+            raise ValueError("automl candidate 'models' must not be empty")
         unknown = [name for name in models if name not in STRATEGIES]
         if unknown:
             raise ValueError(
@@ -111,11 +119,14 @@ def _parse_candidates(raw: list[dict[str, Any]] | None) -> list[Candidate]:
                     f"provide an explicit weight for every model in {models}, "
                     "or omit weights entirely for equal (priority) weighting"
                 )
+            validate_model_weights(weights, context="automl candidate weights")
+        rrf_k = float(entry["rrf_k"]) if "rrf_k" in entry else None
+        validate_rrf_k(rrf_k, context="automl candidate rrf_k")
         parsed.append(
             Candidate(
                 models=models,
                 weights=weights,
-                rrf_k=float(entry["rrf_k"]) if "rrf_k" in entry else None,
+                rrf_k=rrf_k,
             )
         )
     return parsed

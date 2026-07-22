@@ -6,7 +6,13 @@ from rectools import Columns
 
 from cicerone.config import STRATEGY_NAMES
 from cicerone.dataset import build_dataset
-from cicerone.model import STRATEGIES, _recommendable_item_ids, _validate_strategy_names, train_and_recommend
+from cicerone.model import (
+    STRATEGIES,
+    _recommendable_item_ids,
+    _validate_strategy_names,
+    train_and_recommend,
+    validate_model_weights,
+)
 
 
 def _synthetic_events() -> pd.DataFrame:
@@ -107,6 +113,16 @@ def test_train_and_recommend_rejects_unknown_model(sample_items, feature_config)
         )
 
 
+def test_train_and_recommend_rejects_empty_enabled_models(sample_items, feature_config):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    # An explicit empty list is a configuration error, not "no strategies" --
+    # it must not silently fall through to an empty-but-"successful" result.
+    with pytest.raises(ValueError, match="enabled_models is empty"):
+        train_and_recommend(built, target_users=["u1"], config=feature_config, top_k=2, enabled_models=[])
+
+
 def test_train_and_recommend_item_based_strategy(sample_items, feature_config):
     events = _synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
@@ -166,6 +182,11 @@ def test_strategies_keys_match_config_strategy_names():
 def test_validate_strategy_names_raises_on_mismatch():
     with pytest.raises(RuntimeError, match="must match"):
         _validate_strategy_names({"popular": STRATEGIES["popular"]}, ("popular", "latest"))
+
+
+def test_validate_model_weights_no_op_when_none():
+    # No weights configured -> fusion mode isn't in play, nothing to validate.
+    validate_model_weights(None)
 
 
 def test_train_and_recommend_no_warm_users_and_only_personalized_strategies_returns_empty(
@@ -289,6 +310,58 @@ def test_train_and_recommend_empty_weights_dict_enables_fusion(sample_items, fea
     )
 
     assert set(recommendations["source"]) == {"latest+popular_fallback"}
+
+
+def test_train_and_recommend_weighted_fusion_defaults_missing_weight_to_one(sample_items, feature_config):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    # "popular" is omitted from weights -> should default to weight 1.0,
+    # same as passing it explicitly.
+    partial = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=5,
+        enabled_models=["popular", "latest"],
+        weights={"latest": 0.5},
+    )
+    explicit_default = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=5,
+        enabled_models=["popular", "latest"],
+        weights={"popular": 1.0, "latest": 0.5},
+    )
+    explicit_changed = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=5,
+        enabled_models=["popular", "latest"],
+        weights={"popular": 0.3, "latest": 0.5},
+    )
+
+    # Both models still contribute recommendations even though "popular"'s
+    # weight is implicit.
+    assert set(partial["source"]) == {"latest+popular_fallback"}
+
+    # Omitting "popular" defaults it to weight 1.0, so fused scores should
+    # match explicitly passing popular=1.0...
+    merged_default = partial.merge(
+        explicit_default, on=[Columns.User, Columns.Item], suffixes=("_partial", "_explicit")
+    )
+    assert not merged_default.empty
+    assert (merged_default[f"{Columns.Score}_partial"] == merged_default[f"{Columns.Score}_explicit"]).all()
+
+    # ...but changing popular's explicit weight away from the implicit
+    # default of 1.0 should change the fused scores.
+    merged_changed = partial.merge(
+        explicit_changed, on=[Columns.User, Columns.Item], suffixes=("_partial", "_changed")
+    )
+    assert not merged_changed.empty
+    assert (merged_changed[f"{Columns.Score}_partial"] != merged_changed[f"{Columns.Score}_changed"]).any()
 
 
 def test_train_and_recommend_custom_rrf_k_changes_fused_scores(sample_items, feature_config):

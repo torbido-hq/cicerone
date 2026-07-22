@@ -39,6 +39,28 @@ SOURCE_COLUMN = "source"
 WEIGHT_COLUMN = "_weight"
 
 
+def validate_model_weights(weights: dict[str, float] | None, *, context: str = "model_weights") -> None:
+    """Raises ValueError if any weight is negative. Shared by train_and_recommend
+    and cicerone.automl's candidate parsing so both fail on the same invalid
+    configurations with the same error shape (`context` only changes the
+    message prefix so each caller's error reads naturally).
+    """
+    if weights is None:
+        return
+    negative_weights = {name: weight for name, weight in weights.items() if weight < 0}
+    if negative_weights:
+        raise ValueError(f"{context} value(s) must be non-negative, got {negative_weights}")
+
+
+def validate_rrf_k(rrf_k: float | None, *, context: str = "rrf_k") -> None:
+    """Raises ValueError if rrf_k is set but not positive. Shared by
+    train_and_recommend and cicerone.automl's candidate parsing (see
+    validate_model_weights).
+    """
+    if rrf_k is not None and rrf_k <= 0:
+        raise ValueError(f"{context} must be positive, got {rrf_k}")
+
+
 class RecommenderModel(Protocol):
     def fit(self, dataset: Dataset) -> object: ...
 
@@ -174,6 +196,11 @@ def train_and_recommend(
 ) -> pd.DataFrame:
     dataset = built.dataset
     enabled_models = enabled_models if enabled_models is not None else DEFAULT_MODELS
+    if not enabled_models:
+        raise ValueError(
+            "enabled_models is empty; provide at least one model name, or omit enabled_models/pass None "
+            "to use the default"
+        )
     unknown_models = [name for name in enabled_models if name not in STRATEGIES]
     if unknown_models:
         raise ValueError(f"Unknown model(s) {unknown_models}; available: {sorted(STRATEGIES)}")
@@ -186,11 +213,8 @@ def train_and_recommend(
             raise ValueError(
                 f"model_weights key(s) {unknown_weights} are not in enabled_models {enabled_models}"
             )
-        negative_weights = {name: weight for name, weight in weights.items() if weight < 0}
-        if negative_weights:
-            raise ValueError(f"model_weights value(s) must be non-negative, got {negative_weights}")
-    if rrf_k is not None and rrf_k <= 0:
-        raise ValueError(f"rrf_k must be positive, got {rrf_k}")
+        validate_model_weights(weights)
+    validate_rrf_k(rrf_k)
 
     all_item_ids = dataset.item_id_map.external_ids
     allowed_items = _recommendable_item_ids(built.items, config.item_availability_filters, all_item_ids)
