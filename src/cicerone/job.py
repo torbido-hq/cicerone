@@ -96,7 +96,7 @@ def run() -> None:
         "rrf_k": rrf_k if rrf_k is not None else RRF_K,
         "automl_enabled": settings.automl_enabled,
         "automl_metrics": (
-            ",".join(f"{name}={value:.4f}" for name, value in automl_result.metrics.items())
+            ",".join(f"{name}={automl_result.metrics[name]:.4f}" for name in sorted(automl_result.metrics))
             if automl_result is not None
             else ""
         ),
