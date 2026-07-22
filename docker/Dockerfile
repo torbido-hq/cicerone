@@ -4,7 +4,7 @@
 # LightFM ships Cython extensions that must be compiled from source on most
 # platforms/architectures, so the build stage needs a toolchain. Kept out of
 # the final image to keep it small and reduce attack surface.
-FROM python:3.11-slim-bookworm AS builder
+FROM python:3.14-slim-bookworm AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
@@ -21,7 +21,7 @@ COPY requirements.txt ./
 RUN pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt
 
 # --- runtime -----------------------------------------------------------------
-FROM python:3.11-slim-bookworm AS runtime
+FROM python:3.14-slim-bookworm AS runtime
 
 # libgomp1: OpenMP runtime required by the compiled LightFM extension.
 RUN apt-get update && apt-get install -y --no-install-recommends \
