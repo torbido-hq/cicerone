@@ -69,6 +69,17 @@ def test_parse_candidates_rejects_unknown_weight_key():
         _parse_candidates([{"models": ["popular"], "weights": {"not_enabled": 1.0}}])
 
 
+def test_parse_candidates_rejects_partial_weights():
+    with pytest.raises(ValueError, match="latest"):
+        _parse_candidates([{"models": ["popular", "latest"], "weights": {"popular": 1.0}}])
+
+
+def test_parse_candidates_accepts_weights_covering_every_model():
+    entry = {"models": ["popular", "latest"], "weights": {"popular": 1.0, "latest": 0.5}}
+    parsed = _parse_candidates([entry])
+    assert parsed[0].weights == {"popular": 1.0, "latest": 0.5}
+
+
 def test_parse_candidates_defaults_to_default_candidates():
     assert _parse_candidates(None) == _parse_candidates(automl.DEFAULT_CANDIDATES)
 
@@ -130,3 +141,13 @@ def test_select_best_candidate_raises_on_unknown_primary_metric():
     result = CandidateResult(candidate=Candidate(models=["popular"]), metrics={"MAP@5": 1.0}, n_folds=1)
     with pytest.raises(ValueError, match="No metric starting with"):
         select_best_candidate([result], primary_metric="NDCG")
+
+
+def test_select_best_candidate_validates_metric_key_per_result():
+    # Second result is missing "MAP@5" entirely (heterogeneous metrics) -- must
+    # be caught even though the first result does have a "MAP@5" key, i.e. the
+    # metric key can't just be derived once from results[0] and reused.
+    has_map = CandidateResult(candidate=Candidate(models=["popular"]), metrics={"MAP@5": 0.5}, n_folds=1)
+    missing_map = CandidateResult(candidate=Candidate(models=["latest"]), metrics={"NDCG@5": 0.9}, n_folds=1)
+    with pytest.raises(ValueError, match="latest"):
+        select_best_candidate([has_map, missing_map], primary_metric="MAP")

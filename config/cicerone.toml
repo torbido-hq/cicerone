@@ -60,7 +60,10 @@ feature_config_path = "/app/config/features.toml"
 #
 # Optional: override the default candidate search space (every strategy
 # alone, the default priority combo, and a weighted-fusion blend). Each
-# candidate is the same shape as "models"/"model_weights"/"rrf_k" above.
+# candidate is the same shape as "models"/"model_weights"/"rrf_k" above,
+# except a candidate's "weights" table (if present) must give an explicit
+# weight for every one of its "models" -- unlike "job.model_weights" above,
+# there is no implicit default for an omitted model.
 # [[job.automl.candidates]]
 # models = ["popular"]
 # [[job.automl.candidates]]

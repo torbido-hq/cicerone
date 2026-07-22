@@ -159,9 +159,13 @@ The default candidate search space tries every strategy alone, the default
 priority combo, and one weighted-fusion blend across all four strategies —
 override it with `[[job.automl.candidates]]` (same shape as
 `models`/`model_weights`/`rrf_k` above, one array-of-tables entry per
-candidate) if you want to try a different set. AutoML raises if there isn't
-enough event history for at least one fold — reduce `n_splits`/`test_days`
-or provide more historical events.
+candidate) if you want to try a different set. Unlike top-level
+`[job.model_weights]`, a candidate's `weights` table (if present) must give
+an explicit weight for every one of its `models` — there's no implicit
+default for an omitted model, to avoid silently backtesting a weighting you
+didn't intend. AutoML raises if there isn't enough event history for at
+least one fold — reduce `n_splits`/`test_days` or provide more historical
+events.
 
 ## Output
 

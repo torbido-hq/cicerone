@@ -58,7 +58,7 @@ class Candidate:
     def label(self) -> str:
         if self.weights is None:
             return "+".join(self.models)
-        weighted = ",".join(f"{name}={self.weights.get(name, 1.0)}" for name in self.models)
+        weighted = ",".join(f"{name}={self.weights[name]}" for name in self.models)
         return f"fusion({weighted})"
 
 
@@ -83,6 +83,13 @@ def _parse_candidates(raw: list[dict[str, Any]] | None) -> list[Candidate]:
             unknown_weights = [name for name in weights if name not in models]
             if unknown_weights:
                 raise ValueError(f"automl candidate weight key(s) {unknown_weights} not in models {models}")
+            missing_weights = [name for name in models if name not in weights]
+            if missing_weights:
+                raise ValueError(
+                    f"automl candidate weights missing model(s) {missing_weights}; "
+                    f"provide an explicit weight for every model in {models}, "
+                    "or omit weights entirely for equal (priority) weighting"
+                )
         parsed.append(
             Candidate(
                 models=models,
@@ -184,9 +191,14 @@ def select_best_candidate(
     """
     if not results:
         raise ValueError("No candidate results to select from")
-    metric_key = next((key for key in results[0].metrics if key.startswith(primary_metric)), None)
-    if metric_key is None:
-        raise ValueError(
-            f"No metric starting with '{primary_metric}' found in results: {list(results[0].metrics)}"
-        )
-    return max(results, key=lambda result: result.metrics[metric_key])
+
+    def _metric_value(result: CandidateResult) -> float:
+        metric_key = next((key for key in result.metrics if key.startswith(primary_metric)), None)
+        if metric_key is None:
+            raise ValueError(
+                f"No metric starting with '{primary_metric}' found for candidate "
+                f"'{result.candidate.label}': {list(result.metrics)}"
+            )
+        return result.metrics[metric_key]
+
+    return max(results, key=_metric_value)
