@@ -88,6 +88,31 @@ def test_load_settings_with_explicit_models(tmp_path):
     assert settings.models == ["collaborative", "item_based", "popular", "latest"]
 
 
+def test_load_settings_rejects_unknown_model(tmp_path):
+    config_path = _write_toml(
+        tmp_path,
+        """
+        [job]
+        models = ["collaborative", "not_a_real_model"]
+
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+
+    with pytest.raises(RuntimeError, match="not_a_real_model"):
+        load_settings(config_path)
+
+
 def test_load_settings_with_explicit_model_weights(tmp_path):
     config_path = _write_toml(
         tmp_path,

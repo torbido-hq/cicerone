@@ -34,6 +34,14 @@ from typing import Any
 
 DEFAULT_CONFIG_PATH = "/app/config/cicerone.toml"
 
+# Canonical multi-model strategy identifiers. Centralized here (not in
+# cicerone.model, which owns the actual per-strategy factories/behavior but
+# has heavy ML deps -- lightfm/implicit/rectools -- that config.py
+# deliberately doesn't import) so Settings.models can be validated at config
+# load time, and so cicerone.model.STRATEGIES' keys, DEFAULT_MODELS, config
+# file comments, and README can't silently drift out of sync with this list.
+STRATEGY_NAMES: tuple[str, ...] = ("collaborative", "item_based", "popular", "latest")
+
 # Centralized here (not in cicerone.automl, which config.py deliberately
 # doesn't import) so the [job.automl] TOML defaults and automl.py's function
 # defaults can't drift apart.
@@ -133,6 +141,13 @@ def load_settings(config_path: str | None = None) -> Settings:
 
     job = raw.get("job", {})
     automl = job.get("automl", {})
+    models = list(job["models"]) if "models" in job else None
+    if models is not None:
+        unknown_models = [name for name in models if name not in STRATEGY_NAMES]
+        if unknown_models:
+            raise RuntimeError(
+                f"job.models contains unknown model(s) {unknown_models}; available: {list(STRATEGY_NAMES)}"
+            )
     return Settings(
         input=_load_io_settings(raw, "input"),
         output=_load_io_settings(raw, "output"),
@@ -140,7 +155,7 @@ def load_settings(config_path: str | None = None) -> Settings:
         top_k=int(job.get("top_k", 10)),
         half_life_days=float(job.get("half_life_days", 90)),
         cron_schedule=job.get("cron_schedule", "0 3 * * *"),
-        models=list(job["models"]) if "models" in job else None,
+        models=models,
         model_weights=(
             {name: float(weight) for name, weight in job["model_weights"].items()}
             if "model_weights" in job

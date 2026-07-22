@@ -4,8 +4,9 @@ import pandas as pd
 import pytest
 from rectools import Columns
 
+from cicerone.config import STRATEGY_NAMES
 from cicerone.dataset import build_dataset
-from cicerone.model import _recommendable_item_ids, train_and_recommend
+from cicerone.model import STRATEGIES, _recommendable_item_ids, _validate_strategy_names, train_and_recommend
 
 
 def _synthetic_events() -> pd.DataFrame:
@@ -149,6 +150,22 @@ def test_train_and_recommend_combines_multiple_personalized_strategies(sample_it
         Columns.Score,
         "source",
     }
+    # top_k is enforced per user even after combining multiple strategies...
+    assert (recommendations.groupby(Columns.User).size() <= 3).all()
+    # ...and there are no duplicate (user, item) pairs across the combined strategies.
+    assert not recommendations.duplicated(subset=[Columns.User, Columns.Item]).any()
+
+
+def test_strategies_keys_match_config_strategy_names():
+    # cicerone.config.STRATEGY_NAMES is the canonical list of valid model
+    # identifiers (validated against at config-load time); it must stay in
+    # sync with the strategies actually implemented here.
+    assert set(STRATEGIES) == set(STRATEGY_NAMES)
+
+
+def test_validate_strategy_names_raises_on_mismatch():
+    with pytest.raises(RuntimeError, match="must match"):
+        _validate_strategy_names({"popular": STRATEGIES["popular"]}, ("popular", "latest"))
 
 
 def test_train_and_recommend_no_warm_users_and_only_personalized_strategies_returns_empty(

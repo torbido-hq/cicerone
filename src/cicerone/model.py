@@ -17,6 +17,7 @@ from rectools import Columns
 from rectools.dataset import Dataset
 from rectools.models import ImplicitItemKNNWrapperModel, LightFMWrapperModel, PopularModel
 
+from cicerone.config import STRATEGY_NAMES
 from cicerone.dataset import BuiltDataset
 from cicerone.feature_config import FeatureConfig
 
@@ -94,6 +95,22 @@ STRATEGIES: dict[str, Strategy] = {
     "popular": Strategy(_build_popular, personalized=False, source_label="popular_fallback"),
     "latest": Strategy(_build_latest, personalized=False, source_label="latest"),
 }
+
+
+def _validate_strategy_names(strategies: dict[str, Strategy], strategy_names: tuple[str, ...]) -> None:
+    """Fails fast (at import time, for the module-level call below) if
+    STRATEGIES' keys and cicerone.config.STRATEGY_NAMES -- the canonical list
+    Settings.models is validated against at config-load time -- ever drift
+    apart, e.g. a strategy added/renamed in one place but not the other.
+    """
+    if set(strategies) != set(strategy_names):
+        raise RuntimeError(
+            f"cicerone.model.STRATEGIES keys {sorted(strategies)} must match "
+            f"cicerone.config.STRATEGY_NAMES {sorted(strategy_names)} — update both together"
+        )
+
+
+_validate_strategy_names(STRATEGIES, STRATEGY_NAMES)
 
 
 def _recommendable_item_ids(
