@@ -1,5 +1,10 @@
 # Cicerone
 
+[![CI](https://github.com/torbido-hq/cicerone/actions/workflows/ci.yml/badge.svg)](https://github.com/torbido-hq/cicerone/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/torbido-hq/cicerone/actions/workflows/codeql.yml/badge.svg)](https://github.com/torbido-hq/cicerone/actions/workflows/codeql.yml)
+[![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/release/python-3110/)
+[![License: Beerware](https://img.shields.io/badge/license-Beerware%20🍺-f28e1c.svg)](LICENSE)
+
 A generic, self-hosted batch recommender system. No API, no cache: it reads
 your interaction data, trains a hybrid [rectools](https://github.com/MobileTeleSystems/RecTools)
 + LightFM model, and writes out top-K recommendations per user. Everything
