@@ -95,6 +95,11 @@ class Settings:
     models: list[str] | None
     model_weights: dict[str, float] | None
     rrf_k: float | None
+    automl_enabled: bool
+    automl_n_splits: int
+    automl_test_days: int
+    automl_primary_metric: str
+    automl_candidates: list[dict[str, Any]] | None
 
 
 def _load_io_settings(raw: dict[str, Any], section_name: str) -> IOSettings:
@@ -120,6 +125,7 @@ def load_settings(config_path: str | None = None) -> Settings:
         raw = tomllib.load(f)
 
     job = raw.get("job", {})
+    automl = job.get("automl", {})
     return Settings(
         input=_load_io_settings(raw, "input"),
         output=_load_io_settings(raw, "output"),
@@ -134,4 +140,11 @@ def load_settings(config_path: str | None = None) -> Settings:
             else None
         ),
         rrf_k=float(job["rrf_k"]) if "rrf_k" in job else None,
+        automl_enabled=bool(automl.get("enabled", False)),
+        automl_n_splits=int(automl.get("n_splits", 2)),
+        automl_test_days=int(automl.get("test_days", 14)),
+        automl_primary_metric=automl.get("primary_metric", "MAP"),
+        automl_candidates=(
+            [dict(candidate) for candidate in automl["candidates"]] if "candidates" in automl else None
+        ),
     )
