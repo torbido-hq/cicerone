@@ -129,9 +129,10 @@ switches to a weighted reciprocal rank fusion instead — every enabled
 strategy's rank contributes `weight / (rrf_k + rank)` to each item's fused
 score, summed across strategies, so results from heterogeneous strategies
 blend without needing to normalize their raw scores. `rrf_k` (`[job].rrf_k`,
-default `60`) is tunable and only applies when `model_weights` is set. An
-explicitly empty `[job.model_weights]` table still enables fusion mode, with
-every enabled strategy defaulting to weight `1.0`.
+default `60`) is tunable and only applies when `model_weights` is set — it
+must be positive. An explicitly empty `[job.model_weights]` table still
+enables fusion mode, with every enabled strategy defaulting to weight `1.0`.
+Weight values must be non-negative.
 
 ## AutoML
 

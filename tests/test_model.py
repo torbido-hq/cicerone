@@ -186,6 +186,37 @@ def test_train_and_recommend_rejects_unknown_weight_key(sample_items, feature_co
         )
 
 
+def test_train_and_recommend_rejects_negative_weight(sample_items, feature_config):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    with pytest.raises(ValueError, match="non-negative"):
+        train_and_recommend(
+            built,
+            target_users=["u1"],
+            config=feature_config,
+            top_k=2,
+            enabled_models=["popular"],
+            weights={"popular": -1.0},
+        )
+
+
+def test_train_and_recommend_rejects_non_positive_rrf_k(sample_items, feature_config):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    with pytest.raises(ValueError, match="rrf_k must be positive"):
+        train_and_recommend(
+            built,
+            target_users=["u1"],
+            config=feature_config,
+            top_k=2,
+            enabled_models=["popular"],
+            weights={"popular": 1.0},
+            rrf_k=0,
+        )
+
+
 def test_train_and_recommend_weighted_fusion_respects_top_k_and_ranks_by_score(sample_items, feature_config):
     events = _synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)

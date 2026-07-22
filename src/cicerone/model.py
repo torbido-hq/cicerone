@@ -169,6 +169,11 @@ def train_and_recommend(
             raise ValueError(
                 f"model_weights key(s) {unknown_weights} are not in enabled_models {enabled_models}"
             )
+        negative_weights = {name: weight for name, weight in weights.items() if weight < 0}
+        if negative_weights:
+            raise ValueError(f"model_weights value(s) must be non-negative, got {negative_weights}")
+    if rrf_k is not None and rrf_k <= 0:
+        raise ValueError(f"rrf_k must be positive, got {rrf_k}")
 
     all_item_ids = dataset.item_id_map.external_ids
     allowed_items = _recommendable_item_ids(built.items, config.item_availability_filters, all_item_ids)
