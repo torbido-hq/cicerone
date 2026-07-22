@@ -33,6 +33,9 @@ RRF_K = 60
 # strategy/strategies produced this row" tag, kept as a module constant so
 # it's not repeated as a string literal throughout this file.
 SOURCE_COLUMN = "source"
+# Internal-only column: per-strategy weight used by weighted fusion, dropped
+# from the final output before it's returned to callers.
+WEIGHT_COLUMN = "_weight"
 
 
 class RecommenderModel(Protocol):
@@ -116,7 +119,8 @@ def _combine_by_priority(frames: list[pd.DataFrame], top_k: int) -> pd.DataFrame
     combined = pd.concat(frames, ignore_index=True)
     combined = combined.drop_duplicates(subset=[Columns.User, Columns.Item], keep="first")
     combined = combined.sort_values([Columns.User, Columns.Rank])
-    return combined.groupby(Columns.User, as_index=False).head(top_k)
+    combined = combined.groupby(Columns.User, as_index=False).head(top_k)
+    return combined.drop(columns=[WEIGHT_COLUMN])
 
 
 def _combine_by_weighted_fusion(frames: list[pd.DataFrame], top_k: int, rrf_k: float) -> pd.DataFrame:
@@ -129,7 +133,7 @@ def _combine_by_weighted_fusion(frames: list[pd.DataFrame], top_k: int, rrf_k: f
     tagged with in train_and_recommend.
     """
     combined = pd.concat(frames, ignore_index=True)
-    combined[Columns.Score] = combined["_weight"] / (rrf_k + combined[Columns.Rank])
+    combined[Columns.Score] = combined[WEIGHT_COLUMN] / (rrf_k + combined[Columns.Rank])
     fused = combined.groupby([Columns.User, Columns.Item], as_index=False).agg(
         **{
             Columns.Score: (Columns.Score, "sum"),
@@ -196,7 +200,7 @@ def train_and_recommend(
             items_to_recommend=allowed_items,
         )
         recs[SOURCE_COLUMN] = strategy.source_label
-        recs["_weight"] = weights.get(name, 1.0) if weights is not None else 1.0
+        recs[WEIGHT_COLUMN] = weights.get(name, 1.0) if weights is not None else 1.0
         frames.append(recs)
 
     if not frames:

@@ -142,6 +142,13 @@ def test_train_and_recommend_combines_multiple_personalized_strategies(sample_it
     )
 
     assert set(recommendations["source"]) <= {"personalized", "item_based", "popular_fallback"}
+    assert set(recommendations.columns) == {
+        Columns.User,
+        Columns.Item,
+        Columns.Rank,
+        Columns.Score,
+        "source",
+    }
 
 
 def test_train_and_recommend_no_warm_users_and_only_personalized_strategies_returns_empty(
@@ -240,15 +247,7 @@ def test_train_and_recommend_custom_rrf_k_changes_fused_scores(sample_items, fea
     events = _synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
 
-    default_k = train_and_recommend(
-        built,
-        target_users=["u1", "u2", "u3"],
-        config=feature_config,
-        top_k=5,
-        enabled_models=["popular", "latest"],
-        weights={"popular": 1.0, "latest": 1.0},
-    )
-    custom_k = train_and_recommend(
+    small_k = train_and_recommend(
         built,
         target_users=["u1", "u2", "u3"],
         config=feature_config,
@@ -257,6 +256,20 @@ def test_train_and_recommend_custom_rrf_k_changes_fused_scores(sample_items, fea
         weights={"popular": 1.0, "latest": 1.0},
         rrf_k=1,
     )
+    large_k = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=5,
+        enabled_models=["popular", "latest"],
+        weights={"popular": 1.0, "latest": 1.0},
+        rrf_k=1000,
+    )
 
-    merged = default_k.merge(custom_k, on=[Columns.User, Columns.Item], suffixes=("_default", "_custom"))
-    assert not merged[Columns.Score + "_default"].equals(merged[Columns.Score + "_custom"])
+    # RRF fused score is weight / (rrf_k + rank): for a fixed (positive) rank
+    # and weight, a larger rrf_k strictly lowers the score. Both runs recommend
+    # the same (user, item) pairs here (only 2 allowed items per user), so
+    # every pair should show this exact monotonic relationship.
+    merged = small_k.merge(large_k, on=[Columns.User, Columns.Item], suffixes=("_small_k", "_large_k"))
+    assert not merged.empty
+    assert (merged[Columns.Score + "_small_k"] > merged[Columns.Score + "_large_k"]).all()
