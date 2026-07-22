@@ -8,8 +8,10 @@ rectools.model_selection's Interactions-level splitters: candidates here
 span multiple STRATEGIES combined by cicerone.model.train_and_recommend
 (which needs raw events/users/items to rebuild a BuiltDataset per fold), not
 a single rectools model, so splitting at the raw-events level and reusing
-cicerone.dataset.build_dataset for both sides of each fold is simpler and
-avoids reimplementing dataset reconstruction from internal interaction ids.
+cicerone.dataset.build_dataset (train side) / build_interactions (test
+side, interactions-only -- no need for a full feature-laden Dataset just to
+score against ground truth) is simpler and avoids reimplementing dataset
+reconstruction from internal interaction ids.
 """
 
 from __future__ import annotations
@@ -22,15 +24,19 @@ import pandas as pd
 from rectools.metrics import MAP, NDCG, Recall, calc_metrics
 from rectools.metrics.base import MetricAtK
 
-from cicerone.dataset import build_dataset
+from cicerone.config import AUTOML_DEFAULT_N_SPLITS, AUTOML_DEFAULT_PRIMARY_METRIC, AUTOML_DEFAULT_TEST_DAYS
+from cicerone.dataset import build_dataset, build_interactions
 from cicerone.feature_config import FeatureConfig
 from cicerone.model import DEFAULT_MODELS, STRATEGIES, train_and_recommend
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_N_SPLITS = 2
-DEFAULT_TEST_DAYS = 14
-DEFAULT_PRIMARY_METRIC = "MAP"
+# Re-exported under automl-local names for backward-compat/readability at
+# call sites here; the actual values live in cicerone.config so they can't
+# drift apart from the [job.automl] TOML defaults.
+DEFAULT_N_SPLITS = AUTOML_DEFAULT_N_SPLITS
+DEFAULT_TEST_DAYS = AUTOML_DEFAULT_TEST_DAYS
+DEFAULT_PRIMARY_METRIC = AUTOML_DEFAULT_PRIMARY_METRIC
 
 # Tried when [job.automl] doesn't configure its own "candidates": every
 # strategy alone, the default priority combine, and a weighted-fusion blend
@@ -78,7 +84,7 @@ def _parse_candidates(raw: list[dict[str, Any]] | None) -> list[Candidate]:
     parsed = []
     for entry in raw if raw is not None else DEFAULT_CANDIDATES:
         models_value = entry["models"]
-        if isinstance(models_value, str) or not isinstance(models_value, list | tuple):
+        if isinstance(models_value, str) or not isinstance(models_value, (list, tuple)):  # noqa: UP038
             raise ValueError(f"automl candidate 'models' must be a list of model names, got {models_value!r}")
         if not all(isinstance(name, str) for name in models_value):
             raise ValueError(f"automl candidate 'models' must contain only strings, got {models_value!r}")
@@ -176,9 +182,11 @@ def evaluate_candidates(
     for train_events, test_events in folds:
         # Built once per fold and reused across every candidate below: the
         # dataset only depends on the fold's events/users/items, not on which
-        # strategies/weights a candidate combines.
+        # strategies/weights a candidate combines. The test side only needs
+        # interactions for calc_metrics, not a full feature-laden Dataset, so
+        # build_interactions() is used there instead of build_dataset().
         built = build_dataset(train_events, users, items, config, half_life_days=half_life_days)
-        test_built = build_dataset(test_events, users, items, config, half_life_days=half_life_days)
+        test_interactions = build_interactions(test_events, config, half_life_days=half_life_days)
         test_users = sorted(set(test_events["user_id"]))
         for idx, candidate in enumerate(parsed_candidates):
             reco = train_and_recommend(
@@ -191,7 +199,7 @@ def evaluate_candidates(
                 rrf_k=candidate.rrf_k,
             )
             fold_metrics_by_candidate[idx].append(
-                calc_metrics(metrics, reco=reco, interactions=test_built.interactions)
+                calc_metrics(metrics, reco=reco, interactions=test_interactions)
             )
 
     results = []

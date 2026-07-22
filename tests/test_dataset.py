@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 from rectools import Columns
 
-from cicerone.dataset import _explode_features, _time_decay_multiplier, _weighted_interactions, build_dataset
+from cicerone.dataset import _explode_features, _time_decay_multiplier, build_dataset, build_interactions
 from cicerone.feature_config import FeatureColumn
 
 
@@ -34,7 +34,7 @@ def test_weighted_interactions_scales_purchase_by_quantity(feature_config):
             {"user_id": "u2", "item_id": "i1", "event_type": "purchase", "quantity": 5, "occurred_at": now},
         ]
     )
-    result = _weighted_interactions(events, feature_config, half_life_days=90)
+    result = build_interactions(events, feature_config, half_life_days=90)
 
     row_u1 = result[result[Columns.User] == "u1"].iloc[0]
     row_u2 = result[result[Columns.User] == "u2"].iloc[0]
@@ -49,7 +49,7 @@ def test_weighted_interactions_aggregates_multiple_events_for_same_pair(feature_
             {"user_id": "u1", "item_id": "i1", "event_type": "saved", "quantity": 1, "occurred_at": now},
         ]
     )
-    result = _weighted_interactions(events, feature_config, half_life_days=90)
+    result = build_interactions(events, feature_config, half_life_days=90)
 
     assert len(result) == 1
     expected = feature_config.event_weights["view"] + feature_config.event_weights["saved"]
@@ -69,7 +69,7 @@ def test_weighted_interactions_drops_unknown_event_types(feature_config):
             },
         ]
     )
-    result = _weighted_interactions(events, feature_config, half_life_days=90)
+    result = build_interactions(events, feature_config, half_life_days=90)
     assert result.empty
 
 
@@ -81,7 +81,7 @@ def test_weighted_interactions_caps_repeated_events(feature_config):
             for _ in range(20)
         ]
     )
-    result = _weighted_interactions(events, feature_config, half_life_days=90)
+    result = build_interactions(events, feature_config, half_life_days=90)
 
     cap = feature_config.event_caps["view"]
     max_weight = cap * feature_config.event_weights["view"]
@@ -101,7 +101,7 @@ def test_weighted_interactions_negative_reviews_floor_at_epsilon(feature_config)
             },
         ]
     )
-    result = _weighted_interactions(events, feature_config, half_life_days=90)
+    result = build_interactions(events, feature_config, half_life_days=90)
 
     assert result.iloc[0][Columns.Weight] > 0
     assert result.iloc[0][Columns.Weight] == pytest.approx(1e-3, rel=1e-6)
