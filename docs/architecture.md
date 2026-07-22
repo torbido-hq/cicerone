@@ -15,7 +15,8 @@ io/
   db_store.py          backend: SQLAlchemy-backed database tables/queries
   options.py           shared "require_option" validation helper
 dataset.py            raw events/users/items -> weighted rectools Dataset (BuiltDataset)
-model.py              BuiltDataset -> LightFM training -> top-K recommendations + popularity fallback
+model.py            BuiltDataset -> STRATEGIES registry (collaborative/item_based/
+                     popular/latest) -> top-K recommendations, combined per user
 job.py                orchestrates one end-to-end run (source -> dataset -> model -> sink)
 scheduler.py           in-process cron loop that calls job.run() on config/cicerone.toml's cron_schedule
 ```
@@ -50,12 +51,16 @@ flowchart LR
    decay — all driven by `FeatureConfig`) and explodes user/item feature
    columns into rectools' long format, then constructs a
    `rectools.dataset.Dataset`.
-3. `model.train_and_recommend()` fits a `LightFMWrapperModel` on that
-   dataset and produces top-K recommendations for "warm" users (any user
-   present in the dataset, with or without interactions — see the
-   cold-start note below), plus a `PopularModel` fallback for users absent
-   from the dataset entirely and to backfill lists for any warm user who
-   didn't get enough personalized results after the availability filter.
+3. `model.train_and_recommend()` fits every strategy listed in
+   `Settings.models` (`STRATEGIES` registry in `model.py`; defaults to
+   `["collaborative", "popular"]`) and produces top-K recommendations:
+   personalized strategies (`collaborative`, `item_based`) only run for "warm"
+   users (any user present in the dataset, with or without interactions — see
+   the cold-start note below); non-personalized strategies (`popular`,
+   `latest`) run for every target user and backfill any warm user who didn't
+   get enough personalized results after the availability filter. Strategies
+   are combined in configured order — earlier ones win ties for the same
+   user/item pair.
 4. `job.run()` writes the combined recommendations and a small run manifest
    (counts, timestamp) back out via the configured `OutputSink`.
 5. `scheduler.main()` is the container's actual entrypoint: it computes the

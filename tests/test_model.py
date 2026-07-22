@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 from rectools import Columns
 
 from cicerone.dataset import build_dataset
@@ -93,3 +94,71 @@ def test_train_and_recommend_falls_back_to_popularity_for_fully_unknown_users(sa
     cold_user_recos = recommendations[recommendations[Columns.User] == "ghost"]
     assert not cold_user_recos.empty
     assert (cold_user_recos["source"] == "popular_fallback").all()
+
+
+def test_train_and_recommend_rejects_unknown_model(sample_items, feature_config):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    with pytest.raises(ValueError, match="not_a_real_model"):
+        train_and_recommend(
+            built, target_users=["u1"], config=feature_config, top_k=2, enabled_models=["not_a_real_model"]
+        )
+
+
+def test_train_and_recommend_item_based_strategy(sample_items, feature_config):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    recommendations = train_and_recommend(
+        built, target_users=["u1", "u2", "u3"], config=feature_config, top_k=2, enabled_models=["item_based"]
+    )
+
+    assert set(recommendations["source"]) == {"item_based"}
+
+
+def test_train_and_recommend_latest_strategy(sample_items, feature_config):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    recommendations = train_and_recommend(
+        built, target_users=["u1", "u2", "u3"], config=feature_config, top_k=2, enabled_models=["latest"]
+    )
+
+    assert set(recommendations[Columns.User]) == {"u1", "u2", "u3"}
+    assert set(recommendations["source"]) == {"latest"}
+
+
+def test_train_and_recommend_combines_multiple_personalized_strategies(sample_items, feature_config):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    recommendations = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=3,
+        enabled_models=["collaborative", "item_based", "popular"],
+    )
+
+    assert set(recommendations["source"]) <= {"personalized", "item_based", "popular_fallback"}
+
+
+def test_train_and_recommend_no_warm_users_and_only_personalized_strategies_returns_empty(
+    sample_items, feature_config
+):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    recommendations = train_and_recommend(
+        built, target_users=["ghost"], config=feature_config, top_k=2, enabled_models=["item_based"]
+    )
+
+    assert recommendations.empty
+    assert list(recommendations.columns) == [
+        Columns.User,
+        Columns.Item,
+        Columns.Rank,
+        Columns.Score,
+        "source",
+    ]

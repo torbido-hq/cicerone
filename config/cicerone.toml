@@ -21,6 +21,12 @@ top_k = 10
 half_life_days = 90
 cron_schedule = "0 3 * * *" # 5-field cron expression, evaluated in UTC
 feature_config_path = "/app/config/features.toml"
+# Recommendation strategies to fit and combine, in priority order (earlier
+# entries win ties for the same user/item pair). Defaults to
+# ["collaborative", "popular"] if omitted. Available: "collaborative"
+# (LightFM, hybrid CF), "item_based" (item-item KNN), "popular" (global
+# popularity fallback), "latest" (trending in the last two weeks).
+# models = ["collaborative", "item_based", "popular", "latest"]
 
 [input]
 kind = "dataset"

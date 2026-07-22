@@ -14,7 +14,7 @@ from cicerone.config import load_settings
 from cicerone.dataset import build_dataset
 from cicerone.feature_config import load_feature_config
 from cicerone.io.factory import build_input_source, build_output_sink
-from cicerone.model import train_and_recommend
+from cicerone.model import DEFAULT_MODELS, train_and_recommend
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -41,7 +41,9 @@ def run() -> None:
     built = build_dataset(events, users, items, feature_config, half_life_days=settings.half_life_days)
 
     target_users = sorted(set(events["user_id"]) | (set(users["user_id"]) if users is not None else set()))
-    recommendations = train_and_recommend(built, target_users, feature_config, top_k=settings.top_k)
+    recommendations = train_and_recommend(
+        built, target_users, feature_config, top_k=settings.top_k, enabled_models=settings.models
+    )
 
     sink.write_recommendations(recommendations)
 
@@ -52,6 +54,7 @@ def run() -> None:
         "n_users_with_recommendations": int(recommendations["user_id"].nunique()),
         "n_items": int(built.dataset.item_id_map.external_ids.shape[0]),
         "top_k": settings.top_k,
+        "models": ",".join(settings.models or DEFAULT_MODELS),
     }
     sink.write_manifest(manifest)
     logger.info("Job finished: %s", json.dumps(manifest))
