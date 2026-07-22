@@ -52,6 +52,33 @@ def test_load_settings_dataset_backends(tmp_path):
     assert settings.half_life_days == 30.0
     assert settings.cron_schedule == "0 4 * * *"
     assert settings.feature_config_path == "/custom/features.toml"
+    assert settings.models is None
+
+
+def test_load_settings_with_explicit_models(tmp_path):
+    config_path = _write_toml(
+        tmp_path,
+        """
+        [job]
+        models = ["collaborative", "item_based", "popular", "latest"]
+
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+
+    settings = load_settings(config_path)
+
+    assert settings.models == ["collaborative", "item_based", "popular", "latest"]
 
 
 def test_load_settings_defaults_when_job_section_missing(tmp_path):
@@ -78,6 +105,7 @@ def test_load_settings_defaults_when_job_section_missing(tmp_path):
     assert settings.half_life_days == 90.0
     assert settings.cron_schedule == "0 3 * * *"
     assert settings.feature_config_path == "/app/config/features.toml"
+    assert settings.models is None
 
 
 def test_load_settings_db_backend_with_defaults(tmp_path):

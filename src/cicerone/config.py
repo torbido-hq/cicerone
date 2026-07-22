@@ -92,6 +92,7 @@ class Settings:
     top_k: int
     half_life_days: float
     cron_schedule: str
+    models: list[str] | None
 
 
 def _load_io_settings(raw: dict[str, Any], section_name: str) -> IOSettings:
@@ -124,4 +125,5 @@ def load_settings(config_path: str | None = None) -> Settings:
         top_k=int(job.get("top_k", 10)),
         half_life_days=float(job.get("half_life_days", 90)),
         cron_schedule=job.get("cron_schedule", "0 3 * * *"),
+        models=list(job["models"]) if "models" in job else None,
     )

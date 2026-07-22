@@ -30,8 +30,9 @@ input source (S3-compatible/local dataset, or a database)
                                  1. reads events/users/items
                                  2. weighs interactions (see below,
                                     config/features.toml)
-                                 3. trains LightFMWrapperModel (rectools)
-                                 4. generates top-K per user + popularity fallback
+                                 3. trains the configured model strategies
+                                    (collaborative/item-based/popular/latest)
+                                 4. combines them into top-K recs per user
                                         |
                                         v
                      output destination (S3-compatible/local dataset, or a database)
@@ -104,10 +105,28 @@ again, adapt these to your catalog). The availability filter
 (`item_availability_filters`, default `published` + `in_stock`) always
 excludes unavailable items from the recommendations.
 
+## Model strategies
+
+`[job].models` in `config/cicerone.toml` picks which strategies to fit and
+combine, in priority order (earlier entries win ties for the same
+user/item pair). Defaults to `["collaborative", "popular"]` if omitted:
+
+- `collaborative`: `LightFMWrapperModel` (rectools) — hybrid CF, uses user/item
+  features for cold-start. Personalized, warm users only.
+- `item_based`: `ImplicitItemKNNWrapperModel` (rectools) — item-item
+  similarity. Personalized, warm users only.
+- `popular`: `PopularModel` (rectools) — global popularity. Non-personalized,
+  runs for every target user and backfills any warm user without enough
+  personalized results.
+- `latest`: `PopularModel` restricted to the last two weeks of interactions —
+  trending/recently active items. Non-personalized, same backfill role as
+  `popular`.
+
 ## Output
 
-`recommendations`: `user_id, item_id, rank, score, source`
-(`source` = `personalized` or `popular_fallback`).
+`recommendations`: `user_id, item_id, rank, score, source` (`source` is the
+label of whichever strategy produced that row: `personalized`, `item_based`,
+`popular_fallback`, or `latest`).
 
 `manifest`: metadata about the latest run (counts, timestamps) for monitoring.
 
