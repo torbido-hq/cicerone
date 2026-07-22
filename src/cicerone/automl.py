@@ -70,9 +70,19 @@ class CandidateResult:
 
 
 def _parse_candidates(raw: list[dict[str, Any]] | None) -> list[Candidate]:
+    if raw is not None and len(raw) == 0:
+        raise ValueError(
+            "automl_candidates is an empty list; omit [job.automl.candidates] entirely to use the "
+            "default search space, or provide at least one [[job.automl.candidates]] entry"
+        )
     parsed = []
     for entry in raw if raw is not None else DEFAULT_CANDIDATES:
-        models = list(entry["models"])
+        models_value = entry["models"]
+        if isinstance(models_value, str) or not isinstance(models_value, list | tuple):
+            raise ValueError(f"automl candidate 'models' must be a list of model names, got {models_value!r}")
+        if not all(isinstance(name, str) for name in models_value):
+            raise ValueError(f"automl candidate 'models' must contain only strings, got {models_value!r}")
+        models = list(models_value)
         unknown = [name for name in models if name not in STRATEGIES]
         if unknown:
             raise ValueError(

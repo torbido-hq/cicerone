@@ -64,6 +64,21 @@ def test_parse_candidates_rejects_unknown_model():
         _parse_candidates([{"models": ["not_a_model"]}])
 
 
+def test_parse_candidates_rejects_empty_list():
+    with pytest.raises(ValueError, match="empty list"):
+        _parse_candidates([])
+
+
+def test_parse_candidates_rejects_scalar_string_models():
+    with pytest.raises(ValueError, match="must be a list of model names"):
+        _parse_candidates([{"models": "popular"}])
+
+
+def test_parse_candidates_rejects_non_string_model_entries():
+    with pytest.raises(ValueError, match="must contain only strings"):
+        _parse_candidates([{"models": ["popular", 1]}])
+
+
 def test_parse_candidates_rejects_unknown_weight_key():
     with pytest.raises(ValueError, match="not_enabled"):
         _parse_candidates([{"models": ["popular"], "weights": {"not_enabled": 1.0}}])
@@ -98,6 +113,14 @@ def test_evaluate_candidates_raises_without_enough_history(sample_items, feature
     with pytest.raises(ValueError, match="Not enough event history"):
         evaluate_candidates(
             events, None, sample_items, feature_config, top_k=2, half_life_days=90, n_splits=3, test_days=14
+        )
+
+
+def test_evaluate_candidates_raises_on_empty_candidates_list(sample_items, feature_config):
+    events = _spread_events(n_days=21)
+    with pytest.raises(ValueError, match="empty list"):
+        evaluate_candidates(
+            events, None, sample_items, feature_config, top_k=2, half_life_days=90, candidates=[]
         )
 
 
