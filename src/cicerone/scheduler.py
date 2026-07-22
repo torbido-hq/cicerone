@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from croniter import croniter
 
@@ -33,7 +33,7 @@ def main() -> None:
         raise RuntimeError(f"Invalid cron_schedule: {schedule!r}")
 
     while True:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         sleep_seconds = _seconds_until_next_run(schedule, now)
         logger.info("Next run scheduled in %.0fs", sleep_seconds)
         time.sleep(sleep_seconds)

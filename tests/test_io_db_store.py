@@ -79,10 +79,14 @@ def test_database_input_optional_custom_query_missing_table_returns_none():
 def test_database_output_writes_and_replaces_recommendations():
     sink = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})
 
-    first = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"}])
+    first = pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"}]
+    )
     sink.write_recommendations(first)
 
-    second = pd.DataFrame([{"user_id": "u2", "item_id": "i2", "rank": 1, "score": 0.8, "source": "personalized"}])
+    second = pd.DataFrame(
+        [{"user_id": "u2", "item_id": "i2", "rank": 1, "score": 0.8, "source": "personalized"}]
+    )
     sink.write_recommendations(second)
 
     engine = create_engine(TEST_DATABASE_URL)
@@ -119,7 +123,9 @@ def test_database_output_custom_table_names_are_used():
     }
     sink = DatabaseOutputSink(options)
 
-    recos = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"}])
+    recos = pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"}]
+    )
     sink.write_recommendations(recos)
     sink.write_manifest({"n_events": 1})
 
@@ -140,4 +146,3 @@ def test_database_input_custom_table_names_are_used():
     users = source.read_users()
 
     assert list(users["user_id"]) == ["u1"]
-

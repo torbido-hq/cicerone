@@ -37,8 +37,7 @@ def load_feature_config(path: Path | str | None = None) -> FeatureConfig:
 
     def _columns(key: str) -> list[FeatureColumn]:
         return [
-            FeatureColumn(column=c["column"], type=c.get("type", "categorical"))
-            for c in raw.get(key, [])
+            FeatureColumn(column=c["column"], type=c.get("type", "categorical")) for c in raw.get(key, [])
         ]
 
     return FeatureConfig(

@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import pandas as pd
 import pytest
+from rectools import Columns
 
 from cicerone.dataset import _explode_features, _time_decay_multiplier, _weighted_interactions, build_dataset
 from cicerone.feature_config import FeatureColumn
-from rectools import Columns
 
 
 def test_time_decay_multiplier_no_age_is_full_weight():
@@ -60,7 +60,13 @@ def test_weighted_interactions_drops_unknown_event_types(feature_config):
     now = pd.Timestamp.utcnow()
     events = pd.DataFrame(
         [
-            {"user_id": "u1", "item_id": "i1", "event_type": "teleportation", "quantity": 1, "occurred_at": now},
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "event_type": "teleportation",
+                "quantity": 1,
+                "occurred_at": now,
+            },
         ]
     )
     result = _weighted_interactions(events, feature_config, half_life_days=90)
@@ -86,7 +92,13 @@ def test_weighted_interactions_negative_reviews_floor_at_epsilon(feature_config)
     now = pd.Timestamp.utcnow()
     events = pd.DataFrame(
         [
-            {"user_id": "u1", "item_id": "i1", "event_type": "review_negative", "quantity": 1, "occurred_at": now},
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "event_type": "review_negative",
+                "quantity": 1,
+                "occurred_at": now,
+            },
         ]
     )
     result = _weighted_interactions(events, feature_config, half_life_days=90)
@@ -97,7 +109,9 @@ def test_weighted_interactions_negative_reviews_floor_at_epsilon(feature_config)
 
 def test_explode_features_categorical_column():
     df = pd.DataFrame([{"item_id": "i1", "category": "beer"}, {"item_id": "i2", "category": None}])
-    result = _explode_features(df, "item_id", Columns.Item, [FeatureColumn(column="category", type="categorical")])
+    result = _explode_features(
+        df, "item_id", Columns.Item, [FeatureColumn(column="category", type="categorical")]
+    )
 
     assert list(result[Columns.Item]) == ["i1"]
     assert list(result["value"]) == ["beer"]
@@ -115,7 +129,9 @@ def test_explode_features_list_column_produces_one_row_per_value():
 
 def test_explode_features_missing_column_is_skipped(caplog):
     df = pd.DataFrame([{"item_id": "i1"}])
-    result = _explode_features(df, "item_id", Columns.Item, [FeatureColumn(column="does_not_exist", type="categorical")])
+    result = _explode_features(
+        df, "item_id", Columns.Item, [FeatureColumn(column="does_not_exist", type="categorical")]
+    )
     assert result.empty
 
 

@@ -105,7 +105,11 @@ def _load_io_settings(raw: dict[str, Any], section_name: str) -> IOSettings:
 
 
 def load_settings(config_path: str | None = None) -> Settings:
-    path = Path(config_path or os.environ.get("CICERONE_CONFIG_PATH", DEFAULT_CONFIG_PATH))
+    # An empty CICERONE_CONFIG_PATH (e.g. "" from a misconfigured shell/compose
+    # file) must fall back to DEFAULT_CONFIG_PATH too, not resolve to the
+    # current directory -- hence "or DEFAULT_CONFIG_PATH" rather than relying
+    # on os.environ.get's default, which only applies when the var is unset.
+    path = Path(config_path or os.environ.get("CICERONE_CONFIG_PATH") or DEFAULT_CONFIG_PATH)
     if not path.exists():
         raise RuntimeError(f"Config file not found: {path}")
 

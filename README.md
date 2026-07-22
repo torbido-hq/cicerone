@@ -139,7 +139,11 @@ docker compose -f docker-compose.ci.yml up --build --abort-on-container-exit --e
 Runs the whole pytest suite (with an ephemeral Postgres for the `db` backend
 tests) inside Docker — nothing to install on the host. The minimum required
 coverage is 95% (`pyproject.toml`, `[tool.coverage.report].fail_under`) and
-is enforced on every PR by `.github/workflows/ci.yml`.
+is enforced on every PR by `.github/workflows/ci.yml`, which also runs
+[Ruff](https://docs.astral.sh/ruff/) (lint + format check) in the same test
+image. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to run tests/lint
+locally and [docs/architecture.md](docs/architecture.md) for how the code is
+structured.
 
 ## Security
 
@@ -151,6 +155,10 @@ is enforced on every PR by `.github/workflows/ci.yml`.
 - Credentials only ever live in environment variables (`.env`, not
   committed), referenced from `config/cicerone.toml` via `${...}`
   placeholders — never written into the config file itself.
+- CI also runs `pip-audit` (dependency CVE scan) and
+  [CodeQL](.github/workflows/codeql.yml) (static analysis) on every PR;
+  Dependabot (`.github/dependabot.yml`) opens PRs for outdated pip/Docker/
+  Actions pins.
 
 ## License
 
