@@ -9,6 +9,14 @@ updates:
     directory: "/docker"
     schedule:
       interval: "weekly"
+    ignore:
+      # Major Python version bumps require re-validating compiled ML deps
+      # (rectools/lightfm/scipy pins) against the new interpreter first —
+      # see PR #5, closed because rectools==0.13.0 has no 3.14 wheel/sdist
+      # support. Bump these manually alongside the pinned deps in
+      # requirements.txt instead of accepting an automated PR.
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
