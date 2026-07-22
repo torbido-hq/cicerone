@@ -43,6 +43,33 @@ docker run --rm -v "$PWD":/app -w /app --user "$(id -u):$(id -g)" cicerone-test 
 
 Both commands are enforced in CI (`.github/workflows/ci.yml`, `lint` job).
 
+## Type checking
+
+[mypy](https://mypy.readthedocs.io/) is configured in `pyproject.toml`
+(`[tool.mypy]`) and runs against `src/` only (tests aren't type-checked):
+
+```sh
+docker run --rm cicerone-test mypy src
+```
+
+## Dependency vulnerability scanning
+
+[pip-audit](https://github.com/pypa/pip-audit) checks `requirements.txt`/
+`requirements-dev.txt` pins against known CVEs:
+
+```sh
+docker run --rm cicerone-test pip-audit -r requirements.txt -r requirements-dev.txt
+```
+
+If a vulnerability is found with no available fix yet, don't silence it
+silently — open an issue tracking the upstream fix, and only add a
+`--ignore-vuln <ID>` (with a comment explaining why) as a last resort.
+
+All three checks above are enforced in CI (`.github/workflows/ci.yml`,
+`lint` job). Dependabot (`.github/dependabot.yml`) opens PRs for outdated
+pip/Docker/Actions pins, and CodeQL (`.github/workflows/codeql.yml`) scans
+for common security issues on every push/PR to `main`.
+
 ## Adding a new I/O backend
 
 Input and output are pluggable independently of each other — see

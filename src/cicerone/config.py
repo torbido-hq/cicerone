@@ -105,7 +105,7 @@ def _load_io_settings(raw: dict[str, Any], section_name: str) -> IOSettings:
 
 
 def load_settings(config_path: str | None = None) -> Settings:
-    path = Path(config_path or os.environ.get("CICERONE_CONFIG_PATH", DEFAULT_CONFIG_PATH))
+    path = Path(config_path or os.environ.get("CICERONE_CONFIG_PATH") or DEFAULT_CONFIG_PATH)
     if not path.exists():
         raise RuntimeError(f"Config file not found: {path}")
 

@@ -23,6 +23,12 @@ jobs:
       - name: Ruff format check
         run: docker run --rm cicerone-test ruff format --check src tests
 
+      - name: mypy
+        run: docker run --rm cicerone-test mypy src
+
+      - name: pip-audit (dependency vulnerability scan)
+        run: docker run --rm cicerone-test pip-audit -r requirements.txt -r requirements-dev.txt
+
   test:
     runs-on: ubuntu-latest
     steps:

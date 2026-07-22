@@ -155,6 +155,10 @@ structured.
 - Credentials only ever live in environment variables (`.env`, not
   committed), referenced from `config/cicerone.toml` via `${...}`
   placeholders — never written into the config file itself.
+- CI also runs `pip-audit` (dependency CVE scan) and
+  [CodeQL](.github/workflows/codeql.yml) (static analysis) on every PR;
+  Dependabot (`.github/dependabot.yml`) opens PRs for outdated pip/Docker/
+  Actions pins.
 
 ## License
 
