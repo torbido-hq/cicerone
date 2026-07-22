@@ -207,6 +207,12 @@ def evaluate_candidates(
         built = build_dataset(train_events, users, items, config, half_life_days=half_life_days)
         test_interactions = build_interactions(test_events, config, half_life_days=half_life_days)
         test_users = sorted(set(test_events["user_id"]))
+        # Reset per fold (a fold's fitted models are only valid for that
+        # fold's built dataset/test_users) but shared across every candidate
+        # within this fold: candidates that enable the same strategy (e.g.
+        # "popular" alone and a fusion candidate that also enables "popular")
+        # reuse its fitted recommendations instead of re-fitting per candidate.
+        strategy_cache: dict[str, pd.DataFrame] = {}
         for idx, candidate in enumerate(parsed_candidates):
             reco = train_and_recommend(
                 built,
@@ -216,6 +222,7 @@ def evaluate_candidates(
                 enabled_models=candidate.models,
                 weights=candidate.weights,
                 rrf_k=candidate.rrf_k,
+                strategy_cache=strategy_cache,
             )
             fold_metrics_by_candidate[idx].append(
                 calc_metrics(metrics, reco=reco, interactions=test_interactions)

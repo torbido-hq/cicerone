@@ -8,6 +8,7 @@ from cicerone.config import STRATEGY_NAMES
 from cicerone.dataset import build_dataset
 from cicerone.model import (
     STRATEGIES,
+    Strategy,
     _recommendable_item_ids,
     _validate_strategy_names,
     train_and_recommend,
@@ -289,7 +290,117 @@ def test_train_and_recommend_weighted_fusion_merges_sources_for_shared_items(sam
 
     # Both non-personalized strategies see every target user & all allowed
     # items, so every recommended pair should be backed by both sources.
-    assert set(recommendations["source"]) == {"latest+popular_fallback"}
+    # Joined in enabled_models order ("popular" before "latest"), not
+    # alphabetically.
+    assert set(recommendations["source"]) == {"popular_fallback+latest"}
+
+
+def test_train_and_recommend_weighted_fusion_joins_labels_in_enabled_models_order(
+    sample_items, feature_config
+):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    # Same two strategies, opposite enabled_models order -> the joined
+    # source label should flip too, since it's meant to reflect the
+    # configured priority order, not an alphabetical sort of source labels
+    # ("latest" would otherwise always sort before "popular_fallback").
+    popular_first = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=5,
+        enabled_models=["popular", "latest"],
+        weights={"popular": 1.0, "latest": 1.0},
+    )
+    latest_first = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=5,
+        enabled_models=["latest", "popular"],
+        weights={"popular": 1.0, "latest": 1.0},
+    )
+
+    assert set(popular_first["source"]) == {"popular_fallback+latest"}
+    assert set(latest_first["source"]) == {"latest+popular_fallback"}
+
+
+def test_train_and_recommend_reuses_strategy_cache_across_calls(sample_items, feature_config, monkeypatch):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    fit_calls = []
+    original_factory = STRATEGIES["popular"].factory
+
+    def counting_factory():
+        model = original_factory()
+        original_fit = model.fit
+
+        def counting_fit(dataset):
+            fit_calls.append(1)
+            return original_fit(dataset)
+
+        model.fit = counting_fit
+        return model
+
+    monkeypatch.setitem(
+        STRATEGIES, "popular", Strategy(counting_factory, personalized=False, source_label="popular_fallback")
+    )
+
+    cache: dict[str, pd.DataFrame] = {}
+    first = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=2,
+        enabled_models=["popular"],
+        strategy_cache=cache,
+    )
+    second = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=2,
+        enabled_models=["popular"],
+        strategy_cache=cache,
+    )
+
+    assert len(fit_calls) == 1
+    assert "popular" in cache
+    pd.testing.assert_frame_equal(first.reset_index(drop=True), second.reset_index(drop=True))
+
+
+def test_train_and_recommend_without_cache_refits_every_call(sample_items, feature_config, monkeypatch):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    fit_calls = []
+    original_factory = STRATEGIES["popular"].factory
+
+    def counting_factory():
+        model = original_factory()
+        original_fit = model.fit
+
+        def counting_fit(dataset):
+            fit_calls.append(1)
+            return original_fit(dataset)
+
+        model.fit = counting_fit
+        return model
+
+    monkeypatch.setitem(
+        STRATEGIES, "popular", Strategy(counting_factory, personalized=False, source_label="popular_fallback")
+    )
+
+    train_and_recommend(
+        built, target_users=["u1", "u2", "u3"], config=feature_config, top_k=2, enabled_models=["popular"]
+    )
+    train_and_recommend(
+        built, target_users=["u1", "u2", "u3"], config=feature_config, top_k=2, enabled_models=["popular"]
+    )
+
+    assert len(fit_calls) == 2
 
 
 def test_train_and_recommend_empty_weights_dict_enables_fusion(sample_items, feature_config):
@@ -309,7 +420,7 @@ def test_train_and_recommend_empty_weights_dict_enables_fusion(sample_items, fea
         weights={},
     )
 
-    assert set(recommendations["source"]) == {"latest+popular_fallback"}
+    assert set(recommendations["source"]) == {"popular_fallback+latest"}
 
 
 def test_train_and_recommend_weighted_fusion_defaults_missing_weight_to_one(sample_items, feature_config):
@@ -345,7 +456,7 @@ def test_train_and_recommend_weighted_fusion_defaults_missing_weight_to_one(samp
 
     # Both models still contribute recommendations even though "popular"'s
     # weight is implicit.
-    assert set(partial["source"]) == {"latest+popular_fallback"}
+    assert set(partial["source"]) == {"popular_fallback+latest"}
 
     # Omitting "popular" defaults it to weight 1.0, so fused scores should
     # match explicitly passing popular=1.0...

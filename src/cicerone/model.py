@@ -162,21 +162,32 @@ def _combine_by_priority(frames: list[pd.DataFrame], top_k: int) -> pd.DataFrame
     return combined.drop(columns=[WEIGHT_COLUMN])
 
 
-def _combine_by_weighted_fusion(frames: list[pd.DataFrame], top_k: int, rrf_k: float) -> pd.DataFrame:
+def _combine_by_weighted_fusion(
+    frames: list[pd.DataFrame], top_k: int, rrf_k: float, source_label_order: list[str]
+) -> pd.DataFrame:
     """Weighted reciprocal rank fusion: each strategy's contribution to an
     item's fused score is `weight / (rrf_k + rank)`, summed across every
     strategy that recommended that (user, item) pair. Rank-based (rather
     than raw-score-based) so heterogeneous strategies — LightFM scores,
     ItemKNN similarities, popularity counts — combine without normalization.
     Per-strategy weights are read from the "_weight" column each frame was
-    tagged with in train_and_recommend.
+    tagged with in train_and_recommend. Combined source labels for a given
+    (user, item) pair are joined in `source_label_order` (i.e. the
+    configured enabled_models priority order) rather than alphabetically,
+    so e.g. "popular_fallback+latest" reads consistently with how the
+    strategies were configured/prioritized, not by coincidence of spelling.
     """
     combined = pd.concat(frames, ignore_index=True)
     combined[Columns.Score] = combined[WEIGHT_COLUMN] / (rrf_k + combined[Columns.Rank])
+
+    def _join_labels_in_order(labels: pd.Series) -> str:
+        present = set(labels)
+        return "+".join(label for label in source_label_order if label in present)
+
     fused = combined.groupby([Columns.User, Columns.Item], as_index=False).agg(
         **{
             Columns.Score: (Columns.Score, "sum"),
-            SOURCE_COLUMN: (SOURCE_COLUMN, lambda labels: "+".join(sorted(set(labels)))),
+            SOURCE_COLUMN: (SOURCE_COLUMN, _join_labels_in_order),
         }
     )
     fused = fused.sort_values([Columns.User, Columns.Score], ascending=[True, False])
@@ -193,7 +204,16 @@ def train_and_recommend(
     enabled_models: list[str] | None = None,
     weights: dict[str, float] | None = None,
     rrf_k: float | None = None,
+    strategy_cache: dict[str, pd.DataFrame] | None = None,
 ) -> pd.DataFrame:
+    """`strategy_cache`, if given, is read from and written to (keyed by
+    strategy name) so a caller evaluating multiple candidates against the
+    *same* built dataset/target_users/top_k -- e.g. cicerone.automl
+    backtesting several candidates per fold -- can avoid re-fitting a
+    strategy that's shared by more than one candidate. Unused by the
+    single-config job.py call path (defaults to None: no caching, one fit
+    per call, exactly the prior behavior).
+    """
     dataset = built.dataset
     enabled_models = enabled_models if enabled_models is not None else DEFAULT_MODELS
     if not enabled_models:
@@ -235,17 +255,23 @@ def train_and_recommend(
         strategy = STRATEGIES[name]
         if strategy.personalized and not warm_users:
             continue
-        model = strategy.factory()
-        logger.info("Fitting '%s' on %d interactions", name, len(built.interactions))
-        model.fit(dataset)
-        recs = model.recommend(
-            users=warm_users if strategy.personalized else unique_target_users,
-            dataset=dataset,
-            k=top_k,
-            filter_viewed=strategy.personalized,
-            items_to_recommend=allowed_items,
-        )
-        recs[SOURCE_COLUMN] = strategy.source_label
+        if strategy_cache is not None and name in strategy_cache:
+            recs = strategy_cache[name].copy()
+        else:
+            model = strategy.factory()
+            logger.info("Fitting '%s' on %d interactions", name, len(built.interactions))
+            model.fit(dataset)
+            recs = model.recommend(
+                users=warm_users if strategy.personalized else unique_target_users,
+                dataset=dataset,
+                k=top_k,
+                filter_viewed=strategy.personalized,
+                items_to_recommend=allowed_items,
+            )
+            recs[SOURCE_COLUMN] = strategy.source_label
+            if strategy_cache is not None:
+                strategy_cache[name] = recs.copy()
+        recs = recs.copy()
         recs[WEIGHT_COLUMN] = weights.get(name, 1.0) if weights is not None else 1.0
         frames.append(recs)
 
@@ -253,7 +279,10 @@ def train_and_recommend(
         return pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN])
 
     if weights is not None:
-        combined = _combine_by_weighted_fusion(frames, top_k, rrf_k if rrf_k is not None else RRF_K)
+        source_label_order = [STRATEGIES[name].source_label for name in enabled_models]
+        combined = _combine_by_weighted_fusion(
+            frames, top_k, rrf_k if rrf_k is not None else RRF_K, source_label_order
+        )
     else:
         combined = _combine_by_priority(frames, top_k)
     return combined.reset_index(drop=True)
