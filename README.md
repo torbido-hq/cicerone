@@ -224,8 +224,9 @@ coverage is 95% (`pyproject.toml`, `[tool.coverage.report].fail_under`) and
 is enforced on every PR by `.github/workflows/ci.yml`, which also runs
 [Ruff](https://docs.astral.sh/ruff/) (lint + format check) in the same test
 image. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to run tests/lint
-locally and [docs/architecture.md](docs/architecture.md) for how the code is
-structured.
+locally, [docs/tutorial.md](docs/tutorial.md) for a hands-on walkthrough with
+local sample data, and [docs/architecture.md](docs/architecture.md) for how
+the code is structured.
 
 ## Security
 
