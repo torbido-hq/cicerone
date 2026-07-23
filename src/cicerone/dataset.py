@@ -35,7 +35,7 @@ import pandas as pd
 from rectools import Columns
 from rectools.dataset import Dataset
 
-from cicerone.feature_config import FeatureConfig
+from cicerone.feature_config import FeatureColumn, FeatureConfig
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +103,9 @@ def build_interactions(events: pd.DataFrame, config: FeatureConfig, half_life_da
     return aggregated
 
 
-def _explode_features(df: pd.DataFrame, id_column: str, rectools_id_column: str, columns) -> pd.DataFrame:
+def _explode_features(
+    df: pd.DataFrame, id_column: str, rectools_id_column: str, columns: list[FeatureColumn]
+) -> pd.DataFrame:
     frames = []
     for feature in columns:
         if feature.column not in df.columns:
