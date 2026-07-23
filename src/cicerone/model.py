@@ -5,6 +5,7 @@ fallback for cold-start users who have too little (or no) personal signal.
 
 from __future__ import annotations
 
+import inspect
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -47,6 +48,34 @@ class RecommenderModel(Protocol):
     ) -> pd.DataFrame: ...
 
 
+_RECOMMEND_PARAMS = {"users", "dataset", "k", "filter_viewed", "items_to_recommend"}
+
+
+def _as_recommender_model(model: object) -> RecommenderModel:
+    """Verifies (at strategy-construction time, not first use) that `model`
+    implements the RecommenderModel protocol expected by train_and_recommend.
+    A rectools/implicit upgrade that renames or drops one of `.fit`/.recommend`'s
+    parameters would otherwise only surface as a confusing TypeError deep
+    inside a fold loop the first time the strategy is actually used; this
+    fails fast with a clear message naming the offending model/strategy instead.
+    """
+    fit = getattr(model, "fit", None)
+    recommend = getattr(model, "recommend", None)
+    if not callable(fit) or not callable(recommend):
+        raise TypeError(
+            f"{type(model).__name__} does not implement the RecommenderModel protocol "
+            "(missing a callable fit() and/or recommend())"
+        )
+    recommend_params = set(inspect.signature(recommend).parameters)
+    missing_params = _RECOMMEND_PARAMS - recommend_params
+    if missing_params:
+        raise TypeError(
+            f"{type(model).__name__}.recommend() is missing expected parameter(s) {sorted(missing_params)}; "
+            "the RecommenderModel protocol may have drifted from the installed rectools/implicit version"
+        )
+    return model  # type: ignore[return-value]
+
+
 @dataclass(frozen=True)
 class Strategy:
     factory: Callable[[], RecommenderModel]
@@ -54,31 +83,35 @@ class Strategy:
     source_label: str
 
 
-def _build_collaborative() -> LightFMWrapperModel:
-    return LightFMWrapperModel(
-        LightFM(
-            no_components=64,
-            loss="warp",
-            learning_rate=0.05,
-            item_alpha=1e-6,
-            user_alpha=1e-6,
-            random_state=RANDOM_STATE,
-        ),
-        epochs=30,
-        num_threads=4,
+def _build_collaborative() -> RecommenderModel:
+    return _as_recommender_model(
+        LightFMWrapperModel(
+            LightFM(
+                no_components=64,
+                loss="warp",
+                learning_rate=0.05,
+                item_alpha=1e-6,
+                user_alpha=1e-6,
+                random_state=RANDOM_STATE,
+            ),
+            epochs=30,
+            num_threads=4,
+        )
     )
 
 
-def _build_item_based() -> ImplicitItemKNNWrapperModel:
-    return ImplicitItemKNNWrapperModel(TFIDFRecommender(K=20))
+def _build_item_based() -> RecommenderModel:
+    return _as_recommender_model(ImplicitItemKNNWrapperModel(TFIDFRecommender(K=20)))
 
 
-def _build_popular() -> PopularModel:
-    return PopularModel()
+def _build_popular() -> RecommenderModel:
+    return _as_recommender_model(PopularModel())
 
 
-def _build_latest() -> PopularModel:
-    return PopularModel(popularity="n_interactions", period=pd.Timedelta(days=LATEST_WINDOW_DAYS))
+def _build_latest() -> RecommenderModel:
+    return _as_recommender_model(
+        PopularModel(popularity="n_interactions", period=pd.Timedelta(days=LATEST_WINDOW_DAYS))
+    )
 
 
 STRATEGIES: dict[str, Strategy] = {

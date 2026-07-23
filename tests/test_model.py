@@ -11,6 +11,7 @@ from cicerone.model import (
     STRATEGIES,
     RecommenderModel,
     Strategy,
+    _as_recommender_model,
     _recommendable_item_ids,
     _validate_strategy_names,
     train_and_recommend,
@@ -185,6 +186,33 @@ def test_strategies_keys_match_config_strategy_names():
 def test_validate_strategy_names_raises_on_mismatch():
     with pytest.raises(RuntimeError, match="must match"):
         _validate_strategy_names({"popular": STRATEGIES["popular"]}, ("popular", "latest"))
+
+
+def test_as_recommender_model_accepts_every_registered_strategy_factory():
+    for name, strategy in STRATEGIES.items():
+        model = strategy.factory()
+        assert _as_recommender_model(model) is model, name
+
+
+def test_as_recommender_model_rejects_object_missing_recommend():
+    class NotAModel:
+        def fit(self, dataset):
+            return self
+
+    with pytest.raises(TypeError, match="does not implement the RecommenderModel protocol"):
+        _as_recommender_model(NotAModel())
+
+
+def test_as_recommender_model_rejects_recommend_missing_expected_parameters():
+    class WrongSignatureModel:
+        def fit(self, dataset):
+            return self
+
+        def recommend(self, *, users, dataset, k):
+            return pd.DataFrame()
+
+    with pytest.raises(TypeError, match="missing expected parameter"):
+        _as_recommender_model(WrongSignatureModel())
 
 
 def test_validate_model_weights_no_op_when_none():

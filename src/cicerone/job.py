@@ -89,9 +89,7 @@ def run() -> None:
     # implicit defaults behind an empty string in the manifest.
     if weights is not None:
         effective_weights = {name: weights.get(name, 1.0) for name in resolved_models}
-        model_weights_str = ",".join(
-            f"{name}={effective_weights[name]}" for name in sorted(effective_weights)
-        )
+        model_weights_str = ",".join(f"{name}={weight}" for name, weight in effective_weights.items())
     else:
         model_weights_str = ""
 

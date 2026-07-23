@@ -248,7 +248,7 @@ def test_job_run_with_automl_fusion_candidate_reports_effective_weights(tmp_path
     manifest = json.loads((output_dir / "manifest.json").read_text())
     assert manifest["automl_enabled"] is True
     assert manifest["models"] == "popular,latest"
-    assert manifest["model_weights"] == "latest=0.5,popular=1.0"
+    assert manifest["model_weights"] == "popular=1.0,latest=0.5"
     assert manifest["rrf_k"] == 30.0
 
 
@@ -311,7 +311,7 @@ def test_job_run_with_manual_fusion_configuration_reports_manifest_fields(tmp_pa
     manifest = json.loads((output_dir / "manifest.json").read_text())
     assert manifest["automl_enabled"] is False
     assert manifest["models"] == "popular,latest"
-    assert manifest["model_weights"] == "latest=0.5,popular=1.0"
+    assert manifest["model_weights"] == "popular=1.0,latest=0.5"
     assert manifest["rrf_k"] == 30.0
 
 

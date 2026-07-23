@@ -74,9 +74,9 @@ flowchart LR
    reflects the caller's configured priority.
    An optional `strategy_cache` parameter (keyed by strategy name, caching
    the *fitted model* rather than its `recommend()` output) lets a caller
-   evaluating multiple configs against the same `BuiltDataset` — namely
-   `automl.evaluate_candidates()` — skip re-fitting a strategy shared by
-   more than one candidate; a cache hit still calls `recommend()` fresh, so
+   who is evaluating multiple configs against the same `BuiltDataset` —
+   namely `automl.evaluate_candidates()` — skip re-fitting a strategy shared
+   by more than one candidate; a cache hit still calls `recommend()` fresh, so
    it works even across candidates with different `top_k`/`weights`. Unused
    (`None`) by the single-config `job.py` call path.
 4. If `Settings.automl_enabled` (`[job.automl].enabled`), before step 3
