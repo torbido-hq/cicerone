@@ -35,8 +35,9 @@ input source (S3-compatible/local dataset, or a database)
                                  1. reads events/users/items
                                  2. weighs interactions (see below,
                                     config/features.toml)
-                                 3. trains LightFMWrapperModel (rectools)
-                                 4. generates top-K per user + popularity fallback
+                                 3. trains the configured model strategies
+                                    (collaborative/item-based/popular/latest)
+                                 4. combines them into top-K recs per user
                                         |
                                         v
                      output destination (S3-compatible/local dataset, or a database)
@@ -109,10 +110,86 @@ again, adapt these to your catalog). The availability filter
 (`item_availability_filters`, default `published` + `in_stock`) always
 excludes unavailable items from the recommendations.
 
+## Model strategies
+
+`[job].models` in `config/cicerone.toml` picks which strategies to fit and
+combine, in priority order (earlier entries win ties for the same
+user/item pair). Defaults to `["collaborative", "popular"]` if omitted:
+
+- `collaborative`: `LightFMWrapperModel` (rectools) — hybrid CF, uses user/item
+  features for cold-start. Personalized, warm users only.
+- `item_based`: `ImplicitItemKNNWrapperModel` (rectools) — item-item
+  similarity. Personalized, warm users only.
+- `popular`: `PopularModel` (rectools) — global popularity. Non-personalized,
+  runs for every target user and backfills any warm user without enough
+  personalized results.
+- `latest`: `PopularModel` restricted to the last two weeks of interactions —
+  trending/recently active items. Non-personalized, same backfill role as
+  `popular`.
+
+By default, strategies are combined in priority order: earlier ones win ties
+for the same user/item pair, non-personalized ones only backfill users who
+didn't get enough personalized results. Optionally, `[job.model_weights]`
+switches to a weighted reciprocal rank fusion instead — every enabled
+strategy's rank contributes `weight / (rrf_k + rank)` to each item's fused
+score, summed across strategies, so results from heterogeneous strategies
+blend without needing to normalize their raw scores. `rrf_k` (`[job].rrf_k`,
+default `60`) is tunable and only applies when `model_weights` is set — it
+must be positive. An explicitly empty `[job.model_weights]` table still
+enables fusion mode, with every enabled strategy defaulting to weight `1.0`.
+Weight values must be non-negative. When a fusion result's (user, item) pair
+was produced by more than one strategy, its `source` label joins each
+contributing strategy's label in `models`' configured order (e.g.
+`"popular_fallback+latest"` when `models = ["popular", "latest"]`), not
+alphabetically — so the label reflects your configured priority regardless
+of how the underlying strategy labels happen to sort.
+
+## AutoML
+
+Instead of a fixed `models`/`model_weights` config, `[job.automl]` can pick
+the best combination automatically for every run:
+
+```toml
+[job.automl]
+enabled = true
+n_splits = 2       # time-based folds to backtest each candidate over
+test_days = 14     # size of each fold's held-out window, in days
+primary_metric = "MAP" # matched by prefix, e.g. "MAP@10"
+```
+
+Each run, `cicerone.automl.evaluate_candidates()` splits your event history
+into `n_splits` non-overlapping, most-recent-first `test_days`-day windows;
+for each candidate strategy/weight combination, it trains on everything
+before the window and scores the recommendations against what actually
+happened during it (`MAP@k`, `NDCG@k`, `Recall@k`, via `rectools.metrics`).
+`select_best_candidate()` then picks the highest-scoring candidate by
+`primary_metric`, and that candidate's `models`/`weights`/`rrf_k` are used
+for the run in place of the static config, ties broken by candidate order.
+
+The default candidate search space tries every strategy alone, the default
+priority combo, and one weighted-fusion blend across all four strategies —
+override it with `[[job.automl.candidates]]` (same shape as
+`models`/`model_weights`/`rrf_k` above, one array-of-tables entry per
+candidate) if you want to try a different set. Unlike top-level
+`[job.model_weights]`, a candidate's `weights` table (if present) must give
+an explicit weight for every one of its `models` — there's no implicit
+default for an omitted model, to avoid silently backtesting a weighting you
+didn't intend. AutoML raises if there isn't enough event history for at
+least one fold — reduce `n_splits`/`test_days` or provide more historical
+events.
+
+Within each backtested fold, candidates that enable the same strategy (e.g.
+two fusion candidates that both include `popular`) reuse that strategy's
+already-fitted model instead of re-fitting it per candidate — fitting still
+happens once per fold per distinct strategy, and `recommend()` still runs
+fresh for every candidate, so this is purely a training-cost optimization
+and doesn't change scoring.
+
 ## Output
 
-`recommendations`: `user_id, item_id, rank, score, source`
-(`source` = `personalized` or `popular_fallback`).
+`recommendations`: `user_id, item_id, rank, score, source` (`source` is the
+label of whichever strategy produced that row: `personalized`, `item_based`,
+`popular_fallback`, or `latest`).
 
 `manifest`: metadata about the latest run (counts, timestamps) for monitoring.
 

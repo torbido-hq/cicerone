@@ -54,9 +54,13 @@ def _time_decay_multiplier(occurred_at: pd.Series, half_life_days: float) -> pd.
     return 0.5 ** (age_days / half_life_days)
 
 
-def _weighted_interactions(
-    events: pd.DataFrame, config: FeatureConfig, half_life_days: float
-) -> pd.DataFrame:
+def build_interactions(events: pd.DataFrame, config: FeatureConfig, half_life_days: float) -> pd.DataFrame:
+    """Builds the weighted/aggregated interactions DataFrame alone, without
+    constructing user/item feature matrices or a rectools Dataset. Exposed
+    (not `_`-prefixed) for callers that only need interactions -- e.g.
+    cicerone.automl scoring a held-out fold's ground truth, where building a
+    full Dataset (feature exploding included) would be wasted work.
+    """
     df = events.copy()
     df["occurred_at"] = pd.to_datetime(df["occurred_at"], utc=True)
     df["quantity"] = df.get("quantity", 1)
@@ -125,7 +129,7 @@ def build_dataset(
     config: FeatureConfig,
     half_life_days: float,
 ) -> BuiltDataset:
-    interactions = _weighted_interactions(events, config, half_life_days)
+    interactions = build_interactions(events, config, half_life_days)
 
     user_features_df = (
         _explode_features(users, "user_id", Columns.User, config.user_features) if users is not None else None

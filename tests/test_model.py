@@ -1,10 +1,22 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 from rectools import Columns
 
+from cicerone.config import STRATEGY_NAMES
 from cicerone.dataset import build_dataset
-from cicerone.model import _recommendable_item_ids, train_and_recommend
+from cicerone.model import (
+    DEFAULT_MODELS,
+    STRATEGIES,
+    RecommenderModel,
+    Strategy,
+    _as_recommender_model,
+    _recommendable_item_ids,
+    _validate_strategy_names,
+    train_and_recommend,
+    validate_model_weights,
+)
 
 
 def _synthetic_events() -> pd.DataFrame:
@@ -93,3 +105,521 @@ def test_train_and_recommend_falls_back_to_popularity_for_fully_unknown_users(sa
     cold_user_recos = recommendations[recommendations[Columns.User] == "ghost"]
     assert not cold_user_recos.empty
     assert (cold_user_recos["source"] == "popular_fallback").all()
+
+
+def test_train_and_recommend_rejects_unknown_model(sample_items, feature_config):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    with pytest.raises(ValueError, match="not_a_real_model"):
+        train_and_recommend(
+            built, target_users=["u1"], config=feature_config, top_k=2, enabled_models=["not_a_real_model"]
+        )
+
+
+def test_train_and_recommend_rejects_empty_enabled_models(sample_items, feature_config):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    # An explicit empty list is a configuration error, not "no strategies" --
+    # it must not silently fall through to an empty-but-"successful" result.
+    with pytest.raises(ValueError, match="enabled_models is empty"):
+        train_and_recommend(built, target_users=["u1"], config=feature_config, top_k=2, enabled_models=[])
+
+
+def test_train_and_recommend_item_based_strategy(sample_items, feature_config):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    recommendations = train_and_recommend(
+        built, target_users=["u1", "u2", "u3"], config=feature_config, top_k=2, enabled_models=["item_based"]
+    )
+
+    assert set(recommendations["source"]) == {"item_based"}
+
+
+def test_train_and_recommend_latest_strategy(sample_items, feature_config):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    recommendations = train_and_recommend(
+        built, target_users=["u1", "u2", "u3"], config=feature_config, top_k=2, enabled_models=["latest"]
+    )
+
+    assert set(recommendations[Columns.User]) == {"u1", "u2", "u3"}
+    assert set(recommendations["source"]) == {"latest"}
+
+
+def test_train_and_recommend_combines_multiple_personalized_strategies(sample_items, feature_config):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    recommendations = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=3,
+        enabled_models=["collaborative", "item_based", "popular"],
+    )
+
+    assert set(recommendations["source"]) <= {"personalized", "item_based", "popular_fallback"}
+    assert set(recommendations.columns) == {
+        Columns.User,
+        Columns.Item,
+        Columns.Rank,
+        Columns.Score,
+        "source",
+    }
+    # top_k is enforced per user even after combining multiple strategies...
+    assert (recommendations.groupby(Columns.User).size() <= 3).all()
+    # ...and there are no duplicate (user, item) pairs across the combined strategies.
+    assert not recommendations.duplicated(subset=[Columns.User, Columns.Item]).any()
+
+
+def test_strategies_keys_match_config_strategy_names():
+    # cicerone.config.STRATEGY_NAMES is the canonical list of valid model
+    # identifiers (validated against at config-load time); it must stay in
+    # sync with the strategies actually implemented here.
+    assert set(STRATEGIES) == set(STRATEGY_NAMES)
+
+
+def test_validate_strategy_names_raises_on_mismatch():
+    with pytest.raises(RuntimeError, match="must match"):
+        _validate_strategy_names({"popular": STRATEGIES["popular"]}, ("popular", "latest"))
+
+
+def test_as_recommender_model_accepts_every_registered_strategy_factory():
+    for name, strategy in STRATEGIES.items():
+        model = strategy.factory()
+        assert _as_recommender_model(model) is model, name
+
+
+def test_as_recommender_model_rejects_object_missing_recommend():
+    class NotAModel:
+        def fit(self, dataset):
+            return self
+
+    with pytest.raises(TypeError, match="does not implement the RecommenderModel protocol"):
+        _as_recommender_model(NotAModel())
+
+
+def test_as_recommender_model_rejects_recommend_missing_expected_parameters():
+    class WrongSignatureModel:
+        def fit(self, dataset):
+            return self
+
+        def recommend(self, *, users, dataset, k):
+            return pd.DataFrame()
+
+    with pytest.raises(TypeError, match="missing expected parameter"):
+        _as_recommender_model(WrongSignatureModel())
+
+
+def test_validate_model_weights_no_op_when_none():
+    # No weights configured -> fusion mode isn't in play, nothing to validate.
+    validate_model_weights(None)
+
+
+def test_train_and_recommend_no_warm_users_and_only_personalized_strategies_returns_empty(
+    sample_items, feature_config, caplog
+):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    with caplog.at_level("INFO"):
+        recommendations = train_and_recommend(
+            built, target_users=["ghost"], config=feature_config, top_k=2, enabled_models=["item_based"]
+        )
+
+    assert recommendations.empty
+    assert list(recommendations.columns) == [
+        Columns.User,
+        Columns.Item,
+        Columns.Rank,
+        Columns.Score,
+        "source",
+    ]
+    # No non-personalized strategy is enabled, so the log must not claim a
+    # "falling back" that isn't actually happening -- it should say plainly
+    # that these users get no recommendations.
+    assert "no non-personalized strategy is enabled" in caplog.text
+    assert "falling back" not in caplog.text
+
+
+def test_train_and_recommend_rejects_unknown_weight_key(sample_items, feature_config):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    with pytest.raises(ValueError, match="not_enabled"):
+        train_and_recommend(
+            built,
+            target_users=["u1"],
+            config=feature_config,
+            top_k=2,
+            enabled_models=["popular"],
+            weights={"not_enabled": 1.0},
+        )
+
+
+def test_train_and_recommend_rejects_negative_weight(sample_items, feature_config):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    with pytest.raises(ValueError, match="non-negative"):
+        train_and_recommend(
+            built,
+            target_users=["u1"],
+            config=feature_config,
+            top_k=2,
+            enabled_models=["popular"],
+            weights={"popular": -1.0},
+        )
+
+
+def test_train_and_recommend_rejects_non_positive_rrf_k(sample_items, feature_config):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    with pytest.raises(ValueError, match="rrf_k must be positive"):
+        train_and_recommend(
+            built,
+            target_users=["u1"],
+            config=feature_config,
+            top_k=2,
+            enabled_models=["popular"],
+            weights={"popular": 1.0},
+            rrf_k=0,
+        )
+
+
+def test_train_and_recommend_weighted_fusion_with_default_models(sample_items, feature_config):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    # enabled_models omitted (None) but weights given -> fusion mode still
+    # applies, against DEFAULT_MODELS rather than an explicit list.
+    from_default = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=5,
+        weights={"collaborative": 1.0, "popular": 0.3},
+    )
+    from_explicit = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=5,
+        enabled_models=DEFAULT_MODELS,
+        weights={"collaborative": 1.0, "popular": 0.3},
+    )
+
+    fused_labels = {"personalized", "popular_fallback", "personalized+popular_fallback"}
+    assert set(from_default["source"]) <= fused_labels
+    pd.testing.assert_frame_equal(from_default.reset_index(drop=True), from_explicit.reset_index(drop=True))
+
+
+def test_train_and_recommend_weighted_fusion_respects_top_k_and_ranks_by_score(sample_items, feature_config):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    recommendations = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=2,
+        enabled_models=["collaborative", "item_based", "popular"],
+        weights={"collaborative": 1.0, "item_based": 0.5, "popular": 0.2},
+    )
+
+    assert (recommendations.groupby(Columns.User).size() <= 2).all()
+    for _, group in recommendations.groupby(Columns.User):
+        assert list(group[Columns.Rank]) == list(range(1, len(group) + 1))
+        assert list(group[Columns.Score]) == sorted(group[Columns.Score], reverse=True)
+
+
+def test_train_and_recommend_weighted_fusion_merges_sources_for_shared_items(sample_items, feature_config):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    recommendations = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=5,
+        enabled_models=["popular", "latest"],
+        weights={"popular": 1.0, "latest": 1.0},
+    )
+
+    # Both non-personalized strategies see every target user & all allowed
+    # items, so every recommended pair should be backed by both sources.
+    # Joined in enabled_models order ("popular" before "latest"), not
+    # alphabetically.
+    assert set(recommendations["source"]) == {"popular_fallback+latest"}
+
+
+def test_train_and_recommend_weighted_fusion_joins_labels_in_enabled_models_order(
+    sample_items, feature_config
+):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    # Same two strategies, opposite enabled_models order -> the joined
+    # source label should flip too, since it's meant to reflect the
+    # configured priority order, not an alphabetical sort of source labels
+    # ("latest" would otherwise always sort before "popular_fallback").
+    popular_first = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=5,
+        enabled_models=["popular", "latest"],
+        weights={"popular": 1.0, "latest": 1.0},
+    )
+    latest_first = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=5,
+        enabled_models=["latest", "popular"],
+        weights={"popular": 1.0, "latest": 1.0},
+    )
+
+    assert set(popular_first["source"]) == {"popular_fallback+latest"}
+    assert set(latest_first["source"]) == {"latest+popular_fallback"}
+
+
+def test_train_and_recommend_reuses_strategy_cache_across_calls(sample_items, feature_config, monkeypatch):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    fit_calls = []
+    original_factory = STRATEGIES["popular"].factory
+
+    def counting_factory():
+        model = original_factory()
+        original_fit = model.fit
+
+        def counting_fit(dataset):
+            fit_calls.append(1)
+            return original_fit(dataset)
+
+        model.fit = counting_fit
+        return model
+
+    monkeypatch.setitem(
+        STRATEGIES, "popular", Strategy(counting_factory, personalized=False, source_label="popular_fallback")
+    )
+
+    cache: dict[str, RecommenderModel] = {}
+    first = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=2,
+        enabled_models=["popular"],
+        strategy_cache=cache,
+    )
+    second = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=2,
+        enabled_models=["popular"],
+        strategy_cache=cache,
+    )
+
+    assert len(fit_calls) == 1
+    assert "popular" in cache
+    pd.testing.assert_frame_equal(first.reset_index(drop=True), second.reset_index(drop=True))
+
+
+def test_train_and_recommend_strategy_cache_reused_across_different_top_k_and_weights(
+    sample_items, feature_config, monkeypatch
+):
+    # The overall point of caching the *fitted model* (rather than its
+    # recommend() output): a cache hit must still be usable when a later
+    # call asks for a different top_k or weights than the call that
+    # populated the cache -- exactly what cicerone.automl does when
+    # backtesting candidates with different top_k/weights against the same
+    # fold.
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    fit_calls = []
+    original_factory = STRATEGIES["popular"].factory
+
+    def counting_factory():
+        model = original_factory()
+        original_fit = model.fit
+
+        def counting_fit(dataset):
+            fit_calls.append(1)
+            return original_fit(dataset)
+
+        model.fit = counting_fit
+        return model
+
+    monkeypatch.setitem(
+        STRATEGIES, "popular", Strategy(counting_factory, personalized=False, source_label="popular_fallback")
+    )
+
+    cache: dict[str, RecommenderModel] = {}
+    small_top_k = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=1,
+        enabled_models=["popular"],
+        strategy_cache=cache,
+    )
+    large_top_k = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=5,
+        enabled_models=["popular"],
+        weights={"popular": 2.0},
+        strategy_cache=cache,
+    )
+
+    # Only fit once despite the second call using a different top_k/weights.
+    assert len(fit_calls) == 1
+    assert (small_top_k.groupby(Columns.User).size() <= 1).all()
+    assert (large_top_k.groupby(Columns.User).size() <= 5).all()
+
+
+def test_train_and_recommend_without_cache_refits_every_call(sample_items, feature_config, monkeypatch):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    fit_calls = []
+    original_factory = STRATEGIES["popular"].factory
+
+    def counting_factory():
+        model = original_factory()
+        original_fit = model.fit
+
+        def counting_fit(dataset):
+            fit_calls.append(1)
+            return original_fit(dataset)
+
+        model.fit = counting_fit
+        return model
+
+    monkeypatch.setitem(
+        STRATEGIES, "popular", Strategy(counting_factory, personalized=False, source_label="popular_fallback")
+    )
+
+    train_and_recommend(
+        built, target_users=["u1", "u2", "u3"], config=feature_config, top_k=2, enabled_models=["popular"]
+    )
+    train_and_recommend(
+        built, target_users=["u1", "u2", "u3"], config=feature_config, top_k=2, enabled_models=["popular"]
+    )
+
+    assert len(fit_calls) == 2
+
+
+def test_train_and_recommend_empty_weights_dict_enables_fusion(sample_items, feature_config):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    # An explicitly empty weights dict is not the same as omitting weights:
+    # it still opts into fusion mode (every strategy defaults to weight 1.0),
+    # so the merged "+"-joined source label should appear, same as when
+    # weights are given explicitly.
+    recommendations = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=5,
+        enabled_models=["popular", "latest"],
+        weights={},
+    )
+
+    assert set(recommendations["source"]) == {"popular_fallback+latest"}
+
+
+def test_train_and_recommend_weighted_fusion_defaults_missing_weight_to_one(sample_items, feature_config):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    # "popular" is omitted from weights -> should default to weight 1.0,
+    # same as passing it explicitly.
+    partial = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=5,
+        enabled_models=["popular", "latest"],
+        weights={"latest": 0.5},
+    )
+    explicit_default = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=5,
+        enabled_models=["popular", "latest"],
+        weights={"popular": 1.0, "latest": 0.5},
+    )
+    explicit_changed = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=5,
+        enabled_models=["popular", "latest"],
+        weights={"popular": 0.3, "latest": 0.5},
+    )
+
+    # Both models still contribute recommendations even though "popular"'s
+    # weight is implicit.
+    assert set(partial["source"]) == {"popular_fallback+latest"}
+
+    # Omitting "popular" defaults it to weight 1.0, so fused scores should
+    # match explicitly passing popular=1.0...
+    merged_default = partial.merge(
+        explicit_default, on=[Columns.User, Columns.Item], suffixes=("_partial", "_explicit")
+    )
+    assert not merged_default.empty
+    assert (merged_default[f"{Columns.Score}_partial"] == merged_default[f"{Columns.Score}_explicit"]).all()
+
+    # ...but changing popular's explicit weight away from the implicit
+    # default of 1.0 should change the fused scores.
+    merged_changed = partial.merge(
+        explicit_changed, on=[Columns.User, Columns.Item], suffixes=("_partial", "_changed")
+    )
+    assert not merged_changed.empty
+    assert (merged_changed[f"{Columns.Score}_partial"] != merged_changed[f"{Columns.Score}_changed"]).any()
+
+
+def test_train_and_recommend_custom_rrf_k_changes_fused_scores(sample_items, feature_config):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    small_k = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=5,
+        enabled_models=["popular", "latest"],
+        weights={"popular": 1.0, "latest": 1.0},
+        rrf_k=1,
+    )
+    large_k = train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=5,
+        enabled_models=["popular", "latest"],
+        weights={"popular": 1.0, "latest": 1.0},
+        rrf_k=1000,
+    )
+
+    # RRF fused score is weight / (rrf_k + rank): for a fixed (positive) rank
+    # and weight, a larger rrf_k strictly lowers the score. Both runs recommend
+    # the same (user, item) pairs here (only 2 allowed items per user), so
+    # every pair should show this exact monotonic relationship.
+    merged = small_k.merge(large_k, on=[Columns.User, Columns.Item], suffixes=("_small_k", "_large_k"))
+    assert not merged.empty
+    assert (merged[Columns.Score + "_small_k"] > merged[Columns.Score + "_large_k"]).all()

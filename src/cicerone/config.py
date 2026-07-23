@@ -34,6 +34,44 @@ from typing import Any
 
 DEFAULT_CONFIG_PATH = "/app/config/cicerone.toml"
 
+# Canonical multi-model strategy identifiers. Centralized here (not in
+# cicerone.model, which owns the actual per-strategy factories/behavior but
+# has heavy ML deps -- lightfm/implicit/rectools -- that config.py
+# deliberately doesn't import) so Settings.models can be validated at config
+# load time, and so cicerone.model.STRATEGIES' keys, DEFAULT_MODELS, config
+# file comments, and README can't silently drift out of sync with this list.
+STRATEGY_NAMES: tuple[str, ...] = ("collaborative", "item_based", "popular", "latest")
+
+# Centralized here (not in cicerone.automl, which config.py deliberately
+# doesn't import) so the [job.automl] TOML defaults and automl.py's function
+# defaults can't drift apart.
+AUTOML_DEFAULT_N_SPLITS = 2
+AUTOML_DEFAULT_TEST_DAYS = 14
+AUTOML_DEFAULT_PRIMARY_METRIC = "MAP"
+
+
+def validate_model_weights(weights: dict[str, float] | None, *, context: str = "model_weights") -> None:
+    """Raises ValueError if any weight is negative. Shared by config.load_settings,
+    model.train_and_recommend, and automl's candidate parsing so all three fail on
+    the same invalid configurations with the same error shape (`context` only
+    changes the message prefix so each caller's error reads naturally).
+    """
+    if weights is None:
+        return
+    negative_weights = {name: weight for name, weight in weights.items() if weight < 0}
+    if negative_weights:
+        raise ValueError(f"{context} value(s) must be non-negative, got {negative_weights}")
+
+
+def validate_rrf_k(rrf_k: float | None, *, context: str = "rrf_k") -> None:
+    """Raises ValueError if rrf_k is set but not positive. Shared by
+    config.load_settings, model.train_and_recommend, and automl's candidate
+    parsing (see validate_model_weights).
+    """
+    if rrf_k is not None and rrf_k <= 0:
+        raise ValueError(f"{context} must be positive, got {rrf_k}")
+
+
 _ENV_PLACEHOLDER = re.compile(r"\$(\$?)\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
@@ -92,6 +130,14 @@ class Settings:
     top_k: int
     half_life_days: float
     cron_schedule: str
+    models: list[str] | None
+    model_weights: dict[str, float] | None
+    rrf_k: float | None
+    automl_enabled: bool
+    automl_n_splits: int
+    automl_test_days: int
+    automl_primary_metric: str
+    automl_candidates: list[dict[str, Any]] | None
 
 
 def _load_io_settings(raw: dict[str, Any], section_name: str) -> IOSettings:
@@ -117,6 +163,27 @@ def load_settings(config_path: str | None = None) -> Settings:
         raw = tomllib.load(f)
 
     job = raw.get("job", {})
+    automl = job.get("automl", {})
+    models = list(job["models"]) if "models" in job else None
+    if models is not None:
+        if not models:
+            raise RuntimeError(
+                "job.models is empty; configure at least one model name, or omit job.models entirely "
+                "to use the default"
+            )
+        unknown_models = [name for name in models if name not in STRATEGY_NAMES]
+        if unknown_models:
+            raise RuntimeError(
+                f"job.models contains unknown model(s) {unknown_models}; available: {list(STRATEGY_NAMES)}"
+            )
+    model_weights = (
+        {name: float(weight) for name, weight in job["model_weights"].items()}
+        if "model_weights" in job
+        else None
+    )
+    validate_model_weights(model_weights, context="job.model_weights")
+    rrf_k = float(job["rrf_k"]) if "rrf_k" in job else None
+    validate_rrf_k(rrf_k, context="job.rrf_k")
     return Settings(
         input=_load_io_settings(raw, "input"),
         output=_load_io_settings(raw, "output"),
@@ -124,4 +191,14 @@ def load_settings(config_path: str | None = None) -> Settings:
         top_k=int(job.get("top_k", 10)),
         half_life_days=float(job.get("half_life_days", 90)),
         cron_schedule=job.get("cron_schedule", "0 3 * * *"),
+        models=models,
+        model_weights=model_weights,
+        rrf_k=rrf_k,
+        automl_enabled=bool(automl.get("enabled", False)),
+        automl_n_splits=int(automl.get("n_splits", AUTOML_DEFAULT_N_SPLITS)),
+        automl_test_days=int(automl.get("test_days", AUTOML_DEFAULT_TEST_DAYS)),
+        automl_primary_metric=automl.get("primary_metric", AUTOML_DEFAULT_PRIMARY_METRIC),
+        automl_candidates=(
+            [dict(candidate) for candidate in automl["candidates"]] if "candidates" in automl else None
+        ),
     )
