@@ -10,7 +10,7 @@ scipy==1.12.0
 # be written to a Postgres table).
 boto3==1.34.155
 s3fs==2024.6.1
-pyarrow==23.0.1
+pyarrow==25.0.0
 SQLAlchemy==2.0.51
 psycopg[binary]==3.2.1
 
