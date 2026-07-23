@@ -3,7 +3,7 @@ rectools[lightfm]==0.13.0
 implicit==0.7.3
 pandas==2.2.2
 numpy==1.26.4
-scipy==1.12.0
+scipy==1.18.0
 
 # Configurable I/O: static datasets (S3/R2-compatible or local files) or a
 # database (input can be read straight from a Postgres source; output can
