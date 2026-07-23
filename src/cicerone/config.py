@@ -49,6 +49,29 @@ AUTOML_DEFAULT_N_SPLITS = 2
 AUTOML_DEFAULT_TEST_DAYS = 14
 AUTOML_DEFAULT_PRIMARY_METRIC = "MAP"
 
+
+def validate_model_weights(weights: dict[str, float] | None, *, context: str = "model_weights") -> None:
+    """Raises ValueError if any weight is negative. Shared by config.load_settings,
+    model.train_and_recommend, and automl's candidate parsing so all three fail on
+    the same invalid configurations with the same error shape (`context` only
+    changes the message prefix so each caller's error reads naturally).
+    """
+    if weights is None:
+        return
+    negative_weights = {name: weight for name, weight in weights.items() if weight < 0}
+    if negative_weights:
+        raise ValueError(f"{context} value(s) must be non-negative, got {negative_weights}")
+
+
+def validate_rrf_k(rrf_k: float | None, *, context: str = "rrf_k") -> None:
+    """Raises ValueError if rrf_k is set but not positive. Shared by
+    config.load_settings, model.train_and_recommend, and automl's candidate
+    parsing (see validate_model_weights).
+    """
+    if rrf_k is not None and rrf_k <= 0:
+        raise ValueError(f"{context} must be positive, got {rrf_k}")
+
+
 _ENV_PLACEHOLDER = re.compile(r"\$(\$?)\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
@@ -153,6 +176,14 @@ def load_settings(config_path: str | None = None) -> Settings:
             raise RuntimeError(
                 f"job.models contains unknown model(s) {unknown_models}; available: {list(STRATEGY_NAMES)}"
             )
+    model_weights = (
+        {name: float(weight) for name, weight in job["model_weights"].items()}
+        if "model_weights" in job
+        else None
+    )
+    validate_model_weights(model_weights, context="job.model_weights")
+    rrf_k = float(job["rrf_k"]) if "rrf_k" in job else None
+    validate_rrf_k(rrf_k, context="job.rrf_k")
     return Settings(
         input=_load_io_settings(raw, "input"),
         output=_load_io_settings(raw, "output"),
@@ -161,12 +192,8 @@ def load_settings(config_path: str | None = None) -> Settings:
         half_life_days=float(job.get("half_life_days", 90)),
         cron_schedule=job.get("cron_schedule", "0 3 * * *"),
         models=models,
-        model_weights=(
-            {name: float(weight) for name, weight in job["model_weights"].items()}
-            if "model_weights" in job
-            else None
-        ),
-        rrf_k=float(job["rrf_k"]) if "rrf_k" in job else None,
+        model_weights=model_weights,
+        rrf_k=rrf_k,
         automl_enabled=bool(automl.get("enabled", False)),
         automl_n_splits=int(automl.get("n_splits", AUTOML_DEFAULT_N_SPLITS)),
         automl_test_days=int(automl.get("test_days", AUTOML_DEFAULT_TEST_DAYS)),

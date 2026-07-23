@@ -17,7 +17,7 @@ from rectools import Columns
 from rectools.dataset import Dataset
 from rectools.models import ImplicitItemKNNWrapperModel, LightFMWrapperModel, PopularModel
 
-from cicerone.config import STRATEGY_NAMES
+from cicerone.config import STRATEGY_NAMES, validate_model_weights, validate_rrf_k
 from cicerone.dataset import BuiltDataset
 from cicerone.feature_config import FeatureConfig
 
@@ -26,39 +26,11 @@ logger = logging.getLogger(__name__)
 RANDOM_STATE = 42
 DEFAULT_MODELS = ["collaborative", "popular"]
 LATEST_WINDOW_DAYS = 14
-# Reciprocal rank fusion constant (Cormack et al., 2009) — dampens the
-# influence of very low ranks without needing per-strategy score normalization.
-# Default when Settings.rrf_k / train_and_recommend(rrf_k=...) is not set.
+# Reciprocal rank fusion constant (Cormack et al., 2009); default for rrf_k.
 RRF_K = 60
-# Not a rectools-defined column (see rectools.Columns) — our own "which
-# strategy/strategies produced this row" tag, kept as a module constant so
-# it's not repeated as a string literal throughout this file.
 SOURCE_COLUMN = "source"
-# Internal-only column: per-strategy weight used by weighted fusion, dropped
-# from the final output before it's returned to callers.
+# Internal-only; dropped from the output before it's returned to callers.
 WEIGHT_COLUMN = "_weight"
-
-
-def validate_model_weights(weights: dict[str, float] | None, *, context: str = "model_weights") -> None:
-    """Raises ValueError if any weight is negative. Shared by train_and_recommend
-    and cicerone.automl's candidate parsing so both fail on the same invalid
-    configurations with the same error shape (`context` only changes the
-    message prefix so each caller's error reads naturally).
-    """
-    if weights is None:
-        return
-    negative_weights = {name: weight for name, weight in weights.items() if weight < 0}
-    if negative_weights:
-        raise ValueError(f"{context} value(s) must be non-negative, got {negative_weights}")
-
-
-def validate_rrf_k(rrf_k: float | None, *, context: str = "rrf_k") -> None:
-    """Raises ValueError if rrf_k is set but not positive. Shared by
-    train_and_recommend and cicerone.automl's candidate parsing (see
-    validate_model_weights).
-    """
-    if rrf_k is not None and rrf_k <= 0:
-        raise ValueError(f"{context} must be positive, got {rrf_k}")
 
 
 class RecommenderModel(Protocol):
@@ -78,8 +50,6 @@ class RecommenderModel(Protocol):
 @dataclass(frozen=True)
 class Strategy:
     factory: Callable[[], RecommenderModel]
-    # Personalized strategies only run for warm users (filter_viewed=True);
-    # non-personalized ones run for every target user and backfill the rest.
     personalized: bool
     source_label: str
 
@@ -120,11 +90,7 @@ STRATEGIES: dict[str, Strategy] = {
 
 
 def _validate_strategy_names(strategies: dict[str, Strategy], strategy_names: tuple[str, ...]) -> None:
-    """Fails fast (at import time, for the module-level call below) if
-    STRATEGIES' keys and cicerone.config.STRATEGY_NAMES -- the canonical list
-    Settings.models is validated against at config-load time -- ever drift
-    apart, e.g. a strategy added/renamed in one place but not the other.
-    """
+    """Raises if STRATEGIES' keys and cicerone.config.STRATEGY_NAMES drift apart."""
     if set(strategies) != set(strategy_names):
         raise RuntimeError(
             f"cicerone.model.STRATEGIES keys {sorted(strategies)} must match "
@@ -152,8 +118,7 @@ def _recommendable_item_ids(
 
 def _combine_by_priority(frames: list[pd.DataFrame], top_k: int) -> pd.DataFrame:
     """Concatenates strategy outputs in list order; earlier strategies win
-    ties for the same (user, item) pair (e.g. a personalized hit takes
-    precedence over a popularity/latest backfill for that pair).
+    ties for the same (user, item) pair.
     """
     combined = pd.concat(frames, ignore_index=True)
     combined = combined.drop_duplicates(subset=[Columns.User, Columns.Item], keep="first")
@@ -167,15 +132,8 @@ def _combine_by_weighted_fusion(
 ) -> pd.DataFrame:
     """Weighted reciprocal rank fusion: each strategy's contribution to an
     item's fused score is `weight / (rrf_k + rank)`, summed across every
-    strategy that recommended that (user, item) pair. Rank-based (rather
-    than raw-score-based) so heterogeneous strategies — LightFM scores,
-    ItemKNN similarities, popularity counts — combine without normalization.
-    Per-strategy weights are read from the "_weight" column each frame was
-    tagged with in train_and_recommend. Combined source labels for a given
-    (user, item) pair are joined in `source_label_order` (i.e. the
-    configured enabled_models priority order) rather than alphabetically,
-    so e.g. "popular_fallback+latest" reads consistently with how the
-    strategies were configured/prioritized, not by coincidence of spelling.
+    strategy that recommended that (user, item) pair. Combined source labels
+    are joined in `source_label_order` rather than alphabetically.
     """
     combined = pd.concat(frames, ignore_index=True)
     combined[Columns.Score] = combined[WEIGHT_COLUMN] / (rrf_k + combined[Columns.Rank])
@@ -206,16 +164,9 @@ def train_and_recommend(
     rrf_k: float | None = None,
     strategy_cache: dict[str, RecommenderModel] | None = None,
 ) -> pd.DataFrame:
-    """`strategy_cache`, if given, is read from and written to (keyed by
-    strategy name) so a caller evaluating multiple candidates against the
-    *same* built dataset -- e.g. cicerone.automl backtesting several
-    candidates per fold -- can avoid re-fitting a strategy that's shared by
-    more than one candidate. Caches the *fitted model*, not its recommend()
-    output, so a cache hit still calls recommend() fresh with this call's
-    own top_k/target_users -- reuse isn't tied to a specific top_k or
-    weights combination. Unused by the single-config job.py call path
-    (defaults to None: no caching, one fit per call, exactly the prior
-    behavior).
+    """`strategy_cache`, if given, caches fitted models by strategy name so
+    callers evaluating multiple candidates against the same built dataset
+    (see cicerone.automl) can avoid re-fitting a shared strategy.
     """
     dataset = built.dataset
     enabled_models = enabled_models if enabled_models is not None else DEFAULT_MODELS
@@ -227,9 +178,6 @@ def train_and_recommend(
     unknown_models = [name for name in enabled_models if name not in STRATEGIES]
     if unknown_models:
         raise ValueError(f"Unknown model(s) {unknown_models}; available: {sorted(STRATEGIES)}")
-    # `weights is not None` (rather than truthiness) so an explicitly configured
-    # but empty `[job.model_weights]` still opts into fusion mode, just with
-    # every enabled strategy defaulting to weight 1.0.
     if weights is not None:
         unknown_weights = [name for name in weights if name not in enabled_models]
         if unknown_weights:
@@ -253,11 +201,6 @@ def train_and_recommend(
                 len(target_users),
             )
         else:
-            # Only personalized strategies are enabled, so there's no
-            # non-personalized fallback to backfill these users with --
-            # they'll simply get no recommendations. Logging this as
-            # "falling back" would be misleading, since no such fallback
-            # is actually configured/possible here.
             logger.info(
                 "%d/%d users have no usable signal yet and no non-personalized strategy is "
                 "enabled; they will receive no recommendations",

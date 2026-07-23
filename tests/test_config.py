@@ -173,6 +173,65 @@ def test_load_settings_with_explicit_model_weights(tmp_path):
     assert settings.rrf_k == 45.0
 
 
+def test_load_settings_rejects_negative_model_weight(tmp_path):
+    config_path = _write_toml(
+        tmp_path,
+        """
+        [job]
+        models = ["popular"]
+
+        [job.model_weights]
+        popular = -1.0
+
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+
+    # Caught at config load (via the shared validate_model_weights), not
+    # only later inside train_and_recommend.
+    with pytest.raises(ValueError, match="non-negative"):
+        load_settings(config_path)
+
+
+def test_load_settings_rejects_non_positive_rrf_k(tmp_path):
+    config_path = _write_toml(
+        tmp_path,
+        """
+        [job]
+        models = ["popular"]
+        rrf_k = 0
+
+        [job.model_weights]
+        popular = 1.0
+
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+
+    with pytest.raises(ValueError, match="job.rrf_k must be positive"):
+        load_settings(config_path)
+
+
 def test_load_settings_with_explicit_automl(tmp_path):
     config_path = _write_toml(
         tmp_path,

@@ -155,6 +155,19 @@ def test_parse_candidates_defaults_to_default_candidates():
     assert _parse_candidates(None) == _parse_candidates(automl.DEFAULT_CANDIDATES)
 
 
+def test_default_candidates_includes_every_registered_strategy_solo():
+    # DEFAULT_CANDIDATES is derived from STRATEGIES rather than hard-coded,
+    # so it can't silently omit a strategy that's added later.
+    from cicerone.model import STRATEGIES
+
+    solo_candidate_models = {
+        candidate["models"][0]
+        for candidate in automl.DEFAULT_CANDIDATES
+        if len(candidate["models"]) == 1 and "weights" not in candidate
+    }
+    assert solo_candidate_models == set(STRATEGIES)
+
+
 def test_candidate_label_for_priority_and_fusion():
     assert Candidate(models=["collaborative", "popular"]).label == "collaborative+popular"
     fusion = Candidate(models=["popular", "latest"], weights={"popular": 1.0, "latest": 0.5})

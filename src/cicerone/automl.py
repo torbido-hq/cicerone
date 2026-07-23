@@ -24,39 +24,34 @@ import pandas as pd
 from rectools.metrics import MAP, NDCG, Recall, calc_metrics
 from rectools.metrics.base import MetricAtK
 
-from cicerone.config import AUTOML_DEFAULT_N_SPLITS, AUTOML_DEFAULT_PRIMARY_METRIC, AUTOML_DEFAULT_TEST_DAYS
-from cicerone.dataset import build_dataset, build_interactions
-from cicerone.feature_config import FeatureConfig
-from cicerone.model import (
-    DEFAULT_MODELS,
-    STRATEGIES,
-    RecommenderModel,
-    train_and_recommend,
+from cicerone.config import (
+    AUTOML_DEFAULT_N_SPLITS,
+    AUTOML_DEFAULT_PRIMARY_METRIC,
+    AUTOML_DEFAULT_TEST_DAYS,
     validate_model_weights,
     validate_rrf_k,
 )
+from cicerone.dataset import build_dataset, build_interactions
+from cicerone.feature_config import FeatureConfig
+from cicerone.model import DEFAULT_MODELS, STRATEGIES, RecommenderModel, train_and_recommend
 
 logger = logging.getLogger(__name__)
 
-# Re-exported under automl-local names for backward-compat/readability at
-# call sites here; the actual values live in cicerone.config so they can't
-# drift apart from the [job.automl] TOML defaults.
 DEFAULT_N_SPLITS = AUTOML_DEFAULT_N_SPLITS
 DEFAULT_TEST_DAYS = AUTOML_DEFAULT_TEST_DAYS
 DEFAULT_PRIMARY_METRIC = AUTOML_DEFAULT_PRIMARY_METRIC
 
-# Tried when [job.automl] doesn't configure its own "candidates": every
-# strategy alone, the default priority combine, and a weighted-fusion blend
-# across all four strategies.
+# Derived from STRATEGIES/DEFAULT_MODELS (rather than hard-coded model
+# names) so this can't silently drift when a strategy is added/removed:
+# every strategy alone, the default priority combo, and one weighted-fusion
+# blend across every strategy (personalized ones weighted higher than
+# non-personalized/backfill ones).
 DEFAULT_CANDIDATES: list[dict[str, Any]] = [
-    {"models": ["popular"]},
-    {"models": ["latest"]},
-    {"models": ["collaborative"]},
-    {"models": ["item_based"]},
+    *({"models": [name]} for name in STRATEGIES),
     {"models": DEFAULT_MODELS},
     {
-        "models": ["collaborative", "item_based", "popular", "latest"],
-        "weights": {"collaborative": 1.0, "item_based": 0.7, "popular": 0.3, "latest": 0.3},
+        "models": list(STRATEGIES),
+        "weights": {name: (1.0 if strategy.personalized else 0.3) for name, strategy in STRATEGIES.items()},
     },
 ]
 
@@ -143,11 +138,7 @@ def _time_based_folds(
     side ends up empty (e.g. not enough history for the requested n_splits).
     """
     occurred_at = pd.to_datetime(events["occurred_at"], utc=True)
-    # +1us so the mask's strict "< test_end" bound doesn't exclude the very
-    # last event: without this, an event exactly at max_ts would fall
-    # outside every fold (i=0's test_end is max_ts itself). Shifting every
-    # boundary by the same 1us keeps folds non-overlapping and doesn't
-    # meaningfully change day-sized windows.
+    # +1us so the strict "< test_end" bound doesn't exclude the last event.
     max_ts = occurred_at.max() + pd.Timedelta(microseconds=1)
     window = pd.Timedelta(days=test_days)
 
@@ -205,21 +196,11 @@ def evaluate_candidates(
     metrics = _make_metrics(top_k)
     fold_metrics_by_candidate: list[list[dict[str, float]]] = [[] for _ in parsed_candidates]
     for train_events, test_events in folds:
-        # Built once per fold and reused across every candidate below: the
-        # dataset only depends on the fold's events/users/items, not on which
-        # strategies/weights a candidate combines. The test side only needs
-        # interactions for calc_metrics, not a full feature-laden Dataset, so
-        # build_interactions() is used there instead of build_dataset().
         built = build_dataset(train_events, users, items, config, half_life_days=half_life_days)
         test_interactions = build_interactions(test_events, config, half_life_days=half_life_days)
         test_users = sorted(set(test_events["user_id"]))
-        # Reset per fold (a fold's fitted models are only valid for that
-        # fold's built dataset) but shared across every candidate within
-        # this fold: candidates that enable the same strategy (e.g.
-        # "popular" alone and a fusion candidate that also enables
-        # "popular") reuse its fitted model -- refitting is skipped, but
-        # recommend() still runs fresh each time, so this works even across
-        # candidates with different top_k/weights.
+        # Reset per fold; shared across candidates within the fold so ones
+        # that enable the same strategy reuse its fitted model.
         strategy_cache: dict[str, RecommenderModel] = {}
         for idx, candidate in enumerate(parsed_candidates):
             reco = train_and_recommend(
@@ -256,11 +237,6 @@ def select_best_candidate(
     if not results:
         raise ValueError("No candidate results to select from")
 
-    # Validated once, up front, against the first candidate's metric keys
-    # (every candidate shares the same metric set -- see _make_metrics) so a
-    # typo'd/mismatched primary_metric fails immediately with a clear error
-    # instead of only surfacing after `max` has already iterated into
-    # `_metric_value` for some candidate.
     available_metrics = list(results[0].metrics)
     if not any(key.startswith(primary_metric) for key in available_metrics):
         raise ValueError(
