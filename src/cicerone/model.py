@@ -246,11 +246,24 @@ def train_and_recommend(
     warm_users = [u for u in target_users if u in known_users]
     cold_users = [u for u in target_users if u not in known_users]
     if cold_users:
-        logger.info(
-            "%d/%d users have no usable signal yet; falling back to non-personalized strategies for them",
-            len(cold_users),
-            len(target_users),
-        )
+        if any(not STRATEGIES[name].personalized for name in enabled_models):
+            logger.info(
+                "%d/%d users have no usable signal yet; falling back to non-personalized strategies for them",
+                len(cold_users),
+                len(target_users),
+            )
+        else:
+            # Only personalized strategies are enabled, so there's no
+            # non-personalized fallback to backfill these users with --
+            # they'll simply get no recommendations. Logging this as
+            # "falling back" would be misleading, since no such fallback
+            # is actually configured/possible here.
+            logger.info(
+                "%d/%d users have no usable signal yet and no non-personalized strategy is "
+                "enabled; they will receive no recommendations",
+                len(cold_users),
+                len(target_users),
+            )
     unique_target_users = list(dict.fromkeys(target_users))
 
     frames = []

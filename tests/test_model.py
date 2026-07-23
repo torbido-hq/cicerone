@@ -193,14 +193,15 @@ def test_validate_model_weights_no_op_when_none():
 
 
 def test_train_and_recommend_no_warm_users_and_only_personalized_strategies_returns_empty(
-    sample_items, feature_config
+    sample_items, feature_config, caplog
 ):
     events = _synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
 
-    recommendations = train_and_recommend(
-        built, target_users=["ghost"], config=feature_config, top_k=2, enabled_models=["item_based"]
-    )
+    with caplog.at_level("INFO"):
+        recommendations = train_and_recommend(
+            built, target_users=["ghost"], config=feature_config, top_k=2, enabled_models=["item_based"]
+        )
 
     assert recommendations.empty
     assert list(recommendations.columns) == [
@@ -210,6 +211,11 @@ def test_train_and_recommend_no_warm_users_and_only_personalized_strategies_retu
         Columns.Score,
         "source",
     ]
+    # No non-personalized strategy is enabled, so the log must not claim a
+    # "falling back" that isn't actually happening -- it should say plainly
+    # that these users get no recommendations.
+    assert "no non-personalized strategy is enabled" in caplog.text
+    assert "falling back" not in caplog.text
 
 
 def test_train_and_recommend_rejects_unknown_weight_key(sample_items, feature_config):

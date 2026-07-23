@@ -113,6 +113,34 @@ def test_load_settings_rejects_unknown_model(tmp_path):
         load_settings(config_path)
 
 
+def test_load_settings_rejects_empty_models(tmp_path):
+    config_path = _write_toml(
+        tmp_path,
+        """
+        [job]
+        models = []
+
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+
+    # An explicit empty list is a configuration error caught as early as
+    # possible (at config load, not later inside train_and_recommend) so
+    # it surfaces clearly in job logs rather than as a downstream failure.
+    with pytest.raises(RuntimeError, match="job.models is empty"):
+        load_settings(config_path)
+
+
 def test_load_settings_with_explicit_model_weights(tmp_path):
     config_path = _write_toml(
         tmp_path,

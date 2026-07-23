@@ -143,7 +143,12 @@ def _time_based_folds(
     side ends up empty (e.g. not enough history for the requested n_splits).
     """
     occurred_at = pd.to_datetime(events["occurred_at"], utc=True)
-    max_ts = occurred_at.max()
+    # +1us so the mask's strict "< test_end" bound doesn't exclude the very
+    # last event: without this, an event exactly at max_ts would fall
+    # outside every fold (i=0's test_end is max_ts itself). Shifting every
+    # boundary by the same 1us keeps folds non-overlapping and doesn't
+    # meaningfully change day-sized windows.
+    max_ts = occurred_at.max() + pd.Timedelta(microseconds=1)
     window = pd.Timedelta(days=test_days)
 
     folds = []
@@ -250,6 +255,17 @@ def select_best_candidate(
     """
     if not results:
         raise ValueError("No candidate results to select from")
+
+    # Validated once, up front, against the first candidate's metric keys
+    # (every candidate shares the same metric set -- see _make_metrics) so a
+    # typo'd/mismatched primary_metric fails immediately with a clear error
+    # instead of only surfacing after `max` has already iterated into
+    # `_metric_value` for some candidate.
+    available_metrics = list(results[0].metrics)
+    if not any(key.startswith(primary_metric) for key in available_metrics):
+        raise ValueError(
+            f"No metric starting with '{primary_metric}' found; available metrics: {available_metrics}"
+        )
 
     def _metric_value(result: CandidateResult) -> float:
         metric_key = next((key for key in result.metrics if key.startswith(primary_metric)), None)

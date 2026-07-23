@@ -62,6 +62,37 @@ def test_time_based_folds_skips_folds_without_enough_history():
     assert _time_based_folds(events, n_splits=5, test_days=14) == []
 
 
+def test_time_based_folds_includes_most_recent_event_in_latest_fold():
+    # Regression test: the most recent event's timestamp must not fall
+    # exactly on the strict "< test_end" upper bound of the newest fold's
+    # test window, or it would never be included in any fold's test set.
+    now = pd.Timestamp.utcnow()
+    events = pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": now - pd.Timedelta(days=10),
+            },
+            {
+                "user_id": "u1",
+                "item_id": "i2",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": now,
+            },
+        ]
+    )
+
+    folds = _time_based_folds(events, n_splits=1, test_days=7)
+
+    assert len(folds) == 1
+    _, test_events = folds[0]
+    assert pd.to_datetime(now, utc=True) in set(pd.to_datetime(test_events["occurred_at"], utc=True))
+
+
 def test_parse_candidates_rejects_unknown_model():
     with pytest.raises(ValueError, match="not_a_model"):
         _parse_candidates([{"models": ["not_a_model"]}])

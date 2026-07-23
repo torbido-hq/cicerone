@@ -143,6 +143,11 @@ def load_settings(config_path: str | None = None) -> Settings:
     automl = job.get("automl", {})
     models = list(job["models"]) if "models" in job else None
     if models is not None:
+        if not models:
+            raise RuntimeError(
+                "job.models is empty; configure at least one model name, or omit job.models entirely "
+                "to use the default"
+            )
         unknown_models = [name for name in models if name not in STRATEGY_NAMES]
         if unknown_models:
             raise RuntimeError(
