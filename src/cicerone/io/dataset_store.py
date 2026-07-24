@@ -22,24 +22,11 @@ import logging
 from pathlib import Path
 from typing import Any
 
-import boto3
 import pandas as pd
-from botocore.config import Config
 
-from cicerone.io.options import require_option
+from cicerone.io.options import build_s3_client, require_option
 
 logger = logging.getLogger(__name__)
-
-
-def _s3_client(options: dict[str, Any]):
-    return boto3.client(
-        "s3",
-        endpoint_url=options.get("endpoint_url"),
-        aws_access_key_id=require_option(options, "access_key_id", "s3"),
-        aws_secret_access_key=require_option(options, "secret_access_key", "s3"),
-        region_name="auto",
-        config=Config(signature_version="s3v4", retries={"max_attempts": 3, "mode": "standard"}),
-    )
 
 
 def _full_key(options: dict[str, Any], filename: str) -> str:
@@ -78,7 +65,7 @@ class DatasetInputSource:
         bucket = require_option(self._options, "bucket", "s3")
         key = _full_key(self._options, filename)
         logger.info("Reading s3://%s/%s", bucket, key)
-        client = _s3_client(self._options)
+        client = build_s3_client(self._options)
         obj = client.get_object(Bucket=bucket, Key=key)
         return pd.read_parquet(io.BytesIO(obj["Body"].read()))
 
@@ -119,7 +106,7 @@ class DatasetOutputSink:
         bucket = require_option(self._options, "bucket", "s3")
         key = _full_key(self._options, filename)
         logger.info("Writing s3://%s/%s", bucket, key)
-        client = _s3_client(self._options)
+        client = build_s3_client(self._options)
         client.put_object(Bucket=bucket, Key=key, Body=payload, ContentType=content_type)
 
     def write_recommendations(self, df: pd.DataFrame) -> None:

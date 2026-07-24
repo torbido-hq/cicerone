@@ -635,3 +635,143 @@ def test_load_settings_normalizes_kind_case(tmp_path):
 
     assert settings.input.kind == "dataset"
     assert settings.output.kind == "dataset"
+
+
+def _base_io_toml() -> str:
+    return """
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """
+
+
+def test_load_settings_mode_defaults_to_batch(tmp_path):
+    config_path = _write_toml(tmp_path, _base_io_toml())
+
+    settings = load_settings(config_path)
+
+    assert settings.mode == "batch"
+    assert settings.serve_auth_token is None
+    assert settings.trigger_enabled is False
+
+
+def test_load_settings_rejects_unknown_mode(tmp_path):
+    config_path = _write_toml(tmp_path, f'[job]\nmode = "not_a_mode"\n{_base_io_toml()}')
+
+    with pytest.raises(RuntimeError, match="job.mode must be one of"):
+        load_settings(config_path)
+
+
+def test_load_settings_serve_mode_requires_auth_token(tmp_path):
+    config_path = _write_toml(tmp_path, f'[job]\nmode = "serve"\n{_base_io_toml()}')
+
+    with pytest.raises(RuntimeError, match="serve.auth_token is required"):
+        load_settings(config_path)
+
+
+def test_load_settings_serve_mode_with_auth_token(tmp_path, monkeypatch):
+    monkeypatch.setenv("MY_SERVE_TOKEN", "secret-token")
+    config_path = _write_toml(
+        tmp_path,
+        f"""
+        [job]
+        mode = "serve"
+
+        [serve]
+        auth_token = "${{MY_SERVE_TOKEN}}"
+        host = "127.0.0.1"
+        port = 9000
+        default_k = 5
+        refresh_interval_seconds = 30
+        {_base_io_toml()}
+        """,
+    )
+
+    settings = load_settings(config_path)
+
+    assert settings.mode == "serve"
+    assert settings.serve_auth_token == "secret-token"
+    assert settings.serve_host == "127.0.0.1"
+    assert settings.serve_port == 9000
+    assert settings.serve_default_k == 5
+    assert settings.serve_refresh_interval_seconds == 30.0
+
+
+def test_load_settings_serve_defaults(tmp_path, monkeypatch):
+    monkeypatch.setenv("MY_SERVE_TOKEN", "secret-token")
+    config_path = _write_toml(
+        tmp_path,
+        f"""
+        [job]
+        mode = "serve"
+
+        [serve]
+        auth_token = "${{MY_SERVE_TOKEN}}"
+        {_base_io_toml()}
+        """,
+    )
+
+    settings = load_settings(config_path)
+
+    assert settings.serve_host == "0.0.0.0"
+    assert settings.serve_port == 8000
+    assert settings.serve_default_k == 10
+    assert settings.serve_refresh_interval_seconds == 60.0
+
+
+def test_load_settings_trigger_enabled_requires_auth_token(tmp_path):
+    config_path = _write_toml(tmp_path, f"[job]\n[job.trigger]\nenabled = true\n{_base_io_toml()}")
+
+    with pytest.raises(RuntimeError, match="job.trigger.auth_token is required"):
+        load_settings(config_path)
+
+
+def test_load_settings_trigger_enabled_with_auth_token(tmp_path, monkeypatch):
+    monkeypatch.setenv("MY_TRIGGER_TOKEN", "trigger-secret")
+    config_path = _write_toml(
+        tmp_path,
+        f"""
+        [job]
+
+        [job.trigger]
+        enabled = true
+        auth_token = "${{MY_TRIGGER_TOKEN}}"
+        host = "127.0.0.1"
+        port = 9090
+        debounce_seconds = 30
+        poll_input_bucket = true
+        poll_interval_seconds = 120
+        {_base_io_toml()}
+        """,
+    )
+
+    settings = load_settings(config_path)
+
+    assert settings.trigger_enabled is True
+    assert settings.trigger_auth_token == "trigger-secret"
+    assert settings.trigger_host == "127.0.0.1"
+    assert settings.trigger_port == 9090
+    assert settings.trigger_debounce_seconds == 30.0
+    assert settings.trigger_poll_input_bucket is True
+    assert settings.trigger_poll_interval_seconds == 120.0
+
+
+def test_load_settings_trigger_defaults_when_disabled(tmp_path):
+    config_path = _write_toml(tmp_path, _base_io_toml())
+
+    settings = load_settings(config_path)
+
+    assert settings.trigger_enabled is False
+    assert settings.trigger_host == "0.0.0.0"
+    assert settings.trigger_port == 8080
+    assert settings.trigger_debounce_seconds == 60.0
+    assert settings.trigger_poll_input_bucket is False
+    assert settings.trigger_poll_interval_seconds == 300.0

@@ -58,8 +58,9 @@ def test_main_runs_job_each_iteration_and_survives_failures(tmp_path, monkeypatc
         if calls["sleep"] >= 2:
             raise SystemExit("stop the loop after two iterations")
 
-    def fake_run():
+    def fake_run(triggered_by="cron"):
         calls["run"] += 1
+        assert triggered_by == "cron"
         raise ValueError("boom")  # main() must log and keep looping, not crash
 
     monkeypatch.setattr(scheduler.time, "sleep", fake_sleep)
@@ -70,3 +71,58 @@ def test_main_runs_job_each_iteration_and_survives_failures(tmp_path, monkeypatc
 
     assert calls["sleep"] == 2
     assert calls["run"] == 1
+
+
+def test_main_with_trigger_enabled_starts_cron_thread_and_serves_http(tmp_path, monkeypatch):
+    config_path = tmp_path / "cicerone.toml"
+    config_path.write_text(
+        f"""
+        [job]
+        cron_schedule = "* * * * *"
+
+        [job.trigger]
+        enabled = true
+        auth_token = "secret"
+        poll_input_bucket = true
+
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "{tmp_path}"
+
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "{tmp_path}"
+        """
+    )
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", str(config_path))
+
+    started_threads = []
+    real_thread_init = scheduler.threading.Thread.__init__
+
+    def fake_thread_init(self, *args, **kwargs):
+        started_threads.append(kwargs.get("target"))
+        real_thread_init(self, *args, **kwargs)
+
+    uvicorn_calls = {}
+
+    def fake_uvicorn_run(app, host, port):
+        uvicorn_calls["app"] = app
+        uvicorn_calls["host"] = host
+        uvicorn_calls["port"] = port
+
+    monkeypatch.setattr(scheduler.threading.Thread, "__init__", fake_thread_init)
+    monkeypatch.setattr(scheduler.threading.Thread, "start", lambda self: None)
+    monkeypatch.setattr(scheduler, "uvicorn", type("_U", (), {"run": staticmethod(fake_uvicorn_run)}))
+
+    from cicerone.trigger import poll_input_forever
+
+    scheduler.main()
+
+    assert scheduler._cron_loop in started_threads
+    assert poll_input_forever in started_threads
+    assert uvicorn_calls["host"] == "0.0.0.0"
+    assert uvicorn_calls["port"] == 8080
