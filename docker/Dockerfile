@@ -51,8 +51,12 @@ ENV PYTHONPATH=/app/src \
 RUN mkdir -p /tmp/cicerone && chown -R cicerone:cicerone /app /tmp/cicerone
 USER cicerone
 
-# No HTTP surface: this is a scheduled batch job (R2 in -> train -> R2 out).
-# entrypoint.sh runs the job immediately, then re-runs it on CRON_SCHEDULE.
+# Batch mode (default): no HTTP surface, just a scheduled job (R2 in ->
+# train -> R2 out), plus an optional event-driven trigger listener on 8080
+# (see [job.trigger] in cicerone.toml). Serve mode (job.mode = "serve")
+# instead exposes the read API on 8000. entrypoint.sh picks the right one
+# based on the loaded config.
+EXPOSE 8000 8080
 ENTRYPOINT ["./docker/entrypoint.sh"]
 
 # --- test ---------------------------------------------------------------

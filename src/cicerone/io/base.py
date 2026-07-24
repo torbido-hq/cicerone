@@ -24,3 +24,16 @@ class OutputSink(Protocol):
     def write_recommendations(self, df: pd.DataFrame) -> None: ...
 
     def write_manifest(self, manifest: dict) -> None: ...
+
+
+class RecommendationReader(Protocol):
+    """Read-only counterpart of OutputSink, used by the serve mode to read
+    precomputed recommendations back out of the same output store the batch
+    job writes to (never from a loaded model)."""
+
+    def get_recommendations(self, user_id: str, k: int) -> pd.DataFrame: ...
+
+    def refresh(self) -> None:
+        """Reloads any cached data. A no-op for backends that read live on
+        every call (e.g. a database)."""
+        ...
