@@ -87,11 +87,11 @@ def run() -> None:
     # empty/partial `[job.model_weights]` still reports the *effective*
     # weight (defaulting to 1.0) for every enabled model, instead of hiding
     # implicit defaults behind an empty string in the manifest.
-    if weights is not None:
-        effective_weights = {name: weights.get(name, 1.0) for name in resolved_models}
-        model_weights_str = ",".join(f"{name}={weight}" for name, weight in effective_weights.items())
-    else:
-        model_weights_str = ""
+    model_weights_str = (
+        ",".join(f"{name}={weights.get(name, 1.0)}" for name in resolved_models)
+        if weights is not None
+        else ""
+    )
 
     manifest = {
         "generated_at": datetime.now(UTC).isoformat(),
