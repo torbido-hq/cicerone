@@ -20,6 +20,24 @@ RUN pip install --no-cache-dir --upgrade pip==24.2 setuptools==74.1.2 wheel==0.4
 COPY requirements.txt ./
 RUN pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt
 
+# --- frontend ----------------------------------------------------------------
+# Compiles the dashboard's Tailwind CSS. This is the only place Node/npm
+# exists anywhere in this project -- it's a Docker build stage, not a host
+# requirement (everything ships/builds via `docker compose build`), and it
+# never makes it into the runtime image below, which only gets the compiled
+# static/tailwind.css. package-lock.json pins the exact dependency tree so
+# this stage is reproducible, matching requirements.txt's exact-pin style.
+FROM node:22-slim AS frontend
+
+WORKDIR /build
+COPY package.json package-lock.json ./
+RUN npm ci
+
+COPY src/cicerone/templates/ ./src/cicerone/templates/
+COPY src/cicerone/static/dashboard.js ./src/cicerone/static/dashboard.js
+COPY src/cicerone/static/tailwind.input.css ./tailwind.input.css
+RUN npx tailwindcss -i ./tailwind.input.css -o ./tailwind.css --minify
+
 # --- runtime -----------------------------------------------------------------
 FROM python:3.11-slim-bookworm AS runtime
 
@@ -40,6 +58,7 @@ RUN pip install --no-cache-dir --no-index --find-links=/wheels -r requirements.t
     && rm -rf /wheels
 
 COPY src/ ./src/
+COPY --from=frontend /build/tailwind.css ./src/cicerone/static/tailwind.css
 COPY config/ ./config/
 COPY docker/entrypoint.sh ./docker/entrypoint.sh
 RUN chmod +x ./docker/entrypoint.sh
@@ -55,8 +74,11 @@ USER cicerone
 # train -> R2 out), plus an optional event-driven trigger listener on 8080
 # (see [job.trigger] in cicerone.toml). Serve mode (job.mode = "serve")
 # instead exposes the read API on 8000. entrypoint.sh picks the right one
-# based on the loaded config.
-EXPOSE 8000 8080
+# based on the loaded config. The dashboard (cicerone.dashboard, port 8090)
+# is always its own separate entrypoint/container -- see the "dashboard"
+# service in docker-compose.yml, which overrides ENTRYPOINT directly rather
+# than going through entrypoint.sh's batch/serve dispatch.
+EXPOSE 8000 8080 8090
 ENTRYPOINT ["./docker/entrypoint.sh"]
 
 # --- test ---------------------------------------------------------------

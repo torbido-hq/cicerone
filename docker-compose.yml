@@ -6,12 +6,17 @@ version: "3.9"
 # supplies the secrets that cicerone.toml references via ${...} placeholders
 # (set them in .env, see .env.example).
 #
-# Two independent services, same image:
+# Three independent services, same image:
 #   recommender — the batch training job (cron + optional event trigger,
 #                 see [job.trigger] in config/cicerone.toml).
 #   serve       — the lightweight read API over precomputed recommendations
 #                 (config/cicerone.serve.toml, job.mode = "serve"). Optional:
 #                 comment it out if you only need the batch job.
+#   dashboard   — a small status page over job run history
+#                 (config/cicerone.dashboard.toml). Optional: comment it out
+#                 if you don't need it. Manage its login users with:
+#                   docker compose run --rm dashboard \
+#                     python -m cicerone.manage_dashboard_users add <username>
 
 services:
   recommender:
@@ -60,5 +65,29 @@ services:
       - "8000:8000"
     volumes:
       - ./config:/app/config:ro
+    restart: unless-stopped
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    entrypoint: ["python", "-m", "cicerone.dashboard"]
+    environment:
+      PYTHONUNBUFFERED: "1"
+      TZ: "Europe/Rome"
+      CICERONE_CONFIG_PATH: /app/config/cicerone.dashboard.toml
+
+      OUTPUT_S3_ENDPOINT_URL: ${OUTPUT_S3_ENDPOINT_URL:-}
+      OUTPUT_S3_ACCESS_KEY_ID: ${OUTPUT_S3_ACCESS_KEY_ID:-}
+      OUTPUT_S3_SECRET_ACCESS_KEY: ${OUTPUT_S3_SECRET_ACCESS_KEY:-}
+      OUTPUT_S3_BUCKET: ${OUTPUT_S3_BUCKET:-}
+    ports:
+      - "8090:8090"
+    volumes:
+      # Read-write (unlike recommender/serve above): `manage_dashboard_users`
+      # (run via `docker compose run --rm dashboard python -m
+      # cicerone.manage_dashboard_users add <username>`) writes
+      # config/dashboard_users.toml here.
+      - ./config:/app/config
     restart: unless-stopped
 

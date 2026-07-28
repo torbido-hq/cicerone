@@ -39,6 +39,12 @@ def _settings(**overrides) -> Settings:
         trigger_debounce_seconds=60,
         trigger_poll_input_bucket=False,
         trigger_poll_interval_seconds=300,
+        dashboard_enabled=False,
+        dashboard_host="0.0.0.0",
+        dashboard_port=8090,
+        dashboard_users_path="/tmp/dashboard_users.toml",
+        dashboard_refresh_interval_seconds=30,
+        dashboard_history_limit=20,
     )
     base.update(overrides)
     return Settings(**base)

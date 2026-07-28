@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en" class="h-full bg-slate-50">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cicerone — Dashboard</title>
+  <link rel="icon" type="image/svg+xml" href="/static/cicerone-icon.svg">
+  <link rel="stylesheet" href="/static/tailwind.css">
+  <script src="/static/vendor/htmx.min.js"></script>
+  <script src="/static/vendor/stimulus.umd.js"></script>
+  <script src="/static/dashboard.js"></script>
+</head>
+<body class="h-full">
+  <header class="border-b border-slate-200 bg-white">
+    <div class="mx-auto max-w-4xl px-4 py-3 flex items-center gap-4">
+      <h1><img src="/static/cicerone-logo.svg" alt="Cicerone" class="h-12 w-auto"></h1>
+      <p class="text-sm text-slate-500 border-l border-slate-200 pl-4">Recommendation job status</p>
+    </div>
+  </header>
+  <main class="mx-auto max-w-4xl px-4 py-6">
+    <div
+      id="status"
+      hx-get="/partials/status"
+      hx-trigger="load, every {{ refresh_interval_seconds|int }}s"
+      hx-swap="innerHTML"
+    >
+      {% include "_status.html" %}
+    </div>
+  </main>
+</body>
+</html>

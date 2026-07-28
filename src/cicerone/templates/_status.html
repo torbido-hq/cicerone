@@ -1,0 +1,66 @@
+{% if manifest %}
+  <div class="rounded-lg border p-4 mb-4 {{ 'border-red-300 bg-red-50' if manifest.status == 'failed' else 'border-emerald-300 bg-emerald-50' }}">
+    <div class="flex items-center justify-between">
+      <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {{ 'bg-red-100 text-red-800' if manifest.status == 'failed' else 'bg-emerald-100 text-emerald-800' }}">
+        {{ manifest.status or "unknown" }}
+      </span>
+      <span
+        class="text-sm text-slate-500"
+        data-controller="time-ago"
+        data-time-ago-value="{{ manifest.generated_at }}"
+      >{{ manifest.generated_at }}</span>
+    </div>
+    <dl class="mt-3 grid grid-cols-2 gap-2 text-sm text-slate-700">
+      <div><dt class="text-slate-400">Triggered by</dt><dd>{{ manifest.triggered_by or "—" }}</dd></div>
+      <div><dt class="text-slate-400">Events</dt><dd>{{ manifest.n_events if manifest.n_events is not none else "—" }}</dd></div>
+      <div><dt class="text-slate-400">Users w/ recs</dt><dd>{{ manifest.n_users_with_recommendations if manifest.n_users_with_recommendations is not none else "—" }}</dd></div>
+      <div><dt class="text-slate-400">Models</dt><dd>{{ manifest.models or "—" }}</dd></div>
+    </dl>
+    {% if manifest.status == "failed" and manifest.error %}
+      <pre class="mt-3 whitespace-pre-wrap rounded bg-red-100 p-2 text-xs text-red-900">{{ manifest.error }}</pre>
+    {% endif %}
+  </div>
+{% else %}
+  <div class="rounded-lg border border-amber-300 bg-amber-50 p-4 mb-4 text-sm text-amber-800">
+    No job runs recorded yet.
+  </div>
+{% endif %}
+
+{% if staleness.is_stale and manifest %}
+  <div class="rounded-lg border border-amber-300 bg-amber-50 p-4 mb-4 text-sm text-amber-800">
+    Stale: expected another run by {{ staleness.expected_next_run }}, none seen yet.
+  </div>
+{% endif %}
+
+{% if history %}
+  <table class="w-full text-sm border-collapse bg-white rounded-lg overflow-hidden shadow-sm">
+    <thead>
+      <tr class="text-left text-slate-500 border-b border-slate-200">
+        <th class="py-2 px-3">When</th>
+        <th class="py-2 px-3">Status</th>
+        <th class="py-2 px-3">Triggered by</th>
+        <th class="py-2 px-3">Error</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for run in history %}
+      <tr class="border-b border-slate-100">
+        <td class="py-2 px-3 text-slate-600 whitespace-nowrap">{{ run.generated_at or "—" }}</td>
+        <td class="py-2 px-3">
+          <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium {{ 'bg-red-100 text-red-800' if run.status == 'failed' else 'bg-emerald-100 text-emerald-800' }}">
+            {{ run.status or "unknown" }}
+          </span>
+        </td>
+        <td class="py-2 px-3 text-slate-600">{{ run.triggered_by or "—" }}</td>
+        <td class="py-2 px-3 text-red-700">{{ run.error or "" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% if history|length == 1 %}
+    <p class="mt-2 text-xs text-slate-400">
+      Only the latest run is available for this output backend (a "dataset" output overwrites
+      manifest.json every run -- switch to a "db" output for full history).
+    </p>
+  {% endif %}
+{% endif %}

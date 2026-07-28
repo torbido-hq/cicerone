@@ -94,6 +94,40 @@ process:
 - The run manifest now records `triggered_by` (`"cron"`, `"webhook"`, or
   `"s3-poll"`) alongside its existing counts/timestamp fields.
 
+## Dashboard
+
+A lightweight, standalone web dashboard for checking whether the last job
+run succeeded — it's always available as its own container/port (`8090`),
+regardless of `[job].mode` (batch or serve). Like serve mode, it never loads
+lightfm/rectools/implicit.
+
+- `GET /dashboard` shows the latest run's status (success/failed), counts,
+  effective models, and (for a `db` output only — a `dataset` output's
+  `manifest.json` is overwritten every run, so it only ever has the latest)
+  a short run history. The page auto-refreshes itself via
+  [htmx](https://htmx.org) polling, no page reload needed.
+- Protected by HTTP Basic Auth rather than a bearer token, since it's meant
+  to be opened directly in a browser (a login prompt, not a header a human
+  has to attach manually). Manage its small user list (a handful of named
+  users, not a shared token) with:
+
+  ```
+  python -m cicerone.manage_dashboard_users --users-path <path> add <username>
+  python -m cicerone.manage_dashboard_users --users-path <path> remove <username>
+  python -m cicerone.manage_dashboard_users --users-path <path> list
+  ```
+
+  (note `--users-path` comes *before* the subcommand). Passwords are hashed
+  with bcrypt; the file is plain TOML (`username = "<bcrypt hash>"`).
+- Enable it via `[dashboard].enabled = true` in `config/cicerone.toml` (or
+  use the standalone `config/cicerone.dashboard.toml` example config). See
+  the `dashboard` service in `docker-compose.yml` for how it's wired up
+  alongside the batch `recommender` service.
+- The frontend (htmx + [Stimulus](https://stimulus.hotwired.dev) + Tailwind
+  CSS) is fully vendored — no CDN calls at runtime, and no Node/npm needed
+  to run the container (Node only exists in a Docker build stage that
+  compiles Tailwind ahead of time).
+
 ## Configuration (`config/cicerone.toml`)
 
 All structural configuration — which backend to use for input/output,

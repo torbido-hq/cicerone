@@ -5,3 +5,18 @@ __pycache__/
 coverage.xml
 htmlcov/
 .env
+
+# Compiled by docker/Dockerfile's "frontend" build stage (Tailwind CLI) --
+# see src/cicerone/static/tailwind.input.css.
+src/cicerone/static/tailwind.css
+
+# package.json/package-lock.json (repo root) are only used by that same
+# "frontend" Docker build stage -- Node itself never runs on the host, but
+# `npm install` locally (e.g. to regenerate package-lock.json) would create
+# this.
+node_modules/
+
+# Dashboard Basic Auth credentials (managed via
+# `python -m cicerone.manage_dashboard_users`) -- never commit real ones.
+config/dashboard_users.toml
+

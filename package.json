@@ -1,0 +1,12 @@
+{
+  "name": "cicerone-dashboard-frontend",
+  "private": true,
+  "description": "Build-only: compiles src/cicerone/static/tailwind.css for the dashboard (see docker/Dockerfile's 'frontend' stage). Not a runtime dependency of the app -- Node only exists inside this one Docker build stage, never in the runtime image.",
+  "devDependencies": {
+    "@tailwindcss/cli": "4.3.3",
+    "tailwindcss": "4.3.3"
+  },
+  "scripts": {
+    "build:css": "tailwindcss -i ./src/cicerone/static/tailwind.input.css -o ./src/cicerone/static/tailwind.css --minify"
+  }
+}

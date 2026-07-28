@@ -154,6 +154,12 @@ class Settings:
     trigger_debounce_seconds: float
     trigger_poll_input_bucket: bool
     trigger_poll_interval_seconds: float
+    dashboard_enabled: bool
+    dashboard_host: str
+    dashboard_port: int
+    dashboard_users_path: str
+    dashboard_refresh_interval_seconds: float
+    dashboard_history_limit: int
 
 
 def _load_io_settings(raw: dict[str, Any], section_name: str) -> IOSettings:
@@ -222,6 +228,9 @@ def load_settings(config_path: str | None = None) -> Settings:
     if trigger_enabled and not trigger_auth_token:
         raise RuntimeError("job.trigger.auth_token is required when job.trigger.enabled = true")
 
+    dashboard = raw.get("dashboard", {})
+    dashboard_enabled = bool(dashboard.get("enabled", False))
+
     return Settings(
         input=_load_io_settings(raw, "input"),
         output=_load_io_settings(raw, "output"),
@@ -252,4 +261,10 @@ def load_settings(config_path: str | None = None) -> Settings:
         trigger_debounce_seconds=float(trigger.get("debounce_seconds", 60)),
         trigger_poll_input_bucket=bool(trigger.get("poll_input_bucket", False)),
         trigger_poll_interval_seconds=float(trigger.get("poll_interval_seconds", 300)),
+        dashboard_enabled=dashboard_enabled,
+        dashboard_host=dashboard.get("host", "0.0.0.0"),
+        dashboard_port=int(dashboard.get("port", 8090)),
+        dashboard_users_path=dashboard.get("users_path", "/app/config/dashboard_users.toml"),
+        dashboard_refresh_interval_seconds=float(dashboard.get("refresh_interval_seconds", 30)),
+        dashboard_history_limit=int(dashboard.get("history_limit", 20)),
     )
