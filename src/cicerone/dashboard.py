@@ -64,7 +64,23 @@ def _compute_staleness(manifest: dict[str, Any] | None, cron_schedule: str, now:
     if manifest is None or not manifest.get("generated_at"):
         return {"is_stale": True, "expected_next_run": None, "error": None}
 
-    last_run = datetime.fromisoformat(manifest["generated_at"])
+    generated_at = manifest["generated_at"]
+    # A dataset manifest's "generated_at" is always the ISO string job.py
+    # wrote, but a db-backed one can come back from pandas/the driver as a
+    # datetime/Timestamp already (or, for a malformed/hand-edited row,
+    # something that's neither) -- normalize instead of assuming a string,
+    # so a single bad/unexpected value can't 500 the whole dashboard.
+    if isinstance(generated_at, datetime):
+        last_run = generated_at
+    else:
+        try:
+            last_run = datetime.fromisoformat(str(generated_at))
+        except ValueError as exc:
+            logger.warning(
+                "Invalid generated_at %r in manifest, can't compute staleness: %s", generated_at, exc
+            )
+            return {"is_stale": None, "expected_next_run": None, "error": str(exc)}
+
     try:
         expected_next_run = croniter(cron_schedule, last_run).get_next(datetime)
     except CroniterError as exc:

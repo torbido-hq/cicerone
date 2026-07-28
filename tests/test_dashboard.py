@@ -235,6 +235,30 @@ def test_compute_staleness_invalid_cron_schedule_is_unknown_not_a_crash():
     assert result["error"]
 
 
+def test_compute_staleness_accepts_a_datetime_generated_at():
+    # A db-backed manifest can come back with "generated_at" already
+    # deserialized as a datetime/Timestamp by pandas/the driver, not the
+    # ISO string a dataset-backed manifest always has.
+    from cicerone.dashboard import _compute_staleness
+
+    manifest = {"status": "success", "generated_at": datetime(2026, 7, 28, tzinfo=UTC)}
+    result = _compute_staleness(manifest, "0 3 * * *", datetime.now(UTC))
+
+    assert result["error"] is None
+    assert result["is_stale"] is not None
+
+
+def test_compute_staleness_malformed_generated_at_is_unknown_not_a_crash():
+    from cicerone.dashboard import _compute_staleness
+
+    manifest = {"status": "success", "generated_at": "not-a-timestamp"}
+    result = _compute_staleness(manifest, "0 3 * * *", datetime.now(UTC))
+
+    assert result["is_stale"] is None
+    assert result["expected_next_run"] is None
+    assert result["error"]
+
+
 def test_status_partial_shows_unknown_staleness_for_invalid_cron_schedule():
     manifest = {"status": "success", "generated_at": "2026-07-28T00:00:00+00:00"}
     app = create_app(

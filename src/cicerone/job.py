@@ -21,6 +21,15 @@ from cicerone.model import DEFAULT_MODELS, RRF_K, train_and_recommend
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
+# Cap on manifest["error"]'s length -- it's `str(exc)` from an arbitrary
+# exception (could be a long stack-trace-like repr, e.g. some database
+# drivers' errors), stored in the manifest and shown as-is on the dashboard.
+# Truncating keeps that bounded rather than persisting/displaying it
+# indefinitely; it's not a substitute for not putting secrets in exception
+# messages in the first place, but it caps the blast radius of an unusually
+# verbose one.
+_MAX_ERROR_LENGTH = 500
+
 
 # Every run writes exactly one manifest with this fixed set of keys --
 # including on failure -- so a "db" output's manifest table never gets an
@@ -143,7 +152,10 @@ def run(triggered_by: str = "manual") -> None:
             }
         )
     except Exception as exc:
-        manifest["error"] = str(exc)
+        error_message = str(exc)
+        if len(error_message) > _MAX_ERROR_LENGTH:
+            error_message = error_message[:_MAX_ERROR_LENGTH] + "... (truncated)"
+        manifest["error"] = error_message
         raise
     finally:
         manifest["generated_at"] = datetime.now(UTC).isoformat()

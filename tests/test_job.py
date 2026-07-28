@@ -324,6 +324,31 @@ def test_job_run_raises_on_failure(tmp_path, monkeypatch):
     with pytest.raises(Exception, match="events.parquet"):
         job.run()
 
+    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    assert manifest["status"] == "failed"
+    assert "events.parquet" in manifest["error"]
+
+
+def test_job_run_truncates_an_overly_long_error_message(tmp_path, monkeypatch):
+    # A manifest["error"] shouldn't grow unbounded (e.g. a verbose driver
+    # exception) -- it's persisted and shown as-is on the dashboard.
+    config_path = _write_config(tmp_path, tmp_path, tmp_path)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
+
+    long_message = "x" * 1000
+    monkeypatch.setattr(
+        job,
+        "build_input_source",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError(long_message)),
+    )
+
+    with pytest.raises(RuntimeError):
+        job.run()
+
+    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    assert len(manifest["error"]) < len(long_message)
+    assert manifest["error"].endswith("... (truncated)")
+
 
 def test_job_run_records_custom_triggered_by(tmp_path, monkeypatch):
     input_dir = tmp_path / "in"

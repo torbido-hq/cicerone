@@ -109,7 +109,7 @@ lightfm/rectools/implicit.
   effective models, and (for a `db` output only — a `dataset` output's
   `manifest.json` is overwritten every run, so it only ever has the latest)
   a short run history. The page auto-refreshes itself via
-  [htmx](https://htmx.org) polling, no page reload needed.
+  [htmx](https://htmx.org) polling, so no page reload is needed.
 - Protected by HTTP Basic Auth rather than a bearer token, since it's meant
   to be opened directly in a browser (a login prompt, not a header a human
   has to attach manually). Manage its small user list (a handful of named

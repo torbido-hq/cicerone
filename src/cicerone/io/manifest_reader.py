@@ -31,7 +31,7 @@ from typing import Any
 
 import pandas as pd
 from botocore.exceptions import ClientError
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 
 from cicerone.io.options import build_s3_client, require_option
 
@@ -88,12 +88,16 @@ class DbManifestReader:
         return rows[0] if rows else None
 
     def read_recent(self, limit: int) -> list[dict[str, Any]]:
-        sql = text(f'SELECT * FROM "{self._table}" ORDER BY "generated_at" DESC LIMIT :limit')
-        try:
-            df = pd.read_sql(sql, self._engine, params={"limit": limit})
-        except Exception:
-            logger.exception("Failed to read manifest history from database table %r", self._table)
+        # A brand-new "db" output deployment that hasn't completed a run yet
+        # has no manifest table at all -- that's "no runs recorded yet", not
+        # a real error, so check for it explicitly rather than catching a
+        # broad Exception around the query (which would also silently
+        # swallow real connection/permission/schema problems as an empty
+        # history instead of surfacing them).
+        if not inspect(self._engine).has_table(self._table):
             return []
+        sql = text(f'SELECT * FROM "{self._table}" ORDER BY "generated_at" DESC LIMIT :limit')
+        df = pd.read_sql(sql, self._engine, params={"limit": limit})
         # NaN/NaT for columns a pre-upgrade row never had (see module
         # docstring) must become None, not NaN -- NaN is truthy in Python,
         # so an old run without an "error" column would otherwise render as
