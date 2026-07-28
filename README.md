@@ -1,3 +1,5 @@
+<img src="src/cicerone/static/cicerone-logo.svg" alt="Cicerone" width="200">
+
 # Cicerone
 
 [![CI](https://github.com/torbido-hq/cicerone/actions/workflows/ci.yml/badge.svg)](https://github.com/torbido-hq/cicerone/actions/workflows/ci.yml)
