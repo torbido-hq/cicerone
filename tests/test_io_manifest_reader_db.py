@@ -71,7 +71,9 @@ def test_db_reader_read_recent_propagates_real_connection_errors():
     # silently degrading to an empty history -- otherwise a real
     # operational problem (bad credentials, unreachable host, ...) would
     # look identical to "nothing's run yet" on the dashboard.
-    reader = DbManifestReader({"database_url": "postgresql+psycopg://baduser:badpass@127.0.0.1:1/nonexistent"})
+    reader = DbManifestReader(
+        {"database_url": "postgresql+psycopg://baduser:badpass@127.0.0.1:1/nonexistent"}
+    )
 
     with pytest.raises(OperationalError):
         reader.read_recent(10)
