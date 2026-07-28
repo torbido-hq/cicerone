@@ -21,8 +21,13 @@ _basic_scheme = HTTPBasic(auto_error=True)
 # A fixed, never-matching bcrypt hash checked whenever the supplied username
 # isn't in `users`, so an unknown username takes the same time to reject as
 # a wrong password for a known one -- avoids a timing side-channel that
-# would otherwise let a caller enumerate valid usernames.
-_DUMMY_HASH = bcrypt.hashpw(b"not-a-real-password", bcrypt.gensalt())
+# would otherwise let a caller enumerate valid usernames. Precomputed once
+# (rather than `bcrypt.hashpw(..., bcrypt.gensalt())` at import time) so
+# process startup doesn't pay bcrypt's cost function on every launch and so
+# it's the same literal across processes/tests instead of a fresh salt each
+# time -- it's never a real credential, so there's no need for a unique
+# salt here.
+_DUMMY_HASH = b"$2b$12$vJ2512T3h3Og/ZQ2oX0DOumJjo4aEqRgGJPxpAW4Jv76RPsaH7JUm"
 
 
 def require_bearer_token(expected_token: str):
