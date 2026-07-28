@@ -101,6 +101,8 @@ run succeeded — it's always available as its own container/port (`8090`),
 regardless of `[job].mode` (batch or serve). Like serve mode, it never loads
 lightfm/rectools/implicit.
 
+![Cicerone dashboard showing job run history, including a failed run](docs/images/dashboard.png)
+
 - `GET /dashboard` shows the latest run's status (success/failed), counts,
   effective models, and (for a `db` output only — a `dataset` output's
   `manifest.json` is overwritten every run, so it only ever has the latest)
