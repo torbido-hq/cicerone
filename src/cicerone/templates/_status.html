@@ -26,10 +26,16 @@
   </div>
 {% endif %}
 
-{% if staleness.is_stale and manifest %}
-  <div class="rounded-lg border border-amber-300 bg-amber-50 p-4 mb-4 text-sm text-amber-800">
-    Stale: expected another run by {{ staleness.expected_next_run }}, none seen yet.
-  </div>
+{% if manifest %}
+  {% if staleness.is_stale %}
+    <div class="rounded-lg border border-amber-300 bg-amber-50 p-4 mb-4 text-sm text-amber-800">
+      Stale: expected another run by {{ staleness.expected_next_run }}, none seen yet.
+    </div>
+  {% elif staleness.error %}
+    <div class="rounded-lg border border-amber-300 bg-amber-50 p-4 mb-4 text-sm text-amber-800">
+      Can't determine staleness: job.cron_schedule is misconfigured ({{ staleness.error }}).
+    </div>
+  {% endif %}
 {% endif %}
 
 {% if history %}

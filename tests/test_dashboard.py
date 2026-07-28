@@ -221,4 +221,30 @@ def test_compute_staleness_no_manifest_is_stale():
 
     result = _compute_staleness(None, "0 3 * * *", datetime.now(UTC))
 
-    assert result == {"is_stale": True, "expected_next_run": None}
+    assert result == {"is_stale": True, "expected_next_run": None, "error": None}
+
+
+def test_compute_staleness_invalid_cron_schedule_is_unknown_not_a_crash():
+    from cicerone.dashboard import _compute_staleness
+
+    manifest = {"status": "success", "generated_at": "2026-07-28T00:00:00+00:00"}
+    result = _compute_staleness(manifest, "not a cron expression", datetime.now(UTC))
+
+    assert result["is_stale"] is None
+    assert result["expected_next_run"] is None
+    assert result["error"]
+
+
+def test_status_partial_shows_unknown_staleness_for_invalid_cron_schedule():
+    manifest = {"status": "success", "generated_at": "2026-07-28T00:00:00+00:00"}
+    app = create_app(
+        _settings(cron_schedule="not a cron expression"),
+        _FakeReader(manifest),
+        _users_with("alice", "s3cret"),
+    )
+    client = TestClient(app)
+
+    response = client.get("/partials/status", auth=("alice", "s3cret"))
+
+    assert response.status_code == 200
+    assert "misconfigured" in response.text

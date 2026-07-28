@@ -30,11 +30,18 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from botocore.exceptions import ClientError
 from sqlalchemy import create_engine, text
 
 from cicerone.io.options import build_s3_client, require_option
 
 logger = logging.getLogger(__name__)
+
+# S3 error codes that mean "the manifest doesn't exist yet" -- everything
+# else (bad credentials, network errors, access denied, ...) is a real
+# backend/configuration problem and should propagate instead of silently
+# rendering as "no job runs recorded yet".
+_S3_NOT_FOUND_CODES = {"NoSuchKey", "404"}
 
 
 class DatasetManifestReader:
@@ -43,22 +50,24 @@ class DatasetManifestReader:
         self._backend = options.get("storage_backend", "local")
 
     def _read(self) -> dict[str, Any] | None:
-        try:
-            if self._backend == "local":
-                path = Path(require_option(self._options, "path", "local")) / "manifest.json"
-                if not path.exists():
-                    return None
-                return json.loads(path.read_text())
+        if self._backend == "local":
+            path = Path(require_option(self._options, "path", "local")) / "manifest.json"
+            if not path.exists():
+                return None
+            return json.loads(path.read_text())
 
-            bucket = require_option(self._options, "bucket", "s3")
-            prefix = str(self._options.get("prefix", "")).strip("/")
-            key = f"{prefix}/manifest.json" if prefix else "manifest.json"
-            client = build_s3_client(self._options)
+        bucket = require_option(self._options, "bucket", "s3")
+        prefix = str(self._options.get("prefix", "")).strip("/")
+        key = f"{prefix}/manifest.json" if prefix else "manifest.json"
+        client = build_s3_client(self._options)
+        try:
             obj = client.get_object(Bucket=bucket, Key=key)
-            return json.loads(obj["Body"].read())
-        except Exception:
-            logger.exception("Failed to read manifest")
-            return None
+        except ClientError as exc:
+            error_code = exc.response.get("Error", {}).get("Code")
+            if error_code in _S3_NOT_FOUND_CODES:
+                return None
+            raise
+        return json.loads(obj["Body"].read())
 
     def read_latest(self) -> dict[str, Any] | None:
         return self._read()

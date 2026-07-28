@@ -27,12 +27,13 @@ def test_dataset_reader_read_latest_missing_file_returns_none(tmp_path):
     assert reader.read_latest() is None
 
 
-def test_dataset_reader_read_latest_tolerates_read_errors(tmp_path):
+def test_dataset_reader_read_latest_raises_on_corrupt_manifest(tmp_path):
     (tmp_path / "manifest.json").write_text("not valid json")
 
     reader = DatasetManifestReader({"storage_backend": "local", "path": str(tmp_path)})
 
-    assert reader.read_latest() is None
+    with pytest.raises(json.JSONDecodeError):
+        reader.read_latest()
 
 
 def test_dataset_reader_read_recent_returns_only_the_latest_run(tmp_path):
@@ -81,3 +82,15 @@ def test_dataset_reader_s3_backend_missing_object_returns_none(s3_options):
     reader = DatasetManifestReader(s3_options)
 
     assert reader.read_latest() is None
+
+
+def test_dataset_reader_s3_backend_raises_on_hard_failure(s3_options):
+    # A real backend/configuration error (here: bucket doesn't exist) must
+    # propagate rather than being conflated with "no manifest yet" -- only
+    # a genuine not-found response should return None.
+    from botocore.exceptions import ClientError
+
+    reader = DatasetManifestReader({**s3_options, "bucket": "no-such-bucket"})
+
+    with pytest.raises(ClientError):
+        reader.read_latest()

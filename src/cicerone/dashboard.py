@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 import uvicorn
-from croniter import croniter
+from croniter import CroniterError, croniter
 from fastapi import Depends, FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -55,13 +55,23 @@ def _compute_staleness(manifest: dict[str, Any] | None, cron_schedule: str, now:
     runs -- those only ever happen *in addition to* the cron schedule (see
     trigger.py), so the cron-derived expectation is always a valid lower
     bound on "how fresh should this be".
+
+    `is_stale` is `None` (unknown, not stale/fresh) rather than raising when
+    `cron_schedule` is misconfigured -- a bad cron expression shouldn't take
+    the whole dashboard view down; `error` then carries a human-readable
+    reason the template can surface instead.
     """
     if manifest is None or not manifest.get("generated_at"):
-        return {"is_stale": True, "expected_next_run": None}
+        return {"is_stale": True, "expected_next_run": None, "error": None}
 
     last_run = datetime.fromisoformat(manifest["generated_at"])
-    expected_next_run = croniter(cron_schedule, last_run).get_next(datetime)
-    return {"is_stale": now > expected_next_run, "expected_next_run": expected_next_run.isoformat()}
+    try:
+        expected_next_run = croniter(cron_schedule, last_run).get_next(datetime)
+    except CroniterError as exc:
+        logger.warning("Invalid cron_schedule %r, can't compute staleness: %s", cron_schedule, exc)
+        return {"is_stale": None, "expected_next_run": None, "error": str(exc)}
+    is_stale = now > expected_next_run
+    return {"is_stale": is_stale, "expected_next_run": expected_next_run.isoformat(), "error": None}
 
 
 def create_app(settings: Settings, reader: ManifestReader, users: dict[str, str]) -> FastAPI:
