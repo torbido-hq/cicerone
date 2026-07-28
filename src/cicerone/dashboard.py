@@ -91,12 +91,20 @@ def create_app(settings: Settings, reader: ManifestReader, users: dict[str, str]
 
     @app.get("/partials/status", dependencies=[Depends(auth)])
     def status_partial(request: Request):
+        # `request` is passed positionally first, not via a "request" key in
+        # the context dict -- that's the correct call signature for the
+        # pinned starlette==1.3.1 (Jinja2Templates.TemplateResponse(self,
+        # request, name, context=None, ...), verified via
+        # inspect.signature(Jinja2Templates.TemplateResponse)). The older
+        # TemplateResponse(name, {"request": request, ...}) form some
+        # docs/linters still expect doesn't apply to this pinned version.
         return _TEMPLATES.TemplateResponse(request, "_status.html", _status_context())
 
     @app.get("/dashboard", dependencies=[Depends(auth)])
     def dashboard(request: Request):
         context = _status_context()
         context["refresh_interval_seconds"] = settings.dashboard_refresh_interval_seconds
+        # See status_partial() above re: request-positional-first call form.
         return _TEMPLATES.TemplateResponse(request, "dashboard.html", context)
 
     return app
