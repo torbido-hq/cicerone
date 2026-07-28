@@ -1,0 +1,39 @@
+# Example "serve mode" configuration -- a second cicerone process/container
+# that only exposes the read API (cicerone.serve) over the recommendations
+# the batch job (using config/cicerone.toml) already wrote out. Deploy it
+# as a separate container from the same image, pointed at this file via
+# CICERONE_CONFIG_PATH (see the "serve" service in docker-compose.yml).
+#
+# [output] here MUST point at the exact same store the batch job writes to
+# -- everything else in this file is independent of the batch config.
+
+[job]
+mode = "serve"
+
+[output]
+kind = "dataset"
+
+[output.options]
+storage_backend = "s3" # "s3" | "local"
+endpoint_url = "${OUTPUT_S3_ENDPOINT_URL}"
+access_key_id = "${OUTPUT_S3_ACCESS_KEY_ID}"
+secret_access_key = "${OUTPUT_S3_SECRET_ACCESS_KEY}"
+bucket = "${OUTPUT_S3_BUCKET}"
+prefix = "recommendations/latest"
+
+[serve]
+auth_token = "${SERVE_AUTH_TOKEN}"
+host = "0.0.0.0"
+port = 8000
+default_k = 10
+refresh_interval_seconds = 60
+
+# [input] is required by config.load_settings() even in serve mode (kept
+# generic/simple rather than special-casing it away) but is never read from
+# in this mode -- any valid, already-configured backend works as a placeholder.
+[input]
+kind = "dataset"
+
+[input.options]
+storage_backend = "local"
+path = "/tmp/unused-in-serve-mode"

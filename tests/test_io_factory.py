@@ -5,7 +5,8 @@ import pytest
 from cicerone.config import IOSettings
 from cicerone.io.dataset_store import DatasetInputSource, DatasetOutputSink
 from cicerone.io.db_store import DatabaseInputSource, DatabaseOutputSink
-from cicerone.io.factory import build_input_source, build_output_sink
+from cicerone.io.factory import build_input_source, build_output_sink, build_recommendation_reader
+from cicerone.io.recommendation_reader import DatasetRecommendationReader, DbRecommendationReader
 
 
 def test_build_input_source_dataset(tmp_path):
@@ -38,3 +39,19 @@ def test_build_output_sink_unknown_kind_raises():
     settings = IOSettings(kind="carrier-pigeon", options={})
     with pytest.raises(ValueError, match="Unknown output kind"):
         build_output_sink(settings)
+
+
+def test_build_recommendation_reader_dataset(tmp_path):
+    settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    assert isinstance(build_recommendation_reader(settings), DatasetRecommendationReader)
+
+
+def test_build_recommendation_reader_db():
+    settings = IOSettings(kind="db", options={"database_url": "postgresql+psycopg://u:p@h/d"})
+    assert isinstance(build_recommendation_reader(settings), DbRecommendationReader)
+
+
+def test_build_recommendation_reader_unknown_kind_raises():
+    settings = IOSettings(kind="carrier-pigeon", options={})
+    with pytest.raises(ValueError, match="Unknown output kind"):
+        build_recommendation_reader(settings)

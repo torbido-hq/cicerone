@@ -21,7 +21,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logger = logging.getLogger(__name__)
 
 
-def run() -> None:
+def run(triggered_by: str = "manual") -> None:
     settings = load_settings()
     feature_config = load_feature_config(settings.feature_config_path)
 
@@ -95,6 +95,7 @@ def run() -> None:
 
     manifest = {
         "generated_at": datetime.now(UTC).isoformat(),
+        "triggered_by": triggered_by,
         "n_events": int(len(events)),
         "n_target_users": len(target_users),
         "n_users_with_recommendations": int(recommendations["user_id"].nunique()),

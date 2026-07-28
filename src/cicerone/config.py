@@ -122,6 +122,9 @@ class IOSettings:
     options: dict[str, Any] = field(default_factory=dict)
 
 
+MODES: tuple[str, ...] = ("batch", "serve")
+
+
 @dataclass(frozen=True)
 class Settings:
     input: IOSettings
@@ -138,6 +141,19 @@ class Settings:
     automl_test_days: int
     automl_primary_metric: str
     automl_candidates: list[dict[str, Any]] | None
+    mode: str
+    serve_host: str
+    serve_port: int
+    serve_auth_token: str | None
+    serve_default_k: int
+    serve_refresh_interval_seconds: float
+    trigger_enabled: bool
+    trigger_host: str
+    trigger_port: int
+    trigger_auth_token: str | None
+    trigger_debounce_seconds: float
+    trigger_poll_input_bucket: bool
+    trigger_poll_interval_seconds: float
 
 
 def _load_io_settings(raw: dict[str, Any], section_name: str) -> IOSettings:
@@ -184,6 +200,28 @@ def load_settings(config_path: str | None = None) -> Settings:
     validate_model_weights(model_weights, context="job.model_weights")
     rrf_k = float(job["rrf_k"]) if "rrf_k" in job else None
     validate_rrf_k(rrf_k, context="job.rrf_k")
+
+    mode = str(job.get("mode", "batch")).lower()
+    if mode not in MODES:
+        raise RuntimeError(f"job.mode must be one of {list(MODES)}, got {mode!r}")
+
+    serve = raw.get("serve", {})
+    serve_auth_token = (
+        _resolve_env_placeholders(serve["auth_token"], "serve.auth_token") if "auth_token" in serve else None
+    )
+    if mode == "serve" and not serve_auth_token:
+        raise RuntimeError('serve.auth_token is required when job.mode = "serve"')
+
+    trigger = job.get("trigger", {})
+    trigger_enabled = bool(trigger.get("enabled", False))
+    trigger_auth_token = (
+        _resolve_env_placeholders(trigger["auth_token"], "job.trigger.auth_token")
+        if "auth_token" in trigger
+        else None
+    )
+    if trigger_enabled and not trigger_auth_token:
+        raise RuntimeError("job.trigger.auth_token is required when job.trigger.enabled = true")
+
     return Settings(
         input=_load_io_settings(raw, "input"),
         output=_load_io_settings(raw, "output"),
@@ -201,4 +239,17 @@ def load_settings(config_path: str | None = None) -> Settings:
         automl_candidates=(
             [dict(candidate) for candidate in automl["candidates"]] if "candidates" in automl else None
         ),
+        mode=mode,
+        serve_host=serve.get("host", "0.0.0.0"),
+        serve_port=int(serve.get("port", 8000)),
+        serve_auth_token=serve_auth_token,
+        serve_default_k=int(serve.get("default_k", 10)),
+        serve_refresh_interval_seconds=float(serve.get("refresh_interval_seconds", 60)),
+        trigger_enabled=trigger_enabled,
+        trigger_host=trigger.get("host", "0.0.0.0"),
+        trigger_port=int(trigger.get("port", 8080)),
+        trigger_auth_token=trigger_auth_token,
+        trigger_debounce_seconds=float(trigger.get("debounce_seconds", 60)),
+        trigger_poll_input_bucket=bool(trigger.get("poll_input_bucket", False)),
+        trigger_poll_interval_seconds=float(trigger.get("poll_interval_seconds", 300)),
     )

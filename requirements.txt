@@ -16,3 +16,7 @@ psycopg[binary]==3.2.1
 
 # Cron-in-container scheduler (no system cron daemon needed)
 croniter==6.2.4
+
+# Serve mode's read API + the event-driven retrain trigger's webhook
+fastapi==0.139.2
+uvicorn[standard]==0.51.0

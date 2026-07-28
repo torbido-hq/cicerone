@@ -17,6 +17,10 @@
 #                (src/cicerone/io/db_store.py)
 
 [job]
+# "batch" (default): train on cron_schedule (below) + train_and_recommend,
+# same as always. "serve": run the lightweight read API instead (see
+# [serve] below) -- no training job runs in that mode/process.
+mode = "batch" # "batch" | "serve"
 top_k = 10
 half_life_days = 90
 cron_schedule = "0 3 * * *" # 5-field cron expression, evaluated in UTC
@@ -74,6 +78,25 @@ feature_config_path = "/app/config/features.toml"
 # popular = 0.3
 # latest = 0.3
 
+# Optional: event-driven retraining, additive to cron_schedule above (both
+# can fire; a run already in progress or started within debounce_seconds
+# ignores/coalesces new triggers -- at most one run happens at a time).
+# Runs in the same process as the cron loop (cicerone.scheduler).
+# [job.trigger]
+# enabled = true
+# auth_token = "${TRIGGER_AUTH_TOKEN}" # required when enabled; checked as
+#                                       # "Authorization: Bearer <token>"
+# host = "0.0.0.0"
+# port = 8080
+# debounce_seconds = 60
+# # POST /trigger/retrain on this port always works once trigger is enabled.
+# # Additionally poll the *input* source for new/changed data and trigger a
+# # run automatically (only supported for [input].kind = "dataset"; real S3
+# # event notifications only deliver to SQS/SNS/Lambda and aren't portable
+# # across S3-compatible backends, so polling is used instead):
+# poll_input_bucket = false
+# poll_interval_seconds = 300
+
 [input]
 kind = "dataset"
 
@@ -98,6 +121,19 @@ access_key_id = "${OUTPUT_S3_ACCESS_KEY_ID}"
 secret_access_key = "${OUTPUT_S3_SECRET_ACCESS_KEY}"
 bucket = "${OUTPUT_S3_BUCKET}"
 prefix = "recommendations/latest"
+
+# Only relevant when [job].mode = "serve": a lightweight read API over the
+# top-K recommendations the batch job already wrote to [output] above (it
+# reads that same store directly -- no model is loaded to serve requests).
+# For [output].kind = "dataset", the whole recommendations file is cached
+# in memory and reloaded every refresh_interval_seconds; for "db" it's
+# queried directly on every request (already indexed by user_id).
+# [serve]
+# auth_token = "${SERVE_AUTH_TOKEN}" # required; checked as "Authorization: Bearer <token>"
+# host = "0.0.0.0"
+# port = 8000
+# default_k = 10 # used when a request doesn't specify ?k=
+# refresh_interval_seconds = 60
 
 # --- "db" kind example (commented out) ----------------------------------
 # [input]

@@ -81,6 +81,7 @@ def test_job_run_end_to_end_with_local_dataset_backend(tmp_path, monkeypatch):
     assert manifest["top_k"] == 2
     assert manifest["automl_enabled"] is False
     assert manifest["automl_metrics"] == ""
+    assert manifest["triggered_by"] == "manual"
 
 
 def test_job_run_with_automl_enabled_selects_and_records_best_candidate(tmp_path, monkeypatch):
@@ -322,3 +323,28 @@ def test_job_run_raises_on_failure(tmp_path, monkeypatch):
 
     with pytest.raises(Exception, match="events.parquet"):
         job.run()
+
+
+def test_job_run_records_custom_triggered_by(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+
+    now = pd.Timestamp.utcnow()
+    events = pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    )
+    items = pd.DataFrame(
+        [{"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True}]
+    )
+    events.to_parquet(input_dir / "events.parquet", index=False)
+    items.to_parquet(input_dir / "items.parquet", index=False)
+
+    config_path = _write_config(tmp_path, input_dir, output_dir)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
+
+    job.run(triggered_by="webhook")
+
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    assert manifest["triggered_by"] == "webhook"

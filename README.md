@@ -5,11 +5,13 @@
 [![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/release/python-3110/)
 [![License: Beerware](https://img.shields.io/badge/license-Beerware%20🍺-f28e1c.svg)](LICENSE)
 
-A generic, self-hosted batch recommender system. No API, no cache: it reads
-your interaction data, trains a hybrid [rectools](https://github.com/MobileTeleSystems/RecTools)
-+ LightFM model, and writes out top-K recommendations per user. Everything
-runs in Docker (Python 3.11 only lives inside the image, nothing to install
-on the host).
+A generic, self-hosted batch recommender system. It reads your interaction
+data, trains a hybrid [rectools](https://github.com/MobileTeleSystems/RecTools)
++ LightFM model, and writes out top-K recommendations per user. An optional
+lightweight "serve" mode can then expose those precomputed recommendations
+over a small read-only HTTP API — there's still no live inference, no
+model loaded in the request path. Everything runs in Docker (Python 3.11
+only lives inside the image, nothing to install on the host).
 
 Cicerone isn't tied to any particular product, shop, or domain — it works
 for any catalog of "users" and "items" with interaction events (purchases,
@@ -46,6 +48,51 @@ input source (S3-compatible/local dataset, or a database)
 Scheduling is handled in-process (`croniter`, no system cron): it runs once
 at boot, then again on `[job].cron_schedule` in `config/cicerone.toml`
 (default: every night at 03:00 UTC).
+
+## Serve mode
+
+By default (`[job].mode = "batch"`), the container only runs the batch job
+on its cron schedule — no HTTP surface at all. Setting `[job].mode = "serve"`
+switches `python -m cicerone.serve` to instead run a small FastAPI read API:
+
+- `GET /recommendations/{user_id}?k=10` returns the precomputed top-K rows
+  already written to the configured output store (dataset or db) — it never
+  imports lightfm/rectools/implicit, so a serve-only deployment doesn't need
+  the training dependencies installed.
+- For a `dataset` output, the whole recommendations file is cached in memory
+  and refreshed on a background timer (`[serve].refresh_interval_seconds`,
+  default 60s). For a `db` output, each request queries the table directly.
+- Both this API and the retrain trigger below require a bearer token
+  (`Authorization: Bearer <token>`), configured via `[serve].auth_token`
+  (`${ENV_VAR}` placeholder, never a literal secret in the TOML file).
+
+See `config/cicerone.serve.toml` for a standalone example config, and the
+`serve` service in `docker-compose.yml` for how it's wired up alongside the
+batch `recommender` service.
+
+### Event-driven retrain trigger
+
+Batch-only (cron) scheduling still works exactly as before. Optionally,
+`[job.trigger]` in `config/cicerone.toml` adds an event-driven trigger
+**in addition to** the cron schedule, running in the same `scheduler.py`
+process:
+
+- `POST /trigger/retrain` — a generic webhook any external system can call
+  to kick off a run immediately.
+- `[job.trigger].poll_input_bucket = true` additionally polls the configured
+  input source for a changed `events.parquet` (local file mtime, or S3
+  `HEAD` `LastModified`) every `poll_interval_seconds`. This is an
+  in-app substitute for real S3 event notifications: those require wiring
+  up SNS/SQS/Lambda and aren't portable across S3-compatible backends
+  (R2, MinIO), so polling was chosen instead to avoid adding infra.
+- Both paths funnel through the same debounce guard
+  (`[job.trigger].debounce_seconds`), so a burst of triggers (or a trigger
+  firing while cron already kicked off a run) never causes overlapping runs.
+- No new required infra: no Redis, no message queue — the debounce guard is
+  in-process (`threading.Lock`), which assumes a single running instance
+  of the `recommender`/scheduler service (true today).
+- The run manifest now records `triggered_by` (`"cron"`, `"webhook"`, or
+  `"s3-poll"`) alongside its existing counts/timestamp fields.
 
 ## Configuration (`config/cicerone.toml`)
 

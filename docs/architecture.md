@@ -9,18 +9,24 @@ For configuration and usage, see the main [README](../README.md).
 config.py            load & resolve config/cicerone.toml (structural config + ${ENV_VAR} secrets)
 feature_config.py     load config/features.toml (event weights, feature columns)
 io/
-  base.py             InputSource / OutputSink protocols
+  base.py             InputSource / OutputSink / RecommendationReader protocols
   factory.py          picks a concrete backend by IOSettings.kind ("dataset" | "db")
   dataset_store.py     backend: parquet files (S3-compatible or local disk)
   db_store.py          backend: SQLAlchemy-backed database tables/queries
-  options.py           shared "require_option" validation helper
+  recommendation_reader.py  read-only lookup of precomputed recs for serve mode (no rectools/lightfm import)
+  options.py           shared "require_option"/build_s3_client helpers
 dataset.py            raw events/users/items -> weighted rectools Dataset (BuiltDataset)
 model.py            BuiltDataset -> STRATEGIES registry (collaborative/item_based/
                      popular/latest) -> top-K recommendations, combined per user
 automl.py            optional: backtests candidate models/weights/rrf_k configs over
                      time-based folds of event history and picks the best one
 job.py                orchestrates one end-to-end run (source -> dataset -> model -> sink)
-scheduler.py           in-process cron loop that calls job.run() on config/cicerone.toml's cron_schedule
+scheduler.py           in-process cron loop that calls job.run(); when [job.trigger]
+                       is enabled, also hosts the retrain-trigger HTTP server (trigger.py)
+serve.py               serve mode: FastAPI read API over precomputed recommendations
+trigger.py             event-driven retrain trigger: webhook + optional input-bucket poll,
+                       debounce guard (RunGuard) shared with the cron loop
+http_auth.py           shared bearer-token auth dependency for serve.py/trigger.py
 ```
 
 ## Data flow
@@ -98,10 +104,53 @@ flowchart LR
 5. `job.run()` writes the combined recommendations and a small run manifest
    (counts, timestamp, effective `models`/`model_weights`/`rrf_k`, and
    `automl_metrics` when AutoML ran) back out via the configured `OutputSink`.
-6. `scheduler.main()` is the container's actual entrypoint: it computes the
-   next run time from `cron_schedule` with `croniter`, sleeps, calls
-   `job.run()`, and loops forever — a failed run is logged but never kills
-   the loop.
+6. `scheduler.main()` is the container's actual entrypoint for batch mode: it
+   computes the next run time from `cron_schedule` with `croniter`, sleeps,
+   calls `job.run(triggered_by="cron")`, and loops forever — a failed run is
+   logged but never kills the loop. When `Settings.trigger_enabled`
+   (`[job.trigger].enabled`), `scheduler.main()` instead delegates to
+   `_run_with_trigger()`, which runs the same cron loop on a background
+   thread and additionally serves `trigger.create_app()` (see below) in the
+   main thread — both funnel through one `trigger.RunGuard` so at most one
+   run happens at a time regardless of what triggered it.
+
+## Serve mode and the retrain trigger
+
+Selected via `[job].mode = "serve"`, `cicerone.serve` is a separate entrypoint
+(`python -m cicerone.serve`) from the batch scheduler — a serve-only
+deployment never imports `cicerone.model`/`dataset`/`automl` (no
+rectools/lightfm/implicit needed in that process or its request path):
+
+- `io.factory.build_recommendation_reader(settings.output)` builds a
+  `RecommendationReader` (`io/recommendation_reader.py`) matching the
+  configured output `kind` — `DatasetRecommendationReader` caches the whole
+  parquet file in memory and refreshes it on a background timer
+  (`serve.py`'s `_start_refresh_loop`); `DbRecommendationReader` queries the
+  table directly per request (its `refresh()` is a no-op).
+- `serve.create_app()` exposes `GET /health` and
+  `GET /recommendations/{user_id}?k=`, both behind `http_auth.require_bearer_token`.
+
+`cicerone.trigger` implements the event-driven retrain trigger, additive to
+(not a replacement for) `scheduler.py`'s cron loop:
+
+- `RunGuard` (thread-safe) debounces concurrent trigger sources: a run
+  already in flight, or one that finished within `debounce_seconds`, causes
+  a new trigger to be skipped rather than queued or run in parallel.
+- `create_app()` exposes `POST /trigger/retrain` (webhook, behind
+  `http_auth.require_bearer_token`) which calls `guard.trigger("webhook")`.
+- `poll_input_forever()` (only started when
+  `Settings.trigger_poll_input_bucket`) periodically fingerprints the input
+  source (`_current_marker`: local file mtime, or S3 `head_object`'s
+  `LastModified`) and calls `guard.trigger("s3-poll")` when it changes. This
+  is a deliberate substitute for real S3 event notifications, which require
+  SNS/SQS/Lambda wiring and aren't portable across S3-compatible backends
+  (R2, MinIO) — polling avoids adding that infra while still being
+  event-driven from the operator's point of view.
+- Every successful run's manifest (written by `job.run()`) records
+  `triggered_by` (`"cron"`, `"webhook"`, or `"s3-poll"`).
+- No new required infra: debounce state is a single in-process
+  `threading.Lock`, which assumes one running instance of the scheduler
+  process (the confirmed deployment topology for this repo).
 
 ## Extensibility: adding a new I/O backend
 
