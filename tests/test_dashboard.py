@@ -259,6 +259,26 @@ def test_compute_staleness_malformed_generated_at_is_unknown_not_a_crash():
     assert result["error"]
 
 
+def test_compute_staleness_naive_generated_at_is_treated_as_utc_not_a_crash():
+    # A naive "generated_at" (an ISO string with no UTC offset, or a naive
+    # datetime from some db driver/row) must not be compared directly
+    # against the always-aware `now` -- that would raise TypeError instead
+    # of degrading to "unknown" like other bad-input cases here.
+    from cicerone.dashboard import _compute_staleness
+
+    manifest = {"status": "success", "generated_at": "2026-07-28T00:00:00"}
+    result = _compute_staleness(manifest, "0 3 * * *", datetime.now(UTC))
+
+    assert result["error"] is None
+    assert result["is_stale"] is not None
+
+    manifest_datetime = {"status": "success", "generated_at": datetime(2026, 7, 28)}
+    result_datetime = _compute_staleness(manifest_datetime, "0 3 * * *", datetime.now(UTC))
+
+    assert result_datetime["error"] is None
+    assert result_datetime["is_stale"] is not None
+
+
 def test_status_partial_shows_unknown_staleness_for_invalid_cron_schedule():
     manifest = {"status": "success", "generated_at": "2026-07-28T00:00:00+00:00"}
     app = create_app(

@@ -81,6 +81,16 @@ def _compute_staleness(manifest: dict[str, Any] | None, cron_schedule: str, now:
             )
             return {"is_stale": None, "expected_next_run": None, "error": str(exc)}
 
+    # `now` (the caller always passes datetime.now(UTC)) is timezone-aware,
+    # but `last_run` may not be -- an older manifest's ISO string without an
+    # offset, or a naive datetime from some db driver/row. croniter then
+    # returns a naive `expected_next_run`, and comparing an aware `now` to a
+    # naive datetime raises TypeError instead of just rendering "unknown".
+    # Assume naive timestamps are UTC (job.py always writes UTC) so the
+    # comparison below is always aware-to-aware.
+    if last_run.tzinfo is None:
+        last_run = last_run.replace(tzinfo=UTC)
+
     try:
         expected_next_run = croniter(cron_schedule, last_run).get_next(datetime)
     except CroniterError as exc:
