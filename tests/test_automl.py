@@ -185,6 +185,28 @@ def test_evaluate_candidates_raises_without_enough_history(sample_items, feature
         )
 
 
+def test_evaluate_candidates_raises_without_enough_history_with_max_workers(sample_items, feature_config):
+    # The empty-folds check must run before any ProcessPoolExecutor is
+    # constructed, since ProcessPoolExecutor(max_workers=min(max_workers, 0))
+    # would be invalid.
+    now = pd.Timestamp.utcnow()
+    events = pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    )
+    with pytest.raises(ValueError, match="Not enough event history"):
+        evaluate_candidates(
+            events,
+            None,
+            sample_items,
+            feature_config,
+            top_k=2,
+            half_life_days=90,
+            n_splits=3,
+            test_days=14,
+            max_workers=4,
+        )
+
+
 def test_evaluate_candidates_raises_on_empty_candidates_list(sample_items, feature_config):
     events = _spread_events(n_days=21)
     with pytest.raises(ValueError, match="empty list"):
