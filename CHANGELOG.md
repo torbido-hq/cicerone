@@ -4,6 +4,25 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- AutoML candidate backtesting can now evaluate time-based folds in
+  parallel: `evaluate_candidates(..., max_workers=1)` runs folds through a
+  `ProcessPoolExecutor` when `max_workers > 1`, instead of sequentially
+  (opt-in; default behavior/performance is unchanged).
+- Strategy fitting in `train_and_recommend(..., max_workers=1)` can
+  likewise fit independent, not-yet-cached strategies in parallel via a
+  `ProcessPoolExecutor` when `max_workers > 1` (opt-in; default is
+  unchanged).
+
+### Changed
+
+- The job's input reads (events, users, items) now run concurrently via a
+  `ThreadPoolExecutor` instead of sequentially, speeding up runs against
+  network-backed (S3) input sources.
+
 ## [0.2.0] - 2026-07-29
 
 ### Added
