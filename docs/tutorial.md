@@ -1,3 +1,5 @@
+<img src="../src/cicerone/static/cicerone-logo.svg" alt="Cicerone" width="200">
+
 # Tutorial: from zero to a full local run
 
 This is a hands-on, step-by-step walkthrough of Cicerone's main features
@@ -16,8 +18,11 @@ code is structured, see [architecture.md](architecture.md).
 7. [Let AutoML pick a strategy for you](#7-let-automl-pick-a-strategy-for-you)
 8. [Tune interaction weights & features](#8-tune-interaction-weights--features)
 9. [Try the database backend](#9-try-the-database-backend-optional)
-10. [Run continuously, on a schedule](#10-run-continuously-on-a-schedule)
-11. [Next steps](#11-next-steps)
+10. [Serve recommendations over an HTTP API](#10-serve-recommendations-over-an-http-api)
+11. [Trigger a retrain on demand](#11-trigger-a-retrain-on-demand)
+12. [Check job status with the dashboard](#12-check-job-status-with-the-dashboard)
+13. [Run continuously, on a schedule](#13-run-continuously-on-a-schedule)
+14. [Next steps](#14-next-steps)
 
 ## 1. Create a sample dataset
 
@@ -318,7 +323,146 @@ Clean up the throwaway database when you're done:
 docker stop cicerone-tutorial-db
 ```
 
-## 10. Run continuously, on a schedule
+## 10. Serve recommendations over an HTTP API
+
+Everything so far has run the batch job directly. `[job].mode = "serve"`
+switches to a separate, lightweight read API over whatever the batch job
+last wrote to `[output]` — it never imports rectools/lightfm/implicit.
+Reuse the local `data/output/` from [step 3](#3-run-the-job-once):
+
+```sh
+cp config/cicerone.serve.toml config/cicerone.serve.local.toml
+```
+
+Edit `config/cicerone.serve.local.toml`'s `[output.options]` to point at the
+same local directory the batch job wrote to, and set an `auth_token`:
+
+```toml
+[output.options]
+storage_backend = "local"
+path = "/data/output"
+
+[serve]
+auth_token = "tutorial-token"
+```
+
+Start it in the background and query a user's recommendations:
+
+```sh
+docker run --rm -d --name cicerone-tutorial-serve -p 8000:8000 \
+  -v "$PWD/config/cicerone.serve.local.toml":/app/config/cicerone.toml:ro \
+  -v "$PWD/data":/data \
+  -e CICERONE_CONFIG_PATH=/app/config/cicerone.toml \
+  cicerone-test python -m cicerone.serve
+
+curl -H "Authorization: Bearer tutorial-token" "http://localhost:8000/recommendations/alice?k=5"
+```
+
+For a `dataset` output (as here), the whole recommendations file is cached
+in memory and reloaded every `[serve].refresh_interval_seconds` (default
+60s) — re-run [step 3](#3-run-the-job-once) and query again after that
+interval to see updated results without restarting the container. For a
+`db` output, every request queries the table directly instead. Clean up
+when you're done:
+
+```sh
+docker stop cicerone-tutorial-serve
+```
+
+## 11. Trigger a retrain on demand
+
+`[job.trigger]` adds an event-driven retrain trigger *in addition to* the
+cron schedule, running inside the same `cicerone.scheduler` process (not a
+separate container). Add this to `config/cicerone.local.toml`:
+
+```toml
+[job.trigger]
+enabled = true
+auth_token = "tutorial-token"
+port = 8080
+```
+
+Start the scheduler in the background (this also runs the batch job
+immediately, then re-enters the cron loop) and fire the webhook:
+
+```sh
+docker run --rm -d --name cicerone-tutorial-scheduler -p 8080:8080 \
+  -v "$PWD/config/cicerone.local.toml":/app/config/cicerone.toml:ro \
+  -v "$PWD/config/features.toml":/app/config/features.toml:ro \
+  -v "$PWD/data":/data \
+  -e CICERONE_CONFIG_PATH=/app/config/cicerone.toml \
+  cicerone-test python -m cicerone.scheduler
+
+curl -X POST -H "Authorization: Bearer tutorial-token" http://localhost:8080/trigger/retrain
+```
+
+A trigger fired while a run is already in flight, or within
+`[job.trigger].debounce_seconds` (default 60) of the last one, is skipped
+rather than queued — check `docker logs cicerone-tutorial-scheduler` to see
+it happen if you call the webhook twice in a row. The written manifest also
+now records `triggered_by` (`"cron"`, `"webhook"`, or `"s3-poll"` if
+`poll_input_bucket = true`). Clean up when you're done:
+
+```sh
+docker stop cicerone-tutorial-scheduler
+```
+
+## 12. Check job status with the dashboard
+
+`cicerone.dashboard` is a small, standalone status page over job run
+history — always its own container/port, independent of `[job].mode`.
+Reuse the same local `data/output/`:
+
+```sh
+cp config/cicerone.dashboard.toml config/cicerone.dashboard.local.toml
+```
+
+Edit `config/cicerone.dashboard.local.toml`'s `[output.options]` to point at
+the same local directory, and its `[job].cron_schedule` to match
+`config/cicerone.local.toml`'s:
+
+```toml
+[output.options]
+storage_backend = "local"
+path = "/data/output"
+
+[job]
+cron_schedule = "0 3 * * *"
+```
+
+Add a login user (prompts for a password interactively, note `-it` and that
+`--users-path` comes *before* the subcommand):
+
+```sh
+mkdir -p config
+docker run --rm -it \
+  -v "$PWD/config":/app/config \
+  cicerone-test python -m cicerone.manage_dashboard_users \
+  --users-path /app/config/dashboard_users.toml add tutorial-user
+```
+
+Then start the dashboard and open `http://localhost:8090/dashboard` in a
+browser (log in with the user just created):
+
+```sh
+docker run --rm -d --name cicerone-tutorial-dashboard -p 8090:8090 \
+  -v "$PWD/config/cicerone.dashboard.local.toml":/app/config/cicerone.toml:ro \
+  -v "$PWD/config":/app/config \
+  -v "$PWD/data":/data \
+  -e CICERONE_CONFIG_PATH=/app/config/cicerone.toml \
+  cicerone-test python -m cicerone.dashboard
+```
+
+With our `dataset` output, only the latest run is ever shown (its
+`manifest.json` is overwritten every run, not appended) — switch to a `db`
+output (see [step 9](#9-try-the-database-backend-optional)) to see a real
+run history table instead. Clean up when you're done:
+
+```sh
+docker stop cicerone-tutorial-dashboard
+```
+
+## 13. Run continuously, on a schedule
 
 Everything above ran the job once via `docker run`. In practice, Cicerone
 runs continuously as a long-lived container: `docker-compose.yml` runs the
@@ -332,7 +476,7 @@ cp .env.example .env   # fill in the secrets your cicerone.toml references
 docker compose up --build
 ```
 
-## 11. Next steps
+## 14. Next steps
 
 - Swap in your own data, following the [data contract](../README.md#data-contract).
 - Read the full [model strategies](../README.md#model-strategies) and
