@@ -311,7 +311,7 @@ is enforced on every PR by `.github/workflows/ci.yml`, which also runs
 image. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to run tests/lint
 locally, [docs/tutorial.md](docs/tutorial.md) for a hands-on walkthrough with
 local sample data, and [docs/architecture.md](docs/architecture.md) for how
-the code is structured.
+the code is structured. See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 ## Security
 
@@ -319,7 +319,12 @@ the code is structured.
   input side, write on the output side, no delete/admin permissions).
 - No personal data other than `user_id` (an opaque identifier) is ever read
   or written.
-- No ports exposed: the container accepts no inbound connections.
+- The batch job itself accepts no inbound connections. The optional serve
+  API (`8000`), retrain trigger webhook (`8080`), and dashboard (`8090`)
+  each expose one port only when explicitly enabled (`[job].mode = "serve"`,
+  `[job.trigger].enabled = true`, `[dashboard].enabled = true`), and are
+  each protected — a bearer token for serve/trigger, HTTP Basic Auth for
+  the dashboard — see their respective sections above.
 - Credentials only ever live in environment variables (`.env`, not
   committed), referenced from `config/cicerone.toml` via `${...}`
   placeholders — never written into the config file itself.

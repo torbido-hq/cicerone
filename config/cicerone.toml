@@ -135,6 +135,19 @@ prefix = "recommendations/latest"
 # default_k = 10 # used when a request doesn't specify ?k=
 # refresh_interval_seconds = 60
 
+# Optional: a small, standalone read-only status page over job run history
+# (its own container/port, independent of [job].mode -- see the README's
+# Dashboard section). Protected by HTTP Basic Auth (a handful of named
+# users, see manage_dashboard_users) rather than a bearer token, since it's
+# meant to be opened directly in a browser.
+# [dashboard]
+# enabled = true
+# host = "0.0.0.0"
+# port = 8090
+# users_path = "/app/config/dashboard_users.toml"
+# refresh_interval_seconds = 30 # how often the page polls /partials/status
+# history_limit = 20 # recent runs shown (only meaningful for [output].kind = "db")
+
 # --- "db" kind example (commented out) ----------------------------------
 # [input]
 # kind = "db"
