@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Optional **model artifact** (`[job].save_model_artifact`): the batch job
+  can write a versioned, portable fitted-model bundle
+  (`model.artifact` / `model_artifacts` table) alongside recommendations.
+  Load and recommend without re-fitting via `cicerone.artifact`. Serve mode
+  still reads precomputed rows only — this does not add live inference.
 - AutoML candidate backtesting can now evaluate time-based folds in
   parallel: `evaluate_candidates(..., max_workers=1)` runs folds through a
   `ProcessPoolExecutor` when `max_workers > 1`, instead of sequentially
@@ -19,6 +24,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `model.train_and_recommend` is split into `fit_strategies` +
+  `recommend_with_models` so fitted weights can be reused (AutoML cache,
+  model artifacts) without a second fit.
 - The job's input reads (events, users, items) now run concurrently via a
   `ThreadPoolExecutor` instead of sequentially, speeding up runs against
   network-backed (S3) input sources.

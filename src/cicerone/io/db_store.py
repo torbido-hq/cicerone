@@ -12,6 +12,7 @@ built from the [input.options] / [output.options] tables in cicerone.toml:
   items_table                optional, default "items"
   recommendations_table      optional, default "recommendations"
   manifest_table              optional, default "recommendation_runs"
+  model_artifact_table        optional, default "model_artifacts"
   events_query / users_query / items_query   optional raw SQL overrides —
     use these to read straight from an application's own schema instead of
     requiring it to materialize events/users/items tables verbatim (e.g.
@@ -24,6 +25,7 @@ configuration, never from end-user input.
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from typing import Any
 
 import pandas as pd
@@ -97,3 +99,27 @@ class DatabaseOutputSink:
         table = self._options.get("manifest_table", "recommendation_runs")
         logger.info("Appending run manifest to database table %r", table)
         pd.DataFrame([manifest]).to_sql(table, self._engine, if_exists="append", index=False)
+
+    def write_model_artifact(self, payload: bytes) -> None:
+        """Replaces the single-row model_artifacts table with the latest blob.
+
+        Uses a dedicated BYTEA table rather than appending history — the
+        artifact is a point-in-time snapshot meant to be reloaded whole,
+        same as recommendations.parquet for the dataset backend.
+        """
+        table = self._options.get("model_artifact_table", "model_artifacts")
+        logger.info("Writing model artifact (%d bytes) to database table %r", len(payload), table)
+        with self._engine.begin() as conn:
+            conn.execute(text(f'DROP TABLE IF EXISTS "{table}"'))
+            conn.execute(
+                text(
+                    f'CREATE TABLE "{table}" ('
+                    "payload BYTEA NOT NULL, "
+                    "written_at TIMESTAMPTZ NOT NULL"
+                    ")"
+                )
+            )
+            conn.execute(
+                text(f'INSERT INTO "{table}" (payload, written_at) VALUES (:payload, :written_at)'),
+                {"payload": payload, "written_at": datetime.now(UTC)},
+            )

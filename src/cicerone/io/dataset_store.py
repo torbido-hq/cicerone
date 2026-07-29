@@ -88,7 +88,9 @@ class DatasetInputSource:
 
 
 class DatasetOutputSink:
-    """Writes recommendations.parquet + manifest.json to an S3-compatible store or local disk."""
+    """Writes recommendations.parquet + manifest.json (+ optional model.artifact)
+    to an S3-compatible store or local disk.
+    """
 
     def __init__(self, options: dict[str, Any]):
         self._options = options
@@ -116,3 +118,8 @@ class DatasetOutputSink:
 
     def write_manifest(self, manifest: dict) -> None:
         self._write_bytes("manifest.json", json.dumps(manifest, indent=2).encode("utf-8"), "application/json")
+
+    def write_model_artifact(self, payload: bytes) -> None:
+        from cicerone.artifact import ARTIFACT_FILENAME
+
+        self._write_bytes(ARTIFACT_FILENAME, payload, "application/octet-stream")

@@ -12,8 +12,11 @@ data, trains a hybrid [rectools](https://github.com/MobileTeleSystems/RecTools)
 + LightFM model, and writes out top-K recommendations per user. An optional
 lightweight "serve" mode can then expose those precomputed recommendations
 over a small read-only HTTP API — there's still no live inference, no
-model loaded in the request path. Everything runs in Docker (Python 3.11
-only lives inside the image, nothing to install on the host).
+model loaded in the request path. Optionally (`[job].save_model_artifact`),
+the batch job can also write a versioned fitted-model artifact for offline
+reload / future thin inference without redesigning training. Everything
+runs in Docker (Python 3.11 only lives inside the image, nothing to install
+on the host).
 
 Cicerone isn't tied to any particular product, shop, or domain — it works
 for any catalog of "users" and "items" with interaction events (purchases,

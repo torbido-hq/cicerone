@@ -14,13 +14,14 @@ from typing import Any
 
 import pandas as pd
 
+from cicerone.artifact import ARTIFACT_SCHEMA_VERSION, build_artifact, dumps_artifact
 from cicerone.automl import evaluate_candidates, select_best_candidate
 from cicerone.config import load_settings
 from cicerone.dataset import build_dataset
 from cicerone.feature_config import load_feature_config
 from cicerone.io.base import InputSource
 from cicerone.io.factory import build_input_source, build_output_sink
-from cicerone.model import DEFAULT_MODELS, RRF_K, train_and_recommend
+from cicerone.model import DEFAULT_MODELS, RRF_K, RecommenderModel, train_and_recommend
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -45,6 +46,8 @@ _MANIFEST_DEFAULTS: dict[str, Any] = {
     "models": "",
     "model_weights": "",
     "rrf_k": None,
+    "artifact_written": False,
+    "artifact_schema_version": None,
     "automl_enabled": False,
     "automl_metrics": "",
 }
@@ -114,6 +117,7 @@ def run(triggered_by: str = "manual") -> None:
                 automl_result.n_folds,
             )
 
+        fitted: dict[str, RecommenderModel] = {}
         recommendations = train_and_recommend(
             built,
             target_users,
@@ -122,6 +126,7 @@ def run(triggered_by: str = "manual") -> None:
             enabled_models=enabled_models,
             weights=weights,
             rrf_k=rrf_k,
+            strategy_cache=fitted if settings.save_model_artifact else None,
         )
 
         sink.write_recommendations(recommendations)
@@ -135,6 +140,27 @@ def run(triggered_by: str = "manual") -> None:
             if weights is not None
             else ""
         )
+
+        if settings.save_model_artifact:
+            artifact_models = [name for name in resolved_models if name in fitted]
+            artifact_weights = (
+                {name: weight for name, weight in weights.items() if name in artifact_models}
+                if weights is not None
+                else None
+            )
+            artifact = build_artifact(
+                fitted=fitted,
+                built=built,
+                feature_config=feature_config,
+                # Only strategies that were actually fitted (personalized
+                # strategies are skipped when there are no warm users).
+                models=artifact_models,
+                model_weights=artifact_weights,
+                rrf_k=rrf_k if rrf_k is not None else RRF_K,
+            )
+            sink.write_model_artifact(dumps_artifact(artifact))
+            manifest["artifact_written"] = True
+            manifest["artifact_schema_version"] = ARTIFACT_SCHEMA_VERSION
 
         manifest.update(
             {
