@@ -8,7 +8,9 @@ from __future__ import annotations
 import inspect
 import logging
 from collections.abc import Callable
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
+from itertools import repeat
 from typing import Protocol
 
 import pandas as pd
@@ -183,6 +185,16 @@ def _combine_by_weighted_fusion(
     return fused[[Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN]]
 
 
+def _fit_strategy(name: str, dataset: Dataset) -> tuple[str, RecommenderModel]:
+    """Fits one strategy's model on `dataset`. A standalone, picklable
+    function so train_and_recommend can run it in a worker process when
+    fitting multiple (independent) strategies in parallel.
+    """
+    model = STRATEGIES[name].factory()
+    model.fit(dataset)
+    return name, model
+
+
 def train_and_recommend(
     built: BuiltDataset,
     target_users: list[str],
@@ -192,10 +204,15 @@ def train_and_recommend(
     weights: dict[str, float] | None = None,
     rrf_k: float | None = None,
     strategy_cache: dict[str, RecommenderModel] | None = None,
+    max_workers: int = 1,
 ) -> pd.DataFrame:
     """`strategy_cache`, if given, caches fitted models by strategy name so
     callers evaluating multiple candidates against the same built dataset
     (see cicerone.automl) can avoid re-fitting a shared strategy.
+
+    Strategies are independent, so with `max_workers > 1` the models that
+    still need fitting are fit in a `ProcessPoolExecutor` instead of
+    sequentially in-process (the default).
     """
     dataset = built.dataset
     enabled_models = enabled_models if enabled_models is not None else DEFAULT_MODELS
@@ -238,20 +255,40 @@ def train_and_recommend(
             )
     unique_target_users = list(dict.fromkeys(target_users))
 
+    models: dict[str, RecommenderModel] = {}
+    if strategy_cache is not None:
+        for name in enabled_models:
+            if name in strategy_cache:
+                models[name] = strategy_cache[name]
+
+    to_fit = list(
+        dict.fromkeys(
+            name
+            for name in enabled_models
+            if name not in models and not (STRATEGIES[name].personalized and not warm_users)
+        )
+    )
+    if to_fit:
+        if max_workers > 1 and len(to_fit) > 1:
+            with ProcessPoolExecutor(max_workers=min(max_workers, len(to_fit))) as executor:
+                for name, model in executor.map(_fit_strategy, to_fit, repeat(dataset)):
+                    logger.info("Fitted '%s' on %d interactions", name, len(built.interactions))
+                    models[name] = model
+        else:
+            for name in to_fit:
+                logger.info("Fitting '%s' on %d interactions", name, len(built.interactions))
+                _, model = _fit_strategy(name, dataset)
+                models[name] = model
+        if strategy_cache is not None:
+            for name in to_fit:
+                strategy_cache[name] = models[name]
+
     frames = []
     for name in enabled_models:
         strategy = STRATEGIES[name]
         if strategy.personalized and not warm_users:
             continue
-        if strategy_cache is not None and name in strategy_cache:
-            model = strategy_cache[name]
-        else:
-            model = strategy.factory()
-            logger.info("Fitting '%s' on %d interactions", name, len(built.interactions))
-            model.fit(dataset)
-            if strategy_cache is not None:
-                strategy_cache[name] = model
-        recs = model.recommend(
+        recs = models[name].recommend(
             users=warm_users if strategy.personalized else unique_target_users,
             dataset=dataset,
             k=top_k,

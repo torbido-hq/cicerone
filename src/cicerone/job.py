@@ -8,13 +8,17 @@ from __future__ import annotations
 import json
 import logging
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from typing import Any
+
+import pandas as pd
 
 from cicerone.automl import evaluate_candidates, select_best_candidate
 from cicerone.config import load_settings
 from cicerone.dataset import build_dataset
 from cicerone.feature_config import load_feature_config
+from cicerone.io.base import InputSource
 from cicerone.io.factory import build_input_source, build_output_sink
 from cicerone.model import DEFAULT_MODELS, RRF_K, train_and_recommend
 
@@ -46,6 +50,17 @@ _MANIFEST_DEFAULTS: dict[str, Any] = {
 }
 
 
+def _read_input(source: InputSource) -> tuple[pd.DataFrame, pd.DataFrame | None, pd.DataFrame | None]:
+    """Reads events/users/items concurrently — the three reads are
+    independent I/O calls (S3/local file or DB query).
+    """
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        events_future = executor.submit(source.read_events)
+        users_future = executor.submit(source.read_users)
+        items_future = executor.submit(source.read_items)
+        return events_future.result(), users_future.result(), items_future.result()
+
+
 def run(triggered_by: str = "manual") -> None:
     settings = load_settings()
     feature_config = load_feature_config(settings.feature_config_path)
@@ -58,10 +73,7 @@ def run(triggered_by: str = "manual") -> None:
 
     try:
         source = build_input_source(settings.input)
-
-        events = source.read_events()
-        users = source.read_users()
-        items = source.read_items()
+        events, users, items = _read_input(source)
 
         logger.info(
             "Loaded %d events, %s users, %s items",

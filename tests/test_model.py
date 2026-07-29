@@ -521,6 +521,45 @@ def test_train_and_recommend_without_cache_refits_every_call(sample_items, featu
     assert len(fit_calls) == 2
 
 
+def test_train_and_recommend_parallel_fit_matches_sequential(sample_items, feature_config):
+    # popular/latest are deterministic (no LightFM randomness), so fitting
+    # them in worker processes must produce the same recommendations as
+    # fitting them sequentially in-process (the default).
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+    kwargs = dict(
+        built=built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=2,
+        enabled_models=["popular", "latest"],
+    )
+
+    sequential = train_and_recommend(**kwargs, max_workers=1)
+    # max_workers exceeding the number of models to fit must be capped, not raise.
+    parallel = train_and_recommend(**kwargs, max_workers=10)
+
+    pd.testing.assert_frame_equal(sequential.reset_index(drop=True), parallel.reset_index(drop=True))
+
+
+def test_train_and_recommend_parallel_fit_populates_strategy_cache(sample_items, feature_config):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+    cache: dict[str, RecommenderModel] = {}
+
+    train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=2,
+        enabled_models=["popular", "latest"],
+        strategy_cache=cache,
+        max_workers=2,
+    )
+
+    assert set(cache) == {"popular", "latest"}
+
+
 def test_train_and_recommend_empty_weights_dict_enables_fusion(sample_items, feature_config):
     events = _synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
