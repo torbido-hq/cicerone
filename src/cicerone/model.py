@@ -319,9 +319,7 @@ def recommend_with_models(
         if strategy.personalized and not warm_users:
             continue
         if name not in models:
-            raise ValueError(
-                f"Fitted model for strategy {name!r} is missing; available: {sorted(models)}"
-            )
+            raise ValueError(f"Fitted model for strategy {name!r} is missing; available: {sorted(models)}")
         recs = models[name].recommend(
             users=warm_users if strategy.personalized else unique_target_users,
             dataset=dataset,

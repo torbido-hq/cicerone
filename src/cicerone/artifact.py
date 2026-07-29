@@ -75,9 +75,7 @@ def dumps_artifact(artifact: ModelArtifact) -> bytes:
 def loads_artifact(payload: bytes) -> ModelArtifact:
     artifact = pickle.loads(payload)
     if not isinstance(artifact, ModelArtifact):
-        raise TypeError(
-            f"Artifact payload did not unpickle to ModelArtifact, got {type(artifact).__name__}"
-        )
+        raise TypeError(f"Artifact payload did not unpickle to ModelArtifact, got {type(artifact).__name__}")
     if artifact.schema_version != ARTIFACT_SCHEMA_VERSION:
         raise ValueError(
             f"Unsupported artifact schema_version {artifact.schema_version}; "

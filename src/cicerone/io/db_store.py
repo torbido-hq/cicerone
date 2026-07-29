@@ -112,12 +112,7 @@ class DatabaseOutputSink:
         with self._engine.begin() as conn:
             conn.execute(text(f'DROP TABLE IF EXISTS "{table}"'))
             conn.execute(
-                text(
-                    f'CREATE TABLE "{table}" ('
-                    "payload BYTEA NOT NULL, "
-                    "written_at TIMESTAMPTZ NOT NULL"
-                    ")"
-                )
+                text(f'CREATE TABLE "{table}" (payload BYTEA NOT NULL, written_at TIMESTAMPTZ NOT NULL)')
             )
             conn.execute(
                 text(f'INSERT INTO "{table}" (payload, written_at) VALUES (:payload, :written_at)'),
