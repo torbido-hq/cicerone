@@ -27,7 +27,7 @@ RUN pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt
 # never makes it into the runtime image below, which only gets the compiled
 # static/tailwind.css. package-lock.json pins the exact dependency tree so
 # this stage is reproducible, matching requirements.txt's exact-pin style.
-FROM node:22-slim AS frontend
+FROM node:26-slim AS frontend
 
 WORKDIR /build
 COPY package.json package-lock.json ./
