@@ -311,7 +311,7 @@ is enforced on every PR by `.github/workflows/ci.yml`, which also runs
 image. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to run tests/lint
 locally, [docs/tutorial.md](docs/tutorial.md) for a hands-on walkthrough with
 local sample data, and [docs/architecture.md](docs/architecture.md) for how
-the code is structured.
+the code is structured. See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 ## Security
 
