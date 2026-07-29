@@ -4,18 +4,16 @@ recommendation_reader.py -- reads back whatever job.run() already wrote via
 OutputSink.write_manifest(), never recomputes anything:
 
   DatasetManifestReader - reads the single manifest.json the dataset output
-    sink overwrites on every run (S3 or local, see io/dataset_store.py).
-    Only ever the latest run -- there is no history for this backend.
-  DbManifestReader - queries the manifest table (appended to on every run
-    by io/db_store.py's write_manifest()) directly, so real history/trends
+    sink overwrites on every run. Only ever the latest run.
+  DbManifestReader - queries the manifest table directly, so history/trends
     are only available for this backend.
 
-NOTE on upgrading an existing "db" output deployment: job.py now always
-writes "status"/"error" (and every other manifest key) on every run,
-including failures. pandas' to_sql(..., if_exists="append") does not add
-missing columns to an already-existing table, so the first write against an
-older manifest table (created before this change) will fail with an
-"unknown column" error until you add the new columns yourself, e.g.:
+NOTE on upgrading an existing "db" output deployment: job.py always writes
+"status"/"error" (and every other manifest key) on every run, including
+failures. pandas' to_sql(..., if_exists="append") does not add missing
+columns to an already-existing table, so the first write against an older
+manifest table will fail with an "unknown column" error until you add the
+new columns yourself, e.g.:
   ALTER TABLE recommendation_runs ADD COLUMN status TEXT;
   ALTER TABLE recommendation_runs ADD COLUMN error TEXT;
 (or drop/recreate the table -- it's just a run log, not the recommendations
@@ -37,10 +35,8 @@ from cicerone.io.options import build_s3_client, require_option
 
 logger = logging.getLogger(__name__)
 
-# S3 error codes that mean "the manifest doesn't exist yet" -- everything
-# else (bad credentials, network errors, access denied, ...) is a real
-# backend/configuration problem and should propagate instead of silently
-# rendering as "no job runs recorded yet".
+# S3 codes meaning "the manifest doesn't exist yet"; anything else is a real
+# backend/configuration problem and should propagate.
 _S3_NOT_FOUND_CODES = {"NoSuchKey", "404"}
 
 
@@ -88,24 +84,15 @@ class DbManifestReader:
         return rows[0] if rows else None
 
     def read_recent(self, limit: int) -> list[dict[str, Any]]:
-        # A brand-new "db" output deployment that hasn't completed a run yet
-        # has no manifest table at all -- that's "no runs recorded yet", not
-        # a real error, so check for it explicitly rather than catching a
-        # broad Exception around the query (which would also silently
-        # swallow real connection/permission/schema problems as an empty
-        # history instead of surfacing them).
+        # No manifest table yet means no runs recorded, not an error.
         if not inspect(self._engine).has_table(self._table):
             return []
-        # Reflect the table via SQLAlchemy Core rather than interpolating
-        # `self._table` into a raw SQL string -- Core quotes/escapes the
-        # identifier itself, so a misconfigured table name (spaces, quotes,
-        # reserved words, ...) can't produce malformed or unsafe SQL.
+        # Reflect via SQLAlchemy Core rather than interpolating `self._table`
+        # into raw SQL, so Core quotes/escapes the identifier itself.
         table = Table(self._table, MetaData(), autoload_with=self._engine)
         stmt = select(table).order_by(table.c.generated_at.desc()).limit(limit)
         df = pd.read_sql(stmt, self._engine)
-        # NaN/NaT for columns a pre-upgrade row never had (see module
-        # docstring) must become None, not NaN -- NaN is truthy in Python,
-        # so an old run without an "error" column would otherwise render as
-        # if it had one.
+        # NaN (truthy in Python) for columns a pre-upgrade row never had
+        # must become None, not NaN.
         df = df.astype(object).where(df.notna(), None)
         return df.to_dict(orient="records")

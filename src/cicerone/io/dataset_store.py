@@ -35,9 +35,9 @@ def _full_key(options: dict[str, Any], filename: str) -> str:
 
 
 def _validate_backend(options: dict[str, Any], backend: str) -> None:
-    """Validates the required options for `backend` upfront (at construction
-    time) so a misconfiguration fails immediately, rather than only once a
-    read/write is actually attempted."""
+    """Validates the required options for `backend` upfront, at construction
+    time, so a misconfiguration fails immediately rather than on first read/write.
+    """
     if backend not in ("s3", "local"):
         raise ValueError(f"Unknown storage_backend: {backend!r} (expected 's3' or 'local')")
     if backend == "local":

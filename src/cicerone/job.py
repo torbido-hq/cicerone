@@ -8,34 +8,31 @@ from __future__ import annotations
 import json
 import logging
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from typing import Any
+
+import pandas as pd
 
 from cicerone.automl import evaluate_candidates, select_best_candidate
 from cicerone.config import load_settings
 from cicerone.dataset import build_dataset
 from cicerone.feature_config import load_feature_config
+from cicerone.io.base import InputSource
 from cicerone.io.factory import build_input_source, build_output_sink
 from cicerone.model import DEFAULT_MODELS, RRF_K, train_and_recommend
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-# Cap on manifest["error"]'s length -- it's `str(exc)` from an arbitrary
-# exception (could be a long stack-trace-like repr, e.g. some database
-# drivers' errors), stored in the manifest and shown as-is on the dashboard.
-# Truncating keeps that bounded rather than persisting/displaying it
-# indefinitely; it's not a substitute for not putting secrets in exception
-# messages in the first place, but it caps the blast radius of an unusually
-# verbose one.
+# Cap on manifest["error"]'s length, since it's str(exc) from an arbitrary
+# exception and gets persisted/displayed on the dashboard as-is.
 _MAX_ERROR_LENGTH = 500
 
 
-# Every run writes exactly one manifest with this fixed set of keys --
-# including on failure -- so a "db" output's manifest table never gets an
-# INSERT with a different column set from one run to the next (see
-# io/manifest_reader.py's module docstring for the schema-migration
-# implication of changing this set for an existing deployment).
+# Every run writes exactly one manifest with this fixed key set, including
+# on failure, so a "db" output's manifest table never gets an INSERT with a
+# different column set from one run to the next.
 _MANIFEST_DEFAULTS: dict[str, Any] = {
     "triggered_by": None,
     "status": "failed",
@@ -53,6 +50,17 @@ _MANIFEST_DEFAULTS: dict[str, Any] = {
 }
 
 
+def _read_input(source: InputSource) -> tuple[pd.DataFrame, pd.DataFrame | None, pd.DataFrame | None]:
+    """Reads events/users/items concurrently — the three reads are
+    independent I/O calls (S3/local file or DB query).
+    """
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        events_future = executor.submit(source.read_events)
+        users_future = executor.submit(source.read_users)
+        items_future = executor.submit(source.read_items)
+        return events_future.result(), users_future.result(), items_future.result()
+
+
 def run(triggered_by: str = "manual") -> None:
     settings = load_settings()
     feature_config = load_feature_config(settings.feature_config_path)
@@ -65,10 +73,7 @@ def run(triggered_by: str = "manual") -> None:
 
     try:
         source = build_input_source(settings.input)
-
-        events = source.read_events()
-        users = source.read_users()
-        items = source.read_items()
+        events, users, items = _read_input(source)
 
         logger.info(
             "Loaded %d events, %s users, %s items",
@@ -122,10 +127,9 @@ def run(triggered_by: str = "manual") -> None:
         sink.write_recommendations(recommendations)
 
         resolved_models = enabled_models or DEFAULT_MODELS
-        # `weights is not None` (rather than truthiness) so fusion mode with an
-        # empty/partial `[job.model_weights]` still reports the *effective*
-        # weight (defaulting to 1.0) for every enabled model, instead of hiding
-        # implicit defaults behind an empty string in the manifest.
+        # `weights is not None` (not truthiness) so an empty/partial
+        # model_weights table still reports the effective weight
+        # (defaulting to 1.0) for every enabled model.
         model_weights_str = (
             ",".join(f"{name}={weights.get(name, 1.0)}" for name in resolved_models)
             if weights is not None

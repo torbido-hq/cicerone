@@ -1,23 +1,19 @@
 """AutoML harness: backtests candidate strategy/weight configurations over
-time-based folds and picks the best one by a ranking metric, so a job run
-can automatically combine popular/latest/collaborative/item-based instead of
-relying on a hand-picked, static config.
+time-based folds and picks the best one by a ranking metric.
 
-Deliberately does its own lightweight time-based event split rather than
-rectools.model_selection's Interactions-level splitters: candidates here
-span multiple STRATEGIES combined by cicerone.model.train_and_recommend
-(which needs raw events/users/items to rebuild a BuiltDataset per fold), not
-a single rectools model, so splitting at the raw-events level and reusing
-cicerone.dataset.build_dataset (train side) / build_interactions (test
-side, interactions-only -- no need for a full feature-laden Dataset just to
-score against ground truth) is simpler and avoids reimplementing dataset
-reconstruction from internal interaction ids.
+Uses a custom time-based event split rather than
+rectools.model_selection's splitters, since candidates here combine
+multiple STRATEGIES via cicerone.model.train_and_recommend (which needs raw
+events/users/items to rebuild a BuiltDataset per fold), not a single
+rectools model.
 """
 
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
+from itertools import repeat
 from typing import Any
 
 import pandas as pd
@@ -41,11 +37,9 @@ DEFAULT_N_SPLITS = AUTOML_DEFAULT_N_SPLITS
 DEFAULT_TEST_DAYS = AUTOML_DEFAULT_TEST_DAYS
 DEFAULT_PRIMARY_METRIC = AUTOML_DEFAULT_PRIMARY_METRIC
 
-# Derived from STRATEGIES/DEFAULT_MODELS (rather than hard-coded model
-# names) so this can't silently drift when a strategy is added/removed:
-# every strategy alone, the default priority combo, and one weighted-fusion
-# blend across every strategy (personalized ones weighted higher than
-# non-personalized/backfill ones).
+# Derived from STRATEGIES/DEFAULT_MODELS so this can't drift when a
+# strategy is added/removed: every strategy alone, the default priority
+# combo, and one weighted-fusion blend across every strategy.
 DEFAULT_CANDIDATES: list[dict[str, Any]] = [
     *({"models": [name]} for name in STRATEGIES),
     {"models": DEFAULT_MODELS},
@@ -86,7 +80,7 @@ def _parse_candidates(raw: list[dict[str, Any]] | None) -> list[Candidate]:
     parsed = []
     for entry in raw if raw is not None else DEFAULT_CANDIDATES:
         models_value = entry["models"]
-        if isinstance(models_value, str) or not isinstance(models_value, (list, tuple)):  # noqa: UP038
+        if not isinstance(models_value, (list, tuple)):
             raise ValueError(f"automl candidate 'models' must be a list of model names, got {models_value!r}")
         if not all(isinstance(name, str) for name in models_value):
             raise ValueError(f"automl candidate 'models' must contain only strings, got {models_value!r}")
@@ -97,7 +91,7 @@ def _parse_candidates(raw: list[dict[str, Any]] | None) -> list[Candidate]:
         if unknown:
             raise ValueError(
                 f"Unknown model(s) in automl candidate {unknown}; available: {sorted(STRATEGIES)}"
-            )  # noqa: E501
+            )
         weights_value = entry.get("weights")
         if weights_value is not None and not isinstance(weights_value, dict):
             raise ValueError(
@@ -132,13 +126,10 @@ def _time_based_folds(
     events: pd.DataFrame, n_splits: int, test_days: int
 ) -> list[tuple[pd.DataFrame, pd.DataFrame]]:
     """Walks backward from the most recent event in fixed-size, non-overlapping
-    `test_days`-day windows, each becoming one (train, test) fold: everything
-    strictly before the window is "train", everything inside it is "test".
-    Folds are returned oldest-test-window-first. A fold is skipped if either
-    side ends up empty (e.g. not enough history for the requested n_splits).
+    `test_days`-day windows, each becoming one (train, test) fold. Folds are
+    returned oldest-test-window-first; a fold is skipped if either side is empty.
     """
     occurred_at = pd.to_datetime(events["occurred_at"], utc=True)
-    # +1us so the strict "< test_end" bound doesn't exclude the last event.
     max_ts = occurred_at.max() + pd.Timedelta(microseconds=1)
     window = pd.Timedelta(days=test_days)
 
@@ -162,6 +153,43 @@ def _make_metrics(top_k: int) -> dict[str, MetricAtK]:
     }
 
 
+def _evaluate_fold(
+    train_events: pd.DataFrame,
+    test_events: pd.DataFrame,
+    users: pd.DataFrame | None,
+    items: pd.DataFrame | None,
+    config: FeatureConfig,
+    top_k: int,
+    half_life_days: float,
+    candidates: list[Candidate],
+    metrics: dict[str, MetricAtK],
+) -> list[dict[str, float]]:
+    """Scores every candidate against one (train, test) fold, in `candidates`
+    order. Reuses a fitted strategy across candidates that share it. A
+    standalone, picklable function so evaluate_candidates can run it in a
+    worker process when evaluating folds in parallel.
+    """
+    built = build_dataset(train_events, users, items, config, half_life_days=half_life_days)
+    test_interactions = build_interactions(test_events, config, half_life_days=half_life_days)
+    test_users = sorted(set(test_events["user_id"]))
+    strategy_cache: dict[str, RecommenderModel] = {}
+
+    fold_metrics = []
+    for candidate in candidates:
+        reco = train_and_recommend(
+            built,
+            test_users,
+            config,
+            top_k=top_k,
+            enabled_models=candidate.models,
+            weights=candidate.weights,
+            rrf_k=candidate.rrf_k,
+            strategy_cache=strategy_cache,
+        )
+        fold_metrics.append(calc_metrics(metrics, reco=reco, interactions=test_interactions))
+    return fold_metrics
+
+
 def evaluate_candidates(
     events: pd.DataFrame,
     users: pd.DataFrame | None,
@@ -172,10 +200,14 @@ def evaluate_candidates(
     candidates: list[dict[str, Any]] | None = None,
     n_splits: int = DEFAULT_N_SPLITS,
     test_days: int = DEFAULT_TEST_DAYS,
+    max_workers: int = 1,
 ) -> list[CandidateResult]:
     """Backtests every candidate config over up to `n_splits` time-based
     folds and returns one CandidateResult per candidate (metrics averaged
     across the folds that had data), in the same order as `candidates`.
+
+    Folds are independent, so with `max_workers > 1` they're evaluated in a
+    `ProcessPoolExecutor` instead of sequentially in-process (the default).
     """
     parsed_candidates = _parse_candidates(candidates)
     folds = _time_based_folds(events, n_splits=n_splits, test_days=test_days)
@@ -194,28 +226,42 @@ def evaluate_candidates(
         )
 
     metrics = _make_metrics(top_k)
-    fold_metrics_by_candidate: list[list[dict[str, float]]] = [[] for _ in parsed_candidates]
-    for train_events, test_events in folds:
-        built = build_dataset(train_events, users, items, config, half_life_days=half_life_days)
-        test_interactions = build_interactions(test_events, config, half_life_days=half_life_days)
-        test_users = sorted(set(test_events["user_id"]))
-        # Reset per fold; shared across candidates within the fold so ones
-        # that enable the same strategy reuse its fitted model.
-        strategy_cache: dict[str, RecommenderModel] = {}
-        for idx, candidate in enumerate(parsed_candidates):
-            reco = train_and_recommend(
-                built,
-                test_users,
+    if max_workers > 1:
+        with ProcessPoolExecutor(max_workers=min(max_workers, len(folds))) as executor:
+            fold_results = list(
+                executor.map(
+                    _evaluate_fold,
+                    (train_events for train_events, _ in folds),
+                    (test_events for _, test_events in folds),
+                    repeat(users),
+                    repeat(items),
+                    repeat(config),
+                    repeat(top_k),
+                    repeat(half_life_days),
+                    repeat(parsed_candidates),
+                    repeat(metrics),
+                )
+            )
+    else:
+        fold_results = [
+            _evaluate_fold(
+                train_events,
+                test_events,
+                users,
+                items,
                 config,
-                top_k=top_k,
-                enabled_models=candidate.models,
-                weights=candidate.weights,
-                rrf_k=candidate.rrf_k,
-                strategy_cache=strategy_cache,
+                top_k,
+                half_life_days,
+                parsed_candidates,
+                metrics,
             )
-            fold_metrics_by_candidate[idx].append(
-                calc_metrics(metrics, reco=reco, interactions=test_interactions)
-            )
+            for train_events, test_events in folds
+        ]
+
+    fold_metrics_by_candidate: list[list[dict[str, float]]] = [[] for _ in parsed_candidates]
+    for fold_metrics in fold_results:
+        for idx, candidate_metrics in enumerate(fold_metrics):
+            fold_metrics_by_candidate[idx].append(candidate_metrics)
 
     results = []
     for candidate, fold_metrics in zip(parsed_candidates, fold_metrics_by_candidate, strict=True):

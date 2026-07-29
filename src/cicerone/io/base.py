@@ -27,31 +27,32 @@ class OutputSink(Protocol):
 
 
 class RecommendationReader(Protocol):
-    """Read-only counterpart of OutputSink, used by the serve mode to read
-    precomputed recommendations back out of the same output store the batch
-    job writes to (never from a loaded model)."""
+    """Read-only counterpart of OutputSink, used by serve mode to read
+    precomputed recommendations back out of the output store.
+    """
 
     def get_recommendations(self, user_id: str, k: int) -> pd.DataFrame: ...
 
     def refresh(self) -> None:
         """Reloads any cached data. A no-op for backends that read live on
-        every call (e.g. a database)."""
+        every call (e.g. a database).
+        """
         ...
 
 
 class ManifestReader(Protocol):
-    """Read-only access to job run manifests (status/error/counts per run),
-    used by the dashboard (cicerone.dashboard) to read back whatever
-    OutputSink.write_manifest() already wrote -- never recomputed."""
+    """Read-only access to job run manifests, used by the dashboard to read
+    back whatever OutputSink.write_manifest() already wrote.
+    """
 
     def read_latest(self) -> dict | None:
         """Returns the most recently written manifest, or None if the job
-        has never run against this output store."""
+        has never run against this output store.
+        """
         ...
 
     def read_recent(self, limit: int) -> list[dict]:
         """Returns up to `limit` most recent manifests, newest first. The
-        dataset backend only ever has one (its manifest.json is overwritten
-        every run, see io/dataset_store.py), so it returns at most one entry
-        regardless of `limit`."""
+        dataset backend only ever has one entry regardless of `limit`.
+        """
         ...

@@ -1,17 +1,13 @@
 """Tiny in-process cron replacement.
 
-Low-volume batch job: no need for a system cron daemon or a task queue.
-Computes the next run time from the [job].cron_schedule set in cicerone.toml
-(5-field cron expression), sleeps until then, runs the job, and repeats
-forever. A single failed run is logged and does not crash the loop — the
-next scheduled run still fires.
+Computes the next run time from [job].cron_schedule in cicerone.toml (5-field
+cron expression), sleeps until then, runs the job, and repeats forever. A
+failed run is logged and does not crash the loop.
 
-When [job.trigger].enabled is set, this also starts the event-driven
-retrain trigger (cicerone.trigger: webhook + optional input-bucket poller)
-in the same process, additive to the cron loop above -- both funnel through
-the same RunGuard so at most one run happens at a time regardless of what
-triggered it. Batch-only configs (trigger.enabled unset/false, the default)
-behave exactly as before: no HTTP server, just the cron loop.
+When [job.trigger].enabled is set, this also starts the event-driven retrain
+trigger (cicerone.trigger: webhook + optional input-bucket poller) in the
+same process, sharing a RunGuard with the cron loop so at most one run
+happens at a time.
 """
 
 from __future__ import annotations

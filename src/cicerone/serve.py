@@ -1,14 +1,12 @@
 """Serve mode: a lightweight read API over precomputed recommendations.
 
-This is deliberately NOT live inference -- there is no model loaded here,
-and no lightfm/rectools/implicit import anywhere in this module or its
-request path. It only reads whatever the batch job (cicerone.job, run via
-cron and/or cicerone.scheduler's trigger) already wrote to the configured
-output store, via cicerone.io.recommendation_reader. A serve-only deployment
-can therefore run without the training dependencies installed.
+This is not live inference -- there is no model loaded here, and no
+lightfm/rectools/implicit import anywhere in this module or its request
+path. It only reads whatever the batch job already wrote to the configured
+output store, via cicerone.io.recommendation_reader.
 
-Selected via `job.mode = "serve"` in cicerone.toml (see config/cicerone.toml
-for the full [serve] section). Run with `python -m cicerone.serve`.
+Selected via `job.mode = "serve"` in cicerone.toml. Run with
+`python -m cicerone.serve`.
 """
 
 from __future__ import annotations

@@ -185,6 +185,28 @@ def test_evaluate_candidates_raises_without_enough_history(sample_items, feature
         )
 
 
+def test_evaluate_candidates_raises_without_enough_history_with_max_workers(sample_items, feature_config):
+    # The empty-folds check must run before any ProcessPoolExecutor is
+    # constructed, since ProcessPoolExecutor(max_workers=min(max_workers, 0))
+    # would be invalid.
+    now = pd.Timestamp.utcnow()
+    events = pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    )
+    with pytest.raises(ValueError, match="Not enough event history"):
+        evaluate_candidates(
+            events,
+            None,
+            sample_items,
+            feature_config,
+            top_k=2,
+            half_life_days=90,
+            n_splits=3,
+            test_days=14,
+            max_workers=4,
+        )
+
+
 def test_evaluate_candidates_raises_on_empty_candidates_list(sample_items, feature_config):
     events = _spread_events(n_days=21)
     with pytest.raises(ValueError, match="empty list"):
@@ -238,6 +260,36 @@ def test_evaluate_candidates_scores_each_candidate(sample_items, feature_config)
         assert any(key.startswith("MAP") for key in result.metrics)
         assert any(key.startswith("NDCG") for key in result.metrics)
         assert any(key.startswith("Recall") for key in result.metrics)
+
+
+def test_evaluate_candidates_parallel_folds_match_sequential(sample_items, feature_config):
+    # popular/latest are deterministic (no LightFM randomness), so a
+    # ProcessPoolExecutor-parallelized run over folds must score identically
+    # to the default sequential (max_workers=1) run.
+    events = _spread_events(n_days=35)
+    candidates = [{"models": ["popular"]}, {"models": ["latest"]}]
+    kwargs = dict(
+        events=events,
+        users=None,
+        items=sample_items,
+        config=feature_config,
+        top_k=2,
+        half_life_days=90,
+        candidates=candidates,
+        n_splits=3,
+        test_days=7,
+    )
+
+    sequential = evaluate_candidates(**kwargs, max_workers=1)
+    # max_workers exceeding the fold count must be capped, not raise.
+    parallel = evaluate_candidates(**kwargs, max_workers=10)
+
+    assert len(sequential) == len(parallel) == 2
+    for seq_result, par_result in zip(sequential, parallel, strict=True):
+        assert seq_result.candidate == par_result.candidate
+        assert seq_result.n_folds == par_result.n_folds
+        for key, value in seq_result.metrics.items():
+            assert par_result.metrics[key] == pytest.approx(value)
 
 
 def test_evaluate_candidates_handles_weighted_rrf_and_averages_across_folds(sample_items, feature_config):
