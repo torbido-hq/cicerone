@@ -25,4 +25,4 @@ uvicorn[standard]==0.51.0
 # Auth password hashing (bcrypt) for its small set of named users
 # (see cicerone.dashboard_users / cicerone.manage_dashboard_users)
 jinja2==3.1.6
-bcrypt==4.2.1
+bcrypt==5.0.0
