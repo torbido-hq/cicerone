@@ -20,3 +20,9 @@ croniter==6.2.4
 # Serve mode's read API + the event-driven retrain trigger's webhook
 fastapi==0.139.2
 uvicorn[standard]==0.51.0
+
+# Dashboard: server-rendered status page (Jinja2 templates) + HTTP Basic
+# Auth password hashing (bcrypt) for its small set of named users
+# (see cicerone.dashboard_users / cicerone.manage_dashboard_users)
+jinja2==3.1.6
+bcrypt==4.2.1

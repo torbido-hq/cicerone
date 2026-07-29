@@ -1,0 +1,10 @@
+/* Input for the Tailwind CLI (see docker/Dockerfile's "frontend" build
+   stage). The compiled output (static/tailwind.css) is a build artifact,
+   not committed -- see .gitignore. Scans every HTML template under
+   src/cicerone/templates (recursively) and every JS file under
+   src/cicerone/static for class names automatically (Tailwind v4's
+   default content detection).
+   NOTE: don't write the literal glob for "any nested .html file" in this
+   comment -- a bare "star-slash" sequence closes a CSS comment early,
+   even inside a glob pattern, which silently truncates everything below. */
+@import "tailwindcss";

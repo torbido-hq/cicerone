@@ -4,44 +4,15 @@ import threading
 
 import pandas as pd
 import pytest
+from conftest import make_settings
 from fastapi.testclient import TestClient
 
-from cicerone.config import IOSettings, Settings
+from cicerone.config import Settings
 from cicerone.serve import _start_refresh_loop, create_app, main
 
 
 def _settings(**overrides) -> Settings:
-    base = dict(
-        input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": "/tmp/in"}),
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": "/tmp/out"}),
-        feature_config_path="/app/config/features.toml",
-        top_k=10,
-        half_life_days=90,
-        cron_schedule="0 3 * * *",
-        models=None,
-        model_weights=None,
-        rrf_k=None,
-        automl_enabled=False,
-        automl_n_splits=2,
-        automl_test_days=14,
-        automl_primary_metric="MAP",
-        automl_candidates=None,
-        mode="serve",
-        serve_host="0.0.0.0",
-        serve_port=8000,
-        serve_auth_token="secret",
-        serve_default_k=10,
-        serve_refresh_interval_seconds=60,
-        trigger_enabled=False,
-        trigger_host="0.0.0.0",
-        trigger_port=8080,
-        trigger_auth_token=None,
-        trigger_debounce_seconds=60,
-        trigger_poll_input_bucket=False,
-        trigger_poll_interval_seconds=300,
-    )
-    base.update(overrides)
-    return Settings(**base)
+    return make_settings(**{"mode": "serve", "serve_auth_token": "secret", **overrides})
 
 
 class _FakeReader:

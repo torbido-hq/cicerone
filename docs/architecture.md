@@ -14,6 +14,7 @@ io/
   dataset_store.py     backend: parquet files (S3-compatible or local disk)
   db_store.py          backend: SQLAlchemy-backed database tables/queries
   recommendation_reader.py  read-only lookup of precomputed recs for serve mode (no rectools/lightfm import)
+  manifest_reader.py    read-only lookup of job-run manifests for the dashboard (no rectools/lightfm import)
   options.py           shared "require_option"/build_s3_client helpers
 dataset.py            raw events/users/items -> weighted rectools Dataset (BuiltDataset)
 model.py            BuiltDataset -> STRATEGIES registry (collaborative/item_based/
@@ -26,7 +27,12 @@ scheduler.py           in-process cron loop that calls job.run(); when [job.trig
 serve.py               serve mode: FastAPI read API over precomputed recommendations
 trigger.py             event-driven retrain trigger: webhook + optional input-bucket poll,
                        debounce guard (RunGuard) shared with the cron loop
-http_auth.py           shared bearer-token auth dependency for serve.py/trigger.py
+http_auth.py           shared bearer-token (serve.py/trigger.py) and HTTP Basic Auth
+                       (dashboard.py) dependencies
+dashboard.py            standalone FastAPI dashboard: job status/history, own container/port
+dashboard_users.py      load/save the dashboard's Basic Auth users file (TOML, username -> bcrypt hash)
+manage_dashboard_users.py  CLI to add/remove/list dashboard users
+templates/, static/      Jinja2 templates + vendored htmx/Stimulus/Tailwind assets for the dashboard
 ```
 
 ## Data flow
@@ -151,6 +157,47 @@ rectools/lightfm/implicit needed in that process or its request path):
 - No new required infra: debounce state is a single in-process
   `threading.Lock`, which assumes one running instance of the scheduler
   process (the confirmed deployment topology for this repo).
+
+## Dashboard
+
+`cicerone.dashboard` is a standalone entrypoint (`python -m cicerone.dashboard`,
+its own container/port `8090` in `docker-compose.yml`) for checking whether
+the last job run succeeded — it is **not** gated by `[job].mode` like
+serve/batch, so it's available even in plain batch-only deployments with no
+other HTTP surface. Like `serve.py`, it never imports
+`cicerone.model`/`dataset`/`automl`.
+
+- `io.factory.build_manifest_reader(settings.output)` builds a
+  `ManifestReader` (`io/manifest_reader.py`) matching the configured output
+  `kind`: `DatasetManifestReader` only ever has the latest run (a `dataset`
+  output's `manifest.json` is overwritten every run, not appended — no
+  history for that backend), while `DbManifestReader` queries the
+  `recommendation_runs` table for real history (`read_recent(limit)`).
+- `job.run()` writes exactly one manifest per run via a `try`/`finally`,
+  with a consistent key set (`status: "success"|"failed"`, `error`) on both
+  the success and failure paths, so a failed run is no longer silently
+  invisible to the dashboard.
+- Auth is HTTP Basic (`http_auth.require_basic_auth`), not the bearer-token
+  pattern used by serve/trigger — a browser-navigable page needs a login
+  prompt, since a human can't attach a custom `Authorization` header to a
+  plain top-level page load. Users live in a small TOML file
+  (`dashboard_users.py`: username -> bcrypt hash) managed via the
+  `manage_dashboard_users` CLI (`python -m cicerone.manage_dashboard_users
+  --users-path <path> add <username>` — note `--users-path` must precede the
+  subcommand, since it's a global `argparse` option).
+- `dashboard.create_app()` exposes `GET /health` (no auth), `GET
+  /partials/status` (Basic Auth, an htmx-polled fragment — see
+  `templates/_status.html`), and `GET /dashboard` (Basic Auth, the full
+  page). The page polls `/partials/status` via `hx-trigger="load, every Ns"`
+  (`Settings.dashboard_refresh_interval_seconds`) instead of a websocket or
+  client-side JS framework.
+- Frontend stack: server-rendered Jinja2 templates + htmx (polling) +
+  Stimulus (a small `time-ago` controller for relative timestamps) +
+  Tailwind CSS, all vendored under `src/cicerone/static/` — no CDN at
+  runtime and no Node/npm dependency at runtime or for end users. Tailwind
+  is compiled ahead of time in a dedicated `frontend` Docker build stage
+  (`node:22-slim`, pinned via `package.json`/`package-lock.json`) whose only
+  output (`static/tailwind.css`) is copied into the runtime image.
 
 ## Extensibility: adding a new I/O backend
 
