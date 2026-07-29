@@ -11,7 +11,9 @@ rectools model.
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
+from itertools import repeat
 from typing import Any
 
 import pandas as pd
@@ -151,6 +153,43 @@ def _make_metrics(top_k: int) -> dict[str, MetricAtK]:
     }
 
 
+def _evaluate_fold(
+    train_events: pd.DataFrame,
+    test_events: pd.DataFrame,
+    users: pd.DataFrame | None,
+    items: pd.DataFrame | None,
+    config: FeatureConfig,
+    top_k: int,
+    half_life_days: float,
+    candidates: list[Candidate],
+    metrics: dict[str, MetricAtK],
+) -> list[dict[str, float]]:
+    """Scores every candidate against one (train, test) fold, in `candidates`
+    order. Reuses a fitted strategy across candidates that share it. A
+    standalone, picklable function so evaluate_candidates can run it in a
+    worker process when evaluating folds in parallel.
+    """
+    built = build_dataset(train_events, users, items, config, half_life_days=half_life_days)
+    test_interactions = build_interactions(test_events, config, half_life_days=half_life_days)
+    test_users = sorted(set(test_events["user_id"]))
+    strategy_cache: dict[str, RecommenderModel] = {}
+
+    fold_metrics = []
+    for candidate in candidates:
+        reco = train_and_recommend(
+            built,
+            test_users,
+            config,
+            top_k=top_k,
+            enabled_models=candidate.models,
+            weights=candidate.weights,
+            rrf_k=candidate.rrf_k,
+            strategy_cache=strategy_cache,
+        )
+        fold_metrics.append(calc_metrics(metrics, reco=reco, interactions=test_interactions))
+    return fold_metrics
+
+
 def evaluate_candidates(
     events: pd.DataFrame,
     users: pd.DataFrame | None,
@@ -161,10 +200,14 @@ def evaluate_candidates(
     candidates: list[dict[str, Any]] | None = None,
     n_splits: int = DEFAULT_N_SPLITS,
     test_days: int = DEFAULT_TEST_DAYS,
+    max_workers: int = 1,
 ) -> list[CandidateResult]:
     """Backtests every candidate config over up to `n_splits` time-based
     folds and returns one CandidateResult per candidate (metrics averaged
     across the folds that had data), in the same order as `candidates`.
+
+    Folds are independent, so with `max_workers > 1` they're evaluated in a
+    `ProcessPoolExecutor` instead of sequentially in-process (the default).
     """
     parsed_candidates = _parse_candidates(candidates)
     folds = _time_based_folds(events, n_splits=n_splits, test_days=test_days)
@@ -183,26 +226,42 @@ def evaluate_candidates(
         )
 
     metrics = _make_metrics(top_k)
-    fold_metrics_by_candidate: list[list[dict[str, float]]] = [[] for _ in parsed_candidates]
-    for train_events, test_events in folds:
-        built = build_dataset(train_events, users, items, config, half_life_days=half_life_days)
-        test_interactions = build_interactions(test_events, config, half_life_days=half_life_days)
-        test_users = sorted(set(test_events["user_id"]))
-        strategy_cache: dict[str, RecommenderModel] = {}
-        for idx, candidate in enumerate(parsed_candidates):
-            reco = train_and_recommend(
-                built,
-                test_users,
+    if max_workers > 1:
+        with ProcessPoolExecutor(max_workers=min(max_workers, len(folds))) as executor:
+            fold_results = list(
+                executor.map(
+                    _evaluate_fold,
+                    (train_events for train_events, _ in folds),
+                    (test_events for _, test_events in folds),
+                    repeat(users),
+                    repeat(items),
+                    repeat(config),
+                    repeat(top_k),
+                    repeat(half_life_days),
+                    repeat(parsed_candidates),
+                    repeat(metrics),
+                )
+            )
+    else:
+        fold_results = [
+            _evaluate_fold(
+                train_events,
+                test_events,
+                users,
+                items,
                 config,
-                top_k=top_k,
-                enabled_models=candidate.models,
-                weights=candidate.weights,
-                rrf_k=candidate.rrf_k,
-                strategy_cache=strategy_cache,
+                top_k,
+                half_life_days,
+                parsed_candidates,
+                metrics,
             )
-            fold_metrics_by_candidate[idx].append(
-                calc_metrics(metrics, reco=reco, interactions=test_interactions)
-            )
+            for train_events, test_events in folds
+        ]
+
+    fold_metrics_by_candidate: list[list[dict[str, float]]] = [[] for _ in parsed_candidates]
+    for fold_metrics in fold_results:
+        for idx, candidate_metrics in enumerate(fold_metrics):
+            fold_metrics_by_candidate[idx].append(candidate_metrics)
 
     results = []
     for candidate, fold_metrics in zip(parsed_candidates, fold_metrics_by_candidate, strict=True):

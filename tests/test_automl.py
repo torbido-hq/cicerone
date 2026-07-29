@@ -240,6 +240,36 @@ def test_evaluate_candidates_scores_each_candidate(sample_items, feature_config)
         assert any(key.startswith("Recall") for key in result.metrics)
 
 
+def test_evaluate_candidates_parallel_folds_match_sequential(sample_items, feature_config):
+    # popular/latest are deterministic (no LightFM randomness), so a
+    # ProcessPoolExecutor-parallelized run over folds must score identically
+    # to the default sequential (max_workers=1) run.
+    events = _spread_events(n_days=35)
+    candidates = [{"models": ["popular"]}, {"models": ["latest"]}]
+    kwargs = dict(
+        events=events,
+        users=None,
+        items=sample_items,
+        config=feature_config,
+        top_k=2,
+        half_life_days=90,
+        candidates=candidates,
+        n_splits=3,
+        test_days=7,
+    )
+
+    sequential = evaluate_candidates(**kwargs, max_workers=1)
+    # max_workers exceeding the fold count must be capped, not raise.
+    parallel = evaluate_candidates(**kwargs, max_workers=10)
+
+    assert len(sequential) == len(parallel) == 2
+    for seq_result, par_result in zip(sequential, parallel, strict=True):
+        assert seq_result.candidate == par_result.candidate
+        assert seq_result.n_folds == par_result.n_folds
+        for key, value in seq_result.metrics.items():
+            assert par_result.metrics[key] == pytest.approx(value)
+
+
 def test_evaluate_candidates_handles_weighted_rrf_and_averages_across_folds(sample_items, feature_config):
     # 35 days gives 3 non-overlapping 7-day test folds plus enough leftover
     # history for each fold's train side, so multi-fold averaging is
