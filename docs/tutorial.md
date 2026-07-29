@@ -346,7 +346,9 @@ path = "/data/output"
 auth_token = "tutorial-token"
 ```
 
-Start it in the background and query a user's recommendations:
+Start it in the background and query a user's recommendations. Keep the
+token in a shell variable rather than typing it directly into the `curl`
+command (and out of your shell history):
 
 ```sh
 docker run --rm -d --name cicerone-tutorial-serve -p 8000:8000 \
@@ -355,7 +357,8 @@ docker run --rm -d --name cicerone-tutorial-serve -p 8000:8000 \
   -e CICERONE_CONFIG_PATH=/app/config/cicerone.toml \
   cicerone-test python -m cicerone.serve
 
-curl -H "Authorization: Bearer tutorial-token" "http://localhost:8000/recommendations/alice?k=5"
+read -s -p "Serve auth token: " SERVE_TOKEN && echo
+curl -H "Authorization: Bearer $SERVE_TOKEN" "http://localhost:8000/recommendations/alice?k=5"
 ```
 
 For a `dataset` output (as here), the whole recommendations file is cached
@@ -383,7 +386,8 @@ port = 8080
 ```
 
 Start the scheduler in the background (this also runs the batch job
-immediately, then re-enters the cron loop) and fire the webhook:
+immediately, then re-enters the cron loop) and fire the webhook. As above,
+keep the token in a shell variable instead of inlining it:
 
 ```sh
 docker run --rm -d --name cicerone-tutorial-scheduler -p 8080:8080 \
@@ -393,7 +397,8 @@ docker run --rm -d --name cicerone-tutorial-scheduler -p 8080:8080 \
   -e CICERONE_CONFIG_PATH=/app/config/cicerone.toml \
   cicerone-test python -m cicerone.scheduler
 
-curl -X POST -H "Authorization: Bearer tutorial-token" http://localhost:8080/trigger/retrain
+read -s -p "Trigger auth token: " TRIGGER_TOKEN && echo
+curl -X POST -H "Authorization: Bearer $TRIGGER_TOKEN" http://localhost:8080/trigger/retrain
 ```
 
 A trigger fired while a run is already in flight, or within
