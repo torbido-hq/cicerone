@@ -26,8 +26,7 @@ from cicerone.dashboard_users import load_users, save_users
 
 DEFAULT_USERS_PATH = "/app/config/dashboard_users.toml"
 
-# Usernames are stored as bare TOML keys, so they're restricted to what
-# TOML allows there (letters, digits, '_', '-').
+# Usernames are stored as bare TOML keys, restricted to what TOML allows there.
 _USERNAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 

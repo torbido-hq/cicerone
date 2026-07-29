@@ -56,10 +56,8 @@ def _time_decay_multiplier(occurred_at: pd.Series, half_life_days: float) -> pd.
 
 def build_interactions(events: pd.DataFrame, config: FeatureConfig, half_life_days: float) -> pd.DataFrame:
     """Builds the weighted/aggregated interactions DataFrame alone, without
-    constructing user/item feature matrices or a rectools Dataset. Exposed
-    (not `_`-prefixed) for callers that only need interactions -- e.g.
-    cicerone.automl scoring a held-out fold's ground truth, where building a
-    full Dataset (feature exploding included) would be wasted work.
+    building user/item feature matrices or a rectools Dataset. Used directly
+    by cicerone.automl for scoring a held-out fold's ground truth.
     """
     df = events.copy()
     df["occurred_at"] = pd.to_datetime(df["occurred_at"], utc=True)
@@ -146,9 +144,6 @@ def build_dataset(
     dataset = Dataset.construct(
         interactions_df=interactions,
         user_features_df=user_features_df if has_user_features else None,
-        # rectools' cat_*_features must list the actual feature *names* (the
-        # values in the "feature" column) to treat as categorical — every
-        # feature we build is categorical/list-exploded, so pass them all.
         cat_user_features=list(user_features_df["feature"].unique()) if has_user_features else None,
         item_features_df=item_features_df if has_item_features else None,
         cat_item_features=list(item_features_df["feature"].unique()) if has_item_features else None,

@@ -1,21 +1,17 @@
-"""Event-driven retraining trigger: runs alongside the existing cron
-schedule in cicerone.scheduler (additive, cron keeps working unchanged).
-Two ways to signal a run:
+"""Event-driven retraining trigger, running alongside the existing cron
+schedule in cicerone.scheduler. Two ways to signal a run:
 
   - POST /trigger/retrain: a generic webhook, anything can call it.
   - Optional input-bucket polling (trigger.poll_input_bucket = true):
-    periodically checks whether the configured input source's events file
-    has changed (new S3 LastModified / local mtime) and triggers a run if
-    so. Real S3 "event notifications" only deliver to SQS/SNS/Lambda, and
-    non-AWS S3-compatible backends (R2, MinIO, ...) support them
-    differently or not at all -- polling is the portable option that works
-    the same way for every backend cicerone already supports, with no new
-    required infra.
+    periodically checks whether the input source's events file has changed
+    (S3 LastModified / local mtime) and triggers a run if so. Polling is
+    used instead of real S3 event notifications since those require
+    SNS/SQS/Lambda wiring and don't work uniformly across S3-compatible
+    backends (R2, MinIO, ...).
 
-Both paths always trigger the exact same thing: one full, ordinary
-job.run() call, identical to a scheduled run -- no continuous/online
-retraining. RunGuard debounces so at most one run happens at a time and
-rapid-fire triggers within a short window are coalesced into a no-op.
+Both paths trigger the exact same thing: one full, ordinary job.run() call,
+identical to a scheduled run. RunGuard debounces so at most one run happens
+at a time and rapid-fire triggers are coalesced into a no-op.
 """
 
 from __future__ import annotations
@@ -82,8 +78,9 @@ class RunGuard:
 
 def _current_marker(input_settings: IOSettings) -> str | None:
     """A cheap "has the input data changed" fingerprint: local file mtime,
-    or S3 object LastModified. Returns None if it can't be determined (e.g.
-    file/object doesn't exist yet), which never counts as a change."""
+    or S3 object LastModified. Returns None if it can't be determined,
+    which never counts as a change.
+    """
     options = input_settings.options
     backend = options.get("storage_backend", "local")
     if backend == "local":

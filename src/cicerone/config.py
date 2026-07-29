@@ -1,26 +1,14 @@
 """Configuration for the Cicerone recommender job.
 
-Everything is loaded from a single TOML file (default:
-/app/config/cicerone.toml, override with CICERONE_CONFIG_PATH). Secrets are
-never stored in the TOML file itself: reference them with ${ENV_VAR_NAME}
-placeholders, resolved from the process environment at load time (see
-.env.example). This keeps the structural configuration (which backend, which
-bucket/table, scheduling, tuning...) in version control while credentials
-stay in environment variables / secret stores.
+Loaded from a single TOML file (default /app/config/cicerone.toml, override
+with CICERONE_CONFIG_PATH). Secrets are never stored in the file itself:
+reference them with ${ENV_VAR_NAME} placeholders, resolved from the process
+environment at load time. Escape a literal "${...}" by doubling the leading
+"$", e.g. "$${LITERAL}".
 
-Every "${VAR_NAME}" occurrence is resolved, including partial ones embedded
-in a larger string (e.g. `prefix = "datasets/${ENV}/latest"`), and it is
-mandatory: a referenced variable that isn't set raises an error rather than
-silently leaving the placeholder in place. If you need a literal "${...}" in
-a value (no substitution), escape it by doubling the leading "$", e.g.
-`pattern = "$${LITERAL}"` resolves to the literal string "${LITERAL}".
-
-Input and output are each independently configurable, and are deliberately
-generic: a "kind" (e.g. "dataset", "db") plus a free-form "options" table
-interpreted by the corresponding backend in cicerone.io. This is what makes
-Cicerone adaptable to any product catalog, not tied to one particular
-application: adding a new backend (a message queue, a different warehouse,
-...) never requires changing this module — see cicerone.io.factory.
+Input/output backends are each configured generically as a "kind" plus a
+free-form "options" table interpreted by the corresponding module in
+cicerone.io — see cicerone.io.factory.
 """
 
 from __future__ import annotations
@@ -34,28 +22,18 @@ from typing import Any
 
 DEFAULT_CONFIG_PATH = "/app/config/cicerone.toml"
 
-# Canonical multi-model strategy identifiers. Centralized here (not in
-# cicerone.model, which owns the actual per-strategy factories/behavior but
-# has heavy ML deps -- lightfm/implicit/rectools -- that config.py
-# deliberately doesn't import) so Settings.models can be validated at config
-# load time, and so cicerone.model.STRATEGIES' keys, DEFAULT_MODELS, config
-# file comments, and README can't silently drift out of sync with this list.
+# Kept here (not cicerone.model, which has heavy ML deps config.py avoids
+# importing) so Settings.models can be validated at load time and can't
+# drift from cicerone.model.STRATEGIES.
 STRATEGY_NAMES: tuple[str, ...] = ("collaborative", "item_based", "popular", "latest")
 
-# Centralized here (not in cicerone.automl, which config.py deliberately
-# doesn't import) so the [job.automl] TOML defaults and automl.py's function
-# defaults can't drift apart.
 AUTOML_DEFAULT_N_SPLITS = 2
 AUTOML_DEFAULT_TEST_DAYS = 14
 AUTOML_DEFAULT_PRIMARY_METRIC = "MAP"
 
 
 def validate_model_weights(weights: dict[str, float] | None, *, context: str = "model_weights") -> None:
-    """Raises ValueError if any weight is negative. Shared by config.load_settings,
-    model.train_and_recommend, and automl's candidate parsing so all three fail on
-    the same invalid configurations with the same error shape (`context` only
-    changes the message prefix so each caller's error reads naturally).
-    """
+    """Raises ValueError if any weight is negative."""
     if weights is None:
         return
     negative_weights = {name: weight for name, weight in weights.items() if weight < 0}
@@ -64,10 +42,7 @@ def validate_model_weights(weights: dict[str, float] | None, *, context: str = "
 
 
 def validate_rrf_k(rrf_k: float | None, *, context: str = "rrf_k") -> None:
-    """Raises ValueError if rrf_k is set but not positive. Shared by
-    config.load_settings, model.train_and_recommend, and automl's candidate
-    parsing (see validate_model_weights).
-    """
+    """Raises ValueError if rrf_k is set but not positive."""
     if rrf_k is not None and rrf_k <= 0:
         raise ValueError(f"{context} must be positive, got {rrf_k}")
 
@@ -76,12 +51,8 @@ _ENV_PLACEHOLDER = re.compile(r"\$(\$?)\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
 def _resolve_env_placeholders(value: Any, path: str = "") -> Any:
-    """Recursively replaces "${VAR_NAME}" occurrences with the matching
-    environment variable. Supports partial interpolation (e.g.
-    "datasets/${ENV}/latest") and a "$${VAR_NAME}" escape for a literal
-    "${VAR_NAME}" that should not be substituted. `path` is the config
-    location this value came from, included in the error message if a
-    referenced environment variable is missing.
+    """Recursively replaces "${VAR_NAME}" with the matching environment
+    variable. `path` identifies the config location in error messages.
     """
     if isinstance(value, str):
 
@@ -109,13 +80,9 @@ def _resolve_env_placeholders(value: Any, path: str = "") -> Any:
 
 @dataclass(frozen=True)
 class IOSettings:
-    """Generic I/O configuration: a backend "kind" plus its own options.
-
-    Deliberately untyped (``options`` is a plain dict) so new input/output
-    backends can be added under cicerone.io without ever touching this
-    module — see cicerone.io.factory.build_input_source/build_output_sink.
-    ``kind`` is normalized to lower case when loaded from TOML, so "Dataset"
-    / "DATASET" / "dataset" in the config all resolve the same way.
+    """Generic I/O configuration: a backend "kind" plus its own options dict,
+    interpreted by the corresponding module in cicerone.io. `kind` is
+    normalized to lower case when loaded from TOML.
     """
 
     kind: str
@@ -173,10 +140,6 @@ def _load_io_settings(raw: dict[str, Any], section_name: str) -> IOSettings:
 
 
 def load_settings(config_path: str | None = None) -> Settings:
-    # An empty CICERONE_CONFIG_PATH (e.g. "" from a misconfigured shell/compose
-    # file) must fall back to DEFAULT_CONFIG_PATH too, not resolve to the
-    # current directory -- hence "or DEFAULT_CONFIG_PATH" rather than relying
-    # on os.environ.get's default, which only applies when the var is unset.
     path = Path(config_path or os.environ.get("CICERONE_CONFIG_PATH") or DEFAULT_CONFIG_PATH)
     if not path.exists():
         raise RuntimeError(f"Config file not found: {path}")

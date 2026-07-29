@@ -1,10 +1,6 @@
 """Shared auth dependencies for cicerone's HTTP surfaces: a single shared
-bearer token per surface (serve mode's read API, the retrain trigger
-webhook) via require_bearer_token, or HTTP Basic Auth against a small,
-fixed set of named users (the dashboard, see cicerone.dashboard_users) via
-require_basic_auth. There's no session/cookie concept in either case and no
-rate-limiting here (see docs/architecture.md) -- if that's ever needed, put
-a reverse proxy in front rather than growing this module.
+bearer token per surface via require_bearer_token, or HTTP Basic Auth
+against a small, fixed set of named users via require_basic_auth.
 """
 
 from __future__ import annotations
@@ -18,20 +14,16 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBasic, HTTPBasicC
 _bearer_scheme = HTTPBearer(auto_error=True)
 _basic_scheme = HTTPBasic(auto_error=True)
 
-# A fixed, never-matching bcrypt hash checked whenever the supplied username
-# isn't in `users`, so an unknown username takes the same time to reject as
-# a wrong password for a known one -- avoids a timing side-channel that
-# would otherwise let a caller enumerate valid usernames. Precomputed once
-# (rather than `bcrypt.hashpw(..., bcrypt.gensalt())` at import time) so
-# process startup doesn't pay bcrypt's cost function on every launch and so
-# it's the same literal across processes/tests instead of a fresh salt each
-# time -- it's never a real credential, so there's no need for a unique
-# salt here.
+# Never-matching hash checked when the username isn't in `users`, so an
+# unknown username takes the same time to reject as a wrong password for a
+# known one (avoids a username-enumeration timing side-channel). Hardcoded
+# rather than computed at import time so startup doesn't pay bcrypt's cost
+# and processes/tests share the same literal -- it's never a real credential.
 _DUMMY_HASH = b"$2b$12$vJ2512T3h3Og/ZQ2oX0DOumJjo4aEqRgGJPxpAW4Jv76RPsaH7JUm"
 
 
 def require_bearer_token(expected_token: str):
-    """Returns a FastAPI dependency that rejects requests unless their
+    """FastAPI dependency rejecting requests unless their
     "Authorization: Bearer <token>" header matches `expected_token`."""
 
     def _dependency(
@@ -44,11 +36,8 @@ def require_bearer_token(expected_token: str):
 
 
 def require_basic_auth(users: dict[str, str]):
-    """Returns a FastAPI dependency that rejects requests unless their HTTP
-    Basic Auth credentials match a username/bcrypt-hash pair in `users`
-    (see cicerone.dashboard_users). Meant for a small, fixed set of named
-    people logging in via a browser -- not for machine-to-machine calls,
-    which use require_bearer_token instead.
+    """FastAPI dependency rejecting requests unless their HTTP Basic Auth
+    credentials match a username/bcrypt-hash pair in `users`.
     """
 
     def _dependency(

@@ -1,8 +1,7 @@
-"""Read-only access to precomputed recommendations, for the serve mode
-(cicerone.serve). Deliberately independent of cicerone.model: serving reads
-whatever the batch job already wrote to the output store, it never loads or
-runs a model, so a serve-only deployment doesn't need lightfm/rectools/
-implicit installed.
+"""Read-only access to precomputed recommendations, for serve mode
+(cicerone.serve). Independent of cicerone.model: serving reads whatever the
+batch job already wrote to the output store, never loading or running a
+model, so a serve-only deployment doesn't need lightfm/rectools/implicit.
 
 Mirrors the two output backends in cicerone.io ("dataset" and "db"):
 
@@ -10,8 +9,7 @@ Mirrors the two output backends in cicerone.io ("dataset" and "db"):
     local) is cached in memory and filtered per request; call refresh() to
     reload it (cicerone.serve does this on a background timer).
   DbRecommendationReader - queries the recommendations table directly on
-    every call (already indexed by user_id at the database level), so
-    refresh() is a no-op.
+    every call, so refresh() is a no-op.
 """
 
 from __future__ import annotations

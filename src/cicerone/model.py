@@ -30,8 +30,7 @@ LATEST_WINDOW_DAYS = 14
 # Reciprocal rank fusion constant (Cormack et al., 2009); default for rrf_k.
 RRF_K = 60
 SOURCE_COLUMN = "source"
-# Internal-only; dropped from the output before it's returned to callers.
-WEIGHT_COLUMN = "_weight"
+WEIGHT_COLUMN = "_weight"  # internal-only; dropped before returning to callers
 
 
 class RecommenderModel(Protocol):
@@ -52,12 +51,9 @@ _RECOMMEND_PARAMS = {"users", "dataset", "k", "filter_viewed", "items_to_recomme
 
 
 def _as_recommender_model(model: object) -> RecommenderModel:
-    """Verifies (at strategy-construction time, not first use) that `model`
-    implements the RecommenderModel protocol expected by train_and_recommend.
-    A rectools/implicit upgrade that renames or drops one of `.fit`/.recommend`'s
-    parameters would otherwise only surface as a confusing TypeError deep
-    inside a fold loop the first time the strategy is actually used; this
-    fails fast with a clear message naming the offending model/strategy instead.
+    """Verifies (at strategy-construction time) that `model` implements the
+    RecommenderModel protocol, failing fast with a clear message instead of
+    a confusing TypeError deep inside a fold loop on first use.
     """
     fit = getattr(model, "fit", None)
     recommend = getattr(model, "recommend", None)

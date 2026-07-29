@@ -1,17 +1,11 @@
 """AutoML harness: backtests candidate strategy/weight configurations over
-time-based folds and picks the best one by a ranking metric, so a job run
-can automatically combine popular/latest/collaborative/item-based instead of
-relying on a hand-picked, static config.
+time-based folds and picks the best one by a ranking metric.
 
-Deliberately does its own lightweight time-based event split rather than
-rectools.model_selection's Interactions-level splitters: candidates here
-span multiple STRATEGIES combined by cicerone.model.train_and_recommend
-(which needs raw events/users/items to rebuild a BuiltDataset per fold), not
-a single rectools model, so splitting at the raw-events level and reusing
-cicerone.dataset.build_dataset (train side) / build_interactions (test
-side, interactions-only -- no need for a full feature-laden Dataset just to
-score against ground truth) is simpler and avoids reimplementing dataset
-reconstruction from internal interaction ids.
+Uses a custom time-based event split rather than
+rectools.model_selection's splitters, since candidates here combine
+multiple STRATEGIES via cicerone.model.train_and_recommend (which needs raw
+events/users/items to rebuild a BuiltDataset per fold), not a single
+rectools model.
 """
 
 from __future__ import annotations
@@ -41,11 +35,9 @@ DEFAULT_N_SPLITS = AUTOML_DEFAULT_N_SPLITS
 DEFAULT_TEST_DAYS = AUTOML_DEFAULT_TEST_DAYS
 DEFAULT_PRIMARY_METRIC = AUTOML_DEFAULT_PRIMARY_METRIC
 
-# Derived from STRATEGIES/DEFAULT_MODELS (rather than hard-coded model
-# names) so this can't silently drift when a strategy is added/removed:
-# every strategy alone, the default priority combo, and one weighted-fusion
-# blend across every strategy (personalized ones weighted higher than
-# non-personalized/backfill ones).
+# Derived from STRATEGIES/DEFAULT_MODELS so this can't drift when a
+# strategy is added/removed: every strategy alone, the default priority
+# combo, and one weighted-fusion blend across every strategy.
 DEFAULT_CANDIDATES: list[dict[str, Any]] = [
     *({"models": [name]} for name in STRATEGIES),
     {"models": DEFAULT_MODELS},
@@ -86,7 +78,7 @@ def _parse_candidates(raw: list[dict[str, Any]] | None) -> list[Candidate]:
     parsed = []
     for entry in raw if raw is not None else DEFAULT_CANDIDATES:
         models_value = entry["models"]
-        if isinstance(models_value, str) or not isinstance(models_value, (list, tuple)):  # noqa: UP038
+        if not isinstance(models_value, (list, tuple)):
             raise ValueError(f"automl candidate 'models' must be a list of model names, got {models_value!r}")
         if not all(isinstance(name, str) for name in models_value):
             raise ValueError(f"automl candidate 'models' must contain only strings, got {models_value!r}")
@@ -97,7 +89,7 @@ def _parse_candidates(raw: list[dict[str, Any]] | None) -> list[Candidate]:
         if unknown:
             raise ValueError(
                 f"Unknown model(s) in automl candidate {unknown}; available: {sorted(STRATEGIES)}"
-            )  # noqa: E501
+            )
         weights_value = entry.get("weights")
         if weights_value is not None and not isinstance(weights_value, dict):
             raise ValueError(
@@ -132,13 +124,10 @@ def _time_based_folds(
     events: pd.DataFrame, n_splits: int, test_days: int
 ) -> list[tuple[pd.DataFrame, pd.DataFrame]]:
     """Walks backward from the most recent event in fixed-size, non-overlapping
-    `test_days`-day windows, each becoming one (train, test) fold: everything
-    strictly before the window is "train", everything inside it is "test".
-    Folds are returned oldest-test-window-first. A fold is skipped if either
-    side ends up empty (e.g. not enough history for the requested n_splits).
+    `test_days`-day windows, each becoming one (train, test) fold. Folds are
+    returned oldest-test-window-first; a fold is skipped if either side is empty.
     """
     occurred_at = pd.to_datetime(events["occurred_at"], utc=True)
-    # +1us so the strict "< test_end" bound doesn't exclude the last event.
     max_ts = occurred_at.max() + pd.Timedelta(microseconds=1)
     window = pd.Timedelta(days=test_days)
 
@@ -199,8 +188,6 @@ def evaluate_candidates(
         built = build_dataset(train_events, users, items, config, half_life_days=half_life_days)
         test_interactions = build_interactions(test_events, config, half_life_days=half_life_days)
         test_users = sorted(set(test_events["user_id"]))
-        # Reset per fold; shared across candidates within the fold so ones
-        # that enable the same strategy reuse its fitted model.
         strategy_cache: dict[str, RecommenderModel] = {}
         for idx, candidate in enumerate(parsed_candidates):
             reco = train_and_recommend(

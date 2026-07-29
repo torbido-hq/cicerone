@@ -21,21 +21,14 @@ from cicerone.model import DEFAULT_MODELS, RRF_K, train_and_recommend
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-# Cap on manifest["error"]'s length -- it's `str(exc)` from an arbitrary
-# exception (could be a long stack-trace-like repr, e.g. some database
-# drivers' errors), stored in the manifest and shown as-is on the dashboard.
-# Truncating keeps that bounded rather than persisting/displaying it
-# indefinitely; it's not a substitute for not putting secrets in exception
-# messages in the first place, but it caps the blast radius of an unusually
-# verbose one.
+# Cap on manifest["error"]'s length, since it's str(exc) from an arbitrary
+# exception and gets persisted/displayed on the dashboard as-is.
 _MAX_ERROR_LENGTH = 500
 
 
-# Every run writes exactly one manifest with this fixed set of keys --
-# including on failure -- so a "db" output's manifest table never gets an
-# INSERT with a different column set from one run to the next (see
-# io/manifest_reader.py's module docstring for the schema-migration
-# implication of changing this set for an existing deployment).
+# Every run writes exactly one manifest with this fixed key set, including
+# on failure, so a "db" output's manifest table never gets an INSERT with a
+# different column set from one run to the next.
 _MANIFEST_DEFAULTS: dict[str, Any] = {
     "triggered_by": None,
     "status": "failed",
@@ -122,10 +115,9 @@ def run(triggered_by: str = "manual") -> None:
         sink.write_recommendations(recommendations)
 
         resolved_models = enabled_models or DEFAULT_MODELS
-        # `weights is not None` (rather than truthiness) so fusion mode with an
-        # empty/partial `[job.model_weights]` still reports the *effective*
-        # weight (defaulting to 1.0) for every enabled model, instead of hiding
-        # implicit defaults behind an empty string in the manifest.
+        # `weights is not None` (not truthiness) so an empty/partial
+        # model_weights table still reports the effective weight
+        # (defaulting to 1.0) for every enabled model.
         model_weights_str = (
             ",".join(f"{name}={weights.get(name, 1.0)}" for name in resolved_models)
             if weights is not None
