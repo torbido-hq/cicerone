@@ -6,8 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-30
+
 ### Added
 
+- Optional **model artifact** (`[job].save_model_artifact`): the batch job
+  can write a versioned, portable fitted-model bundle
+  (`model.artifact` / `model_artifacts` table) alongside recommendations.
+  Load and recommend without re-fitting via `cicerone.artifact`. Serve mode
+  still reads precomputed rows only — this does not add live inference.
 - Optional `postgres` service in `docker-compose.yml` (Postgres 16, compose
   profile `db`) for local `kind = "db"` input/output. First boot creates
   `cicerone` (app/tutorial) and `cicerone_test` (pytest) databases.
@@ -19,34 +26,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   serve/dashboard DB readers. Schema reset is module-scoped, reflects via
   SQLAlchemy metadata, and is gated by a test DB name check plus
   `ALLOW_SCHEMA_RESET_FOR_TESTS=1`.
-- User-facing documentation for **model artifacts** (0.2.2): README section,
-  tutorial §9 (`save_model_artifact`, load/recommend via `cicerone.artifact`),
+- User-facing documentation for model artifacts: README section, tutorial §9
+  (`save_model_artifact`, load/recommend via `cicerone.artifact`),
   architecture notes, and `model_artifact_table` in the commented db config
   example.
-
-### Changed
-
-- Tutorial database section uses
-  `docker compose --profile db up -d postgres` instead of an ad-hoc
-  `docker run` Postgres container.
-- Local pytest guidance points `TEST_DATABASE_URL` at `cicerone_test` (with
-  `ALLOW_SCHEMA_RESET_FOR_TESTS=1`) so tests do not wipe app data.
-
-## [0.2.2] - 2026-07-30
-
-### Added
-
-- Optional **model artifact** (`[job].save_model_artifact`): the batch job
-  can write a versioned, portable fitted-model bundle
-  (`model.artifact` / `model_artifacts` table) alongside recommendations.
-  Load and recommend without re-fitting via `cicerone.artifact`. Serve mode
-  still reads precomputed rows only — this does not add live inference.
 
 ### Changed
 
 - `model.train_and_recommend` is split into `fit_strategies` +
   `recommend_with_models` so fitted weights can be reused (AutoML cache,
   model artifacts) without a second fit.
+- Tutorial database section uses
+  `docker compose --profile db up -d postgres` instead of an ad-hoc
+  `docker run` Postgres container.
+- Local pytest guidance points `TEST_DATABASE_URL` at `cicerone_test` (with
+  `ALLOW_SCHEMA_RESET_FOR_TESTS=1`) so tests do not wipe app data.
 
 ### Fixed
 
