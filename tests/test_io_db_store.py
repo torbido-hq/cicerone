@@ -124,6 +124,17 @@ def test_database_output_writes_and_replaces_model_artifact():
     assert bytes(payload) == b"second"
 
 
+def test_database_output_model_artifact_custom_table_name():
+    sink = DatabaseOutputSink(
+        {"database_url": TEST_DATABASE_URL, "model_artifact_table": "custom_model_artifacts"}
+    )
+    sink.write_model_artifact(b"custom")
+
+    engine = create_engine(TEST_DATABASE_URL)
+    stored = pd.read_sql('SELECT payload FROM "custom_model_artifacts"', engine)
+    assert bytes(stored.iloc[0]["payload"]) == b"custom"
+
+
 def test_missing_database_url_raises():
     with pytest.raises(RuntimeError, match="database_url"):
         DatabaseInputSource({})

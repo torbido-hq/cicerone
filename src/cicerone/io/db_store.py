@@ -13,6 +13,7 @@ built from the [input.options] / [output.options] tables in cicerone.toml:
   recommendations_table      optional, default "recommendations"
   manifest_table              optional, default "recommendation_runs"
   model_artifact_table        optional, default "model_artifacts"
+                              (must be a simple [A-Za-z_][A-Za-z0-9_]* identifier)
   events_query / users_query / items_query   optional raw SQL overrides —
     use these to read straight from an application's own schema instead of
     requiring it to materialize events/users/items tables verbatim (e.g.
@@ -25,6 +26,7 @@ configuration, never from end-user input.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -37,6 +39,19 @@ from cicerone.io.options import require_option
 logger = logging.getLogger(__name__)
 
 _MISSING_TABLE_ERRORS = (ProgrammingError, OperationalError)
+
+# Table/option names from config are interpolated into SQL identifiers.
+# Restrict to a simple unquoted-safe form so a misconfigured (or hostile)
+# option cannot break out of the identifier.
+_SQL_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _sql_identifier(name: str, *, option: str) -> str:
+    if not isinstance(name, str) or not _SQL_IDENTIFIER.fullmatch(name):
+        raise ValueError(
+            f"{option} must be a simple SQL identifier matching [A-Za-z_][A-Za-z0-9_]*, got {name!r}"
+        )
+    return name
 
 
 class DatabaseInputSource:
@@ -106,14 +121,28 @@ class DatabaseOutputSink:
         Uses a dedicated BYTEA table rather than appending history — the
         artifact is a point-in-time snapshot meant to be reloaded whole,
         same as recommendations.parquet for the dataset backend.
+
+        Schema is kept stable across writes (CREATE IF NOT EXISTS, then
+        TRUNCATE + INSERT in one transaction) so concurrent jobs cannot
+        race on DROP/CREATE and leave the table missing mid-write.
         """
-        table = self._options.get("model_artifact_table", "model_artifacts")
+        table = _sql_identifier(
+            self._options.get("model_artifact_table", "model_artifacts"),
+            option="model_artifact_table",
+        )
         logger.info("Writing model artifact (%d bytes) to database table %r", len(payload), table)
         with self._engine.begin() as conn:
-            conn.execute(text(f'DROP TABLE IF EXISTS "{table}"'))
             conn.execute(
-                text(f'CREATE TABLE "{table}" (payload BYTEA NOT NULL, written_at TIMESTAMPTZ NOT NULL)')
+                text(
+                    f'CREATE TABLE IF NOT EXISTS "{table}" ('
+                    "payload BYTEA NOT NULL, "
+                    "written_at TIMESTAMPTZ NOT NULL"
+                    ")"
+                )
             )
+            # TRUNCATE takes ACCESS EXCLUSIVE in Postgres, serializing
+            # concurrent writers for the rest of this transaction.
+            conn.execute(text(f'TRUNCATE TABLE "{table}"'))
             conn.execute(
                 text(f'INSERT INTO "{table}" (payload, written_at) VALUES (:payload, :written_at)'),
                 {"payload": payload, "written_at": datetime.now(UTC)},

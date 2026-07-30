@@ -8,6 +8,12 @@ redesign the training side.
 
 Serve mode does **not** load this artifact — it still reads precomputed
 recommendation rows only (no ML deps in the request path).
+
+**Trust boundary:** artifacts are serialized with ``pickle``. ``loads_artifact``
+/ ``load_artifact`` must only be used on bytes produced by a trusted Cicerone
+batch job (or an equivalent internal writer). Never unpickle user-uploaded or
+otherwise untrusted payloads — that is a remote code execution vector. This
+module is not exposed on the serve HTTP path.
 """
 
 from __future__ import annotations
@@ -73,6 +79,12 @@ def dumps_artifact(artifact: ModelArtifact) -> bytes:
 
 
 def loads_artifact(payload: bytes) -> ModelArtifact:
+    """Deserialize a ModelArtifact from pickle bytes.
+
+    ``payload`` must come from a trusted internal source (a Cicerone-written
+    artifact). Unpickling untrusted bytes is unsafe — do not call this on
+    user-controlled input.
+    """
     artifact = pickle.loads(payload)
     if not isinstance(artifact, ModelArtifact):
         raise TypeError(f"Artifact payload did not unpickle to ModelArtifact, got {type(artifact).__name__}")
@@ -92,6 +104,11 @@ def save_artifact(path: Path | str, artifact: ModelArtifact) -> None:
 
 
 def load_artifact(path: Path | str) -> ModelArtifact:
+    """Load a ModelArtifact from a trusted local/object-store path.
+
+    Same trust constraint as ``loads_artifact``: the file must be an artifact
+    written by Cicerone (or equivalent), never an untrusted upload.
+    """
     path = Path(path)
     logger.info("Loading model artifact from %s", path)
     return loads_artifact(path.read_bytes())
