@@ -19,12 +19,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   serve/dashboard DB readers. Schema reset is module-scoped, reflects via
   SQLAlchemy metadata, and is gated by a test DB name check plus
   `ALLOW_SCHEMA_RESET_FOR_TESTS=1`.
-- Documentation for **model artifacts** (shipped in 0.2.1): README section,
+- User-facing documentation for **model artifacts** (0.2.2): README section,
   tutorial §9 (`save_model_artifact`, load/recommend via `cicerone.artifact`),
   architecture notes, and `model_artifact_table` in the commented db config
-  example — previously only covered in the 0.2.1 changelog entry.
-- Documentation for opt-in `max_workers` parallel AutoML folds / strategy
-  fitting (also from 0.2.1) in the README AutoML section.
+  example.
 
 ### Changed
 
@@ -34,7 +32,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Local pytest guidance points `TEST_DATABASE_URL` at `cicerone_test` (with
   `ALLOW_SCHEMA_RESET_FOR_TESTS=1`) so tests do not wipe app data.
 
-## [0.2.1] - 2026-07-29
+## [0.2.2] - 2026-07-30
 
 ### Added
 
@@ -43,20 +41,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (`model.artifact` / `model_artifacts` table) alongside recommendations.
   Load and recommend without re-fitting via `cicerone.artifact`. Serve mode
   still reads precomputed rows only — this does not add live inference.
-- AutoML candidate backtesting can now evaluate time-based folds in
-  parallel: `evaluate_candidates(..., max_workers=1)` runs folds through a
-  `ProcessPoolExecutor` when `max_workers > 1`, instead of sequentially
-  (opt-in; default behavior/performance is unchanged).
-- Strategy fitting in `train_and_recommend(..., max_workers=1)` can
-  likewise fit independent, not-yet-cached strategies in parallel via a
-  `ProcessPoolExecutor` when `max_workers > 1` (opt-in; default is
-  unchanged).
 
 ### Changed
 
 - `model.train_and_recommend` is split into `fit_strategies` +
   `recommend_with_models` so fitted weights can be reused (AutoML cache,
   model artifacts) without a second fit.
+
+### Fixed
+
+- Model-artifact DB writes use `CREATE TABLE IF NOT EXISTS` + `TRUNCATE` +
+  `INSERT` (no `DROP`/`CREATE` race under concurrent jobs).
+- `model_artifact_table` is validated as a simple SQL identifier before
+  interpolation.
+- `cicerone.artifact` documents that pickle loads are trusted-internal-only
+  (never user-controlled payloads; not on the serve path).
+
+## [0.2.1] - 2026-07-29
+
+### Added
+
+- AutoML candidate backtesting can now evaluate time-based folds in
+  parallel: `evaluate_candidates(..., max_workers=1)` runs folds through a
+  `ProcessPoolExecutor` when `max_workers > 1`, instead of sequentially
+  (opt-in; default behavior/performance is unchanged).
+- Strategy fitting in `train_and_recommend(..., max_workers=1)` can
+  likewise fit independent, not-yet-cached strategies via a
+  `ProcessPoolExecutor` when `max_workers > 1` (opt-in; default is
+  unchanged).
+
+### Changed
+
 - The job's input reads (events, users, items) now run concurrently via a
   `ThreadPoolExecutor` instead of sequentially, speeding up runs against
   network-backed (S3) input sources.
