@@ -1,13 +1,14 @@
 """System-style end-to-end check against a real Postgres (Rails system-spec analogue).
 
-Seeds events/users/items, runs the full batch job with db input/output + a
+Seeds events/users/items from the shared conftest fixtures (same data contract
+as the rest of the suite), runs the full batch job with db input/output + a
 model artifact, then verifies what serve/dashboard would read back — all
 through the same SQLAlchemy stores production uses.
 
 Requires TEST_DATABASE_URL (set automatically by docker-compose.ci.yml, or
 locally via the compose ``postgres`` service's ``cicerone_test`` database —
-see CONTRIBUTING.md). Prefer a dedicated test database; this module drops
-every table in that database's public schema between runs.
+see CONTRIBUTING.md). Schema resets are gated: the DB name must look like a
+test database and ``ALLOW_SCHEMA_RESET_FOR_TESTS=1`` must be set.
 """
 
 from __future__ import annotations
@@ -33,9 +34,15 @@ pytestmark = pytest.mark.skipif(
     not TEST_DATABASE_URL,
     reason="TEST_DATABASE_URL not set — start compose postgres "
     "(`docker compose --profile db up -d postgres`) and export "
-    "TEST_DATABASE_URL=postgresql+psycopg://cicerone:cicerone@localhost:5432/cicerone_test, "
-    "or run via docker-compose.ci.yml",
+    "TEST_DATABASE_URL=postgresql+psycopg://cicerone:cicerone@localhost:5432/cicerone_test "
+    "ALLOW_SCHEMA_RESET_FOR_TESTS=1, or run via docker-compose.ci.yml",
 )
+
+
+def _is_dedicated_test_database(db_name: str | None) -> bool:
+    if not db_name:
+        return False
+    return db_name == "cicerone_test" or db_name.endswith("_test") or db_name.startswith("test_")
 
 
 @pytest.fixture(scope="session")
@@ -53,63 +60,68 @@ def _reset_schema(engine: Engine) -> None:
 
     Uses SQLAlchemy metadata reflection rather than a hardcoded table list, so
     new job/output tables (or renamed ones) are cleaned up automatically.
-    Intended for a dedicated test database only (see CONTRIBUTING.md).
+    Guarded: only dedicated test DB names, and only when
+    ALLOW_SCHEMA_RESET_FOR_TESTS=1 (see CONTRIBUTING.md).
     """
+    db_name = engine.url.database
+    if not _is_dedicated_test_database(db_name):
+        raise RuntimeError(
+            f"Refusing to reset schema for non-test database {db_name!r}. "
+            "TEST_DATABASE_URL must point at a dedicated test DB "
+            "(e.g. cicerone_test, or a name starting with 'test_' / ending with '_test')."
+        )
+    if os.environ.get("ALLOW_SCHEMA_RESET_FOR_TESTS") != "1":
+        raise RuntimeError(
+            "Schema reset for tests is disabled. Set ALLOW_SCHEMA_RESET_FOR_TESTS=1 "
+            "to permit drop_all on the dedicated test database."
+        )
+
     metadata = MetaData()
     metadata.reflect(bind=engine)
     metadata.drop_all(bind=engine)
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(autouse=True, scope="module")
 def _clean_schema(db_engine: Engine) -> Iterator[None]:
+    """Reset schema once around this module's tests (not every function)."""
     _reset_schema(db_engine)
     yield
     _reset_schema(db_engine)
 
 
-def _seed_sample_catalog(engine: Engine) -> None:
-    now = pd.Timestamp.utcnow()
-    events = pd.DataFrame(
-        [
-            {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 2, "occurred_at": now},
-            {"user_id": "u1", "item_id": "i2", "event_type": "view", "quantity": 1, "occurred_at": now},
-            {
-                "user_id": "u2",
-                "item_id": "i1",
-                "event_type": "review_positive",
-                "quantity": 1,
-                "occurred_at": now,
-            },
-            {"user_id": "u2", "item_id": "i3", "event_type": "saved", "quantity": 1, "occurred_at": now},
-            {"user_id": "u3", "item_id": "i2", "event_type": "cart_add", "quantity": 1, "occurred_at": now},
-        ]
-    )
-    # Keep user/item columns scalar so pandas→Postgres doesn't need array
-    # adapters; missing feature columns are skipped by dataset.build_dataset.
-    users = pd.DataFrame(
-        [
-            {"user_id": "u1", "region_slug": "lazio"},
-            {"user_id": "u2", "region_slug": "toscana"},
-            {"user_id": "u3", "region_slug": None},
-        ]
-    )
-    items = pd.DataFrame(
-        [
-            {"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True},
-            {"item_id": "i2", "category": "beer", "producer_id": "p2", "published": True, "in_stock": True},
-            {"item_id": "i3", "category": "wine", "producer_id": "p1", "published": True, "in_stock": True},
-        ]
-    )
-    events.to_sql("events", engine, if_exists="replace", index=False)
-    users.to_sql("users", engine, if_exists="replace", index=False)
-    items.to_sql("items", engine, if_exists="replace", index=False)
+def _postgres_ready(df: pd.DataFrame) -> pd.DataFrame:
+    """Copy a fixture frame into a shape psycopg can insert (plain lists, not ndarrays)."""
+    out = df.copy()
+    for column in out.columns:
+        out[column] = out[column].map(
+            lambda value: (
+                value.tolist()
+                if hasattr(value, "tolist")
+                else (list(value) if isinstance(value, tuple) else value)
+            )
+        )
+    return out
 
 
-def test_system_job_db_round_trip_with_artifact_and_readers(db_engine: Engine, tmp_path, monkeypatch):
+def _seed_catalog(engine: Engine, events: pd.DataFrame, users: pd.DataFrame, items: pd.DataFrame) -> None:
+    """Persist the shared sample fixtures via the same table names the db input source reads."""
+    _postgres_ready(events).to_sql("events", engine, if_exists="replace", index=False)
+    _postgres_ready(users).to_sql("users", engine, if_exists="replace", index=False)
+    _postgres_ready(items).to_sql("items", engine, if_exists="replace", index=False)
+
+
+def test_system_job_db_round_trip_with_artifact_and_readers(
+    db_engine: Engine,
+    tmp_path,
+    monkeypatch,
+    sample_events: pd.DataFrame,
+    sample_users: pd.DataFrame,
+    sample_items: pd.DataFrame,
+):
     """Full path: Postgres catalog → job.run → recommendations/manifest/artifact
     → recommendation + manifest readers (serve/dashboard backends).
     """
-    _seed_sample_catalog(db_engine)
+    _seed_catalog(db_engine, sample_events, sample_users, sample_items)
 
     config_path = tmp_path / "cicerone.toml"
     config_path.write_text(
@@ -135,9 +147,11 @@ def test_system_job_db_round_trip_with_artifact_and_readers(db_engine: Engine, t
 
     job.run(triggered_by="system-spec")
 
+    expected_users = set(sample_events["user_id"]) | set(sample_users["user_id"])
+
     # Serve-path reader (same store the HTTP API would query).
     rec_reader = DbRecommendationReader({"database_url": TEST_DATABASE_URL})
-    for user_id in ("u1", "u2", "u3"):
+    for user_id in sorted(expected_users):
         served_all = rec_reader.get_recommendations(user_id, k=10)
         assert not served_all.empty, f"expected recommendations for {user_id}"
         assert set(served_all.columns) >= {"user_id", "item_id", "rank", "score", "source"}
@@ -156,7 +170,7 @@ def test_system_job_db_round_trip_with_artifact_and_readers(db_engine: Engine, t
     assert latest is not None
     assert latest["status"] == "success"
     assert latest["triggered_by"] == "system-spec"
-    assert int(latest["n_events"]) == 5
+    assert int(latest["n_events"]) == len(sample_events)
     assert bool(latest["artifact_written"]) is True
     assert int(latest["artifact_schema_version"]) == ARTIFACT_SCHEMA_VERSION
     recent = manifest_reader.read_recent(limit=5)

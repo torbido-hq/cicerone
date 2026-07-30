@@ -28,6 +28,8 @@ services:
       target: test
     environment:
       TEST_DATABASE_URL: postgresql+psycopg://cicerone:cicerone@db-test:5432/cicerone_test
+      # Required by tests/test_system_db.py before it will drop_all on the test DB.
+      ALLOW_SCHEMA_RESET_FOR_TESTS: "1"
     depends_on:
       db-test:
         condition: service_healthy

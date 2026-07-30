@@ -57,15 +57,17 @@ services:
       INPUT_S3_ACCESS_KEY_ID: ${INPUT_S3_ACCESS_KEY_ID:-}
       INPUT_S3_SECRET_ACCESS_KEY: ${INPUT_S3_SECRET_ACCESS_KEY:-}
       INPUT_S3_BUCKET: ${INPUT_S3_BUCKET:-}
-      # Used when [input].kind = "db". With --profile db, point at the compose
-      # postgres service (override in .env for a remote DB).
-      INPUT_DATABASE_URL: ${INPUT_DATABASE_URL:-postgresql+psycopg://cicerone:cicerone@postgres:5432/cicerone}
+      # Only set when using kind = "db" — leave unset by default so enabling
+      # db in TOML without the postgres profile / .env cannot silently point
+      # at a missing host. With --profile db, set in .env e.g.:
+      #   INPUT_DATABASE_URL=postgresql+psycopg://cicerone:cicerone@postgres:5432/cicerone
+      INPUT_DATABASE_URL: ${INPUT_DATABASE_URL:-}
 
       OUTPUT_S3_ENDPOINT_URL: ${OUTPUT_S3_ENDPOINT_URL:-}
       OUTPUT_S3_ACCESS_KEY_ID: ${OUTPUT_S3_ACCESS_KEY_ID:-}
       OUTPUT_S3_SECRET_ACCESS_KEY: ${OUTPUT_S3_SECRET_ACCESS_KEY:-}
       OUTPUT_S3_BUCKET: ${OUTPUT_S3_BUCKET:-}
-      OUTPUT_DATABASE_URL: ${OUTPUT_DATABASE_URL:-postgresql+psycopg://cicerone:cicerone@postgres:5432/cicerone}
+      OUTPUT_DATABASE_URL: ${OUTPUT_DATABASE_URL:-}
 
       # Only used if config/cicerone.toml sets [job.trigger].enabled = true.
       TRIGGER_AUTH_TOKEN: ${TRIGGER_AUTH_TOKEN:-}
@@ -88,7 +90,8 @@ services:
       OUTPUT_S3_ACCESS_KEY_ID: ${OUTPUT_S3_ACCESS_KEY_ID:-}
       OUTPUT_S3_SECRET_ACCESS_KEY: ${OUTPUT_S3_SECRET_ACCESS_KEY:-}
       OUTPUT_S3_BUCKET: ${OUTPUT_S3_BUCKET:-}
-      OUTPUT_DATABASE_URL: ${OUTPUT_DATABASE_URL:-postgresql+psycopg://cicerone:cicerone@postgres:5432/cicerone}
+      # Unset by default — set in .env when serve reads a kind = "db" output.
+      OUTPUT_DATABASE_URL: ${OUTPUT_DATABASE_URL:-}
       SERVE_AUTH_TOKEN: ${SERVE_AUTH_TOKEN:-}
     ports:
       - "8000:8000"
@@ -110,7 +113,8 @@ services:
       OUTPUT_S3_ACCESS_KEY_ID: ${OUTPUT_S3_ACCESS_KEY_ID:-}
       OUTPUT_S3_SECRET_ACCESS_KEY: ${OUTPUT_S3_SECRET_ACCESS_KEY:-}
       OUTPUT_S3_BUCKET: ${OUTPUT_S3_BUCKET:-}
-      OUTPUT_DATABASE_URL: ${OUTPUT_DATABASE_URL:-postgresql+psycopg://cicerone:cicerone@postgres:5432/cicerone}
+      # Unset by default — set in .env when the dashboard reads a kind = "db" output.
+      OUTPUT_DATABASE_URL: ${OUTPUT_DATABASE_URL:-}
     ports:
       - "8090:8090"
     volumes:

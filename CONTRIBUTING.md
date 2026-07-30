@@ -24,13 +24,20 @@ skips the `db` tests (no `TEST_DATABASE_URL`) and will under-report coverage
 
 To iterate on DB-backed tests against compose Postgres, use the dedicated
 **`cicerone_test`** database (created on first boot) so pytest schema resets
-never wipe tutorial/app data in `cicerone`:
+never wipe tutorial/app data in `cicerone`. The system-spec also requires an
+explicit opt-in before it will `drop_all` that database:
 
 ```sh
 docker compose --profile db up -d postgres
 export TEST_DATABASE_URL=postgresql+psycopg://cicerone:cicerone@localhost:5432/cicerone_test
+export ALLOW_SCHEMA_RESET_FOR_TESTS=1
 # then run pytest inside the test image / your venv with PYTHONPATH=src
 ```
+
+`ALLOW_SCHEMA_RESET_FOR_TESTS=1` is set automatically in
+`docker-compose.ci.yml`. Schema reset only proceeds when the database name
+is a known test DB (`cicerone_test`, or a name starting with `test_` /
+ending with `_test`).
 
 ## Linting & formatting
 

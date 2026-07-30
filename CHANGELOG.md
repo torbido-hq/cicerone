@@ -11,11 +11,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Optional `postgres` service in `docker-compose.yml` (Postgres 16, compose
   profile `db`) for local `kind = "db"` input/output. First boot creates
   `cicerone` (app/tutorial) and `cicerone_test` (pytest) databases.
+  `INPUT_DATABASE_URL` / `OUTPUT_DATABASE_URL` stay unset unless provided
+  via `.env`.
 - System-style end-to-end test (`tests/test_system_db.py`) against a real
-  Postgres: seed catalog → `job.run` (db in/out + model artifact) →
-  verify recommendations, manifest, artifact blob, and the serve/dashboard
-  DB readers (session-scoped engine; schema reset via SQLAlchemy metadata
-  reflection).
+  Postgres: seeds shared conftest fixtures → `job.run` (db in/out + model
+  artifact) → verify recommendations, manifest, artifact blob, and the
+  serve/dashboard DB readers. Schema reset is module-scoped, reflects via
+  SQLAlchemy metadata, and is gated by a test DB name check plus
+  `ALLOW_SCHEMA_RESET_FOR_TESTS=1`.
 
 ### Changed
 
@@ -24,7 +27,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `docker run` Postgres container.
 - README / tutorial / architecture document the model-artifact feature and
   the compose Postgres workflow. Local pytest guidance points
-  `TEST_DATABASE_URL` at `cicerone_test` so tests do not wipe app data.
+  `TEST_DATABASE_URL` at `cicerone_test` (with
+  `ALLOW_SCHEMA_RESET_FOR_TESTS=1`) so tests do not wipe app data.
 
 ## [0.2.1] - 2026-07-29
 

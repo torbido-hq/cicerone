@@ -328,10 +328,11 @@ docker compose up --build
 `docker-compose.yml` includes an optional **Postgres 16** service
 (`postgres`, compose profile `db`) for when `[input]`/`[output].kind = "db"`.
 Start it with `docker compose --profile db up -d postgres` (creates
-databases `cicerone` for the app and `cicerone_test` for pytest). Compose
-defaults `INPUT_DATABASE_URL` / `OUTPUT_DATABASE_URL` to that service for
-the recommender, serve, and dashboard containers when you set them — the
-app services do **not** depend on Postgres, so a dataset/S3-only
+databases `cicerone` for the app and `cicerone_test` for pytest). Set
+`INPUT_DATABASE_URL` / `OUTPUT_DATABASE_URL` explicitly in `.env` when you
+use the db backend — compose leaves them unset by default so enabling
+`kind = "db"` without Postgres cannot silently point at a missing host.
+The app services do **not** depend on Postgres, so a dataset/S3-only
 `docker compose up` works even if port 5432 is already taken on the host.
 
 ## Tests & CI
