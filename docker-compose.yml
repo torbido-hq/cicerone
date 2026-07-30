@@ -6,7 +6,10 @@ version: "3.9"
 # supplies the secrets that cicerone.toml references via ${...} placeholders
 # (set them in .env, see .env.example).
 #
-# Three independent services, same image:
+# Four services, same app image for the three app containers:
+#   postgres    — local Postgres 16 for kind = "db" input/output (and for
+#                 running the DB-backed pytest suite against a real database;
+#                 see CONTRIBUTING.md / tests/test_system_db.py).
 #   recommender — the batch training job (cron + optional event trigger,
 #                 see [job.trigger] in config/cicerone.toml).
 #   serve       — the lightweight read API over precomputed recommendations
@@ -19,10 +22,30 @@ version: "3.9"
 #                     python -m cicerone.manage_dashboard_users add <username>
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: cicerone
+      POSTGRES_PASSWORD: cicerone
+      POSTGRES_DB: cicerone
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cicerone -d cicerone"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
   recommender:
     build:
       context: .
       dockerfile: docker/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
     environment:
       PYTHONUNBUFFERED: "1"
       TZ: "Europe/Rome"
@@ -31,13 +54,15 @@ services:
       INPUT_S3_ACCESS_KEY_ID: ${INPUT_S3_ACCESS_KEY_ID:-}
       INPUT_S3_SECRET_ACCESS_KEY: ${INPUT_S3_SECRET_ACCESS_KEY:-}
       INPUT_S3_BUCKET: ${INPUT_S3_BUCKET:-}
-      INPUT_DATABASE_URL: ${INPUT_DATABASE_URL:-}
+      # Default points at the compose postgres service — override in .env for
+      # a remote DB, or leave unused when [input].kind = "dataset".
+      INPUT_DATABASE_URL: ${INPUT_DATABASE_URL:-postgresql+psycopg://cicerone:cicerone@postgres:5432/cicerone}
 
       OUTPUT_S3_ENDPOINT_URL: ${OUTPUT_S3_ENDPOINT_URL:-}
       OUTPUT_S3_ACCESS_KEY_ID: ${OUTPUT_S3_ACCESS_KEY_ID:-}
       OUTPUT_S3_SECRET_ACCESS_KEY: ${OUTPUT_S3_SECRET_ACCESS_KEY:-}
       OUTPUT_S3_BUCKET: ${OUTPUT_S3_BUCKET:-}
-      OUTPUT_DATABASE_URL: ${OUTPUT_DATABASE_URL:-}
+      OUTPUT_DATABASE_URL: ${OUTPUT_DATABASE_URL:-postgresql+psycopg://cicerone:cicerone@postgres:5432/cicerone}
 
       # Only used if config/cicerone.toml sets [job.trigger].enabled = true.
       TRIGGER_AUTH_TOKEN: ${TRIGGER_AUTH_TOKEN:-}
@@ -51,6 +76,9 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
     environment:
       PYTHONUNBUFFERED: "1"
       TZ: "Europe/Rome"
@@ -60,6 +88,7 @@ services:
       OUTPUT_S3_ACCESS_KEY_ID: ${OUTPUT_S3_ACCESS_KEY_ID:-}
       OUTPUT_S3_SECRET_ACCESS_KEY: ${OUTPUT_S3_SECRET_ACCESS_KEY:-}
       OUTPUT_S3_BUCKET: ${OUTPUT_S3_BUCKET:-}
+      OUTPUT_DATABASE_URL: ${OUTPUT_DATABASE_URL:-postgresql+psycopg://cicerone:cicerone@postgres:5432/cicerone}
       SERVE_AUTH_TOKEN: ${SERVE_AUTH_TOKEN:-}
     ports:
       - "8000:8000"
@@ -72,6 +101,9 @@ services:
       context: .
       dockerfile: docker/Dockerfile
     entrypoint: ["python", "-m", "cicerone.dashboard"]
+    depends_on:
+      postgres:
+        condition: service_healthy
     environment:
       PYTHONUNBUFFERED: "1"
       TZ: "Europe/Rome"
@@ -81,6 +113,7 @@ services:
       OUTPUT_S3_ACCESS_KEY_ID: ${OUTPUT_S3_ACCESS_KEY_ID:-}
       OUTPUT_S3_SECRET_ACCESS_KEY: ${OUTPUT_S3_SECRET_ACCESS_KEY:-}
       OUTPUT_S3_BUCKET: ${OUTPUT_S3_BUCKET:-}
+      OUTPUT_DATABASE_URL: ${OUTPUT_DATABASE_URL:-postgresql+psycopg://cicerone:cicerone@postgres:5432/cicerone}
     ports:
       - "8090:8090"
     volumes:
@@ -91,3 +124,5 @@ services:
       - ./config:/app/config
     restart: unless-stopped
 
+volumes:
+  postgres_data:

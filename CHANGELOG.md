@@ -4,6 +4,26 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- `postgres` service in `docker-compose.yml` (Postgres 16) for local
+  `kind = "db"` input/output, with default `INPUT_DATABASE_URL` /
+  `OUTPUT_DATABASE_URL` pointing at it for the recommender, serve, and
+  dashboard containers.
+- System-style end-to-end test (`tests/test_system_db.py`) against a real
+  Postgres: seed catalog → `job.run` (db in/out + model artifact) →
+  verify recommendations, manifest, artifact blob, and the serve/dashboard
+  DB readers.
+
+### Changed
+
+- Tutorial database section uses `docker compose up -d postgres` instead of
+  an ad-hoc `docker run` Postgres container.
+- README / tutorial / architecture document the model-artifact feature and
+  the compose Postgres workflow.
+
 ## [0.2.1] - 2026-07-29
 
 ### Added

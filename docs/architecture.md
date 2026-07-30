@@ -39,6 +39,12 @@ manage_dashboard_users.py  CLI to add/remove/list dashboard users
 templates/, static/      Jinja2 templates + vendored htmx/Stimulus/Tailwind assets for the dashboard
 ```
 
+Local Docker Compose (`docker-compose.yml`) also runs a `postgres` service
+(Postgres 16) so `kind = "db"` input/output can be exercised without an
+external database. CI uses a separate throwaway instance via
+`docker-compose.ci.yml`. The system-style check in `tests/test_system_db.py`
+exercises the full job → recommendations/manifest/artifact → serve/dashboard
+reader path against that real Postgres.
 ## Data flow
 
 ```mermaid

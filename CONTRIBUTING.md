@@ -15,11 +15,20 @@ docker compose -f docker-compose.ci.yml down -v   # clean up the throwaway Postg
 ```
 
 This runs the full pytest suite, including the Postgres-backed `db` I/O
-tests, and enforces the 95% coverage gate (`pyproject.toml`,
+tests and the system-style end-to-end check in `tests/test_system_db.py`,
+and enforces the 95% coverage gate (`pyproject.toml`,
 `[tool.coverage.report].fail_under`). A plain `docker run --rm cicerone-test`
 (after `docker build --target test -t cicerone-test -f docker/Dockerfile .`)
 skips the `db` tests (no `TEST_DATABASE_URL`) and will under-report coverage
 — always validate with the compose file above before opening a PR.
+
+To iterate on DB-backed tests against the same Postgres the app stack uses:
+
+```sh
+docker compose up -d postgres
+export TEST_DATABASE_URL=postgresql+psycopg://cicerone:cicerone@localhost:5432/cicerone
+# then run pytest inside the test image / your venv with PYTHONPATH=src
+```
 
 ## Linting & formatting
 

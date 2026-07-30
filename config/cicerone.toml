@@ -176,3 +176,5 @@ prefix = "recommendations/latest"
 # database_url = "${OUTPUT_DATABASE_URL}"
 # recommendations_table = "recommendations"
 # manifest_table = "recommendation_runs"
+# model_artifact_table = "model_artifacts"  # used when [job].save_model_artifact = true
+

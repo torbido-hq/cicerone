@@ -2,8 +2,9 @@ version: "3.9"
 
 # CI-only stack: runs the pytest suite (>=95% coverage enforced by
 # pyproject.toml) against a real, throwaway Postgres instance for the
-# database-backend tests. Never used in production — see docker-compose.yml
-# for the actual deployed service.
+# database-backend tests and tests/test_system_db.py. Never used in
+# production — see docker-compose.yml (which also ships a durable local
+# `postgres` service for kind = "db" development).
 
 services:
   db-test:
