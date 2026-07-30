@@ -35,6 +35,20 @@ def test_postgres_test_db_prefers_env_override(monkeypatch):
     assert postgres_test_db() == "custom_test"
 
 
+def test_postgres_test_db_rejects_non_test_env_override(monkeypatch):
+    monkeypatch.setenv("POSTGRES_TEST_DB", "cicerone")
+    with pytest.raises(ValueError, match="dedicated test database"):
+        postgres_test_db()
+
+
+def test_looks_like_test_database():
+    from postgres_defaults import looks_like_test_database
+
+    assert looks_like_test_database("cicerone_test") is True
+    assert looks_like_test_database("cicerone") is False
+    assert looks_like_test_database(None) is False
+
+
 def test_build_test_database_url_uses_host_port_for_localhost(monkeypatch):
     monkeypatch.delenv("POSTGRES_USER", raising=False)
     monkeypatch.delenv("POSTGRES_PASSWORD", raising=False)

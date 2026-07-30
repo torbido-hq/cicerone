@@ -21,6 +21,7 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 from postgres_defaults import (
+    looks_like_test_database,
     postgres_test_db,
     resolve_test_database_url,
 )
@@ -51,9 +52,9 @@ _SKIP_NO_TEST_DB = (
 
 
 def _is_dedicated_test_database(db_name: str | None) -> bool:
-    if not db_name:
-        return False
-    return db_name == postgres_test_db() or db_name.endswith("_test") or db_name.startswith("test_")
+    # Pattern-only: do not trust postgres_test_db() / POSTGRES_TEST_DB env,
+    # which could be overridden to the app DB name (e.g. "cicerone").
+    return looks_like_test_database(db_name)
 
 
 @pytest.fixture(scope="session")
@@ -128,6 +129,16 @@ def test_is_dedicated_test_database_classification(db_name: str | None, expected
 
 def test_is_dedicated_test_database_accepts_canonical_postgres_test_db() -> None:
     assert _is_dedicated_test_database(postgres_test_db()) is True
+
+
+def test_is_dedicated_test_database_ignores_postgres_test_db_env_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POSTGRES_TEST_DB=cicerone must not authorize schema reset on the app DB."""
+    monkeypatch.setenv("POSTGRES_TEST_DB", "cicerone")
+    assert _is_dedicated_test_database("cicerone") is False
+    with pytest.raises(ValueError, match="dedicated test database"):
+        postgres_test_db()
 
 
 def test_reset_schema_rejects_non_test_database_names() -> None:

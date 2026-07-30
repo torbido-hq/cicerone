@@ -57,9 +57,36 @@ def _default(key: str) -> str:
     return os.environ.get(key) or load_postgres_defaults()[key]
 
 
+def looks_like_test_database(db_name: str | None) -> bool:
+    """True when ``db_name`` follows the dedicated-test naming convention.
+
+    Schema-reset guardrails use this pattern only — never an env-overridable
+    exact name — so ``POSTGRES_TEST_DB=cicerone`` cannot authorize wiping the
+    app database.
+    """
+    if not db_name:
+        return False
+    return db_name.endswith("_test") or db_name.startswith("test_")
+
+
+def canonical_postgres_test_db() -> str:
+    """``POSTGRES_TEST_DB`` from defaults.env only (ignores process env)."""
+    return load_postgres_defaults()["POSTGRES_TEST_DB"]
+
+
 def postgres_test_db() -> str:
-    """Canonical pytest database name (``POSTGRES_TEST_DB``)."""
-    return _default("POSTGRES_TEST_DB")
+    """Pytest database name (``POSTGRES_TEST_DB``, env override allowed).
+
+    The resolved name must still look like a test database so an override
+    cannot silently target the app DB (see ``looks_like_test_database``).
+    """
+    name = _default("POSTGRES_TEST_DB")
+    if not looks_like_test_database(name):
+        raise ValueError(
+            f"POSTGRES_TEST_DB must look like a dedicated test database "
+            f"(start with 'test_' or end with '_test'), got {name!r}"
+        )
+    return name
 
 
 def postgres_port_for_host(host: str) -> str:
