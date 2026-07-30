@@ -164,6 +164,44 @@ def test_reset_schema_requires_allow_schema_reset_env(monkeypatch: pytest.Monkey
         _reset_schema(fake_engine)  # type: ignore[arg-type]
 
 
+def test_reset_schema_drops_only_cicerone_tables(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Happy path: reflect, strip unrelated tables, drop_all only DEFAULT_DB_TABLES."""
+
+    class FakeTable:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+    class FakeMetaData:
+        def __init__(self) -> None:
+            self.tables = {name: FakeTable(name) for name in DEFAULT_DB_TABLES}
+            self.tables["unrelated_table"] = FakeTable("unrelated_table")
+            self.reflected = False
+            self.dropped_names: list[str] = []
+
+        def reflect(self, bind=None) -> None:
+            self.reflected = True
+
+        def remove(self, table: FakeTable) -> None:
+            self.tables.pop(table.name, None)
+
+        def drop_all(self, bind=None) -> None:
+            self.dropped_names = list(self.tables)
+
+    fake_metadata = FakeMetaData()
+    monkeypatch.setenv("ALLOW_SCHEMA_RESET_FOR_TESTS", "1")
+    monkeypatch.setattr(
+        "test_system_db.MetaData",
+        lambda: fake_metadata,
+    )
+
+    fake_engine = SimpleNamespace(url=SimpleNamespace(database=postgres_test_db()))
+    _reset_schema(fake_engine)  # type: ignore[arg-type]
+
+    assert fake_metadata.reflected is True
+    assert set(fake_metadata.dropped_names) == set(DEFAULT_DB_TABLES)
+    assert "unrelated_table" not in fake_metadata.dropped_names
+
+
 def _postgres_ready(df: pd.DataFrame) -> pd.DataFrame:
     """Copy a fixture frame into a shape psycopg can insert (plain lists, not ndarrays)."""
     out = df.copy()
