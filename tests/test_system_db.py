@@ -5,17 +5,21 @@ model artifact, then verifies what serve/dashboard would read back — all
 through the same SQLAlchemy stores production uses.
 
 Requires TEST_DATABASE_URL (set automatically by docker-compose.ci.yml, or
-locally via the compose ``postgres`` service — see CONTRIBUTING.md).
+locally via the compose ``postgres`` service's ``cicerone_test`` database —
+see CONTRIBUTING.md). Prefer a dedicated test database; this module drops
+every table in that database's public schema between runs.
 """
 
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 from pathlib import Path
 
 import pandas as pd
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import MetaData, create_engine, text
+from sqlalchemy.engine import Engine
 
 from cicerone import job
 from cicerone.artifact import ARTIFACT_SCHEMA_VERSION, loads_artifact, recommend_from_artifact
@@ -28,35 +32,42 @@ REPO_FEATURES_CONFIG = Path(__file__).resolve().parents[1] / "config" / "feature
 pytestmark = pytest.mark.skipif(
     not TEST_DATABASE_URL,
     reason="TEST_DATABASE_URL not set — start compose postgres "
-    "(`docker compose up -d postgres`) and export "
-    "TEST_DATABASE_URL=postgresql+psycopg://cicerone:cicerone@localhost:5432/cicerone, "
+    "(`docker compose --profile db up -d postgres`) and export "
+    "TEST_DATABASE_URL=postgresql+psycopg://cicerone:cicerone@localhost:5432/cicerone_test, "
     "or run via docker-compose.ci.yml",
 )
 
-_TABLES = (
-    "events",
-    "users",
-    "items",
-    "recommendations",
-    "recommendation_runs",
-    "model_artifacts",
-)
+
+@pytest.fixture(scope="session")
+def db_engine() -> Iterator[Engine]:
+    """One Engine for the whole test session — avoids per-test connect/dispose."""
+    engine = create_engine(TEST_DATABASE_URL, pool_pre_ping=True)
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+
+
+def _reset_schema(engine: Engine) -> None:
+    """Drop every reflected table in the connected database.
+
+    Uses SQLAlchemy metadata reflection rather than a hardcoded table list, so
+    new job/output tables (or renamed ones) are cleaned up automatically.
+    Intended for a dedicated test database only (see CONTRIBUTING.md).
+    """
+    metadata = MetaData()
+    metadata.reflect(bind=engine)
+    metadata.drop_all(bind=engine)
 
 
 @pytest.fixture(autouse=True)
-def _clean_tables():
-    engine = create_engine(TEST_DATABASE_URL)
-    with engine.begin() as conn:
-        for table in _TABLES:
-            conn.execute(text(f'DROP TABLE IF EXISTS "{table}"'))
+def _clean_schema(db_engine: Engine) -> Iterator[None]:
+    _reset_schema(db_engine)
     yield
-    with engine.begin() as conn:
-        for table in _TABLES:
-            conn.execute(text(f'DROP TABLE IF EXISTS "{table}"'))
-    engine.dispose()
+    _reset_schema(db_engine)
 
 
-def _seed_sample_catalog(engine) -> None:
+def _seed_sample_catalog(engine: Engine) -> None:
     now = pd.Timestamp.utcnow()
     events = pd.DataFrame(
         [
@@ -94,12 +105,11 @@ def _seed_sample_catalog(engine) -> None:
     items.to_sql("items", engine, if_exists="replace", index=False)
 
 
-def test_system_job_db_round_trip_with_artifact_and_readers(tmp_path, monkeypatch):
+def test_system_job_db_round_trip_with_artifact_and_readers(db_engine: Engine, tmp_path, monkeypatch):
     """Full path: Postgres catalog → job.run → recommendations/manifest/artifact
     → recommendation + manifest readers (serve/dashboard backends).
     """
-    engine = create_engine(TEST_DATABASE_URL)
-    _seed_sample_catalog(engine)
+    _seed_sample_catalog(db_engine)
 
     config_path = tmp_path / "cicerone.toml"
     config_path.write_text(
@@ -125,24 +135,35 @@ def test_system_job_db_round_trip_with_artifact_and_readers(tmp_path, monkeypatc
 
     job.run(triggered_by="system-spec")
 
-    recommendations = pd.read_sql('SELECT * FROM "recommendations"', engine)
-    assert set(recommendations["user_id"]) >= {"u1", "u2", "u3"}
-    assert set(recommendations.columns) >= {"user_id", "item_id", "rank", "score", "source"}
-    assert recommendations["rank"].min() >= 1
+    # Serve-path reader (same store the HTTP API would query).
+    rec_reader = DbRecommendationReader({"database_url": TEST_DATABASE_URL})
+    for user_id in ("u1", "u2", "u3"):
+        served_all = rec_reader.get_recommendations(user_id, k=10)
+        assert not served_all.empty, f"expected recommendations for {user_id}"
+        assert set(served_all.columns) >= {"user_id", "item_id", "rank", "score", "source"}
+        assert served_all["rank"].min() >= 1
 
-    manifests = pd.read_sql(
-        'SELECT * FROM "recommendation_runs" ORDER BY generated_at DESC',
-        engine,
-    )
-    assert len(manifests) == 1
-    manifest = manifests.iloc[0].to_dict()
-    assert manifest["status"] == "success"
-    assert manifest["triggered_by"] == "system-spec"
-    assert int(manifest["n_events"]) == 5
-    assert bool(manifest["artifact_written"]) is True
-    assert int(manifest["artifact_schema_version"]) == ARTIFACT_SCHEMA_VERSION
+    served = rec_reader.get_recommendations("u1", k=2)
+    assert len(served) == 2
+    assert set(served["user_id"]) == {"u1"}
+    # Ordered by rank ascending (priority combine may leave equal ranks
+    # across strategies for different items).
+    assert list(served["rank"]) == sorted(served["rank"].tolist())
 
-    artifacts = pd.read_sql('SELECT payload, written_at FROM "model_artifacts"', engine)
+    # Dashboard-path reader.
+    manifest_reader = DbManifestReader({"database_url": TEST_DATABASE_URL})
+    latest = manifest_reader.read_latest()
+    assert latest is not None
+    assert latest["status"] == "success"
+    assert latest["triggered_by"] == "system-spec"
+    assert int(latest["n_events"]) == 5
+    assert bool(latest["artifact_written"]) is True
+    assert int(latest["artifact_schema_version"]) == ARTIFACT_SCHEMA_VERSION
+    recent = manifest_reader.read_recent(limit=5)
+    assert len(recent) == 1
+
+    # Artifact blob has no dedicated reader — load via the public artifact API.
+    artifacts = pd.read_sql(text('SELECT payload FROM "model_artifacts"'), db_engine)
     assert len(artifacts) == 1
     payload = bytes(artifacts.iloc[0]["payload"])
     loaded = loads_artifact(payload)
@@ -152,24 +173,3 @@ def test_system_job_db_round_trip_with_artifact_and_readers(tmp_path, monkeypatc
     from_artifact = recommend_from_artifact(loaded, ["u1", "u2"], top_k=3)
     assert not from_artifact.empty
     assert set(from_artifact["user_id"]) <= {"u1", "u2"}
-
-    # Serve-path reader (same store the HTTP API would query).
-    rec_reader = DbRecommendationReader({"database_url": TEST_DATABASE_URL})
-    served = rec_reader.get_recommendations("u1", k=2)
-    assert len(served) == 2
-    assert set(served["user_id"]) == {"u1"}
-    # Ordered by rank ascending (priority combine may leave equal ranks
-    # across strategies for different items).
-    assert list(served["rank"]) == sorted(served["rank"].tolist())
-    assert set(served.columns) >= {"user_id", "item_id", "rank", "score", "source"}
-
-    # Dashboard-path reader.
-    manifest_reader = DbManifestReader({"database_url": TEST_DATABASE_URL})
-    latest = manifest_reader.read_latest()
-    assert latest is not None
-    assert latest["status"] == "success"
-    assert latest["triggered_by"] == "system-spec"
-    recent = manifest_reader.read_recent(limit=5)
-    assert len(recent) == 1
-
-    engine.dispose()

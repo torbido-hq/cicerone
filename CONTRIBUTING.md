@@ -22,11 +22,13 @@ and enforces the 95% coverage gate (`pyproject.toml`,
 skips the `db` tests (no `TEST_DATABASE_URL`) and will under-report coverage
 — always validate with the compose file above before opening a PR.
 
-To iterate on DB-backed tests against the same Postgres the app stack uses:
+To iterate on DB-backed tests against compose Postgres, use the dedicated
+**`cicerone_test`** database (created on first boot) so pytest schema resets
+never wipe tutorial/app data in `cicerone`:
 
 ```sh
-docker compose up -d postgres
-export TEST_DATABASE_URL=postgresql+psycopg://cicerone:cicerone@localhost:5432/cicerone
+docker compose --profile db up -d postgres
+export TEST_DATABASE_URL=postgresql+psycopg://cicerone:cicerone@localhost:5432/cicerone_test
 # then run pytest inside the test image / your venv with PYTHONPATH=src
 ```
 

@@ -6,10 +6,11 @@ version: "3.9"
 # supplies the secrets that cicerone.toml references via ${...} placeholders
 # (set them in .env, see .env.example).
 #
-# Four services, same app image for the three app containers:
-#   postgres    — local Postgres 16 for kind = "db" input/output (and for
-#                 running the DB-backed pytest suite against a real database;
-#                 see CONTRIBUTING.md / tests/test_system_db.py).
+# Services (same app image for the three app containers):
+#   postgres    — optional local Postgres 16 for kind = "db" (compose profile
+#                 "db"). Start with: docker compose --profile db up -d postgres
+#                 Creates databases `cicerone` (app/tutorial) and
+#                 `cicerone_test` (pytest). See CONTRIBUTING.md.
 #   recommender — the batch training job (cron + optional event trigger,
 #                 see [job.trigger] in config/cicerone.toml).
 #   serve       — the lightweight read API over precomputed recommendations
@@ -20,9 +21,13 @@ version: "3.9"
 #                 if you don't need it. Manage its login users with:
 #                   docker compose run --rm dashboard \
 #                     python -m cicerone.manage_dashboard_users add <username>
+#
+# Postgres is opt-in via --profile db so a host already using :5432 (or an
+# S3/dataset-only setup) can still `docker compose up` without waiting on DB.
 
 services:
   postgres:
+    profiles: ["db"]
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: cicerone
@@ -37,15 +42,13 @@ services:
       retries: 20
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init-test-db.sql:/docker-entrypoint-initdb.d/init-test-db.sql:ro
     restart: unless-stopped
 
   recommender:
     build:
       context: .
       dockerfile: docker/Dockerfile
-    depends_on:
-      postgres:
-        condition: service_healthy
     environment:
       PYTHONUNBUFFERED: "1"
       TZ: "Europe/Rome"
@@ -54,8 +57,8 @@ services:
       INPUT_S3_ACCESS_KEY_ID: ${INPUT_S3_ACCESS_KEY_ID:-}
       INPUT_S3_SECRET_ACCESS_KEY: ${INPUT_S3_SECRET_ACCESS_KEY:-}
       INPUT_S3_BUCKET: ${INPUT_S3_BUCKET:-}
-      # Default points at the compose postgres service — override in .env for
-      # a remote DB, or leave unused when [input].kind = "dataset".
+      # Used when [input].kind = "db". With --profile db, point at the compose
+      # postgres service (override in .env for a remote DB).
       INPUT_DATABASE_URL: ${INPUT_DATABASE_URL:-postgresql+psycopg://cicerone:cicerone@postgres:5432/cicerone}
 
       OUTPUT_S3_ENDPOINT_URL: ${OUTPUT_S3_ENDPOINT_URL:-}
@@ -76,9 +79,6 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-    depends_on:
-      postgres:
-        condition: service_healthy
     environment:
       PYTHONUNBUFFERED: "1"
       TZ: "Europe/Rome"
@@ -101,9 +101,6 @@ services:
       context: .
       dockerfile: docker/Dockerfile
     entrypoint: ["python", "-m", "cicerone.dashboard"]
-    depends_on:
-      postgres:
-        condition: service_healthy
     environment:
       PYTHONUNBUFFERED: "1"
       TZ: "Europe/Rome"

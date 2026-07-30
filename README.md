@@ -325,13 +325,14 @@ cp .env.example .env   # set the secrets referenced by config/cicerone.toml
 docker compose up --build
 ```
 
-`docker-compose.yml` includes a local **Postgres 16** service (`postgres`)
-used when `[input]`/`[output].kind = "db"`. Compose defaults
-`INPUT_DATABASE_URL` / `OUTPUT_DATABASE_URL` to that service for the
-recommender, serve, and dashboard containers. For a dataset/S3-only setup
-the Postgres URLs are unused; you can still leave the service running or
-comment it out. Start only the database with
-`docker compose up -d postgres`.
+`docker-compose.yml` includes an optional **Postgres 16** service
+(`postgres`, compose profile `db`) for when `[input]`/`[output].kind = "db"`.
+Start it with `docker compose --profile db up -d postgres` (creates
+databases `cicerone` for the app and `cicerone_test` for pytest). Compose
+defaults `INPUT_DATABASE_URL` / `OUTPUT_DATABASE_URL` to that service for
+the recommender, serve, and dashboard containers when you set them — the
+app services do **not** depend on Postgres, so a dataset/S3-only
+`docker compose up` works even if port 5432 is already taken on the host.
 
 ## Tests & CI
 

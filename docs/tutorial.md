@@ -294,11 +294,13 @@ output). `docker-compose.yml` already includes a Postgres 16 service —
 start just that:
 
 ```sh
-docker compose up -d postgres
+docker compose --profile db up -d postgres
 ```
 
-(Defaults: user/password/db `cicerone`/`cicerone`/`cicerone`, port `5432`
-on the host. Containers reach it as host `postgres`.)
+(Defaults: user/password `cicerone`/`cicerone`, databases `cicerone`
+(app/tutorial) and `cicerone_test` (pytest), port `5432` on the host.
+Containers reach it as host `postgres`. Opt-in via `--profile db` so a
+plain `docker compose up` does not require Postgres.)
 
 Load the sample dataset into `events`/`users`/`items` tables:
 
@@ -360,7 +362,7 @@ instead of requiring materialized tables — see the README's
 Clean up when you're done:
 
 ```sh
-docker compose down   # or: docker compose stop postgres
+docker compose --profile db down   # or: docker compose --profile db stop postgres
 ```
 
 ## 11. Serve recommendations over an HTTP API
