@@ -34,10 +34,21 @@ export ALLOW_SCHEMA_RESET_FOR_TESTS=1
 # then run pytest inside the test image / your venv with PYTHONPATH=src
 ```
 
+Host vs container hostname for the same Postgres:
+
+- **Host / venv pytest** (port published on the machine): use `localhost`
+  (compose binds `127.0.0.1:5432` only).
+- **App containers on the compose network**: use host `postgres`
+  (`…@postgres:5432/…`).
+- **CI** (`docker-compose.ci.yml`): the test container uses host `db-test`
+  (`TEST_DATABASE_URL` is set for you).
+
 `ALLOW_SCHEMA_RESET_FOR_TESTS=1` is set automatically in
 `docker-compose.ci.yml`. Schema reset only proceeds when the database name
 is a known test DB (`cicerone_test`, or a name starting with `test_` /
-ending with `_test`).
+ending with `_test`), and only drops the known Cicerone table set
+(`events` / `users` / `items` / `recommendations` / `recommendation_runs` /
+`model_artifacts`).
 
 ## Linting & formatting
 

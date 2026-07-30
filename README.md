@@ -345,9 +345,12 @@ Runs the whole pytest suite (with an ephemeral Postgres for the `db`
 backend tests and the system-style end-to-end check in
 `tests/test_system_db.py`) inside Docker — nothing to install on the host.
 Locally you can also point `TEST_DATABASE_URL` at the compose `postgres`
-service (see [CONTRIBUTING.md](CONTRIBUTING.md)). The minimum required
-coverage is 95% (`pyproject.toml`, `[tool.coverage.report].fail_under`) and
-is enforced on every PR by `.github/workflows/ci.yml`, which also runs
+service's `cicerone_test` database (see [CONTRIBUTING.md](CONTRIBUTING.md)).
+Use host `localhost` when pytest runs on the host; use `postgres` when the
+client is another compose container on the same network (CI uses `db-test`).
+The minimum required coverage is 95% (`pyproject.toml`,
+`[tool.coverage.report].fail_under`) and is enforced on every PR by
+`.github/workflows/ci.yml`, which also runs
 [Ruff](https://docs.astral.sh/ruff/) (lint + format check), mypy, and
 `pip-audit` in the same test image. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for how to run tests/lint locally,

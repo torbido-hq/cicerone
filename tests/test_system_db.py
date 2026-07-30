@@ -55,11 +55,26 @@ def db_engine() -> Iterator[Engine]:
         engine.dispose()
 
 
-def _reset_schema(engine: Engine) -> None:
-    """Drop every reflected table in the connected database.
+# Default db-backend table names from cicerone.io.db_store / config examples.
+# Schema reset only touches these (plus any that currently exist among them),
+# so a misconfigured or shared test DB cannot wipe unrelated tables.
+_CICERONE_TABLES = frozenset(
+    {
+        "events",
+        "users",
+        "items",
+        "recommendations",
+        "recommendation_runs",
+        "model_artifacts",
+    }
+)
 
-    Uses SQLAlchemy metadata reflection rather than a hardcoded table list, so
-    new job/output tables (or renamed ones) are cleaned up automatically.
+
+def _reset_schema(engine: Engine) -> None:
+    """Drop known Cicerone tables in the connected database.
+
+    Reflects the schema, then drops only tables in ``_CICERONE_TABLES`` that
+    currently exist — never an unrelated table that happens to share the DB.
     Guarded: only dedicated test DB names, and only when
     ALLOW_SCHEMA_RESET_FOR_TESTS=1 (see CONTRIBUTING.md).
     """
@@ -73,11 +88,14 @@ def _reset_schema(engine: Engine) -> None:
     if os.environ.get("ALLOW_SCHEMA_RESET_FOR_TESTS") != "1":
         raise RuntimeError(
             "Schema reset for tests is disabled. Set ALLOW_SCHEMA_RESET_FOR_TESTS=1 "
-            "to permit drop_all on the dedicated test database."
+            "to permit dropping known Cicerone tables on the dedicated test database."
         )
 
     metadata = MetaData()
     metadata.reflect(bind=engine)
+    for table_name in list(metadata.tables):
+        if table_name not in _CICERONE_TABLES:
+            metadata.remove(metadata.tables[table_name])
     metadata.drop_all(bind=engine)
 
 

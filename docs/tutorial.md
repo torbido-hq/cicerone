@@ -298,9 +298,13 @@ docker compose --profile db up -d postgres
 ```
 
 (Defaults: user/password `cicerone`/`cicerone`, databases `cicerone`
-(app/tutorial) and `cicerone_test` (pytest), port `5432` on the host.
-Containers reach it as host `postgres`. Opt-in via `--profile db` so a
-plain `docker compose up` does not require Postgres.)
+(app/tutorial) and `cicerone_test` (pytest). Port `5432` is published on
+**localhost only** (`127.0.0.1:5432`). From the host use `@localhost:5432`;
+from another compose container use `@postgres:5432`. For pytest, prefer
+`cicerone_test` and see [CONTRIBUTING.md](../CONTRIBUTING.md) for
+`TEST_DATABASE_URL` (host `localhost` vs container `postgres` / CI
+`db-test`). Opt-in via `--profile db` so a plain `docker compose up` does
+not require Postgres.)
 
 Load the sample dataset into `events`/`users`/`items` tables:
 
