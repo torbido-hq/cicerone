@@ -273,6 +273,14 @@ happens once per fold per distinct strategy, and `recommend()` still runs
 fresh for every candidate, so this is purely a training-cost optimization
 and doesn't change scoring.
 
+For larger histories, the Python APIs accept an opt-in `max_workers` argument
+(`evaluate_candidates(..., max_workers=N)` and
+`train_and_recommend(..., max_workers=N)`, default `1`). When `max_workers > 1`,
+independent AutoML time-folds and independent strategy fits run through a
+`ProcessPoolExecutor` instead of sequentially — same results, less wall-clock
+time. There is no TOML knob for this yet; pass it from custom callers or
+tests.
+
 ## Model artifacts
 
 By default the batch job fits strategies in-memory, writes precomputed

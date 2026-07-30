@@ -19,15 +19,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   serve/dashboard DB readers. Schema reset is module-scoped, reflects via
   SQLAlchemy metadata, and is gated by a test DB name check plus
   `ALLOW_SCHEMA_RESET_FOR_TESTS=1`.
+- Documentation for **model artifacts** (shipped in 0.2.1): README section,
+  tutorial §9 (`save_model_artifact`, load/recommend via `cicerone.artifact`),
+  architecture notes, and `model_artifact_table` in the commented db config
+  example — previously only covered in the 0.2.1 changelog entry.
+- Documentation for opt-in `max_workers` parallel AutoML folds / strategy
+  fitting (also from 0.2.1) in the README AutoML section.
 
 ### Changed
 
 - Tutorial database section uses
   `docker compose --profile db up -d postgres` instead of an ad-hoc
   `docker run` Postgres container.
-- README / tutorial / architecture document the model-artifact feature and
-  the compose Postgres workflow. Local pytest guidance points
-  `TEST_DATABASE_URL` at `cicerone_test` (with
+- Local pytest guidance points `TEST_DATABASE_URL` at `cicerone_test` (with
   `ALLOW_SCHEMA_RESET_FOR_TESTS=1`) so tests do not wipe app data.
 
 ## [0.2.1] - 2026-07-29
