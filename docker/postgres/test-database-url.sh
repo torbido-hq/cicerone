@@ -4,6 +4,9 @@
 # for pytest (see tests/postgres_defaults.py); use this when you need the
 # literal URL string (docs, one-off tools).
 #
+# localhost / 127.0.0.1 / ::1 → POSTGRES_HOST_PORT (published map)
+# any other host (postgres, db-test) → POSTGRES_PORT (container listen port)
+#
 # Usage:
 #   ./docker/postgres/test-database-url.sh localhost   # host / venv pytest
 #   ./docker/postgres/test-database-url.sh db-test     # CI compose service
@@ -17,4 +20,8 @@ source "${ROOT}/defaults.env"
 set +a
 
 HOST="${1:?usage: $0 <host>}"
-echo "postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${HOST}:${POSTGRES_HOST_PORT}/${POSTGRES_TEST_DB}"
+case "${HOST}" in
+  localhost|127.0.0.1|::1) PORT="${POSTGRES_HOST_PORT}" ;;
+  *) PORT="${POSTGRES_PORT}" ;;
+esac
+echo "postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${HOST}:${PORT}/${POSTGRES_TEST_DB}"

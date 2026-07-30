@@ -50,6 +50,8 @@ interpolation matches that file too.
 **Canonical URL assembly:** `tests/postgres_defaults.build_test_database_url(host)`
 (and `./docker/postgres/test-database-url.sh <host>`). Set
 `POSTGRES_TEST_HOST` for pytest, or `TEST_DATABASE_URL` to override.
+`localhost` / `127.0.0.1` use `POSTGRES_HOST_PORT`; compose service hosts
+(`postgres`, `db-test`) use container `POSTGRES_PORT`.
 
 Host vs container hostname for the same Postgres:
 

@@ -5,8 +5,8 @@ pytest DB name and ``TEST_DATABASE_URL`` assembly cannot drift from that
 source. Prefer setting ``POSTGRES_TEST_HOST`` (and optionally the
 ``POSTGRES_*`` vars) rather than hand-building the URL:
 
-- host / venv: ``POSTGRES_TEST_HOST=localhost``
-- compose CI:  ``POSTGRES_TEST_HOST=db-test`` (see docker-compose.ci.yml)
+- host / venv: ``POSTGRES_TEST_HOST=localhost`` (uses ``POSTGRES_HOST_PORT``)
+- compose CI:  ``POSTGRES_TEST_HOST=db-test`` (uses container ``POSTGRES_PORT``)
 
 ``TEST_DATABASE_URL``, when set, still wins (explicit override).
 """
@@ -24,8 +24,12 @@ _REQUIRED_KEYS = (
     "POSTGRES_PASSWORD",
     "POSTGRES_DB",
     "POSTGRES_TEST_DB",
+    "POSTGRES_PORT",
     "POSTGRES_HOST_PORT",
 )
+
+# Hostnames that reach Postgres via the published host port map.
+_HOST_SIDE_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
 @lru_cache(maxsize=1)
@@ -58,11 +62,18 @@ def postgres_test_db() -> str:
     return _default("POSTGRES_TEST_DB")
 
 
+def postgres_port_for_host(host: str) -> str:
+    """Port for ``host``: published map for localhost, container port otherwise."""
+    if host in _HOST_SIDE_HOSTS:
+        return _default("POSTGRES_HOST_PORT")
+    return _default("POSTGRES_PORT")
+
+
 def build_test_database_url(host: str) -> str:
     """Assemble ``TEST_DATABASE_URL`` for ``host`` from canonical defaults."""
     user = _default("POSTGRES_USER")
     password = _default("POSTGRES_PASSWORD")
-    port = _default("POSTGRES_HOST_PORT")
+    port = postgres_port_for_host(host)
     database = postgres_test_db()
     return f"postgresql+psycopg://{user}:{password}@{host}:{port}/{database}"
 

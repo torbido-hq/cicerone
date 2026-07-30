@@ -20,7 +20,6 @@ from pathlib import Path
 import pandas as pd
 import pytest
 from postgres_defaults import (
-    build_test_database_url,
     postgres_test_db,
     resolve_test_database_url,
 )
@@ -46,9 +45,8 @@ pytestmark = pytest.mark.skipif(
     not TEST_DATABASE_URL,
     reason="TEST_DATABASE_URL / POSTGRES_TEST_HOST not set — start compose postgres "
     "(`docker compose --env-file docker/postgres/defaults.env --profile db up -d postgres`) "
-    f"and export POSTGRES_TEST_HOST=localhost "
-    f"(URL would be {build_test_database_url('localhost')}) "
-    "ALLOW_SCHEMA_RESET_FOR_TESTS=1, or run via docker-compose.ci.yml",
+    "and export POSTGRES_TEST_HOST=localhost ALLOW_SCHEMA_RESET_FOR_TESTS=1, "
+    "or run via docker-compose.ci.yml",
 )
 
 
