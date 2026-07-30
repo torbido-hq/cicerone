@@ -306,11 +306,38 @@ def test_load_settings_defaults_when_job_section_missing(tmp_path):
     assert settings.models is None
     assert settings.model_weights is None
     assert settings.rrf_k is None
+    assert settings.save_model_artifact is False
     assert settings.automl_enabled is False
     assert settings.automl_n_splits == 2
     assert settings.automl_test_days == 14
     assert settings.automl_primary_metric == "MAP"
     assert settings.automl_candidates is None
+
+
+def test_load_settings_save_model_artifact(tmp_path):
+    config_path = _write_toml(
+        tmp_path,
+        """
+        [job]
+        save_model_artifact = true
+
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+
+    settings = load_settings(config_path)
+
+    assert settings.save_model_artifact is True
 
 
 def test_load_settings_db_backend_with_defaults(tmp_path):

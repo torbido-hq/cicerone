@@ -12,13 +12,14 @@ from cicerone.model import RRF_K
 REPO_FEATURES_CONFIG = Path(__file__).resolve().parents[1] / "config" / "features.toml"
 
 
-def _write_config(tmp_path, input_dir, output_dir, top_k: int = 10) -> str:
+def _write_config(tmp_path, input_dir, output_dir, top_k: int = 10, extra_job: str = "") -> str:
     config_path = tmp_path / "cicerone.toml"
     config_path.write_text(
         f"""
         [job]
         top_k = {top_k}
         feature_config_path = "{REPO_FEATURES_CONFIG}"
+        {extra_job}
 
         [input]
         kind = "dataset"
@@ -82,6 +83,65 @@ def test_job_run_end_to_end_with_local_dataset_backend(tmp_path, monkeypatch):
     assert manifest["automl_enabled"] is False
     assert manifest["automl_metrics"] == ""
     assert manifest["triggered_by"] == "manual"
+    assert manifest["artifact_written"] is False
+    assert manifest["artifact_schema_version"] is None
+    assert not (output_dir / "model.artifact").exists()
+
+
+def test_job_run_writes_model_artifact_when_enabled(tmp_path, monkeypatch):
+    from cicerone.artifact import ARTIFACT_SCHEMA_VERSION, load_artifact, recommend_from_artifact
+
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+
+    now = pd.Timestamp.utcnow()
+    events = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 2, "occurred_at": now},
+            {"user_id": "u1", "item_id": "i2", "event_type": "view", "quantity": 1, "occurred_at": now},
+            {
+                "user_id": "u2",
+                "item_id": "i1",
+                "event_type": "review_positive",
+                "quantity": 1,
+                "occurred_at": now,
+            },
+            {"user_id": "u2", "item_id": "i3", "event_type": "saved", "quantity": 1, "occurred_at": now},
+        ]
+    )
+    items = pd.DataFrame(
+        [
+            {"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True},
+            {"item_id": "i2", "category": "beer", "producer_id": "p2", "published": True, "in_stock": True},
+            {"item_id": "i3", "category": "wine", "producer_id": "p1", "published": True, "in_stock": True},
+        ]
+    )
+    events.to_parquet(input_dir / "events.parquet", index=False)
+    items.to_parquet(input_dir / "items.parquet", index=False)
+
+    config_path = _write_config(
+        tmp_path, input_dir, output_dir, top_k=2, extra_job="save_model_artifact = true"
+    )
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
+
+    job.run()
+
+    artifact_path = output_dir / "model.artifact"
+    assert artifact_path.exists()
+
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    assert manifest["artifact_written"] is True
+    assert manifest["artifact_schema_version"] == ARTIFACT_SCHEMA_VERSION
+
+    recommendations = pd.read_parquet(output_dir / "recommendations.parquet")
+    loaded = load_artifact(artifact_path)
+    from_artifact = recommend_from_artifact(loaded, sorted(recommendations["user_id"].unique()), top_k=2)
+    pd.testing.assert_frame_equal(
+        recommendations.sort_values(["user_id", "rank"]).reset_index(drop=True),
+        from_artifact.sort_values(["user_id", "rank"]).reset_index(drop=True),
+    )
 
 
 def test_job_run_with_automl_enabled_selects_and_records_best_candidate(tmp_path, monkeypatch):

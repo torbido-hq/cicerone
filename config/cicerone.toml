@@ -32,6 +32,12 @@ feature_config_path = "/app/config/features.toml"
 # popularity fallback), "latest" (trending in the last two weeks).
 # models = ["collaborative", "item_based", "popular", "latest"]
 
+# Optional: also write a versioned fitted-model artifact (model.artifact /
+# model_artifacts table) alongside recommendations. Loadable later via
+# cicerone.artifact without re-running training. Default false. Serve mode
+# never loads this — it still reads precomputed recommendation rows only.
+# save_model_artifact = false
+
 # Optional: combine the enabled strategies via weighted reciprocal rank
 # fusion instead of the default priority order (personalized results win
 # ties, non-personalized ones only backfill). If omitted, the priority

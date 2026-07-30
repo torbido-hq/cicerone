@@ -25,6 +25,10 @@ class OutputSink(Protocol):
 
     def write_manifest(self, manifest: dict) -> None: ...
 
+    def write_model_artifact(self, payload: bytes) -> None:
+        """Persists a serialized ModelArtifact (see cicerone.artifact)."""
+        ...
+
 
 class RecommendationReader(Protocol):
     """Read-only counterpart of OutputSink, used by serve mode to read

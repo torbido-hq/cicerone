@@ -19,8 +19,10 @@ io/
   manifest_reader.py    read-only lookup of job-run manifests for the dashboard (no rectools/lightfm import)
   options.py           shared "require_option"/build_s3_client helpers
 dataset.py            raw events/users/items -> weighted rectools Dataset (BuiltDataset)
-model.py            BuiltDataset -> STRATEGIES registry (collaborative/item_based/
+model.py              BuiltDataset -> STRATEGIES registry (collaborative/item_based/
                      popular/latest) -> top-K recommendations, combined per user
+artifact.py           optional versioned fitted-model bundle (save/load + recommend
+                     without re-fitting); written by the batch job when enabled
 automl.py            optional: backtests candidate models/weights/rrf_k configs over
                      time-based folds of event history and picks the best one
 job.py                orchestrates one end-to-end run (source -> dataset -> model -> sink)
@@ -91,8 +93,9 @@ flowchart LR
    who is evaluating multiple configs against the same `BuiltDataset` —
    namely `automl.evaluate_candidates()` — skip re-fitting a strategy shared
    by more than one candidate; a cache hit still calls `recommend()` fresh, so
-   it works even across candidates with different `top_k`/`weights`. Unused
-   (`None`) by the single-config `job.py` call path.
+   it works even across candidates with different `top_k`/`weights`. The
+   batch job also passes a cache when `[job].save_model_artifact = true` so
+   fitted weights can be serialized without a second fit.
 4. If `Settings.automl_enabled` (`[job.automl].enabled`), before step 3
    `automl.evaluate_candidates()` backtests a list of candidate
    `models`/`weights`/`rrf_k` configs (defaults to `automl.DEFAULT_CANDIDATES`,
@@ -110,8 +113,13 @@ flowchart LR
    `models`/`weights`/`rrf_k` replace the static config for that run's call
    to `model.train_and_recommend()`.
 5. `job.run()` writes the combined recommendations and a small run manifest
-   (counts, timestamp, effective `models`/`model_weights`/`rrf_k`, and
-   `automl_metrics` when AutoML ran) back out via the configured `OutputSink`.
+   (counts, timestamp, effective `models`/`model_weights`/`rrf_k`,
+   `artifact_written` / `artifact_schema_version` when a model artifact was
+   saved, and `automl_metrics` when AutoML ran) back out via the configured
+   `OutputSink`. When `Settings.save_model_artifact` is true, it also writes
+   a versioned fitted-model artifact (`model.artifact` for the dataset
+   backend, `model_artifacts` table for db) via
+   `OutputSink.write_model_artifact`. Serve mode never loads this artifact.
 6. `scheduler.main()` is the container's actual entrypoint for batch mode: it
    computes the next run time from `cron_schedule` with `croniter`, sleeps,
    calls `job.run(triggered_by="cron")`, and loops forever — a failed run is

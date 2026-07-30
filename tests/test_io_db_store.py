@@ -27,10 +27,12 @@ def _clean_tables():
             "items",
             "recommendations",
             "recommendation_runs",
+            "model_artifacts",
             "custom_events",
             "custom_users",
             "custom_recommendations",
             "custom_manifest_runs",
+            "custom_model_artifacts",
         ):
             conn.execute(text(f'DROP TABLE IF EXISTS "{table}"'))
     yield
@@ -106,6 +108,31 @@ def test_database_output_writes_manifest_appends():
     stored = pd.read_sql('SELECT * FROM "recommendation_runs"', engine)
 
     assert list(stored["n_events"]) == [1, 2]
+
+
+def test_database_output_writes_and_replaces_model_artifact():
+    sink = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})
+
+    sink.write_model_artifact(b"first")
+    sink.write_model_artifact(b"second")
+
+    engine = create_engine(TEST_DATABASE_URL)
+    stored = pd.read_sql('SELECT payload FROM "model_artifacts"', engine)
+
+    assert len(stored) == 1
+    payload = stored.iloc[0]["payload"]
+    assert bytes(payload) == b"second"
+
+
+def test_database_output_model_artifact_custom_table_name():
+    sink = DatabaseOutputSink(
+        {"database_url": TEST_DATABASE_URL, "model_artifact_table": "custom_model_artifacts"}
+    )
+    sink.write_model_artifact(b"custom")
+
+    engine = create_engine(TEST_DATABASE_URL)
+    stored = pd.read_sql('SELECT payload FROM "custom_model_artifacts"', engine)
+    assert bytes(stored.iloc[0]["payload"]) == b"custom"
 
 
 def test_missing_database_url_raises():

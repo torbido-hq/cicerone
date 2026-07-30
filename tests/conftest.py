@@ -25,6 +25,7 @@ def make_settings(**overrides) -> Settings:
         models=None,
         model_weights=None,
         rrf_k=None,
+        save_model_artifact=False,
         automl_enabled=False,
         automl_n_splits=2,
         automl_test_days=14,

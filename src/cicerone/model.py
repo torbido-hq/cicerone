@@ -195,46 +195,41 @@ def _fit_strategy(name: str, dataset: Dataset) -> tuple[str, RecommenderModel]:
     return name, model
 
 
-def train_and_recommend(
+def _resolve_enabled_models(enabled_models: list[str] | None) -> list[str]:
+    resolved = enabled_models if enabled_models is not None else DEFAULT_MODELS
+    if not resolved:
+        raise ValueError(
+            "enabled_models is empty; provide at least one model name, or omit enabled_models/pass None "
+            "to use the default"
+        )
+    unknown_models = [name for name in resolved if name not in STRATEGIES]
+    if unknown_models:
+        raise ValueError(f"Unknown model(s) {unknown_models}; available: {sorted(STRATEGIES)}")
+    return resolved
+
+
+def fit_strategies(
     built: BuiltDataset,
     target_users: list[str],
-    config: FeatureConfig,
-    top_k: int,
     enabled_models: list[str] | None = None,
-    weights: dict[str, float] | None = None,
-    rrf_k: float | None = None,
     strategy_cache: dict[str, RecommenderModel] | None = None,
     max_workers: int = 1,
-) -> pd.DataFrame:
-    """`strategy_cache`, if given, caches fitted models by strategy name so
+) -> tuple[list[str], dict[str, RecommenderModel]]:
+    """Fits (or cache-hits) every enabled strategy. Returns
+    ``(resolved_enabled_models, fitted_models)``.
+
+    `strategy_cache`, if given, caches fitted models by strategy name so
     callers evaluating multiple candidates against the same built dataset
-    (see cicerone.automl) can avoid re-fitting a shared strategy.
+    (see cicerone.automl) can avoid re-fitting a shared strategy — and so
+    the batch job can capture fitted weights for a model artifact without
+    a second fit.
 
     Strategies are independent, so with `max_workers > 1` the models that
     still need fitting are fit in a `ProcessPoolExecutor` instead of
     sequentially in-process (the default).
     """
     dataset = built.dataset
-    enabled_models = enabled_models if enabled_models is not None else DEFAULT_MODELS
-    if not enabled_models:
-        raise ValueError(
-            "enabled_models is empty; provide at least one model name, or omit enabled_models/pass None "
-            "to use the default"
-        )
-    unknown_models = [name for name in enabled_models if name not in STRATEGIES]
-    if unknown_models:
-        raise ValueError(f"Unknown model(s) {unknown_models}; available: {sorted(STRATEGIES)}")
-    if weights is not None:
-        unknown_weights = [name for name in weights if name not in enabled_models]
-        if unknown_weights:
-            raise ValueError(
-                f"model_weights key(s) {unknown_weights} are not in enabled_models {enabled_models}"
-            )
-        validate_model_weights(weights)
-    validate_rrf_k(rrf_k)
-
-    all_item_ids = dataset.item_id_map.external_ids
-    allowed_items = _recommendable_item_ids(built.items, config.item_availability_filters, all_item_ids)
+    enabled_models = _resolve_enabled_models(enabled_models)
 
     known_users = set(dataset.user_id_map.external_ids)
     warm_users = [u for u in target_users if u in known_users]
@@ -253,7 +248,6 @@ def train_and_recommend(
                 len(cold_users),
                 len(target_users),
             )
-    unique_target_users = list(dict.fromkeys(target_users))
 
     models: dict[str, RecommenderModel] = {}
     if strategy_cache is not None:
@@ -283,11 +277,49 @@ def train_and_recommend(
             for name in to_fit:
                 strategy_cache[name] = models[name]
 
+    return enabled_models, models
+
+
+def recommend_with_models(
+    models: dict[str, RecommenderModel],
+    built: BuiltDataset,
+    target_users: list[str],
+    config: FeatureConfig,
+    top_k: int,
+    enabled_models: list[str],
+    weights: dict[str, float] | None = None,
+    rrf_k: float | None = None,
+) -> pd.DataFrame:
+    """Runs recommend + combine on already-fitted strategies (no fit).
+
+    Used by ``train_and_recommend`` and by ``artifact.recommend_from_artifact``
+    so a loaded model artifact can produce recommendations without re-training.
+    """
+    enabled_models = _resolve_enabled_models(enabled_models)
+    if weights is not None:
+        unknown_weights = [name for name in weights if name not in enabled_models]
+        if unknown_weights:
+            raise ValueError(
+                f"model_weights key(s) {unknown_weights} are not in enabled_models {enabled_models}"
+            )
+        validate_model_weights(weights)
+    validate_rrf_k(rrf_k)
+
+    dataset = built.dataset
+    all_item_ids = dataset.item_id_map.external_ids
+    allowed_items = _recommendable_item_ids(built.items, config.item_availability_filters, all_item_ids)
+
+    known_users = set(dataset.user_id_map.external_ids)
+    warm_users = [u for u in target_users if u in known_users]
+    unique_target_users = list(dict.fromkeys(target_users))
+
     frames = []
     for name in enabled_models:
         strategy = STRATEGIES[name]
         if strategy.personalized and not warm_users:
             continue
+        if name not in models:
+            raise ValueError(f"Fitted model for strategy {name!r} is missing; available: {sorted(models)}")
         recs = models[name].recommend(
             users=warm_users if strategy.personalized else unique_target_users,
             dataset=dataset,
@@ -310,3 +342,36 @@ def train_and_recommend(
     else:
         combined = _combine_by_priority(frames, top_k)
     return combined.reset_index(drop=True)
+
+
+def train_and_recommend(
+    built: BuiltDataset,
+    target_users: list[str],
+    config: FeatureConfig,
+    top_k: int,
+    enabled_models: list[str] | None = None,
+    weights: dict[str, float] | None = None,
+    rrf_k: float | None = None,
+    strategy_cache: dict[str, RecommenderModel] | None = None,
+    max_workers: int = 1,
+) -> pd.DataFrame:
+    """Fit enabled strategies, then recommend + combine. See ``fit_strategies``
+    and ``recommend_with_models`` for the split used by model artifacts.
+    """
+    resolved_models, fitted = fit_strategies(
+        built,
+        target_users,
+        enabled_models=enabled_models,
+        strategy_cache=strategy_cache,
+        max_workers=max_workers,
+    )
+    return recommend_with_models(
+        fitted,
+        built,
+        target_users,
+        config,
+        top_k=top_k,
+        enabled_models=resolved_models,
+        weights=weights,
+        rrf_k=rrf_k,
+    )

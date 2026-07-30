@@ -103,6 +103,7 @@ class Settings:
     models: list[str] | None
     model_weights: dict[str, float] | None
     rrf_k: float | None
+    save_model_artifact: bool
     automl_enabled: bool
     automl_n_splits: int
     automl_test_days: int
@@ -204,6 +205,7 @@ def load_settings(config_path: str | None = None) -> Settings:
         models=models,
         model_weights=model_weights,
         rrf_k=rrf_k,
+        save_model_artifact=bool(job.get("save_model_artifact", False)),
         automl_enabled=bool(automl.get("enabled", False)),
         automl_n_splits=int(automl.get("n_splits", AUTOML_DEFAULT_N_SPLITS)),
         automl_test_days=int(automl.get("test_days", AUTOML_DEFAULT_TEST_DAYS)),
