@@ -91,6 +91,8 @@ COPY requirements-dev.txt ./
 RUN pip install --no-cache-dir -r requirements-dev.txt
 COPY pyproject.toml ./
 COPY tests/ ./tests/
+# Canonical Postgres defaults — parsed by tests/postgres_defaults.py at runtime.
+COPY docker/postgres/defaults.env ./docker/postgres/defaults.env
 RUN chown -R cicerone:cicerone /app
 USER cicerone
 ENTRYPOINT []

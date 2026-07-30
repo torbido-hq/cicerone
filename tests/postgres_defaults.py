@@ -1,0 +1,76 @@
+"""Canonical local/CI Postgres defaults for tests.
+
+Reads ``docker/postgres/defaults.env`` (same file compose/CI use) so the
+pytest DB name and ``TEST_DATABASE_URL`` assembly cannot drift from that
+source. Prefer setting ``POSTGRES_TEST_HOST`` (and optionally the
+``POSTGRES_*`` vars) rather than hand-building the URL:
+
+- host / venv: ``POSTGRES_TEST_HOST=localhost``
+- compose CI:  ``POSTGRES_TEST_HOST=db-test`` (see docker-compose.ci.yml)
+
+``TEST_DATABASE_URL``, when set, still wins (explicit override).
+"""
+
+from __future__ import annotations
+
+import os
+from functools import lru_cache
+from pathlib import Path
+
+_DEFAULTS_PATH = Path(__file__).resolve().parents[1] / "docker" / "postgres" / "defaults.env"
+
+_REQUIRED_KEYS = (
+    "POSTGRES_USER",
+    "POSTGRES_PASSWORD",
+    "POSTGRES_DB",
+    "POSTGRES_TEST_DB",
+    "POSTGRES_HOST_PORT",
+)
+
+
+@lru_cache(maxsize=1)
+def load_postgres_defaults() -> dict[str, str]:
+    """Parse docker/postgres/defaults.env into a dict (no shell expansion)."""
+    if not _DEFAULTS_PATH.is_file():
+        raise FileNotFoundError(
+            f"Missing Postgres defaults file at {_DEFAULTS_PATH}. "
+            "It is the canonical source for local/CI DB credentials."
+        )
+    values: dict[str, str] = {}
+    for raw_line in _DEFAULTS_PATH.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        values[key.strip()] = value.strip()
+    missing = [key for key in _REQUIRED_KEYS if key not in values]
+    if missing:
+        raise ValueError(f"{_DEFAULTS_PATH} missing required keys: {missing}")
+    return values
+
+
+def _default(key: str) -> str:
+    return os.environ.get(key) or load_postgres_defaults()[key]
+
+
+def postgres_test_db() -> str:
+    """Canonical pytest database name (``POSTGRES_TEST_DB``)."""
+    return _default("POSTGRES_TEST_DB")
+
+
+def build_test_database_url(host: str) -> str:
+    """Assemble ``TEST_DATABASE_URL`` for ``host`` from canonical defaults."""
+    user = _default("POSTGRES_USER")
+    password = _default("POSTGRES_PASSWORD")
+    port = _default("POSTGRES_HOST_PORT")
+    database = postgres_test_db()
+    return f"postgresql+psycopg://{user}:{password}@{host}:{port}/{database}"
+
+
+def resolve_test_database_url() -> str | None:
+    """Resolve the DB URL for pytest: explicit URL, else host + defaults."""
+    if url := os.environ.get("TEST_DATABASE_URL"):
+        return url
+    if host := os.environ.get("POSTGRES_TEST_HOST"):
+        return build_test_database_url(host)
+    return None

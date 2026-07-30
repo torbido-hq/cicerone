@@ -6,10 +6,9 @@ version: "3.9"
 # production — see docker-compose.yml (which also ships a durable local
 # `postgres` service for kind = "db" development).
 #
-# Credentials / DB names: docker/postgres/defaults.env (canonical; same file
-# as local compose). CI uses POSTGRES_TEST_DB as POSTGRES_DB so the
-# throwaway instance is the test database only. Compose ${...:-fallback}
-# values below must match that file.
+# Credentials / DB names: docker/postgres/defaults.env (canonical).
+# TEST_DATABASE_URL is assembled by tests/postgres_defaults.py from
+# POSTGRES_TEST_HOST + that file — do not hand-build the URL here.
 
 services:
   db-test:
@@ -35,8 +34,8 @@ services:
     env_file:
       - ./docker/postgres/defaults.env
     environment:
-      # Host is the compose service name; user/password/db from defaults.env.
-      TEST_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-cicerone}:${POSTGRES_PASSWORD:-cicerone}@db-test:5432/${POSTGRES_TEST_DB:-cicerone_test}
+      # Hostname only — URL from tests/postgres_defaults.resolve_test_database_url().
+      POSTGRES_TEST_HOST: db-test
       # Required by tests/test_system_db.py before it will drop known tables.
       ALLOW_SCHEMA_RESET_FOR_TESTS: "1"
     depends_on:

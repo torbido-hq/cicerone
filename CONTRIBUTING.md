@@ -24,16 +24,19 @@ skips the `db` tests (no `TEST_DATABASE_URL`) and will under-report coverage
 — always validate with the compose file above before opening a PR.
 
 To iterate on DB-backed tests against compose Postgres, use the dedicated
-**pytest database** (see defaults below) so schema resets never wipe
-tutorial/app data. The system-spec also requires an explicit opt-in before
-it will drop known Cicerone tables:
+**pytest database** so schema resets never wipe tutorial/app data. Prefer
+setting the hostname only — pytest builds `TEST_DATABASE_URL` from
+[`docker/postgres/defaults.env`](docker/postgres/defaults.env) via
+`tests/postgres_defaults.py`:
 
 ```sh
 docker compose --env-file docker/postgres/defaults.env --profile db up -d postgres
-# Host URL — credentials/DB/port from docker/postgres/defaults.env:
-export TEST_DATABASE_URL=postgresql+psycopg://cicerone:cicerone@localhost:5432/cicerone_test
+export POSTGRES_TEST_HOST=localhost
 export ALLOW_SCHEMA_RESET_FOR_TESTS=1
 # then run pytest inside the test image / your venv with PYTHONPATH=src
+#
+# Need the literal URL string? Same source of truth:
+#   ./docker/postgres/test-database-url.sh localhost
 ```
 
 ### Local Postgres defaults
@@ -44,19 +47,21 @@ and `docker-compose.ci.yml` load it via `env_file`; prefer
 `docker compose --env-file docker/postgres/defaults.env …` so `${…}`
 interpolation matches that file too.
 
+**Canonical URL assembly:** `tests/postgres_defaults.build_test_database_url(host)`
+(and `./docker/postgres/test-database-url.sh <host>`). Set
+`POSTGRES_TEST_HOST` for pytest, or `TEST_DATABASE_URL` to override.
+
 Host vs container hostname for the same Postgres:
 
-- **Host / venv pytest** (port published on the machine): use `localhost`
-  (compose binds `127.0.0.1` only; port = `POSTGRES_HOST_PORT`).
-- **App containers on the compose network**: use host `postgres`.
-- **CI** (`docker-compose.ci.yml`): the test container uses host `db-test`
-  (`TEST_DATABASE_URL` is set for you).
+- **Host / venv pytest** (port published on the machine):
+  `POSTGRES_TEST_HOST=localhost` (compose binds `127.0.0.1` only).
+- **App containers on the compose network**: host `postgres`.
+- **CI** (`docker-compose.ci.yml`): `POSTGRES_TEST_HOST=db-test`.
 
 `ALLOW_SCHEMA_RESET_FOR_TESTS=1` is set automatically in
 `docker-compose.ci.yml`. Schema reset only proceeds when the database name
-is a known test DB (`POSTGRES_TEST_DB` / `cicerone_test`, or a name
-starting with `test_` / ending with `_test`), and only drops
-`cicerone.io.db_store.DEFAULT_DB_TABLES`.
+is `POSTGRES_TEST_DB` from defaults.env, or a name starting with `test_` /
+ending with `_test`, and only drops `cicerone.io.db_store.DEFAULT_DB_TABLES`.
 
 ## Linting & formatting
 

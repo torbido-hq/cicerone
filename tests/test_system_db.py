@@ -5,10 +5,10 @@ as the rest of the suite), runs the full batch job with db input/output + a
 model artifact, then verifies what serve/dashboard would read back — all
 through the same SQLAlchemy stores production uses.
 
-Requires TEST_DATABASE_URL (set automatically by docker-compose.ci.yml, or
-locally via the compose ``postgres`` service's ``cicerone_test`` database —
-see CONTRIBUTING.md). Schema resets are gated: the DB name must look like a
-test database and ``ALLOW_SCHEMA_RESET_FOR_TESTS=1`` must be set.
+Requires a test DB URL via ``TEST_DATABASE_URL`` or ``POSTGRES_TEST_HOST``
+(see ``tests.postgres_defaults`` / CONTRIBUTING.md). Schema resets are gated:
+the DB name must look like a test database and
+``ALLOW_SCHEMA_RESET_FOR_TESTS=1`` must be set.
 """
 
 from __future__ import annotations
@@ -19,6 +19,11 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from postgres_defaults import (
+    build_test_database_url,
+    postgres_test_db,
+    resolve_test_database_url,
+)
 from sqlalchemy import MetaData, create_engine, text
 from sqlalchemy.engine import Engine
 
@@ -34,14 +39,15 @@ from cicerone.io.db_store import (
 from cicerone.io.manifest_reader import DbManifestReader
 from cicerone.io.recommendation_reader import DbRecommendationReader
 
-TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
+TEST_DATABASE_URL = resolve_test_database_url()
 REPO_FEATURES_CONFIG = Path(__file__).resolve().parents[1] / "config" / "features.toml"
 
 pytestmark = pytest.mark.skipif(
     not TEST_DATABASE_URL,
-    reason="TEST_DATABASE_URL not set — start compose postgres "
-    "(`docker compose --profile db up -d postgres`) and export "
-    "TEST_DATABASE_URL=postgresql+psycopg://cicerone:cicerone@localhost:5432/cicerone_test "
+    reason="TEST_DATABASE_URL / POSTGRES_TEST_HOST not set — start compose postgres "
+    "(`docker compose --env-file docker/postgres/defaults.env --profile db up -d postgres`) "
+    f"and export POSTGRES_TEST_HOST=localhost "
+    f"(URL would be {build_test_database_url('localhost')}) "
     "ALLOW_SCHEMA_RESET_FOR_TESTS=1, or run via docker-compose.ci.yml",
 )
 
@@ -49,7 +55,7 @@ pytestmark = pytest.mark.skipif(
 def _is_dedicated_test_database(db_name: str | None) -> bool:
     if not db_name:
         return False
-    return db_name == "cicerone_test" or db_name.endswith("_test") or db_name.startswith("test_")
+    return db_name == postgres_test_db() or db_name.endswith("_test") or db_name.startswith("test_")
 
 
 @pytest.fixture(scope="session")
@@ -75,7 +81,8 @@ def _reset_schema(engine: Engine) -> None:
         raise RuntimeError(
             f"Refusing to reset schema for non-test database {db_name!r}. "
             "TEST_DATABASE_URL must point at a dedicated test DB "
-            "(e.g. cicerone_test, or a name starting with 'test_' / ending with '_test')."
+            f"(e.g. {postgres_test_db()!r}, or a name starting with 'test_' / "
+            "ending with '_test')."
         )
     if os.environ.get("ALLOW_SCHEMA_RESET_FOR_TESTS") != "1":
         raise RuntimeError(
