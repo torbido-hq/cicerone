@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -41,12 +42,11 @@ from cicerone.io.recommendation_reader import DbRecommendationReader
 TEST_DATABASE_URL = resolve_test_database_url()
 REPO_FEATURES_CONFIG = Path(__file__).resolve().parents[1] / "config" / "features.toml"
 
-pytestmark = pytest.mark.skipif(
-    not TEST_DATABASE_URL,
-    reason="TEST_DATABASE_URL / POSTGRES_TEST_HOST not set — start compose postgres "
+_SKIP_NO_TEST_DB = (
+    "TEST_DATABASE_URL / POSTGRES_TEST_HOST not set — start compose postgres "
     "(`docker compose --env-file docker/postgres/defaults.env --profile db up -d postgres`) "
     "and export POSTGRES_TEST_HOST=localhost ALLOW_SCHEMA_RESET_FOR_TESTS=1, "
-    "or run via docker-compose.ci.yml",
+    "or run via docker-compose.ci.yml"
 )
 
 
@@ -59,6 +59,8 @@ def _is_dedicated_test_database(db_name: str | None) -> bool:
 @pytest.fixture(scope="session")
 def db_engine() -> Iterator[Engine]:
     """One Engine for the whole test session — avoids per-test connect/dispose."""
+    if not TEST_DATABASE_URL:
+        pytest.skip(_SKIP_NO_TEST_DB)
     engine = create_engine(TEST_DATABASE_URL, pool_pre_ping=True)
     try:
         yield engine
@@ -96,12 +98,59 @@ def _reset_schema(engine: Engine) -> None:
     metadata.drop_all(bind=engine)
 
 
-@pytest.fixture(autouse=True, scope="module")
-def _clean_schema(db_engine: Engine) -> Iterator[None]:
-    """Reset schema once around this module's tests (not every function)."""
+@pytest.fixture(scope="module")
+def clean_schema(db_engine: Engine) -> Iterator[None]:
+    """Reset schema once around the system-spec (not every unit test in this module)."""
     _reset_schema(db_engine)
     yield
     _reset_schema(db_engine)
+
+
+@pytest.mark.parametrize(
+    ("db_name", "expected"),
+    [
+        ("test_db", True),
+        ("foo_test", True),
+        ("test_", True),
+        ("_test", True),
+        (None, False),
+        ("", False),
+        ("production", False),
+        ("staging", False),
+        ("dev", False),
+        ("foo_test_backup", False),
+        ("pretest_db", False),
+    ],
+)
+def test_is_dedicated_test_database_classification(db_name: str | None, expected: bool) -> None:
+    assert _is_dedicated_test_database(db_name) is expected
+
+
+def test_is_dedicated_test_database_accepts_canonical_postgres_test_db() -> None:
+    assert _is_dedicated_test_database(postgres_test_db()) is True
+
+
+def test_reset_schema_rejects_non_test_database_names() -> None:
+    """Guardrails must fire before any DB I/O for non-test database names."""
+
+    for db_name in ("prod", "analytics"):
+        fake_engine = SimpleNamespace(url=SimpleNamespace(database=db_name))
+        with pytest.raises(RuntimeError, match="Refusing to reset schema for non-test database"):
+            _reset_schema(fake_engine)  # type: ignore[arg-type]
+
+
+def test_reset_schema_requires_allow_schema_reset_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Even a dedicated test DB name is refused without ALLOW_SCHEMA_RESET_FOR_TESTS=1."""
+
+    fake_engine = SimpleNamespace(url=SimpleNamespace(database=postgres_test_db()))
+
+    monkeypatch.delenv("ALLOW_SCHEMA_RESET_FOR_TESTS", raising=False)
+    with pytest.raises(RuntimeError, match="ALLOW_SCHEMA_RESET_FOR_TESTS"):
+        _reset_schema(fake_engine)  # type: ignore[arg-type]
+
+    monkeypatch.setenv("ALLOW_SCHEMA_RESET_FOR_TESTS", "0")
+    with pytest.raises(RuntimeError, match="ALLOW_SCHEMA_RESET_FOR_TESTS"):
+        _reset_schema(fake_engine)  # type: ignore[arg-type]
 
 
 def _postgres_ready(df: pd.DataFrame) -> pd.DataFrame:
@@ -125,8 +174,10 @@ def _seed_catalog(engine: Engine, events: pd.DataFrame, users: pd.DataFrame, ite
     _postgres_ready(items).to_sql(DEFAULT_ITEMS_TABLE, engine, if_exists="replace", index=False)
 
 
+@pytest.mark.skipif(not TEST_DATABASE_URL, reason=_SKIP_NO_TEST_DB)
 def test_system_job_db_round_trip_with_artifact_and_readers(
     db_engine: Engine,
+    clean_schema: None,
     tmp_path,
     monkeypatch,
     sample_events: pd.DataFrame,
