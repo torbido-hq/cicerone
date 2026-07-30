@@ -41,6 +41,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `docker run` Postgres container.
 - Local pytest guidance points `TEST_DATABASE_URL` at `cicerone_test` (with
   `ALLOW_SCHEMA_RESET_FOR_TESTS=1`) so tests do not wipe app data.
+- Dependency bumps: `fastapi` 0.139.2 → 0.140.13, `uvicorn` 0.51.0 → 0.52.0,
+  `bcrypt` 4.2.1 → 5.0.0, `pytest` 9.0.3 → 9.1.1, `ruff` 0.15.22 → 0.16.0,
+  and the dashboard frontend build image `node:22-slim` → `node:26-slim`.
 
 ### Fixed
 
