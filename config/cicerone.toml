@@ -160,6 +160,7 @@ prefix = "recommendations/latest"
 #
 # [input.options]
 # database_url = "${INPUT_DATABASE_URL}"
+# # Table names default to cicerone.io.db_store.DEFAULT_* (events/users/items/…).
 # events_table = "events"
 # users_table = "users"
 # items_table = "items"
@@ -174,6 +175,8 @@ prefix = "recommendations/latest"
 #
 # [output.options]
 # database_url = "${OUTPUT_DATABASE_URL}"
+# # Defaults: DEFAULT_RECOMMENDATIONS_TABLE / DEFAULT_MANIFEST_TABLE /
+# # DEFAULT_MODEL_ARTIFACT_TABLE in cicerone.io.db_store.
 # recommendations_table = "recommendations"
 # manifest_table = "recommendation_runs"
 # model_artifact_table = "model_artifacts"  # used when [job].save_model_artifact = true

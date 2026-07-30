@@ -5,16 +5,22 @@ version: "3.9"
 # database-backend tests and tests/test_system_db.py. Never used in
 # production — see docker-compose.yml (which also ships a durable local
 # `postgres` service for kind = "db" development).
+#
+# Credentials / DB names: docker/postgres/defaults.env (canonical; same file
+# as local compose). CI uses POSTGRES_TEST_DB as POSTGRES_DB so the
+# throwaway instance is the test database only. Compose ${...:-fallback}
+# values below must match that file.
 
 services:
   db-test:
     image: postgres:16-alpine
+    env_file:
+      - ./docker/postgres/defaults.env
     environment:
-      POSTGRES_USER: cicerone
-      POSTGRES_PASSWORD: cicerone
-      POSTGRES_DB: cicerone_test
+      # Override app DB — CI only needs the pytest database.
+      POSTGRES_DB: ${POSTGRES_TEST_DB:-cicerone_test}
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U cicerone -d cicerone_test"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 3s
       timeout: 3s
       retries: 20
@@ -26,9 +32,12 @@ services:
       context: .
       dockerfile: docker/Dockerfile
       target: test
+    env_file:
+      - ./docker/postgres/defaults.env
     environment:
-      TEST_DATABASE_URL: postgresql+psycopg://cicerone:cicerone@db-test:5432/cicerone_test
-      # Required by tests/test_system_db.py before it will drop_all on the test DB.
+      # Host is the compose service name; user/password/db from defaults.env.
+      TEST_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-cicerone}:${POSTGRES_PASSWORD:-cicerone}@db-test:5432/${POSTGRES_TEST_DB:-cicerone_test}
+      # Required by tests/test_system_db.py before it will drop known tables.
       ALLOW_SCHEMA_RESET_FOR_TESTS: "1"
     depends_on:
       db-test:

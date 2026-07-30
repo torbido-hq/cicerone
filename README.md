@@ -327,8 +327,11 @@ docker compose up --build
 
 `docker-compose.yml` includes an optional **Postgres 16** service
 (`postgres`, compose profile `db`) for when `[input]`/`[output].kind = "db"`.
-Start it with `docker compose --profile db up -d postgres` (creates
-databases `cicerone` for the app and `cicerone_test` for pytest). Set
+Start it with
+`docker compose --env-file docker/postgres/defaults.env --profile db up -d postgres`
+(credentials and DB names:
+[`docker/postgres/defaults.env`](docker/postgres/defaults.env); see
+[CONTRIBUTING.md](CONTRIBUTING.md#local-postgres-defaults)). Set
 `INPUT_DATABASE_URL` / `OUTPUT_DATABASE_URL` explicitly in `.env` when you
 use the db backend — compose leaves them unset by default so enabling
 `kind = "db"` without Postgres cannot silently point at a missing host.
@@ -338,16 +341,18 @@ The app services do **not** depend on Postgres, so a dataset/S3-only
 ## Tests & CI
 
 ```sh
-docker compose -f docker-compose.ci.yml up --build --abort-on-container-exit --exit-code-from test
+docker compose -f docker-compose.ci.yml --env-file docker/postgres/defaults.env \
+  up --build --abort-on-container-exit --exit-code-from test
 ```
 
 Runs the whole pytest suite (with an ephemeral Postgres for the `db`
 backend tests and the system-style end-to-end check in
 `tests/test_system_db.py`) inside Docker — nothing to install on the host.
 Locally you can also point `TEST_DATABASE_URL` at the compose `postgres`
-service's `cicerone_test` database (see [CONTRIBUTING.md](CONTRIBUTING.md)).
-Use host `localhost` when pytest runs on the host; use `postgres` when the
-client is another compose container on the same network (CI uses `db-test`).
+service's pytest database (see
+[CONTRIBUTING.md](CONTRIBUTING.md#local-postgres-defaults)). Use host
+`localhost` when pytest runs on the host; use `postgres` when the client
+is another compose container on the same network (CI uses `db-test`).
 The minimum required coverage is 95% (`pyproject.toml`,
 `[tool.coverage.report].fail_under`) and is enforced on every PR by
 `.github/workflows/ci.yml`, which also runs

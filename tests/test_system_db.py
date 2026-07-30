@@ -24,6 +24,13 @@ from sqlalchemy.engine import Engine
 
 from cicerone import job
 from cicerone.artifact import ARTIFACT_SCHEMA_VERSION, loads_artifact, recommend_from_artifact
+from cicerone.io.db_store import (
+    DEFAULT_DB_TABLES,
+    DEFAULT_EVENTS_TABLE,
+    DEFAULT_ITEMS_TABLE,
+    DEFAULT_MODEL_ARTIFACT_TABLE,
+    DEFAULT_USERS_TABLE,
+)
 from cicerone.io.manifest_reader import DbManifestReader
 from cicerone.io.recommendation_reader import DbRecommendationReader
 
@@ -55,28 +62,13 @@ def db_engine() -> Iterator[Engine]:
         engine.dispose()
 
 
-# Default db-backend table names from cicerone.io.db_store / config examples.
-# Schema reset only touches these (plus any that currently exist among them),
-# so a misconfigured or shared test DB cannot wipe unrelated tables.
-_CICERONE_TABLES = frozenset(
-    {
-        "events",
-        "users",
-        "items",
-        "recommendations",
-        "recommendation_runs",
-        "model_artifacts",
-    }
-)
-
-
 def _reset_schema(engine: Engine) -> None:
     """Drop known Cicerone tables in the connected database.
 
-    Reflects the schema, then drops only tables in ``_CICERONE_TABLES`` that
-    currently exist — never an unrelated table that happens to share the DB.
-    Guarded: only dedicated test DB names, and only when
-    ALLOW_SCHEMA_RESET_FOR_TESTS=1 (see CONTRIBUTING.md).
+    Reflects the schema, then drops only tables in ``DEFAULT_DB_TABLES``
+    (from ``cicerone.io.db_store``) that currently exist — never an unrelated
+    table that happens to share the DB. Guarded: only dedicated test DB
+    names, and only when ALLOW_SCHEMA_RESET_FOR_TESTS=1 (see CONTRIBUTING.md).
     """
     db_name = engine.url.database
     if not _is_dedicated_test_database(db_name):
@@ -94,7 +86,7 @@ def _reset_schema(engine: Engine) -> None:
     metadata = MetaData()
     metadata.reflect(bind=engine)
     for table_name in list(metadata.tables):
-        if table_name not in _CICERONE_TABLES:
+        if table_name not in DEFAULT_DB_TABLES:
             metadata.remove(metadata.tables[table_name])
     metadata.drop_all(bind=engine)
 
@@ -123,9 +115,9 @@ def _postgres_ready(df: pd.DataFrame) -> pd.DataFrame:
 
 def _seed_catalog(engine: Engine, events: pd.DataFrame, users: pd.DataFrame, items: pd.DataFrame) -> None:
     """Persist the shared sample fixtures via the same table names the db input source reads."""
-    _postgres_ready(events).to_sql("events", engine, if_exists="replace", index=False)
-    _postgres_ready(users).to_sql("users", engine, if_exists="replace", index=False)
-    _postgres_ready(items).to_sql("items", engine, if_exists="replace", index=False)
+    _postgres_ready(events).to_sql(DEFAULT_EVENTS_TABLE, engine, if_exists="replace", index=False)
+    _postgres_ready(users).to_sql(DEFAULT_USERS_TABLE, engine, if_exists="replace", index=False)
+    _postgres_ready(items).to_sql(DEFAULT_ITEMS_TABLE, engine, if_exists="replace", index=False)
 
 
 def test_system_job_db_round_trip_with_artifact_and_readers(
@@ -195,7 +187,10 @@ def test_system_job_db_round_trip_with_artifact_and_readers(
     assert len(recent) == 1
 
     # Artifact blob has no dedicated reader — load via the public artifact API.
-    artifacts = pd.read_sql(text('SELECT payload FROM "model_artifacts"'), db_engine)
+    artifacts = pd.read_sql(
+        text(f'SELECT payload FROM "{DEFAULT_MODEL_ARTIFACT_TABLE}"'),
+        db_engine,
+    )
     assert len(artifacts) == 1
     payload = bytes(artifacts.iloc[0]["payload"])
     loaded = loads_artifact(payload)

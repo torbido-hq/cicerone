@@ -20,3 +20,6 @@ node_modules/
 # `python -m cicerone.manage_dashboard_users`) -- never commit real ones.
 config/dashboard_users.toml
 
+
+# Local virtualenv (never commit)
+.venv/

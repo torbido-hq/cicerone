@@ -294,17 +294,16 @@ output). `docker-compose.yml` already includes a Postgres 16 service —
 start just that:
 
 ```sh
-docker compose --profile db up -d postgres
+docker compose --env-file docker/postgres/defaults.env --profile db up -d postgres
 ```
 
-(Defaults: user/password `cicerone`/`cicerone`, databases `cicerone`
-(app/tutorial) and `cicerone_test` (pytest). Port `5432` is published on
-**localhost only** (`127.0.0.1:5432`). From the host use `@localhost:5432`;
-from another compose container use `@postgres:5432`. For pytest, prefer
-`cicerone_test` and see [CONTRIBUTING.md](../CONTRIBUTING.md) for
-`TEST_DATABASE_URL` (host `localhost` vs container `postgres` / CI
-`db-test`). Opt-in via `--profile db` so a plain `docker compose up` does
-not require Postgres.)
+(Credentials, DB names, and host port live in
+[`docker/postgres/defaults.env`](../docker/postgres/defaults.env) — see
+[CONTRIBUTING.md](../CONTRIBUTING.md#local-postgres-defaults). From the host
+use `@localhost`; from another compose container use `@postgres`. For
+pytest, use the pytest DB from that file and
+[CONTRIBUTING.md](../CONTRIBUTING.md) for `TEST_DATABASE_URL`. Opt-in via
+`--profile db` so a plain `docker compose up` does not require Postgres.)
 
 Load the sample dataset into `events`/`users`/`items` tables:
 

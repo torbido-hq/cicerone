@@ -41,14 +41,14 @@ templates/, static/      Jinja2 templates + vendored htmx/Stimulus/Tailwind asse
 
 Local Docker Compose (`docker-compose.yml`) also offers an optional
 `postgres` service under profile `db`
-(`docker compose --profile db up -d postgres`) so `kind = "db"` input/output
-can be exercised without an external database. It creates both `cicerone`
-(app/tutorial) and `cicerone_test` (pytest). CI uses a separate throwaway
-instance via `docker-compose.ci.yml`. The system-style check in
-`tests/test_system_db.py` exercises the full job →
-recommendations/manifest/artifact → serve/dashboard reader path against
-that real Postgres (resetting the test DB via SQLAlchemy metadata
-reflection, not a hardcoded table list).
+(`docker compose --env-file docker/postgres/defaults.env --profile db up -d postgres`)
+so `kind = "db"` input/output can be exercised without an external database.
+Credentials and database names live in `docker/postgres/defaults.env` (see
+CONTRIBUTING.md). CI uses a separate throwaway instance via
+`docker-compose.ci.yml`. The system-style check in `tests/test_system_db.py`
+exercises the full job → recommendations/manifest/artifact →
+serve/dashboard reader path against that real Postgres (resetting only
+`cicerone.io.db_store.DEFAULT_DB_TABLES`).
 ## Data flow
 
 ```mermaid
