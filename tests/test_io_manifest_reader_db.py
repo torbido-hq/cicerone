@@ -1,20 +1,20 @@
 from __future__ import annotations
 
-import os
-
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError
+from support.postgres_defaults import resolve_test_database_url
 
 from cicerone.io.db_store import DatabaseOutputSink
 from cicerone.io.manifest_reader import DbManifestReader
 
-TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
+TEST_DATABASE_URL = resolve_test_database_url()
 
 pytestmark = pytest.mark.skipif(
     not TEST_DATABASE_URL,
-    reason="TEST_DATABASE_URL not set — DB-backed tests run against a real Postgres in CI "
-    "(see docker-compose.ci.yml). Set TEST_DATABASE_URL locally to run them.",
+    reason="TEST_DATABASE_URL / POSTGRES_TEST_HOST not set — DB-backed tests run against "
+    "a real Postgres in CI (see docker-compose.ci.yml). Set POSTGRES_TEST_HOST=localhost "
+    "locally (see CONTRIBUTING.md).",
 )
 
 

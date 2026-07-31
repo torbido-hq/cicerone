@@ -39,9 +39,12 @@ jobs:
       # matches exactly how the service is built and deployed.
       - name: Run test suite (>=95% coverage required)
         run: |
-          docker compose -f docker-compose.ci.yml up \
+          docker compose --env-file docker/postgres/defaults.env \
+            -f docker-compose.ci.yml up \
             --build --abort-on-container-exit --exit-code-from test
 
       - name: Tear down
         if: always()
-        run: docker compose -f docker-compose.ci.yml down -v
+        run: |
+          docker compose --env-file docker/postgres/defaults.env \
+            -f docker-compose.ci.yml down -v

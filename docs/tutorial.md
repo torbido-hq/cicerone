@@ -17,12 +17,13 @@ code is structured, see [architecture.md](architecture.md).
 6. [Weighted reciprocal rank fusion](#6-weighted-reciprocal-rank-fusion)
 7. [Let AutoML pick a strategy for you](#7-let-automl-pick-a-strategy-for-you)
 8. [Tune interaction weights & features](#8-tune-interaction-weights--features)
-9. [Try the database backend](#9-try-the-database-backend-optional)
-10. [Serve recommendations over an HTTP API](#10-serve-recommendations-over-an-http-api)
-11. [Trigger a retrain on demand](#11-trigger-a-retrain-on-demand)
-12. [Check job status with the dashboard](#12-check-job-status-with-the-dashboard)
-13. [Run continuously, on a schedule](#13-run-continuously-on-a-schedule)
-14. [Next steps](#14-next-steps)
+9. [Save a fitted model artifact](#9-save-a-fitted-model-artifact)
+10. [Try the database backend](#10-try-the-database-backend-optional)
+11. [Serve recommendations over an HTTP API](#11-serve-recommendations-over-an-http-api)
+12. [Trigger a retrain on demand](#12-trigger-a-retrain-on-demand)
+13. [Check job status with the dashboard](#13-check-job-status-with-the-dashboard)
+14. [Run continuously, on a schedule](#14-run-continuously-on-a-schedule)
+15. [Next steps](#15-next-steps)
 
 ## 1. Create a sample dataset
 
@@ -251,17 +252,58 @@ own copy of `config/features.toml`, re-run, and compare the output —
 `half_life_days` in `[job]` (default 90) additionally decays all of this by
 recency.
 
-## 9. Try the database backend (optional)
+## 9. Save a fitted model artifact
+
+By default the batch job discards fitted strategy weights after writing
+recommendations. With `[job].save_model_artifact = true` it also writes a
+versioned portable artifact you can reload later without re-training:
+
+```toml
+[job]
+save_model_artifact = true
+# ... keep the rest of your local job settings ...
+```
+
+Re-run the job from [step 3](#3-run-the-job-once). Alongside
+`recommendations.parquet` / `manifest.json` you should now see
+`model.artifact` in `data/output/`. The manifest gains
+`artifact_written = true` and `artifact_schema_version = 1`.
+
+Load it and recommend without calling `job.run` again:
+
+```sh
+docker run --rm -v "$PWD/data":/data cicerone-test python -c "
+from cicerone.artifact import load_artifact, recommend_from_artifact
+artifact = load_artifact('/data/output/model.artifact')
+print('models:', artifact.models, 'schema:', artifact.schema_version)
+print(recommend_from_artifact(artifact, ['alice', 'bob'], top_k=3))
+"
+```
+
+Serve mode never loads this file — it still only reads precomputed
+recommendation rows. Artifacts are for offline reload / a future thin
+inference layer; only load ones your own batch job wrote (pickle is not
+safe on untrusted bytes). See the README's
+[Model artifacts](../README.md#model-artifacts) section.
+
+## 10. Try the database backend (optional)
 
 Input/output don't have to be static files — `kind = "db"` reads/writes a
 relational database via SQLAlchemy instead (independently for input and
-output). Start a throwaway local Postgres:
+output). `docker-compose.yml` already includes a Postgres 16 service —
+start just that:
 
 ```sh
-docker run --rm -d --name cicerone-tutorial-db -p 5432:5432 \
-  -e POSTGRES_USER=cicerone -e POSTGRES_PASSWORD=cicerone -e POSTGRES_DB=cicerone \
-  postgres:16-alpine
+docker compose --env-file docker/postgres/defaults.env --profile db up -d postgres
 ```
+
+(Credentials, DB names, and host port live in
+[`docker/postgres/defaults.env`](../docker/postgres/defaults.env) — see
+[CONTRIBUTING.md](../CONTRIBUTING.md#local-postgres-defaults). From the host
+use `localhost`; from another compose container use `postgres`. For
+pytest, use the pytest DB from that file and
+[CONTRIBUTING.md](../CONTRIBUTING.md) for `TEST_DATABASE_URL`. Opt-in via
+`--profile db` so a plain `docker compose up` does not require Postgres.)
 
 Load the sample dataset into `events`/`users`/`items` tables:
 
@@ -297,6 +339,8 @@ kind = "db"
 
 [output.options]
 database_url = "postgresql+psycopg://cicerone:cicerone@localhost:5432/cicerone"
+# optional when [job].save_model_artifact = true:
+# model_artifact_table = "model_artifacts"
 ```
 
 Re-run the command from [step 3](#3-run-the-job-once) with `--network host`
@@ -308,6 +352,7 @@ import pandas as pd
 from sqlalchemy import create_engine
 engine = create_engine('postgresql+psycopg://cicerone:cicerone@localhost:5432/cicerone')
 print(pd.read_sql('SELECT * FROM recommendations', engine))
+print(pd.read_sql('SELECT status, models, artifact_written FROM recommendation_runs', engine))
 "
 ```
 
@@ -317,13 +362,13 @@ vice versa), and raw SQL overrides (`events_query`/`users_query`/
 instead of requiring materialized tables — see the README's
 [Configuration section](../README.md#configuration-config-cicerone-toml).
 
-Clean up the throwaway database when you're done:
+Clean up when you're done:
 
 ```sh
-docker stop cicerone-tutorial-db
+docker compose --profile db down   # or: docker compose --profile db stop postgres
 ```
 
-## 10. Serve recommendations over an HTTP API
+## 11. Serve recommendations over an HTTP API
 
 Everything so far has run the batch job directly. `[job].mode = "serve"`
 switches to a separate, lightweight read API over whatever the batch job
@@ -372,7 +417,7 @@ when you're done:
 docker stop cicerone-tutorial-serve
 ```
 
-## 11. Trigger a retrain on demand
+## 12. Trigger a retrain on demand
 
 `[job.trigger]` adds an event-driven retrain trigger *in addition to* the
 cron schedule, running inside the same `cicerone.scheduler` process (not a
@@ -412,7 +457,7 @@ now records `triggered_by` (`"cron"`, `"webhook"`, or `"s3-poll"` if
 docker stop cicerone-tutorial-scheduler
 ```
 
-## 12. Check job status with the dashboard
+## 13. Check job status with the dashboard
 
 `cicerone.dashboard` is a small, standalone status page over job run
 history — always its own container/port, independent of `[job].mode`.
@@ -460,14 +505,14 @@ docker run --rm -d --name cicerone-tutorial-dashboard -p 8090:8090 \
 
 With our `dataset` output, only the latest run is ever shown (its
 `manifest.json` is overwritten every run, not appended) — switch to a `db`
-output (see [step 9](#9-try-the-database-backend-optional)) to see a real
+output (see [step 10](#10-try-the-database-backend-optional)) to see a real
 run history table instead. Clean up when you're done:
 
 ```sh
 docker stop cicerone-tutorial-dashboard
 ```
 
-## 13. Run continuously, on a schedule
+## 14. Run continuously, on a schedule
 
 Everything above ran the job once via `docker run`. In practice, Cicerone
 runs continuously as a long-lived container: `docker-compose.yml` runs the
@@ -481,15 +526,17 @@ cp .env.example .env   # fill in the secrets your cicerone.toml references
 docker compose up --build
 ```
 
-## 14. Next steps
+## 15. Next steps
 
 - Swap in your own data, following the [data contract](../README.md#data-contract).
-- Read the full [model strategies](../README.md#model-strategies) and
-  [AutoML](../README.md#automl) reference for every tunable knob covered
-  above.
+- Read the full [model strategies](../README.md#model-strategies),
+  [AutoML](../README.md#automl), and
+  [model artifacts](../README.md#model-artifacts) reference for every
+  tunable knob covered above.
 - Point input/output at S3-compatible object storage (R2, AWS S3, MinIO) —
   see the README's [Configuration](../README.md#configuration-config-cicerone-toml)
   section.
 - Run the test suite (`docker compose -f docker-compose.ci.yml up --build
   --abort-on-container-exit --exit-code-from test`) if you're contributing
-  code — see [CONTRIBUTING.md](../CONTRIBUTING.md).
+  code — see [CONTRIBUTING.md](../CONTRIBUTING.md). That suite includes a
+  system-style Postgres end-to-end check (`tests/test_system_db.py`).

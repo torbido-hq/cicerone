@@ -273,13 +273,38 @@ happens once per fold per distinct strategy, and `recommend()` still runs
 fresh for every candidate, so this is purely a training-cost optimization
 and doesn't change scoring.
 
+## Model artifacts
+
+By default the batch job fits strategies in-memory, writes precomputed
+recommendations (+ a run manifest), and discards the fitted weights. Setting
+`[job].save_model_artifact = true` also persists a **versioned, portable
+fitted-model artifact** alongside those outputs:
+
+- **dataset** output → `model.artifact` next to `recommendations.parquet`
+- **db** output → single-row `model_artifacts` table (BYTEA; override the
+  table name with `[output.options].model_artifact_table`)
+
+Load and recommend without re-fitting via `cicerone.artifact`
+(`load_artifact` / `loads_artifact` / `recommend_from_artifact`). The
+manifest records `artifact_written` and `artifact_schema_version` when an
+artifact was saved.
+
+This is a train/serve *artifact* split (inspired by tools like
+LibRecommender), not live inference: serve mode still reads precomputed
+recommendation rows only and never loads the artifact or ML deps. Artifacts
+are pickle-serialized and must only be loaded from trusted internal sources
+(never user uploads).
+
 ## Output
 
 `recommendations`: `user_id, item_id, rank, score, source` (`source` is the
 label of whichever strategy produced that row: `personalized`, `item_based`,
 `popular_fallback`, or `latest`).
 
-`manifest`: metadata about the latest run (counts, timestamps) for monitoring.
+`manifest`: metadata about the latest run (counts, timestamps,
+`triggered_by`, effective models, optional AutoML metrics, and
+`artifact_written` / `artifact_schema_version` when a model artifact was
+saved) for monitoring.
 
 ## Interaction weights & cold-start
 
@@ -300,21 +325,43 @@ cp .env.example .env   # set the secrets referenced by config/cicerone.toml
 docker compose up --build
 ```
 
+`docker-compose.yml` includes an optional **Postgres 16** service
+(`postgres`, compose profile `db`) for when `[input]`/`[output].kind = "db"`.
+Start it with
+`docker compose --env-file docker/postgres/defaults.env --profile db up -d postgres`
+(credentials and DB names:
+[`docker/postgres/defaults.env`](docker/postgres/defaults.env); see
+[CONTRIBUTING.md](CONTRIBUTING.md#local-postgres-defaults)). Set
+`INPUT_DATABASE_URL` / `OUTPUT_DATABASE_URL` explicitly in `.env` when you
+use the db backend — compose leaves them unset by default so enabling
+`kind = "db"` without Postgres cannot silently point at a missing host.
+The app services do **not** depend on Postgres, so a dataset/S3-only
+`docker compose up` works even if port 5432 is already taken on the host.
+
 ## Tests & CI
 
 ```sh
-docker compose -f docker-compose.ci.yml up --build --abort-on-container-exit --exit-code-from test
+docker compose -f docker-compose.ci.yml --env-file docker/postgres/defaults.env \
+  up --build --abort-on-container-exit --exit-code-from test
 ```
 
-Runs the whole pytest suite (with an ephemeral Postgres for the `db` backend
-tests) inside Docker — nothing to install on the host. The minimum required
-coverage is 95% (`pyproject.toml`, `[tool.coverage.report].fail_under`) and
-is enforced on every PR by `.github/workflows/ci.yml`, which also runs
-[Ruff](https://docs.astral.sh/ruff/) (lint + format check) in the same test
-image. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to run tests/lint
-locally, [docs/tutorial.md](docs/tutorial.md) for a hands-on walkthrough with
-local sample data, and [docs/architecture.md](docs/architecture.md) for how
-the code is structured. See [CHANGELOG.md](CHANGELOG.md) for release notes.
+Runs the whole pytest suite (with an ephemeral Postgres for the `db`
+backend tests and the system-style end-to-end check in
+`tests/test_system_db.py`) inside Docker — nothing to install on the host.
+Locally you can also point pytest at the compose `postgres` service's
+pytest database via `POSTGRES_TEST_HOST=localhost` (see
+[CONTRIBUTING.md](CONTRIBUTING.md#local-postgres-defaults)). Use host
+`localhost` when pytest runs on the host; use `postgres` when the client
+is another compose container on the same network (CI uses `db-test`).
+The minimum required coverage is 95% (`pyproject.toml`,
+`[tool.coverage.report].fail_under`) and is enforced on every PR by
+`.github/workflows/ci.yml`, which also runs
+[Ruff](https://docs.astral.sh/ruff/) (lint + format check), mypy, and
+`pip-audit` in the same test image. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for how to run tests/lint locally,
+[docs/tutorial.md](docs/tutorial.md) for a hands-on walkthrough with local
+sample data, and [docs/architecture.md](docs/architecture.md) for how the
+code is structured. See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 ## Security
 

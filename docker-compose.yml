@@ -6,7 +6,12 @@ version: "3.9"
 # supplies the secrets that cicerone.toml references via ${...} placeholders
 # (set them in .env, see .env.example).
 #
-# Three independent services, same image:
+# Services (same app image for the three app containers):
+#   postgres    — optional local Postgres 16 for kind = "db" (compose profile
+#                 "db"). Start with:
+#                   docker compose --env-file docker/postgres/defaults.env \
+#                     --profile db up -d postgres
+#                 Credentials/DBs: docker/postgres/defaults.env. See CONTRIBUTING.md.
 #   recommender — the batch training job (cron + optional event trigger,
 #                 see [job.trigger] in config/cicerone.toml).
 #   serve       — the lightweight read API over precomputed recommendations
@@ -17,8 +22,35 @@ version: "3.9"
 #                 if you don't need it. Manage its login users with:
 #                   docker compose run --rm dashboard \
 #                     python -m cicerone.manage_dashboard_users add <username>
+#
+# Postgres is opt-in via --profile db so a host already using :5432 (or an
+# S3/dataset-only setup) can still `docker compose up` without waiting on DB.
+#
+# Local Postgres credentials/DB names/port: docker/postgres/defaults.env
+# (canonical). Compose ${...:-fallback} values below must match that file;
+# pass `--env-file docker/postgres/defaults.env` if you override them.
 
 services:
+  postgres:
+    profiles: ["db"]
+    image: postgres:16-alpine
+    env_file:
+      - ./docker/postgres/defaults.env
+    ports:
+      # Bind to localhost only — do not expose Postgres on all host interfaces.
+      # Port value: POSTGRES_HOST_PORT in docker/postgres/defaults.env.
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
+    healthcheck:
+      # $$ → container env (from defaults.env), not compose interpolation.
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init-test-db.sh:/docker-entrypoint-initdb.d/init-test-db.sh:ro
+    restart: unless-stopped
+
   recommender:
     build:
       context: .
@@ -31,6 +63,11 @@ services:
       INPUT_S3_ACCESS_KEY_ID: ${INPUT_S3_ACCESS_KEY_ID:-}
       INPUT_S3_SECRET_ACCESS_KEY: ${INPUT_S3_SECRET_ACCESS_KEY:-}
       INPUT_S3_BUCKET: ${INPUT_S3_BUCKET:-}
+      # Only set when using kind = "db" — leave unset by default so enabling
+      # db in TOML without the postgres profile / .env cannot silently point
+      # at a missing host. With --profile db, set in .env using credentials
+      # from docker/postgres/defaults.env, e.g.:
+      #   INPUT_DATABASE_URL=postgresql+psycopg://cicerone:cicerone@postgres:5432/cicerone
       INPUT_DATABASE_URL: ${INPUT_DATABASE_URL:-}
 
       OUTPUT_S3_ENDPOINT_URL: ${OUTPUT_S3_ENDPOINT_URL:-}
@@ -60,6 +97,8 @@ services:
       OUTPUT_S3_ACCESS_KEY_ID: ${OUTPUT_S3_ACCESS_KEY_ID:-}
       OUTPUT_S3_SECRET_ACCESS_KEY: ${OUTPUT_S3_SECRET_ACCESS_KEY:-}
       OUTPUT_S3_BUCKET: ${OUTPUT_S3_BUCKET:-}
+      # Unset by default — set in .env when serve reads a kind = "db" output.
+      OUTPUT_DATABASE_URL: ${OUTPUT_DATABASE_URL:-}
       SERVE_AUTH_TOKEN: ${SERVE_AUTH_TOKEN:-}
     ports:
       - "8000:8000"
@@ -81,6 +120,8 @@ services:
       OUTPUT_S3_ACCESS_KEY_ID: ${OUTPUT_S3_ACCESS_KEY_ID:-}
       OUTPUT_S3_SECRET_ACCESS_KEY: ${OUTPUT_S3_SECRET_ACCESS_KEY:-}
       OUTPUT_S3_BUCKET: ${OUTPUT_S3_BUCKET:-}
+      # Unset by default — set in .env when the dashboard reads a kind = "db" output.
+      OUTPUT_DATABASE_URL: ${OUTPUT_DATABASE_URL:-}
     ports:
       - "8090:8090"
     volumes:
@@ -91,3 +132,5 @@ services:
       - ./config:/app/config
     restart: unless-stopped
 
+volumes:
+  postgres_data:

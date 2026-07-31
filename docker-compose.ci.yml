@@ -2,18 +2,24 @@ version: "3.9"
 
 # CI-only stack: runs the pytest suite (>=95% coverage enforced by
 # pyproject.toml) against a real, throwaway Postgres instance for the
-# database-backend tests. Never used in production — see docker-compose.yml
-# for the actual deployed service.
+# database-backend tests and tests/test_system_db.py. Never used in
+# production — see docker-compose.yml (which also ships a durable local
+# `postgres` service for kind = "db" development).
+#
+# Credentials / DB names: docker/postgres/defaults.env (canonical).
+# TEST_DATABASE_URL is assembled by tests/support/postgres_defaults.py from
+# POSTGRES_TEST_HOST + that file — do not hand-build the URL here.
 
 services:
   db-test:
     image: postgres:16-alpine
+    env_file:
+      - ./docker/postgres/defaults.env
     environment:
-      POSTGRES_USER: cicerone
-      POSTGRES_PASSWORD: cicerone
-      POSTGRES_DB: cicerone_test
+      # Override app DB — CI only needs the pytest database.
+      POSTGRES_DB: ${POSTGRES_TEST_DB:-cicerone_test}
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U cicerone -d cicerone_test"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 3s
       timeout: 3s
       retries: 20
@@ -25,8 +31,13 @@ services:
       context: .
       dockerfile: docker/Dockerfile
       target: test
+    env_file:
+      - ./docker/postgres/defaults.env
     environment:
-      TEST_DATABASE_URL: postgresql+psycopg://cicerone:cicerone@db-test:5432/cicerone_test
+      # Hostname only — URL from support.postgres_defaults.resolve_test_database_url().
+      POSTGRES_TEST_HOST: db-test
+      # Required by support.system_db.reset_schema before it will drop known tables.
+      ALLOW_SCHEMA_RESET_FOR_TESTS: "1"
     depends_on:
       db-test:
         condition: service_healthy

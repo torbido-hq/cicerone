@@ -40,6 +40,27 @@ logger = logging.getLogger(__name__)
 
 _MISSING_TABLE_ERRORS = (ProgrammingError, OperationalError)
 
+# Default table names for the db backend (overridable via input/output options).
+# Keep these as the single source of truth — config examples, readers, and the
+# system-spec schema reset all derive from them.
+DEFAULT_EVENTS_TABLE = "events"
+DEFAULT_USERS_TABLE = "users"
+DEFAULT_ITEMS_TABLE = "items"
+DEFAULT_RECOMMENDATIONS_TABLE = "recommendations"
+DEFAULT_MANIFEST_TABLE = "recommendation_runs"
+DEFAULT_MODEL_ARTIFACT_TABLE = "model_artifacts"
+
+DEFAULT_DB_TABLES = frozenset(
+    {
+        DEFAULT_EVENTS_TABLE,
+        DEFAULT_USERS_TABLE,
+        DEFAULT_ITEMS_TABLE,
+        DEFAULT_RECOMMENDATIONS_TABLE,
+        DEFAULT_MANIFEST_TABLE,
+        DEFAULT_MODEL_ARTIFACT_TABLE,
+    }
+)
+
 # Table/option names from config are interpolated into SQL identifiers.
 # Restrict to a simple unquoted-safe form so a misconfigured (or hostile)
 # option cannot break out of the identifier.
@@ -65,7 +86,13 @@ class DatabaseInputSource:
         return pd.read_sql(text(sql), self._engine)
 
     def read_events(self) -> pd.DataFrame:
-        return self._read(self._options.get("events_query"), self._options.get("events_table", "events"))
+        return self._read(
+            self._options.get("events_query"),
+            _sql_identifier(
+                self._options.get("events_table", DEFAULT_EVENTS_TABLE),
+                option="events_table",
+            ),
+        )
 
     def _read_optional(self, query: str | None, table: str, label: str) -> pd.DataFrame | None:
         if query is None and not inspect(self._engine).has_table(table):
@@ -84,12 +111,22 @@ class DatabaseInputSource:
 
     def read_users(self) -> pd.DataFrame | None:
         return self._read_optional(
-            self._options.get("users_query"), self._options.get("users_table", "users"), "users"
+            self._options.get("users_query"),
+            _sql_identifier(
+                self._options.get("users_table", DEFAULT_USERS_TABLE),
+                option="users_table",
+            ),
+            "users",
         )
 
     def read_items(self) -> pd.DataFrame | None:
         return self._read_optional(
-            self._options.get("items_query"), self._options.get("items_table", "items"), "items"
+            self._options.get("items_query"),
+            _sql_identifier(
+                self._options.get("items_table", DEFAULT_ITEMS_TABLE),
+                option="items_table",
+            ),
+            "items",
         )
 
 
@@ -99,7 +136,10 @@ class DatabaseOutputSink:
         self._engine = create_engine(require_option(options, "database_url", "db"), pool_pre_ping=True)
 
     def write_recommendations(self, df: pd.DataFrame) -> None:
-        table = self._options.get("recommendations_table", "recommendations")
+        table = _sql_identifier(
+            self._options.get("recommendations_table", DEFAULT_RECOMMENDATIONS_TABLE),
+            option="recommendations_table",
+        )
         logger.info("Writing %d rows to database table %r", len(df), table)
         with self._engine.begin() as conn:
             savepoint = conn.begin_nested()
@@ -111,7 +151,10 @@ class DatabaseOutputSink:
             df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
 
     def write_manifest(self, manifest: dict) -> None:
-        table = self._options.get("manifest_table", "recommendation_runs")
+        table = _sql_identifier(
+            self._options.get("manifest_table", DEFAULT_MANIFEST_TABLE),
+            option="manifest_table",
+        )
         logger.info("Appending run manifest to database table %r", table)
         pd.DataFrame([manifest]).to_sql(table, self._engine, if_exists="append", index=False)
 
@@ -127,7 +170,7 @@ class DatabaseOutputSink:
         race on DROP/CREATE and leave the table missing mid-write.
         """
         table = _sql_identifier(
-            self._options.get("model_artifact_table", "model_artifacts"),
+            self._options.get("model_artifact_table", DEFAULT_MODEL_ARTIFACT_TABLE),
             option="model_artifact_table",
         )
         logger.info("Writing model artifact (%d bytes) to database table %r", len(payload), table)

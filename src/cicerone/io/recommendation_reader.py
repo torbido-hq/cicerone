@@ -22,6 +22,7 @@ from typing import Any
 import pandas as pd
 from sqlalchemy import create_engine, text
 
+from cicerone.io.db_store import DEFAULT_RECOMMENDATIONS_TABLE, _sql_identifier
 from cicerone.io.options import build_s3_client, require_option
 
 logger = logging.getLogger(__name__)
@@ -65,7 +66,10 @@ class DatasetRecommendationReader:
 class DbRecommendationReader:
     def __init__(self, options: dict[str, Any]):
         self._options = options
-        self._table = options.get("recommendations_table", "recommendations")
+        self._table = _sql_identifier(
+            options.get("recommendations_table", DEFAULT_RECOMMENDATIONS_TABLE),
+            option="recommendations_table",
+        )
         self._engine = create_engine(require_option(options, "database_url", "db"), pool_pre_ping=True)
 
     def refresh(self) -> None:

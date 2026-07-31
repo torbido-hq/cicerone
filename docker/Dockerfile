@@ -27,7 +27,9 @@ RUN pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt
 # never makes it into the runtime image below, which only gets the compiled
 # static/tailwind.css. package-lock.json pins the exact dependency tree so
 # this stage is reproducible, matching requirements.txt's exact-pin style.
-FROM node:22-slim AS frontend
+# Pin Node minor/patch so 26.x floating tags cannot change the frontend build
+# without an explicit bump in this file.
+FROM node:26.5.1-slim AS frontend
 
 WORKDIR /build
 COPY package.json package-lock.json ./
@@ -91,6 +93,8 @@ COPY requirements-dev.txt ./
 RUN pip install --no-cache-dir -r requirements-dev.txt
 COPY pyproject.toml ./
 COPY tests/ ./tests/
+# Canonical Postgres defaults — parsed by tests/support/postgres_defaults.py at runtime.
+COPY docker/postgres/defaults.env ./docker/postgres/defaults.env
 RUN chown -R cicerone:cicerone /app
 USER cicerone
 ENTRYPOINT []

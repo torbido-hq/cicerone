@@ -4,7 +4,9 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.2.1] - 2026-07-29
+## [Unreleased]
+
+## [0.3.0] - 2026-07-30
 
 ### Added
 
@@ -13,20 +15,57 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (`model.artifact` / `model_artifacts` table) alongside recommendations.
   Load and recommend without re-fitting via `cicerone.artifact`. Serve mode
   still reads precomputed rows only — this does not add live inference.
-- AutoML candidate backtesting can now evaluate time-based folds in
-  parallel: `evaluate_candidates(..., max_workers=1)` runs folds through a
-  `ProcessPoolExecutor` when `max_workers > 1`, instead of sequentially
-  (opt-in; default behavior/performance is unchanged).
-- Strategy fitting in `train_and_recommend(..., max_workers=1)` can
-  likewise fit independent, not-yet-cached strategies in parallel via a
-  `ProcessPoolExecutor` when `max_workers > 1` (opt-in; default is
-  unchanged).
+- Optional `postgres` service in `docker-compose.yml` (Postgres 16, compose
+  profile `db`) for local `kind = "db"` input/output. First boot creates
+  `cicerone` (app/tutorial) and `cicerone_test` (pytest) databases.
+  `INPUT_DATABASE_URL` / `OUTPUT_DATABASE_URL` stay unset unless provided
+  via `.env`.
+- System-style end-to-end test (`tests/test_system_db.py`) against a real
+  Postgres: seeds shared conftest fixtures → `job.run` (db in/out + model
+  artifact) → verify recommendations, manifest, artifact blob, and the
+  serve/dashboard DB readers. Schema reset is module-scoped, reflects via
+  SQLAlchemy metadata, and is gated by a test DB name check plus
+  `ALLOW_SCHEMA_RESET_FOR_TESTS=1`.
+- User-facing documentation for model artifacts: README section, tutorial §9
+  (`save_model_artifact`, load/recommend via `cicerone.artifact`),
+  architecture notes, and `model_artifact_table` in the commented db config
+  example.
 
 ### Changed
 
 - `model.train_and_recommend` is split into `fit_strategies` +
   `recommend_with_models` so fitted weights can be reused (AutoML cache,
   model artifacts) without a second fit.
+- Tutorial database section uses
+  `docker compose --profile db up -d postgres` instead of an ad-hoc
+  `docker run` Postgres container.
+- Local pytest guidance points `TEST_DATABASE_URL` at `cicerone_test` (with
+  `ALLOW_SCHEMA_RESET_FOR_TESTS=1`) so tests do not wipe app data.
+
+### Fixed
+
+- Model-artifact DB writes use `CREATE TABLE IF NOT EXISTS` + `TRUNCATE` +
+  `INSERT` (no `DROP`/`CREATE` race under concurrent jobs).
+- `model_artifact_table` is validated as a simple SQL identifier before
+  interpolation.
+- `cicerone.artifact` documents that pickle loads are trusted-internal-only
+  (never user-controlled payloads; not on the serve path).
+
+## [0.2.1] - 2026-07-29
+
+### Added
+
+- AutoML candidate backtesting can now evaluate time-based folds in
+  parallel: `evaluate_candidates(..., max_workers=1)` runs folds through a
+  `ProcessPoolExecutor` when `max_workers > 1`, instead of sequentially
+  (opt-in; default behavior/performance is unchanged).
+- Strategy fitting in `train_and_recommend(..., max_workers=1)` can
+  likewise fit independent, not-yet-cached strategies via a
+  `ProcessPoolExecutor` when `max_workers > 1` (opt-in; default is
+  unchanged).
+
+### Changed
+
 - The job's input reads (events, users, items) now run concurrently via a
   `ThreadPoolExecutor` instead of sequentially, speeding up runs against
   network-backed (S3) input sources.
