@@ -88,7 +88,10 @@ class DatabaseInputSource:
     def read_events(self) -> pd.DataFrame:
         return self._read(
             self._options.get("events_query"),
-            self._options.get("events_table", DEFAULT_EVENTS_TABLE),
+            _sql_identifier(
+                self._options.get("events_table", DEFAULT_EVENTS_TABLE),
+                option="events_table",
+            ),
         )
 
     def _read_optional(self, query: str | None, table: str, label: str) -> pd.DataFrame | None:
@@ -109,14 +112,20 @@ class DatabaseInputSource:
     def read_users(self) -> pd.DataFrame | None:
         return self._read_optional(
             self._options.get("users_query"),
-            self._options.get("users_table", DEFAULT_USERS_TABLE),
+            _sql_identifier(
+                self._options.get("users_table", DEFAULT_USERS_TABLE),
+                option="users_table",
+            ),
             "users",
         )
 
     def read_items(self) -> pd.DataFrame | None:
         return self._read_optional(
             self._options.get("items_query"),
-            self._options.get("items_table", DEFAULT_ITEMS_TABLE),
+            _sql_identifier(
+                self._options.get("items_table", DEFAULT_ITEMS_TABLE),
+                option="items_table",
+            ),
             "items",
         )
 

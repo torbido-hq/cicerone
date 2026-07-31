@@ -8,7 +8,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from cicerone.io.db_store import DatabaseOutputSink, _sql_identifier
+from cicerone.io.db_store import DatabaseInputSource, DatabaseOutputSink, _sql_identifier
 
 
 def test_sql_identifier_accepts_simple_names():
@@ -78,6 +78,28 @@ def test_write_manifest_rejects_unsafe_table_name_before_db(bad_name):
     )
     with pytest.raises(ValueError, match="SQL identifier"):
         sink.write_manifest({"n_events": 1})
+
+
+@pytest.mark.parametrize(
+    ("method_name", "option"),
+    [
+        ("read_events", "events_table"),
+        ("read_users", "users_table"),
+        ("read_items", "items_table"),
+    ],
+)
+@pytest.mark.parametrize(
+    "bad_name",
+    [
+        'evil"; DROP TABLE events; --',
+        "has-dash",
+        "has space",
+    ],
+)
+def test_input_source_rejects_unsafe_table_name_before_db(method_name, option, bad_name):
+    source = DatabaseInputSource({"database_url": "postgresql+psycopg://u:p@localhost/db", option: bad_name})
+    with pytest.raises(ValueError, match="SQL identifier"):
+        getattr(source, method_name)()
 
 
 @pytest.mark.parametrize(
