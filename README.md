@@ -186,17 +186,41 @@ mapping looks like:
 - an "add to cart" analytics event → `cart_add`
 - a "product viewed" analytics event → `view`
 
-`users` (optional, enables user features for cold-start): columns are
-configurable in `config/features.toml` → `user_features` (default:
-`favorite_styles` as a list, `region_slug` as categorical — rename/replace
-these for your own domain).
+`users` (optional, enables user features for cold-start + per-user
+eligibility): columns are configurable in `config/features.toml` →
+`user_features` (default: `favorite_styles` as a list, `region_slug` as
+categorical — rename/replace these for your own domain). Any extra columns
+referenced by `[[eligibility]]` rules (e.g. `nationality`, `market`) must
+also be present on the users frame.
 
-`items` (optional, enables item features + the availability filter): columns
-are configurable in `config/features.toml` → `item_features` (default:
-`category`, `primary_style`, `producer_id`, `region_slug`, `abv_bucket` —
-again, adapt these to your catalog). The availability filter
-(`item_availability_filters`, default `published` + `in_stock`) always
-excludes unavailable items from the recommendations.
+`items` (optional, enables item features + availability / eligibility /
+boosts): columns are configurable in `config/features.toml` →
+`item_features` (default: `category`, `primary_style`, `producer_id`,
+`region_slug`, `abv_bucket` — again, adapt these to your catalog). The
+availability filter (`item_availability_filters`, default `published` +
+`in_stock`) always excludes unavailable items from the recommendations.
+Additional policy columns (e.g. `available_countries`, `is_paying_producer`,
+`plan_tier`) are only required when the matching `[[eligibility]]` /
+`[[boost]]` rules are enabled.
+
+### Business policies
+
+Optional hard filters and soft ranking boosts live in
+`config/features.toml` as `[[eligibility]]` and `[[boost]]` tables. They
+run at **batch recommend time** (serve mode stays a lookup of already
+policy-aware rows):
+
+- **Eligibility** (hard): drop items a user must not see. Ops:
+  `item_true`, `eq`, `user_in_item_list`, `item_in_user_list`. Users with
+  the same eligibility attributes are recommended together as a cohort so
+  each cohort gets a correct `items_to_recommend` set.
+- **Boosts** (soft): multiply scores after strategy combine, then re-rank.
+  Kinds: `boolean`, `value_map`, `numeric`. Source labels stay strategy
+  names — boosts are a commercial overlay, not a new strategy.
+
+Common ecommerce recipes (region/nationality shipping, paying producers,
+plan tiers, category allowlists) are annotated in
+`config/features.toml`.
 
 ## Model strategies
 
@@ -308,14 +332,15 @@ saved) for monitoring.
 
 ## Interaction weights & cold-start
 
-All weighting logic is configurable without rebuilding the image via
-`config/features.toml` (mounted as a volume, see `docker-compose.yml`):
+All weighting and policy logic is configurable without rebuilding the image
+via `config/features.toml` (mounted as a volume, see `docker-compose.yml`):
 `event_weights`, `quantity_scaled_events`, `event_caps`, `user_features`,
-`item_features`, `item_availability_filters`. Exponential decay with a
-configurable half-life (`[job].half_life_days` in `config/cicerone.toml`,
-default 90 days) gives more weight to recent activity. Users without enough
-interactions still get a fallback list from `PopularModel` (rectools), still
-honoring the availability filter.
+`item_features`, `item_availability_filters`, `[[eligibility]]`,
+`[[boost]]`. Exponential decay with a configurable half-life
+(`[job].half_life_days` in `config/cicerone.toml`, default 90 days) gives
+more weight to recent activity. Users without enough interactions still get
+a fallback list from `PopularModel` (rectools), still honoring availability
+and any configured eligibility/boost policies.
 
 ## Usage
 

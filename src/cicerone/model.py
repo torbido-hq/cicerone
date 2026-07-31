@@ -23,6 +23,14 @@ from rectools.models import ImplicitItemKNNWrapperModel, LightFMWrapperModel, Po
 from cicerone.config import STRATEGY_NAMES, validate_model_weights, validate_rrf_k
 from cicerone.dataset import BuiltDataset
 from cicerone.feature_config import FeatureConfig
+from cicerone.policy import (
+    allowed_items_for_cohort,
+    apply_boosts,
+    group_users_by_cohort,
+    has_user_scoped_eligibility,
+    is_user_scoped,
+    resolve_eligibility,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +41,15 @@ LATEST_WINDOW_DAYS = 14
 RRF_K = 60
 SOURCE_COLUMN = "source"
 WEIGHT_COLUMN = "_weight"  # internal-only; dropped before returning to callers
+# When boosts are configured, over-fetch candidates so a commercial boost can
+# promote an item that would otherwise sit just outside the final top_k.
+BOOST_OVERFETCH_FACTOR = 3
+
+
+def _recommend_k(top_k: int, has_boosts: bool) -> int:
+    if not has_boosts:
+        return top_k
+    return max(top_k, top_k * BOOST_OVERFETCH_FACTOR)
 
 
 class RecommenderModel(Protocol):
@@ -135,6 +152,10 @@ _validate_strategy_names(STRATEGIES, STRATEGY_NAMES)
 def _recommendable_item_ids(
     items: pd.DataFrame | None, filter_columns: list[str], all_item_ids: pd.Index
 ) -> list:
+    """Global availability filter (boolean item columns). Kept for tests and as
+    the no-user-scoped fast path; prefer ``policy.allowed_items_for_cohort``
+    when eligibility rules are in play.
+    """
     if items is None or not filter_columns:
         return list(all_item_ids)
     mask = pd.Series(True, index=items.index)
@@ -307,11 +328,29 @@ def recommend_with_models(
 
     dataset = built.dataset
     all_item_ids = dataset.item_id_map.external_ids
-    allowed_items = _recommendable_item_ids(built.items, config.item_availability_filters, all_item_ids)
+    eligibility = resolve_eligibility(config)
+    if has_user_scoped_eligibility(eligibility) and built.users is None:
+        logger.warning(
+            "User-scoped eligibility rules are configured but no users frame is available — "
+            "applying only item-global rules"
+        )
+        eligibility = [r for r in eligibility if not is_user_scoped(r)]
+    use_cohorts = has_user_scoped_eligibility(eligibility) and built.users is not None
+    has_boosts = bool(config.boosts)
+    recommend_k = _recommend_k(top_k, has_boosts)
 
     known_users = set(dataset.user_id_map.external_ids)
     warm_users = [u for u in target_users if u in known_users]
     unique_target_users = list(dict.fromkeys(target_users))
+
+    if use_cohorts:
+        cohorts = group_users_by_cohort(unique_target_users, built.users, eligibility)
+        global_allowed: list | None = None
+    else:
+        global_allowed = allowed_items_for_cohort(
+            unique_target_users, built.users, built.items, eligibility, all_item_ids
+        )
+        cohorts = [(None, unique_target_users)]
 
     frames = []
     for name in enabled_models:
@@ -320,27 +359,53 @@ def recommend_with_models(
             continue
         if name not in models:
             raise ValueError(f"Fitted model for strategy {name!r} is missing; available: {sorted(models)}")
-        recs = models[name].recommend(
-            users=warm_users if strategy.personalized else unique_target_users,
-            dataset=dataset,
-            k=top_k,
-            filter_viewed=strategy.personalized,
-            items_to_recommend=allowed_items,
-        )
-        recs[SOURCE_COLUMN] = strategy.source_label
-        recs[WEIGHT_COLUMN] = weights.get(name, 1.0) if weights is not None else 1.0
-        frames.append(recs)
+
+        for _cohort_key, cohort_users in cohorts:
+            allowed_items = (
+                allowed_items_for_cohort(
+                    cohort_users, built.users, built.items, eligibility, all_item_ids
+                )
+                if use_cohorts
+                else global_allowed
+            )
+            assert allowed_items is not None
+
+            if strategy.personalized:
+                cohort_warm = [u for u in cohort_users if u in known_users]
+                if not cohort_warm:
+                    continue
+                recommend_users = cohort_warm
+            else:
+                recommend_users = cohort_users
+
+            recs = models[name].recommend(
+                users=recommend_users,
+                dataset=dataset,
+                k=recommend_k,
+                filter_viewed=strategy.personalized,
+                items_to_recommend=allowed_items,
+            )
+            recs[SOURCE_COLUMN] = strategy.source_label
+            recs[WEIGHT_COLUMN] = weights.get(name, 1.0) if weights is not None else 1.0
+            frames.append(recs)
 
     if not frames:
         return pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN])
 
+    combine_k = recommend_k if has_boosts else top_k
     if weights is not None:
         source_label_order = [STRATEGIES[name].source_label for name in enabled_models]
         combined = _combine_by_weighted_fusion(
-            frames, top_k, rrf_k if rrf_k is not None else RRF_K, source_label_order
+            frames, combine_k, rrf_k if rrf_k is not None else RRF_K, source_label_order
         )
     else:
-        combined = _combine_by_priority(frames, top_k)
+        combined = _combine_by_priority(frames, combine_k)
+
+    if has_boosts:
+        combined = apply_boosts(combined, built.items, config.boosts, top_k=top_k)
+    elif combine_k != top_k:
+        combined = combined.groupby(Columns.User, as_index=False).head(top_k)
+
     return combined.reset_index(drop=True)
 
 

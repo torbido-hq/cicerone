@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Business policy layer** (`config/features.toml` → `[[eligibility]]` /
+  `[[boost]]`): declarative hard filters (region/nationality, market match,
+  category allowlists) and soft ranking boosts (paying producers, plan
+  tiers, numeric lifts). Applied at batch recommend time via
+  `cicerone.policy`; serve mode stays a lookup of already-policy-aware rows.
+  `item_availability_filters` remains sugar for global `item_true` rules.
+- Model artifacts now persist the `users` frame (schema version **2**) so
+  `recommend_from_artifact` can re-apply user-scoped eligibility offline.
+
 ## [0.3.0] - 2026-07-30
 
 ### Added

@@ -18,6 +18,12 @@ Input contract:
     item_id  str
     + one column per entry in config/features.toml -> item_features
     + boolean columns listed in item_availability_filters
+    + any columns referenced by [[eligibility]] / [[boost]] rules
+
+  users   (optional — enables warm/cold user features + per-user eligibility)
+    user_id  str
+    + one column per entry in config/features.toml -> user_features
+    + any user columns referenced by [[eligibility]] rules
 
 Only events is required; users/items features are best-effort and missing
 inputs degrade gracefully to an interactions-only model. Which event types
@@ -45,6 +51,7 @@ class BuiltDataset:
     dataset: Dataset
     interactions: pd.DataFrame
     items: pd.DataFrame | None
+    users: pd.DataFrame | None = None
 
 
 def _time_decay_multiplier(occurred_at: pd.Series, half_life_days: float) -> pd.Series:
@@ -148,4 +155,4 @@ def build_dataset(
         item_features_df=item_features_df if has_item_features else None,
         cat_item_features=list(item_features_df["feature"].unique()) if has_item_features else None,
     )
-    return BuiltDataset(dataset=dataset, interactions=interactions, items=items)
+    return BuiltDataset(dataset=dataset, interactions=interactions, items=items, users=users)
