@@ -300,7 +300,7 @@ docker compose --env-file docker/postgres/defaults.env --profile db up -d postgr
 (Credentials, DB names, and host port live in
 [`docker/postgres/defaults.env`](../docker/postgres/defaults.env) — see
 [CONTRIBUTING.md](../CONTRIBUTING.md#local-postgres-defaults). From the host
-use `@localhost`; from another compose container use `@postgres`. For
+use `localhost`; from another compose container use `postgres`. For
 pytest, use the pytest DB from that file and
 [CONTRIBUTING.md](../CONTRIBUTING.md) for `TEST_DATABASE_URL`. Opt-in via
 `--profile db` so a plain `docker compose up` does not require Postgres.)

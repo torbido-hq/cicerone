@@ -8,7 +8,15 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from cicerone.io.db_store import DatabaseInputSource, DatabaseOutputSink, _sql_identifier
+from cicerone.io.db_store import (
+    DEFAULT_MANIFEST_TABLE,
+    DEFAULT_RECOMMENDATIONS_TABLE,
+    DatabaseInputSource,
+    DatabaseOutputSink,
+    _sql_identifier,
+)
+from cicerone.io.manifest_reader import DbManifestReader
+from cicerone.io.recommendation_reader import DbRecommendationReader
 
 
 def test_sql_identifier_accepts_simple_names():
@@ -111,8 +119,6 @@ def test_input_source_rejects_unsafe_table_name_before_db(method_name, option, b
     ],
 )
 def test_db_recommendation_reader_rejects_unsafe_table_name(bad_name):
-    from cicerone.io.recommendation_reader import DbRecommendationReader
-
     with pytest.raises(ValueError, match="SQL identifier"):
         DbRecommendationReader(
             {
@@ -120,6 +126,18 @@ def test_db_recommendation_reader_rejects_unsafe_table_name(bad_name):
                 "recommendations_table": bad_name,
             }
         )
+
+
+@pytest.mark.parametrize(
+    "table_name",
+    [None, DEFAULT_RECOMMENDATIONS_TABLE, "recommendations_2024", "custom_recos"],
+)
+def test_db_recommendation_reader_accepts_safe_table_names(table_name):
+    options: dict = {"database_url": "postgresql+psycopg://u:p@localhost/db_test"}
+    if table_name is not None:
+        options["recommendations_table"] = table_name
+    reader = DbRecommendationReader(options)
+    assert reader._table == (table_name or DEFAULT_RECOMMENDATIONS_TABLE)
 
 
 @pytest.mark.parametrize(
@@ -131,8 +149,6 @@ def test_db_recommendation_reader_rejects_unsafe_table_name(bad_name):
     ],
 )
 def test_db_manifest_reader_rejects_unsafe_table_name(bad_name):
-    from cicerone.io.manifest_reader import DbManifestReader
-
     with pytest.raises(ValueError, match="SQL identifier"):
         DbManifestReader(
             {
@@ -140,3 +156,15 @@ def test_db_manifest_reader_rejects_unsafe_table_name(bad_name):
                 "manifest_table": bad_name,
             }
         )
+
+
+@pytest.mark.parametrize(
+    "table_name",
+    [None, DEFAULT_MANIFEST_TABLE, "recommendation_runs_2024", "custom_manifest"],
+)
+def test_db_manifest_reader_accepts_safe_table_names(table_name):
+    options: dict = {"database_url": "postgresql+psycopg://u:p@localhost/db_test"}
+    if table_name is not None:
+        options["manifest_table"] = table_name
+    reader = DbManifestReader(options)
+    assert reader._table == (table_name or DEFAULT_MANIFEST_TABLE)
