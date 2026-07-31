@@ -362,9 +362,7 @@ def recommend_with_models(
 
         for _cohort_key, cohort_users in cohorts:
             allowed_items = (
-                allowed_items_for_cohort(
-                    cohort_users, built.users, built.items, eligibility, all_item_ids
-                )
+                allowed_items_for_cohort(cohort_users, built.users, built.items, eligibility, all_item_ids)
                 if use_cohorts
                 else global_allowed
             )
