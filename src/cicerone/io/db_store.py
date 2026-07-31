@@ -127,7 +127,10 @@ class DatabaseOutputSink:
         self._engine = create_engine(require_option(options, "database_url", "db"), pool_pre_ping=True)
 
     def write_recommendations(self, df: pd.DataFrame) -> None:
-        table = self._options.get("recommendations_table", DEFAULT_RECOMMENDATIONS_TABLE)
+        table = _sql_identifier(
+            self._options.get("recommendations_table", DEFAULT_RECOMMENDATIONS_TABLE),
+            option="recommendations_table",
+        )
         logger.info("Writing %d rows to database table %r", len(df), table)
         with self._engine.begin() as conn:
             savepoint = conn.begin_nested()
@@ -139,7 +142,10 @@ class DatabaseOutputSink:
             df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
 
     def write_manifest(self, manifest: dict) -> None:
-        table = self._options.get("manifest_table", DEFAULT_MANIFEST_TABLE)
+        table = _sql_identifier(
+            self._options.get("manifest_table", DEFAULT_MANIFEST_TABLE),
+            option="manifest_table",
+        )
         logger.info("Appending run manifest to database table %r", table)
         pd.DataFrame([manifest]).to_sql(table, self._engine, if_exists="append", index=False)
 
