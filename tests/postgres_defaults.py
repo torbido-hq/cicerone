@@ -8,7 +8,8 @@ source. Prefer setting ``POSTGRES_TEST_HOST`` (and optionally the
 - host / venv: ``POSTGRES_TEST_HOST=localhost`` (uses ``POSTGRES_HOST_PORT``)
 - compose CI:  ``POSTGRES_TEST_HOST=db-test`` (uses container ``POSTGRES_PORT``)
 
-``TEST_DATABASE_URL``, when set, still wins (explicit override).
+``TEST_DATABASE_URL``, when set, still wins (explicit override) but must
+target a database whose name looks like a dedicated test DB.
 """
 
 from __future__ import annotations
@@ -105,10 +106,29 @@ def build_test_database_url(host: str) -> str:
     return f"postgresql+psycopg://{user}:{password}@{host}:{port}/{database}"
 
 
+def require_test_database_url(url: str) -> str:
+    """Return ``url`` only if its database name looks like a dedicated test DB."""
+    from sqlalchemy.engine.url import make_url
+
+    db_name = make_url(url).database
+    if not looks_like_test_database(db_name):
+        raise ValueError(
+            f"TEST_DATABASE_URL must target a dedicated test database "
+            f"(name starts with 'test_' or ends with '_test'), got database={db_name!r} "
+            f"in {url!r}"
+        )
+    return url
+
+
 def resolve_test_database_url() -> str | None:
-    """Resolve the DB URL for pytest: explicit URL, else host + defaults."""
+    """Resolve the DB URL for pytest: explicit URL, else host + defaults.
+
+    Explicit ``TEST_DATABASE_URL`` is validated the same way as
+    ``POSTGRES_TEST_DB`` so a tutorial-style URL aimed at the app database
+    (e.g. ``…/cicerone``) cannot silently wipe catalog tables.
+    """
     if url := os.environ.get("TEST_DATABASE_URL"):
-        return url
+        return require_test_database_url(url)
     if host := os.environ.get("POSTGRES_TEST_HOST"):
         return build_test_database_url(host)
     return None

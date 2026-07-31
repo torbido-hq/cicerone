@@ -84,9 +84,18 @@ def test_build_test_database_url_uses_container_port_for_compose_hosts(monkeypat
 
 
 def test_resolve_prefers_explicit_test_database_url(monkeypatch):
-    monkeypatch.setenv("TEST_DATABASE_URL", "postgresql+psycopg://u:p@h:1/db")
+    monkeypatch.setenv("TEST_DATABASE_URL", "postgresql+psycopg://u:p@h:1/db_test")
     monkeypatch.setenv("POSTGRES_TEST_HOST", "ignored")
-    assert resolve_test_database_url() == "postgresql+psycopg://u:p@h:1/db"
+    assert resolve_test_database_url() == "postgresql+psycopg://u:p@h:1/db_test"
+
+
+def test_resolve_rejects_explicit_non_test_database_url(monkeypatch):
+    monkeypatch.setenv(
+        "TEST_DATABASE_URL",
+        "postgresql+psycopg://cicerone:cicerone@localhost:5432/cicerone",
+    )
+    with pytest.raises(ValueError, match="dedicated test database"):
+        resolve_test_database_url()
 
 
 def test_resolve_builds_from_postgres_test_host(monkeypatch):
@@ -102,11 +111,20 @@ def test_resolve_returns_none_without_url_or_host(monkeypatch):
 
 
 @pytest.mark.parametrize("host", ["localhost", "db-test", "postgres"])
-def test_shell_helper_matches_python_builder(host):
+def test_shell_helper_matches_python_builder(host, monkeypatch):
     """Keep docker/postgres/test-database-url.sh in sync with the Python helper."""
     script = Path(__file__).resolve().parents[1] / "docker" / "postgres" / "test-database-url.sh"
     if not os.access(script, os.X_OK):
         pytest.skip(f"{script} is not executable")
+    # Clear POSTGRES_* so both sides read defaults.env the same way.
+    for key in (
+        "POSTGRES_USER",
+        "POSTGRES_PASSWORD",
+        "POSTGRES_TEST_DB",
+        "POSTGRES_PORT",
+        "POSTGRES_HOST_PORT",
+    ):
+        monkeypatch.delenv(key, raising=False)
     result = subprocess.run(
         [str(script), host],
         check=True,
@@ -114,3 +132,24 @@ def test_shell_helper_matches_python_builder(host):
         text=True,
     )
     assert result.stdout.strip() == build_test_database_url(host)
+
+
+def test_shell_helper_honors_env_overrides(monkeypatch):
+    script = Path(__file__).resolve().parents[1] / "docker" / "postgres" / "test-database-url.sh"
+    if not os.access(script, os.X_OK):
+        pytest.skip(f"{script} is not executable")
+    monkeypatch.setenv("POSTGRES_HOST_PORT", "15432")
+    monkeypatch.setenv("POSTGRES_USER", "override_user")
+    monkeypatch.setenv("POSTGRES_PASSWORD", "override_pass")
+    monkeypatch.setenv("POSTGRES_TEST_DB", "override_test")
+    result = subprocess.run(
+        [str(script), "localhost"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=os.environ.copy(),
+    )
+    assert result.stdout.strip() == (
+        "postgresql+psycopg://override_user:override_pass@localhost:15432/override_test"
+    )
+    assert result.stdout.strip() == build_test_database_url("localhost")
