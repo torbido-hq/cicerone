@@ -31,7 +31,7 @@ import pandas as pd
 from botocore.exceptions import ClientError
 from sqlalchemy import MetaData, Table, create_engine, inspect, select
 
-from cicerone.io.db_store import DEFAULT_MANIFEST_TABLE
+from cicerone.io.db_store import DEFAULT_MANIFEST_TABLE, _sql_identifier
 from cicerone.io.options import build_s3_client, require_option
 
 logger = logging.getLogger(__name__)
@@ -77,7 +77,10 @@ class DatasetManifestReader:
 class DbManifestReader:
     def __init__(self, options: dict[str, Any]):
         self._options = options
-        self._table = options.get("manifest_table", DEFAULT_MANIFEST_TABLE)
+        self._table = _sql_identifier(
+            options.get("manifest_table", DEFAULT_MANIFEST_TABLE),
+            option="manifest_table",
+        )
         self._engine = create_engine(require_option(options, "database_url", "db"), pool_pre_ping=True)
 
     def read_latest(self) -> dict[str, Any] | None:

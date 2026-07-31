@@ -18,7 +18,7 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
-_DEFAULTS_PATH = Path(__file__).resolve().parents[1] / "docker" / "postgres" / "defaults.env"
+_DEFAULTS_PATH = Path(__file__).resolve().parents[2] / "docker" / "postgres" / "defaults.env"
 
 _REQUIRED_KEYS = (
     "POSTGRES_USER",

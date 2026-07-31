@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Print TEST_DATABASE_URL for a given Postgres hostname using the canonical
 # defaults in docker/postgres/defaults.env. Prefer setting POSTGRES_TEST_HOST
-# for pytest (see tests/postgres_defaults.py); use this when you need the
+# for pytest (see tests/support/postgres_defaults.py); use this when you need the
 # literal URL string (docs, one-off tools).
 #
 # Process-environment POSTGRES_* values win over defaults.env (same as
-# tests/postgres_defaults._default), so remapped host ports stay in sync.
+# tests/support/postgres_defaults._default), so remapped host ports stay in sync.
 #
 # localhost / 127.0.0.1 / ::1 → POSTGRES_HOST_PORT (published map)
 # any other host (postgres, db-test) → POSTGRES_PORT (container listen port)

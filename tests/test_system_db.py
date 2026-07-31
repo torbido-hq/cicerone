@@ -1,38 +1,30 @@
 """System-style end-to-end check against a real Postgres (Rails system-spec analogue).
 
-Seeds events/users/items from the shared conftest fixtures (same data contract
-as the rest of the suite), runs the full batch job with db input/output + a
-model artifact, then verifies what serve/dashboard would read back — all
-through the same SQLAlchemy stores production uses.
+Seeds events/users/items from the shared conftest fixtures, runs the full
+batch job with db input/output + a model artifact, then verifies what
+serve/dashboard would read back — through the same SQLAlchemy stores
+production uses.
 
 Requires a test DB URL via ``TEST_DATABASE_URL`` or ``POSTGRES_TEST_HOST``
-(see ``tests.postgres_defaults`` / CONTRIBUTING.md). Schema resets are gated:
-the DB name must look like a test database and
-``ALLOW_SCHEMA_RESET_FOR_TESTS=1`` must be set.
+(see ``support.postgres_defaults`` / CONTRIBUTING.md). Schema resets are
+gated by ``support.system_db.reset_schema``.
 """
 
 from __future__ import annotations
 
-import os
 from collections.abc import Iterator
 from pathlib import Path
-from types import SimpleNamespace
 
-import numpy as np
 import pandas as pd
 import pytest
-from postgres_defaults import (
-    looks_like_test_database,
-    postgres_test_db,
-    resolve_test_database_url,
-)
-from sqlalchemy import MetaData, create_engine, text
+from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
+from support.postgres_defaults import resolve_test_database_url
+from support.system_db import postgres_ready, reset_schema
 
 from cicerone import job
 from cicerone.artifact import ARTIFACT_SCHEMA_VERSION, loads_artifact, recommend_from_artifact
 from cicerone.io.db_store import (
-    DEFAULT_DB_TABLES,
     DEFAULT_EVENTS_TABLE,
     DEFAULT_ITEMS_TABLE,
     DEFAULT_MODEL_ARTIFACT_TABLE,
@@ -52,12 +44,6 @@ _SKIP_NO_TEST_DB = (
 )
 
 
-def _is_dedicated_test_database(db_name: str | None) -> bool:
-    # Pattern-only: do not trust postgres_test_db() / POSTGRES_TEST_DB env,
-    # which could be overridden to the app DB name (e.g. "cicerone").
-    return looks_like_test_database(db_name)
-
-
 @pytest.fixture(scope="session")
 def db_engine() -> Iterator[Engine]:
     """One Engine for the whole test session — avoids per-test connect/dispose."""
@@ -70,184 +56,19 @@ def db_engine() -> Iterator[Engine]:
         engine.dispose()
 
 
-def _reset_schema(engine: Engine) -> None:
-    """Drop known Cicerone tables in the connected database.
-
-    Reflects the schema, then drops only tables in ``DEFAULT_DB_TABLES``
-    (from ``cicerone.io.db_store``) that currently exist — never an unrelated
-    table that happens to share the DB. Guarded: only dedicated test DB
-    names, and only when ALLOW_SCHEMA_RESET_FOR_TESTS=1 (see CONTRIBUTING.md).
-    """
-    db_name = engine.url.database
-    if not _is_dedicated_test_database(db_name):
-        raise RuntimeError(
-            f"Refusing to reset schema for non-test database {db_name!r}. "
-            "TEST_DATABASE_URL must point at a dedicated test DB "
-            f"(e.g. {postgres_test_db()!r}, or a name starting with 'test_' / "
-            "ending with '_test')."
-        )
-    if os.environ.get("ALLOW_SCHEMA_RESET_FOR_TESTS") != "1":
-        raise RuntimeError(
-            "Schema reset for tests is disabled. Set ALLOW_SCHEMA_RESET_FOR_TESTS=1 "
-            "to permit dropping known Cicerone tables on the dedicated test database."
-        )
-
-    metadata = MetaData()
-    metadata.reflect(bind=engine)
-    for table_name in list(metadata.tables):
-        if table_name not in DEFAULT_DB_TABLES:
-            metadata.remove(metadata.tables[table_name])
-    metadata.drop_all(bind=engine)
-
-
 @pytest.fixture(scope="module")
 def clean_schema(db_engine: Engine) -> Iterator[None]:
-    """Reset schema once around the system-spec (not every unit test in this module)."""
-    _reset_schema(db_engine)
+    """Reset schema once around the system-spec."""
+    reset_schema(db_engine)
     yield
-    _reset_schema(db_engine)
-
-
-@pytest.mark.parametrize(
-    ("db_name", "expected"),
-    [
-        ("test_db", True),
-        ("foo_test", True),
-        ("test_", True),
-        ("_test", True),
-        (None, False),
-        ("", False),
-        ("production", False),
-        ("staging", False),
-        ("dev", False),
-        ("foo_test_backup", False),
-        ("pretest_db", False),
-    ],
-)
-def test_is_dedicated_test_database_classification(db_name: str | None, expected: bool) -> None:
-    assert _is_dedicated_test_database(db_name) is expected
-
-
-def test_is_dedicated_test_database_accepts_canonical_postgres_test_db() -> None:
-    assert _is_dedicated_test_database(postgres_test_db()) is True
-
-
-def test_is_dedicated_test_database_ignores_postgres_test_db_env_override(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """POSTGRES_TEST_DB=cicerone must not authorize schema reset on the app DB."""
-    monkeypatch.setenv("POSTGRES_TEST_DB", "cicerone")
-    assert _is_dedicated_test_database("cicerone") is False
-    with pytest.raises(ValueError, match="dedicated test database"):
-        postgres_test_db()
-
-
-def test_reset_schema_rejects_non_test_database_names() -> None:
-    """Guardrails must fire before any DB I/O for non-test database names."""
-
-    for db_name in ("prod", "analytics"):
-        fake_engine = SimpleNamespace(url=SimpleNamespace(database=db_name))
-        with pytest.raises(RuntimeError, match="Refusing to reset schema for non-test database"):
-            _reset_schema(fake_engine)  # type: ignore[arg-type]
-
-
-def test_reset_schema_requires_allow_schema_reset_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Even a dedicated test DB name is refused without ALLOW_SCHEMA_RESET_FOR_TESTS=1."""
-
-    fake_engine = SimpleNamespace(url=SimpleNamespace(database=postgres_test_db()))
-
-    monkeypatch.delenv("ALLOW_SCHEMA_RESET_FOR_TESTS", raising=False)
-    with pytest.raises(RuntimeError, match="ALLOW_SCHEMA_RESET_FOR_TESTS"):
-        _reset_schema(fake_engine)  # type: ignore[arg-type]
-
-    monkeypatch.setenv("ALLOW_SCHEMA_RESET_FOR_TESTS", "0")
-    with pytest.raises(RuntimeError, match="ALLOW_SCHEMA_RESET_FOR_TESTS"):
-        _reset_schema(fake_engine)  # type: ignore[arg-type]
-
-
-def test_reset_schema_drops_only_cicerone_tables(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Happy path: reflect, strip unrelated tables, drop_all only DEFAULT_DB_TABLES."""
-
-    class FakeTable:
-        def __init__(self, name: str) -> None:
-            self.name = name
-
-    class FakeMetaData:
-        def __init__(self) -> None:
-            self.tables = {name: FakeTable(name) for name in DEFAULT_DB_TABLES}
-            self.tables["unrelated_table"] = FakeTable("unrelated_table")
-            self.reflected = False
-            self.dropped_names: list[str] = []
-
-        def reflect(self, bind=None) -> None:
-            self.reflected = True
-
-        def remove(self, table: FakeTable) -> None:
-            self.tables.pop(table.name, None)
-
-        def drop_all(self, bind=None) -> None:
-            self.dropped_names = list(self.tables)
-
-    fake_metadata = FakeMetaData()
-    monkeypatch.setenv("ALLOW_SCHEMA_RESET_FOR_TESTS", "1")
-    monkeypatch.setattr(
-        "test_system_db.MetaData",
-        lambda: fake_metadata,
-    )
-
-    fake_engine = SimpleNamespace(url=SimpleNamespace(database=postgres_test_db()))
-    _reset_schema(fake_engine)  # type: ignore[arg-type]
-
-    assert fake_metadata.reflected is True
-    assert set(fake_metadata.dropped_names) == set(DEFAULT_DB_TABLES)
-    assert "unrelated_table" not in fake_metadata.dropped_names
-
-
-def _postgres_ready(df: pd.DataFrame) -> pd.DataFrame:
-    """Copy a fixture frame into a shape psycopg can insert (plain lists, not ndarrays)."""
-    out = df.copy()
-    for column in out.columns:
-        out[column] = out[column].map(
-            lambda value: (
-                value.tolist()
-                if hasattr(value, "tolist")
-                else (list(value) if isinstance(value, tuple) else value)
-            )
-        )
-    return out
-
-
-def test_postgres_ready_normalizes_arrays_tuples_and_scalars() -> None:
-    """Unit-spec for _postgres_ready's numpy array / tuple normalization."""
-    fixture = pd.DataFrame(
-        {
-            "array_col": [np.array([1, 2]), np.array([3, 4])],
-            "tuple_col": [(5, 6), (7, 8)],
-            "scalar_col": [9, 10],
-        }
-    )
-    assert isinstance(fixture.loc[0, "array_col"], np.ndarray)
-    assert isinstance(fixture.loc[0, "tuple_col"], tuple)
-
-    ready = _postgres_ready(fixture)
-
-    assert ready.loc[0, "array_col"] == [1, 2]
-    assert ready.loc[1, "array_col"] == [3, 4]
-    assert isinstance(ready.loc[0, "array_col"], list)
-    assert ready.loc[0, "tuple_col"] == [5, 6]
-    assert ready.loc[1, "tuple_col"] == [7, 8]
-    assert isinstance(ready.loc[0, "tuple_col"], list)
-    assert ready.loc[0, "scalar_col"] == 9
-    assert ready.loc[1, "scalar_col"] == 10
-    assert ready["array_col"].dtype == object
-    assert ready["tuple_col"].dtype == object
+    reset_schema(db_engine)
 
 
 def _seed_catalog(engine: Engine, events: pd.DataFrame, users: pd.DataFrame, items: pd.DataFrame) -> None:
     """Persist the shared sample fixtures via the same table names the db input source reads."""
-    _postgres_ready(events).to_sql(DEFAULT_EVENTS_TABLE, engine, if_exists="replace", index=False)
-    _postgres_ready(users).to_sql(DEFAULT_USERS_TABLE, engine, if_exists="replace", index=False)
-    _postgres_ready(items).to_sql(DEFAULT_ITEMS_TABLE, engine, if_exists="replace", index=False)
+    postgres_ready(events).to_sql(DEFAULT_EVENTS_TABLE, engine, if_exists="replace", index=False)
+    postgres_ready(users).to_sql(DEFAULT_USERS_TABLE, engine, if_exists="replace", index=False)
+    postgres_ready(items).to_sql(DEFAULT_ITEMS_TABLE, engine, if_exists="replace", index=False)
 
 
 @pytest.mark.skipif(not TEST_DATABASE_URL, reason=_SKIP_NO_TEST_DB)

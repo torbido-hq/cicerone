@@ -7,7 +7,7 @@ version: "3.9"
 # `postgres` service for kind = "db" development).
 #
 # Credentials / DB names: docker/postgres/defaults.env (canonical).
-# TEST_DATABASE_URL is assembled by tests/postgres_defaults.py from
+# TEST_DATABASE_URL is assembled by tests/support/postgres_defaults.py from
 # POSTGRES_TEST_HOST + that file — do not hand-build the URL here.
 
 services:
@@ -34,9 +34,9 @@ services:
     env_file:
       - ./docker/postgres/defaults.env
     environment:
-      # Hostname only — URL from tests/postgres_defaults.resolve_test_database_url().
+      # Hostname only — URL from support.postgres_defaults.resolve_test_database_url().
       POSTGRES_TEST_HOST: db-test
-      # Required by tests/test_system_db.py before it will drop known tables.
+      # Required by support.system_db.reset_schema before it will drop known tables.
       ALLOW_SCHEMA_RESET_FOR_TESTS: "1"
     depends_on:
       db-test:

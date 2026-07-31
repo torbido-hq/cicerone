@@ -1,4 +1,4 @@
-"""Unit tests for tests.postgres_defaults (no live Postgres required)."""
+"""Unit tests for support.postgres_defaults (no live Postgres required)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from postgres_defaults import (
+from support.postgres_defaults import (
     build_test_database_url,
     load_postgres_defaults,
     postgres_port_for_host,
@@ -42,7 +42,7 @@ def test_postgres_test_db_rejects_non_test_env_override(monkeypatch):
 
 
 def test_looks_like_test_database():
-    from postgres_defaults import looks_like_test_database
+    from support.postgres_defaults import looks_like_test_database
 
     assert looks_like_test_database("cicerone_test") is True
     assert looks_like_test_database("cicerone") is False

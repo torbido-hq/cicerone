@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pandas as pd
 import pytest
-from postgres_defaults import resolve_test_database_url
 from sqlalchemy import create_engine, text
+from support.postgres_defaults import resolve_test_database_url
 
 from cicerone.io.db_store import DatabaseOutputSink
 from cicerone.io.recommendation_reader import DbRecommendationReader

@@ -27,7 +27,7 @@ To iterate on DB-backed tests against compose Postgres, use the dedicated
 **pytest database** so schema resets never wipe tutorial/app data. Prefer
 setting the hostname only — pytest builds `TEST_DATABASE_URL` from
 [`docker/postgres/defaults.env`](docker/postgres/defaults.env) via
-`tests/postgres_defaults.py`:
+`tests/support/postgres_defaults.py`:
 
 ```sh
 docker compose --env-file docker/postgres/defaults.env --profile db up -d postgres
@@ -47,11 +47,15 @@ and `docker-compose.ci.yml` load it via `env_file`; prefer
 `docker compose --env-file docker/postgres/defaults.env …` so `${…}`
 interpolation matches that file too.
 
-**Canonical URL assembly:** `tests/postgres_defaults.build_test_database_url(host)`
+**Canonical URL assembly:** `tests.support.postgres_defaults.build_test_database_url(host)`
 (and `./docker/postgres/test-database-url.sh <host>`). Set
 `POSTGRES_TEST_HOST` for pytest, or `TEST_DATABASE_URL` to override.
 `localhost` / `127.0.0.1` use `POSTGRES_HOST_PORT`; compose service hosts
 (`postgres`, `db-test`) use container `POSTGRES_PORT`.
+
+Schema-reset guardrails for the Postgres system test live in
+`tests/support/system_db.py` (reusable across DB-backed tests; keep
+`tests/test_system_db.py` focused on the end-to-end scenario).
 
 Host vs container hostname for the same Postgres:
 
@@ -62,8 +66,8 @@ Host vs container hostname for the same Postgres:
 
 `ALLOW_SCHEMA_RESET_FOR_TESTS=1` is set automatically in
 `docker-compose.ci.yml`. Schema reset only proceeds when the database name
-is `POSTGRES_TEST_DB` from defaults.env, or a name starting with `test_` /
-ending with `_test`, and only drops `cicerone.io.db_store.DEFAULT_DB_TABLES`.
+looks like a dedicated test DB (`test_*` / `*_test`), and only drops
+`cicerone.io.db_store.DEFAULT_DB_TABLES`.
 
 ## Linting & formatting
 

@@ -45,3 +45,43 @@ def test_write_model_artifact_rejects_unsafe_table_name_before_db(bad_name):
     )
     with pytest.raises(ValueError, match="SQL identifier"):
         sink.write_model_artifact(b"x")
+
+
+@pytest.mark.parametrize(
+    "bad_name",
+    [
+        'evil"; DROP TABLE recommendations; --',
+        "has-dash",
+        "has space",
+    ],
+)
+def test_db_recommendation_reader_rejects_unsafe_table_name(bad_name):
+    from cicerone.io.recommendation_reader import DbRecommendationReader
+
+    with pytest.raises(ValueError, match="SQL identifier"):
+        DbRecommendationReader(
+            {
+                "database_url": "postgresql+psycopg://u:p@localhost/db_test",
+                "recommendations_table": bad_name,
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "bad_name",
+    [
+        'evil"; DROP TABLE recommendation_runs; --',
+        "has-dash",
+        "has space",
+    ],
+)
+def test_db_manifest_reader_rejects_unsafe_table_name(bad_name):
+    from cicerone.io.manifest_reader import DbManifestReader
+
+    with pytest.raises(ValueError, match="SQL identifier"):
+        DbManifestReader(
+            {
+                "database_url": "postgresql+psycopg://u:p@localhost/db_test",
+                "manifest_table": bad_name,
+            }
+        )

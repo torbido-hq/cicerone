@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import pytest
-from postgres_defaults import resolve_test_database_url
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError
+from support.postgres_defaults import resolve_test_database_url
 
 from cicerone.io.db_store import DatabaseOutputSink
 from cicerone.io.manifest_reader import DbManifestReader
