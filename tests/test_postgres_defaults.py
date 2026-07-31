@@ -155,3 +155,47 @@ def test_shell_helper_honors_env_overrides(monkeypatch):
         "postgresql+psycopg://override_user:override_pass@localhost:15432/override_test"
     )
     assert result.stdout.strip() == build_test_database_url("localhost")
+
+
+@pytest.mark.parametrize(
+    ("env", "match"),
+    [
+        (
+            {
+                "POSTGRES_USER": "cicerone",
+                "POSTGRES_DB": "cicerone",
+                "POSTGRES_TEST_DB": 'evil"; DROP DATABASE x; --',
+            },
+            "simple SQL identifier",
+        ),
+        (
+            {
+                "POSTGRES_USER": "bad-user",
+                "POSTGRES_DB": "cicerone",
+                "POSTGRES_TEST_DB": "cicerone_test",
+            },
+            "simple SQL identifier",
+        ),
+        (
+            {
+                "POSTGRES_USER": "cicerone",
+                "POSTGRES_DB": "cicerone",
+                "POSTGRES_TEST_DB": "production",
+            },
+            "test_",
+        ),
+    ],
+)
+def test_init_test_db_rejects_unsafe_identifiers(env, match):
+    """init-test-db.sh must fail before psql when env overrides are hostile."""
+    script = Path(__file__).resolve().parents[1] / "docker" / "postgres" / "init-test-db.sh"
+    if not script.is_file():
+        pytest.skip(f"{script} is missing")
+    result = subprocess.run(
+        ["bash", str(script)],
+        capture_output=True,
+        text=True,
+        env={**os.environ, **env},
+    )
+    assert result.returncode == 1
+    assert match in result.stderr
