@@ -18,6 +18,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pandas as pd
 import pytest
 from postgres_defaults import (
@@ -214,6 +215,32 @@ def _postgres_ready(df: pd.DataFrame) -> pd.DataFrame:
             )
         )
     return out
+
+
+def test_postgres_ready_normalizes_arrays_tuples_and_scalars() -> None:
+    """Unit-spec for _postgres_ready's numpy array / tuple normalization."""
+    fixture = pd.DataFrame(
+        {
+            "array_col": [np.array([1, 2]), np.array([3, 4])],
+            "tuple_col": [(5, 6), (7, 8)],
+            "scalar_col": [9, 10],
+        }
+    )
+    assert isinstance(fixture.loc[0, "array_col"], np.ndarray)
+    assert isinstance(fixture.loc[0, "tuple_col"], tuple)
+
+    ready = _postgres_ready(fixture)
+
+    assert ready.loc[0, "array_col"] == [1, 2]
+    assert ready.loc[1, "array_col"] == [3, 4]
+    assert isinstance(ready.loc[0, "array_col"], list)
+    assert ready.loc[0, "tuple_col"] == [5, 6]
+    assert ready.loc[1, "tuple_col"] == [7, 8]
+    assert isinstance(ready.loc[0, "tuple_col"], list)
+    assert ready.loc[0, "scalar_col"] == 9
+    assert ready.loc[1, "scalar_col"] == 10
+    assert ready["array_col"].dtype == object
+    assert ready["tuple_col"].dtype == object
 
 
 def _seed_catalog(engine: Engine, events: pd.DataFrame, users: pd.DataFrame, items: pd.DataFrame) -> None:

@@ -80,6 +80,8 @@ def test_build_test_database_url_uses_container_port_for_compose_hosts(monkeypat
         f"{defaults['POSTGRES_TEST_DB']}"
     )
     assert postgres_port_for_host("localhost") == "15432"
+    assert postgres_port_for_host("127.0.0.1") == "15432"
+    assert postgres_port_for_host("::1") == "15432"
     assert postgres_port_for_host("postgres") == "5432"
 
 
