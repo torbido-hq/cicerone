@@ -13,7 +13,7 @@ from sqlalchemy import MetaData
 from sqlalchemy.engine import Engine
 
 from cicerone.io.db_store import DEFAULT_DB_TABLES
-from support.postgres_defaults import looks_like_test_database, postgres_test_db
+from support.postgres_defaults import canonical_postgres_test_db, looks_like_test_database
 
 
 def is_dedicated_test_database(db_name: str | None) -> bool:
@@ -35,11 +35,14 @@ def reset_schema(engine: Engine) -> None:
     """
     db_name = engine.url.database
     if not is_dedicated_test_database(db_name):
+        # Use canonical_postgres_test_db() (defaults.env only) in the message —
+        # postgres_test_db() can raise ValueError if POSTGRES_TEST_DB is a
+        # hostile override, which would mask this refusal.
         raise RuntimeError(
             f"Refusing to reset schema for non-test database {db_name!r}. "
             "TEST_DATABASE_URL must point at a dedicated test DB "
-            f"(e.g. {postgres_test_db()!r}, or a name starting with 'test_' / "
-            "ending with '_test')."
+            f"(e.g. {canonical_postgres_test_db()!r}, or a name starting with "
+            "'test_' / ending with '_test')."
         )
     if os.environ.get("ALLOW_SCHEMA_RESET_FOR_TESTS") != "1":
         raise RuntimeError(

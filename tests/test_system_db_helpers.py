@@ -54,6 +54,16 @@ def test_reset_schema_rejects_non_test_database_names() -> None:
             reset_schema(fake_engine)  # type: ignore[arg-type]
 
 
+def test_reset_schema_refusal_not_masked_by_bad_postgres_test_db_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Hostile POSTGRES_TEST_DB must not replace the non-test-DB RuntimeError."""
+    monkeypatch.setenv("POSTGRES_TEST_DB", "cicerone")
+    fake_engine = SimpleNamespace(url=SimpleNamespace(database="cicerone"))
+    with pytest.raises(RuntimeError, match="Refusing to reset schema for non-test database"):
+        reset_schema(fake_engine)  # type: ignore[arg-type]
+
+
 def test_reset_schema_requires_allow_schema_reset_env(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_engine = SimpleNamespace(url=SimpleNamespace(database=postgres_test_db()))
 
