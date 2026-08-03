@@ -17,6 +17,22 @@ from cicerone.feature_config import BoostRule, EligibilityRule, FeatureConfig
 logger = logging.getLogger(__name__)
 
 _MISSING = object()
+# Deduplicate missing-column warnings so a bad config does not flood logs when
+# eligibility is evaluated once per cohort (or boosts are applied repeatedly).
+_warned_missing_columns: set[tuple[str, str, str]] = set()
+
+
+def _warn_missing_column(kind: str, rule_name: str, column: str) -> None:
+    key = (kind, rule_name, column)
+    if key in _warned_missing_columns:
+        return
+    _warned_missing_columns.add(key)
+    logger.warning(
+        "Configured %s rule %r item_column %r not found — skipping",
+        kind,
+        rule_name,
+        column,
+    )
 
 
 def resolve_eligibility(config: FeatureConfig) -> list[EligibilityRule]:
@@ -51,7 +67,7 @@ def has_user_scoped_eligibility(rules: Sequence[EligibilityRule]) -> bool:
 def _as_list(value: object) -> list:
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return []
-    if isinstance(value, list | tuple | set):
+    if isinstance(value, (list, tuple, set)):
         return list(value)
     if isinstance(value, pd.Series):
         return [v for v in value.tolist() if not (isinstance(v, float) and pd.isna(v))]
@@ -91,11 +107,7 @@ def eligible_item_mask(
 
     for rule in rules:
         if rule.item_column not in items.columns:
-            logger.warning(
-                "Configured eligibility rule %r item_column %r not found — skipping",
-                rule.name,
-                rule.item_column,
-            )
+            _warn_missing_column("eligibility", rule.name, rule.item_column)
             continue
 
         item_values = items[rule.item_column]
@@ -136,7 +148,7 @@ def cohort_key(user_row: pd.Series | dict | None, rules: Sequence[EligibilityRul
         value = _user_attr(user_row, rule.user_column)
         if _is_missing(value):
             parts.append((rule.user_column, None))
-        elif isinstance(value, list | tuple | set):
+        elif isinstance(value, (list, tuple, set)):
             parts.append((rule.user_column, tuple(sorted(str(v) for v in value))))
         else:
             parts.append((rule.user_column, value if isinstance(value, Hashable) else str(value)))
@@ -228,11 +240,7 @@ def item_boost_factors(items: pd.DataFrame | None, boosts: Sequence[BoostRule]) 
     factors = pd.Series(1.0, index=items.index)
     for boost in boosts:
         if boost.item_column not in items.columns:
-            logger.warning(
-                "Configured boost rule %r item_column %r not found — skipping",
-                boost.name,
-                boost.item_column,
-            )
+            _warn_missing_column("boost", boost.name, boost.item_column)
             continue
         col = items[boost.item_column]
         if boost.kind == "boolean":

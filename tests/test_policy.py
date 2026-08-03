@@ -183,6 +183,36 @@ def test_eligible_item_mask_missing_item_column_fails_open(caplog):
     assert "not_a_column" in caplog.text
 
 
+def test_missing_column_warnings_are_deduplicated(caplog):
+    import cicerone.policy as policy
+
+    policy._warned_missing_columns.clear()
+    items = _items()
+    rules = [EligibilityRule(name="x", op="item_true", item_column="not_a_column")]
+    boosts = [BoostRule(name="y", kind="boolean", item_column="also_missing", factor=2.0)]
+
+    eligible_item_mask(None, items, rules)
+    eligible_item_mask(None, items, rules)
+    item_boost_factors(items, boosts)
+    item_boost_factors(items, boosts)
+
+    assert caplog.text.count("not_a_column") == 1
+    assert caplog.text.count("also_missing") == 1
+
+
+def test_cohort_key_accepts_list_valued_user_attrs():
+    user = {"allowed_categories": ["beer", "wine"]}
+    rules = [
+        EligibilityRule(
+            name="cats",
+            op="item_in_user_list",
+            item_column="category",
+            user_column="allowed_categories",
+        )
+    ]
+    assert cohort_key(user, rules) == (("allowed_categories", ("beer", "wine")),)
+
+
 def test_cohort_key_and_grouping():
     users = _users()
     rules = [

@@ -792,3 +792,98 @@ def test_train_and_recommend_paying_producer_boost_reorders(feature_config):
     ghost = recommendations[recommendations[Columns.User] == "ghost"].sort_values(Columns.Rank)
     assert list(ghost[Columns.Item])[0] == "i2"
     assert not ghost[Columns.Item].isin(["i3", "i4"]).any()
+
+
+def test_train_and_recommend_paying_producer_boost_overfetch(feature_config):
+    """Boosted item ranked just below top_k by popularity must enter final top_k
+    via BOOST_OVERFETCH_FACTOR + apply_boosts, not only by reordering within top_k.
+    """
+    from dataclasses import replace
+
+    from cicerone.feature_config import BoostRule
+    from cicerone.model import BOOST_OVERFETCH_FACTOR
+
+    assert BOOST_OVERFETCH_FACTOR > 1
+
+    now = pd.Timestamp.utcnow()
+    # Popularity order without boost: i1 > i2 > i3 (paying). With top_k=2 and no
+    # over-fetch, i3 would never be a candidate; with over-fetch + a large boost
+    # it is retrieved and promoted into the final top-2.
+    events = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+            {"user_id": "u2", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+            {"user_id": "u3", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+            {"user_id": "u1", "item_id": "i2", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+            {"user_id": "u2", "item_id": "i2", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+            {"user_id": "u1", "item_id": "i3", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+        ]
+    )
+    items = pd.DataFrame(
+        [
+            {
+                "item_id": "i1",
+                "category": "beer",
+                "producer_id": "p1",
+                "published": True,
+                "in_stock": True,
+                "is_paying_producer": False,
+            },
+            {
+                "item_id": "i2",
+                "category": "beer",
+                "producer_id": "p2",
+                "published": True,
+                "in_stock": True,
+                "is_paying_producer": False,
+            },
+            {
+                "item_id": "i3",
+                "category": "beer",
+                "producer_id": "p3",
+                "published": True,
+                "in_stock": True,
+                "is_paying_producer": True,
+            },
+        ]
+    )
+    baseline_config = replace(feature_config, boosts=[])
+    boosted_config = replace(
+        feature_config,
+        boosts=[
+            BoostRule(
+                name="paying_producer",
+                kind="boolean",
+                item_column="is_paying_producer",
+                factor=100.0,
+            )
+        ],
+    )
+    built = build_dataset(events, None, items, boosted_config, half_life_days=90)
+
+    baseline = train_and_recommend(
+        built,
+        target_users=["ghost"],
+        config=baseline_config,
+        top_k=2,
+        enabled_models=["popular"],
+    )
+    baseline_items = list(
+        baseline.loc[baseline[Columns.User] == "ghost"].sort_values(Columns.Rank)[Columns.Item]
+    )
+    assert baseline_items == ["i1", "i2"]
+    assert "i3" not in baseline_items
+
+    boosted = train_and_recommend(
+        built,
+        target_users=["ghost"],
+        config=boosted_config,
+        top_k=2,
+        enabled_models=["popular"],
+    )
+    boosted_items = list(
+        boosted.loc[boosted[Columns.User] == "ghost"].sort_values(Columns.Rank)[Columns.Item]
+    )
+    assert len(boosted_items) == 2
+    assert "i3" in boosted_items
+    assert boosted_items[0] == "i3"

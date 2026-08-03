@@ -345,11 +345,16 @@ def recommend_with_models(
 
     if use_cohorts:
         cohorts = group_users_by_cohort(unique_target_users, built.users, eligibility)
-        global_allowed: list | None = None
+        allowed_by_cohort = {
+            key: allowed_items_for_cohort(cohort_users, built.users, built.items, eligibility, all_item_ids)
+            for key, cohort_users in cohorts
+        }
     else:
-        global_allowed = allowed_items_for_cohort(
-            unique_target_users, built.users, built.items, eligibility, all_item_ids
-        )
+        allowed_by_cohort = {
+            None: allowed_items_for_cohort(
+                unique_target_users, built.users, built.items, eligibility, all_item_ids
+            )
+        }
         cohorts = [(None, unique_target_users)]
 
     frames = []
@@ -360,13 +365,8 @@ def recommend_with_models(
         if name not in models:
             raise ValueError(f"Fitted model for strategy {name!r} is missing; available: {sorted(models)}")
 
-        for _cohort_key, cohort_users in cohorts:
-            allowed_items = (
-                allowed_items_for_cohort(cohort_users, built.users, built.items, eligibility, all_item_ids)
-                if use_cohorts
-                else global_allowed
-            )
-            assert allowed_items is not None
+        for cohort_key_value, cohort_users in cohorts:
+            allowed_items = allowed_by_cohort[cohort_key_value]
 
             if strategy.personalized:
                 cohort_warm = [u for u in cohort_users if u in known_users]
@@ -401,8 +401,6 @@ def recommend_with_models(
 
     if has_boosts:
         combined = apply_boosts(combined, built.items, config.boosts, top_k=top_k)
-    elif combine_k != top_k:
-        combined = combined.groupby(Columns.User, as_index=False).head(top_k)
 
     return combined.reset_index(drop=True)
 
