@@ -172,6 +172,7 @@ def test_candidate_label_for_priority_and_fusion():
     assert Candidate(models=["collaborative", "popular"]).label == "collaborative+popular"
     fusion = Candidate(models=["popular", "latest"], weights={"popular": 1.0, "latest": 0.5})
     assert fusion.label == "fusion(popular=1.0,latest=0.5)"
+    assert Candidate(models=["popular"], rrf_k=40.0).label == "popular;rrf_k=40.0"
 
 
 def test_evaluate_candidates_raises_without_enough_history(sample_items, feature_config):
@@ -363,8 +364,14 @@ def test_select_best_candidate_raises_on_empty_results():
 
 def test_select_best_candidate_raises_on_unknown_primary_metric():
     result = CandidateResult(candidate=Candidate(models=["popular"]), metrics={"MAP@5": 1.0}, n_folds=1)
-    with pytest.raises(ValueError, match="No metric starting with"):
+    with pytest.raises(ValueError, match="No metric matching"):
         select_best_candidate([result], primary_metric="NDCG")
+
+
+def test_select_best_candidate_rejects_ambiguous_prefix():
+    result = CandidateResult(candidate=Candidate(models=["popular"]), metrics={"MAP@5": 1.0}, n_folds=1)
+    with pytest.raises(ValueError, match="No metric matching"):
+        select_best_candidate([result], primary_metric="MA")
 
 
 def test_select_best_candidate_validates_metric_key_per_result():

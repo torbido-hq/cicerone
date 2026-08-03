@@ -249,9 +249,10 @@ user/item pair). Defaults to `["collaborative", "popular"]` if omitted:
   trending/recently active items. Non-personalized, same backfill role as
   `popular`.
 
-By default, strategies are combined in priority order: earlier ones win ties
-for the same user/item pair, non-personalized ones only backfill users who
-didn't get enough personalized results. Optionally, `[job.model_weights]`
+By default, strategies are combined in priority order: earlier strategies
+fill top-K slots first (later ones only backfill remaining slots), and
+duplicate (user, item) pairs keep the earlier strategy. Optionally,
+`[job.model_weights]`
 switches to a weighted reciprocal rank fusion instead — every enabled
 strategy's rank contributes `weight / (rrf_k + rank)` to each item's fused
 score, summed across strategies, so results from heterogeneous strategies
@@ -266,6 +267,10 @@ contributing strategy's label in `models`' configured order (e.g.
 alphabetically — so the label reflects your configured priority regardless
 of how the underlying strategy labels happen to sort.
 
+Set `[job].max_workers` (>1) to fit independent strategies and evaluate
+AutoML folds in parallel via a process pool (default `1` keeps sequential
+behavior).
+
 ## AutoML
 
 Instead of a fixed `models`/`model_weights` config, `[job.automl]` can pick
@@ -276,7 +281,7 @@ the best combination automatically for every run:
 enabled = true
 n_splits = 2       # time-based folds to backtest each candidate over
 test_days = 14     # size of each fold's held-out window, in days
-primary_metric = "MAP" # matched by prefix, e.g. "MAP@10"
+primary_metric = "MAP" # exact name or NAME@k (e.g. "MAP" → "MAP@10")
 ```
 
 Each run, `cicerone.automl.evaluate_candidates()` splits your event history

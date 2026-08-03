@@ -38,20 +38,11 @@ _TEMPLATES = Jinja2Templates(directory=str(_PACKAGE_DIR / "templates"))
 
 
 def _compute_staleness(manifest: dict[str, Any] | None, cron_schedule: str, now: datetime) -> dict[str, Any]:
-    """Whether a scheduled run looks overdue, per `cron_schedule`.
-    Deliberately unaware of the retrain trigger's extra webhook/s3-poll
-    runs -- those only ever happen in addition to the cron schedule, so the
-    cron-derived expectation is always a valid lower bound.
-
-    `is_stale` is `None` (unknown) rather than raising when `cron_schedule`
-    is misconfigured, with a human-readable `error` for the template.
-    """
+    """Whether a scheduled run looks overdue per cron_schedule (ignore webhook/poll extras)."""
     if manifest is None or not manifest.get("generated_at"):
         return {"is_stale": True, "expected_next_run": None, "error": None}
 
     generated_at = manifest["generated_at"]
-    # A dataset-backend manifest always has an ISO string here, but a
-    # db-backed one can come back as a datetime/Timestamp already.
     if isinstance(generated_at, datetime):
         last_run = generated_at
     else:
@@ -63,9 +54,6 @@ def _compute_staleness(manifest: dict[str, Any] | None, cron_schedule: str, now:
             )
             return {"is_stale": None, "expected_next_run": None, "error": str(exc)}
 
-    # `now` is always tz-aware; a naive `last_run` (older manifest without a
-    # UTC offset, or a naive db value) would otherwise make the comparison
-    # below raise TypeError. job.py always writes UTC, so assume UTC.
     if last_run.tzinfo is None:
         last_run = last_run.replace(tzinfo=UTC)
 
@@ -95,10 +83,6 @@ def create_app(settings: Settings, reader: ManifestReader, users: dict[str, str]
 
     @app.get("/partials/status", dependencies=[Depends(auth)])
     def status_partial(request: Request):
-        # request must be positional-first: the correct call signature for
-        # pinned starlette==1.3.1 is TemplateResponse(self, request, name,
-        # context=None, ...), NOT the older TemplateResponse(name, {"request":
-        # request, ...}) form.
         return _TEMPLATES.TemplateResponse(request, "_status.html", _status_context())
 
     @app.get("/dashboard", dependencies=[Depends(auth)])

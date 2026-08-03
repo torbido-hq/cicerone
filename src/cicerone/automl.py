@@ -59,9 +59,13 @@ class Candidate:
     @property
     def label(self) -> str:
         if self.weights is None:
-            return "+".join(self.models)
-        weighted = ",".join(f"{name}={self.weights[name]}" for name in self.models)
-        return f"fusion({weighted})"
+            base = "+".join(self.models)
+        else:
+            weighted = ",".join(f"{name}={self.weights[name]}" for name in self.models)
+            base = f"fusion({weighted})"
+        if self.rrf_k is None:
+            return base
+        return f"{base};rrf_k={self.rrf_k}"
 
 
 @dataclass(frozen=True)
@@ -164,11 +168,7 @@ def _evaluate_fold(
     candidates: list[Candidate],
     metrics: dict[str, MetricAtK],
 ) -> list[dict[str, float]]:
-    """Scores every candidate against one (train, test) fold, in `candidates`
-    order. Reuses a fitted strategy across candidates that share it. A
-    standalone, picklable function so evaluate_candidates can run it in a
-    worker process when evaluating folds in parallel.
-    """
+    """Score every candidate on one fold (picklable for ProcessPoolExecutor)."""
     built = build_dataset(train_events, users, items, config, half_life_days=half_life_days)
     test_interactions = build_interactions(test_events, config, half_life_days=half_life_days)
     test_users = sorted(set(test_events["user_id"]))
@@ -202,13 +202,7 @@ def evaluate_candidates(
     test_days: int = DEFAULT_TEST_DAYS,
     max_workers: int = 1,
 ) -> list[CandidateResult]:
-    """Backtests every candidate config over up to `n_splits` time-based
-    folds and returns one CandidateResult per candidate (metrics averaged
-    across the folds that had data), in the same order as `candidates`.
-
-    Folds are independent, so with `max_workers > 1` they're evaluated in a
-    `ProcessPoolExecutor` instead of sequentially in-process (the default).
-    """
+    """Backtest candidates over time folds. ``max_workers > 1`` evaluates folds in parallel."""
     parsed_candidates = _parse_candidates(candidates)
     folds = _time_based_folds(events, n_splits=n_splits, test_days=test_days)
     if not folds:
@@ -273,28 +267,33 @@ def evaluate_candidates(
     return results
 
 
+def _resolve_metric_key(available_metrics: list[str], primary_metric: str) -> str:
+    if primary_metric in available_metrics:
+        return primary_metric
+    matches = [
+        key for key in available_metrics if key == primary_metric or key.startswith(f"{primary_metric}@")
+    ]
+    if not matches:
+        raise ValueError(
+            f"No metric matching '{primary_metric}' found; available metrics: {available_metrics}"
+        )
+    return matches[0]
+
+
 def select_best_candidate(
     results: list[CandidateResult], primary_metric: str = DEFAULT_PRIMARY_METRIC
 ) -> CandidateResult:
-    """Picks the candidate with the highest average value for the metric
-    whose name starts with `primary_metric` (e.g. "MAP" matches "MAP@10").
-    Ties are broken by candidate list order (first one wins).
-    """
+    """Pick the highest ``primary_metric`` (exact name or ``NAME@k``). Ties keep list order."""
     if not results:
         raise ValueError("No candidate results to select from")
 
-    available_metrics = list(results[0].metrics)
-    if not any(key.startswith(primary_metric) for key in available_metrics):
-        raise ValueError(
-            f"No metric starting with '{primary_metric}' found; available metrics: {available_metrics}"
-        )
+    metric_key = _resolve_metric_key(list(results[0].metrics), primary_metric)
 
     def _metric_value(result: CandidateResult) -> float:
-        metric_key = next((key for key in result.metrics if key.startswith(primary_metric)), None)
-        if metric_key is None:
+        if metric_key not in result.metrics:
             raise ValueError(
-                f"No metric starting with '{primary_metric}' found for candidate "
-                f"'{result.candidate.label}': {list(result.metrics)}"
+                f"Metric '{metric_key}' missing for candidate '{result.candidate.label}': "
+                f"{list(result.metrics)}"
             )
         return result.metrics[metric_key]
 

@@ -3,7 +3,7 @@
 # Values come from docker/postgres/defaults.env (via the service env_file).
 set -euo pipefail
 
-# Match cicerone.io.db_store._sql_identifier / looks_like_test_database so a
+# Match cicerone.io.options.sql_identifier / looks_like_test_database so a
 # crafted compose/env override cannot inject statements into CREATE DATABASE.
 _ident_re='^[A-Za-z_][A-Za-z0-9_]*$'
 for var in POSTGRES_USER POSTGRES_DB POSTGRES_TEST_DB; do

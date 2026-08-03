@@ -39,6 +39,14 @@ def test_local_backend_optional_inputs_missing_return_none(tmp_path):
     assert source.read_items() is None
 
 
+def test_local_backend_optional_inputs_propagate_corrupt_file_errors(tmp_path):
+    options = {"storage_backend": "local", "path": str(tmp_path)}
+    (tmp_path / "users.parquet").write_bytes(b"not-a-parquet-file")
+    source = DatasetInputSource(options)
+    with pytest.raises(ValueError):
+        source.read_users()
+
+
 def test_unknown_storage_backend_raises():
     with pytest.raises(ValueError, match="Unknown storage_backend"):
         DatasetInputSource({"storage_backend": "ftp"})

@@ -1,48 +1,26 @@
-"""Database input/output backend (SQLAlchemy). Lets the job read straight
-from any relational source (e.g. a read-replica, via a table name or a
-custom SQL query) and/or write recommendations into a database table that
-an application can query directly.
+"""Database input/output via SQLAlchemy.
 
-Configured generically via an "options" dict (see cicerone.config.IOSettings)
-built from the [input.options] / [output.options] tables in cicerone.toml:
-
-  database_url             required (SQLAlchemy connection string)
-  events_table              optional, default "events"
-  users_table               optional, default "users"
-  items_table                optional, default "items"
-  recommendations_table      optional, default "recommendations"
-  manifest_table              optional, default "recommendation_runs"
-  model_artifact_table        optional, default "model_artifacts"
-                              (must be a simple [A-Za-z_][A-Za-z0-9_]* identifier)
-  events_query / users_query / items_query   optional raw SQL overrides —
-    use these to read straight from an application's own schema instead of
-    requiring it to materialize events/users/items tables verbatim (e.g.
-    JOIN orders+order_items+reviews into one query).
-
-Table/column identifiers used here come from trusted deploy-time
-configuration, never from end-user input.
+Options: database_url (required); optional table names / raw SQL overrides
+(events_query, users_query, items_query). Identifiers come from trusted
+deploy-time config only.
 """
 
 from __future__ import annotations
 
 import logging
-import re
 from datetime import UTC, datetime
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import Column, DateTime, LargeBinary, MetaData, Table, create_engine, insert, inspect, text
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
-from cicerone.io.options import require_option
+from cicerone.io.options import require_option, sql_identifier
 
 logger = logging.getLogger(__name__)
 
 _MISSING_TABLE_ERRORS = (ProgrammingError, OperationalError)
 
-# Default table names for the db backend (overridable via input/output options).
-# Keep these as the single source of truth — config examples, readers, and the
-# system-spec schema reset all derive from them.
 DEFAULT_EVENTS_TABLE = "events"
 DEFAULT_USERS_TABLE = "users"
 DEFAULT_ITEMS_TABLE = "items"
@@ -61,19 +39,6 @@ DEFAULT_DB_TABLES = frozenset(
     }
 )
 
-# Table/option names from config are interpolated into SQL identifiers.
-# Restrict to a simple unquoted-safe form so a misconfigured (or hostile)
-# option cannot break out of the identifier.
-_SQL_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-
-
-def _sql_identifier(name: str, *, option: str) -> str:
-    if not isinstance(name, str) or not _SQL_IDENTIFIER.fullmatch(name):
-        raise ValueError(
-            f"{option} must be a simple SQL identifier matching [A-Za-z_][A-Za-z0-9_]*, got {name!r}"
-        )
-    return name
-
 
 class DatabaseInputSource:
     def __init__(self, options: dict[str, Any]):
@@ -88,10 +53,7 @@ class DatabaseInputSource:
     def read_events(self) -> pd.DataFrame:
         return self._read(
             self._options.get("events_query"),
-            _sql_identifier(
-                self._options.get("events_table", DEFAULT_EVENTS_TABLE),
-                option="events_table",
-            ),
+            sql_identifier(self._options.get("events_table", DEFAULT_EVENTS_TABLE), option="events_table"),
         )
 
     def _read_optional(self, query: str | None, table: str, label: str) -> pd.DataFrame | None:
@@ -112,20 +74,14 @@ class DatabaseInputSource:
     def read_users(self) -> pd.DataFrame | None:
         return self._read_optional(
             self._options.get("users_query"),
-            _sql_identifier(
-                self._options.get("users_table", DEFAULT_USERS_TABLE),
-                option="users_table",
-            ),
+            sql_identifier(self._options.get("users_table", DEFAULT_USERS_TABLE), option="users_table"),
             "users",
         )
 
     def read_items(self) -> pd.DataFrame | None:
         return self._read_optional(
             self._options.get("items_query"),
-            _sql_identifier(
-                self._options.get("items_table", DEFAULT_ITEMS_TABLE),
-                option="items_table",
-            ),
+            sql_identifier(self._options.get("items_table", DEFAULT_ITEMS_TABLE), option="items_table"),
             "items",
         )
 
@@ -136,7 +92,7 @@ class DatabaseOutputSink:
         self._engine = create_engine(require_option(options, "database_url", "db"), pool_pre_ping=True)
 
     def write_recommendations(self, df: pd.DataFrame) -> None:
-        table = _sql_identifier(
+        table = sql_identifier(
             self._options.get("recommendations_table", DEFAULT_RECOMMENDATIONS_TABLE),
             option="recommendations_table",
         )
@@ -151,7 +107,7 @@ class DatabaseOutputSink:
             df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
 
     def write_manifest(self, manifest: dict) -> None:
-        table = _sql_identifier(
+        table = sql_identifier(
             self._options.get("manifest_table", DEFAULT_MANIFEST_TABLE),
             option="manifest_table",
         )
@@ -159,34 +115,26 @@ class DatabaseOutputSink:
         pd.DataFrame([manifest]).to_sql(table, self._engine, if_exists="append", index=False)
 
     def write_model_artifact(self, payload: bytes) -> None:
-        """Replaces the single-row model_artifacts table with the latest blob.
-
-        Uses a dedicated BYTEA table rather than appending history — the
-        artifact is a point-in-time snapshot meant to be reloaded whole,
-        same as recommendations.parquet for the dataset backend.
-
-        Schema is kept stable across writes (CREATE IF NOT EXISTS, then
-        TRUNCATE + INSERT in one transaction) so concurrent jobs cannot
-        race on DROP/CREATE and leave the table missing mid-write.
-        """
-        table = _sql_identifier(
+        """Replace the single-row model_artifacts table with the latest blob."""
+        table_name = sql_identifier(
             self._options.get("model_artifact_table", DEFAULT_MODEL_ARTIFACT_TABLE),
             option="model_artifact_table",
         )
-        logger.info("Writing model artifact (%d bytes) to database table %r", len(payload), table)
+        logger.info("Writing model artifact (%d bytes) to database table %r", len(payload), table_name)
+        metadata = MetaData()
+        artifacts = Table(
+            table_name,
+            metadata,
+            Column("payload", LargeBinary, nullable=False),
+            Column("written_at", DateTime(timezone=True), nullable=False),
+        )
         with self._engine.begin() as conn:
-            conn.execute(
-                text(
-                    f'CREATE TABLE IF NOT EXISTS "{table}" ('
-                    "payload BYTEA NOT NULL, "
-                    "written_at TIMESTAMPTZ NOT NULL"
-                    ")"
-                )
-            )
-            # TRUNCATE takes ACCESS EXCLUSIVE in Postgres, serializing
-            # concurrent writers for the rest of this transaction.
-            conn.execute(text(f'TRUNCATE TABLE "{table}"'))
-            conn.execute(
-                text(f'INSERT INTO "{table}" (payload, written_at) VALUES (:payload, :written_at)'),
-                {"payload": payload, "written_at": datetime.now(UTC)},
-            )
+            artifacts.create(conn, checkfirst=True)
+            savepoint = conn.begin_nested()
+            try:
+                conn.execute(text(f'TRUNCATE TABLE "{table_name}"'))
+                savepoint.commit()
+            except ProgrammingError:
+                savepoint.rollback()
+                conn.execute(artifacts.delete())
+            conn.execute(insert(artifacts).values(payload=payload, written_at=datetime.now(UTC)))

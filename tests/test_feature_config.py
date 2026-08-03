@@ -112,6 +112,13 @@ def test_load_feature_config_defaults_column_type_to_categorical(tmp_path):
     assert config.user_features[0].type == "categorical"
 
 
+def test_load_feature_config_rejects_unknown_feature_type(tmp_path):
+    config_path = tmp_path / "bad_type.toml"
+    config_path.write_text('[[item_features]]\ncolumn = "category"\ntype = "embedding"\n')
+    with pytest.raises(ValueError, match="Unknown feature type"):
+        load_feature_config(config_path)
+
+
 def test_load_feature_config_rejects_unknown_eligibility_op(tmp_path):
     config_path = tmp_path / "bad_elig.toml"
     config_path.write_text(

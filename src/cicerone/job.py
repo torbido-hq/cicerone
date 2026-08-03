@@ -1,7 +1,4 @@
-"""Entry point for a single run of the recommendation job:
-configured input (dataset or db) -> build dataset -> train LightFM ->
-recommend -> configured output (dataset or db).
-"""
+"""Single recommendation job run: input → dataset → (AutoML) → train → write."""
 
 from __future__ import annotations
 
@@ -26,14 +23,8 @@ from cicerone.model import DEFAULT_MODELS, RRF_K, RecommenderModel, train_and_re
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-# Cap on manifest["error"]'s length, since it's str(exc) from an arbitrary
-# exception and gets persisted/displayed on the dashboard as-is.
 _MAX_ERROR_LENGTH = 500
 
-
-# Every run writes exactly one manifest with this fixed key set, including
-# on failure, so a "db" output's manifest table never gets an INSERT with a
-# different column set from one run to the next.
 _MANIFEST_DEFAULTS: dict[str, Any] = {
     "triggered_by": None,
     "status": "failed",
@@ -54,9 +45,6 @@ _MANIFEST_DEFAULTS: dict[str, Any] = {
 
 
 def _read_input(source: InputSource) -> tuple[pd.DataFrame, pd.DataFrame | None, pd.DataFrame | None]:
-    """Reads events/users/items concurrently — the three reads are
-    independent I/O calls (S3/local file or DB query).
-    """
     with ThreadPoolExecutor(max_workers=3) as executor:
         events_future = executor.submit(source.read_events)
         users_future = executor.submit(source.read_users)
@@ -103,6 +91,7 @@ def run(triggered_by: str = "manual") -> None:
                 candidates=settings.automl_candidates,
                 n_splits=settings.automl_n_splits,
                 test_days=settings.automl_test_days,
+                max_workers=settings.max_workers,
             )
             automl_result = select_best_candidate(
                 candidate_results, primary_metric=settings.automl_primary_metric
@@ -127,20 +116,17 @@ def run(triggered_by: str = "manual") -> None:
             weights=weights,
             rrf_k=rrf_k,
             strategy_cache=fitted if settings.save_model_artifact else None,
+            max_workers=settings.max_workers,
         )
 
-        sink.write_recommendations(recommendations)
-
         resolved_models = enabled_models or DEFAULT_MODELS
-        # `weights is not None` (not truthiness) so an empty/partial
-        # model_weights table still reports the effective weight
-        # (defaulting to 1.0) for every enabled model.
         model_weights_str = (
             ",".join(f"{name}={weights.get(name, 1.0)}" for name in resolved_models)
             if weights is not None
             else ""
         )
 
+        artifact_bytes: bytes | None = None
         if settings.save_model_artifact:
             artifact_models = [name for name in resolved_models if name in fitted]
             artifact_weights = (
@@ -148,19 +134,25 @@ def run(triggered_by: str = "manual") -> None:
                 if weights is not None
                 else None
             )
-            artifact = build_artifact(
-                fitted=fitted,
-                built=built,
-                feature_config=feature_config,
-                # Only strategies that were actually fitted (personalized
-                # strategies are skipped when there are no warm users).
-                models=artifact_models,
-                model_weights=artifact_weights,
-                rrf_k=rrf_k if rrf_k is not None else RRF_K,
+            artifact_bytes = dumps_artifact(
+                build_artifact(
+                    fitted=fitted,
+                    built=built,
+                    feature_config=feature_config,
+                    models=artifact_models,
+                    model_weights=artifact_weights,
+                    rrf_k=rrf_k if rrf_k is not None else RRF_K,
+                )
             )
-            sink.write_model_artifact(dumps_artifact(artifact))
+
+        # Persist outputs only after in-memory work succeeds so a failed run
+        # does not leave recommendations without a matching success manifest.
+        if artifact_bytes is not None:
+            sink.write_model_artifact(artifact_bytes)
             manifest["artifact_written"] = True
             manifest["artifact_schema_version"] = ARTIFACT_SCHEMA_VERSION
+
+        sink.write_recommendations(recommendations)
 
         manifest.update(
             {

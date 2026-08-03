@@ -55,6 +55,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `docker run` Postgres container.
 - Local pytest guidance points `TEST_DATABASE_URL` at `cicerone_test` (with
   `ALLOW_SCHEMA_RESET_FOR_TESTS=1`) so tests do not wipe app data.
+- Priority combine fills top-K from earlier strategies first (stable
+  priority + rank sort) instead of interleaving by per-strategy rank.
+- `[job].max_workers` wires existing ProcessPool parallelism for AutoML
+  folds and strategy fitting (default 1).
+- AutoML `primary_metric` matches exact names or `NAME@k` (no accidental
+  `"MA"` → `"MAP@10"` prefix hits).
+- Shared I/O helpers: `object_key`, `sql_identifier`, S3 not-found checks.
+- Model-artifact DB writes use portable SQLAlchemy `LargeBinary` /
+  timezone-aware `DateTime` (TRUNCATE with DELETE fallback).
+- Config validates `top_k`, `half_life_days`, feature column types, and
+  `model_weights` keys against `job.models`.
+- Batch job builds artifacts in memory and writes outputs only after
+  successful compute, reducing partial failed-run publishes.
 
 ### Fixed
 
@@ -64,6 +77,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   interpolation.
 - `cicerone.artifact` documents that pickle loads are trusted-internal-only
   (never user-controlled payloads; not on the serve path).
+- Optional dataset `users`/`items` reads only treat missing files / S3
+  not-found as absent; other errors propagate.
 
 ## [0.2.1] - 2026-07-29
 

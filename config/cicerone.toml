@@ -38,6 +38,10 @@ feature_config_path = "/app/config/features.toml"
 # never loads this — it still reads precomputed recommendation rows only.
 # save_model_artifact = false
 
+# Parallelism for AutoML fold evaluation and strategy fitting (ProcessPool).
+# Default 1 (sequential). Set >1 when the host has spare cores.
+# max_workers = 1
+
 # Optional: combine the enabled strategies via weighted reciprocal rank
 # fusion instead of the default priority order (personalized results win
 # ties, non-personalized ones only backfill). If omitted, the priority
@@ -66,7 +70,7 @@ feature_config_path = "/app/config/features.toml"
 # enabled = true
 # n_splits = 2       # number of time-based folds to backtest each candidate over
 # test_days = 14     # size of each fold's held-out window, in days
-# primary_metric = "MAP" # matched by prefix against "MAP@<top_k>"/"NDCG@<top_k>"/"Recall@<top_k>"
+# primary_metric = "MAP" # exact name or NAME@k (e.g. "MAP" → "MAP@10")
 #
 # Optional: override the default candidate search space (every strategy
 # alone, the default priority combo, and a weighted-fusion blend). Each

@@ -13,15 +13,15 @@ from cicerone.io.db_store import (
     DEFAULT_RECOMMENDATIONS_TABLE,
     DatabaseInputSource,
     DatabaseOutputSink,
-    _sql_identifier,
 )
 from cicerone.io.manifest_reader import DbManifestReader
+from cicerone.io.options import sql_identifier
 from cicerone.io.recommendation_reader import DbRecommendationReader
 
 
 def test_sql_identifier_accepts_simple_names():
-    assert _sql_identifier("model_artifacts", option="model_artifact_table") == "model_artifacts"
-    assert _sql_identifier("_private", option="model_artifact_table") == "_private"
+    assert sql_identifier("model_artifacts", option="model_artifact_table") == "model_artifacts"
+    assert sql_identifier("_private", option="model_artifact_table") == "_private"
 
 
 @pytest.mark.parametrize(
@@ -37,7 +37,7 @@ def test_sql_identifier_accepts_simple_names():
 )
 def test_sql_identifier_rejects_unsafe_names(bad_name):
     with pytest.raises(ValueError, match="SQL identifier"):
-        _sql_identifier(bad_name, option="model_artifact_table")  # type: ignore[arg-type]
+        sql_identifier(bad_name, option="model_artifact_table")  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(

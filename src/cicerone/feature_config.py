@@ -17,30 +17,27 @@ DEFAULT_CONFIG_PATH = Path("/app/config/features.toml")
 ELIGIBILITY_OPS = frozenset({"item_true", "eq", "user_in_item_list", "item_in_user_list"})
 BOOST_KINDS = frozenset({"boolean", "value_map", "numeric"})
 ON_MISSING_USER_VALUES = frozenset({"exclude", "allow"})
+FEATURE_COLUMN_TYPES = frozenset({"categorical", "list"})
 DEFAULT_BOOST_OVERFETCH_FACTOR = 3
 
 
 @dataclass(frozen=True)
 class FeatureColumn:
     column: str
-    type: str  # "categorical" | "list"
+    type: str
 
 
 @dataclass(frozen=True)
 class EligibilityRule:
-    """Hard filter. Ops: item_true, eq, user_in_item_list, item_in_user_list."""
-
     name: str
     op: str
     item_column: str
     user_column: str | None = None
-    on_missing_user: str = "exclude"  # "exclude" | "allow"
+    on_missing_user: str = "exclude"
 
 
 @dataclass(frozen=True)
 class BoostRule:
-    """Soft re-rank. Kinds: boolean, value_map, numeric."""
-
     name: str
     kind: str
     item_column: str
@@ -135,13 +132,21 @@ def _parse_boosts(raw_boosts: list[dict[str, Any]]) -> list[BoostRule]:
 
 def load_feature_config(path: Path | str | None = None) -> FeatureConfig:
     config_path = Path(path) if path else DEFAULT_CONFIG_PATH
-    with open(config_path, "rb") as f:
+    with config_path.open("rb") as f:
         raw = tomllib.load(f)
 
     def _columns(key: str) -> list[FeatureColumn]:
-        return [
-            FeatureColumn(column=c["column"], type=c.get("type", "categorical")) for c in raw.get(key, [])
-        ]
+        columns: list[FeatureColumn] = []
+        for raw_column in raw.get(key, []):
+            column = str(raw_column["column"])
+            column_type = str(raw_column.get("type", "categorical"))
+            if column_type not in FEATURE_COLUMN_TYPES:
+                raise ValueError(
+                    f"Unknown feature type {column_type!r} for {key} column {column!r}; "
+                    f"available: {sorted(FEATURE_COLUMN_TYPES)}"
+                )
+            columns.append(FeatureColumn(column=column, type=column_type))
+        return columns
 
     return FeatureConfig(
         event_weights={k: float(v) for k, v in raw.get("event_weights", {}).items()},

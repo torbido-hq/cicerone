@@ -1,14 +1,8 @@
 """Configuration for the Cicerone recommender job.
 
-Loaded from a single TOML file (default /app/config/cicerone.toml, override
-with CICERONE_CONFIG_PATH). Secrets are never stored in the file itself:
-reference them with ${ENV_VAR_NAME} placeholders, resolved from the process
-environment at load time. Escape a literal "${...}" by doubling the leading
-"$", e.g. "$${LITERAL}".
-
-Input/output backends are each configured generically as a "kind" plus a
-free-form "options" table interpreted by the corresponding module in
-cicerone.io — see cicerone.io.factory.
+Loaded from a TOML file (default /app/config/cicerone.toml, override with
+CICERONE_CONFIG_PATH). Secrets use ${ENV_VAR_NAME} placeholders; escape a
+literal "${...}" as "$${...}".
 """
 
 from __future__ import annotations
@@ -22,18 +16,16 @@ from typing import Any
 
 DEFAULT_CONFIG_PATH = "/app/config/cicerone.toml"
 
-# Kept here (not cicerone.model, which has heavy ML deps config.py avoids
-# importing) so Settings.models can be validated at load time and can't
-# drift from cicerone.model.STRATEGIES.
+# Kept here (not cicerone.model) so Settings.models validates without ML deps.
 STRATEGY_NAMES: tuple[str, ...] = ("collaborative", "item_based", "popular", "latest")
 
 AUTOML_DEFAULT_N_SPLITS = 2
 AUTOML_DEFAULT_TEST_DAYS = 14
 AUTOML_DEFAULT_PRIMARY_METRIC = "MAP"
+DEFAULT_MAX_WORKERS = 1
 
 
 def validate_model_weights(weights: dict[str, float] | None, *, context: str = "model_weights") -> None:
-    """Raises ValueError if any weight is negative."""
     if weights is None:
         return
     negative_weights = {name: weight for name, weight in weights.items() if weight < 0}
@@ -42,18 +34,26 @@ def validate_model_weights(weights: dict[str, float] | None, *, context: str = "
 
 
 def validate_rrf_k(rrf_k: float | None, *, context: str = "rrf_k") -> None:
-    """Raises ValueError if rrf_k is set but not positive."""
     if rrf_k is not None and rrf_k <= 0:
         raise ValueError(f"{context} must be positive, got {rrf_k}")
+
+
+def _require_positive_int(value: int, *, name: str) -> int:
+    if value < 1:
+        raise RuntimeError(f"{name} must be >= 1, got {value}")
+    return value
+
+
+def _require_positive_float(value: float, *, name: str) -> float:
+    if value <= 0:
+        raise RuntimeError(f"{name} must be > 0, got {value}")
+    return value
 
 
 _ENV_PLACEHOLDER = re.compile(r"\$(\$?)\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
 def _resolve_env_placeholders(value: Any, path: str = "") -> Any:
-    """Recursively replaces "${VAR_NAME}" with the matching environment
-    variable. `path` identifies the config location in error messages.
-    """
     if isinstance(value, str):
 
         def _replace(match: re.Match[str]) -> str:
@@ -80,11 +80,6 @@ def _resolve_env_placeholders(value: Any, path: str = "") -> Any:
 
 @dataclass(frozen=True)
 class IOSettings:
-    """Generic I/O configuration: a backend "kind" plus its own options dict,
-    interpreted by the corresponding module in cicerone.io. `kind` is
-    normalized to lower case when loaded from TOML.
-    """
-
     kind: str
     options: dict[str, Any] = field(default_factory=dict)
 
@@ -104,6 +99,7 @@ class Settings:
     model_weights: dict[str, float] | None
     rrf_k: float | None
     save_model_artifact: bool
+    max_workers: int
     automl_enabled: bool
     automl_n_splits: int
     automl_test_days: int
@@ -168,6 +164,10 @@ def load_settings(config_path: str | None = None) -> Settings:
         else None
     )
     validate_model_weights(model_weights, context="job.model_weights")
+    if model_weights is not None and models is not None:
+        unknown_weights = [name for name in model_weights if name not in models]
+        if unknown_weights:
+            raise RuntimeError(f"job.model_weights key(s) {unknown_weights} are not in job.models {models}")
     rrf_k = float(job["rrf_k"]) if "rrf_k" in job else None
     validate_rrf_k(rrf_k, context="job.rrf_k")
 
@@ -199,16 +199,25 @@ def load_settings(config_path: str | None = None) -> Settings:
         input=_load_io_settings(raw, "input"),
         output=_load_io_settings(raw, "output"),
         feature_config_path=job.get("feature_config_path", "/app/config/features.toml"),
-        top_k=int(job.get("top_k", 10)),
-        half_life_days=float(job.get("half_life_days", 90)),
+        top_k=_require_positive_int(int(job.get("top_k", 10)), name="job.top_k"),
+        half_life_days=_require_positive_float(
+            float(job.get("half_life_days", 90)), name="job.half_life_days"
+        ),
         cron_schedule=job.get("cron_schedule", "0 3 * * *"),
         models=models,
         model_weights=model_weights,
         rrf_k=rrf_k,
         save_model_artifact=bool(job.get("save_model_artifact", False)),
+        max_workers=_require_positive_int(
+            int(job.get("max_workers", DEFAULT_MAX_WORKERS)), name="job.max_workers"
+        ),
         automl_enabled=bool(automl.get("enabled", False)),
-        automl_n_splits=int(automl.get("n_splits", AUTOML_DEFAULT_N_SPLITS)),
-        automl_test_days=int(automl.get("test_days", AUTOML_DEFAULT_TEST_DAYS)),
+        automl_n_splits=_require_positive_int(
+            int(automl.get("n_splits", AUTOML_DEFAULT_N_SPLITS)), name="job.automl.n_splits"
+        ),
+        automl_test_days=_require_positive_int(
+            int(automl.get("test_days", AUTOML_DEFAULT_TEST_DAYS)), name="job.automl.test_days"
+        ),
         automl_primary_metric=automl.get("primary_metric", AUTOML_DEFAULT_PRIMARY_METRIC),
         automl_candidates=(
             [dict(candidate) for candidate in automl["candidates"]] if "candidates" in automl else None
@@ -217,7 +226,7 @@ def load_settings(config_path: str | None = None) -> Settings:
         serve_host=serve.get("host", "0.0.0.0"),
         serve_port=int(serve.get("port", 8000)),
         serve_auth_token=serve_auth_token,
-        serve_default_k=int(serve.get("default_k", 10)),
+        serve_default_k=_require_positive_int(int(serve.get("default_k", 10)), name="serve.default_k"),
         serve_refresh_interval_seconds=float(serve.get("refresh_interval_seconds", 60)),
         trigger_enabled=trigger_enabled,
         trigger_host=trigger.get("host", "0.0.0.0"),
@@ -231,5 +240,7 @@ def load_settings(config_path: str | None = None) -> Settings:
         dashboard_port=int(dashboard.get("port", 8090)),
         dashboard_users_path=dashboard.get("users_path", "/app/config/dashboard_users.toml"),
         dashboard_refresh_interval_seconds=float(dashboard.get("refresh_interval_seconds", 30)),
-        dashboard_history_limit=int(dashboard.get("history_limit", 20)),
+        dashboard_history_limit=_require_positive_int(
+            int(dashboard.get("history_limit", 20)), name="dashboard.history_limit"
+        ),
     )
