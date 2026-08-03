@@ -16,11 +16,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `[job].max_workers` drives ProcessPool parallelism for AutoML folds and
   strategy fitting; omit for auto (`min(cpu_count, 4)`), set `1` for
   sequential.
-- AutoML `primary_metric` matches exact names or `NAME@k` (no accidental
-  `"MA"` → `"MAP@10"` prefix hits).
+- AutoML `primary_metric` matches an exact name or a single `NAME@k`;
+  ambiguous `NAME@k` sets are rejected (no order-dependent first match).
 - Shared I/O helpers: `object_key`, `sql_identifier`, S3 not-found checks.
 - Model-artifact DB writes use portable SQLAlchemy `LargeBinary` /
-  timezone-aware `DateTime` (TRUNCATE with DELETE fallback).
+  timezone-aware `DateTime` and clear via `DELETE` (dialect-agnostic).
 - Config validates `top_k`, `half_life_days`, feature column types, and
   `model_weights` keys against `job.models`.
 - Batch job builds artifacts in memory and writes outputs only after
