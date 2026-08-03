@@ -17,6 +17,8 @@ DEFAULT_CONFIG_PATH = Path("/app/config/features.toml")
 ELIGIBILITY_OPS = frozenset({"item_true", "eq", "user_in_item_list", "item_in_user_list"})
 BOOST_KINDS = frozenset({"boolean", "value_map", "numeric"})
 ON_MISSING_USER_VALUES = frozenset({"exclude", "allow"})
+# Single source of truth for the default boost candidate over-fetch multiplier.
+DEFAULT_BOOST_OVERFETCH_FACTOR = 3
 
 
 @dataclass(frozen=True)
@@ -72,11 +74,11 @@ class FeatureConfig:
     eligibility: list[EligibilityRule] = field(default_factory=list)
     boosts: list[BoostRule] = field(default_factory=list)
     # When [[boost]] is set, over-fetch this many times top_k before re-ranking.
-    boost_overfetch_factor: int = 3
+    boost_overfetch_factor: int = DEFAULT_BOOST_OVERFETCH_FACTOR
 
 
 def _parse_boost_overfetch_factor(raw: Any) -> int:
-    factor = 3 if raw is None else int(raw)
+    factor = DEFAULT_BOOST_OVERFETCH_FACTOR if raw is None else int(raw)
     if factor < 1:
         raise ValueError(f"boost_overfetch_factor must be >= 1, got {factor}")
     return factor

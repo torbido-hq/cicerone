@@ -193,11 +193,19 @@ def allowed_items_for_cohort(
     must group by ``cohort_key`` first so attrs match.
 
     If eligibility excludes every catalog item, returns an empty list (strict)
-    and logs a warning — callers decide whether to skip the cohort.
+    and logs a warning — callers decide whether to skip the cohort. When rules
+    are configured but ``items`` is missing, also returns an empty list so
+    user-scoped filters cannot be silently bypassed.
     """
     catalog = list(catalog_ids)
-    if items is None or not rules:
+    if not rules:
         return catalog
+    if items is None:
+        logger.warning(
+            "Eligibility rules are configured but items frame is missing — "
+            "returning an empty allow-list (cannot evaluate item attributes)"
+        )
+        return []
 
     lookup = users_by_id if users_by_id is not None else index_users_by_id(users)
     representative = _user_row_for(users, users_slice[0], users_by_id=lookup) if users_slice else None
@@ -218,17 +226,20 @@ def group_users_by_cohort(
     target_users: Sequence[str],
     users: pd.DataFrame | None,
     rules: Sequence[EligibilityRule],
+    *,
+    users_by_id: dict[str, pd.Series] | None = None,
 ) -> list[tuple[Hashable, list[str]]]:
     """Group target users by eligibility cohort key, preserving first-seen order.
 
     Users absent from ``users`` (or with missing eligibility attributes) still
     appear in a cohort keyed by those missing values — they are not dropped.
+    Pass a precomputed ``users_by_id`` map to avoid re-indexing on large frames.
     """
     cohorts: dict[Hashable, list[str]] = {}
     order: list[Hashable] = []
-    users_by_id = index_users_by_id(users)
+    lookup = users_by_id if users_by_id is not None else index_users_by_id(users)
     for user_id in dict.fromkeys(target_users):
-        key = cohort_key(_user_row_for(users, user_id, users_by_id=users_by_id), rules)
+        key = cohort_key(_user_row_for(users, user_id, users_by_id=lookup), rules)
         if key not in cohorts:
             cohorts[key] = []
             order.append(key)
@@ -292,20 +303,28 @@ def apply_boosts(
     boosts: Sequence[BoostRule],
     top_k: int | None = None,
 ) -> pd.DataFrame:
-    """Multiply scores by boost factors, re-rank per user, optionally truncate."""
-    if recs.empty or not boosts:
+    """Multiply scores by boost factors, re-rank per user, optionally truncate.
+
+    Always honors ``top_k`` when set — even if boost columns are missing / items
+    is empty (in which case scores are left unchanged and the list is truncated).
+    """
+    if recs.empty:
         return recs
+    if not boosts:
+        return _truncate_recs(recs, top_k) if top_k is not None else recs
 
     factor_by_item = item_boost_factors(items, boosts)
-    if not factor_by_item:
-        return recs
-
     out = recs.copy()
-    out[Columns.Score] = out[Columns.Score] * out[Columns.Item].astype(str).map(
-        lambda i: factor_by_item.get(i, 1.0)
-    )
-    out = out.sort_values([Columns.User, Columns.Score], ascending=[True, False])
-    out[Columns.Rank] = out.groupby(Columns.User).cumcount() + 1
-    if top_k is not None:
-        out = out.groupby(Columns.User, as_index=False).head(top_k)
-    return out.reset_index(drop=True)
+    if factor_by_item:
+        out[Columns.Score] = out[Columns.Score] * out[Columns.Item].astype(str).map(
+            lambda i: factor_by_item.get(i, 1.0)
+        )
+        out = out.sort_values([Columns.User, Columns.Score], ascending=[True, False])
+        out[Columns.Rank] = out.groupby(Columns.User).cumcount() + 1
+    return _truncate_recs(out, top_k)
+
+
+def _truncate_recs(recs: pd.DataFrame, top_k: int | None) -> pd.DataFrame:
+    if top_k is None:
+        return recs.reset_index(drop=True)
+    return recs.groupby(Columns.User, as_index=False).head(top_k).reset_index(drop=True)

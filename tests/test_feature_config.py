@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from cicerone.feature_config import load_feature_config
+from cicerone.feature_config import DEFAULT_BOOST_OVERFETCH_FACTOR, load_feature_config
 
 
 def test_load_feature_config_parses_all_sections(tmp_path):
@@ -70,7 +70,7 @@ value_factors = { premium = 1.5, free = 1.0 }
     assert config.boosts[0].kind == "boolean"
     assert config.boosts[0].factor == 1.5
     assert config.boosts[1].value_factors == {"premium": 1.5, "free": 1.0}
-    assert config.boost_overfetch_factor == 3
+    assert config.boost_overfetch_factor == DEFAULT_BOOST_OVERFETCH_FACTOR
 
 
 def test_load_feature_config_defaults_to_empty_sections(tmp_path):
@@ -87,7 +87,7 @@ def test_load_feature_config_defaults_to_empty_sections(tmp_path):
     assert config.item_availability_filters == []
     assert config.eligibility == []
     assert config.boosts == []
-    assert config.boost_overfetch_factor == 3
+    assert config.boost_overfetch_factor == DEFAULT_BOOST_OVERFETCH_FACTOR
 
 
 def test_load_feature_config_parses_boost_overfetch_factor(tmp_path):

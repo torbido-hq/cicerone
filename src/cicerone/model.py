@@ -22,7 +22,7 @@ from rectools.models import ImplicitItemKNNWrapperModel, LightFMWrapperModel, Po
 
 from cicerone.config import STRATEGY_NAMES, validate_model_weights, validate_rrf_k
 from cicerone.dataset import BuiltDataset
-from cicerone.feature_config import FeatureConfig
+from cicerone.feature_config import DEFAULT_BOOST_OVERFETCH_FACTOR, FeatureConfig
 from cicerone.policy import (
     allowed_items_for_cohort,
     apply_boosts,
@@ -42,15 +42,14 @@ LATEST_WINDOW_DAYS = 14
 RRF_K = 60
 SOURCE_COLUMN = "source"
 WEIGHT_COLUMN = "_weight"  # internal-only; dropped before returning to callers
-# When boosts are configured, over-fetch candidates so a commercial boost can
-# promote an item that would otherwise sit just outside the final top_k.
-BOOST_OVERFETCH_FACTOR = 3
+# Alias of FeatureConfig's default — keep imports from model working for tests.
+BOOST_OVERFETCH_FACTOR = DEFAULT_BOOST_OVERFETCH_FACTOR
 
 
-def _recommend_k(top_k: int, has_boosts: bool, overfetch_factor: int = BOOST_OVERFETCH_FACTOR) -> int:
+def _recommend_k(top_k: int, has_boosts: bool, overfetch_factor: int = DEFAULT_BOOST_OVERFETCH_FACTOR) -> int:
     if not has_boosts:
         return top_k
-    factor = overfetch_factor if overfetch_factor >= 1 else BOOST_OVERFETCH_FACTOR
+    factor = overfetch_factor if overfetch_factor >= 1 else DEFAULT_BOOST_OVERFETCH_FACTOR
     return max(top_k, top_k * factor)
 
 
@@ -342,12 +341,15 @@ def recommend_with_models(
     recommend_k = _recommend_k(top_k, has_boosts, config.boost_overfetch_factor)
 
     known_users = set(dataset.user_id_map.external_ids)
-    warm_users = [u for u in target_users if u in known_users]
     unique_target_users = list(dict.fromkeys(target_users))
+    # Early-out when no personalized strategy can run (no warm users at all).
+    has_any_warm_user = bool(known_users.intersection(unique_target_users))
 
     users_by_id = index_users_by_id(built.users)
     if use_cohorts:
-        cohorts = group_users_by_cohort(unique_target_users, built.users, eligibility)
+        cohorts = group_users_by_cohort(
+            unique_target_users, built.users, eligibility, users_by_id=users_by_id
+        )
         allowed_by_cohort = {
             key: allowed_items_for_cohort(
                 cohort_users,
@@ -375,7 +377,7 @@ def recommend_with_models(
     frames = []
     for name in enabled_models:
         strategy = STRATEGIES[name]
-        if strategy.personalized and not warm_users:
+        if strategy.personalized and not has_any_warm_user:
             continue
         if name not in models:
             raise ValueError(f"Fitted model for strategy {name!r} is missing; available: {sorted(models)}")

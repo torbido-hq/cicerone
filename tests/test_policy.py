@@ -310,6 +310,34 @@ def test_allowed_items_for_cohort_returns_empty_when_nothing_passes(caplog):
     assert "empty allow-list" in caplog.text
 
 
+def test_allowed_items_for_cohort_missing_items_with_rules_returns_empty(caplog):
+    rules = [
+        EligibilityRule(
+            name="ships",
+            op="user_in_item_list",
+            item_column="available_countries",
+            user_column="nationality",
+        )
+    ]
+    allowed = allowed_items_for_cohort(["u1"], _users(), None, rules, ["i1", "i2"])
+    assert allowed == []
+    assert "items frame is missing" in caplog.text
+
+
+def test_apply_boosts_truncates_even_when_items_missing():
+    recs = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "rank": 1, "score": 3.0, "source": "popular_fallback"},
+            {"user_id": "u1", "item_id": "i2", "rank": 2, "score": 2.0, "source": "popular_fallback"},
+            {"user_id": "u1", "item_id": "i3", "rank": 3, "score": 1.0, "source": "popular_fallback"},
+        ]
+    )
+    boosts = [BoostRule(name="paying", kind="boolean", item_column="is_paying_producer", factor=2.0)]
+    out = apply_boosts(recs, None, boosts, top_k=2)
+    assert list(out[Columns.Item]) == ["i1", "i2"]
+    assert len(out) == 2
+
+
 def test_boolean_and_value_map_and_numeric_boosts():
     items = _items()
     boosts = [
