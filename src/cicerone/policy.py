@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Hashable, Iterable, Sequence
 
+import numpy as np
 import pandas as pd
 from rectools import Columns
 
@@ -54,23 +55,37 @@ def has_user_scoped_eligibility(rules: Sequence[EligibilityRule]) -> bool:
     return any(is_user_scoped(r) for r in rules)
 
 
-def _as_list(value: object) -> list:
-    if value is None or (isinstance(value, float) and pd.isna(value)):
-        return []
-    if isinstance(value, (list, tuple, set)):
-        return list(value)
-    if isinstance(value, pd.Series):
-        return [v for v in value.tolist() if not (isinstance(v, float) and pd.isna(v))]
-    return [value]
-
-
 def _is_missing(value: object) -> bool:
     if value is None or value is _MISSING:
         return True
+    # List-like cells are never "missing" (empty allow-lists are just empty).
+    if isinstance(value, (list, tuple, set, pd.Series)) or (isinstance(value, np.ndarray) and value.ndim > 0):
+        return False
     try:
         return bool(pd.isna(value))
     except (TypeError, ValueError):
         return False
+
+
+def _is_sequence_attr(value: object) -> bool:
+    """True for list-like user/item attribute cells (including parquet ndarrays)."""
+    if isinstance(value, (list, tuple, set, pd.Series)):
+        return True
+    return isinstance(value, np.ndarray) and value.ndim > 0
+
+
+def _as_list(value: object) -> list:
+    if _is_missing(value):
+        return []
+    if isinstance(value, np.ndarray):
+        if value.ndim == 0:
+            return _as_list(value.item())
+        return [v for v in value.tolist() if not _is_missing(v)]
+    if isinstance(value, (list, tuple, set)):
+        return list(value)
+    if isinstance(value, pd.Series):
+        return [v for v in value.tolist() if not _is_missing(v)]
+    return [value]
 
 
 def _str_set(values: Iterable) -> set[str]:
@@ -158,8 +173,8 @@ def cohort_key(user_row: pd.Series | dict | None, rules: Sequence[EligibilityRul
         value = _user_attr(user_row, rule.user_column)
         if _is_missing(value):
             parts.append((rule.user_column, None))
-        elif isinstance(value, (list, tuple, set)):
-            parts.append((rule.user_column, tuple(sorted(_str_set(value)))))
+        elif _is_sequence_attr(value):
+            parts.append((rule.user_column, tuple(sorted(_str_set(_as_list(value))))))
         else:
             parts.append((rule.user_column, str(value)))
     return tuple(parts)

@@ -141,6 +141,87 @@ item_column = "is_paying_producer"
         load_feature_config(config_path)
 
 
+def test_load_feature_config_rejects_eligibility_without_user_column(tmp_path):
+    config_path = tmp_path / "elig_no_user.toml"
+    config_path.write_text(
+        """
+[[eligibility]]
+name = "ships"
+op = "user_in_item_list"
+item_column = "available_countries"
+"""
+    )
+    with pytest.raises(ValueError, match="requires user_column"):
+        load_feature_config(config_path)
+
+
+def test_load_feature_config_rejects_invalid_on_missing_user(tmp_path):
+    config_path = tmp_path / "bad_missing.toml"
+    config_path.write_text(
+        """
+[[eligibility]]
+name = "ships"
+op = "eq"
+user_column = "market"
+item_column = "market"
+on_missing_user = "shrug"
+"""
+    )
+    with pytest.raises(ValueError, match="on_missing_user"):
+        load_feature_config(config_path)
+
+
+def test_load_feature_config_rejects_unknown_and_invalid_boosts(tmp_path):
+    unknown = tmp_path / "unknown_boost.toml"
+    unknown.write_text(
+        """
+[[boost]]
+name = "bad"
+kind = "magic"
+item_column = "x"
+"""
+    )
+    with pytest.raises(ValueError, match="Unknown boost kind"):
+        load_feature_config(unknown)
+
+    bad_factors = tmp_path / "bad_factors.toml"
+    bad_factors.write_text(
+        """
+[[boost]]
+name = "tier"
+kind = "value_map"
+item_column = "plan_tier"
+value_factors = ["not", "a", "table"]
+"""
+    )
+    with pytest.raises(ValueError, match="value_factors must be a table"):
+        load_feature_config(bad_factors)
+
+    empty_map = tmp_path / "empty_map.toml"
+    empty_map.write_text(
+        """
+[[boost]]
+name = "tier"
+kind = "value_map"
+item_column = "plan_tier"
+"""
+    )
+    with pytest.raises(ValueError, match="requires value_factors"):
+        load_feature_config(empty_map)
+
+    no_weight = tmp_path / "no_weight.toml"
+    no_weight.write_text(
+        """
+[[boost]]
+name = "margin"
+kind = "numeric"
+item_column = "margin"
+"""
+    )
+    with pytest.raises(ValueError, match="requires weight"):
+        load_feature_config(no_weight)
+
+
 def test_load_feature_config_missing_file_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
         load_feature_config(tmp_path / "does-not-exist.toml")

@@ -191,6 +191,46 @@ def test_eligible_item_mask_list_ops_normalize_types():
     assert cohort_key({"allowed": [10, 99]}, cats) == cohort_key({"allowed": ["10", "99"]}, cats)
 
 
+def test_eligible_item_mask_and_cohort_key_accept_numpy_list_cells():
+    """Parquet often surfaces list columns as numpy ndarrays."""
+    import numpy as np
+
+    items = pd.DataFrame(
+        [
+            {"item_id": "i1", "available_countries": np.array(["IT", "FR"], dtype=object)},
+            {"item_id": "i2", "available_countries": np.array(["US"], dtype=object)},
+        ]
+    )
+    ships = [
+        EligibilityRule(
+            name="ships",
+            op="user_in_item_list",
+            item_column="available_countries",
+            user_column="nationality",
+        )
+    ]
+    assert set(items.loc[eligible_item_mask({"nationality": "IT"}, items, ships), "item_id"]) == {"i1"}
+
+    cats = [
+        EligibilityRule(
+            name="cats",
+            op="item_in_user_list",
+            item_column="category",
+            user_column="allowed_categories",
+        )
+    ]
+    items_cats = pd.DataFrame(
+        [
+            {"item_id": "i1", "category": "beer"},
+            {"item_id": "i2", "category": "wine"},
+        ]
+    )
+    user = {"allowed_categories": np.array(["beer", "wine"], dtype=object)}
+    assert set(items_cats.loc[eligible_item_mask(user, items_cats, cats), "item_id"]) == {"i1", "i2"}
+    assert cohort_key(user, cats) == cohort_key({"allowed_categories": ["beer", "wine"]}, cats)
+    assert cohort_key(user, cats) == (("allowed_categories", ("beer", "wine")),)
+
+
 def test_index_users_by_id_first_row_wins_across_types():
     users = pd.DataFrame(
         [
@@ -448,3 +488,141 @@ def test_apply_boosts_reorders_and_truncates():
     assert list(out[Columns.Item]) == ["i1"]
     assert list(out[Columns.Rank]) == [1]
     assert out.iloc[0][Columns.Score] == pytest.approx(18.0)
+
+
+def test_as_list_handles_missing_series_and_zero_dim_ndarray():
+    import numpy as np
+
+    from cicerone.policy import _as_list
+
+    assert _as_list(None) == []
+    assert _as_list(float("nan")) == []
+    assert _as_list(np.array("IT")) == ["IT"]
+    assert _as_list(pd.Series(["beer", None, "wine"])) == ["beer", "wine"]
+    assert _as_list(np.array(["IT", None], dtype=object)) == ["IT"]
+
+
+def test_user_attr_missing_columns_and_empty_mask_edges():
+    items = pd.DataFrame(
+        [
+            {"item_id": "i1", "available_countries": [], "category": None},
+            {"item_id": "i2", "available_countries": [None], "category": float("nan")},
+        ]
+    )
+    ships = [
+        EligibilityRule(
+            name="ships",
+            op="user_in_item_list",
+            item_column="available_countries",
+            user_column="nationality",
+        )
+    ]
+    # Empty / all-missing list cells → no matches (explode edges).
+    assert not eligible_item_mask({"nationality": "IT"}, items, ships).any()
+    # All-empty lists → explode yields an empty series.
+    only_empty = pd.DataFrame([{"item_id": "i1", "available_countries": []}])
+    assert not eligible_item_mask({"nationality": "IT"}, only_empty, ships).any()
+
+    cats = [
+        EligibilityRule(
+            name="cats",
+            op="item_in_user_list",
+            item_column="category",
+            user_column="allowed_categories",
+        )
+    ]
+    # Missing user column on a Series row → exclude.
+    user_row = pd.Series({"user_id": "u1"})
+    assert not eligible_item_mask(user_row, _items(), cats).any()
+    # Missing key on a dict → exclude.
+    assert not eligible_item_mask({"user_id": "u1"}, _items(), cats).any()
+
+
+def test_numeric_factors_and_boost_without_top_k():
+    from cicerone.policy import _is_missing, _numeric_factors
+
+    items = pd.DataFrame([{"item_id": "i1", "margin": 1.0}])
+    # Missing column / empty frame short-circuit inside helper.
+    assert list(_numeric_factors(items, "missing", 1.0)) == [1.0]
+    assert _numeric_factors(items.iloc[0:0], "margin", 1.0).empty
+    # Non-scalar objects that pd.isna cannot truth-coerce.
+    assert _is_missing({"nested": True}) is False
+
+    recs = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i2", "rank": 1, "score": 10.0},
+            {"user_id": "u1", "item_id": "i1", "rank": 2, "score": 9.0},
+        ]
+    )
+    boosts = [BoostRule(name="paying", kind="boolean", item_column="is_paying_producer", factor=2.0)]
+    out = apply_boosts(recs, _items(), boosts, top_k=None)
+    assert list(out[Columns.Item]) == ["i1", "i2"]
+    assert len(out) == 2
+
+
+def test_eligible_item_mask_empty_inputs_and_unknown_op():
+    items = _items()
+    assert eligible_item_mask(None, items, []).all()
+    empty_items = items.iloc[0:0]
+    pub = [EligibilityRule(name="x", op="item_true", item_column="published")]
+    assert eligible_item_mask(None, empty_items, pub).empty
+
+    with pytest.raises(ValueError, match="Unknown eligibility op"):
+        eligible_item_mask(
+            {"market": "eu"},
+            items,
+            [EligibilityRule(name="bad", op="not_real", item_column="market", user_column="market")],
+        )
+
+
+def test_allowed_items_for_cohort_no_rules_returns_catalog():
+    assert allowed_items_for_cohort(["u1"], None, _items(), [], ["i1", "i9"]) == ["i1", "i9"]
+
+
+def test_boost_helpers_cover_missing_values_and_edge_numeric():
+    items = pd.DataFrame(
+        [
+            {"item_id": "i1", "flag": None, "tier": None, "margin": 5.0},
+            {"item_id": "i2", "flag": False, "tier": "free", "margin": 5.0},
+            {"item_id": "i3", "flag": True, "tier": "premium", "margin": float("nan")},
+        ]
+    )
+    factors = item_boost_factors(
+        items,
+        [
+            BoostRule(name="flag", kind="boolean", item_column="flag", factor=2.0),
+            BoostRule(
+                name="tier",
+                kind="value_map",
+                item_column="tier",
+                value_factors={"premium": 1.5},
+            ),
+            BoostRule(name="margin", kind="numeric", item_column="margin", weight=1.0),
+        ],
+    )
+    # Missing boolean/value_map → 1.0; equal/NaN margins → normalized 0 → factor 1.0
+    assert factors["i1"] == pytest.approx(1.0)
+    assert factors["i2"] == pytest.approx(1.0)
+    assert factors["i3"] == pytest.approx(2.0 * 1.5)
+
+    empty_boost = [BoostRule(name="x", kind="boolean", item_column="flag", factor=2.0)]
+    assert item_boost_factors(items.iloc[0:0], empty_boost) == {}
+    with pytest.raises(ValueError, match="Unknown boost kind"):
+        item_boost_factors(items, [BoostRule(name="bad", kind="nope", item_column="flag")])
+
+
+def test_apply_boosts_empty_recs_and_no_boosts_paths():
+    empty = pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score])
+    boosts = [BoostRule(name="paying", kind="boolean", item_column="is_paying_producer", factor=2.0)]
+    assert apply_boosts(empty, _items(), boosts, top_k=1).empty
+
+    recs = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "rank": 1, "score": 3.0},
+            {"user_id": "u1", "item_id": "i2", "rank": 2, "score": 2.0},
+        ]
+    )
+    truncated = apply_boosts(recs, _items(), [], top_k=1)
+    assert list(truncated[Columns.Item]) == ["i1"]
+    untruncated = apply_boosts(recs, _items(), [], top_k=None)
+    assert len(untruncated) == 2
