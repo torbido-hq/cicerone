@@ -20,6 +20,11 @@ quantity_scaled_events = ["purchase"]
 # [[eligibility]] rules with op = "item_true".
 item_availability_filters = ["published", "in_stock"]
 
+# When any [[boost]] rule is configured, over-fetch this many times top_k
+# candidates before applying boost multipliers (must be >= 1). Raise it if
+# boosted items often sit far below the raw top-K; lower it to save work.
+boost_overfetch_factor = 3
+
 # Base weight applied to each raw event_type before time-decay. Any
 # event_type present in events.parquet but missing here is dropped (and
 # logged as a warning) — this is how you add/retire signal types.
@@ -94,8 +99,14 @@ type = "categorical"
 #   value_map — map categorical item values to factors via value_factors
 #   numeric   — score *= 1 + weight * min-max-normalized(item column)
 #
-# When any [[boost]] is present, candidates are over-fetched (3× top_k) so a
-# boosted item ranked just outside the raw top-K can still be promoted.
+# When any [[boost]] is present, candidates are over-fetched
+# (boost_overfetch_factor × top_k, default 3) so a boosted item ranked just
+# outside the raw top-K can still be promoted. Tune boost_overfetch_factor
+# at the top of this file.
+#
+# If eligibility excludes every catalog item for a cohort, that cohort gets
+# an empty allow-list (no silent fallback to the full catalog) and is skipped
+# at recommend time.
 #
 # Recipes (uncomment and wire matching columns into users/items parquet):
 #

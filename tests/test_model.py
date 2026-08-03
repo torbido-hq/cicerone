@@ -801,9 +801,11 @@ def test_train_and_recommend_paying_producer_boost_overfetch(feature_config):
     from dataclasses import replace
 
     from cicerone.feature_config import BoostRule
-    from cicerone.model import BOOST_OVERFETCH_FACTOR
+    from cicerone.model import BOOST_OVERFETCH_FACTOR, _recommend_k
 
     assert BOOST_OVERFETCH_FACTOR > 1
+    assert _recommend_k(2, True, overfetch_factor=5) == 10
+    assert feature_config.boost_overfetch_factor >= 1
 
     now = pd.Timestamp.utcnow()
     # Popularity order without boost: i1 > i2 > i3 (paying). With top_k=2 and no

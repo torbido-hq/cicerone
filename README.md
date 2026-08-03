@@ -218,13 +218,15 @@ policy-aware rows):
   A missing user attribute defaults to excluding all items under that rule
   (`on_missing_user = "exclude"`); set `"allow"` to skip the rule for that
   user. A configured `item_column` missing from `items` fails open (rule
-  skipped) and logs a one-time warning.
-- **Boosts** (soft): after strategy combine, multiply scores by the product
+  skipped) and logs a one-time warning. If eligibility excludes every catalog
+  item for a cohort, that cohort gets an empty allow-list (no silent fallback
+  to the full catalog) and is skipped at recommend time.
+- **Boosts** (soft): after strategies are combined, multiply scores by the product
   of boost factors, re-rank, then truncate to `top_k`. Kinds: `boolean`,
-  `value_map`, `numeric`. Candidates are over-fetched (3× `top_k` by
-  default) before boosting so an item ranked just outside the raw top-K can
-  still be promoted. Source labels stay strategy names — boosts are a
-  commercial overlay, not a new strategy.
+  `value_map`, `numeric`. Candidates are over-fetched (`boost_overfetch_factor`
+  × `top_k`, default 3) before boosting so an item ranked just outside the
+  raw top-K can still be promoted. Source labels stay strategy names — boosts
+  are a commercial overlay, not a new strategy.
 
 Common ecommerce recipes (region/nationality shipping, paying producers,
 plan tiers, category allowlists) are annotated in

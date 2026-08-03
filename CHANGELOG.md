@@ -17,9 +17,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   User-scoped eligibility groups users into cohorts whose allowed-item set
   is computed once and reused across strategies; missing `item_column`
   warnings are deduplicated per `(kind, rule, column)`. When boosts are
-  configured, candidates are over-fetched (`BOOST_OVERFETCH_FACTOR`,
-  default 3× `top_k`) before score multipliers so a commercially boosted
-  item just outside the raw top-K can still enter the final list.
+  configured, candidates are over-fetched (`boost_overfetch_factor` ×
+  `top_k`, default 3 — tunable in `features.toml`) before score multipliers
+  so a commercially boosted item just outside the raw top-K can still enter
+  the final list. Cohorts whose eligibility excludes every item get an empty
+  allow-list (no silent catalog fallback) and are skipped.
 - Optional **model artifact** (`[job].save_model_artifact`): the batch job
   can write a versioned, portable fitted-model bundle
   (`model.artifact` / `model_artifacts` table) alongside recommendations.

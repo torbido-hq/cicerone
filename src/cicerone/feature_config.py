@@ -71,6 +71,15 @@ class FeatureConfig:
     item_availability_filters: list[str]
     eligibility: list[EligibilityRule] = field(default_factory=list)
     boosts: list[BoostRule] = field(default_factory=list)
+    # When [[boost]] is set, over-fetch this many times top_k before re-ranking.
+    boost_overfetch_factor: int = 3
+
+
+def _parse_boost_overfetch_factor(raw: Any) -> int:
+    factor = 3 if raw is None else int(raw)
+    if factor < 1:
+        raise ValueError(f"boost_overfetch_factor must be >= 1, got {factor}")
+    return factor
 
 
 def _parse_eligibility(raw_rules: list[dict[str, Any]]) -> list[EligibilityRule]:
@@ -161,4 +170,5 @@ def load_feature_config(path: Path | str | None = None) -> FeatureConfig:
         item_availability_filters=list(raw.get("item_availability_filters", [])),
         eligibility=_parse_eligibility(list(raw.get("eligibility", []))),
         boosts=_parse_boosts(list(raw.get("boost", []))),
+        boost_overfetch_factor=_parse_boost_overfetch_factor(raw.get("boost_overfetch_factor")),
     )

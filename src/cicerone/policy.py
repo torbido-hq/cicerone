@@ -155,13 +155,27 @@ def cohort_key(user_row: pd.Series | dict | None, rules: Sequence[EligibilityRul
     return tuple(parts)
 
 
-def _user_row_for(users: pd.DataFrame | None, user_id: str) -> pd.Series | None:
+def index_users_by_id(users: pd.DataFrame | None) -> dict[str, pd.Series]:
+    """Build an O(1) user_id -> row map once for hot cohort loops."""
     if users is None or users.empty or "user_id" not in users.columns:
-        return None
-    matched = users.loc[users["user_id"] == user_id]
-    if matched.empty:
-        return None
-    return matched.iloc[0]
+        return {}
+    # Keep the first row per user_id if duplicates exist.
+    indexed: dict[str, pd.Series] = {}
+    for _, row in users.iterrows():
+        uid = row["user_id"]
+        if uid not in indexed:
+            indexed[str(uid)] = row
+    return indexed
+
+
+def _user_row_for(
+    users: pd.DataFrame | None,
+    user_id: str,
+    *,
+    users_by_id: dict[str, pd.Series] | None = None,
+) -> pd.Series | None:
+    lookup = users_by_id if users_by_id is not None else index_users_by_id(users)
+    return lookup.get(str(user_id))
 
 
 def allowed_items_for_cohort(
@@ -170,22 +184,34 @@ def allowed_items_for_cohort(
     items: pd.DataFrame | None,
     rules: Sequence[EligibilityRule],
     catalog_ids: Iterable,
+    *,
+    users_by_id: dict[str, pd.Series] | None = None,
 ) -> list:
     """Items recommendable for a cohort of users (identical eligibility attrs).
 
     Uses the first user in ``users_slice`` as the representative row — callers
     must group by ``cohort_key`` first so attrs match.
+
+    If eligibility excludes every catalog item, returns an empty list (strict)
+    and logs a warning — callers decide whether to skip the cohort.
     """
     catalog = list(catalog_ids)
     if items is None or not rules:
         return catalog
 
-    representative = _user_row_for(users, users_slice[0]) if users_slice else None
+    lookup = users_by_id if users_by_id is not None else index_users_by_id(users)
+    representative = _user_row_for(users, users_slice[0], users_by_id=lookup) if users_slice else None
     # If every rule is item-global, user_row may be None.
     mask = eligible_item_mask(representative, items, rules)
     allowed = set(items.loc[mask, "item_id"].astype(str))
     filtered = [i for i in catalog if str(i) in allowed]
-    return filtered or catalog
+    if not filtered and catalog:
+        logger.warning(
+            "Eligibility rules excluded every item for cohort representative %r — "
+            "returning an empty allow-list (no fallback to full catalog)",
+            users_slice[0] if users_slice else None,
+        )
+    return filtered
 
 
 def group_users_by_cohort(
@@ -193,11 +219,16 @@ def group_users_by_cohort(
     users: pd.DataFrame | None,
     rules: Sequence[EligibilityRule],
 ) -> list[tuple[Hashable, list[str]]]:
-    """Group target users by eligibility cohort key, preserving first-seen order."""
+    """Group target users by eligibility cohort key, preserving first-seen order.
+
+    Users absent from ``users`` (or with missing eligibility attributes) still
+    appear in a cohort keyed by those missing values — they are not dropped.
+    """
     cohorts: dict[Hashable, list[str]] = {}
     order: list[Hashable] = []
+    users_by_id = index_users_by_id(users)
     for user_id in dict.fromkeys(target_users):
-        key = cohort_key(_user_row_for(users, user_id), rules)
+        key = cohort_key(_user_row_for(users, user_id, users_by_id=users_by_id), rules)
         if key not in cohorts:
             cohorts[key] = []
             order.append(key)

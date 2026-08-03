@@ -229,6 +229,41 @@ def test_cohort_key_and_grouping():
     assert [ids for _, ids in cohorts] == [["u1"], ["u2"]]
 
 
+def test_group_users_by_cohort_keeps_missing_users_under_missing_attr_key():
+    users = _users()
+    rules = [
+        EligibilityRule(
+            name="ships",
+            op="user_in_item_list",
+            item_column="available_countries",
+            user_column="nationality",
+        )
+    ]
+    cohorts = group_users_by_cohort(["u1", "ghost"], users, rules)
+    by_id = {uid: key for key, ids in cohorts for uid in ids}
+    assert by_id["u1"] == (("nationality", "IT"),)
+    # Absent from users frame → same missing-attr key as a null nationality.
+    assert by_id["ghost"] == (("nationality", None),)
+    assert set(uid for _, ids in cohorts for uid in ids) == {"u1", "ghost"}
+
+
+def test_group_users_by_cohort_with_missing_attributes():
+    users = _users()
+    rules = [
+        EligibilityRule(
+            name="ships",
+            op="user_in_item_list",
+            item_column="available_countries",
+            user_column="nationality",
+        )
+    ]
+    # u3 already has nationality=None in the fixture; share a cohort with a
+    # completely unknown user.
+    cohorts = group_users_by_cohort(["u1", "u3", "ghost"], users, rules)
+    missing_cohort = [ids for key, ids in cohorts if key == (("nationality", None),)][0]
+    assert missing_cohort == ["u3", "ghost"]
+
+
 def test_allowed_items_for_cohort_intersects_availability_and_region():
     config = _base_config(
         eligibility=[
@@ -244,6 +279,35 @@ def test_allowed_items_for_cohort_intersects_availability_and_region():
     allowed = allowed_items_for_cohort(["u1"], _users(), _items(), rules, ["i1", "i2", "i3", "i4"])
     # i1 published+stock and ships to IT; i3 OOS; i2 US-only; i4 unpublished
     assert allowed == ["i1"]
+
+
+def test_allowed_items_for_cohort_returns_empty_when_nothing_passes(caplog):
+    rules = resolve_eligibility(
+        _base_config(
+            eligibility=[
+                EligibilityRule(
+                    name="ships",
+                    op="user_in_item_list",
+                    item_column="available_countries",
+                    user_column="nationality",
+                )
+            ]
+        )
+    )
+    # DE-only unpublished item — no catalog entry survives for an IT user.
+    items = pd.DataFrame(
+        [
+            {
+                "item_id": "i4",
+                "published": False,
+                "in_stock": True,
+                "available_countries": ["DE"],
+            }
+        ]
+    )
+    allowed = allowed_items_for_cohort(["u1"], _users(), items, rules, ["i4"])
+    assert allowed == []
+    assert "empty allow-list" in caplog.text
 
 
 def test_boolean_and_value_map_and_numeric_boosts():

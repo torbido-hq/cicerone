@@ -28,6 +28,7 @@ from cicerone.policy import (
     apply_boosts,
     group_users_by_cohort,
     has_user_scoped_eligibility,
+    index_users_by_id,
     is_user_scoped,
     resolve_eligibility,
 )
@@ -46,10 +47,11 @@ WEIGHT_COLUMN = "_weight"  # internal-only; dropped before returning to callers
 BOOST_OVERFETCH_FACTOR = 3
 
 
-def _recommend_k(top_k: int, has_boosts: bool) -> int:
+def _recommend_k(top_k: int, has_boosts: bool, overfetch_factor: int = BOOST_OVERFETCH_FACTOR) -> int:
     if not has_boosts:
         return top_k
-    return max(top_k, top_k * BOOST_OVERFETCH_FACTOR)
+    factor = overfetch_factor if overfetch_factor >= 1 else BOOST_OVERFETCH_FACTOR
+    return max(top_k, top_k * factor)
 
 
 class RecommenderModel(Protocol):
@@ -337,22 +339,35 @@ def recommend_with_models(
         eligibility = [r for r in eligibility if not is_user_scoped(r)]
     use_cohorts = has_user_scoped_eligibility(eligibility) and built.users is not None
     has_boosts = bool(config.boosts)
-    recommend_k = _recommend_k(top_k, has_boosts)
+    recommend_k = _recommend_k(top_k, has_boosts, config.boost_overfetch_factor)
 
     known_users = set(dataset.user_id_map.external_ids)
     warm_users = [u for u in target_users if u in known_users]
     unique_target_users = list(dict.fromkeys(target_users))
 
+    users_by_id = index_users_by_id(built.users)
     if use_cohorts:
         cohorts = group_users_by_cohort(unique_target_users, built.users, eligibility)
         allowed_by_cohort = {
-            key: allowed_items_for_cohort(cohort_users, built.users, built.items, eligibility, all_item_ids)
+            key: allowed_items_for_cohort(
+                cohort_users,
+                built.users,
+                built.items,
+                eligibility,
+                all_item_ids,
+                users_by_id=users_by_id,
+            )
             for key, cohort_users in cohorts
         }
     else:
         allowed_by_cohort = {
             None: allowed_items_for_cohort(
-                unique_target_users, built.users, built.items, eligibility, all_item_ids
+                unique_target_users,
+                built.users,
+                built.items,
+                eligibility,
+                all_item_ids,
+                users_by_id=users_by_id,
             )
         }
         cohorts = [(None, unique_target_users)]
@@ -367,6 +382,10 @@ def recommend_with_models(
 
         for cohort_key_value, cohort_users in cohorts:
             allowed_items = allowed_by_cohort[cohort_key_value]
+            if not allowed_items:
+                # Strict eligibility: cohort has no sellable items — skip rather
+                # than calling recommend with an empty catalog.
+                continue
 
             if strategy.personalized:
                 cohort_warm = [u for u in cohort_users if u in known_users]

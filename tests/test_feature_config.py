@@ -70,6 +70,7 @@ value_factors = { premium = 1.5, free = 1.0 }
     assert config.boosts[0].kind == "boolean"
     assert config.boosts[0].factor == 1.5
     assert config.boosts[1].value_factors == {"premium": 1.5, "free": 1.0}
+    assert config.boost_overfetch_factor == 3
 
 
 def test_load_feature_config_defaults_to_empty_sections(tmp_path):
@@ -86,6 +87,20 @@ def test_load_feature_config_defaults_to_empty_sections(tmp_path):
     assert config.item_availability_filters == []
     assert config.eligibility == []
     assert config.boosts == []
+    assert config.boost_overfetch_factor == 3
+
+
+def test_load_feature_config_parses_boost_overfetch_factor(tmp_path):
+    config_path = tmp_path / "overfetch.toml"
+    config_path.write_text("boost_overfetch_factor = 5\n")
+    assert load_feature_config(config_path).boost_overfetch_factor == 5
+
+
+def test_load_feature_config_rejects_invalid_boost_overfetch_factor(tmp_path):
+    config_path = tmp_path / "bad_overfetch.toml"
+    config_path.write_text("boost_overfetch_factor = 0\n")
+    with pytest.raises(ValueError, match="boost_overfetch_factor"):
+        load_feature_config(config_path)
 
 
 def test_load_feature_config_defaults_column_type_to_categorical(tmp_path):
