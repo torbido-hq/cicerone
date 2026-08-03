@@ -293,7 +293,7 @@ the best combination automatically for every run:
 enabled = true
 n_splits = 2       # time-based folds to backtest each candidate over
 test_days = 14     # size of each fold's held-out window, in days
-primary_metric = "MAP" # exact name or NAME@k (e.g. "MAP" → "MAP@10")
+primary_metric = "MAP" # exact name, or a unique NAME@k (e.g. "MAP" → "MAP@10")
 ```
 
 Each run, `cicerone.automl.evaluate_candidates()` splits your event history
