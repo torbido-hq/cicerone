@@ -24,6 +24,18 @@ views, reviews, ...): drinks, books, courses, tracks, you name it. Input and
 output are pluggable and configured through a single TOML file, so wiring it
 up to your own data doesn't require touching any code.
 
+## Features
+
+- **Batch recommender** — cron-scheduled train + top-K write (dataset or DB I/O)
+- **Hybrid strategies** — collaborative (LightFM), item-based KNN, popular, latest
+- **Priority or RRF fusion** — combine strategies by order or weighted ranks
+- **AutoML** — time-fold backtest to pick models/weights per run
+- **Business policies** — TOML eligibility filters and score boosts
+- **Serve mode** — read-only HTTP API over precomputed recommendations
+- **Retrain trigger** — webhook (+ optional input poll) alongside cron
+- **Dashboard** — Basic-Auth status page for run success/failure and history
+- **Model artifacts** — optional versioned fitted-model bundle for offline reload
+
 > **Why "Cicerone"?** In the world of beer, a [Cicerone](https://www.cicerone.org)
 > is a certified expert on beer's history, styles, ingredients, brewing, and
 > — most importantly — what to pair or recommend for a given taste. Think of
