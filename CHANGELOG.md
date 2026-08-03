@@ -4,9 +4,12 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.3.1] - Unreleased
 
 ### Changed
+
+- README gains a top-level **Features** list (batch, strategies, AutoML,
+  policies, serve, trigger, dashboard, artifacts).
 
 - Priority combine fills top-K from earlier strategies first (stable
   priority + rank sort) instead of interleaving by per-strategy rank.
