@@ -70,7 +70,7 @@ feature_config_path = "/app/config/features.toml"
 # enabled = true
 # n_splits = 2       # number of time-based folds to backtest each candidate over
 # test_days = 14     # size of each fold's held-out window, in days
-# primary_metric = "MAP" # exact name or NAME@k (e.g. "MAP" → "MAP@10")
+# primary_metric = "MAP" # exact name, or a unique NAME@k (e.g. "MAP" → "MAP@10")
 #
 # Optional: override the default candidate search space (every strategy
 # alone, the default priority combo, and a weighted-fusion blend). Each

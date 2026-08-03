@@ -374,6 +374,30 @@ def test_select_best_candidate_rejects_ambiguous_prefix():
         select_best_candidate([result], primary_metric="MA")
 
 
+def test_select_best_candidate_rejects_ambiguous_name_at_k_variants():
+    result = CandidateResult(
+        candidate=Candidate(models=["popular"]),
+        metrics={"MAP@5": 0.5, "MAP@10": 0.9},
+        n_folds=1,
+    )
+    with pytest.raises(ValueError, match="Ambiguous primary_metric"):
+        select_best_candidate([result], primary_metric="MAP")
+
+
+def test_select_best_candidate_accepts_exact_metric_name():
+    low = CandidateResult(
+        candidate=Candidate(models=["popular"]),
+        metrics={"MAP@5": 0.9, "MAP@10": 0.1},
+        n_folds=1,
+    )
+    high = CandidateResult(
+        candidate=Candidate(models=["latest"]),
+        metrics={"MAP@5": 0.2, "MAP@10": 0.8},
+        n_folds=1,
+    )
+    assert select_best_candidate([low, high], primary_metric="MAP@10") is high
+
+
 def test_select_best_candidate_validates_metric_key_per_result():
     # Second result is missing "MAP@5" entirely (heterogeneous metrics) -- must
     # be caught even though the first result does have a "MAP@5" key, i.e. the

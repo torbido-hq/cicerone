@@ -270,12 +270,15 @@ def evaluate_candidates(
 def _resolve_metric_key(available_metrics: list[str], primary_metric: str) -> str:
     if primary_metric in available_metrics:
         return primary_metric
-    matches = [
-        key for key in available_metrics if key == primary_metric or key.startswith(f"{primary_metric}@")
-    ]
+    matches = [key for key in available_metrics if key.startswith(f"{primary_metric}@")]
     if not matches:
         raise ValueError(
             f"No metric matching '{primary_metric}' found; available metrics: {available_metrics}"
+        )
+    if len(matches) > 1:
+        raise ValueError(
+            f"Ambiguous primary_metric '{primary_metric}' matches {matches}; "
+            "use an exact metric name (e.g. 'MAP@10')"
         )
     return matches[0]
 

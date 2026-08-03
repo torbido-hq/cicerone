@@ -130,11 +130,5 @@ class DatabaseOutputSink:
         )
         with self._engine.begin() as conn:
             artifacts.create(conn, checkfirst=True)
-            savepoint = conn.begin_nested()
-            try:
-                conn.execute(text(f'TRUNCATE TABLE "{table_name}"'))
-                savepoint.commit()
-            except ProgrammingError:
-                savepoint.rollback()
-                conn.execute(artifacts.delete())
+            conn.execute(artifacts.delete())
             conn.execute(insert(artifacts).values(payload=payload, written_at=datetime.now(UTC)))
