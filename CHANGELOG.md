@@ -16,6 +16,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `item_availability_filters` remains sugar for global `item_true` rules.
 - Model artifacts now persist the `users` frame (schema version **2**) so
   `recommend_from_artifact` can re-apply user-scoped eligibility offline.
+- When boosts are configured, `recommend_with_models` over-fetches
+  candidates (`BOOST_OVERFETCH_FACTOR`, default 3× `top_k`) before applying
+  boost multipliers, so a commercially boosted item ranked just outside the
+  raw top-K can still enter the final list.
+
+### Changed
+
+- Allowed-item sets for eligibility cohorts are computed once per cohort key
+  and reused across every strategy in `recommend_with_models` (avoids
+  recomputing the same mask for each strategy).
+- Missing `item_column` warnings from eligibility/boost rules are
+  deduplicated per `(kind, rule, column)` for the process lifetime so a bad
+  config does not flood logs when rules run once per cohort.
 
 ## [0.3.0] - 2026-07-30
 

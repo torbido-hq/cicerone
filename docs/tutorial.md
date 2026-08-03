@@ -248,7 +248,10 @@ controls signal weighting and cold-start features without touching code:
   `["published", "in_stock"]`).
 - `[[eligibility]]` / `[[boost]]`: optional hard per-user item filters
   (e.g. nationality ∈ `available_countries`) and soft commercial re-rank
-  boosts (e.g. paying producers). See the annotated recipes in
+  boosts (e.g. paying producers). Eligibility groups users into cohorts that
+  share an allowed-item set; boosts over-fetch candidates (3× `top_k` by
+  default) before re-ranking so a boosted item just outside the raw top-K
+  can still make the cut. See the annotated recipes in
   `config/features.toml`.
 
 Try lowering `view`'s weight to `0.1` or raising `purchase` to `6.0` in your

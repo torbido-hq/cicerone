@@ -96,7 +96,8 @@ flowchart LR
    `item_availability_filters` sugar with explicit `[[eligibility]]` rules.
    User-scoped rules group target users into cohorts that share the same
    allowed item set (rectools accepts one `items_to_recommend` list per
-   call). Strategies are combined either by priority order (default —
+   call); each cohort's allowed list is computed once and reused across
+   every strategy. Strategies are combined either by priority order (default —
    earlier ones win ties) or, if `Settings.model_weights` is set (even an
    empty table), by weighted reciprocal rank fusion
    (`_combine_by_weighted_fusion`) — the fusion constant defaults to
@@ -105,8 +106,9 @@ flowchart LR
    pair was produced by more than one strategy, its combined `source` label
    joins each contributing strategy's label in `enabled_models`' order (not
    alphabetically), so the label reflects the caller's configured priority.
-   If `[[boost]]` rules are configured, candidates are over-fetched, scores
-   are multiplied by the product of boost factors, and ranks are rewritten
+   If `[[boost]]` rules are configured, candidates are over-fetched by
+   `model.BOOST_OVERFETCH_FACTOR` (default 3× `top_k`), scores are
+   multiplied by the product of boost factors, and ranks are rewritten
    before truncating to `top_k`.
    An optional `strategy_cache` parameter (keyed by strategy name, caching
    the *fitted model* rather than its `recommend()` output) lets a caller
@@ -237,8 +239,24 @@ boosts (`[[eligibility]]` / `[[boost]]`). These are evaluated in
 precomputed recommendation rows already respect region/nationality gates,
 paying-producer boosts, plan tiers, and similar ecommerce rules. See the
 annotated recipes in `config/features.toml` and the README data-contract
-section. Model artifacts (schema version 2+) also persist the `users` frame
-so `recommend_from_artifact` can re-apply user-scoped eligibility offline.
+section.
+
+Implementation details:
+
+- **Cohorts:** user-scoped eligibility groups target users by the
+  fingerprint of the user attributes those rules read. Each cohort's
+  allowed-item list is computed once and shared by every strategy's
+  `recommend()` call.
+- **Boost over-fetch:** when any `[[boost]]` is configured,
+  strategies request `BOOST_OVERFETCH_FACTOR * top_k` candidates (default
+  factor 3) so a commercially boosted item that would otherwise sit just
+  outside the raw top-K can still be promoted after score multiplication.
+- **Missing columns:** a configured `item_column` absent from the items
+  frame fails open (rule skipped). The warning is emitted once per
+  `(kind, rule name, column)` for the process lifetime to avoid log spam
+  when eligibility runs per cohort.
+- **Artifacts:** schema version 2+ persists the `users` frame so
+  `recommend_from_artifact` can re-apply user-scoped eligibility offline.
 
 ## Extensibility: adding a new I/O backend
 

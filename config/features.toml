@@ -83,10 +83,19 @@ type = "categorical"
 #   user_in_item_list  — user scalar is in item list column
 #   item_in_user_list  — item scalar is in user list column
 #
+# Users that share the same eligibility attribute values are recommended as
+# one cohort (one items_to_recommend set, reused across every strategy).
+# Missing user attributes default to on_missing_user = "exclude"; set
+# "allow" to skip that rule for the user. A missing item_column fails open
+# and logs a one-time warning.
+#
 # Boost kinds:
 #   boolean   — if item flag is truthy, multiply score by `factor`
 #   value_map — map categorical item values to factors via value_factors
 #   numeric   — score *= 1 + weight * min-max-normalized(item column)
+#
+# When any [[boost]] is present, candidates are over-fetched (3× top_k) so a
+# boosted item ranked just outside the raw top-K can still be promoted.
 #
 # Recipes (uncomment and wire matching columns into users/items parquet):
 #
