@@ -98,7 +98,8 @@ flowchart LR
    allowed item set (rectools accepts one `items_to_recommend` list per
    call); each cohort's allowlist is computed once and reused across
    every strategy. Strategies are combined either by priority order (default —
-   earlier ones win ties) or, if `Settings.model_weights` is set (even an
+   earlier strategies fill top-K first; later ones only backfill) or, if
+   `Settings.model_weights` is set (even an
    empty table), by weighted reciprocal rank fusion
    (`_combine_by_weighted_fusion`) — the fusion constant defaults to
    `model.RRF_K` but is overridable via `Settings.rrf_k`/`[job].rrf_k`; see
@@ -106,6 +107,8 @@ flowchart LR
    pair was produced by more than one strategy, its combined `source` label
    joins each contributing strategy's label in `enabled_models`' order (not
    alphabetically), so the label reflects the caller's configured priority.
+   `Settings.max_workers` (`[job].max_workers`, default 1) parallelizes
+   AutoML fold evaluation and strategy fitting via `ProcessPoolExecutor`.
    If `[[boost]]` rules are configured, candidates are over-fetched by
    `FeatureConfig.boost_overfetch_factor` (default 3× `top_k`), scores are
    multiplied by the product of boost factors, and ranks are rewritten
