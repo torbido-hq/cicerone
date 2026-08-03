@@ -732,6 +732,71 @@ def test_train_and_recommend_respects_per_user_eligibility(feature_config):
     assert "i1" not in u2_items
 
 
+def test_train_and_recommend_empty_users_frame_skips_user_scoped_rules(feature_config, caplog):
+    """Empty users.parquet must not enable broken cohort mode (treat like missing)."""
+    from dataclasses import replace
+
+    from cicerone.feature_config import EligibilityRule
+
+    now = pd.Timestamp.utcnow()
+    events = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+            {"user_id": "u1", "item_id": "i2", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+            {"user_id": "u2", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+            {"user_id": "u2", "item_id": "i2", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+        ]
+    )
+    items = pd.DataFrame(
+        [
+            {
+                "item_id": "i1",
+                "category": "beer",
+                "producer_id": "p1",
+                "published": True,
+                "in_stock": True,
+                "available_countries": ["IT"],
+            },
+            {
+                "item_id": "i2",
+                "category": "beer",
+                "producer_id": "p2",
+                "published": True,
+                "in_stock": True,
+                "available_countries": ["US"],
+            },
+        ]
+    )
+    config = replace(
+        feature_config,
+        eligibility=[
+            EligibilityRule(
+                name="ships_to_user",
+                op="user_in_item_list",
+                item_column="available_countries",
+                user_column="nationality",
+            )
+        ],
+    )
+    built = build_dataset(events, None, items, config, half_life_days=90)
+    # Simulate a present-but-empty users frame (e.g. empty users.parquet).
+    built = replace(built, users=pd.DataFrame(columns=["user_id", "nationality"]))
+
+    recommendations = train_and_recommend(
+        built,
+        target_users=["u1", "u2"],
+        config=config,
+        top_k=2,
+        enabled_models=["popular"],
+    )
+
+    assert "no users frame is available" in caplog.text
+    # User-scoped rule stripped → both published items remain eligible for both users.
+    for uid in ("u1", "u2"):
+        got = set(recommendations.loc[recommendations[Columns.User] == uid, Columns.Item])
+        assert got == {"i1", "i2"}
+
+
 def test_train_and_recommend_paying_producer_boost_reorders(feature_config):
     from dataclasses import replace
 
@@ -796,14 +861,14 @@ def test_train_and_recommend_paying_producer_boost_reorders(feature_config):
 
 def test_train_and_recommend_paying_producer_boost_overfetch(feature_config):
     """Boosted item ranked just below top_k by popularity must enter final top_k
-    via BOOST_OVERFETCH_FACTOR + apply_boosts, not only by reordering within top_k.
+    via boost over-fetch + apply_boosts, not only by reordering within top_k.
     """
     from dataclasses import replace
 
-    from cicerone.feature_config import BoostRule
-    from cicerone.model import BOOST_OVERFETCH_FACTOR, _recommend_k
+    from cicerone.feature_config import DEFAULT_BOOST_OVERFETCH_FACTOR, BoostRule
+    from cicerone.model import _recommend_k
 
-    assert BOOST_OVERFETCH_FACTOR > 1
+    assert DEFAULT_BOOST_OVERFETCH_FACTOR > 1
     assert _recommend_k(2, True, overfetch_factor=5) == 10
     assert feature_config.boost_overfetch_factor >= 1
 

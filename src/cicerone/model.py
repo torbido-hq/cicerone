@@ -42,7 +42,6 @@ LATEST_WINDOW_DAYS = 14
 RRF_K = 60
 SOURCE_COLUMN = "source"
 WEIGHT_COLUMN = "_weight"  # internal-only; dropped before returning to callers
-BOOST_OVERFETCH_FACTOR = DEFAULT_BOOST_OVERFETCH_FACTOR
 
 
 def _recommend_k(top_k: int, has_boosts: bool, overfetch_factor: int = DEFAULT_BOOST_OVERFETCH_FACTOR) -> int:
@@ -326,13 +325,14 @@ def recommend_with_models(
     dataset = built.dataset
     all_item_ids = dataset.item_id_map.external_ids
     eligibility = resolve_eligibility(config)
-    if has_user_scoped_eligibility(eligibility) and built.users is None:
+    users_frame = built.users if built.users is not None and not built.users.empty else None
+    if has_user_scoped_eligibility(eligibility) and users_frame is None:
         logger.warning(
             "User-scoped eligibility rules are configured but no users frame is available — "
             "applying only item-global rules"
         )
         eligibility = [r for r in eligibility if not is_user_scoped(r)]
-    use_cohorts = has_user_scoped_eligibility(eligibility) and built.users is not None
+    use_cohorts = has_user_scoped_eligibility(eligibility) and users_frame is not None
     has_boosts = bool(config.boosts)
     recommend_k = _recommend_k(top_k, has_boosts, config.boost_overfetch_factor)
 
@@ -340,15 +340,15 @@ def recommend_with_models(
     unique_target_users = list(dict.fromkeys(target_users))
     has_any_warm_user = bool(known_users.intersection(unique_target_users))
 
-    users_by_id = index_users_by_id(built.users)
+    users_by_id = index_users_by_id(users_frame)
     if use_cohorts:
         cohorts = group_users_by_cohort(
-            unique_target_users, built.users, eligibility, users_by_id=users_by_id
+            unique_target_users, users_frame, eligibility, users_by_id=users_by_id
         )
         allowed_by_cohort = {
             key: allowed_items_for_cohort(
                 cohort_users,
-                built.users,
+                users_frame,
                 built.items,
                 eligibility,
                 all_item_ids,
@@ -360,7 +360,7 @@ def recommend_with_models(
         allowed_by_cohort = {
             None: allowed_items_for_cohort(
                 unique_target_users,
-                built.users,
+                users_frame,
                 built.items,
                 eligibility,
                 all_item_ids,

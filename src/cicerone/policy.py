@@ -73,6 +73,10 @@ def _is_missing(value: object) -> bool:
         return False
 
 
+def _str_set(values: Iterable) -> set[str]:
+    return {str(v) for v in values if not _is_missing(v)}
+
+
 def _user_attr(user_row: pd.Series | dict | None, column: str | None) -> object:
     if user_row is None or column is None:
         return _MISSING
@@ -83,6 +87,26 @@ def _user_attr(user_row: pd.Series | dict | None, column: str | None) -> object:
     if column not in user_row.index:
         return _MISSING
     return user_row[column]
+
+
+def _user_in_item_list_mask(item_values: pd.Series, user_value: object) -> pd.Series:
+    """True where stringified ``user_value`` appears in the item's list-like cell."""
+    needle = str(user_value)
+    exploded = item_values.map(_as_list).explode()
+    if exploded.empty:
+        return pd.Series(False, index=item_values.index)
+    present = exploded[~exploded.map(_is_missing)]
+    if present.empty:
+        return pd.Series(False, index=item_values.index)
+    matches = present.astype(str).eq(needle)
+    return matches.groupby(level=0).any().reindex(item_values.index, fill_value=False)
+
+
+def _item_in_user_list_mask(item_values: pd.Series, user_value: object) -> pd.Series:
+    """True where the stringified item value is in the user's allow-list."""
+    allowed = _str_set(_as_list(user_value))
+    non_missing = ~item_values.map(_is_missing)
+    return non_missing & item_values.astype(str).isin(allowed)
 
 
 def eligible_item_mask(
@@ -114,12 +138,11 @@ def eligible_item_mask(
             continue
 
         if rule.op == "eq":
-            mask &= item_values == user_value
+            mask &= item_values.astype(str).eq(str(user_value))
         elif rule.op == "user_in_item_list":
-            mask &= item_values.map(lambda cell, uv=user_value: uv in _as_list(cell))
+            mask &= _user_in_item_list_mask(item_values, user_value)
         elif rule.op == "item_in_user_list":
-            allowed = set(_as_list(user_value))
-            mask &= item_values.map(lambda cell, allowed=allowed: cell in allowed and not _is_missing(cell))
+            mask &= _item_in_user_list_mask(item_values, user_value)
         else:
             raise ValueError(f"Unknown eligibility op {rule.op!r} in rule {rule.name!r}")
 
@@ -136,9 +159,9 @@ def cohort_key(user_row: pd.Series | dict | None, rules: Sequence[EligibilityRul
         if _is_missing(value):
             parts.append((rule.user_column, None))
         elif isinstance(value, (list, tuple, set)):
-            parts.append((rule.user_column, tuple(sorted(str(v) for v in value))))
+            parts.append((rule.user_column, tuple(sorted(_str_set(value)))))
         else:
-            parts.append((rule.user_column, value if isinstance(value, Hashable) else str(value)))
+            parts.append((rule.user_column, str(value)))
     return tuple(parts)
 
 
@@ -148,9 +171,9 @@ def index_users_by_id(users: pd.DataFrame | None) -> dict[str, pd.Series]:
         return {}
     indexed: dict[str, pd.Series] = {}
     for _, row in users.iterrows():
-        uid = row["user_id"]
-        if uid not in indexed:
-            indexed[str(uid)] = row
+        key = str(row["user_id"])
+        if key not in indexed:
+            indexed[key] = row
     return indexed
 
 
@@ -291,10 +314,12 @@ def apply_boosts(
     factor_by_item = item_boost_factors(items, boosts)
     out = recs.copy()
     if factor_by_item:
-        out[Columns.Score] = out[Columns.Score] * out[Columns.Item].astype(str).map(
-            lambda i: factor_by_item.get(i, 1.0)
+        item_ids = out[Columns.Item].astype(str)
+        out[Columns.Score] = out[Columns.Score] * item_ids.map(factor_by_item).fillna(1.0)
+        out = out.sort_values(
+            [Columns.User, Columns.Score, Columns.Item],
+            ascending=[True, False, True],
         )
-        out = out.sort_values([Columns.User, Columns.Score], ascending=[True, False])
         out[Columns.Rank] = out.groupby(Columns.User).cumcount() + 1
     return _truncate_recs(out, top_k)
 

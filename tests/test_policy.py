@@ -12,6 +12,7 @@ from cicerone.policy import (
     eligible_item_mask,
     group_users_by_cohort,
     has_user_scoped_eligibility,
+    index_users_by_id,
     item_boost_factors,
     resolve_eligibility,
 )
@@ -152,6 +153,75 @@ def test_eligible_item_mask_item_in_user_list():
     ]
     mask = eligible_item_mask(user, items, rules)
     assert set(items.loc[mask, "item_id"]) == {"i1", "i2", "i3"}
+
+
+def test_eligible_item_mask_list_ops_normalize_types():
+    """Cohort fingerprint and mask both stringify, so int/str list elements agree."""
+    items = pd.DataFrame(
+        [
+            {"item_id": "i1", "region_ids": [1, 2], "category_id": 10},
+            {"item_id": "i2", "region_ids": ["3"], "category_id": 20},
+        ]
+    )
+    # user_in_item_list: scalar user attr vs list item attr
+    ships = [
+        EligibilityRule(
+            name="ships",
+            op="user_in_item_list",
+            item_column="region_ids",
+            user_column="region",
+        )
+    ]
+    assert set(items.loc[eligible_item_mask({"region": "1"}, items, ships), "item_id"]) == {"i1"}
+    assert set(items.loc[eligible_item_mask({"region": 1}, items, ships), "item_id"]) == {"i1"}
+
+    # item_in_user_list: list user attr vs scalar item attr
+    cats = [
+        EligibilityRule(
+            name="cats",
+            op="item_in_user_list",
+            item_column="category_id",
+            user_column="allowed",
+        )
+    ]
+    assert set(items.loc[eligible_item_mask({"allowed": [10, 99]}, items, cats), "item_id"]) == {"i1"}
+    assert set(items.loc[eligible_item_mask({"allowed": ["10", "99"]}, items, cats), "item_id"]) == {"i1"}
+
+    # Same stringified list → same cohort key
+    assert cohort_key({"allowed": [10, 99]}, cats) == cohort_key({"allowed": ["10", "99"]}, cats)
+
+
+def test_index_users_by_id_first_row_wins_across_types():
+    users = pd.DataFrame(
+        [
+            {"user_id": 1, "nationality": "IT"},
+            {"user_id": "1", "nationality": "US"},
+            {"user_id": 2, "nationality": "DE"},
+        ]
+    )
+    indexed = index_users_by_id(users)
+    assert set(indexed) == {"1", "2"}
+    assert indexed["1"]["nationality"] == "IT"
+    assert indexed["2"]["nationality"] == "DE"
+
+
+def test_apply_boosts_tie_break_is_deterministic():
+    items = pd.DataFrame(
+        [
+            {"item_id": "i_b", "is_paying_producer": True},
+            {"item_id": "i_a", "is_paying_producer": True},
+        ]
+    )
+    recs = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i_b", "rank": 1, "score": 1.0, "source": "popular_fallback"},
+            {"user_id": "u1", "item_id": "i_a", "rank": 2, "score": 1.0, "source": "popular_fallback"},
+        ]
+    )
+    boosts = [BoostRule(name="paying", kind="boolean", item_column="is_paying_producer", factor=2.0)]
+    out = apply_boosts(recs, items, boosts, top_k=2)
+    # Equal boosted scores → stable sort by item id ascending
+    assert list(out[Columns.Item]) == ["i_a", "i_b"]
 
 
 def test_eligible_item_mask_missing_user_exclude_vs_allow():
