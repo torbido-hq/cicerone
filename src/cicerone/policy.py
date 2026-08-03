@@ -194,18 +194,30 @@ def allowed_items_for_cohort(
 
     If eligibility excludes every catalog item, returns an empty list (strict)
     and logs a warning — callers decide whether to skip the cohort. When rules
-    are configured but ``items`` is missing, also returns an empty list so
-    user-scoped filters cannot be silently bypassed.
+    are configured but ``items`` is missing: user-scoped rules fail closed
+    (empty list); item-global-only rules fail open (full catalog) so events-only
+    runs keep working.
     """
     catalog = list(catalog_ids)
     if not rules:
         return catalog
     if items is None:
+        if has_user_scoped_eligibility(rules):
+            # Cannot evaluate user↔item matching without an items frame —
+            # fail closed so per-user hard filters are never silently skipped.
+            logger.warning(
+                "User-scoped eligibility rules are configured but items frame is missing — "
+                "returning an empty allow-list (cannot evaluate item attributes)"
+            )
+            return []
+        # Item-global-only rules (e.g. availability sugar) without an items
+        # frame fail open — same as a missing column — so events-only runs
+        # keep working.
         logger.warning(
-            "Eligibility rules are configured but items frame is missing — "
-            "returning an empty allow-list (cannot evaluate item attributes)"
+            "Item eligibility rules are configured but items frame is missing — "
+            "skipping item filters and returning the full catalog"
         )
-        return []
+        return catalog
 
     lookup = users_by_id if users_by_id is not None else index_users_by_id(users)
     representative = _user_row_for(users, users_slice[0], users_by_id=lookup) if users_slice else None

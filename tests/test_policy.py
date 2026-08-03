@@ -310,7 +310,7 @@ def test_allowed_items_for_cohort_returns_empty_when_nothing_passes(caplog):
     assert "empty allow-list" in caplog.text
 
 
-def test_allowed_items_for_cohort_missing_items_with_rules_returns_empty(caplog):
+def test_allowed_items_for_cohort_missing_items_with_user_rules_returns_empty(caplog):
     rules = [
         EligibilityRule(
             name="ships",
@@ -321,7 +321,16 @@ def test_allowed_items_for_cohort_missing_items_with_rules_returns_empty(caplog)
     ]
     allowed = allowed_items_for_cohort(["u1"], _users(), None, rules, ["i1", "i2"])
     assert allowed == []
-    assert "items frame is missing" in caplog.text
+    assert "empty allow-list" in caplog.text
+
+
+def test_allowed_items_for_cohort_missing_items_with_item_only_rules_fails_open(caplog):
+    rules = resolve_eligibility(_base_config())  # availability sugar only
+    assert rules  # published + in_stock
+    assert not has_user_scoped_eligibility(rules)
+    allowed = allowed_items_for_cohort(["u1"], None, None, rules, ["i1", "i2"])
+    assert allowed == ["i1", "i2"]
+    assert "full catalog" in caplog.text
 
 
 def test_apply_boosts_truncates_even_when_items_missing():
