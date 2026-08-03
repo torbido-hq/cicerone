@@ -219,7 +219,7 @@ policy-aware rows):
   (`on_missing_user = "exclude"`); set `"allow"` to skip the rule for that
   user. A configured `item_column` missing from `items` fails open (rule
   skipped) and logs a one-time warning. If eligibility excludes every catalog
-  item for a cohort, that cohort gets an empty allow-list (no silent fallback
+  item for a cohort, that cohort gets an empty allowlist (no silent fallback
   to the full catalog) and is skipped at recommend time.
 - **Boosts** (soft): after strategies are combined, multiply scores by the product
   of boost factors, re-rank, then truncate to `top_k`. Kinds: `boolean`,

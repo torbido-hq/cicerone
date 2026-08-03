@@ -96,7 +96,7 @@ flowchart LR
    `item_availability_filters` sugar with explicit `[[eligibility]]` rules.
    User-scoped rules group target users into cohorts that share the same
    allowed item set (rectools accepts one `items_to_recommend` list per
-   call); each cohort's allowed list is computed once and reused across
+   call); each cohort's allowlist is computed once and reused across
    every strategy. Strategies are combined either by priority order (default —
    earlier ones win ties) or, if `Settings.model_weights` is set (even an
    empty table), by weighted reciprocal rank fusion
@@ -109,7 +109,7 @@ flowchart LR
    If `[[boost]]` rules are configured, candidates are over-fetched by
    `FeatureConfig.boost_overfetch_factor` (default 3× `top_k`), scores are
    multiplied by the product of boost factors, and ranks are rewritten
-   before truncating to `top_k`. Cohorts with an empty allow-list (eligibility
+   before truncating to `top_k`. Cohorts with an empty allowlist (eligibility
    filtered out every item) are skipped.
    An optional `strategy_cache` parameter (keyed by strategy name, caching
    the *fitted model* rather than its `recommend()` output) lets a caller
@@ -254,7 +254,7 @@ Implementation details:
   would otherwise sit just outside the raw top-K can still be promoted after
   score multiplication.
 - **Empty cohorts:** if eligibility excludes every catalog item for a
-  cohort, the allow-list is empty (logged once per such cohort) and that
+  cohort, the allowlist is empty (logged once per such cohort) and that
   cohort is skipped — there is no silent fallback to the full catalog.
 - **Missing columns:** a configured `item_column` absent from the items
   frame fails open (rule skipped). The warning is emitted once per

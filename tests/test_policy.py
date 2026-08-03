@@ -417,7 +417,7 @@ def test_allowed_items_for_cohort_returns_empty_when_nothing_passes(caplog):
     )
     allowed = allowed_items_for_cohort(["u1"], _users(), items, rules, ["i4"])
     assert allowed == []
-    assert "empty allow-list" in caplog.text
+    assert "empty allowlist" in caplog.text
 
 
 def test_allowed_items_for_cohort_missing_items_with_user_rules_returns_empty(caplog):
@@ -431,7 +431,7 @@ def test_allowed_items_for_cohort_missing_items_with_user_rules_returns_empty(ca
     ]
     allowed = allowed_items_for_cohort(["u1"], _users(), None, rules, ["i1", "i2"])
     assert allowed == []
-    assert "empty allow-list" in caplog.text
+    assert "empty allowlist" in caplog.text
 
 
 def test_allowed_items_for_cohort_missing_items_with_item_only_rules_fails_open(caplog):

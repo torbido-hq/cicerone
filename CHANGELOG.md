@@ -21,7 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `top_k`, default 3 — tunable in `features.toml`) before score multipliers
   so a commercially boosted item just outside the raw top-K can still enter
   the final list. Cohorts whose eligibility excludes every item get an empty
-  allow-list (no silent catalog fallback) and are skipped.
+  allowlist (no silent catalog fallback) and are skipped.
 - Optional **model artifact** (`[job].save_model_artifact`): the batch job
   can write a versioned, portable fitted-model bundle
   (`model.artifact` / `model_artifacts` table) alongside recommendations.

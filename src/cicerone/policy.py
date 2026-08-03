@@ -69,7 +69,7 @@ def has_user_scoped_eligibility(rules: Sequence[EligibilityRule]) -> bool:
 def _is_missing(value: object) -> bool:
     if value is None or value is _MISSING:
         return True
-    # List-like cells are never "missing" (empty allow-lists are just empty).
+    # List-like cells are never "missing" (empty allowlists are just empty).
     if isinstance(value, (list, tuple, set, pd.Series)) or (isinstance(value, np.ndarray) and value.ndim > 0):
         return False
     try:
@@ -129,7 +129,7 @@ def _user_in_item_list_mask(item_values: pd.Series, user_value: object) -> pd.Se
 
 
 def _item_in_user_list_mask(item_values: pd.Series, user_value: object) -> pd.Series:
-    """True where the stringified item value is in the user's allow-list."""
+    """True where the stringified item value is in the user's allowlist."""
     allowed = _str_set(_as_list(user_value))
     non_missing = ~item_values.map(_is_missing)
     return non_missing & item_values.astype(str).isin(allowed)
@@ -176,7 +176,7 @@ def eligible_item_mask(
 
 
 def cohort_key(user_row: pd.Series | dict | None, rules: Sequence[EligibilityRule]) -> Hashable:
-    """Fingerprint of user attrs used by eligibility (same key → same allow-list)."""
+    """Fingerprint of user attrs used by eligibility (same key → same allowlist)."""
     parts: list[tuple[str, Hashable]] = []
     for rule in rules:
         if not is_user_scoped(rule) or rule.user_column is None:
@@ -234,7 +234,7 @@ def allowed_items_for_cohort(
         if has_user_scoped_eligibility(rules):
             logger.warning(
                 "User-scoped eligibility rules are configured but items frame is missing or empty — "
-                "returning an empty allow-list (cannot evaluate item attributes)"
+                "returning an empty allowlist (cannot evaluate item attributes)"
             )
             return []
         logger.warning(
@@ -251,7 +251,7 @@ def allowed_items_for_cohort(
     if not filtered and catalog:
         logger.warning(
             "Eligibility rules excluded every item for cohort representative %r — "
-            "returning an empty allow-list (no fallback to full catalog)",
+            "returning an empty allowlist (no fallback to full catalog)",
             users_slice[0] if users_slice else None,
         )
     return filtered

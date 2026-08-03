@@ -105,7 +105,7 @@ type = "categorical"
 # at the top of this file.
 #
 # If eligibility excludes every catalog item for a cohort, that cohort gets
-# an empty allow-list (no silent fallback to the full catalog) and is skipped
+# an empty allowlist (no silent fallback to the full catalog) and is skipped
 # at recommend time.
 #
 # Recipes (uncomment and wire matching columns into users/items parquet):
