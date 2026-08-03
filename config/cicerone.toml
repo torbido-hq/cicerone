@@ -39,8 +39,8 @@ feature_config_path = "/app/config/features.toml"
 # save_model_artifact = false
 
 # Parallelism for AutoML fold evaluation and strategy fitting (ProcessPool).
-# Default 1 (sequential). Set >1 when the host has spare cores.
-# max_workers = 1
+# Omit for auto: min(cpu_count, 4). Set explicitly to pin (1 = sequential).
+# max_workers = 4
 
 # Optional: combine the enabled strategies via weighted reciprocal rank
 # fusion instead of the default priority order (personalized results win

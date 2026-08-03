@@ -279,9 +279,9 @@ contributing strategy's label in `models`' configured order (e.g.
 alphabetically — so the label reflects your configured priority regardless
 of how the underlying strategy labels happen to sort.
 
-Set `[job].max_workers` (>1) to fit independent strategies and evaluate
-AutoML folds in parallel via a process pool (default `1` keeps sequential
-behavior).
+Omit `[job].max_workers` to auto-size the process pool
+(`min(cpu_count, 4)`); set an explicit integer to pin (including `1` for
+sequential). Used for strategy fitting and AutoML fold evaluation.
 
 ## AutoML
 

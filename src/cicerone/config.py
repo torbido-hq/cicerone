@@ -22,7 +22,22 @@ STRATEGY_NAMES: tuple[str, ...] = ("collaborative", "item_based", "popular", "la
 AUTOML_DEFAULT_N_SPLITS = 2
 AUTOML_DEFAULT_TEST_DAYS = 14
 AUTOML_DEFAULT_PRIMARY_METRIC = "MAP"
-DEFAULT_MAX_WORKERS = 1
+# Cap auto parallelism so LightFM/implicit workers don't OOM on fat hosts.
+MAX_WORKERS_AUTO_CAP = 4
+
+
+def resolve_max_workers(raw: Any | None = None) -> int:
+    """Process-pool size for AutoML folds / strategy fitting.
+
+    Omit or pass ``None`` for ``min(cpu_count, MAX_WORKERS_AUTO_CAP)``.
+    An explicit integer must be >= 1.
+    """
+    if raw is None:
+        return min(MAX_WORKERS_AUTO_CAP, os.cpu_count() or 1)
+    workers = int(raw)
+    if workers < 1:
+        raise RuntimeError(f"job.max_workers must be >= 1, got {workers}")
+    return workers
 
 
 def validate_model_weights(weights: dict[str, float] | None, *, context: str = "model_weights") -> None:
@@ -208,9 +223,7 @@ def load_settings(config_path: str | None = None) -> Settings:
         model_weights=model_weights,
         rrf_k=rrf_k,
         save_model_artifact=bool(job.get("save_model_artifact", False)),
-        max_workers=_require_positive_int(
-            int(job.get("max_workers", DEFAULT_MAX_WORKERS)), name="job.max_workers"
-        ),
+        max_workers=resolve_max_workers(job.get("max_workers")),
         automl_enabled=bool(automl.get("enabled", False)),
         automl_n_splits=_require_positive_int(
             int(automl.get("n_splits", AUTOML_DEFAULT_N_SPLITS)), name="job.automl.n_splits"

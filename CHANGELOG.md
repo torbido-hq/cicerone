@@ -13,8 +13,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Priority combine fills top-K from earlier strategies first (stable
   priority + rank sort) instead of interleaving by per-strategy rank.
-- `[job].max_workers` wires existing ProcessPool parallelism for AutoML
-  folds and strategy fitting (default 1).
+- `[job].max_workers` drives ProcessPool parallelism for AutoML folds and
+  strategy fitting; omit for auto (`min(cpu_count, 4)`), set `1` for
+  sequential.
 - AutoML `primary_metric` matches exact names or `NAME@k` (no accidental
   `"MA"` → `"MAP@10"` prefix hits).
 - Shared I/O helpers: `object_key`, `sql_identifier`, S3 not-found checks.

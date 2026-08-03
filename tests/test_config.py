@@ -4,7 +4,7 @@ import re
 
 import pytest
 
-from cicerone.config import load_settings
+from cicerone.config import load_settings, resolve_max_workers
 
 
 def _write_toml(tmp_path, content: str) -> str:
@@ -334,7 +334,7 @@ def test_load_settings_defaults_when_job_section_missing(tmp_path):
     assert settings.model_weights is None
     assert settings.rrf_k is None
     assert settings.save_model_artifact is False
-    assert settings.max_workers == 1
+    assert settings.max_workers == resolve_max_workers()
     assert settings.automl_enabled is False
     assert settings.automl_n_splits == 2
     assert settings.automl_test_days == 14
@@ -389,10 +389,61 @@ def test_load_settings_max_workers_and_rejects_non_positive(tmp_path):
     )
     assert load_settings(good).max_workers == 4
 
+    auto_dir = tmp_path / "auto"
+    auto_dir.mkdir()
+    auto = _write_toml(
+        auto_dir,
+        """
+        [job]
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+    assert load_settings(auto).max_workers == resolve_max_workers()
+
     bad_dir = tmp_path / "bad"
     bad_dir.mkdir()
     bad = _write_toml(
         bad_dir,
+        """
+        [job]
+        max_workers = 0
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+    with pytest.raises(RuntimeError, match="max_workers"):
+        load_settings(bad)
+
+
+def test_resolve_max_workers_auto_caps_cpu_count(monkeypatch):
+    monkeypatch.setattr("cicerone.config.os.cpu_count", lambda: 32)
+    assert resolve_max_workers() == 4
+    monkeypatch.setattr("cicerone.config.os.cpu_count", lambda: 2)
+    assert resolve_max_workers() == 2
+    monkeypatch.setattr("cicerone.config.os.cpu_count", lambda: None)
+    assert resolve_max_workers() == 1
+
+
+def test_load_settings_rejects_non_positive_half_life_days(tmp_path):
+    config_path = _write_toml(
+        tmp_path,
         """
         [job]
         half_life_days = 0
@@ -409,7 +460,7 @@ def test_load_settings_max_workers_and_rejects_non_positive(tmp_path):
         """,
     )
     with pytest.raises(RuntimeError, match="half_life_days"):
-        load_settings(bad)
+        load_settings(config_path)
 
 
 def test_load_settings_db_backend_with_defaults(tmp_path):
