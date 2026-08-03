@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 _MISSING = object()
 _warned_missing_columns: set[tuple[str, str, str]] = set()
+_warned_boost_without_items = False
 
 
 def _warn_missing_column(kind: str, rule_name: str, column: str) -> None:
@@ -27,6 +28,16 @@ def _warn_missing_column(kind: str, rule_name: str, column: str) -> None:
         kind,
         rule_name,
         column,
+    )
+
+
+def _warn_boost_without_items() -> None:
+    global _warned_boost_without_items
+    if _warned_boost_without_items:
+        return
+    _warned_boost_without_items = True
+    logger.warning(
+        "Boost rules are configured but items data is missing or empty — item boosts will not be applied"
     )
 
 
@@ -213,21 +224,21 @@ def allowed_items_for_cohort(
 ) -> list:
     """Recommendable item ids for a cohort (representative = first user in slice).
 
-    Missing ``items``: user-scoped rules → []; item-global-only → full catalog.
+    Missing/empty ``items``: user-scoped rules → []; item-global-only → full catalog.
     All items filtered out → [] (no silent catalog fallback).
     """
     catalog = list(catalog_ids)
     if not rules:
         return catalog
-    if items is None:
+    if items is None or items.empty:
         if has_user_scoped_eligibility(rules):
             logger.warning(
-                "User-scoped eligibility rules are configured but items frame is missing — "
+                "User-scoped eligibility rules are configured but items frame is missing or empty — "
                 "returning an empty allow-list (cannot evaluate item attributes)"
             )
             return []
         logger.warning(
-            "Item eligibility rules are configured but items frame is missing — "
+            "Item eligibility rules are configured but items frame is missing or empty — "
             "skipping item filters and returning the full catalog"
         )
         return catalog
@@ -293,7 +304,10 @@ def _numeric_factors(items: pd.DataFrame, column: str, weight: float) -> pd.Seri
 
 def item_boost_factors(items: pd.DataFrame | None, boosts: Sequence[BoostRule]) -> dict:
     """item_id → product of configured boost factors."""
-    if items is None or items.empty or not boosts:
+    if not boosts:
+        return {}
+    if items is None or items.empty:
+        _warn_boost_without_items()
         return {}
 
     factors = pd.Series(1.0, index=items.index)

@@ -443,6 +443,25 @@ def test_allowed_items_for_cohort_missing_items_with_item_only_rules_fails_open(
     assert "full catalog" in caplog.text
 
 
+def test_allowed_items_for_cohort_empty_items_frame_matches_missing(caplog):
+    """Empty items.parquet must fail-open for item-only rules (like items is None)."""
+    rules = resolve_eligibility(_base_config())
+    empty = pd.DataFrame(columns=["item_id", "published", "in_stock"])
+    allowed = allowed_items_for_cohort(["u1"], None, empty, rules, ["i1", "i2"])
+    assert allowed == ["i1", "i2"]
+    assert "full catalog" in caplog.text
+
+    user_rules = [
+        EligibilityRule(
+            name="ships",
+            op="user_in_item_list",
+            item_column="available_countries",
+            user_column="nationality",
+        )
+    ]
+    assert allowed_items_for_cohort(["u1"], _users(), empty, user_rules, ["i1", "i2"]) == []
+
+
 def test_apply_boosts_truncates_even_when_items_missing():
     recs = pd.DataFrame(
         [
@@ -455,6 +474,16 @@ def test_apply_boosts_truncates_even_when_items_missing():
     out = apply_boosts(recs, None, boosts, top_k=2)
     assert list(out[Columns.Item]) == ["i1", "i2"]
     assert len(out) == 2
+
+
+def test_item_boost_factors_warns_once_when_items_missing(caplog):
+    import cicerone.policy as policy
+
+    policy._warned_boost_without_items = False
+    boosts = [BoostRule(name="paying", kind="boolean", item_column="is_paying_producer", factor=2.0)]
+    assert item_boost_factors(None, boosts) == {}
+    assert item_boost_factors(pd.DataFrame(), boosts) == {}
+    assert caplog.text.count("item boosts will not be applied") == 1
 
 
 def test_boolean_and_value_map_and_numeric_boosts():
