@@ -42,7 +42,6 @@ LATEST_WINDOW_DAYS = 14
 RRF_K = 60
 SOURCE_COLUMN = "source"
 WEIGHT_COLUMN = "_weight"  # internal-only; dropped before returning to callers
-# Alias of FeatureConfig's default — keep imports from model working for tests.
 BOOST_OVERFETCH_FACTOR = DEFAULT_BOOST_OVERFETCH_FACTOR
 
 
@@ -153,10 +152,7 @@ _validate_strategy_names(STRATEGIES, STRATEGY_NAMES)
 def _recommendable_item_ids(
     items: pd.DataFrame | None, filter_columns: list[str], all_item_ids: pd.Index
 ) -> list:
-    """Global availability filter (boolean item columns). Kept for tests and as
-    the no-user-scoped fast path; prefer ``policy.allowed_items_for_cohort``
-    when eligibility rules are in play.
-    """
+    """Global boolean availability filter (legacy helper; prefer policy.allowed_items_for_cohort)."""
     if items is None or not filter_columns:
         return list(all_item_ids)
     mask = pd.Series(True, index=items.index)
@@ -342,7 +338,6 @@ def recommend_with_models(
 
     known_users = set(dataset.user_id_map.external_ids)
     unique_target_users = list(dict.fromkeys(target_users))
-    # Early-out when no personalized strategy can run (no warm users at all).
     has_any_warm_user = bool(known_users.intersection(unique_target_users))
 
     users_by_id = index_users_by_id(built.users)
@@ -385,8 +380,6 @@ def recommend_with_models(
         for cohort_key_value, cohort_users in cohorts:
             allowed_items = allowed_by_cohort[cohort_key_value]
             if not allowed_items:
-                # Strict eligibility: cohort has no sellable items — skip rather
-                # than calling recommend with an empty catalog.
                 continue
 
             if strategy.personalized:

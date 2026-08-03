@@ -1,8 +1,4 @@
-"""Declarative business policies for eligibility filtering and score boosts.
-
-Configured via ``[[eligibility]]`` / ``[[boost]]`` in ``config/features.toml``
-and applied at batch recommend time (see ``cicerone.model.recommend_with_models``).
-"""
+"""Declarative eligibility filters and score boosts (see config/features.toml)."""
 
 from __future__ import annotations
 
@@ -17,8 +13,6 @@ from cicerone.feature_config import BoostRule, EligibilityRule, FeatureConfig
 logger = logging.getLogger(__name__)
 
 _MISSING = object()
-# Deduplicate missing-column warnings so a bad config does not flood logs when
-# eligibility is evaluated once per cohort (or boosts are applied repeatedly).
 _warned_missing_columns: set[tuple[str, str, str]] = set()
 
 
@@ -36,11 +30,7 @@ def _warn_missing_column(kind: str, rule_name: str, column: str) -> None:
 
 
 def resolve_eligibility(config: FeatureConfig) -> list[EligibilityRule]:
-    """Merge ``item_availability_filters`` sugar with explicit eligibility rules.
-
-    Availability columns become ``item_true`` rules so one code path applies
-    every hard gate, whether ``FeatureConfig`` came from TOML or a test fixture.
-    """
+    """Merge item_availability_filters sugar with explicit [[eligibility]] rules."""
     rules: list[EligibilityRule] = []
     already = {(r.op, r.item_column) for r in config.eligibility if r.op == "item_true"}
     for column in config.item_availability_filters:
@@ -100,7 +90,7 @@ def eligible_item_mask(
     items: pd.DataFrame,
     rules: Sequence[EligibilityRule],
 ) -> pd.Series:
-    """Return a boolean mask over ``items`` rows that pass every eligibility rule."""
+    """Boolean mask over ``items`` for rows that pass every eligibility rule."""
     mask = pd.Series(True, index=items.index)
     if items.empty or not rules:
         return mask
@@ -137,10 +127,7 @@ def eligible_item_mask(
 
 
 def cohort_key(user_row: pd.Series | dict | None, rules: Sequence[EligibilityRule]) -> Hashable:
-    """Fingerprint of user attributes that participate in eligibility rules.
-
-    Users sharing the same key share one ``items_to_recommend`` set.
-    """
+    """Fingerprint of user attrs used by eligibility (same key → same allow-list)."""
     parts: list[tuple[str, Hashable]] = []
     for rule in rules:
         if not is_user_scoped(rule) or rule.user_column is None:
@@ -156,10 +143,9 @@ def cohort_key(user_row: pd.Series | dict | None, rules: Sequence[EligibilityRul
 
 
 def index_users_by_id(users: pd.DataFrame | None) -> dict[str, pd.Series]:
-    """Build an O(1) user_id -> row map once for hot cohort loops."""
+    """O(1) user_id → row map (first row wins on duplicates)."""
     if users is None or users.empty or "user_id" not in users.columns:
         return {}
-    # Keep the first row per user_id if duplicates exist.
     indexed: dict[str, pd.Series] = {}
     for _, row in users.iterrows():
         uid = row["user_id"]
@@ -187,32 +173,21 @@ def allowed_items_for_cohort(
     *,
     users_by_id: dict[str, pd.Series] | None = None,
 ) -> list:
-    """Items recommendable for a cohort of users (identical eligibility attrs).
+    """Recommendable item ids for a cohort (representative = first user in slice).
 
-    Uses the first user in ``users_slice`` as the representative row — callers
-    must group by ``cohort_key`` first so attrs match.
-
-    If eligibility excludes every catalog item, returns an empty list (strict)
-    and logs a warning — callers decide whether to skip the cohort. When rules
-    are configured but ``items`` is missing: user-scoped rules fail closed
-    (empty list); item-global-only rules fail open (full catalog) so events-only
-    runs keep working.
+    Missing ``items``: user-scoped rules → []; item-global-only → full catalog.
+    All items filtered out → [] (no silent catalog fallback).
     """
     catalog = list(catalog_ids)
     if not rules:
         return catalog
     if items is None:
         if has_user_scoped_eligibility(rules):
-            # Cannot evaluate user↔item matching without an items frame —
-            # fail closed so per-user hard filters are never silently skipped.
             logger.warning(
                 "User-scoped eligibility rules are configured but items frame is missing — "
                 "returning an empty allow-list (cannot evaluate item attributes)"
             )
             return []
-        # Item-global-only rules (e.g. availability sugar) without an items
-        # frame fail open — same as a missing column — so events-only runs
-        # keep working.
         logger.warning(
             "Item eligibility rules are configured but items frame is missing — "
             "skipping item filters and returning the full catalog"
@@ -221,7 +196,6 @@ def allowed_items_for_cohort(
 
     lookup = users_by_id if users_by_id is not None else index_users_by_id(users)
     representative = _user_row_for(users, users_slice[0], users_by_id=lookup) if users_slice else None
-    # If every rule is item-global, user_row may be None.
     mask = eligible_item_mask(representative, items, rules)
     allowed = set(items.loc[mask, "item_id"].astype(str))
     filtered = [i for i in catalog if str(i) in allowed]
@@ -241,12 +215,7 @@ def group_users_by_cohort(
     *,
     users_by_id: dict[str, pd.Series] | None = None,
 ) -> list[tuple[Hashable, list[str]]]:
-    """Group target users by eligibility cohort key, preserving first-seen order.
-
-    Users absent from ``users`` (or with missing eligibility attributes) still
-    appear in a cohort keyed by those missing values — they are not dropped.
-    Pass a precomputed ``users_by_id`` map to avoid re-indexing on large frames.
-    """
+    """Group target users by eligibility cohort key (missing users kept under missing-attr key)."""
     cohorts: dict[Hashable, list[str]] = {}
     order: list[Hashable] = []
     lookup = users_by_id if users_by_id is not None else index_users_by_id(users)
@@ -272,7 +241,6 @@ def _value_map_factor(value: object, value_factors: dict[str, float]) -> float:
 
 
 def _numeric_factors(items: pd.DataFrame, column: str, weight: float) -> pd.Series:
-    """Per-item multiplier ``1 + weight * min_max(column)``; missing → 1.0."""
     if column not in items.columns or items.empty:
         return pd.Series(1.0, index=items.index if items is not None else None)
     series = pd.to_numeric(items[column], errors="coerce")
@@ -282,12 +250,11 @@ def _numeric_factors(items: pd.DataFrame, column: str, weight: float) -> pd.Seri
         normalized = pd.Series(0.0, index=items.index)
     else:
         normalized = (series - lo) / (hi - lo)
-    factors = 1.0 + weight * normalized.fillna(0.0)
-    return factors
+    return 1.0 + weight * normalized.fillna(0.0)
 
 
 def item_boost_factors(items: pd.DataFrame | None, boosts: Sequence[BoostRule]) -> dict:
-    """Map item_id -> product of all configured boost factors."""
+    """item_id → product of configured boost factors."""
     if items is None or items.empty or not boosts:
         return {}
 
@@ -315,11 +282,7 @@ def apply_boosts(
     boosts: Sequence[BoostRule],
     top_k: int | None = None,
 ) -> pd.DataFrame:
-    """Multiply scores by boost factors, re-rank per user, optionally truncate.
-
-    Always honors ``top_k`` when set — even if boost columns are missing / items
-    is empty (in which case scores are left unchanged and the list is truncated).
-    """
+    """Apply boost multipliers, re-rank; always truncates to ``top_k`` when set."""
     if recs.empty:
         return recs
     if not boosts:

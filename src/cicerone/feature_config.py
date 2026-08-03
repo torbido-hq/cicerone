@@ -17,7 +17,6 @@ DEFAULT_CONFIG_PATH = Path("/app/config/features.toml")
 ELIGIBILITY_OPS = frozenset({"item_true", "eq", "user_in_item_list", "item_in_user_list"})
 BOOST_KINDS = frozenset({"boolean", "value_map", "numeric"})
 ON_MISSING_USER_VALUES = frozenset({"exclude", "allow"})
-# Single source of truth for the default boost candidate over-fetch multiplier.
 DEFAULT_BOOST_OVERFETCH_FACTOR = 3
 
 
@@ -29,14 +28,7 @@ class FeatureColumn:
 
 @dataclass(frozen=True)
 class EligibilityRule:
-    """Hard filter: an item must pass every rule to be recommendable.
-
-    Ops:
-      item_true          — item[item_column] is truthy (no user column)
-      eq                 — user[user_column] == item[item_column]
-      user_in_item_list  — user[user_column] is in item[item_column] (list)
-      item_in_user_list  — item[item_column] is in user[user_column] (list)
-    """
+    """Hard filter. Ops: item_true, eq, user_in_item_list, item_in_user_list."""
 
     name: str
     op: str
@@ -47,13 +39,7 @@ class EligibilityRule:
 
 @dataclass(frozen=True)
 class BoostRule:
-    """Soft re-rank: multiplies an item's score after strategy combine.
-
-    Kinds:
-      boolean   — if item[item_column] is truthy, multiply by `factor`
-      value_map — look up item[item_column] in `value_factors` (default 1.0)
-      numeric   — score *= 1 + weight * min-max-normalized(item[item_column])
-    """
+    """Soft re-rank. Kinds: boolean, value_map, numeric."""
 
     name: str
     kind: str
@@ -73,7 +59,6 @@ class FeatureConfig:
     item_availability_filters: list[str]
     eligibility: list[EligibilityRule] = field(default_factory=list)
     boosts: list[BoostRule] = field(default_factory=list)
-    # When [[boost]] is set, over-fetch this many times top_k before re-ranking.
     boost_overfetch_factor: int = DEFAULT_BOOST_OVERFETCH_FACTOR
 
 
@@ -85,11 +70,6 @@ def _parse_boost_overfetch_factor(raw: Any) -> int:
 
 
 def _parse_eligibility(raw_rules: list[dict[str, Any]]) -> list[EligibilityRule]:
-    """Parse explicit [[eligibility]] tables.
-
-    ``item_availability_filters`` stays separate sugar and is merged at
-    recommend time via ``policy.resolve_eligibility``.
-    """
     rules: list[EligibilityRule] = []
     for raw in raw_rules:
         name = str(raw.get("name") or raw.get("item_column") or "unnamed")
