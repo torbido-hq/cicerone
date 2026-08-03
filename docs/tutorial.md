@@ -246,6 +246,13 @@ controls signal weighting and cold-start features without touching code:
 - `item_availability_filters`: boolean `items.parquet` columns that must all
   be `true` for an item to ever be recommended (default:
   `["published", "in_stock"]`).
+- `[[eligibility]]` / `[[boost]]`: optional hard per-user item filters
+  (e.g. nationality ∈ `available_countries`) and soft commercial re-rank
+  boosts (e.g. paying producers). Eligibility groups users into cohorts that
+  share an allowed-item set; boosts over-fetch candidates
+  (`boost_overfetch_factor` × `top_k`, default 3) before re-ranking so a
+  boosted item just outside the raw top-K can still make the cut. See the
+  annotated recipes in `config/features.toml`.
 
 Try lowering `view`'s weight to `0.1` or raising `purchase` to `6.0` in your
 own copy of `config/features.toml`, re-run, and compare the output —
@@ -267,7 +274,7 @@ save_model_artifact = true
 Re-run the job from [step 3](#3-run-the-job-once). Alongside
 `recommendations.parquet` / `manifest.json` you should now see
 `model.artifact` in `data/output/`. The manifest gains
-`artifact_written = true` and `artifact_schema_version = 1`.
+`artifact_written = true` and `artifact_schema_version = 2`.
 
 Load it and recommend without calling `job.run` again:
 

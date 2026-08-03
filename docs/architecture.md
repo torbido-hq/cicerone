@@ -9,7 +9,9 @@ For configuration and usage, see the main [README](../README.md).
 
 ```
 config.py            load & resolve config/cicerone.toml (structural config + ${ENV_VAR} secrets)
-feature_config.py     load config/features.toml (event weights, feature columns)
+feature_config.py     load config/features.toml (event weights, feature columns,
+                     eligibility/boost policy rules)
+policy.py             declarative eligibility masks, cohort grouping, score boosts
 io/
   base.py             InputSource / OutputSink / RecommendationReader protocols
   factory.py          picks a concrete backend by IOSettings.kind ("dataset" | "db")
@@ -18,9 +20,10 @@ io/
   recommendation_reader.py  read-only lookup of precomputed recs for serve mode (no rectools/lightfm import)
   manifest_reader.py    read-only lookup of job-run manifests for the dashboard (no rectools/lightfm import)
   options.py           shared "require_option"/build_s3_client helpers
-dataset.py            raw events/users/items -> weighted rectools Dataset (BuiltDataset)
+dataset.py            raw events/users/items -> weighted rectools Dataset (BuiltDataset;
+                     keeps users+items frames for policy evaluation)
 model.py              BuiltDataset -> STRATEGIES registry (collaborative/item_based/
-                     popular/latest) -> top-K recommendations, combined per user
+                     popular/latest) -> cohort-aware recommend -> combine -> boosts
 artifact.py           optional versioned fitted-model bundle (save/load + recommend
                      without re-fitting); written by the batch job when enabled
 automl.py            optional: backtests candidate models/weights/rrf_k configs over
@@ -88,16 +91,26 @@ flowchart LR
    users (any user present in the dataset, with or without interactions — see
    the cold-start note below); non-personalized strategies (`popular`,
    `latest`) run for every target user and backfill any warm user who didn't
-   get enough personalized results after the availability filter. Strategies
-   are combined either by priority order (default — earlier ones win ties)
-   or, if `Settings.model_weights` is set (even an empty table), by weighted
-   reciprocal rank fusion (`_combine_by_weighted_fusion`) — the fusion
-   constant defaults to `model.RRF_K` but is overridable via
-   `Settings.rrf_k`/`[job].rrf_k`; see the module docstring for the exact
-   formula. When a fused (user, item) pair was produced by more than one
-   strategy, its combined `source` label joins each contributing strategy's
-   label in `enabled_models`' order (not alphabetically), so the label
-   reflects the caller's configured priority.
+   get enough personalized results after eligibility filtering. Before
+   `recommend()`, `policy.resolve_eligibility()` merges
+   `item_availability_filters` sugar with explicit `[[eligibility]]` rules.
+   User-scoped rules group target users into cohorts that share the same
+   allowed item set (rectools accepts one `items_to_recommend` list per
+   call); each cohort's allowlist is computed once and reused across
+   every strategy. Strategies are combined either by priority order (default —
+   earlier ones win ties) or, if `Settings.model_weights` is set (even an
+   empty table), by weighted reciprocal rank fusion
+   (`_combine_by_weighted_fusion`) — the fusion constant defaults to
+   `model.RRF_K` but is overridable via `Settings.rrf_k`/`[job].rrf_k`; see
+   the module docstring for the exact formula. When a fused (user, item)
+   pair was produced by more than one strategy, its combined `source` label
+   joins each contributing strategy's label in `enabled_models`' order (not
+   alphabetically), so the label reflects the caller's configured priority.
+   If `[[boost]]` rules are configured, candidates are over-fetched by
+   `FeatureConfig.boost_overfetch_factor` (default 3× `top_k`), scores are
+   multiplied by the product of boost factors, and ranks are rewritten
+   before truncating to `top_k`. Cohorts with an empty allowlist (eligibility
+   filtered out every item) are skipped.
    An optional `strategy_cache` parameter (keyed by strategy name, caching
    the *fitted model* rather than its `recommend()` output) lets a caller
    who is evaluating multiple configs against the same `BuiltDataset` —
@@ -219,6 +232,37 @@ other HTTP surface. Like `serve.py`, it never imports
   (`node:22-slim`, pinned via `package.json`/`package-lock.json`) whose only
   output (`static/tailwind.css`) is copied into the runtime image.
 
+## Business policies
+
+`config/features.toml` can declare hard eligibility filters and soft ranking
+boosts (`[[eligibility]]` / `[[boost]]`). These are evaluated in
+`cicerone.policy` during `recommend_with_models` — not at serve time — so
+precomputed recommendation rows already respect region/nationality gates,
+paying-producer boosts, plan tiers, and similar ecommerce rules. See the
+annotated recipes in `config/features.toml` and the README data-contract
+section.
+
+Implementation details:
+
+- **Cohorts:** user-scoped eligibility groups target users by the
+  fingerprint of the user attributes those rules read. Each cohort's
+  allowed-item list is computed once and shared by every strategy's
+  `recommend()` call.
+- **Boost over-fetch:** when any `[[boost]]` is configured,
+  strategies request `boost_overfetch_factor * top_k` candidates (default
+  factor 3, set in `features.toml`) so a commercially boosted item that
+  would otherwise sit just outside the raw top-K can still be promoted after
+  score multiplication.
+- **Empty cohorts:** if eligibility excludes every catalog item for a
+  cohort, the allowlist is empty (logged once per such cohort) and that
+  cohort is skipped — there is no silent fallback to the full catalog.
+- **Missing columns:** a configured `item_column` absent from the items
+  frame fails open (rule skipped). The warning is emitted once per
+  `(kind, rule name, column)` for the process lifetime to avoid log spam
+  when eligibility runs per cohort.
+- **Artifacts:** schema version 2+ persists the `users` frame so
+  `recommend_from_artifact` can re-apply user-scoped eligibility offline.
+
 ## Extensibility: adding a new I/O backend
 
 Input and output are each just a `kind` (string) + a free-form `options`
@@ -242,5 +286,6 @@ A user only counts as truly "cold" (popularity-only) if they're absent from
 the dataset entirely — no interactions **and** no features. A user with
 only features (no interactions) is still "warm" to LightFM via hybrid
 cold-start and can get personalized recommendations. See
-`model._recommendable_item_ids` and `model.train_and_recommend` for exactly
-how warm/cold users and the availability filter interact.
+`cicerone.policy.resolve_eligibility` / `allowed_items_for_cohort` and
+`model.train_and_recommend` for exactly how warm/cold users and eligibility
+interact.

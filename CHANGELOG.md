@@ -4,17 +4,31 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
-
-## [0.3.0] - 2026-07-30
+## [0.3.0] - Unreleased
 
 ### Added
 
+- **Business policy layer** (`config/features.toml` → `[[eligibility]]` /
+  `[[boost]]`): declarative hard filters (region/nationality, market match,
+  category allowlists) and soft ranking boosts (paying producers, plan
+  tiers, numeric lifts). Applied at batch recommend time via
+  `cicerone.policy`; serve mode stays a lookup of already-policy-aware rows.
+  `item_availability_filters` remains sugar for global `item_true` rules.
+  User-scoped eligibility groups users into cohorts whose allowed-item set
+  is computed once and reused across strategies; missing `item_column`
+  warnings are deduplicated per `(kind, rule, column)`. When boosts are
+  configured, candidates are over-fetched (`boost_overfetch_factor` ×
+  `top_k`, default 3 — tunable in `features.toml`) before score multipliers
+  so a commercially boosted item just outside the raw top-K can still enter
+  the final list. Cohorts whose eligibility excludes every item get an empty
+  allowlist (no silent catalog fallback) and are skipped.
 - Optional **model artifact** (`[job].save_model_artifact`): the batch job
   can write a versioned, portable fitted-model bundle
   (`model.artifact` / `model_artifacts` table) alongside recommendations.
   Load and recommend without re-fitting via `cicerone.artifact`. Serve mode
   still reads precomputed rows only — this does not add live inference.
+  Artifacts persist the `users` frame (schema version **2**) so
+  `recommend_from_artifact` can re-apply user-scoped eligibility offline.
 - Optional `postgres` service in `docker-compose.yml` (Postgres 16, compose
   profile `db`) for local `kind = "db"` input/output. First boot creates
   `cicerone` (app/tutorial) and `cicerone_test` (pytest) databases.
@@ -26,10 +40,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   serve/dashboard DB readers. Schema reset is module-scoped, reflects via
   SQLAlchemy metadata, and is gated by a test DB name check plus
   `ALLOW_SCHEMA_RESET_FOR_TESTS=1`.
-- User-facing documentation for model artifacts: README section, tutorial §9
-  (`save_model_artifact`, load/recommend via `cicerone.artifact`),
-  architecture notes, and `model_artifact_table` in the commented db config
-  example.
+- User-facing documentation for model artifacts and business policies:
+  README sections, tutorial §8–9, architecture notes, annotated recipes in
+  `config/features.toml`, and `model_artifact_table` in the commented db
+  config example.
 
 ### Changed
 

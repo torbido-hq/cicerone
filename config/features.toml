@@ -16,8 +16,14 @@ quantity_scaled_events = ["purchase"]
 
 # Boolean columns in items.parquet that must ALL be true for an item to ever
 # be recommended. A listed column missing from items.parquet is skipped
-# (fails open) rather than excluding every item.
+# (fails open) rather than excluding every item. This is sugar for
+# [[eligibility]] rules with op = "item_true".
 item_availability_filters = ["published", "in_stock"]
+
+# When any [[boost]] rule is configured, over-fetch this many times top_k
+# candidates before applying boost multipliers (must be >= 1). Raise it if
+# boosted items often sit far below the raw top-K; lower it to save work.
+boost_overfetch_factor = 3
 
 # Base weight applied to each raw event_type before time-decay. Any
 # event_type present in events.parquet but missing here is dropped (and
@@ -70,3 +76,79 @@ type = "categorical"
 column = "abv_bucket"
 type = "categorical"
 
+# ---------------------------------------------------------------------------
+# Business policies (optional)
+#
+# Hard eligibility filters and soft ranking boosts applied at batch recommend
+# time. Serve mode stays a plain lookup of already-policy-aware rows.
+#
+# Eligibility ops:
+#   item_true          — item[item_column] is truthy (global; no user_column)
+#   eq                 — user[user_column] == item[item_column]
+#   user_in_item_list  — user scalar is in item list column
+#   item_in_user_list  — item scalar is in user list column
+#
+# Users that share the same eligibility attribute values are recommended as
+# one cohort (one items_to_recommend set, reused across every strategy).
+# Missing user attributes default to on_missing_user = "exclude"; set
+# "allow" to skip that rule for the user. A missing item_column fails open
+# and logs a one-time warning.
+#
+# Boost kinds:
+#   boolean   — if item flag is truthy, multiply score by `factor`
+#   value_map — map categorical item values to factors via value_factors
+#   numeric   — score *= 1 + weight * min-max-normalized(item column)
+#
+# When any [[boost]] is present, candidates are over-fetched
+# (boost_overfetch_factor × top_k, default 3) so a boosted item ranked just
+# outside the raw top-K can still be promoted. Tune boost_overfetch_factor
+# at the top of this file.
+#
+# If eligibility excludes every catalog item for a cohort, that cohort gets
+# an empty allowlist (no silent fallback to the full catalog) and is skipped
+# at recommend time.
+#
+# Recipes (uncomment and wire matching columns into users/items parquet):
+#
+# # Only recommend items that ship to the user's nationality/country.
+# [[eligibility]]
+# name = "ships_to_user"
+# op = "user_in_item_list"
+# user_column = "nationality"
+# item_column = "available_countries"
+#
+# # Same market / store / currency zone.
+# [[eligibility]]
+# name = "same_market"
+# op = "eq"
+# user_column = "market"
+# item_column = "market"
+#
+# # Category allowlist (B2B segment, parental controls, etc.).
+# [[eligibility]]
+# name = "allowed_categories"
+# op = "item_in_user_list"
+# user_column = "allowed_categories"
+# item_column = "category"
+#
+# # Paying / sponsored producers rank higher (commercial overlay).
+# [[boost]]
+# name = "paying_producer"
+# kind = "boolean"
+# item_column = "is_paying_producer"
+# factor = 1.5
+#
+# # Marketplace plan tier.
+# [[boost]]
+# name = "plan_tier"
+# kind = "value_map"
+# item_column = "plan_tier"
+# value_factors = { premium = 1.5, standard = 1.1, free = 1.0 }
+#
+# # Soft margin / rating lift (min-max normalized over the catalog).
+# [[boost]]
+# name = "margin"
+# kind = "numeric"
+# item_column = "margin"
+# weight = 0.25
+# ---------------------------------------------------------------------------

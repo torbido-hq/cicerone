@@ -22,7 +22,16 @@ from rectools.models import ImplicitItemKNNWrapperModel, LightFMWrapperModel, Po
 
 from cicerone.config import STRATEGY_NAMES, validate_model_weights, validate_rrf_k
 from cicerone.dataset import BuiltDataset
-from cicerone.feature_config import FeatureConfig
+from cicerone.feature_config import DEFAULT_BOOST_OVERFETCH_FACTOR, FeatureConfig
+from cicerone.policy import (
+    allowed_items_for_cohort,
+    apply_boosts,
+    group_users_by_cohort,
+    has_user_scoped_eligibility,
+    index_users_by_id,
+    is_user_scoped,
+    resolve_eligibility,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +42,13 @@ LATEST_WINDOW_DAYS = 14
 RRF_K = 60
 SOURCE_COLUMN = "source"
 WEIGHT_COLUMN = "_weight"  # internal-only; dropped before returning to callers
+
+
+def _recommend_k(top_k: int, has_boosts: bool, overfetch_factor: int = DEFAULT_BOOST_OVERFETCH_FACTOR) -> int:
+    if not has_boosts:
+        return top_k
+    factor = overfetch_factor if overfetch_factor >= 1 else DEFAULT_BOOST_OVERFETCH_FACTOR
+    return max(top_k, top_k * factor)
 
 
 class RecommenderModel(Protocol):
@@ -135,6 +151,7 @@ _validate_strategy_names(STRATEGIES, STRATEGY_NAMES)
 def _recommendable_item_ids(
     items: pd.DataFrame | None, filter_columns: list[str], all_item_ids: pd.Index
 ) -> list:
+    """Global boolean availability filter (legacy helper; prefer policy.allowed_items_for_cohort)."""
     if items is None or not filter_columns:
         return list(all_item_ids)
     mask = pd.Series(True, index=items.index)
@@ -307,40 +324,98 @@ def recommend_with_models(
 
     dataset = built.dataset
     all_item_ids = dataset.item_id_map.external_ids
-    allowed_items = _recommendable_item_ids(built.items, config.item_availability_filters, all_item_ids)
+    eligibility = resolve_eligibility(config)
+    users_frame = built.users if built.users is not None and not built.users.empty else None
+    if has_user_scoped_eligibility(eligibility) and users_frame is None:
+        logger.warning(
+            "User-scoped eligibility rules are configured but no users frame is available — "
+            "applying only item-global rules"
+        )
+        eligibility = [r for r in eligibility if not is_user_scoped(r)]
+    use_cohorts = has_user_scoped_eligibility(eligibility) and users_frame is not None
+    has_boosts = bool(config.boosts)
+    recommend_k = _recommend_k(top_k, has_boosts, config.boost_overfetch_factor)
 
     known_users = set(dataset.user_id_map.external_ids)
-    warm_users = [u for u in target_users if u in known_users]
     unique_target_users = list(dict.fromkeys(target_users))
+    has_any_warm_user = bool(known_users.intersection(unique_target_users))
+
+    users_by_id = index_users_by_id(users_frame)
+    if use_cohorts:
+        cohorts = group_users_by_cohort(
+            unique_target_users, users_frame, eligibility, users_by_id=users_by_id
+        )
+        allowed_by_cohort = {
+            key: allowed_items_for_cohort(
+                cohort_users,
+                users_frame,
+                built.items,
+                eligibility,
+                all_item_ids,
+                users_by_id=users_by_id,
+            )
+            for key, cohort_users in cohorts
+        }
+    else:
+        allowed_by_cohort = {
+            None: allowed_items_for_cohort(
+                unique_target_users,
+                users_frame,
+                built.items,
+                eligibility,
+                all_item_ids,
+                users_by_id=users_by_id,
+            )
+        }
+        cohorts = [(None, unique_target_users)]
 
     frames = []
     for name in enabled_models:
         strategy = STRATEGIES[name]
-        if strategy.personalized and not warm_users:
+        if strategy.personalized and not has_any_warm_user:
             continue
         if name not in models:
             raise ValueError(f"Fitted model for strategy {name!r} is missing; available: {sorted(models)}")
-        recs = models[name].recommend(
-            users=warm_users if strategy.personalized else unique_target_users,
-            dataset=dataset,
-            k=top_k,
-            filter_viewed=strategy.personalized,
-            items_to_recommend=allowed_items,
-        )
-        recs[SOURCE_COLUMN] = strategy.source_label
-        recs[WEIGHT_COLUMN] = weights.get(name, 1.0) if weights is not None else 1.0
-        frames.append(recs)
+
+        for cohort_key_value, cohort_users in cohorts:
+            allowed_items = allowed_by_cohort[cohort_key_value]
+            if not allowed_items:
+                continue
+
+            if strategy.personalized:
+                cohort_warm = [u for u in cohort_users if u in known_users]
+                if not cohort_warm:
+                    continue
+                recommend_users = cohort_warm
+            else:
+                recommend_users = cohort_users
+
+            recs = models[name].recommend(
+                users=recommend_users,
+                dataset=dataset,
+                k=recommend_k,
+                filter_viewed=strategy.personalized,
+                items_to_recommend=allowed_items,
+            )
+            recs[SOURCE_COLUMN] = strategy.source_label
+            recs[WEIGHT_COLUMN] = weights.get(name, 1.0) if weights is not None else 1.0
+            frames.append(recs)
 
     if not frames:
         return pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN])
 
+    combine_k = recommend_k if has_boosts else top_k
     if weights is not None:
         source_label_order = [STRATEGIES[name].source_label for name in enabled_models]
         combined = _combine_by_weighted_fusion(
-            frames, top_k, rrf_k if rrf_k is not None else RRF_K, source_label_order
+            frames, combine_k, rrf_k if rrf_k is not None else RRF_K, source_label_order
         )
     else:
-        combined = _combine_by_priority(frames, top_k)
+        combined = _combine_by_priority(frames, combine_k)
+
+    if has_boosts:
+        combined = apply_boosts(combined, built.items, config.boosts, top_k=top_k)
+
     return combined.reset_index(drop=True)
 
 

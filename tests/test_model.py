@@ -662,3 +662,295 @@ def test_train_and_recommend_custom_rrf_k_changes_fused_scores(sample_items, fea
     merged = small_k.merge(large_k, on=[Columns.User, Columns.Item], suffixes=("_small_k", "_large_k"))
     assert not merged.empty
     assert (merged[Columns.Score + "_small_k"] > merged[Columns.Score + "_large_k"]).all()
+
+
+def test_train_and_recommend_respects_per_user_eligibility(feature_config):
+    from dataclasses import replace
+
+    from cicerone.feature_config import EligibilityRule
+
+    now = pd.Timestamp.utcnow()
+    events = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+            {"user_id": "u1", "item_id": "i2", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+            {"user_id": "u2", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+            {"user_id": "u2", "item_id": "i2", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+        ]
+    )
+    users = pd.DataFrame(
+        [
+            {"user_id": "u1", "nationality": "IT", "favorite_styles": ["ipa"], "region_slug": "lazio"},
+            {"user_id": "u2", "nationality": "US", "favorite_styles": ["lager"], "region_slug": "toscana"},
+        ]
+    )
+    items = pd.DataFrame(
+        [
+            {
+                "item_id": "i1",
+                "category": "beer",
+                "producer_id": "p1",
+                "published": True,
+                "in_stock": True,
+                "available_countries": ["IT", "FR"],
+            },
+            {
+                "item_id": "i2",
+                "category": "beer",
+                "producer_id": "p2",
+                "published": True,
+                "in_stock": True,
+                "available_countries": ["US"],
+            },
+        ]
+    )
+    config = replace(
+        feature_config,
+        eligibility=[
+            EligibilityRule(
+                name="ships_to_user",
+                op="user_in_item_list",
+                item_column="available_countries",
+                user_column="nationality",
+            )
+        ],
+    )
+    built = build_dataset(events, users, items, config, half_life_days=90)
+    recommendations = train_and_recommend(
+        built,
+        target_users=["u1", "u2"],
+        config=config,
+        top_k=2,
+        enabled_models=["popular"],
+    )
+
+    u1_items = set(recommendations.loc[recommendations[Columns.User] == "u1", Columns.Item])
+    u2_items = set(recommendations.loc[recommendations[Columns.User] == "u2", Columns.Item])
+    assert u1_items <= {"i1"}
+    assert u2_items <= {"i2"}
+    assert "i2" not in u1_items
+    assert "i1" not in u2_items
+
+
+def test_train_and_recommend_empty_users_frame_skips_user_scoped_rules(feature_config, caplog):
+    """Empty users.parquet must not enable broken cohort mode (treat like missing)."""
+    from dataclasses import replace
+
+    from cicerone.feature_config import EligibilityRule
+
+    now = pd.Timestamp.utcnow()
+    events = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+            {"user_id": "u1", "item_id": "i2", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+            {"user_id": "u2", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+            {"user_id": "u2", "item_id": "i2", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+        ]
+    )
+    items = pd.DataFrame(
+        [
+            {
+                "item_id": "i1",
+                "category": "beer",
+                "producer_id": "p1",
+                "published": True,
+                "in_stock": True,
+                "available_countries": ["IT"],
+            },
+            {
+                "item_id": "i2",
+                "category": "beer",
+                "producer_id": "p2",
+                "published": True,
+                "in_stock": True,
+                "available_countries": ["US"],
+            },
+        ]
+    )
+    config = replace(
+        feature_config,
+        eligibility=[
+            EligibilityRule(
+                name="ships_to_user",
+                op="user_in_item_list",
+                item_column="available_countries",
+                user_column="nationality",
+            )
+        ],
+    )
+    built = build_dataset(events, None, items, config, half_life_days=90)
+    # Simulate a present-but-empty users frame (e.g. empty users.parquet).
+    built = replace(built, users=pd.DataFrame(columns=["user_id", "nationality"]))
+
+    recommendations = train_and_recommend(
+        built,
+        target_users=["u1", "u2"],
+        config=config,
+        top_k=2,
+        enabled_models=["popular"],
+    )
+
+    assert "no users frame is available" in caplog.text
+    # User-scoped rule stripped → both published items remain eligible for both users.
+    for uid in ("u1", "u2"):
+        got = set(recommendations.loc[recommendations[Columns.User] == uid, Columns.Item])
+        assert got == {"i1", "i2"}
+
+
+def test_train_and_recommend_paying_producer_boost_reorders(feature_config):
+    from dataclasses import replace
+
+    from cicerone.feature_config import BoostRule
+
+    now = pd.Timestamp.utcnow()
+    # Identical interaction pattern so popularity alone ranks by frequency;
+    # both items equally popular → boost decides order.
+    events = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+            {"user_id": "u1", "item_id": "i2", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+            {"user_id": "u2", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+            {"user_id": "u2", "item_id": "i2", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+            {"user_id": "u3", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+            {"user_id": "u3", "item_id": "i2", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+        ]
+    )
+    items = pd.DataFrame(
+        [
+            {
+                "item_id": "i1",
+                "category": "beer",
+                "producer_id": "p1",
+                "published": True,
+                "in_stock": True,
+                "is_paying_producer": False,
+            },
+            {
+                "item_id": "i2",
+                "category": "beer",
+                "producer_id": "p2",
+                "published": True,
+                "in_stock": True,
+                "is_paying_producer": True,
+            },
+        ]
+    )
+    config = replace(
+        feature_config,
+        boosts=[
+            BoostRule(
+                name="paying_producer",
+                kind="boolean",
+                item_column="is_paying_producer",
+                factor=10.0,
+            )
+        ],
+    )
+    built = build_dataset(events, None, items, config, half_life_days=90)
+    recommendations = train_and_recommend(
+        built,
+        target_users=["ghost"],
+        config=config,
+        top_k=2,
+        enabled_models=["popular"],
+    )
+    ghost = recommendations[recommendations[Columns.User] == "ghost"].sort_values(Columns.Rank)
+    assert list(ghost[Columns.Item])[0] == "i2"
+    assert not ghost[Columns.Item].isin(["i3", "i4"]).any()
+
+
+def test_train_and_recommend_paying_producer_boost_overfetch(feature_config):
+    """Boosted item ranked just below top_k by popularity must enter final top_k
+    via boost over-fetch + apply_boosts, not only by reordering within top_k.
+    """
+    from dataclasses import replace
+
+    from cicerone.feature_config import DEFAULT_BOOST_OVERFETCH_FACTOR, BoostRule
+    from cicerone.model import _recommend_k
+
+    assert DEFAULT_BOOST_OVERFETCH_FACTOR > 1
+    assert _recommend_k(2, True, overfetch_factor=5) == 10
+    assert feature_config.boost_overfetch_factor >= 1
+
+    now = pd.Timestamp.utcnow()
+    # Popularity order without boost: i1 > i2 > i3 (paying). With top_k=2 and no
+    # over-fetch, i3 would never be a candidate; with over-fetch + a large boost
+    # it is retrieved and promoted into the final top-2.
+    events = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+            {"user_id": "u2", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+            {"user_id": "u3", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+            {"user_id": "u1", "item_id": "i2", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+            {"user_id": "u2", "item_id": "i2", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+            {"user_id": "u1", "item_id": "i3", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+        ]
+    )
+    items = pd.DataFrame(
+        [
+            {
+                "item_id": "i1",
+                "category": "beer",
+                "producer_id": "p1",
+                "published": True,
+                "in_stock": True,
+                "is_paying_producer": False,
+            },
+            {
+                "item_id": "i2",
+                "category": "beer",
+                "producer_id": "p2",
+                "published": True,
+                "in_stock": True,
+                "is_paying_producer": False,
+            },
+            {
+                "item_id": "i3",
+                "category": "beer",
+                "producer_id": "p3",
+                "published": True,
+                "in_stock": True,
+                "is_paying_producer": True,
+            },
+        ]
+    )
+    baseline_config = replace(feature_config, boosts=[])
+    boosted_config = replace(
+        feature_config,
+        boosts=[
+            BoostRule(
+                name="paying_producer",
+                kind="boolean",
+                item_column="is_paying_producer",
+                factor=100.0,
+            )
+        ],
+    )
+    built = build_dataset(events, None, items, boosted_config, half_life_days=90)
+
+    baseline = train_and_recommend(
+        built,
+        target_users=["ghost"],
+        config=baseline_config,
+        top_k=2,
+        enabled_models=["popular"],
+    )
+    baseline_items = list(
+        baseline.loc[baseline[Columns.User] == "ghost"].sort_values(Columns.Rank)[Columns.Item]
+    )
+    assert baseline_items == ["i1", "i2"]
+    assert "i3" not in baseline_items
+
+    boosted = train_and_recommend(
+        built,
+        target_users=["ghost"],
+        config=boosted_config,
+        top_k=2,
+        enabled_models=["popular"],
+    )
+    boosted_items = list(
+        boosted.loc[boosted[Columns.User] == "ghost"].sort_values(Columns.Rank)[Columns.Item]
+    )
+    assert len(boosted_items) == 2
+    assert "i3" in boosted_items
+    assert boosted_items[0] == "i3"

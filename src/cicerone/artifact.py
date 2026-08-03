@@ -33,7 +33,7 @@ from cicerone.model import RecommenderModel, recommend_with_models
 
 logger = logging.getLogger(__name__)
 
-ARTIFACT_SCHEMA_VERSION = 1
+ARTIFACT_SCHEMA_VERSION = 2
 ARTIFACT_FILENAME = "model.artifact"
 
 
@@ -50,6 +50,7 @@ class ModelArtifact:
     dataset: Dataset
     items: pd.DataFrame | None
     feature_config: FeatureConfig
+    users: pd.DataFrame | None = None
 
 
 def build_artifact(
@@ -71,6 +72,7 @@ def build_artifact(
         dataset=built.dataset,
         items=built.items.copy() if built.items is not None else None,
         feature_config=feature_config,
+        users=built.users.copy() if built.users is not None else None,
     )
 
 
@@ -121,7 +123,13 @@ def recommend_from_artifact(
 ) -> pd.DataFrame:
     """Produce recommendations from a loaded artifact without re-fitting."""
     # interactions are unused at recommend time; pass an empty frame.
-    built = BuiltDataset(dataset=artifact.dataset, interactions=pd.DataFrame(), items=artifact.items)
+    users = getattr(artifact, "users", None)
+    built = BuiltDataset(
+        dataset=artifact.dataset,
+        interactions=pd.DataFrame(),
+        items=artifact.items,
+        users=users,
+    )
     return recommend_with_models(
         artifact.fitted,
         built,
