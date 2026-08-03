@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.3.0] - Unreleased
 
 ### Added
 
@@ -20,18 +20,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   configured, candidates are over-fetched (`BOOST_OVERFETCH_FACTOR`,
   default 3× `top_k`) before score multipliers so a commercially boosted
   item just outside the raw top-K can still enter the final list.
-- Model artifacts now persist the `users` frame (schema version **2**) so
-  `recommend_from_artifact` can re-apply user-scoped eligibility offline.
-
-## [0.3.0] - 2026-07-30
-
-### Added
-
 - Optional **model artifact** (`[job].save_model_artifact`): the batch job
   can write a versioned, portable fitted-model bundle
   (`model.artifact` / `model_artifacts` table) alongside recommendations.
   Load and recommend without re-fitting via `cicerone.artifact`. Serve mode
   still reads precomputed rows only — this does not add live inference.
+  Artifacts persist the `users` frame (schema version **2**) so
+  `recommend_from_artifact` can re-apply user-scoped eligibility offline.
 - Optional `postgres` service in `docker-compose.yml` (Postgres 16, compose
   profile `db`) for local `kind = "db"` input/output. First boot creates
   `cicerone` (app/tutorial) and `cicerone_test` (pytest) databases.
@@ -43,10 +38,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   serve/dashboard DB readers. Schema reset is module-scoped, reflects via
   SQLAlchemy metadata, and is gated by a test DB name check plus
   `ALLOW_SCHEMA_RESET_FOR_TESTS=1`.
-- User-facing documentation for model artifacts: README section, tutorial §9
-  (`save_model_artifact`, load/recommend via `cicerone.artifact`),
-  architecture notes, and `model_artifact_table` in the commented db config
-  example.
+- User-facing documentation for model artifacts and business policies:
+  README sections, tutorial §8–9, architecture notes, annotated recipes in
+  `config/features.toml`, and `model_artifact_table` in the commented db
+  config example.
 
 ### Changed
 
