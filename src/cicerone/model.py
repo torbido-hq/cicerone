@@ -375,10 +375,10 @@ def fit_strategies(
         )
     )
     # Pre-slice in the parent so ProcessPool workers do not pickle the full
-    # interactions frame (None when epoch logging is off).
+    # interactions frame (None when epoch logging is off or collaborative isn't fitting).
     epoch_interactions = (
         _interactions_for_epoch_metrics(dataset, built.interactions, epoch_metrics.max_users)
-        if epoch_metrics is not None
+        if epoch_metrics is not None and "collaborative" in to_fit
         else None
     )
     if to_fit:
