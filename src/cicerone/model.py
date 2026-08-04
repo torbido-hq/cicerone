@@ -46,6 +46,7 @@ SOURCE_COLUMN = "source"
 WEIGHT_COLUMN = "_weight"  # internal-only; dropped before returning to callers
 
 COLLABORATIVE_EPOCHS = 30  # LightFMWrapperModel.fit() runs these in one fit_partial
+_EPOCH_METRICS_RNG = random.Random()
 
 
 def _recommend_k(top_k: int, has_boosts: bool, overfetch_factor: int = DEFAULT_BOOST_OVERFETCH_FACTOR) -> int:
@@ -123,7 +124,31 @@ def _sample_epoch_metric_users(external_ids, max_users: int) -> list:
     users = list(external_ids)
     if len(users) <= max_users:
         return users
-    return random.Random(RANDOM_STATE).sample(users, max_users)
+    _EPOCH_METRICS_RNG.seed(RANDOM_STATE)
+    return _EPOCH_METRICS_RNG.sample(users, max_users)
+
+
+def _epoch_metric_fit_partial(model: object) -> Callable:
+    fit_partial = getattr(model, "fit_partial", None)
+    if not callable(fit_partial):
+        raise TypeError(
+            f"{type(model).__name__} does not support fit_partial(); "
+            "epoch metric logging requires a model with fit_partial and an epoch count"
+        )
+    return fit_partial
+
+
+def _epoch_metric_total_epochs(model: object) -> int:
+    # rectools LightFMWrapperModel stores constructor epochs= as n_epochs;
+    # accept epochs as a fallback for other wrappers.
+    for attr in ("n_epochs", "epochs"):
+        value = getattr(model, attr, None)
+        if value is not None:
+            return int(value)
+    raise TypeError(
+        f"{type(model).__name__} has no n_epochs/epochs attribute; "
+        "epoch metric logging needs a known epoch count"
+    )
 
 
 def _warn_on_epoch_metric_trajectory(
@@ -184,12 +209,8 @@ def _fit_lightfm_with_epoch_metrics(
     ``interactions`` should already be limited to the scored-user subset.
     Scores with filter_viewed=False (trajectory signal, not holdout).
     """
-    if not isinstance(model, LightFMWrapperModel):
-        raise TypeError(
-            f"{type(model).__name__} does not support epoch metric logging; expected LightFMWrapperModel"
-        )
-
-    total_epochs = model.n_epochs
+    fit_partial = _epoch_metric_fit_partial(model)
+    total_epochs = _epoch_metric_total_epochs(model)
     metric_defs = {
         f"Precision@{top_k}": Precision(k=top_k),
         f"Recall@{top_k}": Recall(k=top_k),
@@ -198,7 +219,7 @@ def _fit_lightfm_with_epoch_metrics(
     history: list[tuple[int, dict[str, float]]] = []
 
     for epoch in range(1, total_epochs + 1):
-        model.fit_partial(dataset, 1)
+        fit_partial(dataset, 1)
         if not _should_log_epoch(epoch, total_epochs, settings.every):
             continue
         reco = model.recommend(

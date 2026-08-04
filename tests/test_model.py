@@ -1266,10 +1266,28 @@ def test_fit_lightfm_with_epoch_metrics_rejects_non_lightfm_wrapper():
         def recommend(self, **kwargs):
             return pd.DataFrame()
 
-    with pytest.raises(TypeError, match="LightFMWrapperModel"):
+    with pytest.raises(TypeError, match="fit_partial"):
         _fit_lightfm_with_epoch_metrics(
             NoPartial(), None, pd.DataFrame(), settings=EpochMetricsSettings(every=1), top_k=2
         )
+
+
+def test_epoch_metric_total_epochs_prefers_n_epochs_then_epochs():
+    from cicerone.model import _epoch_metric_total_epochs
+
+    class WithNEpochs:
+        n_epochs = 7
+
+    class WithEpochs:
+        epochs = 3
+
+    class WithNeither:
+        pass
+
+    assert _epoch_metric_total_epochs(WithNEpochs()) == 7
+    assert _epoch_metric_total_epochs(WithEpochs()) == 3
+    with pytest.raises(TypeError, match="n_epochs/epochs"):
+        _epoch_metric_total_epochs(WithNeither())
 
 
 def test_warn_on_epoch_metric_trajectory_plateau_scale_handles_negative_values(caplog):
