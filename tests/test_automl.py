@@ -173,6 +173,10 @@ def test_candidate_label_for_priority_and_fusion():
     fusion = Candidate(models=["popular", "latest"], weights={"popular": 1.0, "latest": 0.5})
     assert fusion.label == "fusion(popular=1.0,latest=0.5)"
     assert Candidate(models=["popular"], rrf_k=40.0).label == "popular;rrf_k=40.0"
+    fusion_rrf = Candidate(
+        models=["popular", "latest"], weights={"popular": 1.0, "latest": 0.5}, rrf_k=40.0
+    )
+    assert fusion_rrf.label == "fusion(popular=1.0,latest=0.5);rrf_k=40.0"
 
 
 def test_evaluate_candidates_raises_without_enough_history(sample_items, feature_config):

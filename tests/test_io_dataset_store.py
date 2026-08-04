@@ -5,6 +5,7 @@ import json
 import boto3
 import pandas as pd
 import pytest
+from botocore.exceptions import ClientError
 from moto import mock_aws
 
 from cicerone.io.dataset_store import DatasetInputSource, DatasetOutputSink
@@ -116,6 +117,48 @@ def test_s3_backend_optional_inputs_missing_return_none(s3_options):
     source = DatasetInputSource(s3_options)
     assert source.read_users() is None
     assert source.read_items() is None
+
+
+def test_s3_backend_optional_users_not_found_logs_warning_and_returns_none(s3_options, mocker, caplog):
+    source = DatasetInputSource(s3_options)
+    client_error = ClientError(
+        {"Error": {"Code": "NoSuchKey", "Message": "Object not found"}},
+        "GetObject",
+    )
+    mocker.patch.object(source, "_read", side_effect=client_error)
+
+    with caplog.at_level("WARNING", logger="cicerone.io.dataset_store"):
+        result = source.read_users()
+
+    assert result is None
+    assert any("users" in record.getMessage().lower() for record in caplog.records)
+
+
+def test_s3_backend_optional_users_client_error_is_propagated_for_non_not_found_codes(s3_options, mocker):
+    source = DatasetInputSource(s3_options)
+    client_error = ClientError(
+        {"Error": {"Code": "AccessDenied", "Message": "Access denied"}},
+        "GetObject",
+    )
+    mocker.patch.object(source, "_read", side_effect=client_error)
+
+    with pytest.raises(ClientError):
+        source.read_users()
+
+
+def test_s3_backend_optional_items_not_found_logs_warning_and_returns_none(s3_options, mocker, caplog):
+    source = DatasetInputSource(s3_options)
+    client_error = ClientError(
+        {"Error": {"Code": "404", "Message": "Not Found"}},
+        "GetObject",
+    )
+    mocker.patch.object(source, "_read", side_effect=client_error)
+
+    with caplog.at_level("WARNING", logger="cicerone.io.dataset_store"):
+        result = source.read_items()
+
+    assert result is None
+    assert any("items" in record.getMessage().lower() for record in caplog.records)
 
 
 def test_s3_backend_no_prefix_writes_flat_key(s3_options):
