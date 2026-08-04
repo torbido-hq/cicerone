@@ -68,7 +68,7 @@ class RecommenderModel(Protocol):
         dataset: Dataset,
         k: int,
         filter_viewed: bool,
-        items_to_recommend: list,
+        items_to_recommend: list | None = None,
     ) -> pd.DataFrame: ...
 
 
@@ -195,7 +195,6 @@ def _fit_lightfm_with_epoch_metrics(
             dataset=dataset,
             k=top_k,
             filter_viewed=False,
-            items_to_recommend=list(dataset.item_id_map.external_ids),
         )
         snapshot = calc_metrics(metric_defs, reco=reco, interactions=interactions)
         history.append((epoch, snapshot))
