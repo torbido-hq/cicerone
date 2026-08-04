@@ -27,6 +27,10 @@ DEFAULT_ITEMS_TABLE = "items"
 DEFAULT_RECOMMENDATIONS_TABLE = "recommendations"
 DEFAULT_MANIFEST_TABLE = "recommendation_runs"
 DEFAULT_MODEL_ARTIFACT_TABLE = "model_artifacts"
+# Snapshot of items written next to recommendations for serve-time filters
+# (category / availability). Kept separate from DEFAULT_ITEMS_TABLE so a
+# shared input+output database cannot clobber the source items table.
+DEFAULT_RECOMMENDATION_ITEMS_TABLE = "recommendation_items"
 
 DEFAULT_DB_TABLES = frozenset(
     {
@@ -36,6 +40,7 @@ DEFAULT_DB_TABLES = frozenset(
         DEFAULT_RECOMMENDATIONS_TABLE,
         DEFAULT_MANIFEST_TABLE,
         DEFAULT_MODEL_ARTIFACT_TABLE,
+        DEFAULT_RECOMMENDATION_ITEMS_TABLE,
     }
 )
 
@@ -132,3 +137,18 @@ class DatabaseOutputSink:
             artifacts.create(conn, checkfirst=True)
             conn.execute(artifacts.delete())
             conn.execute(insert(artifacts).values(payload=payload, written_at=datetime.now(UTC)))
+
+    def write_items_snapshot(self, df: pd.DataFrame) -> None:
+        table = sql_identifier(
+            self._options.get("recommendation_items_table", DEFAULT_RECOMMENDATION_ITEMS_TABLE),
+            option="recommendation_items_table",
+        )
+        logger.info("Writing %d item snapshot rows to database table %r", len(df), table)
+        with self._engine.begin() as conn:
+            savepoint = conn.begin_nested()
+            try:
+                conn.execute(text(f'TRUNCATE TABLE "{table}"'))
+                savepoint.commit()
+            except ProgrammingError:
+                savepoint.rollback()
+            df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)

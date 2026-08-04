@@ -12,6 +12,7 @@ config.py            load & resolve config/cicerone.toml (structural config + ${
 feature_config.py     load config/features.toml (event weights, feature columns,
                      eligibility/boost policy rules)
 policy.py             declarative eligibility masks, cohort grouping, score boosts
+blending.py           per-user weighted mix of personalized/popular/latest (optional)
 io/
   base.py             InputSource / OutputSink / RecommendationReader protocols
   factory.py          picks a concrete backend by IOSettings.kind ("dataset" | "db")
@@ -23,7 +24,7 @@ io/
 dataset.py            raw events/users/items -> weighted rectools Dataset (BuiltDataset;
                      keeps users+items frames for policy evaluation)
 model.py              BuiltDataset -> STRATEGIES registry (collaborative/item_based/
-                     popular/latest) -> cohort-aware recommend -> combine -> boosts
+                     popular/latest) -> cohort-aware recommend -> combine/blend -> boosts
 artifact.py           optional versioned fitted-model bundle (save/load + recommend
                      without re-fitting); written by the batch job when enabled
 automl.py            optional: backtests candidate models/weights/rrf_k configs over
@@ -174,11 +175,15 @@ rectools/lightfm/implicit needed in that process or its request path):
 - `io.factory.build_recommendation_reader(settings.output)` builds a
   `RecommendationReader` (`io/recommendation_reader.py`) matching the
   configured output `kind` — `DatasetRecommendationReader` caches the whole
-  parquet file in memory and refreshes it on a background timer
-  (`serve.py`'s `_start_refresh_loop`); `DbRecommendationReader` queries the
-  table directly per request (its `refresh()` is a no-op).
+  parquet file (and optional `items_snapshot.parquet`) in memory and refreshes
+  it on a background timer (`serve.py`'s `_start_refresh_loop`);
+  `DbRecommendationReader` queries the recommendations table directly per
+  request and caches the `recommendation_items` snapshot for filters.
 - `serve.create_app()` exposes `GET /health` and
-  `GET /recommendations/{user_id}?k=`, both behind `http_auth.require_bearer_token`.
+  `GET /recommendations/{user_id}` (`limit`/`k`, `category`,
+  `exclude_unavailable`) behind `http_auth.require_bearer_token`. Unknown
+  users fall back to the precomputed `__cold_start__` list rather than 404.
+  Responses include `generated_at` from the run manifest.
 
 `cicerone.trigger` implements the event-driven retrain trigger, additive to
 (not a replacement for) `scheduler.py`'s cron loop:

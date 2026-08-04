@@ -152,3 +152,34 @@ type = "categorical"
 # item_column = "margin"
 # weight = 0.25
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Weighted multi-source blending (optional)
+#
+# When enabled, replaces the binary personalized-vs-popular_fallback choice
+# with a gradual per-user mix of three sources:
+#   personalized — rectools collaborative / item_based output
+#   popular      — PopularModel (same as today's cold-start fallback)
+#   latest       — newest items by a datetime column on `items` (tried in
+#                  order from latest_date_columns); disabled automatically
+#                  when no usable date column is present, and its weight is
+#                  redistributed onto popular
+#
+# The personalized weight grows with the user's interaction count via a
+# configurable curve; the remainder is split between popular and latest by
+# popular_share. Combined rows get source = "blended". Availability /
+# eligibility filters still run on every source *before* the blend.
+#
+# curve = "sigmoid": weight = 1 / (1 + exp(-steepness * (n - midpoint)))
+# curve = "linear":  weight = min(1, n / saturate_at)
+# ---------------------------------------------------------------------------
+# [blending]
+# enabled = true
+# curve = "sigmoid"          # "sigmoid" | "linear"
+# midpoint = 5.0             # sigmoid: interactions at which weight ≈ 0.5
+# steepness = 1.0            # sigmoid: how fast the curve rises
+# saturate_at = 10.0         # linear: interactions at which weight = 1.0
+# popular_share = 0.7        # of the non-personalized remainder
+# latest_date_columns = ["published_at", "created_at", "occurred_at"]
+# rrf_k = 60.0               # reciprocal-rank fusion constant inside the blend
+# ---------------------------------------------------------------------------

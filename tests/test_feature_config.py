@@ -88,9 +88,67 @@ def test_load_feature_config_defaults_to_empty_sections(tmp_path):
     assert config.eligibility == []
     assert config.boosts == []
     assert config.boost_overfetch_factor == DEFAULT_BOOST_OVERFETCH_FACTOR
+    assert config.blending.enabled is False
 
 
-def test_load_feature_config_parses_boost_overfetch_factor(tmp_path):
+def test_load_feature_config_parses_blending(tmp_path):
+    config_path = tmp_path / "blending.toml"
+    config_path.write_text(
+        """
+[blending]
+enabled = true
+curve = "linear"
+midpoint = 3.0
+steepness = 2.0
+saturate_at = 8.0
+popular_share = 0.6
+latest_date_columns = ["published_at", "created_at"]
+rrf_k = 40.0
+"""
+    )
+    blending = load_feature_config(config_path).blending
+    assert blending.enabled is True
+    assert blending.curve == "linear"
+    assert blending.midpoint == 3.0
+    assert blending.steepness == 2.0
+    assert blending.saturate_at == 8.0
+    assert blending.popular_share == 0.6
+    assert blending.latest_date_columns == ("published_at", "created_at")
+    assert blending.rrf_k == 40.0
+
+
+def test_load_feature_config_rejects_invalid_blending_curve(tmp_path):
+    config_path = tmp_path / "bad_blend.toml"
+    config_path.write_text('[blending]\ncurve = "exponential"\n')
+    with pytest.raises(ValueError, match="Unknown blending curve"):
+        load_feature_config(config_path)
+
+
+def test_load_feature_config_rejects_invalid_blending_steepness(tmp_path):
+    config_path = tmp_path / "bad_steep.toml"
+    config_path.write_text("[blending]\nsteepness = 0\n")
+    with pytest.raises(ValueError, match="steepness"):
+        load_feature_config(config_path)
+
+
+def test_load_feature_config_rejects_invalid_blending_saturate_at(tmp_path):
+    config_path = tmp_path / "bad_sat.toml"
+    config_path.write_text("[blending]\nsaturate_at = -1\n")
+    with pytest.raises(ValueError, match="saturate_at"):
+        load_feature_config(config_path)
+
+
+def test_load_feature_config_rejects_invalid_blending_rrf_k(tmp_path):
+    config_path = tmp_path / "bad_rrf.toml"
+    config_path.write_text("[blending]\nrrf_k = 0\n")
+    with pytest.raises(ValueError, match="rrf_k"):
+        load_feature_config(config_path)
+
+
+def test_load_feature_config_accepts_string_latest_date_column(tmp_path):
+    config_path = tmp_path / "date_str.toml"
+    config_path.write_text('[blending]\nlatest_date_columns = "published_at"\n')
+    assert load_feature_config(config_path).blending.latest_date_columns == ("published_at",)
     config_path = tmp_path / "overfetch.toml"
     config_path.write_text("boost_overfetch_factor = 5\n")
     assert load_feature_config(config_path).boost_overfetch_factor == 5

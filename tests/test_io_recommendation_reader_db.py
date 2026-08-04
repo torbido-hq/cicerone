@@ -23,6 +23,7 @@ def _clean_recommendations_table():
     engine = create_engine(TEST_DATABASE_URL)
     with engine.begin() as conn:
         conn.execute(text('DROP TABLE IF EXISTS "recommendations"'))
+        conn.execute(text('DROP TABLE IF EXISTS "recommendation_items"'))
     yield
     engine.dispose()
 
@@ -44,6 +45,33 @@ def test_db_reader_returns_top_k_sorted_by_rank():
     recs = reader.get_recommendations("u1", k=2)
 
     assert list(recs["item_id"]) == ["i1", "i2"]
+
+
+def test_db_reader_items_snapshot_and_cold_start_fallback():
+    sink = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})
+    sink.write_recommendations(
+        pd.DataFrame(
+            [
+                {
+                    "user_id": "__cold_start__",
+                    "item_id": "i9",
+                    "rank": 1,
+                    "score": 0.4,
+                    "source": "popular_fallback",
+                },
+                {"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"},
+            ]
+        )
+    )
+    sink.write_items_snapshot(
+        pd.DataFrame([{"item_id": "i1", "category": "beer", "published": True, "in_stock": True}])
+    )
+
+    reader = DbRecommendationReader({"database_url": TEST_DATABASE_URL})
+    items = reader.get_items()
+    assert items is not None
+    assert list(items["item_id"]) == ["i1"]
+    assert list(reader.get_cold_start_fallback(k=1)["item_id"]) == ["i9"]
 
 
 def test_db_reader_unknown_user_returns_empty():

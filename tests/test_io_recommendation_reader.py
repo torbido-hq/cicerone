@@ -64,10 +64,51 @@ def test_dataset_reader_refresh_keeps_previous_cache_on_error(tmp_path):
     assert list(recs["item_id"]) == ["i1"]
 
 
+def test_dataset_reader_cold_start_fallback_and_items(tmp_path):
+    _write_recommendations(
+        tmp_path,
+        [
+            {"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"},
+            {
+                "user_id": "__cold_start__",
+                "item_id": "i9",
+                "rank": 1,
+                "score": 0.4,
+                "source": "popular_fallback",
+            },
+        ],
+    )
+    pd.DataFrame([{"item_id": "i1", "category": "beer", "published": True, "in_stock": True}]).to_parquet(
+        tmp_path / "items_snapshot.parquet", index=False
+    )
+
+    reader = DatasetRecommendationReader({"storage_backend": "local", "path": str(tmp_path)})
+
+    assert list(reader.get_cold_start_fallback(k=5)["item_id"]) == ["i9"]
+    items = reader.get_items()
+    assert items is not None
+    assert list(items["item_id"]) == ["i1"]
+
+
+def test_dataset_reader_cold_start_fallback_without_sentinel(tmp_path):
+    _write_recommendations(
+        tmp_path,
+        [
+            {"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"},
+            {"user_id": "u2", "item_id": "i9", "rank": 1, "score": 0.4, "source": "popular_fallback"},
+            {"user_id": "u2", "item_id": "i8", "rank": 2, "score": 0.3, "source": "popular_fallback"},
+        ],
+    )
+    reader = DatasetRecommendationReader({"storage_backend": "local", "path": str(tmp_path)})
+    assert list(reader.get_cold_start_fallback(k=2)["item_id"]) == ["i9", "i8"]
+
+
 def test_dataset_reader_construction_tolerates_missing_file(tmp_path):
     reader = DatasetRecommendationReader({"storage_backend": "local", "path": str(tmp_path)})
 
     assert reader.get_recommendations("u1", k=10).empty
+    assert reader.get_items() is None
+    assert reader.get_cold_start_fallback(k=5).empty
 
 
 @pytest.fixture

@@ -22,6 +22,15 @@ from rectools.dataset import Dataset
 from rectools.metrics import Precision, Recall, calc_metrics
 from rectools.models import ImplicitItemKNNWrapperModel, LightFMWrapperModel, PopularModel
 
+from cicerone.blending import (
+    PERSONALIZED_SOURCE,
+    POPULAR_SOURCE,
+    append_cold_start_rows,
+    blend_for_users,
+    build_latest_ranking,
+    interaction_counts,
+    resolve_latest_date_column,
+)
 from cicerone.config import STRATEGY_NAMES, EpochMetricsSettings, validate_model_weights, validate_rrf_k
 from cicerone.dataset import BuiltDataset
 from cicerone.feature_config import DEFAULT_BOOST_OVERFETCH_FACTOR, FeatureConfig
@@ -433,6 +442,13 @@ def fit_strategies(
     return enabled_models, models
 
 
+def _models_for_recommend(enabled_models: list[str], blending_enabled: bool) -> list[str]:
+    """When blending is on, ensure ``popular`` is available as a blend source."""
+    if not blending_enabled or "popular" in enabled_models:
+        return enabled_models
+    return [*enabled_models, "popular"]
+
+
 def recommend_with_models(
     models: dict[str, RecommenderModel],
     built: BuiltDataset,
@@ -449,7 +465,11 @@ def recommend_with_models(
     so a loaded model artifact can produce recommendations without re-training.
     """
     enabled_models = _resolve_enabled_models(enabled_models)
-    if weights is not None:
+    blending = config.blending
+    blending_enabled = blending.enabled
+    recommend_models = _models_for_recommend(enabled_models, blending_enabled)
+
+    if weights is not None and not blending_enabled:
         unknown_weights = [name for name in weights if name not in enabled_models]
         if unknown_weights:
             raise ValueError(
@@ -506,7 +526,9 @@ def recommend_with_models(
         cohorts = [(None, unique_target_users)]
 
     frames = []
-    for name in enabled_models:
+    personalized_frames: list[pd.DataFrame] = []
+    popular_frames: list[pd.DataFrame] = []
+    for name in recommend_models:
         strategy = STRATEGIES[name]
         if strategy.personalized and not has_any_warm_user:
             continue
@@ -538,12 +560,94 @@ def recommend_with_models(
             recs[SOURCE_COLUMN] = strategy.source_label
             recs[WEIGHT_COLUMN] = weights.get(name, 1.0) if weights is not None else 1.0
             frames.append(recs)
+            if blending_enabled:
+                if strategy.personalized:
+                    personalized_frames.append(recs)
+                elif name == "popular":
+                    popular_frames.append(recs)
 
     if not frames:
         return pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN])
 
     combine_k = recommend_k if has_boosts else top_k
-    if weights is not None:
+
+    if blending_enabled:
+        date_column = resolve_latest_date_column(built.items, blending.latest_date_columns)
+        latest_available = date_column is not None and built.items is not None
+        if not latest_available:
+            logger.info(
+                "Blending: no usable date column among %s on items — disabling 'latest' "
+                "and redistributing its weight onto popular",
+                list(blending.latest_date_columns),
+            )
+
+        # Union of allowlists across cohorts (already availability-filtered).
+        allowed_union: list = []
+        seen_allowed: set[str] = set()
+        for allowed in allowed_by_cohort.values():
+            for item_id in allowed:
+                key = str(item_id)
+                if key not in seen_allowed:
+                    seen_allowed.add(key)
+                    allowed_union.append(item_id)
+
+        latest_frame = (
+            build_latest_ranking(
+                built.items,
+                date_column,
+                allowed_union,
+                combine_k,
+                unique_target_users,
+            )
+            if latest_available and date_column is not None and built.items is not None
+            else None
+        )
+
+        personalized = (
+            pd.concat(personalized_frames, ignore_index=True)
+            if personalized_frames
+            else pd.DataFrame(
+                columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN]
+            )
+        )
+        # Prefer collaborative/item_based source labels → map to "personalized" for blend.
+        if not personalized.empty:
+            personalized = personalized.copy()
+            personalized[SOURCE_COLUMN] = PERSONALIZED_SOURCE
+
+        popular = (
+            pd.concat(popular_frames, ignore_index=True)
+            if popular_frames
+            else pd.DataFrame(
+                columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN]
+            )
+        )
+        if not popular.empty:
+            popular = popular.copy()
+            popular[SOURCE_COLUMN] = POPULAR_SOURCE
+
+        counts = interaction_counts(built.interactions)
+        combined = blend_for_users(
+            personalized=personalized,
+            popular=popular,
+            latest=latest_frame,
+            counts=counts,
+            target_users=unique_target_users,
+            config=blending,
+            top_k=combine_k,
+            latest_available=bool(latest_available),
+        )
+        combined = append_cold_start_rows(
+            combined,
+            popular=popular,
+            latest=latest_frame,
+            config=blending,
+            top_k=combine_k,
+            latest_available=bool(latest_available),
+        )
+        if WEIGHT_COLUMN in combined.columns:
+            combined = combined.drop(columns=[WEIGHT_COLUMN])
+    elif weights is not None:
         source_label_order = [STRATEGIES[name].source_label for name in enabled_models]
         combined = _combine_by_weighted_fusion(
             frames, combine_k, rrf_k if rrf_k is not None else RRF_K, source_label_order
@@ -572,10 +676,12 @@ def train_and_recommend(
     """Fit enabled strategies, then recommend + combine. See ``fit_strategies``
     and ``recommend_with_models`` for the split used by model artifacts.
     """
-    resolved_models, fitted = fit_strategies(
+    resolved_models = _resolve_enabled_models(enabled_models)
+    fit_models = _models_for_recommend(resolved_models, config.blending.enabled)
+    _, fitted = fit_strategies(
         built,
         target_users,
-        enabled_models=enabled_models,
+        enabled_models=fit_models,
         strategy_cache=strategy_cache,
         max_workers=max_workers,
         epoch_metrics=epoch_metrics,

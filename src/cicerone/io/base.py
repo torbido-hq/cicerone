@@ -22,12 +22,24 @@ class OutputSink(Protocol):
 
     def write_model_artifact(self, payload: bytes) -> None: ...
 
+    def write_items_snapshot(self, df: pd.DataFrame) -> None:
+        """Optional: persist items for serve-time category/availability filters."""
+        ...
+
 
 class RecommendationReader(Protocol):
     def get_recommendations(self, user_id: str, k: int) -> pd.DataFrame: ...
 
     def refresh(self) -> None:
         """Reload caches. No-op for live backends."""
+        ...
+
+    def get_items(self) -> pd.DataFrame | None:
+        """Items snapshot for serve-time filters, if available."""
+        ...
+
+    def get_cold_start_fallback(self, k: int) -> pd.DataFrame:
+        """Precomputed popular/latest rows for unknown users."""
         ...
 
 

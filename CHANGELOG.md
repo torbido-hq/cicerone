@@ -4,6 +4,36 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.0] - 2026-08-04
+
+### Added
+
+- **Weighted multi-source blending** (`[blending]` in `config/features.toml`):
+  replaces the binary personalized-vs-`popular_fallback` choice with a
+  gradual per-user mix of `personalized`, `popular`, and date-based
+  `latest` (publication/`occurred_at`-style columns on `items`). A
+  configurable sigmoid or linear curve maps interaction count →
+  personalized weight; the remainder is split by `popular_share`. When no
+  usable date column exists, `latest` is disabled and its weight moves to
+  `popular`. Combined rows use `source = "blended"`. Availability /
+  eligibility still filter every source before the blend. A shared
+  `__cold_start__` row set is written for serve-mode fallback.
+- **Serve read contract** aligned with a Gorse-style lookup (without
+  adopting Gorse infra): `GET /recommendations/{user_id}` accepts
+  `limit` / `k`, `category`, and `exclude_unavailable`, returns
+  `{generated_at, user_id, fallback, items:[{item_id,rank,score,source}]}`
+  plus an `X-Generated-At` header from the last run manifest, and falls
+  back to the precomputed cold-start list for unknown users (not a bare
+  404). Items are snapshotted to the output store
+  (`items_snapshot.parquet` / `recommendation_items`) so filters stay on
+  the configured output without loading ML deps. Documented in the README
+  Serve section alongside the existing Dashboard style.
+
+### Changed
+
+- Serve JSON response is an object (with `generated_at` / `items`) rather
+  than a bare list; `k` remains accepted as an alias for `limit`.
+
 ## [0.3.2] - 2026-08-04
 
 ### Added

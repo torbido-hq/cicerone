@@ -26,6 +26,7 @@ def _clean_tables():
             "users",
             "items",
             "recommendations",
+            "recommendation_items",
             "recommendation_runs",
             "model_artifacts",
             "custom_events",

@@ -19,6 +19,7 @@ def test_local_backend_round_trip(tmp_path):
 
     df = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"}])
     sink.write_recommendations(df)
+    sink.write_items_snapshot(pd.DataFrame([{"item_id": "i1", "category": "beer"}]))
     sink.write_manifest({"n_events": 3})
     sink.write_model_artifact(b"fake-artifact-bytes")
 
@@ -30,6 +31,8 @@ def test_local_backend_round_trip(tmp_path):
     manifest_path = tmp_path / "manifest.json"
     assert json.loads(manifest_path.read_text()) == {"n_events": 3}
     assert (tmp_path / "model.artifact").read_bytes() == b"fake-artifact-bytes"
+    items_snap = pd.read_parquet(tmp_path / "items_snapshot.parquet")
+    assert list(items_snap["item_id"]) == ["i1"]
 
 
 def test_local_backend_optional_inputs_missing_return_none(tmp_path):

@@ -154,8 +154,9 @@ prefix = "recommendations/latest"
 # auth_token = "${SERVE_AUTH_TOKEN}" # required; checked as "Authorization: Bearer <token>"
 # host = "0.0.0.0"
 # port = 8000
-# default_k = 10 # used when a request doesn't specify ?k=
+# default_k = 10 # used when a request doesn't specify ?limit= / ?k=
 # refresh_interval_seconds = 60
+# category_column = "category" # items column used by ?category= filter
 
 # Optional: a small, standalone read-only status page over job run history
 # (its own container/port, independent of [job].mode -- see the README's

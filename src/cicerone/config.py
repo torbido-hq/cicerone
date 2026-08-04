@@ -189,6 +189,7 @@ class Settings:
     serve_auth_token: str | None
     serve_default_k: int
     serve_refresh_interval_seconds: float
+    serve_category_column: str
     trigger_enabled: bool
     trigger_host: str
     trigger_port: int
@@ -314,6 +315,7 @@ def load_settings(config_path: str | None = None) -> Settings:
         serve_auth_token=serve_auth_token,
         serve_default_k=_require_positive_int(int(serve.get("default_k", 10)), name="serve.default_k"),
         serve_refresh_interval_seconds=float(serve.get("refresh_interval_seconds", 60)),
+        serve_category_column=str(serve.get("category_column", "category")),
         trigger_enabled=trigger_enabled,
         trigger_host=trigger.get("host", "0.0.0.0"),
         trigger_port=int(trigger.get("port", 8080)),

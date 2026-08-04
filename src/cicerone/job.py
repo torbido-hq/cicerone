@@ -154,6 +154,8 @@ def run(triggered_by: str = "manual") -> None:
             manifest["artifact_schema_version"] = ARTIFACT_SCHEMA_VERSION
 
         sink.write_recommendations(recommendations)
+        if items is not None and not items.empty:
+            sink.write_items_snapshot(items)
 
         manifest.update(
             {
