@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import logging
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -22,10 +23,32 @@ logger = logging.getLogger(__name__)
 USER_COLUMN = "user_id"
 RANK_COLUMN = "rank"
 SOURCE_COLUMN = "source"
+ITEM_COLUMN = "item_id"
 ITEMS_SNAPSHOT_FILENAME = "items_snapshot.parquet"
 
 # When __cold_start__ is missing: popular/latest only (never warm "blended").
 _FALLBACK_SOURCES = frozenset({POPULAR_SOURCE, LATEST_SOURCE})
+
+
+def normalize_items_snapshot(
+    items: pd.DataFrame | None,
+    *,
+    category_column: str | None = None,
+    availability_filters: Sequence[str] = (),
+) -> pd.DataFrame | None:
+    """Cast filter columns once so serve requests can reuse the frame as-is."""
+    if items is None or items.empty:
+        return items
+    out = items.copy()
+    if ITEM_COLUMN not in out.columns:
+        return out
+    out[ITEM_COLUMN] = out[ITEM_COLUMN].astype(str)
+    if category_column and category_column in out.columns:
+        out[category_column] = out[category_column].astype(str)
+    for column in availability_filters:
+        if column in out.columns:
+            out[column] = [bool(v) if pd.notna(v) else False for v in out[column].tolist()]
+    return out
 
 
 class DatasetRecommendationReader:
@@ -34,7 +57,23 @@ class DatasetRecommendationReader:
         self._backend = options.get("storage_backend", "local")
         self._cache = pd.DataFrame(columns=[USER_COLUMN, RANK_COLUMN, SOURCE_COLUMN])
         self._items: pd.DataFrame | None = None
+        self._category_column: str | None = None
+        self._availability_filters: list[str] = []
         self.refresh()
+
+    def configure_item_filters(
+        self,
+        *,
+        category_column: str | None = None,
+        availability_filters: Sequence[str] = (),
+    ) -> None:
+        self._category_column = category_column
+        self._availability_filters = list(availability_filters)
+        self._items = normalize_items_snapshot(
+            self._items,
+            category_column=self._category_column,
+            availability_filters=self._availability_filters,
+        )
 
     def _read_recommendations(self) -> pd.DataFrame:
         if self._backend == "local":
@@ -78,7 +117,11 @@ class DatasetRecommendationReader:
         except Exception:
             logger.exception("Failed to refresh recommendations cache; keeping previous data")
         try:
-            self._items = self._read_items_snapshot()
+            self._items = normalize_items_snapshot(
+                self._read_items_snapshot(),
+                category_column=self._category_column,
+                availability_filters=self._availability_filters,
+            )
         except Exception:
             logger.exception("Failed to refresh items snapshot; keeping previous data")
 
@@ -117,7 +160,23 @@ class DbRecommendationReader:
         )
         self._engine = create_engine(require_option(options, "database_url", "db"), pool_pre_ping=True)
         self._items: pd.DataFrame | None = None
+        self._category_column: str | None = None
+        self._availability_filters: list[str] = []
         self.refresh()
+
+    def configure_item_filters(
+        self,
+        *,
+        category_column: str | None = None,
+        availability_filters: Sequence[str] = (),
+    ) -> None:
+        self._category_column = category_column
+        self._availability_filters = list(availability_filters)
+        self._items = normalize_items_snapshot(
+            self._items,
+            category_column=self._category_column,
+            availability_filters=self._availability_filters,
+        )
 
     def refresh(self) -> None:
         try:
@@ -126,7 +185,11 @@ class DbRecommendationReader:
             if not inspect(self._engine).has_table(self._items_table):
                 self._items = None
                 return
-            self._items = pd.read_sql(text(f'SELECT * FROM "{self._items_table}"'), self._engine)
+            self._items = normalize_items_snapshot(
+                pd.read_sql(text(f'SELECT * FROM "{self._items_table}"'), self._engine),
+                category_column=self._category_column,
+                availability_filters=self._availability_filters,
+            )
         except Exception:
             logger.exception("Failed to refresh recommendation items snapshot; continuing without it")
             self._items = None

@@ -7,11 +7,56 @@ import pandas as pd
 import pytest
 from moto import mock_aws
 
-from cicerone.io.recommendation_reader import DatasetRecommendationReader
+from cicerone.io.recommendation_reader import DatasetRecommendationReader, normalize_items_snapshot
 
 
 def _write_recommendations(path, rows) -> None:
     pd.DataFrame(rows).to_parquet(path / "recommendations.parquet", index=False)
+
+
+def test_normalize_items_snapshot_casts_filter_columns():
+    raw = pd.DataFrame(
+        [
+            {"item_id": 1, "category": "beer", "published": 1, "in_stock": None},
+            {"item_id": 2, "category": "wine", "published": 0, "in_stock": True},
+        ]
+    )
+    items = normalize_items_snapshot(
+        raw,
+        category_column="category",
+        availability_filters=["published", "in_stock"],
+    )
+    assert items is not None
+    assert list(items["item_id"]) == ["1", "2"]
+    assert items["category"].dtype == object
+    assert list(items["published"]) == [True, False]
+    assert list(items["in_stock"]) == [False, True]
+
+
+def test_dataset_reader_configure_item_filters_and_refresh(tmp_path):
+    _write_recommendations(
+        tmp_path,
+        [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"}],
+    )
+    pd.DataFrame([{"item_id": 1, "category": "beer", "published": 1}]).to_parquet(
+        tmp_path / "items_snapshot.parquet", index=False
+    )
+    reader = DatasetRecommendationReader({"storage_backend": "local", "path": str(tmp_path)})
+    reader.configure_item_filters(category_column="category", availability_filters=["published"])
+
+    items = reader.get_items()
+    assert items is not None
+    assert list(items["item_id"]) == ["1"]
+    assert list(items["published"]) == [True]
+
+    pd.DataFrame([{"item_id": 9, "category": "wine", "published": 0}]).to_parquet(
+        tmp_path / "items_snapshot.parquet", index=False
+    )
+    reader.refresh()
+    refreshed = reader.get_items()
+    assert refreshed is not None
+    assert list(refreshed["item_id"]) == ["9"]
+    assert list(refreshed["published"]) == [False]
 
 
 def test_dataset_reader_returns_top_k_sorted_by_rank(tmp_path):

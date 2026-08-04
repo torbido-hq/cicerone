@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import Settings
 from cicerone.feature_config import FeatureConfig
-from cicerone.serve import _start_refresh_loop, create_app, main
+from cicerone.serve import _ItemsFilterCache, _start_refresh_loop, create_app, main
 
 
 def _settings(**overrides) -> Settings:
@@ -90,6 +90,25 @@ class _FakeManifest:
         del limit
         latest = self.read_latest()
         return [latest] if latest else []
+
+
+def test_items_filter_cache_normalizes_once_per_refresh():
+    reader = _FakeReader(_recs_df(), _items_df())
+    cache = _ItemsFilterCache(
+        reader,
+        category_column="category",
+        availability_filters=["published", "in_stock"],
+    )
+    items_a, available_a = cache.get()
+    items_b, available_b = cache.get()
+    assert items_a is items_b
+    assert available_a is available_b
+    assert available_a == frozenset({"i1", "i2"})
+
+    reader._items = _items_df()
+    items_c, available_c = cache.get()
+    assert items_c is not items_a
+    assert available_c == frozenset({"i1", "i2"})
 
 
 def test_health_requires_no_auth():
