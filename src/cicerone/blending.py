@@ -8,7 +8,6 @@ popular and latest (item publication date). See ``[blending]`` in
 
 from __future__ import annotations
 
-import logging
 import math
 from collections.abc import Mapping, Sequence
 
@@ -17,17 +16,12 @@ from rectools import Columns
 
 from cicerone.feature_config import BlendingConfig
 
-logger = logging.getLogger(__name__)
-
 SOURCE_COLUMN = "source"
 BLENDED_SOURCE = "blended"
 PERSONALIZED_SOURCE = "personalized"
 POPULAR_SOURCE = "popular_fallback"
 LATEST_SOURCE = "latest"
 COLD_START_USER_ID = "__cold_start__"
-
-# Sources whose contribution counts toward a "blended" label when >1 participate.
-BLENDABLE_SOURCES = (PERSONALIZED_SOURCE, POPULAR_SOURCE, LATEST_SOURCE)
 
 _WEIGHT_EPS = 1e-9
 
@@ -176,7 +170,7 @@ def blend_for_users(
         ),
     }
 
-    by_user_item: dict[tuple[str, str], dict[str, float | set[str]]] = {}
+    by_user_item: dict[tuple[str, str], tuple[float, set[str]]] = {}
     for user_id in dict.fromkeys(str(u) for u in target_users):
         weights = source_weights(
             counts.get(user_id, 0),
@@ -190,27 +184,22 @@ def blend_for_users(
             user_rows = frame[frame[Columns.User] == user_id]
             for row in user_rows.itertuples(index=False):
                 key = (user_id, str(getattr(row, Columns.Item)))
-                entry = by_user_item.setdefault(key, {"score": 0.0, "sources": set()})
-                entry["score"] = float(entry["score"]) + _rrf_contrib(
-                    float(getattr(row, Columns.Rank)), weight, config.rrf_k
-                )
-                sources = entry["sources"]
-                assert isinstance(sources, set)
+                score, sources = by_user_item.get(key, (0.0, set()))
+                score += _rrf_contrib(float(getattr(row, Columns.Rank)), weight, config.rrf_k)
                 sources.add(source_label)
+                by_user_item[key] = (score, sources)
 
     if not by_user_item:
         return pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN])
 
     rows = []
-    for (user_id, item_id), entry in by_user_item.items():
-        sources = entry["sources"]
-        assert isinstance(sources, set)
+    for (user_id, item_id), (score, sources) in by_user_item.items():
         label = BLENDED_SOURCE if len(sources) > 1 else next(iter(sources))
         rows.append(
             {
                 Columns.User: user_id,
                 Columns.Item: item_id,
-                Columns.Score: float(entry["score"]),
+                Columns.Score: score,
                 SOURCE_COLUMN: label,
             }
         )

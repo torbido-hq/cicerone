@@ -116,16 +116,14 @@ def create_app(
         if recs.empty:
             recs = reader.get_recommendations(COLD_START_USER_ID, fetch_k)
             used_fallback = True
-            if recs.empty and hasattr(reader, "get_cold_start_fallback"):
-                recs = reader.get_cold_start_fallback(fetch_k)  # type: ignore[attr-defined]
-                used_fallback = True
+            if recs.empty:
+                recs = reader.get_cold_start_fallback(fetch_k)
         if recs.empty:
             raise HTTPException(status_code=404, detail=f"No recommendations for user_id={user_id!r}")
 
-        items = reader.get_items() if hasattr(reader, "get_items") else None  # type: ignore[attr-defined]
         filtered = _filter_recommendations(
             recs,
-            items=items,
+            items=reader.get_items(),
             category=category,
             category_column=category_column,
             exclude_unavailable=exclude_unavailable,
