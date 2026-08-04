@@ -80,11 +80,11 @@ def resolve_epoch_metrics(
             DEFAULT_EPOCH_METRICS_MAX_USERS if max_users is None else int(max_users),
             name="job.epoch_metrics_max_users",
         ),
-        regression_drop=_require_positive_float(
+        regression_drop=_require_unit_interval(
             DEFAULT_EPOCH_METRICS_REGRESSION_DROP if regression_drop is None else float(regression_drop),
             name="job.epoch_metrics_regression_drop",
         ),
-        plateau_eps=_require_positive_float(
+        plateau_eps=_require_unit_interval(
             DEFAULT_EPOCH_METRICS_PLATEAU_EPS if plateau_eps is None else float(plateau_eps),
             name="job.epoch_metrics_plateau_eps",
         ),
@@ -117,6 +117,13 @@ def _require_positive_int(value: int, *, name: str) -> int:
 def _require_positive_float(value: float, *, name: str) -> float:
     if value <= 0:
         raise RuntimeError(f"{name} must be > 0, got {value}")
+    return value
+
+
+def _require_unit_interval(value: float, *, name: str) -> float:
+    """Require a relative fraction in (0, 1]."""
+    if value <= 0 or value > 1:
+        raise RuntimeError(f"{name} must be in (0, 1], got {value}")
     return value
 
 

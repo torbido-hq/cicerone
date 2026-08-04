@@ -533,6 +533,14 @@ def test_resolve_epoch_metrics_rejects_non_positive_when_enabled():
         resolve_epoch_metrics(log_epoch_metrics=True, every=0)
 
 
+def test_resolve_epoch_metrics_rejects_fraction_outside_unit_interval():
+    with pytest.raises(RuntimeError, match="epoch_metrics_regression_drop"):
+        resolve_epoch_metrics(log_epoch_metrics=True, regression_drop=1.5)
+    with pytest.raises(RuntimeError, match="epoch_metrics_plateau_eps"):
+        resolve_epoch_metrics(log_epoch_metrics=True, plateau_eps=0)
+    assert resolve_epoch_metrics(log_epoch_metrics=True, regression_drop=1.0).regression_drop == 1.0
+
+
 def test_load_settings_rejects_non_positive_half_life_days(tmp_path):
     config_path = _write_toml(
         tmp_path,
