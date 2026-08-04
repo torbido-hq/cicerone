@@ -115,8 +115,7 @@ def create_app(
             and not items.empty
             and (category is not None or (exclude_unavailable and availability_filters))
         )
-        # Over-fetch only when serve-time filters can actually drop rows.
-        fetch_k = max(top_k * 5, top_k) if can_filter else top_k
+        fetch_k = max(top_k * 5, top_k) if can_filter else top_k  # over-fetch only if filters apply
         recs = reader.get_recommendations(user_id, fetch_k)
         used_fallback = False
         if recs.empty:
@@ -136,7 +135,6 @@ def create_app(
             availability_filters=availability_filters,
         )
         filtered = filtered.head(top_k).reset_index(drop=True)
-        # Re-number ranks after filtering so the response stays 1..n.
         if not filtered.empty:
             filtered = filtered.copy()
             filtered["rank"] = range(1, len(filtered) + 1)

@@ -24,7 +24,7 @@ RANK_COLUMN = "rank"
 SOURCE_COLUMN = "source"
 ITEMS_SNAPSHOT_FILENAME = "items_snapshot.parquet"
 
-# Heuristic fallback when __cold_start__ is missing: never reuse warm "blended" rows.
+# When __cold_start__ is missing: popular/latest only (never warm "blended").
 _FALLBACK_SOURCES = frozenset({POPULAR_SOURCE, LATEST_SOURCE})
 
 

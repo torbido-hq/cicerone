@@ -99,9 +99,7 @@ def recommend_from_artifact(
     top_k: int,
 ) -> pd.DataFrame:
     users = getattr(artifact, "users", None)
-    # Artifacts do not persist the interactions frame; blending therefore
-    # treats every user as n_interactions=0 (cold curve). Prefer the batch
-    # lookup table for production reads.
+    # Artifacts omit interactions → blending sees n=0 for every user.
     built = BuiltDataset(
         dataset=artifact.dataset,
         interactions=pd.DataFrame(),

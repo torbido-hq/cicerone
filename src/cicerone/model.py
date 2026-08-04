@@ -647,8 +647,7 @@ def recommend_with_models(
             latest_available=latest_available,
         )
 
-        # Cold-start sentinel: global item-scoped allowlist only (no user-scoped
-        # eligibility), so unknown users never inherit a random cohort's list.
+        # __cold_start__: global (item-scoped) allowlist only — not a user cohort.
         cold_popular = empty_recs.copy()
         cold_latest = None
         if "popular" in models:

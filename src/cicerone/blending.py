@@ -1,12 +1,7 @@
 """Per-user weighted blending of personalized / popular / latest sources.
 
-Replaces the binary warm/cold fallback with a gradual curve: the personalized
-weight grows with the user's interaction count; the remainder is split between
-popular and latest (item publication date). See ``[blending]`` in
-``config/features.toml``.
-
-``n_interactions`` is the number of distinct (user, item) pairs for that user
-in the post-aggregation interactions frame (not raw event rows, not Σ weight).
+See ``[blending]`` in ``config/features.toml``. Interaction counts are distinct
+``(user, item)`` pairs after dataset aggregation.
 """
 
 from __future__ import annotations
@@ -113,11 +108,7 @@ def build_latest_ranking(
     top_k: int,
     target_users: Sequence[str],
 ) -> pd.DataFrame:
-    """Non-personalized top-K by newest ``date_column``, expanded to ``target_users``.
-
-    ``allowed_item_ids`` must already encode availability / eligibility for the
-    users in ``target_users`` (filter before blend, not after).
-    """
+    """Non-personalized top-K by newest ``date_column``, expanded to ``target_users``."""
     if not target_users or top_k < 1 or not allowed_item_ids:
         return _empty_recs()
 
@@ -135,8 +126,7 @@ def build_latest_ranking(
     frame = frame.sort_values(["_date", item_col], ascending=[False, True]).head(top_k)
     frame = frame.reset_index(drop=True)
     ranks = list(range(1, len(frame) + 1))
-    # Synthetic decreasing scores for boost/sort coherence; blend itself uses ranks.
-    scores = [float(len(frame) - i + 1) for i in ranks]
+    scores = [float(len(frame) - i + 1) for i in ranks]  # synthetic; blend uses ranks
     item_ids = frame[item_col].astype(str).tolist()
 
     rows = [
@@ -178,11 +168,7 @@ def blend_for_users(
     top_k: int,
     latest_available: bool,
 ) -> pd.DataFrame:
-    """Weighted reciprocal-rank fusion with per-user source weights.
-
-    Within each source, duplicate (user, item) rows are collapsed to the best
-    rank before fusion so multiple personalized strategies cannot double-count.
-    """
+    """Weighted RRF with per-user source weights (best rank per item within each source)."""
     frames = {
         PERSONALIZED_SOURCE: _normalize_source_frame(personalized, PERSONALIZED_SOURCE),
         POPULAR_SOURCE: _normalize_source_frame(popular, POPULAR_SOURCE),
@@ -217,7 +203,6 @@ def blend_for_users(
 
     rows = []
     for (user_id, item_id), (score, sources) in by_user_item.items():
-        # Per-item label: "blended" only when >1 source contributed that item.
         label = BLENDED_SOURCE if len(sources) > 1 else next(iter(sources))
         rows.append(
             {
@@ -248,11 +233,7 @@ def append_cold_start_rows(
     top_k: int,
     latest_available: bool,
 ) -> pd.DataFrame:
-    """Ensure a shared ``__cold_start__`` lookup row set exists for serve fallback.
-
-    ``popular`` / ``latest`` must already be ranked for ``COLD_START_USER_ID``
-    against the *global* (item-scoped only) allowlist — not a random cohort.
-    """
+    """Append a ``__cold_start__`` row set for serve fallback (global allowlist)."""
     cold = blend_for_users(
         personalized=_empty_recs(),
         popular=popular,
