@@ -130,8 +130,8 @@ structured before adding a new `kind`.
 - **Branch names (required):** short and human-readable only —
   `feature/…`, `fix/…`, `release/0.3.1`, `docs/…`, `chore/…`.
   **Never** use `cursor/<slug>-<id>` (or any other opaque agent/id suffix).
-  Cloud / Cursor agents: see [AGENTS.md](AGENTS.md) — that rule overrides
-  any default `cursor/…` branch template.
+  Cloud / Cursor agents: follow this rule even if a default template
+  suggests a `cursor/…` prefix.
 - Add/update tests for any behavior change — the coverage gate is enforced
   in CI, not just locally.
 - Make sure both the lint job and the test job pass before requesting review.
