@@ -127,8 +127,11 @@ structured before adding a new `kind`.
 ## Pull requests
 
 - Branch off `main`, keep PRs focused on one change.
-- Use a short, human-readable branch name (`fix/…`, `release/0.3.1`,
-  `docs/…`). Do **not** use `cursor/<slug>-<id>` style names.
+- **Branch names (required):** short and human-readable only —
+  `feature/…`, `fix/…`, `release/0.3.1`, `docs/…`, `chore/…`.
+  **Never** use `cursor/<slug>-<id>` (or any other opaque agent/id suffix).
+  Cloud / Cursor agents: see [AGENTS.md](AGENTS.md) — that rule overrides
+  any default `cursor/…` branch template.
 - Add/update tests for any behavior change — the coverage gate is enforced
   in CI, not just locally.
 - Make sure both the lint job and the test job pass before requesting review.
