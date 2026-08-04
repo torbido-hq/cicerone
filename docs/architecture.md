@@ -114,8 +114,9 @@ flowchart LR
    id maps — Cicerone does not hand-roll that conversion). When
    `[job].log_epoch_metrics = true`, the collaborative LightFM strategy is
    fitted epoch-by-epoch via `fit_partial` and logs in-sample
-   Precision@K/Recall@K every `[job].epoch_metrics_every` epochs (default
-   off, so scheduled runs stay fast).
+   Precision@K/Recall@K every `[job].epoch_metrics_every` epochs over a
+   seeded random user sample (default off). Tunables are grouped in
+   `EpochMetricsSettings`.
    If `[[boost]]` rules are configured, candidates are over-fetched by
    `FeatureConfig.boost_overfetch_factor` (default 3× `top_k`), scores are
    multiplied by the product of boost factors, and ranks are rewritten

@@ -11,9 +11,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Optional per-epoch LightFM training metrics (`[job].log_epoch_metrics`,
   default `false`; interval via `[job].epoch_metrics_every`, default `5`):
   when enabled, the collaborative strategy fits via `fit_partial` one epoch
-  at a time and logs in-sample Precision@K/Recall@K. Significant regression
-  or late plateau across logged epochs emits a WARN. Off by default so
-  scheduled batch runs stay unchanged.
+  at a time and logs in-sample Precision@K/Recall@K over a seeded random
+  user sample. Tunables (`epoch_metrics_max_users`, regression/plateau
+  thresholds) live on `EpochMetricsSettings`. Significant regression or late
+  plateau across logged epochs emits a WARN. Off by default so scheduled
+  batch runs stay unchanged.
 - Top-K ID-mapping regression test: synthetic catalog with sparse external
   IDs that must not collide with rectools' dense internal indices, asserting
   no duplicate items per user and no seen items in personalized rows.

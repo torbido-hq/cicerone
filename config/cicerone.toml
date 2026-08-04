@@ -41,10 +41,14 @@ feature_config_path = "/app/config/features.toml"
 # Optional: log in-sample Precision@K/Recall@K every N LightFM epochs while
 # fitting the collaborative strategy (uses fit_partial epoch-by-epoch instead
 # of a single fit). Adds training time — default off. Significant regression
-# or plateau across logged epochs emits a WARN. epoch_metrics_every is ignored
-# unless log_epoch_metrics is true.
+# or plateau across logged epochs emits a WARN. The knobs below are ignored
+# unless log_epoch_metrics is true (scored users are a seeded random sample).
 # log_epoch_metrics = false
 # epoch_metrics_every = 5
+# epoch_metrics_max_users = 500
+# epoch_metrics_regression_drop = 0.25
+# epoch_metrics_plateau_eps = 0.01
+# epoch_metrics_plateau_window = 3
 
 # Parallelism for AutoML fold evaluation and strategy fitting (ProcessPool).
 # Default 1 (sequential). Set >1 when the host has spare cores.

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import random
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
@@ -21,7 +22,7 @@ from rectools.dataset import Dataset
 from rectools.metrics import Precision, Recall, calc_metrics
 from rectools.models import ImplicitItemKNNWrapperModel, LightFMWrapperModel, PopularModel
 
-from cicerone.config import STRATEGY_NAMES, validate_model_weights, validate_rrf_k
+from cicerone.config import STRATEGY_NAMES, EpochMetricsSettings, validate_model_weights, validate_rrf_k
 from cicerone.dataset import BuiltDataset
 from cicerone.feature_config import DEFAULT_BOOST_OVERFETCH_FACTOR, FeatureConfig
 from cicerone.policy import (
@@ -45,10 +46,6 @@ SOURCE_COLUMN = "source"
 WEIGHT_COLUMN = "_weight"  # internal-only; dropped before returning to callers
 
 COLLABORATIVE_EPOCHS = 30  # LightFMWrapperModel.fit() runs these in one fit_partial
-EPOCH_METRICS_MAX_USERS = 500
-EPOCH_METRICS_REGRESSION_DROP = 0.25
-EPOCH_METRICS_PLATEAU_EPS = 0.01
-EPOCH_METRICS_PLATEAU_WINDOW = 3
 
 
 def _recommend_k(top_k: int, has_boosts: bool, overfetch_factor: int = DEFAULT_BOOST_OVERFETCH_FACTOR) -> int:
@@ -122,7 +119,16 @@ def _should_log_epoch(epoch: int, total_epochs: int, every: int) -> bool:
     return epoch == 1 or epoch == total_epochs or epoch % every == 0
 
 
-def _warn_on_epoch_metric_trajectory(history: list[tuple[int, dict[str, float]]]) -> None:
+def _sample_epoch_metric_users(external_ids, max_users: int) -> list:
+    users = list(external_ids)
+    if len(users) <= max_users:
+        return users
+    return random.Random(RANDOM_STATE).sample(users, max_users)
+
+
+def _warn_on_epoch_metric_trajectory(
+    history: list[tuple[int, dict[str, float]]], settings: EpochMetricsSettings
+) -> None:
     """WARN when a tracked metric regresses from its best or plateaus late."""
     if len(history) < 2:
         return
@@ -135,32 +141,34 @@ def _warn_on_epoch_metric_trajectory(history: list[tuple[int, dict[str, float]]]
             continue
         best = max(values)
         last = values[-1]
-        if best > 0 and (best - last) / best >= EPOCH_METRICS_REGRESSION_DROP:
+        if best > 0 and (best - last) / best >= settings.regression_drop:
             logger.warning(
                 "Collaborative epoch metrics: %s regressed from best %.4f to final %.4f "
                 "(drop >= %.0f%% across logged epochs)",
                 metric_name,
                 best,
                 last,
-                EPOCH_METRICS_REGRESSION_DROP * 100,
+                settings.regression_drop * 100,
             )
-        if len(values) >= EPOCH_METRICS_PLATEAU_WINDOW:
-            recent = values[-EPOCH_METRICS_PLATEAU_WINDOW:]
+        if len(values) >= settings.plateau_window:
+            recent = values[-settings.plateau_window :]
             span = max(recent) - min(recent)
             scale = max(max(abs(v) for v in recent), 1e-9)
-            if span / scale <= EPOCH_METRICS_PLATEAU_EPS:
+            if span / scale <= settings.plateau_eps:
                 logger.warning(
                     "Collaborative epoch metrics: %s plateaued near %.4f over the last %d "
                     "logged snapshots (span %.4f)",
                     metric_name,
                     recent[-1],
-                    EPOCH_METRICS_PLATEAU_WINDOW,
+                    settings.plateau_window,
                     span,
                 )
 
 
-def _interactions_for_epoch_metrics(dataset: Dataset, interactions: pd.DataFrame) -> pd.DataFrame:
-    users = list(dataset.user_id_map.external_ids)[:EPOCH_METRICS_MAX_USERS]
+def _interactions_for_epoch_metrics(
+    dataset: Dataset, interactions: pd.DataFrame, max_users: int
+) -> pd.DataFrame:
+    users = _sample_epoch_metric_users(dataset.user_id_map.external_ids, max_users)
     return interactions[interactions[Columns.User].isin(users)]
 
 
@@ -168,7 +176,7 @@ def _fit_lightfm_with_epoch_metrics(
     model: RecommenderModel,
     dataset: Dataset,
     interactions: pd.DataFrame,
-    every: int,
+    settings: EpochMetricsSettings,
     top_k: int,
 ) -> RecommenderModel:
     """Epoch-by-epoch LightFM fit with in-sample Precision/Recall@K logs.
@@ -191,7 +199,7 @@ def _fit_lightfm_with_epoch_metrics(
 
     for epoch in range(1, total_epochs + 1):
         model.fit_partial(dataset, 1)
-        if not _should_log_epoch(epoch, total_epochs, every):
+        if not _should_log_epoch(epoch, total_epochs, settings.every):
             continue
         reco = model.recommend(
             users=users,
@@ -203,7 +211,7 @@ def _fit_lightfm_with_epoch_metrics(
         history.append((epoch, snapshot))
         logger.info("Collaborative epoch %d/%d metrics: %s", epoch, total_epochs, snapshot)
 
-    _warn_on_epoch_metric_trajectory(history)
+    _warn_on_epoch_metric_trajectory(history, settings)
     return model
 
 
@@ -289,16 +297,16 @@ def _fit_strategy(
     name: str,
     dataset: Dataset,
     epoch_interactions: pd.DataFrame | None,
-    epoch_metrics_every: int | None,
+    epoch_metrics: EpochMetricsSettings | None,
     epoch_metrics_top_k: int,
 ) -> tuple[str, RecommenderModel]:
     """Fit one strategy (picklable for ProcessPoolExecutor workers)."""
     model = STRATEGIES[name].factory()
-    if name == "collaborative" and epoch_metrics_every is not None:
+    if name == "collaborative" and epoch_metrics is not None:
         if epoch_interactions is None:
             raise ValueError("epoch_interactions is required when epoch metric logging is enabled")
         _fit_lightfm_with_epoch_metrics(
-            model, dataset, epoch_interactions, every=epoch_metrics_every, top_k=epoch_metrics_top_k
+            model, dataset, epoch_interactions, settings=epoch_metrics, top_k=epoch_metrics_top_k
         )
     else:
         model.fit(dataset)
@@ -324,12 +332,12 @@ def fit_strategies(
     enabled_models: list[str] | None = None,
     strategy_cache: dict[str, RecommenderModel] | None = None,
     max_workers: int = 1,
-    epoch_metrics_every: int | None = None,
+    epoch_metrics: EpochMetricsSettings | None = None,
     epoch_metrics_top_k: int = 10,
 ) -> tuple[list[str], dict[str, RecommenderModel]]:
     """Fit (or cache-hit) enabled strategies. ``max_workers > 1`` fits in parallel.
 
-    ``epoch_metrics_every`` enables collaborative fit_partial logging; default
+    ``epoch_metrics`` enables collaborative fit_partial logging; default
     ``None`` keeps a single LightFM ``fit()``.
     """
     dataset = built.dataset
@@ -369,8 +377,8 @@ def fit_strategies(
     # Pre-slice in the parent so ProcessPool workers do not pickle the full
     # interactions frame (None when epoch logging is off).
     epoch_interactions = (
-        _interactions_for_epoch_metrics(dataset, built.interactions)
-        if epoch_metrics_every is not None
+        _interactions_for_epoch_metrics(dataset, built.interactions, epoch_metrics.max_users)
+        if epoch_metrics is not None
         else None
     )
     if to_fit:
@@ -381,7 +389,7 @@ def fit_strategies(
                     to_fit,
                     repeat(dataset),
                     repeat(epoch_interactions),
-                    repeat(epoch_metrics_every),
+                    repeat(epoch_metrics),
                     repeat(epoch_metrics_top_k),
                 ):
                     logger.info("Fitted '%s' on %d interactions", name, len(built.interactions))
@@ -393,7 +401,7 @@ def fit_strategies(
                     name,
                     dataset,
                     epoch_interactions,
-                    epoch_metrics_every,
+                    epoch_metrics,
                     epoch_metrics_top_k,
                 )
                 models[name] = model
@@ -538,7 +546,7 @@ def train_and_recommend(
     rrf_k: float | None = None,
     strategy_cache: dict[str, RecommenderModel] | None = None,
     max_workers: int = 1,
-    epoch_metrics_every: int | None = None,
+    epoch_metrics: EpochMetricsSettings | None = None,
 ) -> pd.DataFrame:
     """Fit enabled strategies, then recommend + combine. See ``fit_strategies``
     and ``recommend_with_models`` for the split used by model artifacts.
@@ -549,7 +557,7 @@ def train_and_recommend(
         enabled_models=enabled_models,
         strategy_cache=strategy_cache,
         max_workers=max_workers,
-        epoch_metrics_every=epoch_metrics_every,
+        epoch_metrics=epoch_metrics,
         epoch_metrics_top_k=top_k,
     )
     return recommend_with_models(

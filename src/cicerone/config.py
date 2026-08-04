@@ -26,6 +26,21 @@ AUTOML_DEFAULT_PRIMARY_METRIC = "MAP"
 # deadlocks easily in Docker/CI when forked from a multithreaded parent.
 DEFAULT_MAX_WORKERS = 1
 DEFAULT_EPOCH_METRICS_EVERY = 5
+DEFAULT_EPOCH_METRICS_MAX_USERS = 500
+DEFAULT_EPOCH_METRICS_REGRESSION_DROP = 0.25
+DEFAULT_EPOCH_METRICS_PLATEAU_EPS = 0.01
+DEFAULT_EPOCH_METRICS_PLATEAU_WINDOW = 3
+
+
+@dataclass(frozen=True)
+class EpochMetricsSettings:
+    """Tunables for optional LightFM per-epoch metric logging."""
+
+    every: int
+    max_users: int = DEFAULT_EPOCH_METRICS_MAX_USERS
+    regression_drop: float = DEFAULT_EPOCH_METRICS_REGRESSION_DROP
+    plateau_eps: float = DEFAULT_EPOCH_METRICS_PLATEAU_EPS
+    plateau_window: int = DEFAULT_EPOCH_METRICS_PLATEAU_WINDOW
 
 
 def resolve_max_workers(raw: Any | None = None) -> int:
@@ -41,19 +56,43 @@ def resolve_max_workers(raw: Any | None = None) -> int:
     return workers
 
 
-def resolve_epoch_metrics_every(
+def resolve_epoch_metrics(
     *,
     log_epoch_metrics: bool,
-    epoch_metrics_every: Any | None = None,
-) -> int | None:
-    """Epoch-logging interval, or ``None`` when ``log_epoch_metrics`` is off.
+    every: Any | None = None,
+    max_users: Any | None = None,
+    regression_drop: Any | None = None,
+    plateau_eps: Any | None = None,
+    plateau_window: Any | None = None,
+) -> EpochMetricsSettings | None:
+    """Build epoch-metric settings, or ``None`` when logging is off.
 
-    The interval is validated only when logging is enabled.
+    Interval / threshold knobs are validated only when logging is enabled.
     """
     if not log_epoch_metrics:
         return None
-    every = DEFAULT_EPOCH_METRICS_EVERY if epoch_metrics_every is None else int(epoch_metrics_every)
-    return _require_positive_int(every, name="job.epoch_metrics_every")
+    return EpochMetricsSettings(
+        every=_require_positive_int(
+            DEFAULT_EPOCH_METRICS_EVERY if every is None else int(every),
+            name="job.epoch_metrics_every",
+        ),
+        max_users=_require_positive_int(
+            DEFAULT_EPOCH_METRICS_MAX_USERS if max_users is None else int(max_users),
+            name="job.epoch_metrics_max_users",
+        ),
+        regression_drop=_require_positive_float(
+            DEFAULT_EPOCH_METRICS_REGRESSION_DROP if regression_drop is None else float(regression_drop),
+            name="job.epoch_metrics_regression_drop",
+        ),
+        plateau_eps=_require_positive_float(
+            DEFAULT_EPOCH_METRICS_PLATEAU_EPS if plateau_eps is None else float(plateau_eps),
+            name="job.epoch_metrics_plateau_eps",
+        ),
+        plateau_window=_require_positive_int(
+            DEFAULT_EPOCH_METRICS_PLATEAU_WINDOW if plateau_window is None else int(plateau_window),
+            name="job.epoch_metrics_plateau_window",
+        ),
+    )
 
 
 def validate_model_weights(weights: dict[str, float] | None, *, context: str = "model_weights") -> None:
@@ -131,8 +170,7 @@ class Settings:
     rrf_k: float | None
     save_model_artifact: bool
     max_workers: int
-    log_epoch_metrics: bool
-    epoch_metrics_every: int | None  # None when logging off; validated only when on
+    epoch_metrics: EpochMetricsSettings | None
     automl_enabled: bool
     automl_n_splits: int
     automl_test_days: int
@@ -244,10 +282,13 @@ def load_settings(config_path: str | None = None) -> Settings:
         rrf_k=rrf_k,
         save_model_artifact=bool(job.get("save_model_artifact", False)),
         max_workers=resolve_max_workers(job.get("max_workers")),
-        log_epoch_metrics=log_epoch_metrics,
-        epoch_metrics_every=resolve_epoch_metrics_every(
+        epoch_metrics=resolve_epoch_metrics(
             log_epoch_metrics=log_epoch_metrics,
-            epoch_metrics_every=job.get("epoch_metrics_every"),
+            every=job.get("epoch_metrics_every"),
+            max_users=job.get("epoch_metrics_max_users"),
+            regression_drop=job.get("epoch_metrics_regression_drop"),
+            plateau_eps=job.get("epoch_metrics_plateau_eps"),
+            plateau_window=job.get("epoch_metrics_plateau_window"),
         ),
         automl_enabled=bool(automl.get("enabled", False)),
         automl_n_splits=_require_positive_int(

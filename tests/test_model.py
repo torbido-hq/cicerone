@@ -1203,10 +1203,13 @@ def test_should_log_epoch_first_last_and_interval():
 
 
 def test_warn_on_epoch_metric_trajectory_regression_and_plateau(caplog):
+    from cicerone.config import EpochMetricsSettings
     from cicerone.model import _warn_on_epoch_metric_trajectory
 
+    settings = EpochMetricsSettings(every=5)
+
     with caplog.at_level("WARNING"):
-        _warn_on_epoch_metric_trajectory([(1, {"Precision@2": 0.5})])
+        _warn_on_epoch_metric_trajectory([(1, {"Precision@2": 0.5})], settings)
     assert caplog.text == ""
 
     with caplog.at_level("WARNING"):
@@ -1215,7 +1218,8 @@ def test_warn_on_epoch_metric_trajectory_regression_and_plateau(caplog):
                 (1, {"Precision@2": 0.8}),
                 (5, {"Precision@2": 0.7}),
                 (10, {"Precision@2": 0.4}),
-            ]
+            ],
+            settings,
         )
     assert "regressed" in caplog.text
 
@@ -1226,12 +1230,14 @@ def test_warn_on_epoch_metric_trajectory_regression_and_plateau(caplog):
                 (1, {"Recall@2": 0.50}),
                 (5, {"Recall@2": 0.501}),
                 (10, {"Recall@2": 0.502}),
-            ]
+            ],
+            settings,
         )
     assert "plateaued" in caplog.text
 
 
 def test_warn_on_epoch_metric_trajectory_skips_metrics_missing_from_some_snapshots(caplog):
+    from cicerone.config import EpochMetricsSettings
     from cicerone.model import _warn_on_epoch_metric_trajectory
 
     # Heterogeneous snapshots: a key present in only one entry must not KeyError,
@@ -1241,7 +1247,8 @@ def test_warn_on_epoch_metric_trajectory_skips_metrics_missing_from_some_snapsho
             [
                 (1, {"Precision@2": 0.9, "Recall@2": 0.5}),
                 (5, {"Precision@2": 0.4}),
-            ]
+            ],
+            EpochMetricsSettings(every=5),
         )
     assert "Precision@2" in caplog.text
     assert "regressed" in caplog.text
@@ -1249,6 +1256,7 @@ def test_warn_on_epoch_metric_trajectory_skips_metrics_missing_from_some_snapsho
 
 
 def test_fit_lightfm_with_epoch_metrics_rejects_non_lightfm_wrapper():
+    from cicerone.config import EpochMetricsSettings
     from cicerone.model import _fit_lightfm_with_epoch_metrics
 
     class NoPartial:
@@ -1259,10 +1267,13 @@ def test_fit_lightfm_with_epoch_metrics_rejects_non_lightfm_wrapper():
             return pd.DataFrame()
 
     with pytest.raises(TypeError, match="LightFMWrapperModel"):
-        _fit_lightfm_with_epoch_metrics(NoPartial(), None, pd.DataFrame(), every=1, top_k=2)
+        _fit_lightfm_with_epoch_metrics(
+            NoPartial(), None, pd.DataFrame(), settings=EpochMetricsSettings(every=1), top_k=2
+        )
 
 
 def test_warn_on_epoch_metric_trajectory_plateau_scale_handles_negative_values(caplog):
+    from cicerone.config import EpochMetricsSettings
     from cicerone.model import _warn_on_epoch_metric_trajectory
 
     # All-negative recent window: scale must use max(|v|), not abs(max(v))
@@ -1273,15 +1284,31 @@ def test_warn_on_epoch_metric_trajectory_plateau_scale_handles_negative_values(c
                 (1, {"Score": -10.0}),
                 (5, {"Score": -10.01}),
                 (10, {"Score": -10.02}),
-            ]
+            ],
+            EpochMetricsSettings(every=5),
         )
     assert "plateaued" in caplog.text
+
+
+def test_sample_epoch_metric_users_is_seeded_not_prefix():
+    from cicerone.model import RANDOM_STATE, _sample_epoch_metric_users
+
+    ordered = list(range(1000))
+    sampled = _sample_epoch_metric_users(ordered, max_users=10)
+    assert len(sampled) == 10
+    assert sampled != ordered[:10]
+    assert _sample_epoch_metric_users(ordered, max_users=10) == sampled
+    assert set(sampled).issubset(ordered)
+    # Under the cap: return everyone, preserve order from list().
+    assert _sample_epoch_metric_users([3, 1, 2], max_users=10) == [3, 1, 2]
+    assert RANDOM_STATE == 42
 
 
 def test_train_and_recommend_logs_epoch_metrics_when_configured(
     sample_items, feature_config, monkeypatch, caplog
 ):
     import cicerone.model as model_module
+    from cicerone.config import EpochMetricsSettings
 
     # Keep the epoch loop short so this stays a unit test, not a training bench.
     monkeypatch.setattr(model_module, "COLLABORATIVE_EPOCHS", 4)
@@ -1295,7 +1322,7 @@ def test_train_and_recommend_logs_epoch_metrics_when_configured(
             config=feature_config,
             top_k=2,
             enabled_models=["collaborative"],
-            epoch_metrics_every=2,
+            epoch_metrics=EpochMetricsSettings(every=2),
         )
 
     assert not recommendations.empty
