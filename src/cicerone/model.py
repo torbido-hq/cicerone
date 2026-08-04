@@ -131,9 +131,13 @@ def _warn_on_epoch_metric_trajectory(history: list[tuple[int, dict[str, float]]]
     """WARN when a tracked metric regresses from its best or plateaus late."""
     if len(history) < 2:
         return
-    metric_names = list(history[0][1])
-    for metric_name in metric_names:
-        values = [snapshot[metric_name] for _, snapshot in history]
+    metric_names: set[str] = set()
+    for _, snapshot in history:
+        metric_names.update(snapshot)
+    for metric_name in sorted(metric_names):
+        values = [snapshot[metric_name] for _, snapshot in history if metric_name in snapshot]
+        if len(values) < 2:
+            continue
         best = max(values)
         last = values[-1]
         if best > 0 and (best - last) / best >= EPOCH_METRICS_REGRESSION_DROP:

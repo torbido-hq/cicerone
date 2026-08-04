@@ -28,7 +28,7 @@ def make_settings(**overrides) -> Settings:
         save_model_artifact=False,
         max_workers=1,
         log_epoch_metrics=False,
-        epoch_metrics_every=5,
+        epoch_metrics_every=None,
         automl_enabled=False,
         automl_n_splits=2,
         automl_test_days=14,

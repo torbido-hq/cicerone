@@ -41,14 +41,22 @@ def resolve_max_workers(raw: Any | None = None) -> int:
     return workers
 
 
-def resolve_epoch_metrics_every(log_epoch_metrics: bool, raw_every: Any | None = None) -> int | None:
-    """Return the epoch logging interval, or ``None`` when logging is off."""
+def resolve_epoch_metrics_every(
+    *,
+    log_epoch_metrics: bool,
+    epoch_metrics_every: Any | None = None,
+) -> int | None:
+    """Resolved LightFM epoch-logging interval, or ``None`` when logging is off.
+
+    ``epoch_metrics_every`` is ignored (not validated) unless
+    ``log_epoch_metrics`` is true — matching the TOML docs. When logging is
+    on, a missing value defaults to ``DEFAULT_EPOCH_METRICS_EVERY`` and the
+    result must be >= 1.
+    """
     if not log_epoch_metrics:
         return None
-    every = DEFAULT_EPOCH_METRICS_EVERY if raw_every is None else int(raw_every)
-    if every < 1:
-        raise RuntimeError(f"job.epoch_metrics_every must be >= 1, got {every}")
-    return every
+    every = DEFAULT_EPOCH_METRICS_EVERY if epoch_metrics_every is None else int(epoch_metrics_every)
+    return _require_positive_int(every, name="job.epoch_metrics_every")
 
 
 def validate_model_weights(weights: dict[str, float] | None, *, context: str = "model_weights") -> None:
@@ -127,7 +135,9 @@ class Settings:
     save_model_artifact: bool
     max_workers: int
     log_epoch_metrics: bool
-    epoch_metrics_every: int
+    # Resolved interval when logging is on; None when log_epoch_metrics is false
+    # (raw TOML value is ignored / not validated in that case).
+    epoch_metrics_every: int | None
     automl_enabled: bool
     automl_n_splits: int
     automl_test_days: int
@@ -223,6 +233,8 @@ def load_settings(config_path: str | None = None) -> Settings:
     dashboard = raw.get("dashboard", {})
     dashboard_enabled = bool(dashboard.get("enabled", False))
 
+    log_epoch_metrics = bool(job.get("log_epoch_metrics", False))
+
     return Settings(
         input=_load_io_settings(raw, "input"),
         output=_load_io_settings(raw, "output"),
@@ -237,10 +249,10 @@ def load_settings(config_path: str | None = None) -> Settings:
         rrf_k=rrf_k,
         save_model_artifact=bool(job.get("save_model_artifact", False)),
         max_workers=resolve_max_workers(job.get("max_workers")),
-        log_epoch_metrics=bool(job.get("log_epoch_metrics", False)),
-        epoch_metrics_every=_require_positive_int(
-            int(job.get("epoch_metrics_every", DEFAULT_EPOCH_METRICS_EVERY)),
-            name="job.epoch_metrics_every",
+        log_epoch_metrics=log_epoch_metrics,
+        epoch_metrics_every=resolve_epoch_metrics_every(
+            log_epoch_metrics=log_epoch_metrics,
+            epoch_metrics_every=job.get("epoch_metrics_every"),
         ),
         automl_enabled=bool(automl.get("enabled", False)),
         automl_n_splits=_require_positive_int(

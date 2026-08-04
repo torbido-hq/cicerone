@@ -1231,6 +1231,23 @@ def test_warn_on_epoch_metric_trajectory_regression_and_plateau(caplog):
     assert "plateaued" in caplog.text
 
 
+def test_warn_on_epoch_metric_trajectory_skips_metrics_missing_from_some_snapshots(caplog):
+    from cicerone.model import _warn_on_epoch_metric_trajectory
+
+    # Heterogeneous snapshots: a key present in only one entry must not KeyError,
+    # and a key with a single value must not trigger regression/plateau WARNs.
+    with caplog.at_level("WARNING"):
+        _warn_on_epoch_metric_trajectory(
+            [
+                (1, {"Precision@2": 0.9, "Recall@2": 0.5}),
+                (5, {"Precision@2": 0.4}),
+            ]
+        )
+    assert "Precision@2" in caplog.text
+    assert "regressed" in caplog.text
+    assert "Recall@2" not in caplog.text
+
+
 def test_fit_lightfm_with_epoch_metrics_rejects_model_without_fit_partial():
     from cicerone.model import _fit_lightfm_with_epoch_metrics
 

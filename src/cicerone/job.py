@@ -13,7 +13,7 @@ import pandas as pd
 
 from cicerone.artifact import ARTIFACT_SCHEMA_VERSION, build_artifact, dumps_artifact
 from cicerone.automl import evaluate_candidates, select_best_candidate
-from cicerone.config import load_settings, resolve_epoch_metrics_every
+from cicerone.config import load_settings
 from cicerone.dataset import build_dataset
 from cicerone.feature_config import load_feature_config
 from cicerone.io.base import InputSource
@@ -117,9 +117,7 @@ def run(triggered_by: str = "manual") -> None:
             rrf_k=rrf_k,
             strategy_cache=fitted if settings.save_model_artifact else None,
             max_workers=settings.max_workers,
-            epoch_metrics_every=resolve_epoch_metrics_every(
-                settings.log_epoch_metrics, settings.epoch_metrics_every
-            ),
+            epoch_metrics_every=settings.epoch_metrics_every,
         )
 
         resolved_models = enabled_models or DEFAULT_MODELS
