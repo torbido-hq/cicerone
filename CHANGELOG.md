@@ -15,7 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   or late plateau across logged epochs emits a WARN. Off by default so
   scheduled batch runs stay unchanged.
 - Top-K ID-mapping regression test: synthetic catalog with sparse external
-  IDs that must not collide with rectools' dense internal indices; asserts
+  IDs that must not collide with rectools' dense internal indices, asserting
   no duplicate items per user and no seen items in personalized rows.
 
 ### Changed

@@ -184,6 +184,7 @@ def _fit_lightfm_with_epoch_metrics(
         f"Recall@{top_k}": Recall(k=top_k),
     }
     users = list(dataset.user_id_map.external_ids)[:EPOCH_METRICS_MAX_USERS]
+    interactions_for_users = interactions[interactions[Columns.User].isin(users)]
     history: list[tuple[int, dict[str, float]]] = []
 
     for epoch in range(1, total_epochs + 1):
@@ -196,7 +197,7 @@ def _fit_lightfm_with_epoch_metrics(
             k=top_k,
             filter_viewed=False,
         )
-        snapshot = calc_metrics(metric_defs, reco=reco, interactions=interactions)
+        snapshot = calc_metrics(metric_defs, reco=reco, interactions=interactions_for_users)
         history.append((epoch, snapshot))
         logger.info("Collaborative epoch %d/%d metrics: %s", epoch, total_epochs, snapshot)
 
