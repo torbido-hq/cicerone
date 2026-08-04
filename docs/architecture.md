@@ -98,16 +98,25 @@ flowchart LR
    User-scoped rules group target users into cohorts that share the same
    allowed item set (rectools accepts one `items_to_recommend` list per
    call); each cohort's allowlist is computed once and reused across
-   every strategy. Strategies are combined either by priority order (default —
-   earlier strategies fill top-K first; later ones only backfill) or, if
-   `Settings.model_weights` is set (even an
-   empty table), by weighted reciprocal rank fusion
-   (`_combine_by_weighted_fusion`) — the fusion constant defaults to
-   `model.RRF_K` but is overridable via `Settings.rrf_k`/`[job].rrf_k`; see
-   the module docstring for the exact formula. When a fused (user, item)
-   pair was produced by more than one strategy, its combined `source` label
-   joins each contributing strategy's label in `enabled_models`' order (not
-   alphabetically), so the label reflects the caller's configured priority.
+   every strategy. Strategies are then combined in one of three ways:
+   - **Priority order** (default) — earlier strategies fill top-K first;
+     later ones only backfill.
+   - **Weighted RRF** — if `Settings.model_weights` is set (even an empty
+     table), `_combine_by_weighted_fusion` sums `weight / (rrf_k + rank)`
+     across strategies; `rrf_k` defaults to `model.RRF_K` and is
+     overridable via `Settings.rrf_k`/`[job].rrf_k`. Combined `source`
+     labels join contributing strategy labels in `enabled_models` order.
+   - **Per-user blending** — if `FeatureConfig.blending.enabled`
+     (`[blending]` in `features.toml`), `cicerone.blending` replaces the
+     binary personalized-vs-popular choice with a gradual mix of
+     `personalized`, `popular`, and (when `items` has a usable datetime
+     column from `latest_date_columns`) date-based `latest`. A sigmoid or
+     linear curve maps each user's interaction count → personalized
+     weight; the remainder is split by `popular_share`. Availability /
+     eligibility still filter every source *before* the blend. Combined
+     rows get `source = "blended"`; a shared `__cold_start__` user is
+     written for serve-mode fallback. When no date column is usable,
+     `latest` is disabled and its weight moves to `popular`.
    `Settings.max_workers` (`[job].max_workers`, default `1`) parallelizes
    AutoML fold evaluation and strategy fitting via `ProcessPoolExecutor`
    when set `>1`. Per-strategy top-K is rectools-native
@@ -151,7 +160,10 @@ flowchart LR
    (counts, timestamp, effective `models`/`model_weights`/`rrf_k`,
    `artifact_written` / `artifact_schema_version` when a model artifact was
    saved, and `automl_metrics` when AutoML ran) back out via the configured
-   `OutputSink`. When `Settings.save_model_artifact` is true, it also writes
+   `OutputSink`. When items were loaded, it also writes an items snapshot
+   (`items_snapshot.parquet` / `recommendation_items`) so serve mode can
+   apply `?category=` and `exclude_unavailable` without reading the input
+   store. When `Settings.save_model_artifact` is true, it also writes
    a versioned fitted-model artifact (`model.artifact` for the dataset
    backend, `model_artifacts` table for db) via
    `OutputSink.write_model_artifact`. Serve mode never loads this artifact.

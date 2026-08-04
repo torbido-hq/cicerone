@@ -33,6 +33,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Serve JSON response is an object (with `generated_at` / `items`) rather
   than a bare list; `k` remains accepted as an alias for `limit`.
+- Docs: architecture data-flow covers the three combine paths (priority /
+  RRF / `[blending]`) and the items snapshot write; tutorial gains a
+  blending walkthrough and an updated serve-API section (response shape,
+  `limit` / `category` / cold-start fallback).
 
 ## [0.3.2] - 2026-08-04
 
