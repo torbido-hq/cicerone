@@ -1248,7 +1248,7 @@ def test_warn_on_epoch_metric_trajectory_skips_metrics_missing_from_some_snapsho
     assert "Recall@2" not in caplog.text
 
 
-def test_fit_lightfm_with_epoch_metrics_rejects_model_without_fit_partial():
+def test_fit_lightfm_with_epoch_metrics_rejects_non_lightfm_wrapper():
     from cicerone.model import _fit_lightfm_with_epoch_metrics
 
     class NoPartial:
@@ -1258,8 +1258,24 @@ def test_fit_lightfm_with_epoch_metrics_rejects_model_without_fit_partial():
         def recommend(self, **kwargs):
             return pd.DataFrame()
 
-    with pytest.raises(TypeError, match="fit_partial"):
+    with pytest.raises(TypeError, match="LightFMWrapperModel"):
         _fit_lightfm_with_epoch_metrics(NoPartial(), None, pd.DataFrame(), every=1, top_k=2)
+
+
+def test_warn_on_epoch_metric_trajectory_plateau_scale_handles_negative_values(caplog):
+    from cicerone.model import _warn_on_epoch_metric_trajectory
+
+    # All-negative recent window: scale must use max(|v|), not abs(max(v))
+    # which would be near zero and falsely inflate relative span.
+    with caplog.at_level("WARNING"):
+        _warn_on_epoch_metric_trajectory(
+            [
+                (1, {"Score": -10.0}),
+                (5, {"Score": -10.01}),
+                (10, {"Score": -10.02}),
+            ]
+        )
+    assert "plateaued" in caplog.text
 
 
 def test_train_and_recommend_logs_epoch_metrics_when_configured(

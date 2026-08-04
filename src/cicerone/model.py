@@ -147,7 +147,7 @@ def _warn_on_epoch_metric_trajectory(history: list[tuple[int, dict[str, float]]]
         if len(values) >= EPOCH_METRICS_PLATEAU_WINDOW:
             recent = values[-EPOCH_METRICS_PLATEAU_WINDOW:]
             span = max(recent) - min(recent)
-            scale = max(abs(max(recent)), 1e-9)
+            scale = max(max(abs(v) for v in recent), 1e-9)
             if span / scale <= EPOCH_METRICS_PLATEAU_EPS:
                 logger.warning(
                     "Collaborative epoch metrics: %s plateaued near %.4f over the last %d "
@@ -159,6 +159,11 @@ def _warn_on_epoch_metric_trajectory(history: list[tuple[int, dict[str, float]]]
                 )
 
 
+def _interactions_for_epoch_metrics(dataset: Dataset, interactions: pd.DataFrame) -> pd.DataFrame:
+    users = list(dataset.user_id_map.external_ids)[:EPOCH_METRICS_MAX_USERS]
+    return interactions[interactions[Columns.User].isin(users)]
+
+
 def _fit_lightfm_with_epoch_metrics(
     model: RecommenderModel,
     dataset: Dataset,
@@ -168,27 +173,24 @@ def _fit_lightfm_with_epoch_metrics(
 ) -> RecommenderModel:
     """Epoch-by-epoch LightFM fit with in-sample Precision/Recall@K logs.
 
-    Scores training interactions with filter_viewed=False (trajectory signal,
-    not holdout generalization).
+    ``interactions`` should already be limited to the scored-user subset.
+    Scores with filter_viewed=False (trajectory signal, not holdout).
     """
-    fit_partial = getattr(model, "fit_partial", None)
-    if not callable(fit_partial):
+    if not isinstance(model, LightFMWrapperModel):
         raise TypeError(
-            f"{type(model).__name__} does not support fit_partial(); "
-            "epoch metric logging requires LightFMWrapperModel"
+            f"{type(model).__name__} does not support epoch metric logging; expected LightFMWrapperModel"
         )
 
-    total_epochs = int(getattr(model, "n_epochs", COLLABORATIVE_EPOCHS))
+    total_epochs = model.n_epochs
     metric_defs = {
         f"Precision@{top_k}": Precision(k=top_k),
         f"Recall@{top_k}": Recall(k=top_k),
     }
-    users = list(dataset.user_id_map.external_ids)[:EPOCH_METRICS_MAX_USERS]
-    interactions_for_users = interactions[interactions[Columns.User].isin(users)]
+    users = list(dict.fromkeys(interactions[Columns.User].tolist()))
     history: list[tuple[int, dict[str, float]]] = []
 
     for epoch in range(1, total_epochs + 1):
-        fit_partial(dataset, 1)
+        model.fit_partial(dataset, 1)
         if not _should_log_epoch(epoch, total_epochs, every):
             continue
         reco = model.recommend(
@@ -197,7 +199,7 @@ def _fit_lightfm_with_epoch_metrics(
             k=top_k,
             filter_viewed=False,
         )
-        snapshot = calc_metrics(metric_defs, reco=reco, interactions=interactions_for_users)
+        snapshot = calc_metrics(metric_defs, reco=reco, interactions=interactions)
         history.append((epoch, snapshot))
         logger.info("Collaborative epoch %d/%d metrics: %s", epoch, total_epochs, snapshot)
 
@@ -286,15 +288,17 @@ def _combine_by_weighted_fusion(
 def _fit_strategy(
     name: str,
     dataset: Dataset,
-    interactions: pd.DataFrame,
+    epoch_interactions: pd.DataFrame | None,
     epoch_metrics_every: int | None,
     epoch_metrics_top_k: int,
 ) -> tuple[str, RecommenderModel]:
     """Fit one strategy (picklable for ProcessPoolExecutor workers)."""
     model = STRATEGIES[name].factory()
     if name == "collaborative" and epoch_metrics_every is not None:
+        if epoch_interactions is None:
+            raise ValueError("epoch_interactions is required when epoch metric logging is enabled")
         _fit_lightfm_with_epoch_metrics(
-            model, dataset, interactions, every=epoch_metrics_every, top_k=epoch_metrics_top_k
+            model, dataset, epoch_interactions, every=epoch_metrics_every, top_k=epoch_metrics_top_k
         )
     else:
         model.fit(dataset)
@@ -362,6 +366,13 @@ def fit_strategies(
             if name not in models and not (STRATEGIES[name].personalized and not warm_users)
         )
     )
+    # Pre-slice in the parent so ProcessPool workers do not pickle the full
+    # interactions frame (None when epoch logging is off).
+    epoch_interactions = (
+        _interactions_for_epoch_metrics(dataset, built.interactions)
+        if epoch_metrics_every is not None
+        else None
+    )
     if to_fit:
         if max_workers > 1 and len(to_fit) > 1:
             with ProcessPoolExecutor(max_workers=min(max_workers, len(to_fit))) as executor:
@@ -369,7 +380,7 @@ def fit_strategies(
                     _fit_strategy,
                     to_fit,
                     repeat(dataset),
-                    repeat(built.interactions),
+                    repeat(epoch_interactions),
                     repeat(epoch_metrics_every),
                     repeat(epoch_metrics_top_k),
                 ):
@@ -381,7 +392,7 @@ def fit_strategies(
                 _, model = _fit_strategy(
                     name,
                     dataset,
-                    built.interactions,
+                    epoch_interactions,
                     epoch_metrics_every,
                     epoch_metrics_top_k,
                 )
