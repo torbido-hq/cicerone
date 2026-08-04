@@ -232,7 +232,7 @@ def test_recommendations_category_filter_keeps_matching():
     assert [row["item_id"] for row in response.json()["items"]] == ["i2"]
 
 
-def test_recommendations_missing_category_column_returns_empty():
+def test_recommendations_missing_category_column_returns_empty(caplog):
     items = pd.DataFrame([{"item_id": "i1", "published": True, "in_stock": True}])
     app = create_app(
         _settings(),
@@ -240,12 +240,16 @@ def test_recommendations_missing_category_column_returns_empty():
         feature_config=_feature_config(),
     )
     client = TestClient(app)
+    headers = {"Authorization": "Bearer secret"}
 
-    response = client.get(
-        "/recommendations/u1?category=beer",
-        headers={"Authorization": "Bearer secret"},
-    )
-    assert response.json()["items"] == []
+    with caplog.at_level("WARNING"):
+        first = client.get("/recommendations/u1?category=beer", headers=headers)
+        second = client.get("/recommendations/u1?category=beer", headers=headers)
+
+    assert first.json()["items"] == []
+    assert second.json()["items"] == []
+    warnings = [r for r in caplog.records if "no column" in r.getMessage()]
+    assert len(warnings) == 1
 
 
 def test_recommendations_without_items_skips_filters():

@@ -47,7 +47,9 @@ def normalize_items_snapshot(
         out[category_column] = out[category_column].astype(str)
     for column in availability_filters:
         if column in out.columns:
-            out[column] = [bool(v) if pd.notna(v) else False for v in out[column].tolist()]
+            with pd.option_context("future.no_silent_downcasting", True):
+                filled = out[column].fillna(False)
+            out[column] = filled.infer_objects(copy=False).astype(bool)
     return out
 
 

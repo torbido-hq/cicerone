@@ -74,6 +74,43 @@ def test_db_reader_items_snapshot_and_cold_start_fallback():
     assert list(reader.get_cold_start_fallback(k=1)["item_id"]) == ["i9"]
 
 
+def test_db_reader_cold_start_fallback_without_sentinel():
+    sink = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})
+    sink.write_recommendations(
+        pd.DataFrame(
+            [
+                {
+                    "user_id": "regular_user",
+                    "item_id": "i1",
+                    "rank": 1,
+                    "score": 0.9,
+                    "source": "popular_fallback",
+                },
+                {
+                    "user_id": "regular_user",
+                    "item_id": "i2",
+                    "rank": 2,
+                    "score": 0.8,
+                    "source": "popular_fallback",
+                },
+                {
+                    "user_id": "other",
+                    "item_id": "i9",
+                    "rank": 1,
+                    "score": 0.1,
+                    "source": "personalized",
+                },
+            ]
+        )
+    )
+
+    reader = DbRecommendationReader({"database_url": TEST_DATABASE_URL})
+    cold = reader.get_cold_start_fallback(k=2)
+
+    assert list(cold["item_id"]) == ["i1", "i2"]
+    assert set(cold["user_id"].astype(str)) == {"regular_user"}
+
+
 def test_db_reader_unknown_user_returns_empty():
     sink = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})
     sink.write_recommendations(pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9}]))

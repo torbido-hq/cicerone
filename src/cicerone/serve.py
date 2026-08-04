@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import pandas as pd
@@ -116,6 +116,7 @@ def _filter_recommendations(
     category: str | None,
     category_column: str,
     exclude_unavailable: bool,
+    on_missing_category_column: Callable[[], None] | None = None,
 ) -> pd.DataFrame:
     if recs.empty:
         return recs
@@ -127,10 +128,8 @@ def _filter_recommendations(
 
     if category is not None:
         if category_column not in items.columns:
-            logger.warning(
-                "Serve category filter requested but items have no column %r — returning empty",
-                category_column,
-            )
+            if on_missing_category_column is not None:
+                on_missing_category_column()
             return out.iloc[0:0].reset_index(drop=True)
         allowed = set(items.loc[items[category_column] == str(category), "item_id"])
         out = out[item_ids.isin(allowed)]
@@ -153,16 +152,24 @@ def create_app(
     dependencies = optional_bearer_deps(settings.serve_auth_token)
     availability_filters = list(feature_config.item_availability_filters) if feature_config else []
     category_column = settings.serve_category_column
-    _configure_reader_item_filters(
-        reader,
-        category_column=category_column,
-        availability_filters=availability_filters,
-    )
+    # Reader filters are configured by main() before create_app; the cache still
+    # normalizes for test doubles / callers that skip that step.
     items_cache = _ItemsFilterCache(
         reader,
         category_column=category_column,
         availability_filters=availability_filters,
     )
+    missing_category_warned = False
+
+    def _warn_missing_category_column() -> None:
+        nonlocal missing_category_warned
+        if missing_category_warned:
+            return
+        missing_category_warned = True
+        logger.warning(
+            "Serve category filter requested but items have no column %r — returning empty",
+            category_column,
+        )
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -201,6 +208,7 @@ def create_app(
             category=category,
             category_column=category_column,
             exclude_unavailable=exclude_unavailable,
+            on_missing_category_column=_warn_missing_category_column,
         )
         filtered = filtered.head(top_k).reset_index(drop=True)
         if not filtered.empty:
