@@ -334,7 +334,7 @@ def test_load_settings_defaults_when_job_section_missing(tmp_path):
     assert settings.model_weights is None
     assert settings.rrf_k is None
     assert settings.save_model_artifact is False
-    assert settings.max_workers == resolve_max_workers()
+    assert settings.max_workers == 1
     assert settings.automl_enabled is False
     assert settings.automl_n_splits == 2
     assert settings.automl_test_days == 14
@@ -389,10 +389,10 @@ def test_load_settings_max_workers_and_rejects_non_positive(tmp_path):
     )
     assert load_settings(good).max_workers == 4
 
-    auto_dir = tmp_path / "auto"
-    auto_dir.mkdir()
-    auto = _write_toml(
-        auto_dir,
+    omitted_dir = tmp_path / "omitted"
+    omitted_dir.mkdir()
+    omitted = _write_toml(
+        omitted_dir,
         """
         [job]
         [input]
@@ -407,7 +407,10 @@ def test_load_settings_max_workers_and_rejects_non_positive(tmp_path):
         path = "/tmp/out"
         """,
     )
-    assert load_settings(auto).max_workers == resolve_max_workers()
+    assert load_settings(omitted).max_workers == 1
+    assert resolve_max_workers() == 1
+    assert resolve_max_workers(None) == 1
+    assert resolve_max_workers(3) == 3
 
     bad_dir = tmp_path / "bad"
     bad_dir.mkdir()
@@ -430,15 +433,6 @@ def test_load_settings_max_workers_and_rejects_non_positive(tmp_path):
     )
     with pytest.raises(RuntimeError, match="max_workers"):
         load_settings(bad)
-
-
-def test_resolve_max_workers_auto_caps_cpu_count(monkeypatch):
-    monkeypatch.setattr("cicerone.config.os.cpu_count", lambda: 32)
-    assert resolve_max_workers() == 4
-    monkeypatch.setattr("cicerone.config.os.cpu_count", lambda: 2)
-    assert resolve_max_workers() == 2
-    monkeypatch.setattr("cicerone.config.os.cpu_count", lambda: None)
-    assert resolve_max_workers() == 1
 
 
 def test_load_settings_rejects_non_positive_half_life_days(tmp_path):

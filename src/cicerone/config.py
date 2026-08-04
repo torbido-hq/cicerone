@@ -22,18 +22,18 @@ STRATEGY_NAMES: tuple[str, ...] = ("collaborative", "item_based", "popular", "la
 AUTOML_DEFAULT_N_SPLITS = 2
 AUTOML_DEFAULT_TEST_DAYS = 14
 AUTOML_DEFAULT_PRIMARY_METRIC = "MAP"
-# Cap auto parallelism so LightFM/implicit workers don't OOM on fat hosts.
-MAX_WORKERS_AUTO_CAP = 4
+# Default sequential: ProcessPool after threaded I/O (and with LightFM/OpenBLAS)
+# deadlocks easily in Docker/CI when forked from a multithreaded parent.
+DEFAULT_MAX_WORKERS = 1
 
 
 def resolve_max_workers(raw: Any | None = None) -> int:
     """Process-pool size for AutoML folds / strategy fitting.
 
-    Omit or pass ``None`` for ``min(cpu_count, MAX_WORKERS_AUTO_CAP)``.
-    An explicit integer must be >= 1.
+    Omit or pass ``None`` for sequential (``1``). An explicit integer must be >= 1.
     """
     if raw is None:
-        return min(MAX_WORKERS_AUTO_CAP, os.cpu_count() or 1)
+        return DEFAULT_MAX_WORKERS
     workers = int(raw)
     if workers < 1:
         raise RuntimeError(f"job.max_workers must be >= 1, got {workers}")

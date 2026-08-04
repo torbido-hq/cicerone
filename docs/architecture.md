@@ -107,9 +107,9 @@ flowchart LR
    pair was produced by more than one strategy, its combined `source` label
    joins each contributing strategy's label in `enabled_models`' order (not
    alphabetically), so the label reflects the caller's configured priority.
-   `Settings.max_workers` (`[job].max_workers`, default
-   `min(cpu_count, 4)`) parallelizes
-   AutoML fold evaluation and strategy fitting via `ProcessPoolExecutor`.
+   `Settings.max_workers` (`[job].max_workers`, default `1`) parallelizes
+   AutoML fold evaluation and strategy fitting via `ProcessPoolExecutor`
+   when set `>1`.
    If `[[boost]]` rules are configured, candidates are over-fetched by
    `FeatureConfig.boost_overfetch_factor` (default 3× `top_k`), scores are
    multiplied by the product of boost factors, and ranks are rewritten
