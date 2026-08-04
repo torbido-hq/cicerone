@@ -4,7 +4,12 @@ import re
 
 import pytest
 
-from cicerone.config import load_settings, resolve_max_workers
+from cicerone.config import (
+    EpochMetricsSettings,
+    load_settings,
+    resolve_epoch_metrics,
+    resolve_max_workers,
+)
 
 
 def _write_toml(tmp_path, content: str) -> str:
@@ -335,6 +340,7 @@ def test_load_settings_defaults_when_job_section_missing(tmp_path):
     assert settings.rrf_k is None
     assert settings.save_model_artifact is False
     assert settings.max_workers == 1
+    assert settings.epoch_metrics is None
     assert settings.automl_enabled is False
     assert settings.automl_n_splits == 2
     assert settings.automl_test_days == 14
@@ -433,6 +439,106 @@ def test_load_settings_max_workers_and_rejects_non_positive(tmp_path):
     )
     with pytest.raises(RuntimeError, match="max_workers"):
         load_settings(bad)
+
+
+def test_load_settings_log_epoch_metrics(tmp_path):
+    config_path = _write_toml(
+        tmp_path,
+        """
+        [job]
+        log_epoch_metrics = true
+        epoch_metrics_every = 3
+        epoch_metrics_max_users = 100
+        epoch_metrics_regression_drop = 0.5
+        epoch_metrics_plateau_eps = 0.02
+        epoch_metrics_plateau_window = 4
+
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+
+    settings = load_settings(config_path)
+    assert settings.epoch_metrics == EpochMetricsSettings(
+        every=3,
+        max_users=100,
+        regression_drop=0.5,
+        plateau_eps=0.02,
+        plateau_window=4,
+    )
+    assert resolve_epoch_metrics(log_epoch_metrics=True, every=3).every == 3
+    assert resolve_epoch_metrics(log_epoch_metrics=False, every=3) is None
+    assert resolve_epoch_metrics(log_epoch_metrics=True, every=None).every == 5
+
+
+def test_load_settings_ignores_epoch_metrics_every_when_logging_disabled(tmp_path):
+    # epoch_metrics_* knobs are unused when logging is off — even invalid
+    # values must not fail config load (validated only when logging is on).
+    config_path = _write_toml(
+        tmp_path,
+        """
+        [job]
+        log_epoch_metrics = false
+        epoch_metrics_every = 0
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+    settings = load_settings(config_path)
+    assert settings.epoch_metrics is None
+
+
+def test_load_settings_rejects_non_positive_epoch_metrics_every_when_enabled(tmp_path):
+    config_path = _write_toml(
+        tmp_path,
+        """
+        [job]
+        log_epoch_metrics = true
+        epoch_metrics_every = 0
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+    with pytest.raises(RuntimeError, match="epoch_metrics_every"):
+        load_settings(config_path)
+
+
+def test_resolve_epoch_metrics_rejects_non_positive_when_enabled():
+    with pytest.raises(RuntimeError, match="epoch_metrics_every"):
+        resolve_epoch_metrics(log_epoch_metrics=True, every=0)
+
+
+def test_resolve_epoch_metrics_rejects_fraction_outside_unit_interval():
+    with pytest.raises(RuntimeError, match="epoch_metrics_regression_drop"):
+        resolve_epoch_metrics(log_epoch_metrics=True, regression_drop=1.5)
+    with pytest.raises(RuntimeError, match="epoch_metrics_plateau_eps"):
+        resolve_epoch_metrics(log_epoch_metrics=True, plateau_eps=0)
+    assert resolve_epoch_metrics(log_epoch_metrics=True, regression_drop=1.0).regression_drop == 1.0
 
 
 def test_load_settings_rejects_non_positive_half_life_days(tmp_path):

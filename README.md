@@ -282,6 +282,15 @@ of how the underlying strategy labels happen to sort.
 `[job].max_workers` (default `1`, sequential) controls ProcessPool size for
 strategy fitting and AutoML fold evaluation. Set `>1` to opt into parallelism.
 
+To watch LightFM's training trajectory, set `[job].log_epoch_metrics = true`
+(default off). The collaborative strategy then fits epoch-by-epoch and logs
+in-sample Precision@K/Recall@K every `[job].epoch_metrics_every` epochs
+(default `5`) over a seeded random user sample. Significant regression or
+plateau emits a WARN. Optional tunables:
+`epoch_metrics_max_users`, `epoch_metrics_regression_drop`,
+`epoch_metrics_plateau_eps`, `epoch_metrics_plateau_window` — see
+`config/cicerone.toml`.
+
 ## AutoML
 
 Instead of a fixed `models`/`model_weights` config, `[job.automl]` can pick

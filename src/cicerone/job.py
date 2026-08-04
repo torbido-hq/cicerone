@@ -117,6 +117,7 @@ def run(triggered_by: str = "manual") -> None:
             rrf_k=rrf_k,
             strategy_cache=fitted if settings.save_model_artifact else None,
             max_workers=settings.max_workers,
+            epoch_metrics=settings.epoch_metrics,
         )
 
         resolved_models = enabled_models or DEFAULT_MODELS

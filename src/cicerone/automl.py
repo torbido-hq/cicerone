@@ -150,6 +150,7 @@ def _time_based_folds(
 
 
 def _make_metrics(top_k: int) -> dict[str, MetricAtK]:
+    # rectools.metrics — not a custom MAP/NDCG/Recall implementation.
     return {
         f"MAP@{top_k}": MAP(k=top_k),
         f"NDCG@{top_k}": NDCG(k=top_k),
