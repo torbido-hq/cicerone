@@ -109,8 +109,14 @@ def create_app(
         exclude_unavailable: bool = Query(default=True),
     ) -> JSONResponse:
         top_k = limit or k or settings.serve_default_k
-        # Over-fetch before category/availability filters so limit still fills when possible.
-        fetch_k = top_k if (category is None and not exclude_unavailable) else max(top_k * 5, top_k)
+        items = reader.get_items()
+        can_filter = bool(
+            items is not None
+            and not items.empty
+            and (category is not None or (exclude_unavailable and availability_filters))
+        )
+        # Over-fetch only when serve-time filters can actually drop rows.
+        fetch_k = max(top_k * 5, top_k) if can_filter else top_k
         recs = reader.get_recommendations(user_id, fetch_k)
         used_fallback = False
         if recs.empty:
@@ -123,7 +129,7 @@ def create_app(
 
         filtered = _filter_recommendations(
             recs,
-            items=reader.get_items(),
+            items=items,
             category=category,
             category_column=category_column,
             exclude_unavailable=exclude_unavailable,

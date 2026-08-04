@@ -44,7 +44,7 @@ def test_personalized_weight_sigmoid_cold_vs_rich():
     cold = personalized_weight(0, config)
     rich = personalized_weight(50, config)
     mid = personalized_weight(5, config)
-    assert cold < 0.1
+    assert cold == 0.0
     assert rich > 0.9
     assert abs(mid - 0.5) < 1e-9
 
@@ -301,7 +301,7 @@ def test_append_cold_start_rows_adds_sentinel():
     popular = pd.DataFrame(
         [
             {
-                Columns.User: "u1",
+                Columns.User: COLD_START_USER_ID,
                 Columns.Item: "i1",
                 Columns.Rank: 1,
                 Columns.Score: 1.0,
@@ -329,6 +329,21 @@ def test_append_cold_start_rows_adds_sentinel():
         latest_available=False,
     )
     assert COLD_START_USER_ID in set(out[Columns.User].astype(str))
+
+
+def test_collapse_best_rank_keeps_lowest_rank():
+    from cicerone.blending import collapse_best_rank
+
+    frame = pd.DataFrame(
+        [
+            {Columns.User: "u1", Columns.Item: "a", Columns.Rank: 3, Columns.Score: 1.0, "source": "x"},
+            {Columns.User: "u1", Columns.Item: "a", Columns.Rank: 1, Columns.Score: 0.5, "source": "y"},
+            {Columns.User: "u1", Columns.Item: "b", Columns.Rank: 2, Columns.Score: 0.9, "source": "x"},
+        ]
+    )
+    out = collapse_best_rank(frame)
+    assert list(out[Columns.Item]) == ["a", "b"]
+    assert list(out[Columns.Rank]) == [1, 2]
 
 
 def test_interaction_counts_empty_frame():

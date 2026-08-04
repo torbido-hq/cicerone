@@ -420,8 +420,9 @@ When `[blending].enabled = true`, the binary personalized-vs-popular
 fallback is replaced by a gradual per-user mix of `personalized`,
 `popular`, and (when items expose a usable date column) `latest`. The
 personalized weight follows a sigmoid or linear curve over the user's
-interaction count; the remainder is split by `popular_share`. Combined
-rows get `source = "blended"`. Without blending, users without enough
+**distinct (user, item) count** after aggregation; the remainder is split
+by `popular_share`. An item is labeled `source = "blended"` only when more
+than one source contributed it. Without blending, users without enough
 interactions still get a fallback list from `PopularModel` (rectools),
 still honoring availability and any configured eligibility/boost policies.
 

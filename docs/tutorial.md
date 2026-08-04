@@ -206,14 +206,18 @@ mounted one), enable the block above, keep `models` including
 
 - cold / low-history users lean on `popular_fallback` / `latest`
 - richer users lean on `personalized`
-- mixed rows use `source = "blended"`
-- a sentinel `__cold_start__` user is written for serve-mode fallback
+- an item is `source = "blended"` only when more than one source contributed it
+- a sentinel `__cold_start__` user is written (global availability allowlist)
+  for serve-mode fallback
 
-If `items` has no usable date column among `latest_date_columns`, `latest`
-is skipped and its weight moves to `popular` (check the job log). This is
-independent of `[job.model_weights]` RRF — enable one or the other, not both
-as the primary combiner. See the annotated `[blending]` block in
-`config/features.toml` and the README's Interaction weights section.
+The blend curve uses each user's **distinct (user, item) count** after
+dataset aggregation (not raw event rows). If `items` has no usable date
+column among `latest_date_columns`, `latest` is skipped and its weight
+moves to `popular` (check the job log). Independent of
+`[job.model_weights]` RRF — enable one or the other as the primary
+combiner (blending wins and logs a warning if both are set). See the
+annotated `[blending]` block in `config/features.toml` and the README's
+Interaction weights section.
 
 ## 8. Let AutoML pick a strategy for you
 

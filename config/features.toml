@@ -165,12 +165,16 @@ type = "categorical"
 #                  when no usable date column is present, and its weight is
 #                  redistributed onto popular
 #
-# The personalized weight grows with the user's interaction count via a
+# The personalized weight grows with the user's *distinct (user, item)
+# interaction count* after dataset aggregation (not raw event rows) via a
 # configurable curve; the remainder is split between popular and latest by
-# popular_share. Combined rows get source = "blended". Availability /
-# eligibility filters still run on every source *before* the blend.
+# popular_share. An item gets source = "blended" only when more than one
+# source contributed that item; otherwise it keeps the single source label.
+# Availability / eligibility filters still run on every source *before* the
+# blend (latest is ranked per eligibility cohort, never from a cross-cohort
+# union).
 #
-# curve = "sigmoid": weight = 1 / (1 + exp(-steepness * (n - midpoint)))
+# curve = "sigmoid": weight = 0 at n=0; else 1/(1+exp(-steepness*(n-midpoint)))
 # curve = "linear":  weight = min(1, n / saturate_at)
 # ---------------------------------------------------------------------------
 # [blending]

@@ -23,6 +23,7 @@ from rectools.metrics import Precision, Recall, calc_metrics
 from rectools.models import ImplicitItemKNNWrapperModel, LightFMWrapperModel, PopularModel
 
 from cicerone.blending import (
+    COLD_START_USER_ID,
     PERSONALIZED_SOURCE,
     POPULAR_SOURCE,
     append_cold_start_rows,
@@ -442,11 +443,21 @@ def fit_strategies(
     return enabled_models, models
 
 
-def _models_for_recommend(enabled_models: list[str], blending_enabled: bool) -> list[str]:
-    """When blending is on, ensure ``popular`` is available as a blend source."""
-    if not blending_enabled or "popular" in enabled_models:
-        return enabled_models
-    return [*enabled_models, "popular"]
+def resolve_recommend_models(enabled_models: list[str], blending_enabled: bool) -> list[str]:
+    """Models to fit/recommend for a run.
+
+    When blending is on: ensure ``popular`` is present, and drop strategy
+    ``latest`` (trending PopularModel) — blending's date-based ``latest`` is
+    built from items, not that strategy.
+    """
+    models = list(enabled_models)
+    if not blending_enabled:
+        return models
+    if "latest" in models:
+        models = [name for name in models if name != "latest"]
+    if "popular" not in models:
+        models.append("popular")
+    return models
 
 
 def recommend_with_models(
@@ -467,7 +478,17 @@ def recommend_with_models(
     enabled_models = _resolve_enabled_models(enabled_models)
     blending = config.blending
     blending_enabled = blending.enabled
-    recommend_models = _models_for_recommend(enabled_models, blending_enabled)
+    if blending_enabled and "latest" in enabled_models:
+        logger.warning(
+            "Blending is enabled: date-based 'latest' comes from items; "
+            "strategy 'latest' (trending PopularModel) is skipped for this run"
+        )
+    if blending_enabled and weights is not None:
+        logger.warning(
+            "Blending is enabled: job.model_weights / AutoML weights are ignored "
+            "(per-user blend curve controls source mix instead)"
+        )
+    recommend_models = resolve_recommend_models(enabled_models, blending_enabled)
 
     if weights is not None and not blending_enabled:
         unknown_weights = [name for name in weights if name not in enabled_models]
@@ -528,6 +549,19 @@ def recommend_with_models(
     frames = []
     personalized_frames: list[pd.DataFrame] = []
     popular_frames: list[pd.DataFrame] = []
+    latest_frames: list[pd.DataFrame] = []
+
+    date_column = (
+        resolve_latest_date_column(built.items, blending.latest_date_columns) if blending_enabled else None
+    )
+    latest_available = bool(blending_enabled and date_column is not None and built.items is not None)
+    if blending_enabled and not latest_available:
+        logger.info(
+            "Blending: no usable date column among %s on items — disabling 'latest' "
+            "and redistributing its weight onto popular",
+            list(blending.latest_date_columns),
+        )
+
     for name in recommend_models:
         strategy = STRATEGIES[name]
         if strategy.personalized and not has_any_warm_user:
@@ -566,65 +600,40 @@ def recommend_with_models(
                 elif name == "popular":
                     popular_frames.append(recs)
 
-    if not frames:
-        return pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN])
+    if blending_enabled and latest_available and date_column is not None and built.items is not None:
+        for _cohort_key, cohort_users in cohorts:
+            allowed_items = allowed_by_cohort[_cohort_key]
+            if not allowed_items:
+                continue
+            latest_frames.append(
+                build_latest_ranking(
+                    built.items,
+                    date_column,
+                    allowed_items,
+                    recommend_k if has_boosts else top_k,
+                    cohort_users,
+                )
+            )
 
     combine_k = recommend_k if has_boosts else top_k
 
     if blending_enabled:
-        date_column = resolve_latest_date_column(built.items, blending.latest_date_columns)
-        latest_available = date_column is not None and built.items is not None
-        if not latest_available:
-            logger.info(
-                "Blending: no usable date column among %s on items — disabling 'latest' "
-                "and redistributing its weight onto popular",
-                list(blending.latest_date_columns),
-            )
-
-        # Union of allowlists across cohorts (already availability-filtered).
-        allowed_union: list = []
-        seen_allowed: set[str] = set()
-        for allowed in allowed_by_cohort.values():
-            for item_id in allowed:
-                key = str(item_id)
-                if key not in seen_allowed:
-                    seen_allowed.add(key)
-                    allowed_union.append(item_id)
-
-        latest_frame = (
-            build_latest_ranking(
-                built.items,
-                date_column,
-                allowed_union,
-                combine_k,
-                unique_target_users,
-            )
-            if latest_available and date_column is not None and built.items is not None
-            else None
+        empty_recs = pd.DataFrame(
+            columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN]
         )
-
         personalized = (
-            pd.concat(personalized_frames, ignore_index=True)
-            if personalized_frames
-            else pd.DataFrame(
-                columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN]
-            )
+            pd.concat(personalized_frames, ignore_index=True) if personalized_frames else empty_recs
         )
-        # Prefer collaborative/item_based source labels → map to "personalized" for blend.
         if not personalized.empty:
             personalized = personalized.copy()
             personalized[SOURCE_COLUMN] = PERSONALIZED_SOURCE
 
-        popular = (
-            pd.concat(popular_frames, ignore_index=True)
-            if popular_frames
-            else pd.DataFrame(
-                columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN]
-            )
-        )
+        popular = pd.concat(popular_frames, ignore_index=True) if popular_frames else empty_recs
         if not popular.empty:
             popular = popular.copy()
             popular[SOURCE_COLUMN] = POPULAR_SOURCE
+
+        latest_frame = pd.concat(latest_frames, ignore_index=True) if latest_frames else None
 
         counts = interaction_counts(built.interactions)
         combined = blend_for_users(
@@ -635,18 +644,52 @@ def recommend_with_models(
             target_users=unique_target_users,
             config=blending,
             top_k=combine_k,
-            latest_available=bool(latest_available),
+            latest_available=latest_available,
         )
+
+        # Cold-start sentinel: global item-scoped allowlist only (no user-scoped
+        # eligibility), so unknown users never inherit a random cohort's list.
+        cold_popular = empty_recs.copy()
+        cold_latest = None
+        if "popular" in models:
+            global_rules = [rule for rule in eligibility if not is_user_scoped(rule)]
+            global_allowed = allowed_items_for_cohort(
+                [],
+                None,
+                built.items,
+                global_rules,
+                all_item_ids,
+            )
+            if global_allowed:
+                cold_popular = models["popular"].recommend(
+                    users=[COLD_START_USER_ID],
+                    dataset=dataset,
+                    k=combine_k,
+                    filter_viewed=False,
+                    items_to_recommend=global_allowed,
+                )
+                cold_popular[SOURCE_COLUMN] = POPULAR_SOURCE
+                if latest_available and date_column is not None and built.items is not None:
+                    cold_latest = build_latest_ranking(
+                        built.items,
+                        date_column,
+                        global_allowed,
+                        combine_k,
+                        [COLD_START_USER_ID],
+                    )
+
         combined = append_cold_start_rows(
             combined,
-            popular=popular,
-            latest=latest_frame,
+            popular=cold_popular,
+            latest=cold_latest,
             config=blending,
             top_k=combine_k,
-            latest_available=bool(latest_available),
+            latest_available=latest_available,
         )
         if WEIGHT_COLUMN in combined.columns:
             combined = combined.drop(columns=[WEIGHT_COLUMN])
+    elif not frames:
+        return pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN])
     elif weights is not None:
         source_label_order = [STRATEGIES[name].source_label for name in enabled_models]
         combined = _combine_by_weighted_fusion(
@@ -677,7 +720,7 @@ def train_and_recommend(
     and ``recommend_with_models`` for the split used by model artifacts.
     """
     resolved_models = _resolve_enabled_models(enabled_models)
-    fit_models = _models_for_recommend(resolved_models, config.blending.enabled)
+    fit_models = resolve_recommend_models(resolved_models, config.blending.enabled)
     _, fitted = fit_strategies(
         built,
         target_users,

@@ -111,12 +111,16 @@ flowchart LR
      binary personalized-vs-popular choice with a gradual mix of
      `personalized`, `popular`, and (when `items` has a usable datetime
      column from `latest_date_columns`) date-based `latest`. A sigmoid or
-     linear curve maps each user's interaction count → personalized
-     weight; the remainder is split by `popular_share`. Availability /
-     eligibility still filter every source *before* the blend. Combined
-     rows get `source = "blended"`; a shared `__cold_start__` user is
-     written for serve-mode fallback. When no date column is usable,
-     `latest` is disabled and its weight moves to `popular`.
+     linear curve maps each user's distinct (user, item) count after
+     aggregation → personalized weight; the remainder is split by
+     `popular_share`. Availability / eligibility still filter every source
+     *before* the blend; date-based `latest` is ranked **per cohort
+     allowlist** (not a cross-cohort union). An item gets
+     `source = "blended"` only when more than one source contributed it. A
+     shared `__cold_start__` user is ranked against the global item-scoped
+     allowlist for serve-mode fallback. When no date column is usable,
+     `latest` is disabled and its weight moves to `popular`. Strategy
+     `latest` (trending PopularModel) is skipped while blending is on.
    `Settings.max_workers` (`[job].max_workers`, default `1`) parallelizes
    AutoML fold evaluation and strategy fitting via `ProcessPoolExecutor`
    when set `>1`. Per-strategy top-K is rectools-native

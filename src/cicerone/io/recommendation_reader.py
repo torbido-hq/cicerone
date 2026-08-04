@@ -24,7 +24,8 @@ RANK_COLUMN = "rank"
 SOURCE_COLUMN = "source"
 ITEMS_SNAPSHOT_FILENAME = "items_snapshot.parquet"
 
-_FALLBACK_SOURCES = frozenset({POPULAR_SOURCE, LATEST_SOURCE, "blended"})
+# Heuristic fallback when __cold_start__ is missing: never reuse warm "blended" rows.
+_FALLBACK_SOURCES = frozenset({POPULAR_SOURCE, LATEST_SOURCE})
 
 
 class DatasetRecommendationReader:
@@ -146,17 +147,15 @@ class DbRecommendationReader:
             return sentinel
         sql = text(
             f'SELECT * FROM "{self._table}" WHERE "{SOURCE_COLUMN}" IN '
-            f"(:popular, :latest, :blended) "
+            f"(:popular, :latest) "
             f'ORDER BY "{USER_COLUMN}" ASC, "{RANK_COLUMN}" ASC LIMIT :k'
         )
-        # Pull a small window then keep one user's rows.
         sample = pd.read_sql(
             sql,
             self._engine,
             params={
                 "popular": POPULAR_SOURCE,
                 "latest": LATEST_SOURCE,
-                "blended": "blended",
                 "k": max(k * 20, k),
             },
         )

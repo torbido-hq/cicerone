@@ -4,6 +4,9 @@ Replaces the binary warm/cold fallback with a gradual curve: the personalized
 weight grows with the user's interaction count; the remainder is split between
 popular and latest (item publication date). See ``[blending]`` in
 ``config/features.toml``.
+
+``n_interactions`` is the number of distinct (user, item) pairs for that user
+in the post-aggregation interactions frame (not raw event rows, not Σ weight).
 """
 
 from __future__ import annotations
@@ -24,15 +27,21 @@ LATEST_SOURCE = "latest"
 COLD_START_USER_ID = "__cold_start__"
 
 _WEIGHT_EPS = 1e-9
+_EMPTY_COLS = [Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN]
+
+
+def _empty_recs() -> pd.DataFrame:
+    return pd.DataFrame(columns=_EMPTY_COLS)
 
 
 def personalized_weight(n_interactions: int, config: BlendingConfig) -> float:
     """Map interaction count → weight in [0, 1] for the personalized source."""
     n = max(0, int(n_interactions))
+    if n == 0:
+        return 0.0
     if config.curve == "linear":
         saturate = config.saturate_at if config.saturate_at > 0 else 1.0
         return min(1.0, n / saturate)
-    # sigmoid
     return 1.0 / (1.0 + math.exp(-config.steepness * (n - config.midpoint)))
 
 
@@ -79,11 +88,22 @@ def resolve_latest_date_column(
 
 
 def interaction_counts(interactions: pd.DataFrame) -> dict[str, int]:
-    """Count rows per user in a rectools interactions frame."""
+    """Count distinct (user, item) rows per user after dataset aggregation."""
     if interactions.empty or Columns.User not in interactions.columns:
         return {}
     counts = interactions.groupby(Columns.User).size()
     return {str(user): int(count) for user, count in counts.items()}
+
+
+def collapse_best_rank(frame: pd.DataFrame) -> pd.DataFrame:
+    """Keep the best (lowest) rank per (user, item); ties break on higher score."""
+    if frame.empty:
+        return _empty_recs()
+    out = frame.sort_values(
+        [Columns.User, Columns.Item, Columns.Rank, Columns.Score],
+        ascending=[True, True, True, False],
+    )
+    return out.drop_duplicates(subset=[Columns.User, Columns.Item], keep="first").reset_index(drop=True)
 
 
 def build_latest_ranking(
@@ -93,30 +113,31 @@ def build_latest_ranking(
     top_k: int,
     target_users: Sequence[str],
 ) -> pd.DataFrame:
-    """Non-personalized top-K by newest ``date_column``, expanded to every user.
+    """Non-personalized top-K by newest ``date_column``, expanded to ``target_users``.
 
-    Availability / eligibility must already be encoded in ``allowed_item_ids``
-    (filter before blend, not after).
+    ``allowed_item_ids`` must already encode availability / eligibility for the
+    users in ``target_users`` (filter before blend, not after).
     """
     if not target_users or top_k < 1 or not allowed_item_ids:
-        return pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN])
+        return _empty_recs()
 
     allowed = {str(i) for i in allowed_item_ids}
-    frame = items.loc[items["item_id"].astype(str).isin(allowed)].copy()
+    item_col = "item_id" if "item_id" in items.columns else Columns.Item
+    frame = items.loc[items[item_col].astype(str).isin(allowed)].copy()
     if frame.empty:
-        return pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN])
+        return _empty_recs()
 
     frame["_date"] = pd.to_datetime(frame[date_column], errors="coerce", utc=True)
     frame = frame.dropna(subset=["_date"])
     if frame.empty:
-        return pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN])
+        return _empty_recs()
 
-    frame = frame.sort_values(["_date", "item_id"], ascending=[False, True]).head(top_k)
+    frame = frame.sort_values(["_date", item_col], ascending=[False, True]).head(top_k)
     frame = frame.reset_index(drop=True)
     ranks = list(range(1, len(frame) + 1))
-    # Newer → higher score so boosts/fusion stay coherent with other sources.
+    # Synthetic decreasing scores for boost/sort coherence; blend itself uses ranks.
     scores = [float(len(frame) - i + 1) for i in ranks]
-    item_ids = frame["item_id"].astype(str).tolist()
+    item_ids = frame[item_col].astype(str).tolist()
 
     rows = [
         {
@@ -134,8 +155,8 @@ def build_latest_ranking(
 
 def _normalize_source_frame(frame: pd.DataFrame, source_label: str) -> pd.DataFrame:
     if frame.empty:
-        return pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN])
-    out = frame.copy()
+        return _empty_recs()
+    out = collapse_best_rank(frame)
     out[Columns.User] = out[Columns.User].astype(str)
     out[Columns.Item] = out[Columns.Item].astype(str)
     out[SOURCE_COLUMN] = source_label
@@ -157,16 +178,18 @@ def blend_for_users(
     top_k: int,
     latest_available: bool,
 ) -> pd.DataFrame:
-    """Weighted reciprocal-rank fusion with per-user source weights."""
+    """Weighted reciprocal-rank fusion with per-user source weights.
+
+    Within each source, duplicate (user, item) rows are collapsed to the best
+    rank before fusion so multiple personalized strategies cannot double-count.
+    """
     frames = {
         PERSONALIZED_SOURCE: _normalize_source_frame(personalized, PERSONALIZED_SOURCE),
         POPULAR_SOURCE: _normalize_source_frame(popular, POPULAR_SOURCE),
         LATEST_SOURCE: (
             _normalize_source_frame(latest, LATEST_SOURCE)
             if latest is not None and latest_available
-            else pd.DataFrame(
-                columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN]
-            )
+            else _empty_recs()
         ),
     }
 
@@ -190,10 +213,11 @@ def blend_for_users(
                 by_user_item[key] = (score, sources)
 
     if not by_user_item:
-        return pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN])
+        return _empty_recs()
 
     rows = []
     for (user_id, item_id), (score, sources) in by_user_item.items():
+        # Per-item label: "blended" only when >1 source contributed that item.
         label = BLENDED_SOURCE if len(sources) > 1 else next(iter(sources))
         rows.append(
             {
@@ -224,13 +248,15 @@ def append_cold_start_rows(
     top_k: int,
     latest_available: bool,
 ) -> pd.DataFrame:
-    """Ensure a shared ``__cold_start__`` lookup row set exists for serve fallback."""
+    """Ensure a shared ``__cold_start__`` lookup row set exists for serve fallback.
+
+    ``popular`` / ``latest`` must already be ranked for ``COLD_START_USER_ID``
+    against the *global* (item-scoped only) allowlist — not a random cohort.
+    """
     cold = blend_for_users(
-        personalized=pd.DataFrame(
-            columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN]
-        ),
-        popular=_retag_user(popular, COLD_START_USER_ID),
-        latest=_retag_user(latest, COLD_START_USER_ID) if latest is not None else None,
+        personalized=_empty_recs(),
+        popular=popular,
+        latest=latest,
         counts={COLD_START_USER_ID: 0},
         target_users=[COLD_START_USER_ID],
         config=config,
@@ -241,13 +267,3 @@ def append_cold_start_rows(
         return recommendations
     without = recommendations[recommendations[Columns.User].astype(str) != COLD_START_USER_ID]
     return pd.concat([without, cold], ignore_index=True)
-
-
-def _retag_user(frame: pd.DataFrame | None, user_id: str) -> pd.DataFrame:
-    if frame is None or frame.empty:
-        return pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN])
-    # Use one representative user's ranking (same non-personalized list for all).
-    sample_user = frame[Columns.User].astype(str).iloc[0]
-    rows = frame[frame[Columns.User].astype(str) == sample_user].copy()
-    rows[Columns.User] = user_id
-    return rows

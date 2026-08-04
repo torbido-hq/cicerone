@@ -37,6 +37,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   RRF / `[blending]`) and the items snapshot write; tutorial gains a
   blending walkthrough and an updated serve-API section (response shape,
   `limit` / `category` / cold-start fallback).
+- Blending correctness: date-based `latest` is ranked per eligibility
+  cohort (no cross-cohort allowlist union); `__cold_start__` uses the
+  global item-scoped allowlist; multi-personalized strategies collapse to
+  best rank before RRF; sigmoid maps `n=0 → 0`; strategy `latest` is
+  skipped while blending is on; serve heuristic fallback never reuses
+  warm `blended` rows.
 
 ## [0.3.2] - 2026-08-04
 

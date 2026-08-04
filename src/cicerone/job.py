@@ -18,7 +18,13 @@ from cicerone.dataset import build_dataset
 from cicerone.feature_config import load_feature_config
 from cicerone.io.base import InputSource
 from cicerone.io.factory import build_input_source, build_output_sink
-from cicerone.model import DEFAULT_MODELS, RRF_K, RecommenderModel, train_and_recommend
+from cicerone.model import (
+    DEFAULT_MODELS,
+    RRF_K,
+    RecommenderModel,
+    resolve_recommend_models,
+    train_and_recommend,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -121,6 +127,7 @@ def run(triggered_by: str = "manual") -> None:
         )
 
         resolved_models = enabled_models or DEFAULT_MODELS
+        run_models = resolve_recommend_models(resolved_models, feature_config.blending.enabled)
         model_weights_str = (
             ",".join(f"{name}={weights.get(name, 1.0)}" for name in resolved_models)
             if weights is not None
@@ -129,7 +136,7 @@ def run(triggered_by: str = "manual") -> None:
 
         artifact_bytes: bytes | None = None
         if settings.save_model_artifact:
-            artifact_models = [name for name in resolved_models if name in fitted]
+            artifact_models = [name for name in run_models if name in fitted]
             artifact_weights = (
                 {name: weight for name, weight in weights.items() if name in artifact_models}
                 if weights is not None
