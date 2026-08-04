@@ -130,3 +130,22 @@ structured before adding a new `kind`.
 - Add/update tests for any behavior change — the coverage gate is enforced
   in CI, not just locally.
 - Make sure both the lint job and the test job pass before requesting review.
+
+## Releasing
+
+`main` requires one approving review (including code owners) on every PR.
+Do **not** open a follow-up PR that only dates `CHANGELOG.md` — it still
+needs that approval and is pure process drag.
+
+1. On the feature PR that completes the version, change
+   `## [X.Y.Z] - Unreleased` to `## [X.Y.Z] - YYYY-MM-DD` (today's date)
+   in the same branch before merge.
+2. Merge that PR to `main`.
+3. Tag the merge commit: `git tag -a vX.Y.Z <sha> -m "…"` and
+   `git push origin vX.Y.Z`.
+4. Publish the GitHub release from that tag (notes can mirror the
+   changelog section).
+
+If the version was already tagged while the changelog still said
+Unreleased, fold the date fix into the next real PR — never a dating-only
+PR.
