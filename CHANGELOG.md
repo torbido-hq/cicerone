@@ -4,6 +4,27 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.2] - 2026-08-04
+
+### Added
+
+- Optional per-epoch LightFM training metrics (`[job].log_epoch_metrics`,
+  default `false`; interval via `[job].epoch_metrics_every`, default `5`):
+  when enabled, the collaborative strategy fits via `fit_partial` one epoch
+  at a time and logs in-sample Precision@K/Recall@K. Significant regression
+  or late plateau across logged epochs emits a WARN. Off by default so
+  scheduled batch runs stay unchanged.
+- Top-K ID-mapping regression test: synthetic catalog with sparse external
+  IDs that must not collide with rectools' dense internal indices; asserts
+  no duplicate items per user and no seen items in personalized rows.
+
+### Changed
+
+- Documented that per-strategy top-K extraction is rectools-native
+  (`ModelBase.recommend()` + Dataset id maps) and that AutoML eval metrics
+  already use `rectools.metrics.calc_metrics` (MAP/NDCG/Recall) — no custom
+  metric implementations.
+
 ## [0.3.1] - 2026-08-04
 
 ### Changed

@@ -109,7 +109,13 @@ flowchart LR
    alphabetically), so the label reflects the caller's configured priority.
    `Settings.max_workers` (`[job].max_workers`, default `1`) parallelizes
    AutoML fold evaluation and strategy fitting via `ProcessPoolExecutor`
-   when set `>1`.
+   when set `>1`. Per-strategy top-K is rectools-native
+   (`ModelBase.recommend()` maps external↔internal IDs via the Dataset's
+   id maps — Cicerone does not hand-roll that conversion). When
+   `[job].log_epoch_metrics = true`, the collaborative LightFM strategy is
+   fitted epoch-by-epoch via `fit_partial` and logs in-sample
+   Precision@K/Recall@K every `[job].epoch_metrics_every` epochs (default
+   off, so scheduled runs stay fast).
    If `[[boost]]` rules are configured, candidates are over-fetched by
    `FeatureConfig.boost_overfetch_factor` (default 3× `top_k`), scores are
    multiplied by the product of boost factors, and ranks are rewritten

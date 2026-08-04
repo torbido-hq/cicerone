@@ -25,6 +25,7 @@ AUTOML_DEFAULT_PRIMARY_METRIC = "MAP"
 # Default sequential: ProcessPool after threaded I/O (and with LightFM/OpenBLAS)
 # deadlocks easily in Docker/CI when forked from a multithreaded parent.
 DEFAULT_MAX_WORKERS = 1
+DEFAULT_EPOCH_METRICS_EVERY = 5
 
 
 def resolve_max_workers(raw: Any | None = None) -> int:
@@ -38,6 +39,16 @@ def resolve_max_workers(raw: Any | None = None) -> int:
     if workers < 1:
         raise RuntimeError(f"job.max_workers must be >= 1, got {workers}")
     return workers
+
+
+def resolve_epoch_metrics_every(log_epoch_metrics: bool, raw_every: Any | None = None) -> int | None:
+    """Return the epoch logging interval, or ``None`` when logging is off."""
+    if not log_epoch_metrics:
+        return None
+    every = DEFAULT_EPOCH_METRICS_EVERY if raw_every is None else int(raw_every)
+    if every < 1:
+        raise RuntimeError(f"job.epoch_metrics_every must be >= 1, got {every}")
+    return every
 
 
 def validate_model_weights(weights: dict[str, float] | None, *, context: str = "model_weights") -> None:
@@ -115,6 +126,8 @@ class Settings:
     rrf_k: float | None
     save_model_artifact: bool
     max_workers: int
+    log_epoch_metrics: bool
+    epoch_metrics_every: int
     automl_enabled: bool
     automl_n_splits: int
     automl_test_days: int
@@ -224,6 +237,11 @@ def load_settings(config_path: str | None = None) -> Settings:
         rrf_k=rrf_k,
         save_model_artifact=bool(job.get("save_model_artifact", False)),
         max_workers=resolve_max_workers(job.get("max_workers")),
+        log_epoch_metrics=bool(job.get("log_epoch_metrics", False)),
+        epoch_metrics_every=_require_positive_int(
+            int(job.get("epoch_metrics_every", DEFAULT_EPOCH_METRICS_EVERY)),
+            name="job.epoch_metrics_every",
+        ),
         automl_enabled=bool(automl.get("enabled", False)),
         automl_n_splits=_require_positive_int(
             int(automl.get("n_splits", AUTOML_DEFAULT_N_SPLITS)), name="job.automl.n_splits"

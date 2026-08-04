@@ -1115,3 +1115,177 @@ def test_train_and_recommend_paying_producer_boost_overfetch(feature_config):
     assert len(boosted_items) == 2
     assert "i3" in boosted_items
     assert boosted_items[0] == "i3"
+
+
+def test_topk_extraction_preserves_external_ids_no_duplicates_or_seen_items(feature_config):
+    """Regression guard for internal↔external ID mapping bugs in top-K extraction.
+
+    External user/item IDs are sparse integers that do not match rectools'
+    dense 0..n-1 internal indices. If recommend() (or a hand-rolled top-K)
+    leaked internal indices, they would not be in the external catalog.
+    Personalized strategies must also exclude already-seen items and never
+    emit duplicate item IDs for the same user.
+    """
+    now = pd.Timestamp.utcnow()
+    # External IDs deliberately far from 0..n-1 so an off-by-one / reindex
+    # leak cannot accidentally look like a valid catalog id.
+    external_users = [1000, 2000, 3000]
+    external_items = [100, 200, 300, 400, 500, 600]
+    # Each warm user has interacted with a distinct contiguous block so
+    # "seen" membership is unambiguous in the assertions below.
+    seen_by_user = {
+        1000: [100, 200, 300, 400, 500],
+        2000: [200, 300, 400, 500, 600],
+        3000: [100, 300, 400, 500, 600],
+    }
+    rows = []
+    for user, items in seen_by_user.items():
+        for item in items:
+            rows.append(
+                {
+                    "user_id": user,
+                    "item_id": item,
+                    "event_type": "purchase",
+                    "quantity": 1,
+                    "occurred_at": now,
+                }
+            )
+    events = pd.DataFrame(rows)
+    items = pd.DataFrame(
+        [
+            {
+                "item_id": item_id,
+                "category": "beer",
+                "producer_id": "p1",
+                "published": True,
+                "in_stock": True,
+            }
+            for item_id in external_items
+        ]
+    )
+    built = build_dataset(events, None, items, feature_config, half_life_days=90)
+
+    # Confirm the dataset's internal indices are NOT the external IDs.
+    assert list(built.dataset.item_id_map.external_ids) == external_items
+    assert set(built.dataset.item_id_map.internal_ids) == set(range(len(external_items)))
+    assert set(built.dataset.item_id_map.internal_ids).isdisjoint(external_items)
+
+    recommendations = train_and_recommend(
+        built,
+        target_users=external_users,
+        config=feature_config,
+        top_k=3,
+        enabled_models=["collaborative", "popular"],
+    )
+
+    assert not recommendations.empty
+    assert set(recommendations[Columns.Item]).issubset(external_items)
+    assert set(recommendations[Columns.User]).issubset(external_users)
+    # No dense internal indices (0..5) should appear as item/user ids.
+    assert set(recommendations[Columns.Item]).isdisjoint(range(len(external_items)))
+    assert set(recommendations[Columns.User]).isdisjoint(range(len(external_users)))
+    assert not recommendations.duplicated(subset=[Columns.User, Columns.Item]).any()
+
+    personalized = recommendations[recommendations["source"] == "personalized"]
+    for user_id, group in personalized.groupby(Columns.User):
+        seen = set(seen_by_user[int(user_id)])
+        assert set(group[Columns.Item]).isdisjoint(seen)
+
+
+def test_should_log_epoch_first_last_and_interval():
+    from cicerone.model import _should_log_epoch
+
+    assert _should_log_epoch(1, 30, 5)
+    assert _should_log_epoch(5, 30, 5)
+    assert _should_log_epoch(30, 30, 5)
+    assert not _should_log_epoch(2, 30, 5)
+    assert not _should_log_epoch(29, 30, 5)
+
+
+def test_warn_on_epoch_metric_trajectory_regression_and_plateau(caplog):
+    from cicerone.model import _warn_on_epoch_metric_trajectory
+
+    with caplog.at_level("WARNING"):
+        _warn_on_epoch_metric_trajectory([(1, {"Precision@2": 0.5})])
+    assert caplog.text == ""
+
+    with caplog.at_level("WARNING"):
+        _warn_on_epoch_metric_trajectory(
+            [
+                (1, {"Precision@2": 0.8}),
+                (5, {"Precision@2": 0.7}),
+                (10, {"Precision@2": 0.4}),
+            ]
+        )
+    assert "regressed" in caplog.text
+
+    caplog.clear()
+    with caplog.at_level("WARNING"):
+        _warn_on_epoch_metric_trajectory(
+            [
+                (1, {"Recall@2": 0.50}),
+                (5, {"Recall@2": 0.501}),
+                (10, {"Recall@2": 0.502}),
+            ]
+        )
+    assert "plateaued" in caplog.text
+
+
+def test_fit_lightfm_with_epoch_metrics_rejects_model_without_fit_partial():
+    from cicerone.model import _fit_lightfm_with_epoch_metrics
+
+    class NoPartial:
+        def fit(self, dataset):
+            return self
+
+        def recommend(self, **kwargs):
+            return pd.DataFrame()
+
+    with pytest.raises(TypeError, match="fit_partial"):
+        _fit_lightfm_with_epoch_metrics(NoPartial(), None, pd.DataFrame(), every=1, top_k=2)
+
+
+def test_train_and_recommend_logs_epoch_metrics_when_configured(
+    sample_items, feature_config, monkeypatch, caplog
+):
+    import cicerone.model as model_module
+
+    # Keep the epoch loop short so this stays a unit test, not a training bench.
+    monkeypatch.setattr(model_module, "COLLABORATIVE_EPOCHS", 4)
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    with caplog.at_level("INFO"):
+        recommendations = train_and_recommend(
+            built,
+            target_users=["u1", "u2", "u3"],
+            config=feature_config,
+            top_k=2,
+            enabled_models=["collaborative"],
+            epoch_metrics_every=2,
+        )
+
+    assert not recommendations.empty
+    assert "Collaborative epoch 1/4 metrics:" in caplog.text
+    assert "Collaborative epoch 2/4 metrics:" in caplog.text
+    assert "Collaborative epoch 4/4 metrics:" in caplog.text
+    # Interval is every 2 → epoch 3 should not be logged.
+    assert "Collaborative epoch 3/4 metrics:" not in caplog.text
+    assert "Precision@2" in caplog.text
+    assert "Recall@2" in caplog.text
+
+
+def test_train_and_recommend_skips_epoch_metrics_by_default(sample_items, feature_config, caplog):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    with caplog.at_level("INFO"):
+        train_and_recommend(
+            built,
+            target_users=["u1", "u2", "u3"],
+            config=feature_config,
+            top_k=2,
+            enabled_models=["collaborative"],
+        )
+
+    assert "Collaborative epoch" not in caplog.text
