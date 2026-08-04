@@ -44,14 +44,9 @@ RRF_K = 60
 SOURCE_COLUMN = "source"
 WEIGHT_COLUMN = "_weight"  # internal-only; dropped before returning to callers
 
-# LightFMWrapperModel.fit() runs all of these in one LightFM.fit_partial call.
-# Per-epoch metric logging (job.log_epoch_metrics) instead loops fit_partial(epochs=1).
-COLLABORATIVE_EPOCHS = 30
-# Cap how many users we score mid-training so epoch logging stays cheap.
+COLLABORATIVE_EPOCHS = 30  # LightFMWrapperModel.fit() runs these in one fit_partial
 EPOCH_METRICS_MAX_USERS = 500
-# Relative drop from the best logged value that triggers a WARN.
 EPOCH_METRICS_REGRESSION_DROP = 0.25
-# Relative range across the last few snapshots that counts as a plateau WARN.
 EPOCH_METRICS_PLATEAU_EPS = 0.01
 EPOCH_METRICS_PLATEAU_WINDOW = 3
 
@@ -171,14 +166,10 @@ def _fit_lightfm_with_epoch_metrics(
     every: int,
     top_k: int,
 ) -> RecommenderModel:
-    """Fit LightFM one epoch at a time and log in-sample Precision/Recall@K.
+    """Epoch-by-epoch LightFM fit with in-sample Precision/Recall@K logs.
 
-    Default training is a single ``model.fit(dataset)`` (rectools runs all
-    ``COLLABORATIVE_EPOCHS`` inside one ``LightFM.fit_partial``). Per-epoch
-    logging needs the public ``fit_partial(dataset, epochs=1)`` loop instead.
-    Metrics are scored against the training interactions with
-    ``filter_viewed=False`` so known positives can appear in top-K — this is a
-    trajectory signal, not a holdout generalization estimate.
+    Scores training interactions with filter_viewed=False (trajectory signal,
+    not holdout generalization).
     """
     fit_partial = getattr(model, "fit_partial", None)
     if not callable(fit_partial):
@@ -334,10 +325,8 @@ def fit_strategies(
 ) -> tuple[list[str], dict[str, RecommenderModel]]:
     """Fit (or cache-hit) enabled strategies. ``max_workers > 1`` fits in parallel.
 
-    When ``epoch_metrics_every`` is set, the collaborative (LightFM) strategy is
-    trained epoch-by-epoch via ``fit_partial`` and logs Precision/Recall@K every
-    N epochs (see ``job.log_epoch_metrics``). Other strategies still use a
-    single ``fit()``. Default ``None`` keeps the fast single-shot LightFM fit.
+    ``epoch_metrics_every`` enables collaborative fit_partial logging; default
+    ``None`` keeps a single LightFM ``fit()``.
     """
     dataset = built.dataset
     enabled_models = _resolve_enabled_models(enabled_models)
@@ -497,13 +486,8 @@ def recommend_with_models(
             else:
                 recommend_users = cohort_users
 
-            # Top-K extraction is rectools-native end-to-end: ModelBase.recommend()
-            # maps external user/item IDs ↔ the model's internal integer indices via
-            # dataset.user_id_map / item_id_map (built once in Dataset.construct /
-            # build_dataset — the single source of truth), ranks with
-            # recommend_from_scores, and returns external IDs. Cicerone never
-            # hand-rolls that mapping; _combine_by_* below only merges already-
-            # external recommendation frames across strategies.
+            # rectools ModelBase.recommend() owns external↔internal ID mapping
+            # via dataset.*_id_map; _combine_by_* only merges already-external frames.
             recs = models[name].recommend(
                 users=recommend_users,
                 dataset=dataset,

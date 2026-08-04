@@ -46,12 +46,9 @@ def resolve_epoch_metrics_every(
     log_epoch_metrics: bool,
     epoch_metrics_every: Any | None = None,
 ) -> int | None:
-    """Resolved LightFM epoch-logging interval, or ``None`` when logging is off.
+    """Epoch-logging interval, or ``None`` when ``log_epoch_metrics`` is off.
 
-    ``epoch_metrics_every`` is ignored (not validated) unless
-    ``log_epoch_metrics`` is true — matching the TOML docs. When logging is
-    on, a missing value defaults to ``DEFAULT_EPOCH_METRICS_EVERY`` and the
-    result must be >= 1.
+    The interval is validated only when logging is enabled.
     """
     if not log_epoch_metrics:
         return None
@@ -135,9 +132,7 @@ class Settings:
     save_model_artifact: bool
     max_workers: int
     log_epoch_metrics: bool
-    # Resolved interval when logging is on; None when log_epoch_metrics is false
-    # (raw TOML value is ignored / not validated in that case).
-    epoch_metrics_every: int | None
+    epoch_metrics_every: int | None  # None when logging off; validated only when on
     automl_enabled: bool
     automl_n_splits: int
     automl_test_days: int

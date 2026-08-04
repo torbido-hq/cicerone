@@ -150,11 +150,7 @@ def _time_based_folds(
 
 
 def _make_metrics(top_k: int) -> dict[str, MetricAtK]:
-    # Library-native rectools metrics (not a custom MAP/NDCG/Recall
-    # implementation). Prefer these over homebrew versions: they match the
-    # definitions AutoML and the recommenders ecosystem expect, and avoid
-    # silent correctness bugs. Keep using calc_metrics() below rather than
-    # reimplementing.
+    # rectools.metrics — not a custom MAP/NDCG/Recall implementation.
     return {
         f"MAP@{top_k}": MAP(k=top_k),
         f"NDCG@{top_k}": NDCG(k=top_k),
