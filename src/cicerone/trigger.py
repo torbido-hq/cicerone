@@ -1,17 +1,7 @@
-"""Event-driven retraining trigger, running alongside the existing cron
-schedule in cicerone.scheduler. Two ways to signal a run:
+"""Event-driven retrain trigger (webhook + optional input-bucket poller).
 
-  - POST /trigger/retrain: a generic webhook, anything can call it.
-  - Optional input-bucket polling (trigger.poll_input_bucket = true):
-    periodically checks whether the input source's events file has changed
-    (S3 LastModified / local mtime) and triggers a run if so. Polling is
-    used instead of real S3 event notifications since those require
-    SNS/SQS/Lambda wiring and don't work uniformly across S3-compatible
-    backends (R2, MinIO, ...).
-
-Both paths trigger the exact same thing: one full, ordinary job.run() call,
-identical to a scheduled run. RunGuard debounces so at most one run happens
-at a time and rapid-fire triggers are coalesced into a no-op.
+Runs alongside cron in cicerone.scheduler. Both paths call job.run() through
+a RunGuard that debounces concurrent / rapid-fire triggers.
 """
 
 from __future__ import annotations
@@ -22,12 +12,12 @@ import time
 from pathlib import Path
 from typing import Any, Protocol
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException
 
 from cicerone import job
 from cicerone.config import IOSettings, Settings
-from cicerone.http_auth import require_bearer_token
-from cicerone.io.options import build_s3_client, require_option
+from cicerone.http_auth import optional_bearer_deps
+from cicerone.io.options import build_s3_client, object_key, require_option
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +27,7 @@ class _RunFn(Protocol):
 
 
 class RunGuard:
-    """Debounces/guards concurrent or rapid-fire triggers: at most one
-    training run happens at a time, and a trigger arriving less than
-    `debounce_seconds` after the previous one started is ignored."""
+    """At most one run at a time; triggers within debounce_seconds are ignored."""
 
     def __init__(self, debounce_seconds: float, run_fn: _RunFn = job.run):
         self._debounce_seconds = debounce_seconds
@@ -49,9 +37,6 @@ class RunGuard:
         self._last_started_at: float | None = None
 
     def trigger(self, triggered_by: str) -> bool:
-        """Attempts to start a run. Returns True if a run was started, False
-        if the trigger was ignored (already running, or within the debounce
-        window of the previous run)."""
         with self._lock:
             now = time.monotonic()
             if self._running:
@@ -77,10 +62,6 @@ class RunGuard:
 
 
 def _current_marker(input_settings: IOSettings) -> str | None:
-    """A cheap "has the input data changed" fingerprint: local file mtime,
-    or S3 object LastModified. Returns None if it can't be determined,
-    which never counts as a change.
-    """
     options = input_settings.options
     backend = options.get("storage_backend", "local")
     if backend == "local":
@@ -90,8 +71,7 @@ def _current_marker(input_settings: IOSettings) -> str | None:
     try:
         client = build_s3_client(options)
         bucket = require_option(options, "bucket", "s3")
-        prefix = str(options.get("prefix", "")).strip("/")
-        key = f"{prefix}/events.parquet" if prefix else "events.parquet"
+        key = object_key(options, "events.parquet")
         head = client.head_object(Bucket=bucket, Key=key)
         return str(head["LastModified"])
     except Exception:
@@ -119,8 +99,7 @@ def poll_input_forever(input_settings: IOSettings, guard: RunGuard, interval_sec
 
 def create_app(settings: Settings, guard: RunGuard) -> FastAPI:
     app = FastAPI(title="cicerone-trigger")
-    auth = require_bearer_token(settings.trigger_auth_token) if settings.trigger_auth_token else None
-    dependencies = [Depends(auth)] if auth else []
+    dependencies = optional_bearer_deps(settings.trigger_auth_token)
 
     @app.get("/health")
     def health() -> dict[str, str]:

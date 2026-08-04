@@ -4,7 +4,7 @@ import re
 
 import pytest
 
-from cicerone.config import load_settings
+from cicerone.config import load_settings, resolve_max_workers
 
 
 def _write_toml(tmp_path, content: str) -> str:
@@ -173,6 +173,33 @@ def test_load_settings_with_explicit_model_weights(tmp_path):
     assert settings.rrf_k == 45.0
 
 
+def test_load_settings_rejects_model_weights_not_in_models(tmp_path):
+    config_path = _write_toml(
+        tmp_path,
+        """
+        [job]
+        models = ["popular"]
+
+        [job.model_weights]
+        collaborative = 1.0
+
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+    with pytest.raises(RuntimeError, match="model_weights"):
+        load_settings(config_path)
+
+
 def test_load_settings_rejects_negative_model_weight(tmp_path):
     config_path = _write_toml(
         tmp_path,
@@ -307,6 +334,7 @@ def test_load_settings_defaults_when_job_section_missing(tmp_path):
     assert settings.model_weights is None
     assert settings.rrf_k is None
     assert settings.save_model_artifact is False
+    assert settings.max_workers == 1
     assert settings.automl_enabled is False
     assert settings.automl_n_splits == 2
     assert settings.automl_test_days == 14
@@ -336,8 +364,97 @@ def test_load_settings_save_model_artifact(tmp_path):
     )
 
     settings = load_settings(config_path)
-
     assert settings.save_model_artifact is True
+
+
+def test_load_settings_max_workers_and_rejects_non_positive(tmp_path):
+    good_dir = tmp_path / "good"
+    good_dir.mkdir()
+    good = _write_toml(
+        good_dir,
+        """
+        [job]
+        max_workers = 4
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+    assert load_settings(good).max_workers == 4
+
+    omitted_dir = tmp_path / "omitted"
+    omitted_dir.mkdir()
+    omitted = _write_toml(
+        omitted_dir,
+        """
+        [job]
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+    assert load_settings(omitted).max_workers == 1
+    assert resolve_max_workers() == 1
+    assert resolve_max_workers(None) == 1
+    assert resolve_max_workers(3) == 3
+
+    bad_dir = tmp_path / "bad"
+    bad_dir.mkdir()
+    bad = _write_toml(
+        bad_dir,
+        """
+        [job]
+        max_workers = 0
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+    with pytest.raises(RuntimeError, match="max_workers"):
+        load_settings(bad)
+
+
+def test_load_settings_rejects_non_positive_half_life_days(tmp_path):
+    config_path = _write_toml(
+        tmp_path,
+        """
+        [job]
+        half_life_days = 0
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+    with pytest.raises(RuntimeError, match="half_life_days"):
+        load_settings(config_path)
 
 
 def test_load_settings_db_backend_with_defaults(tmp_path):

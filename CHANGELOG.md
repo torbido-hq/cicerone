@@ -4,6 +4,32 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.1] - Unreleased
+
+### Changed
+
+- README gains a top-level **Features** list (batch, strategies, AutoML,
+  policies, serve, trigger, dashboard, artifacts).
+
+- Priority combine fills top-K from earlier strategies first (stable
+  priority + rank sort) instead of interleaving by per-strategy rank.
+- `[job].max_workers` drives ProcessPool parallelism for AutoML folds and
+  strategy fitting (default `1` / sequential; set `>1` to opt in).
+- AutoML `primary_metric` matches an exact name or a single `NAME@k`;
+  ambiguous `NAME@k` sets are rejected (no order-dependent first match).
+- Shared I/O helpers: `object_key`, `sql_identifier`, S3 not-found checks.
+- Model-artifact DB writes use portable SQLAlchemy `LargeBinary` /
+  timezone-aware `DateTime` and clear via `DELETE` (dialect-agnostic).
+- Config validates `top_k`, `half_life_days`, feature column types, and
+  `model_weights` keys against `job.models`.
+- Batch job builds artifacts in memory and writes outputs only after
+  successful compute, reducing partial failed-run publishes.
+
+### Fixed
+
+- Optional dataset `users`/`items` reads only treat missing files / S3
+  not-found as absent; other errors propagate.
+
 ## [0.3.0] - 2026-08-03
 
 ### Added

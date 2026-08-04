@@ -1,17 +1,4 @@
-"""CLI to manage the dashboard's HTTP Basic Auth users (see
-cicerone.dashboard_users for the file format/loader cicerone.dashboard
-reads at startup). Intended for a small, fixed set of named people (a
-handful of maintainers) -- not a general user management system, so it
-deliberately does nothing more than add/remove/list against that one file.
-
-Usage:
-  python -m cicerone.manage_dashboard_users add <username> [--users-path PATH]
-  python -m cicerone.manage_dashboard_users remove <username> [--users-path PATH]
-  python -m cicerone.manage_dashboard_users list [--users-path PATH]
-
-Passwords are always read interactively via getpass (never as a CLI
-argument), so they never end up in shell history or a `ps` listing.
-"""
+"""CLI for dashboard Basic Auth users (python -m cicerone.manage_dashboard_users)."""
 
 from __future__ import annotations
 
@@ -25,8 +12,6 @@ import bcrypt
 from cicerone.dashboard_users import load_users, save_users
 
 DEFAULT_USERS_PATH = "/app/config/dashboard_users.toml"
-
-# Usernames are stored as bare TOML keys, restricted to what TOML allows there.
 _USERNAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 

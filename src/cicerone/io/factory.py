@@ -1,9 +1,4 @@
-"""Builds the configured input source / output sink.
-
-Input and output are chosen independently via the "kind" of their
-[input]/[output] section in cicerone.toml ("dataset" or "db"). Adding a new
-backend kind means adding a case here and a module under cicerone.io.
-"""
+"""Builds the configured input source / output sink / readers from IOSettings."""
 
 from __future__ import annotations
 

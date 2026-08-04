@@ -69,10 +69,7 @@ _RECOMMEND_PARAMS = {"users", "dataset", "k", "filter_viewed", "items_to_recomme
 
 
 def _as_recommender_model(model: object) -> RecommenderModel:
-    """Verifies (at strategy-construction time) that `model` implements the
-    RecommenderModel protocol, failing fast with a clear message instead of
-    a confusing TypeError deep inside a fold loop on first use.
-    """
+    """Fail fast if `model` does not implement RecommenderModel."""
     fit = getattr(model, "fit", None)
     recommend = getattr(model, "recommend", None)
     if not callable(fit) or not callable(recommend):
@@ -148,31 +145,21 @@ def _validate_strategy_names(strategies: dict[str, Strategy], strategy_names: tu
 _validate_strategy_names(STRATEGIES, STRATEGY_NAMES)
 
 
-def _recommendable_item_ids(
-    items: pd.DataFrame | None, filter_columns: list[str], all_item_ids: pd.Index
-) -> list:
-    """Global boolean availability filter (legacy helper; prefer policy.allowed_items_for_cohort)."""
-    if items is None or not filter_columns:
-        return list(all_item_ids)
-    mask = pd.Series(True, index=items.index)
-    for column in filter_columns:
-        if column not in items.columns:
-            logger.warning("Configured item_availability_filters column '%s' not found — skipping", column)
-            continue
-        mask &= items[column].fillna(False)
-    allowed = set(items.loc[mask, "item_id"])
-    return [i for i in all_item_ids if i in allowed] or list(all_item_ids)
-
-
 def _combine_by_priority(frames: list[pd.DataFrame], top_k: int) -> pd.DataFrame:
-    """Concatenates strategy outputs in list order; earlier strategies win
-    ties for the same (user, item) pair.
+    """Fill top-K from strategy outputs in list order: earlier strategies keep
+    duplicate (user, item) pairs and fill slots before later ones.
     """
-    combined = pd.concat(frames, ignore_index=True)
+    tagged = []
+    for priority, frame in enumerate(frames):
+        part = frame.copy()
+        part["_priority"] = priority
+        tagged.append(part)
+    combined = pd.concat(tagged, ignore_index=True)
     combined = combined.drop_duplicates(subset=[Columns.User, Columns.Item], keep="first")
-    combined = combined.sort_values([Columns.User, Columns.Rank])
+    combined = combined.sort_values([Columns.User, "_priority", Columns.Rank])
     combined = combined.groupby(Columns.User, as_index=False).head(top_k)
-    return combined.drop(columns=[WEIGHT_COLUMN])
+    combined[Columns.Rank] = combined.groupby(Columns.User).cumcount() + 1
+    return combined.drop(columns=[WEIGHT_COLUMN, "_priority"])
 
 
 def _combine_by_weighted_fusion(
@@ -203,10 +190,7 @@ def _combine_by_weighted_fusion(
 
 
 def _fit_strategy(name: str, dataset: Dataset) -> tuple[str, RecommenderModel]:
-    """Fits one strategy's model on `dataset`. A standalone, picklable
-    function so train_and_recommend can run it in a worker process when
-    fitting multiple (independent) strategies in parallel.
-    """
+    """Fit one strategy (picklable for ProcessPoolExecutor workers)."""
     model = STRATEGIES[name].factory()
     model.fit(dataset)
     return name, model
@@ -232,19 +216,7 @@ def fit_strategies(
     strategy_cache: dict[str, RecommenderModel] | None = None,
     max_workers: int = 1,
 ) -> tuple[list[str], dict[str, RecommenderModel]]:
-    """Fits (or cache-hits) every enabled strategy. Returns
-    ``(resolved_enabled_models, fitted_models)``.
-
-    `strategy_cache`, if given, caches fitted models by strategy name so
-    callers evaluating multiple candidates against the same built dataset
-    (see cicerone.automl) can avoid re-fitting a shared strategy — and so
-    the batch job can capture fitted weights for a model artifact without
-    a second fit.
-
-    Strategies are independent, so with `max_workers > 1` the models that
-    still need fitting are fit in a `ProcessPoolExecutor` instead of
-    sequentially in-process (the default).
-    """
+    """Fit (or cache-hit) enabled strategies. ``max_workers > 1`` fits in parallel."""
     dataset = built.dataset
     enabled_models = _resolve_enabled_models(enabled_models)
 

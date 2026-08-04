@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 from rectools import Columns
 
-from cicerone.config import STRATEGY_NAMES
+from cicerone.config import STRATEGY_NAMES, validate_model_weights
 from cicerone.dataset import build_dataset
 from cicerone.model import (
     DEFAULT_MODELS,
@@ -12,11 +12,11 @@ from cicerone.model import (
     RecommenderModel,
     Strategy,
     _as_recommender_model,
-    _recommendable_item_ids,
+    _combine_by_priority,
     _validate_strategy_names,
     train_and_recommend,
-    validate_model_weights,
 )
+from cicerone.policy import allowed_items_for_cohort, resolve_eligibility
 
 
 def _synthetic_events() -> pd.DataFrame:
@@ -42,27 +42,188 @@ def _synthetic_events() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def test_recommendable_item_ids_filters_on_all_configured_columns(sample_items):
-    all_ids = pd.Index(["i1", "i2", "i3", "i4"])
-    allowed = _recommendable_item_ids(sample_items, ["published", "in_stock"], all_ids)
-    assert set(allowed) == {"i1", "i2"}
+def test_availability_filters_via_policy_allowlist(sample_items, feature_config):
+    rules = resolve_eligibility(feature_config)
+    allowed = allowed_items_for_cohort(["u1"], None, sample_items, rules, ["i1", "i2", "i3", "i4"])
+    assert allowed == ["i1", "i2"]
 
 
-def test_recommendable_item_ids_skips_missing_column_and_warns(sample_items, caplog):
-    all_ids = pd.Index(["i1", "i2", "i3", "i4"])
-    allowed = _recommendable_item_ids(sample_items, ["published", "not_a_real_column"], all_ids)
-    assert "not_a_real_column" in caplog.text
-    assert set(allowed) == {"i1", "i2", "i3"}
+def test_combine_by_priority_fills_from_earlier_strategies_first():
+    frames = [
+        pd.DataFrame(
+            [
+                {"user_id": "u1", "item_id": "a", "rank": 1, "score": 1.0, "source": "first", "_weight": 1.0},
+                {"user_id": "u1", "item_id": "b", "rank": 2, "score": 0.5, "source": "first", "_weight": 1.0},
+            ]
+        ),
+        pd.DataFrame(
+            [
+                {
+                    "user_id": "u1",
+                    "item_id": "c",
+                    "rank": 1,
+                    "score": 9.0,
+                    "source": "second",
+                    "_weight": 1.0,
+                },
+                {
+                    "user_id": "u1",
+                    "item_id": "b",
+                    "rank": 2,
+                    "score": 8.0,
+                    "source": "second",
+                    "_weight": 1.0,
+                },
+            ]
+        ),
+    ]
+    out = _combine_by_priority(frames, top_k=2)
+    assert list(out[Columns.Item]) == ["a", "b"]
+    assert list(out[Columns.Rank]) == [1, 2]
+    assert list(out["source"]) == ["first", "first"]
 
 
-def test_recommendable_item_ids_no_items_returns_all():
-    all_ids = pd.Index(["i1", "i2"])
-    assert _recommendable_item_ids(None, ["published"], all_ids) == ["i1", "i2"]
+def test_combine_by_priority_fills_from_later_strategies_when_earlier_insufficient():
+    frames = [
+        pd.DataFrame(
+            [
+                {
+                    "user_id": "u1",
+                    "item_id": "a",
+                    "rank": 1,
+                    "score": 1.0,
+                    "source": "first",
+                    "_weight": 1.0,
+                },
+            ]
+        ),
+        pd.DataFrame(
+            [
+                {
+                    "user_id": "u1",
+                    "item_id": "b",
+                    "rank": 1,
+                    "score": 0.8,
+                    "source": "second",
+                    "_weight": 1.0,
+                },
+                {
+                    "user_id": "u1",
+                    "item_id": "c",
+                    "rank": 2,
+                    "score": 0.7,
+                    "source": "second",
+                    "_weight": 1.0,
+                },
+            ]
+        ),
+        pd.DataFrame(
+            [
+                {
+                    "user_id": "u1",
+                    "item_id": "d",
+                    "rank": 1,
+                    "score": 0.9,
+                    "source": "third",
+                    "_weight": 1.0,
+                },
+            ]
+        ),
+    ]
+
+    combined = _combine_by_priority(frames, top_k=2)
+
+    assert list(combined[Columns.User].unique()) == ["u1"]
+    assert len(combined) == 2
+    assert list(combined[Columns.Item]) == ["a", "b"]
+    assert list(combined[Columns.Rank]) == [1, 2]
 
 
-def test_recommendable_item_ids_no_filters_configured_returns_all(sample_items):
-    all_ids = pd.Index(["i1", "i2", "i3", "i4"])
-    assert _recommendable_item_ids(sample_items, [], all_ids) == ["i1", "i2", "i3", "i4"]
+def test_combine_by_priority_recomputes_ranks_per_user():
+    frames = [
+        pd.DataFrame(
+            [
+                {
+                    "user_id": "u1",
+                    "item_id": "a",
+                    "rank": 1,
+                    "score": 1.0,
+                    "source": "first",
+                    "_weight": 1.0,
+                },
+                {
+                    "user_id": "u2",
+                    "item_id": "b",
+                    "rank": 1,
+                    "score": 0.9,
+                    "source": "first",
+                    "_weight": 1.0,
+                },
+                {
+                    "user_id": "u2",
+                    "item_id": "c",
+                    "rank": 2,
+                    "score": 0.8,
+                    "source": "first",
+                    "_weight": 1.0,
+                },
+            ]
+        ),
+        pd.DataFrame(
+            [
+                {
+                    "user_id": "u1",
+                    "item_id": "d",
+                    "rank": 1,
+                    "score": 0.7,
+                    "source": "second",
+                    "_weight": 1.0,
+                },
+                {
+                    "user_id": "u1",
+                    "item_id": "e",
+                    "rank": 2,
+                    "score": 0.6,
+                    "source": "second",
+                    "_weight": 1.0,
+                },
+                {
+                    "user_id": "u2",
+                    "item_id": "f",
+                    "rank": 1,
+                    "score": 0.85,
+                    "source": "second",
+                    "_weight": 1.0,
+                },
+            ]
+        ),
+    ]
+
+    top_k = 2
+    combined = _combine_by_priority(frames, top_k=top_k)
+
+    counts = combined.groupby(Columns.User)[Columns.Item].count().to_dict()
+    assert counts == {"u1": 2, "u2": 2}
+
+    ranks_per_user = (
+        combined.sort_values([Columns.User, Columns.Rank])
+        .groupby(Columns.User)[Columns.Rank]
+        .apply(list)
+        .to_dict()
+    )
+    assert ranks_per_user == {"u1": [1, 2], "u2": [1, 2]}
+
+    items_per_user = (
+        combined.sort_values([Columns.User, Columns.Rank])
+        .groupby(Columns.User)[Columns.Item]
+        .apply(list)
+        .to_dict()
+    )
+    assert items_per_user == {"u1": ["a", "d"], "u2": ["b", "c"]}
+
+    for _, group in combined.groupby(Columns.User):
+        ordered = group.sort_values(Columns.Rank)
+        assert list(ordered[Columns.Rank]) == list(range(1, top_k + 1))
 
 
 def test_train_and_recommend_respects_top_k_and_availability_filter(sample_items, feature_config):

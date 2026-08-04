@@ -1,13 +1,4 @@
-"""Serve mode: a lightweight read API over precomputed recommendations.
-
-This is not live inference -- there is no model loaded here, and no
-lightfm/rectools/implicit import anywhere in this module or its request
-path. It only reads whatever the batch job already wrote to the configured
-output store, via cicerone.io.recommendation_reader.
-
-Selected via `job.mode = "serve"` in cicerone.toml. Run with
-`python -m cicerone.serve`.
-"""
+"""Serve mode: read API over precomputed recommendations (no live inference)."""
 
 from __future__ import annotations
 
@@ -16,10 +7,10 @@ import threading
 import time
 
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query
 
 from cicerone.config import Settings, load_settings
-from cicerone.http_auth import require_bearer_token
+from cicerone.http_auth import optional_bearer_deps
 from cicerone.io.base import RecommendationReader
 from cicerone.io.factory import build_recommendation_reader
 
@@ -38,13 +29,11 @@ def _start_refresh_loop(reader: RecommendationReader, interval_seconds: float) -
 
 def create_app(settings: Settings, reader: RecommendationReader) -> FastAPI:
     app = FastAPI(title="cicerone-serve")
-    auth = require_bearer_token(settings.serve_auth_token) if settings.serve_auth_token else None
+    dependencies = optional_bearer_deps(settings.serve_auth_token)
 
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
-
-    dependencies = [Depends(auth)] if auth else []
 
     @app.get("/recommendations/{user_id}", dependencies=dependencies)
     def get_recommendations(user_id: str, k: int | None = Query(default=None, gt=0)) -> list[dict]:

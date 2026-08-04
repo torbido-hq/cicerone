@@ -1,34 +1,19 @@
-"""Builds a rectools Dataset from the raw events/users/items provided by the
-configured input source (see cicerone.io).
+"""Build a rectools Dataset from events/users/items (see cicerone.io).
 
 Input contract:
 
-  events   (required)
-    user_id       str   stable user identifier
-    item_id       str   stable item/product identifier
-    event_type    str   must have an entry in config/features.toml -> event_weights
-    quantity      int   optional, defaults to 1 (used by quantity_scaled_events)
-    occurred_at   datetime64  UTC timestamp of the event
+  events (required)
+    user_id, item_id, event_type, quantity (optional), occurred_at
 
-  users   (optional — enables warm/cold user features)
-    user_id  str
-    + one column per entry in config/features.toml -> user_features
+  users (optional — features + per-user eligibility)
+    user_id + columns from user_features / [[eligibility]]
 
-  items   (optional — enables warm/cold item features + fallback ranking)
-    item_id  str
-    + one column per entry in config/features.toml -> item_features
-    + boolean columns listed in item_availability_filters
-    + any columns referenced by [[eligibility]] / [[boost]] rules
+  items (optional — features, availability, eligibility, boosts)
+    item_id + columns from item_features / item_availability_filters /
+    [[eligibility]] / [[boost]]
 
-  users   (optional — enables warm/cold user features + per-user eligibility)
-    user_id  str
-    + one column per entry in config/features.toml -> user_features
-    + any user columns referenced by [[eligibility]] rules
-
-Only events is required; users/items features are best-effort and missing
-inputs degrade gracefully to an interactions-only model. Which event types
-carry weight, and which user/item columns feed the model, are NOT hardcoded
-here — see cicerone.feature_config / config/features.toml.
+Only events is required; missing users/items degrade gracefully.
+Weights and feature columns come from config/features.toml.
 """
 
 from __future__ import annotations
@@ -55,17 +40,14 @@ class BuiltDataset:
 
 
 def _time_decay_multiplier(occurred_at: pd.Series, half_life_days: float) -> pd.Series:
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     age_days = (now - occurred_at).dt.total_seconds() / 86_400
     age_days = age_days.clip(lower=0)
     return 0.5 ** (age_days / half_life_days)
 
 
 def build_interactions(events: pd.DataFrame, config: FeatureConfig, half_life_days: float) -> pd.DataFrame:
-    """Builds the weighted/aggregated interactions DataFrame alone, without
-    building user/item feature matrices or a rectools Dataset. Used directly
-    by cicerone.automl for scoring a held-out fold's ground truth.
-    """
+    """Weighted/aggregated interactions without building a rectools Dataset."""
     df = events.copy()
     df["occurred_at"] = pd.to_datetime(df["occurred_at"], utc=True)
     df["quantity"] = df.get("quantity", 1)
@@ -81,8 +63,6 @@ def build_interactions(events: pd.DataFrame, config: FeatureConfig, half_life_da
         df["event_type"].isin(config.quantity_scaled_events), np.log1p(df["quantity"]), 1.0
     )
 
-    # Apply per-(user, item, event_type) caps before decay, so noisy
-    # high-frequency signals (e.g. views) can't drown out rarer ones.
     for event_type, cap in config.event_caps.items():
         mask = df["event_type"] == event_type
         if not mask.any():
@@ -97,9 +77,7 @@ def build_interactions(events: pd.DataFrame, config: FeatureConfig, half_life_da
     aggregated = df.groupby(["user_id", "item_id"], as_index=False).agg(
         weight=("weight", "sum"), datetime=("occurred_at", "max")
     )
-    # Negative reviews can push a pair below zero; rectools/LightFM expects
-    # non-negative implicit weights, so floor at a small positive epsilon
-    # instead of dropping the row (an epsilon still ranks it near-last).
+    # Floor negative review sums: rectools/LightFM expect non-negative weights.
     aggregated["weight"] = aggregated["weight"].clip(lower=1e-3)
 
     aggregated = aggregated.rename(columns={"user_id": Columns.User, "item_id": Columns.Item})

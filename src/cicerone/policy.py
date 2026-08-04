@@ -66,23 +66,21 @@ def has_user_scoped_eligibility(rules: Sequence[EligibilityRule]) -> bool:
     return any(is_user_scoped(r) for r in rules)
 
 
+def _is_sequence_attr(value: object) -> bool:
+    if isinstance(value, (list, tuple, set, pd.Series)):
+        return True
+    return isinstance(value, np.ndarray) and value.ndim > 0
+
+
 def _is_missing(value: object) -> bool:
     if value is None or value is _MISSING:
         return True
-    # List-like cells are never "missing" (empty allowlists are just empty).
-    if isinstance(value, (list, tuple, set, pd.Series)) or (isinstance(value, np.ndarray) and value.ndim > 0):
+    if _is_sequence_attr(value):
         return False
     try:
         return bool(pd.isna(value))
     except (TypeError, ValueError):
         return False
-
-
-def _is_sequence_attr(value: object) -> bool:
-    """True for list-like user/item attribute cells (including parquet ndarrays)."""
-    if isinstance(value, (list, tuple, set, pd.Series)):
-        return True
-    return isinstance(value, np.ndarray) and value.ndim > 0
 
 
 def _as_list(value: object) -> list:
@@ -91,12 +89,12 @@ def _as_list(value: object) -> list:
     if isinstance(value, np.ndarray):
         if value.ndim == 0:
             return _as_list(value.item())
-        return [v for v in value.tolist() if not _is_missing(v)]
-    if isinstance(value, (list, tuple, set)):
-        return list(value)
-    if isinstance(value, pd.Series):
-        return [v for v in value.tolist() if not _is_missing(v)]
-    return [value]
+        values = value.tolist()
+    elif isinstance(value, (list, tuple, set, pd.Series)):
+        values = list(value) if not isinstance(value, pd.Series) else value.tolist()
+    else:
+        return [value]
+    return [v for v in values if not _is_missing(v)]
 
 
 def _str_set(values: Iterable) -> set[str]:
@@ -116,7 +114,6 @@ def _user_attr(user_row: pd.Series | dict | None, column: str | None) -> object:
 
 
 def _user_in_item_list_mask(item_values: pd.Series, user_value: object) -> pd.Series:
-    """True where stringified ``user_value`` appears in the item's list-like cell."""
     needle = str(user_value)
     exploded = item_values.map(_as_list).explode()
     if exploded.empty:
@@ -129,7 +126,6 @@ def _user_in_item_list_mask(item_values: pd.Series, user_value: object) -> pd.Se
 
 
 def _item_in_user_list_mask(item_values: pd.Series, user_value: object) -> pd.Series:
-    """True where the stringified item value is in the user's allowlist."""
     allowed = _str_set(_as_list(user_value))
     non_missing = ~item_values.map(_is_missing)
     return non_missing & item_values.astype(str).isin(allowed)
@@ -195,12 +191,9 @@ def index_users_by_id(users: pd.DataFrame | None) -> dict[str, pd.Series]:
     """O(1) user_id → row map (first row wins on duplicates)."""
     if users is None or users.empty or "user_id" not in users.columns:
         return {}
-    indexed: dict[str, pd.Series] = {}
-    for _, row in users.iterrows():
-        key = str(row["user_id"])
-        if key not in indexed:
-            indexed[key] = row
-    return indexed
+    keys = users["user_id"].astype(str)
+    keep = ~keys.duplicated(keep="first")
+    return {key: users.loc[idx] for idx, key in zip(users.index[keep], keys[keep], strict=True)}
 
 
 def _user_row_for(
@@ -291,7 +284,7 @@ def _value_map_factor(value: object, value_factors: dict[str, float]) -> float:
 
 def _numeric_factors(items: pd.DataFrame, column: str, weight: float) -> pd.Series:
     if column not in items.columns or items.empty:
-        return pd.Series(1.0, index=items.index if items is not None else None)
+        return pd.Series(1.0, index=items.index)
     series = pd.to_numeric(items[column], errors="coerce")
     lo = series.min(skipna=True)
     hi = series.max(skipna=True)

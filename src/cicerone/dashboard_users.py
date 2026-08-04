@@ -1,7 +1,4 @@
-"""The dashboard's HTTP Basic Auth users file: a small TOML file mapping
-username -> bcrypt password hash, managed via
-`python -m cicerone.manage_dashboard_users` rather than hand-edited.
-"""
+"""Dashboard Basic Auth users file (username → bcrypt hash)."""
 
 from __future__ import annotations
 
@@ -10,9 +7,6 @@ from pathlib import Path
 
 
 def load_users(path: str | Path) -> dict[str, str]:
-    """Returns {username: bcrypt_hash}. A missing file returns {} rather
-    than raising, since no users configured yet is a valid state.
-    """
     file_path = Path(path)
     if not file_path.exists():
         return {}

@@ -24,6 +24,18 @@ views, reviews, ...): drinks, books, courses, tracks, you name it. Input and
 output are pluggable and configured through a single TOML file, so wiring it
 up to your own data doesn't require touching any code.
 
+## Features
+
+- **Batch recommender** — cron-scheduled train + top-K write (dataset or DB I/O)
+- **Hybrid strategies** — collaborative (LightFM), item-based KNN, popular, latest
+- **Priority or RRF fusion** — combine strategies by order or weighted ranks
+- **AutoML** — time-fold backtest to pick models/weights per run
+- **Business policies** — TOML eligibility filters and score boosts
+- **Serve mode** — read-only HTTP API over precomputed recommendations
+- **Retrain trigger** — webhook (+ optional input poll) alongside cron
+- **Dashboard** — Basic-Auth status page for run success/failure and history
+- **Model artifacts** — optional versioned fitted-model bundle for offline reload
+
 > **Why "Cicerone"?** In the world of beer, a [Cicerone](https://www.cicerone.org)
 > is a certified expert on beer's history, styles, ingredients, brewing, and
 > — most importantly — what to pair or recommend for a given taste. Think of
@@ -249,9 +261,10 @@ user/item pair). Defaults to `["collaborative", "popular"]` if omitted:
   trending/recently active items. Non-personalized, same backfill role as
   `popular`.
 
-By default, strategies are combined in priority order: earlier ones win ties
-for the same user/item pair, non-personalized ones only backfill users who
-didn't get enough personalized results. Optionally, `[job.model_weights]`
+By default, strategies are combined in priority order: earlier strategies
+fill top-K slots first (later ones only backfill remaining slots), and
+duplicate (user, item) pairs keep the earlier strategy. Optionally,
+`[job.model_weights]`
 switches to a weighted reciprocal rank fusion instead — every enabled
 strategy's rank contributes `weight / (rrf_k + rank)` to each item's fused
 score, summed across strategies, so results from heterogeneous strategies
@@ -266,6 +279,9 @@ contributing strategy's label in `models`' configured order (e.g.
 alphabetically — so the label reflects your configured priority regardless
 of how the underlying strategy labels happen to sort.
 
+`[job].max_workers` (default `1`, sequential) controls ProcessPool size for
+strategy fitting and AutoML fold evaluation. Set `>1` to opt into parallelism.
+
 ## AutoML
 
 Instead of a fixed `models`/`model_weights` config, `[job.automl]` can pick
@@ -276,7 +292,7 @@ the best combination automatically for every run:
 enabled = true
 n_splits = 2       # time-based folds to backtest each candidate over
 test_days = 14     # size of each fold's held-out window, in days
-primary_metric = "MAP" # matched by prefix, e.g. "MAP@10"
+primary_metric = "MAP" # exact name, or a unique NAME@k (e.g. "MAP" → "MAP@10")
 ```
 
 Each run, `cicerone.automl.evaluate_candidates()` splits your event history

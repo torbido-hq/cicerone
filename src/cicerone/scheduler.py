@@ -1,14 +1,4 @@
-"""Tiny in-process cron replacement.
-
-Computes the next run time from [job].cron_schedule in cicerone.toml (5-field
-cron expression), sleeps until then, runs the job, and repeats forever. A
-failed run is logged and does not crash the loop.
-
-When [job.trigger].enabled is set, this also starts the event-driven retrain
-trigger (cicerone.trigger: webhook + optional input-bucket poller) in the
-same process, sharing a RunGuard with the cron loop so at most one run
-happens at a time.
-"""
+"""In-process cron loop; optionally embeds the retrain trigger in-process."""
 
 from __future__ import annotations
 

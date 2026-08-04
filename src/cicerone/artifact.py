@@ -1,19 +1,8 @@
-"""Versioned, portable fitted-model artifacts.
+"""Versioned, portable fitted-model artifacts (pickle).
 
-The batch job can optionally persist the fitted strategies (+ the rectools
-Dataset and FeatureConfig needed to recommend from them) as a single
-serialized file. That artifact is loadable without re-running
-``job.run`` / ``fit``, so a future thin inference layer would not need to
-redesign the training side.
-
-Serve mode does **not** load this artifact — it still reads precomputed
-recommendation rows only (no ML deps in the request path).
-
-**Trust boundary:** artifacts are serialized with ``pickle``. ``loads_artifact``
-/ ``load_artifact`` must only be used on bytes produced by a trusted Cicerone
-batch job (or an equivalent internal writer). Never unpickle user-uploaded or
-otherwise untrusted payloads — that is a remote code execution vector. This
-module is not exposed on the serve HTTP path.
+Trust boundary: only unpickle artifacts produced by a trusted Cicerone batch
+job. Never load user-uploaded or otherwise untrusted payloads — pickle is an
+RCE vector. Not used on the serve HTTP path.
 """
 
 from __future__ import annotations
@@ -39,8 +28,6 @@ ARTIFACT_FILENAME = "model.artifact"
 
 @dataclass
 class ModelArtifact:
-    """Portable bundle of fitted strategies and everything needed to recommend."""
-
     schema_version: int
     created_at: str
     models: list[str]
@@ -81,12 +68,7 @@ def dumps_artifact(artifact: ModelArtifact) -> bytes:
 
 
 def loads_artifact(payload: bytes) -> ModelArtifact:
-    """Deserialize a ModelArtifact from pickle bytes.
-
-    ``payload`` must come from a trusted internal source (a Cicerone-written
-    artifact). Unpickling untrusted bytes is unsafe — do not call this on
-    user-controlled input.
-    """
+    """Deserialize a trusted ModelArtifact (never untrusted input)."""
     artifact = pickle.loads(payload)
     if not isinstance(artifact, ModelArtifact):
         raise TypeError(f"Artifact payload did not unpickle to ModelArtifact, got {type(artifact).__name__}")
@@ -106,11 +88,6 @@ def save_artifact(path: Path | str, artifact: ModelArtifact) -> None:
 
 
 def load_artifact(path: Path | str) -> ModelArtifact:
-    """Load a ModelArtifact from a trusted local/object-store path.
-
-    Same trust constraint as ``loads_artifact``: the file must be an artifact
-    written by Cicerone (or equivalent), never an untrusted upload.
-    """
     path = Path(path)
     logger.info("Loading model artifact from %s", path)
     return loads_artifact(path.read_bytes())
@@ -121,8 +98,6 @@ def recommend_from_artifact(
     target_users: list[str],
     top_k: int,
 ) -> pd.DataFrame:
-    """Produce recommendations from a loaded artifact without re-fitting."""
-    # interactions are unused at recommend time; pass an empty frame.
     users = getattr(artifact, "users", None)
     built = BuiltDataset(
         dataset=artifact.dataset,

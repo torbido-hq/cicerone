@@ -1,16 +1,4 @@
-"""Read-only access to precomputed recommendations, for serve mode
-(cicerone.serve). Independent of cicerone.model: serving reads whatever the
-batch job already wrote to the output store, never loading or running a
-model, so a serve-only deployment doesn't need lightfm/rectools/implicit.
-
-Mirrors the two output backends in cicerone.io ("dataset" and "db"):
-
-  DatasetRecommendationReader - the whole recommendations.parquet file (S3 or
-    local) is cached in memory and filtered per request; call refresh() to
-    reload it (cicerone.serve does this on a background timer).
-  DbRecommendationReader - queries the recommendations table directly on
-    every call, so refresh() is a no-op.
-"""
+"""Read-only access to precomputed recommendations for serve mode."""
 
 from __future__ import annotations
 
@@ -22,8 +10,8 @@ from typing import Any
 import pandas as pd
 from sqlalchemy import create_engine, text
 
-from cicerone.io.db_store import DEFAULT_RECOMMENDATIONS_TABLE, _sql_identifier
-from cicerone.io.options import build_s3_client, require_option
+from cicerone.io.db_store import DEFAULT_RECOMMENDATIONS_TABLE
+from cicerone.io.options import build_s3_client, object_key, require_option, sql_identifier
 
 logger = logging.getLogger(__name__)
 
@@ -45,8 +33,7 @@ class DatasetRecommendationReader:
             return pd.read_parquet(path)
 
         bucket = require_option(self._options, "bucket", "s3")
-        prefix = str(self._options.get("prefix", "")).strip("/")
-        key = f"{prefix}/recommendations.parquet" if prefix else "recommendations.parquet"
+        key = object_key(self._options, "recommendations.parquet")
         logger.info("Loading recommendations from s3://%s/%s", bucket, key)
         client = build_s3_client(self._options)
         obj = client.get_object(Bucket=bucket, Key=key)
@@ -66,14 +53,14 @@ class DatasetRecommendationReader:
 class DbRecommendationReader:
     def __init__(self, options: dict[str, Any]):
         self._options = options
-        self._table = _sql_identifier(
+        self._table = sql_identifier(
             options.get("recommendations_table", DEFAULT_RECOMMENDATIONS_TABLE),
             option="recommendations_table",
         )
         self._engine = create_engine(require_option(options, "database_url", "db"), pool_pre_ping=True)
 
     def refresh(self) -> None:
-        pass
+        return None
 
     def get_recommendations(self, user_id: str, k: int) -> pd.DataFrame:
         sql = text(

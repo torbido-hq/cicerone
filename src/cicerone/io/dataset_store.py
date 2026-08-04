@@ -1,17 +1,10 @@
-"""Static-file input/output backend: S3-compatible object storage (R2, AWS
-S3, MinIO, ...) or the local filesystem. Files are always parquet, except
-the manifest which is written as JSON.
+"""Static-file input/output: S3-compatible object storage or local filesystem.
 
-Configured generically via an "options" dict (see cicerone.config.IOSettings)
-built from the [input.options] / [output.options] tables in cicerone.toml:
+Options (from [input.options] / [output.options]):
 
-  storage_backend   "s3" | "local" (default: "local")
-  # storage_backend == "s3"
-  access_key_id, secret_access_key, bucket   required
-  endpoint_url                                optional (needed for R2/MinIO/etc, not AWS S3)
-  prefix                                      optional, default ""
-  # storage_backend == "local"
-  path                                        required
+  storage_backend   "s3" | "local" (default "local")
+  # s3: access_key_id, secret_access_key, bucket (required); endpoint_url, prefix
+  # local: path (required)
 """
 
 from __future__ import annotations
@@ -24,20 +17,12 @@ from typing import Any
 
 import pandas as pd
 
-from cicerone.io.options import build_s3_client, require_option
+from cicerone.io.options import build_s3_client, is_s3_not_found, object_key, require_option
 
 logger = logging.getLogger(__name__)
 
 
-def _full_key(options: dict[str, Any], filename: str) -> str:
-    prefix = str(options.get("prefix", "")).strip("/")
-    return f"{prefix}/{filename}" if prefix else filename
-
-
 def _validate_backend(options: dict[str, Any], backend: str) -> None:
-    """Validates the required options for `backend` upfront, at construction
-    time, so a misconfiguration fails immediately rather than on first read/write.
-    """
     if backend not in ("s3", "local"):
         raise ValueError(f"Unknown storage_backend: {backend!r} (expected 's3' or 'local')")
     if backend == "local":
@@ -49,8 +34,6 @@ def _validate_backend(options: dict[str, Any], backend: str) -> None:
 
 
 class DatasetInputSource:
-    """Reads events/users/items parquet files from an S3-compatible store or local disk."""
-
     def __init__(self, options: dict[str, Any]):
         self._options = options
         self._backend = options.get("storage_backend", "local")
@@ -63,7 +46,7 @@ class DatasetInputSource:
             return pd.read_parquet(path)
 
         bucket = require_option(self._options, "bucket", "s3")
-        key = _full_key(self._options, filename)
+        key = object_key(self._options, filename)
         logger.info("Reading s3://%s/%s", bucket, key)
         client = build_s3_client(self._options)
         obj = client.get_object(Bucket=bucket, Key=key)
@@ -72,26 +55,28 @@ class DatasetInputSource:
     def read_events(self) -> pd.DataFrame:
         return self._read("events.parquet")
 
-    def read_users(self) -> pd.DataFrame | None:
+    def _read_optional(self, filename: str, label: str) -> pd.DataFrame | None:
         try:
-            return self._read("users.parquet")
-        except Exception:  # noqa: BLE001 - optional input, missing file is expected
-            logger.warning("Optional input 'users.parquet' not found — continuing without user features.")
+            return self._read(filename)
+        except FileNotFoundError:
+            logger.warning("Optional input %r not found — continuing without %s features.", filename, label)
             return None
+        except Exception as exc:
+            if is_s3_not_found(exc):
+                logger.warning(
+                    "Optional input %r not found — continuing without %s features.", filename, label
+                )
+                return None
+            raise
+
+    def read_users(self) -> pd.DataFrame | None:
+        return self._read_optional("users.parquet", "user")
 
     def read_items(self) -> pd.DataFrame | None:
-        try:
-            return self._read("items.parquet")
-        except Exception:  # noqa: BLE001 - optional input, missing file is expected
-            logger.warning("Optional input 'items.parquet' not found — continuing without item features.")
-            return None
+        return self._read_optional("items.parquet", "item")
 
 
 class DatasetOutputSink:
-    """Writes recommendations.parquet + manifest.json (+ optional model.artifact)
-    to an S3-compatible store or local disk.
-    """
-
     def __init__(self, options: dict[str, Any]):
         self._options = options
         self._backend = options.get("storage_backend", "local")
@@ -106,7 +91,7 @@ class DatasetOutputSink:
             return
 
         bucket = require_option(self._options, "bucket", "s3")
-        key = _full_key(self._options, filename)
+        key = object_key(self._options, filename)
         logger.info("Writing s3://%s/%s", bucket, key)
         client = build_s3_client(self._options)
         client.put_object(Bucket=bucket, Key=key, Body=payload, ContentType=content_type)
