@@ -168,7 +168,6 @@ class ContentFallbackModel:
         self._vectorizer = DictVectorizer(sparse=True)
         self._matrix = self._vectorizer.fit_transform(dicts)
         self._item_ids = item_ids
-        # Fixed after fit — reused by recommend() so we avoid O(n_items) per call.
         self._item_index = {item_id: idx for idx, item_id in enumerate(item_ids)}
         cold_indices = [i for i, item_id in enumerate(item_ids) if item_id not in interacted]
         self._cold_indices = np.asarray(cold_indices, dtype=int)
@@ -231,7 +230,6 @@ class ContentFallbackModel:
             if take >= len(candidates):
                 ranked = sorted(candidates, key=lambda pair: pair[1], reverse=True)
             else:
-                # Partial select top-take without sorting the full candidate list.
                 score_arr = np.fromiter((s for _, s in candidates), dtype=float, count=len(candidates))
                 top_idx = np.argpartition(score_arr, -take)[-take:]
                 ranked = sorted(
