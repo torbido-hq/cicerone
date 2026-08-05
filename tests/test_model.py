@@ -453,6 +453,23 @@ def test_train_and_recommend_rejects_non_positive_rrf_k(sample_items, feature_co
         )
 
 
+def test_train_and_recommend_rejects_weights_for_models_dropped_from_recommend(sample_items, feature_config):
+    """Weights must match the resolved recommend set, not just the requested models list."""
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    with pytest.raises(ValueError, match="not in recommend models"):
+        train_and_recommend(
+            built,
+            target_users=["u1"],
+            config=feature_config,
+            top_k=2,
+            enabled_models=["collaborative", "content_fallback", "popular"],
+            weights={"collaborative": 1.0, "content_fallback": 0.5, "popular": 0.3},
+            content_fallback_enabled=False,
+        )
+
+
 def test_train_and_recommend_weighted_fusion_with_default_models(sample_items, feature_config):
     events = _synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)

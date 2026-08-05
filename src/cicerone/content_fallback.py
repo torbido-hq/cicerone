@@ -24,6 +24,19 @@ logger = logging.getLogger(__name__)
 
 CONTENT_FALLBACK_SOURCE = "content_fallback"
 
+_USER_ID_COLUMNS = (Columns.User, "user_id")
+_ITEM_ID_COLUMNS = (Columns.Item, "item_id")
+
+
+def _require_id_column(frame: pd.DataFrame, candidates: tuple[str, ...], *, frame_name: str) -> str:
+    for name in candidates:
+        if name in frame.columns:
+            return name
+    raise ValueError(
+        f"{frame_name} is missing a required id column; expected one of {list(candidates)}, "
+        f"got columns {list(frame.columns)}"
+    )
+
 
 def _feature_dict(
     row: pd.Series,
@@ -79,8 +92,8 @@ class ContentFallbackModel:
         del dataset  # history/cold set come from interactions + items frames
         self._user_history = defaultdict(list)
         if self.interactions is not None and not self.interactions.empty:
-            user_col = Columns.User if Columns.User in self.interactions.columns else "user_id"
-            item_col = Columns.Item if Columns.Item in self.interactions.columns else "item_id"
+            user_col = _require_id_column(self.interactions, _USER_ID_COLUMNS, frame_name="interactions")
+            item_col = _require_id_column(self.interactions, _ITEM_ID_COLUMNS, frame_name="interactions")
             for user_id, item_id in zip(
                 self.interactions[user_col].tolist(),
                 self.interactions[item_col].tolist(),
@@ -96,10 +109,10 @@ class ContentFallbackModel:
             self._cold_indices = np.array([], dtype=int)
             return self
 
-        id_col = "item_id" if "item_id" in self.items.columns else Columns.Item
+        id_col = _require_id_column(self.items, _ITEM_ID_COLUMNS, frame_name="items")
         interacted = set()
         if self.interactions is not None and not self.interactions.empty:
-            item_col = Columns.Item if Columns.Item in self.interactions.columns else "item_id"
+            item_col = _require_id_column(self.interactions, _ITEM_ID_COLUMNS, frame_name="interactions")
             interacted = set(self.interactions[item_col].tolist())
 
         dicts = []

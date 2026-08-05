@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 from rectools import Columns
 
 from cicerone.content_fallback import ContentFallbackModel, build_content_fallback_model
@@ -137,3 +138,34 @@ def test_recommend_empty_when_allowlist_excludes_all_cold_items():
         items_to_recommend=["i1"],  # warm only — no cold items allowed
     )
     assert recs.empty
+
+
+def test_fit_raises_clear_error_when_interactions_missing_id_columns():
+    items = pd.DataFrame([{"item_id": "i1", "category": "beer"}])
+    interactions = pd.DataFrame({"user": ["u1"], "product": ["i1"]})
+    model = ContentFallbackModel(
+        feature_columns=[FeatureColumn(column="category", type="categorical")],
+        items=items,
+        interactions=interactions,
+    )
+    with pytest.raises(ValueError, match="interactions is missing a required id column"):
+        model.fit(_DummyDataset())
+
+
+def test_fit_raises_clear_error_when_items_missing_id_column():
+    items = pd.DataFrame([{"sku": "i1", "category": "beer"}])
+    interactions = pd.DataFrame(
+        {
+            Columns.User: ["u1"],
+            Columns.Item: ["i1"],
+            Columns.Weight: [1.0],
+            Columns.Datetime: [pd.Timestamp.utcnow()],
+        }
+    )
+    model = ContentFallbackModel(
+        feature_columns=[FeatureColumn(column="category", type="categorical")],
+        items=items,
+        interactions=interactions,
+    )
+    with pytest.raises(ValueError, match="items is missing a required id column"):
+        model.fit(_DummyDataset())

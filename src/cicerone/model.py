@@ -580,10 +580,10 @@ def recommend_with_models(
     )
 
     if weights is not None and not blending_enabled:
-        unknown_weights = [name for name in weights if name not in enabled_models]
+        unknown_weights = [name for name in weights if name not in recommend_models]
         if unknown_weights:
             raise ValueError(
-                f"model_weights key(s) {unknown_weights} are not in enabled_models {enabled_models}"
+                f"model_weights key(s) {unknown_weights} are not in recommend models {recommend_models}"
             )
         validate_model_weights(weights)
     validate_rrf_k(rrf_k)
