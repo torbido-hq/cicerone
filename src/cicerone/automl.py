@@ -33,7 +33,6 @@ from cicerone.model import (
     DEFAULT_MODELS,
     STRATEGIES,
     RecommenderModel,
-    content_fallback_enabled_from_models,
     train_and_recommend,
 )
 
@@ -192,7 +191,6 @@ def _evaluate_fold(
             weights=candidate.weights,
             rrf_k=candidate.rrf_k,
             strategy_cache=strategy_cache,
-            content_fallback_enabled=content_fallback_enabled_from_models(candidate.models),
         )
         fold_metrics.append(calc_metrics(metrics, reco=reco, interactions=test_interactions))
     return fold_metrics

@@ -20,7 +20,6 @@ from cicerone.dataset import BuiltDataset
 from cicerone.feature_config import FeatureConfig
 from cicerone.model import (
     RecommenderModel,
-    content_fallback_enabled_from_models,
     recommend_with_models,
 )
 
@@ -124,5 +123,4 @@ def recommend_from_artifact(
         enabled_models=artifact.models,
         weights=artifact.model_weights,
         rrf_k=artifact.rrf_k,
-        content_fallback_enabled=content_fallback_enabled_from_models(artifact.models),
     )

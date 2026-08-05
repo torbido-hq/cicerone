@@ -418,6 +418,43 @@ def content_fallback_enabled_from_models(models: list[str] | tuple[str, ...] | N
     return "content_fallback" in models
 
 
+@dataclass(frozen=True)
+class ModelRunPlan:
+    """Resolved model lists for one train/recommend run.
+
+    Built once via ``plan_model_run`` so content_fallback / blending adjustments
+    are not re-derived at every call site.
+    """
+
+    enabled_models: tuple[str, ...]
+    recommend_models: tuple[str, ...]
+
+    @property
+    def content_fallback_active(self) -> bool:
+        return "content_fallback" in self.recommend_models
+
+
+def plan_model_run(
+    enabled_models: list[str] | None,
+    *,
+    blending_enabled: bool,
+    content_fallback_enabled: bool | None = None,
+) -> ModelRunPlan:
+    """Resolve enabled + recommend model lists for a run.
+
+    When ``content_fallback_enabled`` is omitted, it is derived from whether
+    ``content_fallback`` is already present in the requested model list
+    (artifact / AutoML replay). Job runs pass the config flag explicitly.
+    """
+    resolved = _resolve_enabled_models(enabled_models)
+    if content_fallback_enabled is None:
+        content_fallback_enabled = content_fallback_enabled_from_models(resolved)
+    recommend = resolve_recommend_models(
+        resolved, blending_enabled, content_fallback_enabled=content_fallback_enabled
+    )
+    return ModelRunPlan(enabled_models=tuple(resolved), recommend_models=tuple(recommend))
+
+
 def resolve_run_models(
     enabled_models: list[str] | None,
     *,
@@ -426,14 +463,15 @@ def resolve_run_models(
 ) -> tuple[list[str], list[str]]:
     """Resolve requested models and the effective fit/recommend list.
 
-    Single entry point so content_fallback / blending adjustments cannot
-    drift across job, train_and_recommend, and recommend_with_models.
+    Prefer ``plan_model_run`` for new call sites; this returns plain lists for
+    existing callers/tests.
     """
-    resolved = _resolve_enabled_models(enabled_models)
-    recommend = resolve_recommend_models(
-        resolved, blending_enabled, content_fallback_enabled=content_fallback_enabled
+    plan = plan_model_run(
+        enabled_models,
+        blending_enabled=blending_enabled,
+        content_fallback_enabled=content_fallback_enabled,
     )
-    return resolved, recommend
+    return list(plan.enabled_models), list(plan.recommend_models)
 
 
 def fit_strategies(
@@ -586,20 +624,28 @@ def recommend_with_models(
     enabled_models: list[str],
     weights: dict[str, float] | None = None,
     rrf_k: float | None = None,
-    content_fallback_enabled: bool = False,
+    run_plan: ModelRunPlan | None = None,
 ) -> pd.DataFrame:
     """Runs recommend + combine on already-fitted strategies (no fit).
 
     Used by ``train_and_recommend`` and by ``artifact.recommend_from_artifact``
     so a loaded model artifact can produce recommendations without re-training.
+
+    Pass ``run_plan`` from ``plan_model_run`` when available so content_fallback
+    / blending resolution is not repeated. Without a plan, content_fallback is
+    derived from ``enabled_models`` (artifact / AutoML lists already include it
+    when that tier was active).
     """
     blending = config.blending
     blending_enabled = blending.enabled
-    enabled_models, recommend_models = resolve_run_models(
-        enabled_models,
-        blending_enabled=blending_enabled,
-        content_fallback_enabled=content_fallback_enabled,
-    )
+    if run_plan is None:
+        run_plan = plan_model_run(
+            enabled_models,
+            blending_enabled=blending_enabled,
+            content_fallback_enabled=None,
+        )
+    enabled_models = list(run_plan.enabled_models)
+    recommend_models = list(run_plan.recommend_models)
     if blending_enabled and "latest" in enabled_models:
         logger.warning(
             "Blending is enabled: date-based 'latest' comes from items; "
@@ -637,8 +683,12 @@ def recommend_with_models(
     known_users = set(dataset.user_id_map.external_ids)
     unique_target_users = list(dict.fromkeys(target_users))
     has_any_warm_user = bool(known_users.intersection(unique_target_users))
-    # External ids — same namespace as target_users / cohort_users (see cicerone.ids).
-    interacting_users = interacting_external_user_ids(built)
+    needs_interacting_users = any(
+        STRATEGIES[name].requires_interactions for name in recommend_models if name in STRATEGIES
+    )
+    interacting_users = (
+        interacting_external_user_ids(built) if needs_interacting_users else set()
+    )
 
     users_by_id = index_users_by_id(users_frame)
     if use_cohorts:
@@ -840,21 +890,27 @@ def train_and_recommend(
     max_workers: int = 1,
     epoch_metrics: EpochMetricsSettings | None = None,
     item_based_k_neighbors: int = DEFAULT_ITEM_BASED_K_NEIGHBORS,
-    content_fallback_enabled: bool = False,
+    content_fallback_enabled: bool | None = None,
     content_fallback_max_neighbors: int = DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS,
+    run_plan: ModelRunPlan | None = None,
 ) -> pd.DataFrame:
     """Fit enabled strategies, then recommend + combine. See ``fit_strategies``
     and ``recommend_with_models`` for the split used by model artifacts.
+
+    Pass ``run_plan`` from ``plan_model_run`` when the caller already resolved
+    models (e.g. job). Otherwise ``content_fallback_enabled`` is the config
+    flag, or ``None`` to derive from ``enabled_models`` (AutoML lists).
     """
-    resolved_models, fit_models = resolve_run_models(
-        enabled_models,
-        blending_enabled=config.blending.enabled,
-        content_fallback_enabled=content_fallback_enabled,
-    )
+    if run_plan is None:
+        run_plan = plan_model_run(
+            enabled_models,
+            blending_enabled=config.blending.enabled,
+            content_fallback_enabled=content_fallback_enabled,
+        )
     _, fitted = fit_strategies(
         built,
         target_users,
-        enabled_models=fit_models,
+        enabled_models=list(run_plan.recommend_models),
         strategy_cache=strategy_cache,
         max_workers=max_workers,
         epoch_metrics=epoch_metrics,
@@ -869,8 +925,8 @@ def train_and_recommend(
         target_users,
         config,
         top_k=top_k,
-        enabled_models=resolved_models,
+        enabled_models=list(run_plan.enabled_models),
         weights=weights,
         rrf_k=rrf_k,
-        content_fallback_enabled=content_fallback_enabled,
+        run_plan=run_plan,
     )

@@ -1423,7 +1423,7 @@ def test_resolve_recommend_models_skips_content_fallback_when_disabled(caplog):
 
 
 def test_resolve_run_models_centralizes_content_fallback_and_blending():
-    from cicerone.model import content_fallback_enabled_from_models, resolve_run_models
+    from cicerone.model import content_fallback_enabled_from_models, plan_model_run, resolve_run_models
 
     resolved, recommend = resolve_run_models(
         ["collaborative", "popular"],
@@ -1434,6 +1434,15 @@ def test_resolve_run_models_centralizes_content_fallback_and_blending():
     assert recommend == ["collaborative", "content_fallback", "popular"]
     assert content_fallback_enabled_from_models(recommend) is True
     assert content_fallback_enabled_from_models(["collaborative", "popular"]) is False
+
+    # Artifact/AutoML path: omit the flag and derive from the stored list.
+    plan = plan_model_run(
+        ["collaborative", "content_fallback", "popular"],
+        blending_enabled=False,
+        content_fallback_enabled=None,
+    )
+    assert plan.content_fallback_active is True
+    assert list(plan.recommend_models) == ["collaborative", "content_fallback", "popular"]
 
 
 def test_item_based_k_neighbors_reaches_tfidf_recommender(sample_items, feature_config, monkeypatch):

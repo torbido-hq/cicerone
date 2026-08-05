@@ -152,6 +152,36 @@ def test_recommend_empty_when_allowlist_excludes_all_cold_items():
     assert recs.empty
 
 
+def test_fit_releases_source_frames_after_building_indexes():
+    items = pd.DataFrame(
+        [
+            {"item_id": "i1", "category": "beer"},
+            {"item_id": "i_new", "category": "beer"},
+        ]
+    )
+    interactions = pd.DataFrame(
+        {
+            Columns.User: ["u1"],
+            Columns.Item: ["i1"],
+            Columns.Weight: [1.0],
+            Columns.Datetime: [pd.Timestamp.utcnow()],
+        }
+    )
+    model = build_content_fallback_model(
+        feature_columns=[FeatureColumn(column="category", type="categorical")],
+        max_neighbors=10,
+        items=items,
+        interactions=interactions,
+    )
+    model.fit(_DummyDataset())
+    assert model.items is None
+    assert model.interactions is None
+    assert model._item_index
+    assert model._cold_ids
+    recs = model.recommend(users=["u1"], dataset=_DummyDataset(), k=5, filter_viewed=True)
+    assert not recs.empty
+
+
 def test_recommend_respects_max_neighbors_cap():
     """max_neighbors bounds recommendations even when a larger k is requested."""
     items = pd.DataFrame(

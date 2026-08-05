@@ -22,7 +22,7 @@ from cicerone.model import (
     DEFAULT_MODELS,
     RRF_K,
     RecommenderModel,
-    resolve_run_models,
+    plan_model_run,
     train_and_recommend,
 )
 
@@ -113,27 +113,28 @@ def run(triggered_by: str = "manual") -> None:
             )
 
         fitted: dict[str, RecommenderModel] = {}
+        run_plan = plan_model_run(
+            enabled_models or DEFAULT_MODELS,
+            blending_enabled=feature_config.blending.enabled,
+            content_fallback_enabled=settings.content_fallback_enabled,
+        )
         recommendations = train_and_recommend(
             built,
             target_users,
             feature_config,
             top_k=settings.top_k,
-            enabled_models=enabled_models,
+            enabled_models=list(run_plan.enabled_models),
             weights=weights,
             rrf_k=rrf_k,
             strategy_cache=fitted if settings.save_model_artifact else None,
             max_workers=settings.max_workers,
             epoch_metrics=settings.epoch_metrics,
             item_based_k_neighbors=settings.item_based_k_neighbors,
-            content_fallback_enabled=settings.content_fallback_enabled,
             content_fallback_max_neighbors=settings.content_fallback_max_neighbors,
+            run_plan=run_plan,
         )
 
-        _, run_models = resolve_run_models(
-            enabled_models or DEFAULT_MODELS,
-            blending_enabled=feature_config.blending.enabled,
-            content_fallback_enabled=settings.content_fallback_enabled,
-        )
+        run_models = list(run_plan.recommend_models)
         model_weights_str = (
             ",".join(f"{name}={weights.get(name, 1.0)}" for name in run_models) if weights is not None else ""
         )

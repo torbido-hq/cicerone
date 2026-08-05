@@ -127,6 +127,11 @@ class ContentFallbackModel:
         self._cold_ids = []
         self._cold_indices = np.array([], dtype=int)
 
+    def _release_fit_frames(self) -> None:
+        # Drop source frames once matrices / history are built (artifact size + RAM).
+        self.items = None
+        self.interactions = None
+
     def fit(self, dataset: Dataset) -> ContentFallbackModel:
         del dataset  # history/cold set come from interactions + items frames
         self._user_history = defaultdict(list)
@@ -143,6 +148,7 @@ class ContentFallbackModel:
         if self.items is None or self.items.empty or not self.feature_columns:
             logger.info("Content fallback: no items/features — strategy will emit no rows")
             self._reset_item_state()
+            self._release_fit_frames()
             return self
 
         id_col = items_id_column(self.items)
@@ -163,6 +169,7 @@ class ContentFallbackModel:
 
         if not dicts:
             self._reset_item_state()
+            self._release_fit_frames()
             return self
 
         self._vectorizer = DictVectorizer(sparse=True)
@@ -177,6 +184,7 @@ class ContentFallbackModel:
             len(item_ids),
             len(self._cold_ids),
         )
+        self._release_fit_frames()
         return self
 
     def recommend(
@@ -214,7 +222,8 @@ class ContentFallbackModel:
             if not history:
                 continue
             # Most recent interactions first when history was appended in event order.
-            hist_indices = [item_index[i] for i in history if i in item_index][-_MAX_HISTORY_ITEMS:]
+            recent_history = history[-_MAX_HISTORY_ITEMS:]
+            hist_indices = [item_index[i] for i in recent_history if i in item_index]
             if not hist_indices:
                 continue
             hist_matrix = self._matrix[hist_indices]
