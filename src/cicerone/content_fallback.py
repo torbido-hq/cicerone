@@ -19,23 +19,15 @@ from sklearn.feature_extraction import DictVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 from cicerone.feature_config import FeatureColumn
+from cicerone.ids import interactions_item_column, interactions_user_column, items_id_column
 
 logger = logging.getLogger(__name__)
 
 CONTENT_FALLBACK_SOURCE = "content_fallback"
-
-_USER_ID_COLUMNS = (Columns.User, "user_id")
-_ITEM_ID_COLUMNS = (Columns.Item, "item_id")
-
-
-def _require_id_column(frame: pd.DataFrame, candidates: tuple[str, ...], *, frame_name: str) -> str:
-    for name in candidates:
-        if name in frame.columns:
-            return name
-    raise ValueError(
-        f"{frame_name} is missing a required id column; expected one of {list(candidates)}, "
-        f"got columns {list(frame.columns)}"
-    )
+# Cap history length so cold×history cosine stays bounded for heavy users.
+_MAX_HISTORY_ITEMS = 50
+# Soft cap on a single dense cosine block; larger cold sets are scored in batches.
+_DENSE_SIM_BATCH_PRODUCT = 50_000
 
 
 def _is_missing(value: object) -> bool:
@@ -81,6 +73,31 @@ def _feature_dict(
     return tokens
 
 
+def _max_cosine_scores(cold_matrix, hist_matrix) -> np.ndarray:
+    """Per-cold-item max cosine vs history (exact).
+
+    Batches the cold axis when a single dense cold×history block would be large,
+    so catalogs with many zero-interaction items do not allocate one huge matrix.
+    History is already capped at ``_MAX_HISTORY_ITEMS`` by the caller.
+    """
+    n_cold = int(cold_matrix.shape[0])
+    n_hist = int(hist_matrix.shape[0])
+    if n_cold == 0 or n_hist == 0:
+        return np.zeros(n_cold, dtype=float)
+
+    batch_size = max(1, _DENSE_SIM_BATCH_PRODUCT // max(n_hist, 1))
+    if n_cold <= batch_size:
+        sim = cosine_similarity(cold_matrix, hist_matrix, dense_output=True)
+        return sim.max(axis=1)
+
+    scores = np.empty(n_cold, dtype=float)
+    for start in range(0, n_cold, batch_size):
+        end = min(start + batch_size, n_cold)
+        block = cosine_similarity(cold_matrix[start:end], hist_matrix, dense_output=True)
+        scores[start:end] = block.max(axis=1)
+    return scores
+
+
 class ContentFallbackModel:
     """RecommenderModel-compatible strategy for brand-new (zero-event) items."""
 
@@ -106,8 +123,8 @@ class ContentFallbackModel:
         del dataset  # history/cold set come from interactions + items frames
         self._user_history = defaultdict(list)
         if self.interactions is not None and not self.interactions.empty:
-            user_col = _require_id_column(self.interactions, _USER_ID_COLUMNS, frame_name="interactions")
-            item_col = _require_id_column(self.interactions, _ITEM_ID_COLUMNS, frame_name="interactions")
+            user_col = interactions_user_column(self.interactions)
+            item_col = interactions_item_column(self.interactions)
             for user_id, item_id in zip(
                 self.interactions[user_col].tolist(),
                 self.interactions[item_col].tolist(),
@@ -123,10 +140,10 @@ class ContentFallbackModel:
             self._cold_indices = np.array([], dtype=int)
             return self
 
-        id_col = _require_id_column(self.items, _ITEM_ID_COLUMNS, frame_name="items")
+        id_col = items_id_column(self.items)
         interacted = set()
         if self.interactions is not None and not self.interactions.empty:
-            item_col = _require_id_column(self.interactions, _ITEM_ID_COLUMNS, frame_name="interactions")
+            item_col = interactions_item_column(self.interactions)
             interacted = set(self.interactions[item_col].tolist())
 
         dicts = []
@@ -193,23 +210,31 @@ class ContentFallbackModel:
             history = self._user_history.get(user, [])
             if not history:
                 continue
-            hist_indices = [item_index[i] for i in history if i in item_index]
+            # Most recent interactions first when history was appended in event order.
+            hist_indices = [item_index[i] for i in history if i in item_index][-_MAX_HISTORY_ITEMS:]
             if not hist_indices:
                 continue
             hist_matrix = self._matrix[hist_indices]
-            # cold × history cosine; score = max similarity to any history item
-            sim = cosine_similarity(cold_matrix, hist_matrix, dense_output=True)
-            scores = sim.max(axis=1)
+            scores = _max_cosine_scores(cold_matrix, hist_matrix)
             seen = set(history) if filter_viewed else set()
-            ranked = sorted(
-                (
-                    (cold_ids_filtered[i], float(scores[i]))
-                    for i in range(len(cold_ids_filtered))
-                    if cold_ids_filtered[i] not in seen and scores[i] > 0
-                ),
-                key=lambda pair: pair[1],
-                reverse=True,
-            )[:take]
+            candidates = [
+                (cold_ids_filtered[i], float(scores[i]))
+                for i in range(len(cold_ids_filtered))
+                if cold_ids_filtered[i] not in seen and scores[i] > 0
+            ]
+            if not candidates:
+                continue
+            if take >= len(candidates):
+                ranked = sorted(candidates, key=lambda pair: pair[1], reverse=True)
+            else:
+                # Partial select top-take without sorting the full candidate list.
+                score_arr = np.fromiter((s for _, s in candidates), dtype=float, count=len(candidates))
+                top_idx = np.argpartition(score_arr, -take)[-take:]
+                ranked = sorted(
+                    (candidates[i] for i in top_idx),
+                    key=lambda pair: pair[1],
+                    reverse=True,
+                )
             for rank, (item_id, score) in enumerate(ranked, start=1):
                 rows.append(
                     {

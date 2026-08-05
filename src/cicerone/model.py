@@ -47,6 +47,7 @@ from cicerone.content_fallback import (
 )
 from cicerone.dataset import BuiltDataset
 from cicerone.feature_config import DEFAULT_BOOST_OVERFETCH_FACTOR, FeatureColumn, FeatureConfig
+from cicerone.ids import interacting_external_user_ids
 from cicerone.policy import (
     allowed_items_for_cohort,
     apply_boosts,
@@ -435,18 +436,6 @@ def resolve_run_models(
     return resolved, recommend
 
 
-def _interacting_external_user_ids(built: BuiltDataset) -> set:
-    """External user IDs with ≥1 interaction (same namespace as ``target_users``).
-
-    ``BuiltDataset.interactions`` keeps original event user/item ids under
-    rectools ``Columns.User`` / ``Columns.Item`` — these are *external* ids,
-    not rectools' dense internal indices.
-    """
-    if built.interactions is None or built.interactions.empty:
-        return set()
-    return set(built.interactions[Columns.User].tolist())
-
-
 def fit_strategies(
     built: BuiltDataset,
     target_users: list[str],
@@ -648,8 +637,8 @@ def recommend_with_models(
     known_users = set(dataset.user_id_map.external_ids)
     unique_target_users = list(dict.fromkeys(target_users))
     has_any_warm_user = bool(known_users.intersection(unique_target_users))
-    # External ids — same namespace as target_users / cohort_users.
-    interacting_users = _interacting_external_user_ids(built)
+    # External ids — same namespace as target_users / cohort_users (see cicerone.ids).
+    interacting_users = interacting_external_user_ids(built)
 
     users_by_id = index_users_by_id(users_frame)
     if use_cohorts:

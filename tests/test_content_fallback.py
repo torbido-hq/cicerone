@@ -152,6 +152,36 @@ def test_recommend_empty_when_allowlist_excludes_all_cold_items():
     assert recs.empty
 
 
+def test_recommend_respects_max_neighbors_cap():
+    """max_neighbors bounds recommendations even when a larger k is requested."""
+    items = pd.DataFrame(
+        [
+            {"item_id": "i1", "category": "beer"},
+            {"item_id": "i2", "category": "beer"},
+            {"item_id": "i3", "category": "beer"},
+        ]
+    )
+    interactions = pd.DataFrame(
+        {
+            Columns.User: ["u1"],
+            Columns.Item: ["i1"],
+            Columns.Weight: [1.0],
+            Columns.Datetime: [pd.Timestamp.utcnow()],
+        }
+    )
+    model = build_content_fallback_model(
+        feature_columns=[FeatureColumn(column="category", type="categorical")],
+        max_neighbors=1,
+        items=items,
+        interactions=interactions,
+    )
+    model.fit(_DummyDataset())
+    recs = model.recommend(users=["u1"], dataset=_DummyDataset(), k=5, filter_viewed=True)
+    assert len(recs) <= 1
+    assert not recs.empty
+    assert set(recs[Columns.Item]) <= {"i2", "i3"}
+
+
 def test_fit_raises_clear_error_when_interactions_missing_id_columns():
     items = pd.DataFrame([{"item_id": "i1", "category": "beer"}])
     interactions = pd.DataFrame({"user": ["u1"], "product": ["i1"]})
