@@ -99,12 +99,18 @@ def recommend_from_artifact(
     top_k: int,
 ) -> pd.DataFrame:
     users = getattr(artifact, "users", None)
+    # Artifacts omit interactions → blending sees n=0 for every user.
     built = BuiltDataset(
         dataset=artifact.dataset,
         interactions=pd.DataFrame(),
         items=artifact.items,
         users=users,
     )
+    if artifact.feature_config.blending.enabled:
+        logger.warning(
+            "recommend_from_artifact with blending.enabled: interactions are not stored in the "
+            "artifact, so the blend curve sees n_interactions=0 for every user"
+        )
     return recommend_with_models(
         artifact.fitted,
         built,

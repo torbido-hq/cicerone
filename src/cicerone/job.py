@@ -18,7 +18,13 @@ from cicerone.dataset import build_dataset
 from cicerone.feature_config import load_feature_config
 from cicerone.io.base import InputSource
 from cicerone.io.factory import build_input_source, build_output_sink
-from cicerone.model import DEFAULT_MODELS, RRF_K, RecommenderModel, train_and_recommend
+from cicerone.model import (
+    DEFAULT_MODELS,
+    RRF_K,
+    RecommenderModel,
+    resolve_recommend_models,
+    train_and_recommend,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -121,19 +127,16 @@ def run(triggered_by: str = "manual") -> None:
         )
 
         resolved_models = enabled_models or DEFAULT_MODELS
+        run_models = resolve_recommend_models(resolved_models, feature_config.blending.enabled)
         model_weights_str = (
-            ",".join(f"{name}={weights.get(name, 1.0)}" for name in resolved_models)
-            if weights is not None
-            else ""
+            ",".join(f"{name}={weights.get(name, 1.0)}" for name in run_models) if weights is not None else ""
         )
 
         artifact_bytes: bytes | None = None
         if settings.save_model_artifact:
-            artifact_models = [name for name in resolved_models if name in fitted]
+            artifact_models = [name for name in run_models if name in fitted]
             artifact_weights = (
-                {name: weight for name, weight in weights.items() if name in artifact_models}
-                if weights is not None
-                else None
+                {name: weights.get(name, 1.0) for name in artifact_models} if weights is not None else None
             )
             artifact_bytes = dumps_artifact(
                 build_artifact(
@@ -154,6 +157,8 @@ def run(triggered_by: str = "manual") -> None:
             manifest["artifact_schema_version"] = ARTIFACT_SCHEMA_VERSION
 
         sink.write_recommendations(recommendations)
+        if items is not None and not items.empty:
+            sink.write_items_snapshot(items)
 
         manifest.update(
             {
@@ -162,7 +167,7 @@ def run(triggered_by: str = "manual") -> None:
                 "n_target_users": len(target_users),
                 "n_users_with_recommendations": int(recommendations["user_id"].nunique()),
                 "n_items": int(built.dataset.item_id_map.external_ids.shape[0]),
-                "models": ",".join(resolved_models),
+                "models": ",".join(run_models),
                 "model_weights": model_weights_str,
                 "rrf_k": rrf_k if rrf_k is not None else RRF_K,
                 "automl_metrics": (

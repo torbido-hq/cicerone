@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from typing import Protocol
 
 import pandas as pd
@@ -22,6 +23,10 @@ class OutputSink(Protocol):
 
     def write_model_artifact(self, payload: bytes) -> None: ...
 
+    def write_items_snapshot(self, df: pd.DataFrame) -> None:
+        """Optional: persist items for serve-time category/availability filters."""
+        ...
+
 
 class RecommendationReader(Protocol):
     def get_recommendations(self, user_id: str, k: int) -> pd.DataFrame: ...
@@ -29,6 +34,43 @@ class RecommendationReader(Protocol):
     def refresh(self) -> None:
         """Reload caches. No-op for live backends."""
         ...
+
+    def get_items(self) -> pd.DataFrame | None:
+        """Items snapshot for serve-time filters, if available."""
+        ...
+
+    def items_version(self) -> int:
+        """Monotonic token bumped when the items snapshot changes."""
+        ...
+
+    def get_cold_start_fallback(self, k: int) -> pd.DataFrame:
+        """``__cold_start__`` rows, else a popular/latest heuristic for unknown users."""
+        ...
+
+
+class BaseRecommendationReader(ABC):
+    """Optional base with empty defaults for serve filter / cold-start hooks.
+
+    Custom readers can subclass this and only implement ``get_recommendations``
+    (and override the hooks they need) instead of satisfying every Protocol
+    method from scratch.
+    """
+
+    def refresh(self) -> None:
+        return
+
+    def get_items(self) -> pd.DataFrame | None:
+        return None
+
+    def items_version(self) -> int:
+        return 0
+
+    def get_cold_start_fallback(self, k: int) -> pd.DataFrame:
+        del k
+        return pd.DataFrame()
+
+    @abstractmethod
+    def get_recommendations(self, user_id: str, k: int) -> pd.DataFrame: ...
 
 
 class ManifestReader(Protocol):

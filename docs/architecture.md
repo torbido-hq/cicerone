@@ -12,8 +12,10 @@ config.py            load & resolve config/cicerone.toml (structural config + ${
 feature_config.py     load config/features.toml (event weights, feature columns,
                      eligibility/boost policy rules)
 policy.py             declarative eligibility masks, cohort grouping, score boosts
+blending.py           per-user weighted mix of personalized/popular/latest (optional)
 io/
-  base.py             InputSource / OutputSink / RecommendationReader protocols
+  base.py             InputSource / OutputSink / RecommendationReader protocols;
+                      BaseRecommendationReader with empty defaults for custom readers
   factory.py          picks a concrete backend by IOSettings.kind ("dataset" | "db")
   dataset_store.py     backend: parquet files (S3-compatible or local disk)
   db_store.py          backend: SQLAlchemy-backed database tables/queries
@@ -23,7 +25,7 @@ io/
 dataset.py            raw events/users/items -> weighted rectools Dataset (BuiltDataset;
                      keeps users+items frames for policy evaluation)
 model.py              BuiltDataset -> STRATEGIES registry (collaborative/item_based/
-                     popular/latest) -> cohort-aware recommend -> combine -> boosts
+                     popular/latest) -> cohort-aware recommend -> combine/blend -> boosts
 artifact.py           optional versioned fitted-model bundle (save/load + recommend
                      without re-fitting); written by the batch job when enabled
 automl.py            optional: backtests candidate models/weights/rrf_k configs over
@@ -97,16 +99,29 @@ flowchart LR
    User-scoped rules group target users into cohorts that share the same
    allowed item set (rectools accepts one `items_to_recommend` list per
    call); each cohort's allowlist is computed once and reused across
-   every strategy. Strategies are combined either by priority order (default —
-   earlier strategies fill top-K first; later ones only backfill) or, if
-   `Settings.model_weights` is set (even an
-   empty table), by weighted reciprocal rank fusion
-   (`_combine_by_weighted_fusion`) — the fusion constant defaults to
-   `model.RRF_K` but is overridable via `Settings.rrf_k`/`[job].rrf_k`; see
-   the module docstring for the exact formula. When a fused (user, item)
-   pair was produced by more than one strategy, its combined `source` label
-   joins each contributing strategy's label in `enabled_models`' order (not
-   alphabetically), so the label reflects the caller's configured priority.
+   every strategy. Strategies are then combined in one of three ways:
+   - **Priority order** (default) — earlier strategies fill top-K first;
+     later ones only backfill.
+   - **Weighted RRF** — if `Settings.model_weights` is set (even an empty
+     table), `_combine_by_weighted_fusion` sums `weight / (rrf_k + rank)`
+     across strategies; `rrf_k` defaults to `model.RRF_K` and is
+     overridable via `Settings.rrf_k`/`[job].rrf_k`. Combined `source`
+     labels join contributing strategy labels in `enabled_models` order.
+   - **Per-user blending** — if `FeatureConfig.blending.enabled`
+     (`[blending]` in `features.toml`), `cicerone.blending` replaces the
+     binary personalized-vs-popular choice with a gradual mix of
+     `personalized`, `popular`, and (when `items` has a usable datetime
+     column from `latest_date_columns`) date-based `latest`. A sigmoid or
+     linear curve maps each user's distinct (user, item) count after
+     aggregation → personalized weight; the remainder is split by
+     `popular_share`. Availability / eligibility still filter every source
+     *before* the blend; date-based `latest` is ranked **per cohort
+     allowlist** (not a cross-cohort union). An item gets
+     `source = "blended"` only when more than one source contributed it. A
+     shared `__cold_start__` user is ranked against the global item-scoped
+     allowlist for serve-mode fallback. When no date column is usable,
+     `latest` is disabled and its weight moves to `popular`. Strategy
+     `latest` (trending PopularModel) is skipped while blending is on.
    `Settings.max_workers` (`[job].max_workers`, default `1`) parallelizes
    AutoML fold evaluation and strategy fitting via `ProcessPoolExecutor`
    when set `>1`. Per-strategy top-K is rectools-native
@@ -150,7 +165,10 @@ flowchart LR
    (counts, timestamp, effective `models`/`model_weights`/`rrf_k`,
    `artifact_written` / `artifact_schema_version` when a model artifact was
    saved, and `automl_metrics` when AutoML ran) back out via the configured
-   `OutputSink`. When `Settings.save_model_artifact` is true, it also writes
+   `OutputSink`. When items were loaded, it also writes an items snapshot
+   (`items_snapshot.parquet` / `recommendation_items`) so serve mode can
+   apply `?category=` and `exclude_unavailable` without reading the input
+   store. When `Settings.save_model_artifact` is true, it also writes
    a versioned fitted-model artifact (`model.artifact` for the dataset
    backend, `model_artifacts` table for db) via
    `OutputSink.write_model_artifact`. Serve mode never loads this artifact.
@@ -174,11 +192,15 @@ rectools/lightfm/implicit needed in that process or its request path):
 - `io.factory.build_recommendation_reader(settings.output)` builds a
   `RecommendationReader` (`io/recommendation_reader.py`) matching the
   configured output `kind` — `DatasetRecommendationReader` caches the whole
-  parquet file in memory and refreshes it on a background timer
-  (`serve.py`'s `_start_refresh_loop`); `DbRecommendationReader` queries the
-  table directly per request (its `refresh()` is a no-op).
+  parquet file (and optional `items_snapshot.parquet`) in memory and refreshes
+  it on a background timer (`serve.py`'s `_start_refresh_loop`);
+  `DbRecommendationReader` queries the recommendations table directly per
+  request and caches the `recommendation_items` snapshot for filters.
 - `serve.create_app()` exposes `GET /health` and
-  `GET /recommendations/{user_id}?k=`, both behind `http_auth.require_bearer_token`.
+  `GET /recommendations/{user_id}` (`limit`/`k`, `category`,
+  `exclude_unavailable`) behind `http_auth.require_bearer_token`. Unknown
+  users fall back to the precomputed `__cold_start__` list rather than 404.
+  Responses include `generated_at` from the run manifest.
 
 `cicerone.trigger` implements the event-driven retrain trigger, additive to
 (not a replacement for) `scheduler.py`'s cron loop:

@@ -15,15 +15,16 @@ code is structured, see [architecture.md](architecture.md).
 4. [Inspect the recommendations](#4-inspect-the-recommendations)
 5. [Try different model strategies](#5-try-different-model-strategies)
 6. [Weighted reciprocal rank fusion](#6-weighted-reciprocal-rank-fusion)
-7. [Let AutoML pick a strategy for you](#7-let-automl-pick-a-strategy-for-you)
-8. [Tune interaction weights & features](#8-tune-interaction-weights--features)
-9. [Save a fitted model artifact](#9-save-a-fitted-model-artifact)
-10. [Try the database backend](#10-try-the-database-backend-optional)
-11. [Serve recommendations over an HTTP API](#11-serve-recommendations-over-an-http-api)
-12. [Trigger a retrain on demand](#12-trigger-a-retrain-on-demand)
-13. [Check job status with the dashboard](#13-check-job-status-with-the-dashboard)
-14. [Run continuously, on a schedule](#14-run-continuously-on-a-schedule)
-15. [Next steps](#15-next-steps)
+7. [Per-user weighted blending](#7-per-user-weighted-blending)
+8. [Let AutoML pick a strategy for you](#8-let-automl-pick-a-strategy-for-you)
+9. [Tune interaction weights & features](#9-tune-interaction-weights--features)
+10. [Save a fitted model artifact](#10-save-a-fitted-model-artifact)
+11. [Try the database backend](#11-try-the-database-backend-optional)
+12. [Serve recommendations over an HTTP API](#12-serve-recommendations-over-an-http-api)
+13. [Trigger a retrain on demand](#13-trigger-a-retrain-on-demand)
+14. [Check job status with the dashboard](#14-check-job-status-with-the-dashboard)
+15. [Run continuously, on a schedule](#15-run-continuously-on-a-schedule)
+16. [Next steps](#16-next-steps)
 
 ## 1. Create a sample dataset
 
@@ -58,9 +59,9 @@ users = pd.DataFrame([
     {'user_id': 'carol', 'favorite_styles': ['Stout'], 'region_slug': 'north'},
 ])
 items = pd.DataFrame([
-    {'item_id': 'ipa-001', 'category': 'beer', 'primary_style': 'IPA', 'producer_id': 'p1', 'region_slug': 'north', 'abv_bucket': 'medium', 'published': True, 'in_stock': True},
-    {'item_id': 'stout-002', 'category': 'beer', 'primary_style': 'Stout', 'producer_id': 'p1', 'region_slug': 'north', 'abv_bucket': 'high', 'published': True, 'in_stock': True},
-    {'item_id': 'lager-003', 'category': 'beer', 'primary_style': 'Lager', 'producer_id': 'p2', 'region_slug': 'south', 'abv_bucket': 'low', 'published': True, 'in_stock': True},
+    {'item_id': 'ipa-001', 'category': 'beer', 'primary_style': 'IPA', 'producer_id': 'p1', 'region_slug': 'north', 'abv_bucket': 'medium', 'published': True, 'in_stock': True, 'published_at': now - timedelta(days=30)},
+    {'item_id': 'stout-002', 'category': 'beer', 'primary_style': 'Stout', 'producer_id': 'p1', 'region_slug': 'north', 'abv_bucket': 'high', 'published': True, 'in_stock': True, 'published_at': now - timedelta(days=3)},
+    {'item_id': 'lager-003', 'category': 'beer', 'primary_style': 'Lager', 'producer_id': 'p2', 'region_slug': 'south', 'abv_bucket': 'low', 'published': True, 'in_stock': True, 'published_at': now - timedelta(days=1)},
 ])
 events.to_parquet('/data/input/events.parquet')
 users.to_parquet('/data/input/users.parquet')
@@ -70,7 +71,7 @@ print('sample dataset written to data/input/')
 ```
 
 `event_type`/user/item columns here match the defaults in
-`config/features.toml` — see [step 8](#8-tune-interaction-weights--features)
+`config/features.toml` — see [step 9](#9-tune-interaction-weights--features)
 for how to adapt them to your own catalog.
 
 ## 2. Point `cicerone.toml` at it
@@ -182,7 +183,43 @@ strategy that recommended that pair. Tune the fusion constant with
 `[job.model_weights]` — see the TOML gotcha note in the README) if you want
 top ranks to matter more or less relative to lower ones.
 
-## 7. Let AutoML pick a strategy for you
+## 7. Per-user weighted blending
+
+Section 6's RRF uses **fixed** per-strategy weights for every user. Optional
+`[blending]` in `config/features.toml` instead grows the personalized weight
+with each user's interaction count (sigmoid or linear), and splits the
+remainder between `popular` and date-based `latest`:
+
+```toml
+[blending]
+enabled = true
+curve = "linear"
+saturate_at = 5.0
+popular_share = 0.7
+latest_date_columns = ["published_at", "created_at", "occurred_at"]
+```
+
+Copy `config/features.toml` next to your local job config (or edit the
+mounted one), enable the block above, keep `models` including
+`collaborative` (blending auto-adds `popular` if missing), and re-run
+[step 3](#3-run-the-job-once). Inspect `data/output/recommendations.parquet`:
+
+- cold / low-history users lean on `popular_fallback` / `latest`
+- richer users lean on `personalized`
+- an item is `source = "blended"` only when more than one source contributed it
+- a sentinel `__cold_start__` user is written (global availability allowlist)
+  for serve-mode fallback
+
+The blend curve uses each user's **distinct (user, item) count** after
+dataset aggregation (not raw event rows). If `items` has no usable date
+column among `latest_date_columns`, `latest` is skipped and its weight
+moves to `popular` (check the job log). Independent of
+`[job.model_weights]` RRF — enable one or the other as the primary
+combiner (blending wins and logs a warning if both are set). See the
+annotated `[blending]` block in `config/features.toml` and the README's
+Interaction weights section.
+
+## 8. Let AutoML pick a strategy for you
 
 Instead of hand-picking `models`/`model_weights`, AutoML backtests a set of
 candidate configs over time-based folds of your own event history and picks
@@ -231,7 +268,7 @@ scores), set `log_epoch_metrics = true` under `[job]` and re-run with
 plus a WARN if metrics regress or plateau. Off by default; details in the
 [README model strategies](../README.md#model-strategies) section.
 
-## 8. Tune interaction weights & features
+## 9. Tune interaction weights & features
 
 `config/features.toml` (mounted read-only, already used by every run above)
 controls signal weighting and cold-start features without touching code:
@@ -259,13 +296,15 @@ controls signal weighting and cold-start features without touching code:
   (`boost_overfetch_factor` × `top_k`, default 3) before re-ranking so a
   boosted item just outside the raw top-K can still make the cut. See the
   annotated recipes in `config/features.toml`.
+- `[blending]`: optional per-user mix of personalized / popular / latest
+  (see [step 7](#7-per-user-weighted-blending)).
 
 Try lowering `view`'s weight to `0.1` or raising `purchase` to `6.0` in your
 own copy of `config/features.toml`, re-run, and compare the output —
 `half_life_days` in `[job]` (default 90) additionally decays all of this by
 recency.
 
-## 9. Save a fitted model artifact
+## 10. Save a fitted model artifact
 
 By default the batch job discards fitted strategy weights after writing
 recommendations. With `[job].save_model_artifact = true` it also writes a
@@ -299,7 +338,7 @@ inference layer; only load ones your own batch job wrote (pickle is not
 safe on untrusted bytes). See the README's
 [Model artifacts](../README.md#model-artifacts) section.
 
-## 10. Try the database backend (optional)
+## 11. Try the database backend (optional)
 
 Input/output don't have to be static files — `kind = "db"` reads/writes a
 relational database via SQLAlchemy instead (independently for input and
@@ -381,12 +420,13 @@ Clean up when you're done:
 docker compose --profile db down   # or: docker compose --profile db stop postgres
 ```
 
-## 11. Serve recommendations over an HTTP API
+## 12. Serve recommendations over an HTTP API
 
 Everything so far has run the batch job directly. `[job].mode = "serve"`
-switches to a separate, lightweight read API over whatever the batch job
-last wrote to `[output]` — it never imports rectools/lightfm/implicit.
-Reuse the local `data/output/` from [step 3](#3-run-the-job-once):
+switches to a separate, lightweight **read** API over whatever the batch job
+last wrote to `[output]` — it never imports rectools/lightfm/implicit, never
+trains, and never loads a model artifact. Reuse the local `data/output/` from
+[step 3](#3-run-the-job-once):
 
 ```sh
 cp config/cicerone.serve.toml config/cicerone.serve.local.toml
@@ -402,6 +442,7 @@ path = "/data/output"
 
 [serve]
 auth_token = "tutorial-token"
+category_column = "category"
 ```
 
 Start it in the background and query a user's recommendations. Keep the
@@ -411,26 +452,53 @@ command (and out of your shell history):
 ```sh
 docker run --rm -d --name cicerone-tutorial-serve -p 8000:8000 \
   -v "$PWD/config/cicerone.serve.local.toml":/app/config/cicerone.toml:ro \
+  -v "$PWD/config/features.toml":/app/config/features.toml:ro \
   -v "$PWD/data":/data \
   -e CICERONE_CONFIG_PATH=/app/config/cicerone.toml \
   cicerone-test python -m cicerone.serve
 
 read -s -p "Serve auth token: " SERVE_TOKEN && echo
-curl -H "Authorization: Bearer $SERVE_TOKEN" "http://localhost:8000/recommendations/alice?k=5"
+curl -s -H "Authorization: Bearer $SERVE_TOKEN" \
+  "http://localhost:8000/recommendations/alice?limit=5" | python -m json.tool
 ```
 
-For a `dataset` output (as here), the whole recommendations file is cached
-in memory and reloaded every `[serve].refresh_interval_seconds` (default
-60s) — re-run [step 3](#3-run-the-job-once) and query again after that
-interval to see updated results without restarting the container. For a
-`db` output, every request queries the table directly instead. Clean up
-when you're done:
+The response is an object (not a bare list):
+
+```json
+{
+  "generated_at": "2026-08-04T03:00:00+00:00",
+  "user_id": "alice",
+  "fallback": false,
+  "items": [
+    {"item_id": "lager-003", "rank": 1, "score": 0.91, "source": "blended"}
+  ]
+}
+```
+
+Try a few filters (same auth header):
+
+```sh
+# Category filter (column from [serve].category_column, default "category")
+curl -s -H "Authorization: Bearer $SERVE_TOKEN" \
+  "http://localhost:8000/recommendations/alice?limit=5&category=beer"
+
+# Unknown user → cold-start fallback (popular/latest/blended), not a bare 404
+curl -s -H "Authorization: Bearer $SERVE_TOKEN" \
+  "http://localhost:8000/recommendations/nobody?limit=5"
+```
+
+For a `dataset` output (as here), the recommendations file and optional
+`items_snapshot.parquet` are cached in memory and reloaded every
+`[serve].refresh_interval_seconds` (default 60s) — re-run
+[step 3](#3-run-the-job-once) and query again after that interval to see
+updated results without restarting the container. For a `db` output, every
+request queries the table directly instead. Clean up when you're done:
 
 ```sh
 docker stop cicerone-tutorial-serve
 ```
 
-## 12. Trigger a retrain on demand
+## 13. Trigger a retrain on demand
 
 `[job.trigger]` adds an event-driven retrain trigger *in addition to* the
 cron schedule, running inside the same `cicerone.scheduler` process (not a
@@ -470,7 +538,7 @@ now records `triggered_by` (`"cron"`, `"webhook"`, or `"s3-poll"` if
 docker stop cicerone-tutorial-scheduler
 ```
 
-## 13. Check job status with the dashboard
+## 14. Check job status with the dashboard
 
 `cicerone.dashboard` is a small, standalone status page over job run
 history — always its own container/port, independent of `[job].mode`.
@@ -518,14 +586,14 @@ docker run --rm -d --name cicerone-tutorial-dashboard -p 8090:8090 \
 
 With our `dataset` output, only the latest run is ever shown (its
 `manifest.json` is overwritten every run, not appended) — switch to a `db`
-output (see [step 10](#10-try-the-database-backend-optional)) to see a real
+output (see [step 11](#11-try-the-database-backend-optional)) to see a real
 run history table instead. Clean up when you're done:
 
 ```sh
 docker stop cicerone-tutorial-dashboard
 ```
 
-## 14. Run continuously, on a schedule
+## 15. Run continuously, on a schedule
 
 Everything above ran the job once via `docker run`. In practice, Cicerone
 runs continuously as a long-lived container: `docker-compose.yml` runs the
@@ -539,7 +607,7 @@ cp .env.example .env   # fill in the secrets your cicerone.toml references
 docker compose up --build
 ```
 
-## 15. Next steps
+## 16. Next steps
 
 - Swap in your own data, following the [data contract](../README.md#data-contract).
 - Read the full [model strategies](../README.md#model-strategies),

@@ -27,6 +27,10 @@ DEFAULT_ITEMS_TABLE = "items"
 DEFAULT_RECOMMENDATIONS_TABLE = "recommendations"
 DEFAULT_MANIFEST_TABLE = "recommendation_runs"
 DEFAULT_MODEL_ARTIFACT_TABLE = "model_artifacts"
+# Snapshot of items written next to recommendations for serve-time filters
+# (category / availability). Kept separate from DEFAULT_ITEMS_TABLE so a
+# shared input+output database cannot clobber the source items table.
+DEFAULT_RECOMMENDATION_ITEMS_TABLE = "recommendation_items"
 
 DEFAULT_DB_TABLES = frozenset(
     {
@@ -36,8 +40,32 @@ DEFAULT_DB_TABLES = frozenset(
         DEFAULT_RECOMMENDATIONS_TABLE,
         DEFAULT_MANIFEST_TABLE,
         DEFAULT_MODEL_ARTIFACT_TABLE,
+        DEFAULT_RECOMMENDATION_ITEMS_TABLE,
     }
 )
+
+
+def _clear_table_for_replace(conn, table: str) -> None:
+    """Empty ``table`` before a full rewrite; prefer TRUNCATE, fall back to DELETE.
+
+    Some backends (e.g. SQLite) lack TRUNCATE. Rolling back only the TRUNCATE
+    savepoint and then appending would duplicate rows, so DELETE is tried next.
+    If the table does not exist yet, both fail and ``to_sql`` creates it.
+    """
+    savepoint = conn.begin_nested()
+    try:
+        conn.execute(text(f'TRUNCATE TABLE "{table}"'))
+        savepoint.commit()
+        return
+    except ProgrammingError:
+        savepoint.rollback()
+
+    savepoint = conn.begin_nested()
+    try:
+        conn.execute(text(f'DELETE FROM "{table}"'))
+        savepoint.commit()
+    except ProgrammingError:
+        savepoint.rollback()
 
 
 class DatabaseInputSource:
@@ -98,12 +126,7 @@ class DatabaseOutputSink:
         )
         logger.info("Writing %d rows to database table %r", len(df), table)
         with self._engine.begin() as conn:
-            savepoint = conn.begin_nested()
-            try:
-                conn.execute(text(f'TRUNCATE TABLE "{table}"'))
-                savepoint.commit()
-            except ProgrammingError:
-                savepoint.rollback()
+            _clear_table_for_replace(conn, table)
             df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
 
     def write_manifest(self, manifest: dict) -> None:
@@ -132,3 +155,13 @@ class DatabaseOutputSink:
             artifacts.create(conn, checkfirst=True)
             conn.execute(artifacts.delete())
             conn.execute(insert(artifacts).values(payload=payload, written_at=datetime.now(UTC)))
+
+    def write_items_snapshot(self, df: pd.DataFrame) -> None:
+        table = sql_identifier(
+            self._options.get("recommendation_items_table", DEFAULT_RECOMMENDATION_ITEMS_TABLE),
+            option="recommendation_items_table",
+        )
+        logger.info("Writing %d item snapshot rows to database table %r", len(df), table)
+        with self._engine.begin() as conn:
+            _clear_table_for_replace(conn, table)
+            df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)

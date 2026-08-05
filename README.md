@@ -32,6 +32,7 @@ up to your own data doesn't require touching any code.
 - **AutoML** — time-fold backtest to pick models/weights per run
 - **Business policies** — TOML eligibility filters and score boosts
 - **Serve mode** — read-only HTTP API over precomputed recommendations
+  (`limit` / `category` / `exclude_unavailable`, cold-start fallback)
 - **Retrain trigger** — webhook (+ optional input poll) alongside cron
 - **Dashboard** — Basic-Auth status page for run success/failure and history
 - **Model artifacts** — optional versioned fitted-model bundle for offline reload
@@ -70,22 +71,56 @@ at boot, then again on `[job].cron_schedule` in `config/cicerone.toml`
 
 By default (`[job].mode = "batch"`), the container only runs the batch job
 on its cron schedule — no HTTP surface at all. Setting `[job].mode = "serve"`
-switches `python -m cicerone.serve` to instead run a small FastAPI read API:
+switches `python -m cicerone.serve` to instead run a small FastAPI **read**
+API over the lookup table the batch job already wrote (never loads
+lightfm/rectools/implicit, never trains or imports):
 
-- `GET /recommendations/{user_id}?k=10` returns the precomputed top-K rows
-  already written to the configured output store (dataset or db) — it never
-  imports lightfm/rectools/implicit, so a serve-only deployment doesn't need
-  the training dependencies installed.
-- For a `dataset` output, the whole recommendations file is cached in memory
-  and refreshed on a background timer (`[serve].refresh_interval_seconds`,
-  default 60s). For a `db` output, each request queries the table directly.
-- Both this API and the retrain trigger below require a bearer token
-  (`Authorization: Bearer <token>`), configured via `[serve].auth_token`
-  (`${ENV_VAR}` placeholder, never a literal secret in the TOML file).
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/health` | Liveness probe (no auth) |
+| `GET` | `/recommendations/{user_id}` | Precomputed top-K for that user |
+
+Query parameters for `/recommendations/{user_id}`:
+
+| Param | Default | Description |
+| --- | --- | --- |
+| `limit` | `[serve].default_k` (10) | Top-K rows to return (`k` is accepted as an alias) |
+| `category` | _(none)_ | Keep only items whose `[serve].category_column` (default `category`) matches |
+| `exclude_unavailable` | `true` | Re-apply `item_availability_filters` against the items snapshot written with the last run |
+
+Response JSON:
+
+```json
+{
+  "generated_at": "2026-08-04T03:00:00+00:00",
+  "user_id": "u1",
+  "fallback": false,
+  "items": [
+    {"item_id": "i1", "rank": 1, "score": 0.91, "source": "blended"}
+  ]
+}
+```
+
+`generated_at` comes from the last run's `manifest` (also mirrored as the
+`X-Generated-At` response header). If `user_id` is missing from the lookup
+table, the API returns the precomputed cold-start fallback
+(`popular` / `latest` / `blended` for `__cold_start__`) with
+`"fallback": true` — not a bare 404.
+
+- For a `dataset` output, the whole recommendations file (+ optional
+  `items_snapshot.parquet`) is cached in memory and refreshed on a
+  background timer (`[serve].refresh_interval_seconds`, default 60s). For a
+  `db` output, each request queries the table directly; the items snapshot
+  lives in `recommendation_items`.
+- Auth is a bearer token (`Authorization: Bearer <token>`), configured via
+  `[serve].auth_token` (`${ENV_VAR}` placeholder, never a literal secret in
+  the TOML file).
 
 See `config/cicerone.serve.toml` for a standalone example config, and the
 `serve` service in `docker-compose.yml` for how it's wired up alongside the
-batch `recommender` service.
+batch `recommender` service. The serve port is exposed only when
+`[job].mode = "serve"` — batch-only deployments keep "no ports exposed by
+default".
 
 ### Event-driven retrain trigger
 
@@ -358,12 +393,18 @@ are pickle-serialized and must only be loaded from trusted internal sources
 
 `recommendations`: `user_id, item_id, rank, score, source` (`source` is the
 label of whichever strategy produced that row: `personalized`, `item_based`,
-`popular_fallback`, or `latest`).
+`popular_fallback`, `latest`, or `blended` when multi-source blending
+combined more than one).
 
 `manifest`: metadata about the latest run (counts, timestamps,
 `triggered_by`, effective models, optional AutoML metrics, and
 `artifact_written` / `artifact_schema_version` when a model artifact was
-saved) for monitoring.
+saved) for monitoring. Serve mode exposes `generated_at` from this
+manifest on every read.
+
+`items_snapshot` / `recommendation_items`: optional copy of the items frame
+written next to recommendations so serve mode can apply `?category=` and
+`exclude_unavailable` without reading the input store.
 
 ## Interaction weights & cold-start
 
@@ -371,11 +412,19 @@ All weighting and policy logic is configurable without rebuilding the image
 via `config/features.toml` (mounted as a volume, see `docker-compose.yml`):
 `event_weights`, `quantity_scaled_events`, `event_caps`, `user_features`,
 `item_features`, `item_availability_filters`, `[[eligibility]]`,
-`[[boost]]`. Exponential decay with a configurable half-life
-(`[job].half_life_days` in `config/cicerone.toml`, default 90 days) gives
-more weight to recent activity. Users without enough interactions still get
-a fallback list from `PopularModel` (rectools), still honoring availability
-and any configured eligibility/boost policies.
+`[[boost]]`, and optional `[blending]`. Exponential decay with a
+configurable half-life (`[job].half_life_days` in `config/cicerone.toml`,
+default 90 days) gives more weight to recent activity.
+
+When `[blending].enabled = true`, the binary personalized-vs-popular
+fallback is replaced by a gradual per-user mix of `personalized`,
+`popular`, and (when items expose a usable date column) `latest`. The
+personalized weight follows a sigmoid or linear curve over the user's
+**distinct (user, item) count** after aggregation; the remainder is split
+by `popular_share`. An item is labeled `source = "blended"` only when more
+than one source contributed it. Without blending, users without enough
+interactions still get a fallback list from `PopularModel` (rectools),
+still honoring availability and any configured eligibility/boost policies.
 
 ## Usage
 

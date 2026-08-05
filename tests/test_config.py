@@ -953,6 +953,7 @@ def test_load_settings_serve_mode_with_auth_token(tmp_path, monkeypatch):
     assert settings.serve_port == 9000
     assert settings.serve_default_k == 5
     assert settings.serve_refresh_interval_seconds == 30.0
+    assert settings.serve_category_column == "category"
 
 
 def test_load_settings_serve_defaults(tmp_path, monkeypatch):
@@ -975,6 +976,7 @@ def test_load_settings_serve_defaults(tmp_path, monkeypatch):
     assert settings.serve_port == 8000
     assert settings.serve_default_k == 10
     assert settings.serve_refresh_interval_seconds == 60.0
+    assert settings.serve_category_column == "category"
 
 
 def test_load_settings_trigger_enabled_requires_auth_token(tmp_path):

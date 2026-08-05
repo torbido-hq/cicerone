@@ -39,6 +39,7 @@ def make_settings(**overrides) -> Settings:
         serve_auth_token=None,
         serve_default_k=10,
         serve_refresh_interval_seconds=60,
+        serve_category_column="category",
         trigger_enabled=False,
         trigger_host="0.0.0.0",
         trigger_port=8080,

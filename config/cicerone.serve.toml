@@ -27,6 +27,7 @@ host = "0.0.0.0"
 port = 8000
 default_k = 10
 refresh_interval_seconds = 60
+category_column = "category"
 
 # [input] is required by config.load_settings() even in serve mode (kept
 # generic/simple rather than special-casing it away) but is never read from

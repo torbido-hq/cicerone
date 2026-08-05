@@ -101,6 +101,11 @@ class DatasetOutputSink:
         df.to_parquet(buffer, index=False)
         self._write_bytes("recommendations.parquet", buffer.getvalue(), "application/octet-stream")
 
+    def write_items_snapshot(self, df: pd.DataFrame) -> None:
+        buffer = io.BytesIO()
+        df.to_parquet(buffer, index=False)
+        self._write_bytes("items_snapshot.parquet", buffer.getvalue(), "application/octet-stream")
+
     def write_manifest(self, manifest: dict) -> None:
         self._write_bytes("manifest.json", json.dumps(manifest, indent=2).encode("utf-8"), "application/json")
 
