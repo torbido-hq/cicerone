@@ -113,11 +113,19 @@ class ContentFallbackModel:
         self.items = items
         self.interactions = interactions
         self._item_ids: list = []
+        self._item_index: dict = {}
         self._matrix = None
         self._cold_ids: list = []
         self._cold_indices: np.ndarray = np.array([], dtype=int)
         self._user_history: dict = {}
         self._vectorizer: DictVectorizer | None = None
+
+    def _reset_item_state(self) -> None:
+        self._item_ids = []
+        self._item_index = {}
+        self._matrix = None
+        self._cold_ids = []
+        self._cold_indices = np.array([], dtype=int)
 
     def fit(self, dataset: Dataset) -> ContentFallbackModel:
         del dataset  # history/cold set come from interactions + items frames
@@ -134,10 +142,7 @@ class ContentFallbackModel:
 
         if self.items is None or self.items.empty or not self.feature_columns:
             logger.info("Content fallback: no items/features — strategy will emit no rows")
-            self._item_ids = []
-            self._matrix = None
-            self._cold_ids = []
-            self._cold_indices = np.array([], dtype=int)
+            self._reset_item_state()
             return self
 
         id_col = items_id_column(self.items)
@@ -157,15 +162,14 @@ class ContentFallbackModel:
             item_ids.append(item_id)
 
         if not dicts:
-            self._item_ids = []
-            self._matrix = None
-            self._cold_ids = []
-            self._cold_indices = np.array([], dtype=int)
+            self._reset_item_state()
             return self
 
         self._vectorizer = DictVectorizer(sparse=True)
         self._matrix = self._vectorizer.fit_transform(dicts)
         self._item_ids = item_ids
+        # Fixed after fit — reused by recommend() so we avoid O(n_items) per call.
+        self._item_index = {item_id: idx for idx, item_id in enumerate(item_ids)}
         cold_indices = [i for i, item_id in enumerate(item_ids) if item_id not in interacted]
         self._cold_indices = np.asarray(cold_indices, dtype=int)
         self._cold_ids = [item_ids[i] for i in cold_indices]
@@ -202,7 +206,7 @@ class ContentFallbackModel:
             return empty
 
         cold_matrix = self._matrix[cold_mask]
-        item_index = {item_id: i for i, item_id in enumerate(self._item_ids)}
+        item_index = self._item_index
         take = min(k, self.max_neighbors, len(cold_ids_filtered))
 
         rows: list[dict] = []
