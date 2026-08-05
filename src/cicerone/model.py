@@ -686,9 +686,7 @@ def recommend_with_models(
     needs_interacting_users = any(
         STRATEGIES[name].requires_interactions for name in recommend_models if name in STRATEGIES
     )
-    interacting_users = (
-        interacting_external_user_ids(built) if needs_interacting_users else set()
-    )
+    interacting_users = interacting_external_user_ids(built) if needs_interacting_users else set()
 
     users_by_id = index_users_by_id(users_frame)
     if use_cohorts:
