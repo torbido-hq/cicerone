@@ -1549,3 +1549,66 @@ def test_content_fallback_respects_availability_filters(feature_config):
     recommended_items = set(recommendations[Columns.Item])
     assert "i_new_ok" in recommended_items
     assert "i_new_blocked" not in recommended_items
+
+
+def test_item_based_and_content_fallback_require_interactions(feature_config, sample_users):
+    """Feature-only warm users must not get item_based / content_fallback rows."""
+    now = pd.Timestamp.utcnow()
+    # u4 is feature-only in sample_users; give u1 beer interactions + a cold beer.
+    events = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+            {"user_id": "u1", "item_id": "i2", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+        ]
+    )
+    items = pd.DataFrame(
+        [
+            {"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True},
+            {"item_id": "i2", "category": "beer", "producer_id": "p2", "published": True, "in_stock": True},
+            {
+                "item_id": "i_new",
+                "category": "beer",
+                "producer_id": "p9",
+                "published": True,
+                "in_stock": True,
+            },
+        ]
+    )
+    built = build_dataset(events, sample_users, items, feature_config, half_life_days=90)
+    gated_models = ["item_based", "content_fallback"]
+    gated_sources = {"item_based", "content_fallback"}
+
+    # Full chain: feature-only u4 may get collaborative/popular, never gated sources.
+    mixed = train_and_recommend(
+        built,
+        target_users=["u1", "u4"],
+        config=feature_config,
+        top_k=5,
+        enabled_models=["collaborative", *gated_models, "popular"],
+        content_fallback_enabled=True,
+    )
+    assert "u4" in set(mixed[Columns.User])
+    feature_only = mixed[mixed[Columns.User] == "u4"]
+    assert not feature_only["source"].isin(gated_sources).any()
+
+    # Gated strategies alone: interacting user gets rows; feature-only gets none.
+    interacting_only = train_and_recommend(
+        built,
+        target_users=["u1"],
+        config=feature_config,
+        top_k=5,
+        enabled_models=gated_models,
+        content_fallback_enabled=True,
+    )
+    assert not interacting_only.empty
+    assert interacting_only["source"].isin(gated_sources).all()
+
+    feature_only_gated = train_and_recommend(
+        built,
+        target_users=["u4"],
+        config=feature_config,
+        top_k=5,
+        enabled_models=gated_models,
+        content_fallback_enabled=True,
+    )
+    assert feature_only_gated.empty

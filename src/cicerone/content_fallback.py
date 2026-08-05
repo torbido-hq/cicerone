@@ -54,10 +54,6 @@ def _feature_dict(
     return tokens
 
 
-def _serialize_feature_columns(columns: Sequence[FeatureColumn]) -> list[tuple[str, str]]:
-    return [(c.column, c.type) for c in columns]
-
-
 class ContentFallbackModel:
     """RecommenderModel-compatible strategy for brand-new (zero-event) items."""
 
@@ -208,9 +204,9 @@ def build_content_fallback_model(
     items: pd.DataFrame | None,
     interactions: pd.DataFrame | None,
 ) -> ContentFallbackModel:
-    """Factory used by model._fit_strategy (picklable column tuples)."""
+    """Factory used by model._fit_strategy (ProcessPool-picklable FeatureColumns)."""
     return ContentFallbackModel(
-        feature_columns=_serialize_feature_columns(list(feature_columns)),
+        feature_columns=list(feature_columns),
         max_neighbors=max_neighbors,
         items=items,
         interactions=interactions,

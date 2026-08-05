@@ -362,7 +362,7 @@ def _fit_strategy(
     epoch_metrics: EpochMetricsSettings | None,
     epoch_metrics_top_k: int,
     item_based_k_neighbors: int = DEFAULT_ITEM_BASED_K_NEIGHBORS,
-    content_feature_columns: list[tuple[str, str]] | None = None,
+    content_feature_columns: list[FeatureColumn] | None = None,
     content_max_neighbors: int = DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS,
     content_items: pd.DataFrame | None = None,
     content_interactions: pd.DataFrame | None = None,
@@ -371,10 +371,9 @@ def _fit_strategy(
     if name == "item_based":
         model = _build_item_based(item_based_k_neighbors)
     elif name == "content_fallback":
-        columns = [FeatureColumn(column=c, type=t) for c, t in (content_feature_columns or [])]
         model = _as_recommender_model(
             build_content_fallback_model(
-                feature_columns=columns,
+                feature_columns=content_feature_columns or [],
                 max_neighbors=content_max_neighbors,
                 items=content_items,
                 interactions=content_interactions,
@@ -464,7 +463,7 @@ def fit_strategies(
         if epoch_metrics is not None and "collaborative" in to_fit
         else None
     )
-    content_cols = [(c.column, c.type) for c in (content_feature_columns or [])]
+    content_cols = list(content_feature_columns or [])
     content_items = built.items if "content_fallback" in to_fit else None
     content_interactions = built.interactions if "content_fallback" in to_fit else None
     if to_fit:
