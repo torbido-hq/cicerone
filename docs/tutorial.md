@@ -5,9 +5,11 @@
 This is a hands-on, step-by-step walkthrough of Cicerone's main features
 using a handful of made-up users/items/events on local disk — no S3 bucket
 or database required until the optional "database backend" section.
-Everything runs in Docker (nothing gets installed on the host). For the
-full configuration reference, see the [README](../README.md); for how the
-code is structured, see [architecture.md](architecture.md).
+Everything runs in Docker (nothing gets installed on the host).
+`docker-compose.yml` is for local developer convenience only — do not run
+it as a production deployment. For the full configuration reference, see
+the [README](../README.md); for how the code is structured, see
+[architecture.md](architecture.md).
 
 1. [Create a sample dataset](#1-create-a-sample-dataset)
 2. [Point cicerone.toml at it](#2-point-ciceronetoml-at-it)
@@ -610,9 +612,14 @@ docker stop cicerone-tutorial-dashboard
 Everything above ran the job once via `docker run`. In practice, Cicerone
 runs continuously as a long-lived container: `docker-compose.yml` runs the
 job immediately on boot, then again on `[job].cron_schedule` (a 5-field cron
-expression evaluated in UTC; default: every night at 03:00). Point
-`docker-compose.yml` at your real input/output backend (S3-compatible
-storage or a database — see `.env.example`/`config/cicerone.toml`) and run:
+expression evaluated in UTC; default: every night at 03:00). That compose
+file is a local/dev convenience so you can exercise recommender + serve +
+dashboard together — it is **not** a production deployment recipe (no
+resource limits, secrets management, replicas, health-based rollouts, etc.).
+For real environments, run the same image under your orchestrator of choice
+with production config and secrets. To try the compose stack locally, point
+it at your real input/output backend (S3-compatible storage or a database —
+see `.env.example`/`config/cicerone.toml`) and run:
 
 ```sh
 cp .env.example .env   # fill in the secrets your cicerone.toml references
