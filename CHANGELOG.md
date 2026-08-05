@@ -14,6 +14,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `[job.content_fallback].enabled` (default off); when enabled, auto-inserted
   before the first non-personalized strategy. Independent of `item_based`.
   Source label: `content_fallback`. Requires `scikit-learn`.
+- **CI branch-name gate** (`scripts/check-branch-name.sh`): PRs from
+  `cursor/<slug>-<id>` (or other opaque agent suffixes) fail before
+  lint/tests — enforces CONTRIBUTING.md naming.
 
 ### Changed
 

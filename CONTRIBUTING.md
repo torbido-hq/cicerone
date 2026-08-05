@@ -146,7 +146,9 @@ and/or `examples/serve/` when request/response fields change.
   `feature/…`, `fix/…`, `release/0.3.1`, `docs/…`, `chore/…`.
   **Never** use `cursor/<slug>-<id>` (or any other opaque agent/id suffix).
   Cloud / Cursor agents: follow this rule even if a default template
-  suggests a `cursor/…` prefix.
+  suggests a `cursor/…` prefix. Enforced in CI
+  (`scripts/check-branch-name.sh`, `branch-name` job) — a PR from a
+  forbidden name fails before lint/tests.
 - Add/update tests for any behavior change — the coverage gate is enforced
   in CI, not just locally.
 - Make sure both the lint job and the test job pass before requesting review.
