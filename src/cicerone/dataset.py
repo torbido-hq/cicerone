@@ -40,25 +40,29 @@ class BuiltDataset:
 
 
 @dataclass(frozen=True)
-class _EmptyNormalizedFeatures:
-    frame: None = None
-    categorical: None = None
+class _NormalizedFeatures:
+    """Optional exploded feature frame + categorical names for Dataset.construct.
 
+    Both fields are None, or both are set (never mixed).
+    """
 
-@dataclass(frozen=True)
-class _PresentNormalizedFeatures:
-    frame: pd.DataFrame
-    categorical: list[str]
-
-
-# Either both fields are None, or both are set — never mixed.
-_NormalizedFeatures = _EmptyNormalizedFeatures | _PresentNormalizedFeatures
+    frame: pd.DataFrame | None
+    categorical: list[str] | None
 
 
 def _normalize_feature_df(df: pd.DataFrame | None) -> _NormalizedFeatures:
+    """Collapse empty/missing frames to None; otherwise read categorical names.
+
+    Expects ``None`` or an ``_explode_features`` result (``feature`` column present).
+    """
     if df is None or df.empty:
-        return _EmptyNormalizedFeatures()
-    return _PresentNormalizedFeatures(frame=df, categorical=list(df["feature"].unique()))
+        return _NormalizedFeatures(frame=None, categorical=None)
+    if "feature" not in df.columns:
+        raise ValueError(
+            "_normalize_feature_df expected an _explode_features frame with a 'feature' column, "
+            f"got columns {list(df.columns)}"
+        )
+    return _NormalizedFeatures(frame=df, categorical=list(df["feature"].unique()))
 
 
 def _time_decay_multiplier(occurred_at: pd.Series, half_life_days: float) -> pd.Series:
@@ -111,6 +115,7 @@ def build_interactions(events: pd.DataFrame, config: FeatureConfig, half_life_da
 def _explode_features(
     df: pd.DataFrame, id_column: str, rectools_id_column: str, columns: list[FeatureColumn]
 ) -> pd.DataFrame:
+    """Long-form features with columns ``{id, feature, value}`` (possibly empty)."""
     frames = []
     for feature in columns:
         if feature.column not in df.columns:
