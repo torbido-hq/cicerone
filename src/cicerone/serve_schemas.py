@@ -14,7 +14,9 @@ class RecommendationItem(BaseModel):
     rank: int = Field(ge=1, description="1-based position in the returned list")
     score: float = Field(description="Score from the batch job (strategy- or blend-specific)")
     source: str = Field(
-        description="Origin label, e.g. personalized, item_based, content_fallback, popular_fallback, latest, blended",
+        description=(
+            "Origin label, e.g. personalized, item_based, content_fallback, popular_fallback, latest, blended"
+        ),
         examples=["blended"],
     )
 

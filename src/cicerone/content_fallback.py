@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from typing import Sequence
+from collections.abc import Sequence
 
 import numpy as np
 import pandas as pd
@@ -25,7 +25,10 @@ logger = logging.getLogger(__name__)
 CONTENT_FALLBACK_SOURCE = "content_fallback"
 
 
-def _feature_dict(row: pd.Series, feature_columns: Sequence[FeatureColumn | tuple[str, str]]) -> dict[str, float]:
+def _feature_dict(
+    row: pd.Series,
+    feature_columns: Sequence[FeatureColumn | tuple[str, str]],
+) -> dict[str, float]:
     """Map one item row to {feature=value: 1.0} tokens for DictVectorizer."""
     tokens: dict[str, float] = {}
     for spec in feature_columns:

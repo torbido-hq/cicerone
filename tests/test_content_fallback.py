@@ -71,9 +71,7 @@ def test_fit_skips_items_without_any_feature_tokens():
     )
     model.fit(_DummyDataset())
     assert model._item_ids == []
-    assert model.recommend(
-        users=["u1"], dataset=_DummyDataset(), k=3, filter_viewed=True
-    ).empty
+    assert model.recommend(users=["u1"], dataset=_DummyDataset(), k=3, filter_viewed=True).empty
 
 
 def test_recommend_skips_users_without_history_or_unmapped_history():

@@ -40,7 +40,11 @@ from cicerone.config import (
     validate_model_weights,
     validate_rrf_k,
 )
-from cicerone.content_fallback import CONTENT_FALLBACK_SOURCE, ContentFallbackModel, build_content_fallback_model
+from cicerone.content_fallback import (
+    CONTENT_FALLBACK_SOURCE,
+    ContentFallbackModel,
+    build_content_fallback_model,
+)
 from cicerone.dataset import BuiltDataset
 from cicerone.feature_config import DEFAULT_BOOST_OVERFETCH_FACTOR, FeatureColumn, FeatureConfig
 from cicerone.policy import (
