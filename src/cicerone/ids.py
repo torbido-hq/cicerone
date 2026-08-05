@@ -47,4 +47,5 @@ def interacting_external_user_ids(built: BuiltDataset) -> set:
     if interactions is None or interactions.empty:
         return set()
     user_col = interactions_user_column(interactions)
-    return set(interactions[user_col].tolist())
+    # unique() dedupes in pandas before materializing into Python.
+    return set(interactions[user_col].unique())
