@@ -26,6 +26,14 @@ USER_COLUMN = "user_id"
 RANK_COLUMN = "rank"
 SOURCE_COLUMN = "source"
 ITEM_COLUMN = "item_id"
+SCORE_COLUMN = "score"
+RECOMMENDATION_COLUMNS: tuple[str, ...] = (
+    USER_COLUMN,
+    ITEM_COLUMN,
+    RANK_COLUMN,
+    SCORE_COLUMN,
+    SOURCE_COLUMN,
+)
 ITEMS_SNAPSHOT_FILENAME = "items_snapshot.parquet"
 
 # When __cold_start__ is missing: popular/latest only (never warm "blended").

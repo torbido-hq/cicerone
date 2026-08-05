@@ -28,6 +28,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (`items_snapshot.parquet` / `recommendation_items`) so filters stay on
   the configured output without loading ML deps. Documented in the README
   Serve section alongside the existing Dashboard style.
+- **Serve OpenAPI contract**: response models for `/health` and
+  `/recommendations/{user_id}` so FastAPI's `/openapi.json`, `/docs`, and
+  `/redoc` document the real JSON shape (including `X-Generated-At`). A
+  checked-in schema at `docs/openapi/serve.openapi.json` can be regenerated
+  with `python -m cicerone.export_serve_openapi`.
+- **Thin serve clients**: `cicerone.serve_client.ServeClient` (stdlib
+  `urllib`, typed via `serve_schemas`) plus copy-paste examples under
+  `examples/serve/` (Python, Node `fetch`, curl).
 
 ### Changed
 
@@ -36,13 +44,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Docs: architecture data-flow covers the three combine paths (priority /
   RRF / `[blending]`) and the items snapshot write; tutorial gains a
   blending walkthrough and an updated serve-API section (response shape,
-  `limit` / `category` / cold-start fallback).
+  `limit` / `category` / cold-start fallback, OpenAPI `/docs`,
+  `examples/serve/` clients).
 - Blending correctness: date-based `latest` is ranked per eligibility
   cohort (no cross-cohort allowlist union); `__cold_start__` uses the
   global item-scoped allowlist; multi-personalized strategies collapse to
   best rank before RRF; sigmoid maps `n=0 → 0`; strategy `latest` is
   skipped while blending is on; serve heuristic fallback never reuses
   warm `blended` rows.
+- `cicerone.serve.main` imports I/O factory helpers lazily so OpenAPI export
+  and `create_app` do not require dataset/DB backend imports at module load.
+- Serve OpenAPI `info.version` follows `cicerone.__version__` (single source
+  of truth with the changelog / release tag).
+- `config.make_settings(**overrides)` is the shared Settings factory for
+  tests and OpenAPI schema export (replacing duplicated default blocks).
 
 ## [0.3.2] - 2026-08-04
 

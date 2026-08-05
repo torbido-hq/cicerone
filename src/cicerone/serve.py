@@ -6,22 +6,35 @@ import logging
 import threading
 import time
 from collections.abc import Callable, Sequence
-from typing import Any
 
 import pandas as pd
 import uvicorn
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi.openapi.utils import get_openapi
 
+from cicerone import __version__
 from cicerone.config import Settings, load_settings
 from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.io.base import ManifestReader, RecommendationReader
-from cicerone.io.factory import build_manifest_reader, build_recommendation_reader
 from cicerone.io.recommendation_reader import ITEM_COLUMN, normalize_items_snapshot
+from cicerone.serve_schemas import ErrorDetail, HealthResponse, RecommendationItem, RecommendationsResponse
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
+
+SERVE_API_TITLE = "Cicerone Serve API"
+SERVE_API_VERSION = __version__
+SERVE_API_DESCRIPTION = """
+Read-only HTTP API over **precomputed** recommendations written by the batch job.
+
+There is no live inference in the request path: `GET /recommendations/{user_id}`
+looks up rows already stored in the configured output (dataset parquet or DB).
+
+Interactive docs: `/docs` (Swagger UI) and `/redoc`. Machine-readable schema: `/openapi.json`.
+A checked-in copy lives at `docs/openapi/serve.openapi.json` (regenerate with
+`python -m cicerone.export_serve_openapi`).
+""".strip()
 
 
 def _start_refresh_loop(reader: RecommendationReader, interval_seconds: float) -> None:
@@ -150,7 +163,11 @@ def create_app(
     manifest_reader: ManifestReader | None = None,
     feature_config: FeatureConfig | None = None,
 ) -> FastAPI:
-    app = FastAPI(title="cicerone-serve")
+    app = FastAPI(
+        title=SERVE_API_TITLE,
+        version=SERVE_API_VERSION,
+        description=SERVE_API_DESCRIPTION,
+    )
     dependencies = optional_bearer_deps(settings.serve_auth_token)
     availability_filters = list(feature_config.item_availability_filters) if feature_config else []
     category_column = settings.serve_category_column
@@ -173,18 +190,41 @@ def create_app(
             category_column,
         )
 
-    @app.get("/health")
-    def health() -> dict[str, str]:
-        return {"status": "ok"}
+    @app.get(
+        "/health",
+        response_model=HealthResponse,
+        tags=["health"],
+        summary="Liveness probe",
+    )
+    def health() -> HealthResponse:
+        return HealthResponse(status="ok")
 
-    @app.get("/recommendations/{user_id}", dependencies=dependencies)
+    @app.get(
+        "/recommendations/{user_id}",
+        response_model=RecommendationsResponse,
+        dependencies=dependencies,
+        tags=["recommendations"],
+        summary="Precomputed top-K recommendations for a user",
+        responses={
+            400: {"model": ErrorDetail, "description": "Conflicting limit and k"},
+            401: {"model": ErrorDetail, "description": "Missing or invalid bearer token"},
+            404: {"model": ErrorDetail, "description": "No rows and no cold-start fallback"},
+        },
+    )
     def get_recommendations(
         user_id: str,
-        limit: int | None = Query(default=None, gt=0),
+        response: Response,
+        limit: int | None = Query(default=None, gt=0, description="Top-K rows to return"),
         k: int | None = Query(default=None, gt=0, description="Alias for limit (back-compat)"),
-        category: str | None = Query(default=None),
-        exclude_unavailable: bool = Query(default=True),
-    ) -> JSONResponse:
+        category: str | None = Query(
+            default=None,
+            description="Keep only items whose configured category column matches this value",
+        ),
+        exclude_unavailable: bool = Query(
+            default=True,
+            description="Re-apply item_availability_filters against the items snapshot",
+        ),
+    ) -> RecommendationsResponse:
         if limit is not None and k is not None and limit != k:
             raise HTTPException(
                 status_code=400,
@@ -225,29 +265,56 @@ def create_app(
             filtered = filtered.copy()
             filtered["rank"] = range(1, len(filtered) + 1)
 
-        body: dict[str, Any] = {
-            "generated_at": _generated_at(manifest_reader),
-            "user_id": user_id,
-            "fallback": used_fallback,
-            "items": [
-                {
-                    ITEM_COLUMN: row[ITEM_COLUMN],
-                    "rank": int(row["rank"]),
-                    "score": float(row["score"]),
-                    "source": row["source"],
-                }
+        generated_at = _generated_at(manifest_reader)
+        body = RecommendationsResponse(
+            generated_at=generated_at,
+            user_id=user_id,
+            fallback=used_fallback,
+            items=[
+                RecommendationItem(
+                    item_id=str(row[ITEM_COLUMN]),
+                    rank=int(row["rank"]),
+                    score=float(row["score"]),
+                    source=str(row["source"]),
+                )
                 for _, row in filtered.iterrows()
             ],
-        }
-        headers = {}
-        if body["generated_at"] is not None:
-            headers["X-Generated-At"] = str(body["generated_at"])
-        return JSONResponse(content=body, headers=headers)
+        )
+        if generated_at is not None:
+            response.headers["X-Generated-At"] = str(generated_at)
+        return body
 
+    def custom_openapi() -> dict:
+        if app.openapi_schema is not None:
+            return app.openapi_schema
+        schema = get_openapi(
+            title=app.title,
+            version=app.version,
+            description=app.description,
+            routes=app.routes,
+        )
+        schema.setdefault("components", {}).setdefault("headers", {})["X-Generated-At"] = {
+            "description": "ISO timestamp from the last job-run manifest (mirrors body.generated_at)",
+            "schema": {"type": "string", "example": "2026-08-04T03:00:00+00:00"},
+        }
+        rec_responses = (
+            schema.get("paths", {}).get("/recommendations/{user_id}", {}).get("get", {}).get("responses", {})
+        )
+        ok = rec_responses.get("200")
+        if isinstance(ok, dict):
+            ok.setdefault("headers", {})["X-Generated-At"] = {
+                "$ref": "#/components/headers/X-Generated-At",
+            }
+        app.openapi_schema = schema
+        return app.openapi_schema
+
+    app.openapi = custom_openapi  # type: ignore[method-assign]
     return app
 
 
 def main() -> None:
+    from cicerone.io.factory import build_manifest_reader, build_recommendation_reader
+
     settings = load_settings()
     if settings.mode != "serve":
         raise RuntimeError(f"job.mode is {settings.mode!r}; python -m cicerone.serve requires mode = 'serve'")

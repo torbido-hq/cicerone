@@ -6,6 +6,9 @@
 #
 # [output] here MUST point at the exact same store the batch job writes to
 # -- everything else in this file is independent of the batch config.
+#
+# Once running, try GET /docs (Swagger UI), GET /openapi.json, or the thin
+# clients under examples/serve/ (and cicerone.serve_client.ServeClient).
 
 [job]
 mode = "serve"

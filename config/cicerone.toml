@@ -150,6 +150,8 @@ prefix = "recommendations/latest"
 # For [output].kind = "dataset", the whole recommendations file is cached
 # in memory and reloaded every refresh_interval_seconds; for "db" it's
 # queried directly on every request (already indexed by user_id).
+# OpenAPI: GET /docs, /redoc, /openapi.json; thin clients in examples/serve/.
+# Prefer config/cicerone.serve.toml for a standalone serve-only process.
 # [serve]
 # auth_token = "${SERVE_AUTH_TOKEN}" # required; checked as "Authorization: Bearer <token>"
 # host = "0.0.0.0"

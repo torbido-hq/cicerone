@@ -32,7 +32,8 @@ up to your own data doesn't require touching any code.
 - **AutoML** — time-fold backtest to pick models/weights per run
 - **Business policies** — TOML eligibility filters and score boosts
 - **Serve mode** — read-only HTTP API over precomputed recommendations
-  (`limit` / `category` / `exclude_unavailable`, cold-start fallback)
+  (`limit` / `category` / `exclude_unavailable`, cold-start fallback;
+  OpenAPI at `/docs` + thin `ServeClient`)
 - **Retrain trigger** — webhook (+ optional input poll) alongside cron
 - **Dashboard** — Basic-Auth status page for run success/failure and history
 - **Model artifacts** — optional versioned fitted-model bundle for offline reload
@@ -79,6 +80,8 @@ lightfm/rectools/implicit, never trains or imports):
 | --- | --- | --- |
 | `GET` | `/health` | Liveness probe (no auth) |
 | `GET` | `/recommendations/{user_id}` | Precomputed top-K for that user |
+| `GET` | `/docs` / `/redoc` | Interactive OpenAPI docs (Swagger / ReDoc) |
+| `GET` | `/openapi.json` | Machine-readable OpenAPI schema |
 
 Query parameters for `/recommendations/{user_id}`:
 
@@ -121,6 +124,36 @@ See `config/cicerone.serve.toml` for a standalone example config, and the
 batch `recommender` service. The serve port is exposed only when
 `[job].mode = "serve"` — batch-only deployments keep "no ports exposed by
 default".
+
+#### OpenAPI and clients
+
+While serve is running, FastAPI exposes interactive docs at `/docs` and
+`/redoc`, and the machine-readable schema at `/openapi.json`. A checked-in
+copy (for codegen / offline review without a live process) lives at
+[`docs/openapi/serve.openapi.json`](docs/openapi/serve.openapi.json); refresh
+it with:
+
+```sh
+docker run --rm -v "$PWD":/app -w /app -e PYTHONPATH=/app/src cicerone-test \
+  python -m cicerone.export_serve_openapi -o docs/openapi/serve.openapi.json
+```
+
+Thin clients (no generated SDK package — copy or import as needed):
+
+| Path | Notes |
+| --- | --- |
+| `cicerone.serve_client.ServeClient` | Stdlib `urllib` client returning `serve_schemas` models |
+| [`examples/serve/python_client.py`](examples/serve/python_client.py) | Example using `ServeClient` |
+| [`examples/serve/fetch.mjs`](examples/serve/fetch.mjs) | Node / browser `fetch` example |
+| [`examples/serve/curl_examples.sh`](examples/serve/curl_examples.sh) | curl + `/openapi.json` peek |
+
+```python
+from cicerone.serve_client import ServeClient
+
+client = ServeClient("http://localhost:8000", token="…")
+print(client.health())  # HealthResponse
+print(client.recommendations("alice", limit=5, category="beer"))  # RecommendationsResponse
+```
 
 ### Event-driven retrain trigger
 

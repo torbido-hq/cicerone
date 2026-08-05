@@ -5,9 +5,11 @@
 This is a hands-on, step-by-step walkthrough of Cicerone's main features
 using a handful of made-up users/items/events on local disk — no S3 bucket
 or database required until the optional "database backend" section.
-Everything runs in Docker (nothing gets installed on the host). For the
-full configuration reference, see the [README](../README.md); for how the
-code is structured, see [architecture.md](architecture.md).
+Everything runs in Docker (nothing gets installed on the host).
+`docker-compose.yml` is for local developer convenience only — do not run
+it as a production deployment. For the full configuration reference, see
+the [README](../README.md); for how the code is structured, see
+[architecture.md](architecture.md).
 
 1. [Create a sample dataset](#1-create-a-sample-dataset)
 2. [Point cicerone.toml at it](#2-point-ciceronetoml-at-it)
@@ -487,6 +489,18 @@ curl -s -H "Authorization: Bearer $SERVE_TOKEN" \
   "http://localhost:8000/recommendations/nobody?limit=5"
 ```
 
+OpenAPI (Swagger UI) is at `http://localhost:8000/docs`; the JSON schema is
+`/openapi.json`. For a non-curl client, use the thin package helper (or the
+Node / curl snippets under [`examples/serve/`](../examples/serve/)):
+
+```sh
+docker run --rm --network host -e PYTHONPATH=/app/src \
+  -e CICERONE_SERVE_URL=http://localhost:8000 \
+  -e CICERONE_SERVE_TOKEN="$SERVE_TOKEN" \
+  -v "$PWD":/app -w /app cicerone-test \
+  python examples/serve/python_client.py
+```
+
 For a `dataset` output (as here), the recommendations file and optional
 `items_snapshot.parquet` are cached in memory and reloaded every
 `[serve].refresh_interval_seconds` (default 60s) — re-run
@@ -598,9 +612,11 @@ docker stop cicerone-tutorial-dashboard
 Everything above ran the job once via `docker run`. In practice, Cicerone
 runs continuously as a long-lived container: `docker-compose.yml` runs the
 job immediately on boot, then again on `[job].cron_schedule` (a 5-field cron
-expression evaluated in UTC; default: every night at 03:00). Point
-`docker-compose.yml` at your real input/output backend (S3-compatible
-storage or a database — see `.env.example`/`config/cicerone.toml`) and run:
+expression evaluated in UTC; default: every night at 03:00). Use that compose
+file to exercise recommender + serve + dashboard locally — it is for
+developer convenience, not production. Point it at your real input/output
+backend (S3-compatible storage or a database — see
+`.env.example`/`config/cicerone.toml`) and run:
 
 ```sh
 cp .env.example .env   # fill in the secrets your cicerone.toml references

@@ -8,7 +8,8 @@ For configuration and usage, see the main [README](../README.md).
 ## Module overview
 
 ```
-config.py            load & resolve config/cicerone.toml (structural config + ${ENV_VAR} secrets)
+config.py            load & resolve config/cicerone.toml (structural config + ${ENV_VAR} secrets);
+                     also `make_settings(**overrides)` for tests / OpenAPI export
 feature_config.py     load config/features.toml (event weights, feature columns,
                      eligibility/boost policy rules)
 policy.py             declarative eligibility masks, cohort grouping, score boosts
@@ -34,6 +35,9 @@ job.py                orchestrates one end-to-end run (source -> dataset -> mode
 scheduler.py           in-process cron loop that calls job.run(); when [job.trigger]
                        is enabled, also hosts the retrain-trigger HTTP server (trigger.py)
 serve.py               serve mode: FastAPI read API over precomputed recommendations
+serve_schemas.py       Pydantic models that drive the serve OpenAPI schema
+serve_client.py        thin stdlib HTTP client for the serve read API
+export_serve_openapi.py  CLI to dump FastAPI's OpenAPI JSON (docs/openapi/…)
 trigger.py             event-driven retrain trigger: webhook + optional input-bucket poll,
                        debounce guard (RunGuard) shared with the cron loop
 http_auth.py           shared bearer-token (serve.py/trigger.py) and HTTP Basic Auth
@@ -200,7 +204,11 @@ rectools/lightfm/implicit needed in that process or its request path):
   `GET /recommendations/{user_id}` (`limit`/`k`, `category`,
   `exclude_unavailable`) behind `http_auth.require_bearer_token`. Unknown
   users fall back to the precomputed `__cold_start__` list rather than 404.
-  Responses include `generated_at` from the run manifest.
+  Responses include `generated_at` from the run manifest. Pydantic models in
+  `serve_schemas.py` populate `/openapi.json` (and `/docs` / `/redoc`);
+  `export_serve_openapi` writes the checked-in copy under `docs/openapi/`.
+  Integrators can call the same contract via `serve_client.ServeClient` or the
+  snippets in `examples/serve/`.
 
 `cicerone.trigger` implements the event-driven retrain trigger, additive to
 (not a replacement for) `scheduler.py`'s cron loop:

@@ -93,6 +93,8 @@ COPY requirements-dev.txt ./
 RUN pip install --no-cache-dir -r requirements-dev.txt
 COPY pyproject.toml ./
 COPY tests/ ./tests/
+# Checked-in serve OpenAPI schema — asserted against create_app().openapi() in tests.
+COPY docs/openapi/ ./docs/openapi/
 # Canonical Postgres defaults — parsed by tests/support/postgres_defaults.py at runtime.
 COPY docker/postgres/defaults.env ./docker/postgres/defaults.env
 RUN chown -R cicerone:cicerone /app
