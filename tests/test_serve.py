@@ -11,7 +11,7 @@ from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import Settings
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.recommendation_reader import select_cold_start_fallback
-from cicerone.serve import _ItemsFilterCache, _start_refresh_loop, create_app, main
+from cicerone.serve import _available_item_ids, _ItemsFilterCache, _start_refresh_loop, create_app, main
 
 
 def _settings(**overrides) -> Settings:
@@ -96,6 +96,23 @@ class _FakeManifest:
         del limit
         latest = self.read_latest()
         return [latest] if latest else []
+
+
+def test_available_item_ids_missing_item_id_returns_none():
+    items = pd.DataFrame([{"sku": "x", "published": True}])
+    assert _available_item_ids(items, ["published"]) is None
+
+
+def test_items_filter_cache_tolerates_snapshot_without_item_id():
+    reader = _FakeReader(_recs_df(), pd.DataFrame([{"sku": "x", "published": True}]))
+    cache = _ItemsFilterCache(
+        reader,
+        category_column="category",
+        availability_filters=["published"],
+    )
+    items, available = cache.get()
+    assert items is not None
+    assert available is None
 
 
 def test_items_filter_cache_normalizes_once_per_refresh():

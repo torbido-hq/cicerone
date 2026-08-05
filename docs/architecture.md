@@ -14,7 +14,8 @@ feature_config.py     load config/features.toml (event weights, feature columns,
 policy.py             declarative eligibility masks, cohort grouping, score boosts
 blending.py           per-user weighted mix of personalized/popular/latest (optional)
 io/
-  base.py             InputSource / OutputSink / RecommendationReader protocols
+  base.py             InputSource / OutputSink / RecommendationReader protocols;
+                      BaseRecommendationReader with empty defaults for custom readers
   factory.py          picks a concrete backend by IOSettings.kind ("dataset" | "db")
   dataset_store.py     backend: parquet files (S3-compatible or local disk)
   db_store.py          backend: SQLAlchemy-backed database tables/queries

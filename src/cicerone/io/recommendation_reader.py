@@ -10,8 +10,10 @@ from typing import Any
 
 import pandas as pd
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from cicerone.blending import COLD_START_USER_ID, LATEST_SOURCE, POPULAR_SOURCE
+from cicerone.io.base import BaseRecommendationReader
 from cicerone.io.db_store import (
     DEFAULT_RECOMMENDATION_ITEMS_TABLE,
     DEFAULT_RECOMMENDATIONS_TABLE,
@@ -28,6 +30,7 @@ ITEMS_SNAPSHOT_FILENAME = "items_snapshot.parquet"
 
 # When __cold_start__ is missing: popular/latest only (never warm "blended").
 _FALLBACK_SOURCES = frozenset({POPULAR_SOURCE, LATEST_SOURCE})
+_MISSING_TABLE_ERRORS = (ProgrammingError, OperationalError)
 
 
 def normalize_items_snapshot(
@@ -93,7 +96,7 @@ def select_cold_start_fallback(
     return rows.head(k).reset_index(drop=True)
 
 
-class DatasetRecommendationReader:
+class DatasetRecommendationReader(BaseRecommendationReader):
     def __init__(self, options: dict[str, Any]):
         self._options = options
         self._backend = options.get("storage_backend", "local")
@@ -184,7 +187,7 @@ class DatasetRecommendationReader:
         return select_cold_start_fallback(self._cache, k)
 
 
-class DbRecommendationReader:
+class DbRecommendationReader(BaseRecommendationReader):
     def __init__(self, options: dict[str, Any]):
         self._options = options
         self._table = sql_identifier(
@@ -219,17 +222,19 @@ class DbRecommendationReader:
 
     def refresh(self) -> None:
         try:
-            from sqlalchemy import inspect
-
-            if not inspect(self._engine).has_table(self._items_table):
-                self._items = None
-                self._items_version += 1
-                return
+            frame = pd.read_sql(text(f'SELECT * FROM "{self._items_table}"'), self._engine)
             self._items = normalize_items_snapshot(
-                pd.read_sql(text(f'SELECT * FROM "{self._items_table}"'), self._engine),
+                frame,
                 category_column=self._category_column,
                 availability_filters=self._availability_filters,
             )
+            self._items_version += 1
+        except _MISSING_TABLE_ERRORS:
+            logger.debug(
+                "recommendation items table %r not present; continuing without it",
+                self._items_table,
+            )
+            self._items = None
             self._items_version += 1
         except Exception:
             logger.exception("Failed to refresh recommendation items snapshot; continuing without it")

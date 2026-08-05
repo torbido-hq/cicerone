@@ -58,7 +58,7 @@ def _configure_reader_item_filters(
 
 
 def _available_item_ids(items: pd.DataFrame, availability_filters: Sequence[str]) -> frozenset[str] | None:
-    if not availability_filters:
+    if not availability_filters or "item_id" not in items.columns:
         return None
     mask = pd.Series(True, index=items.index)
     for column in availability_filters:
