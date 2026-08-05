@@ -612,14 +612,11 @@ docker stop cicerone-tutorial-dashboard
 Everything above ran the job once via `docker run`. In practice, Cicerone
 runs continuously as a long-lived container: `docker-compose.yml` runs the
 job immediately on boot, then again on `[job].cron_schedule` (a 5-field cron
-expression evaluated in UTC; default: every night at 03:00). That compose
-file is a local/dev convenience so you can exercise recommender + serve +
-dashboard together — it is **not** a production deployment recipe (no
-resource limits, secrets management, replicas, health-based rollouts, etc.).
-For real environments, run the same image under your orchestrator of choice
-with production config and secrets. To try the compose stack locally, point
-it at your real input/output backend (S3-compatible storage or a database —
-see `.env.example`/`config/cicerone.toml`) and run:
+expression evaluated in UTC; default: every night at 03:00). Use that compose
+file to exercise recommender + serve + dashboard locally — it is for
+developer convenience, not production. Point it at your real input/output
+backend (S3-compatible storage or a database — see
+`.env.example`/`config/cicerone.toml`) and run:
 
 ```sh
 cp .env.example .env   # fill in the secrets your cicerone.toml references
