@@ -8,4 +8,4 @@ httpx==0.28.1
 ruff==0.16.0
 mypy==1.11.2
 types-croniter==6.2.4.20260711
-pip-audit==2.7.3
+pip-audit==2.10.1
