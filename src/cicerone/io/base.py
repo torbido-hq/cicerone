@@ -38,8 +38,12 @@ class RecommendationReader(Protocol):
         """Items snapshot for serve-time filters, if available."""
         ...
 
+    def items_version(self) -> int:
+        """Monotonic token bumped when the items snapshot changes."""
+        ...
+
     def get_cold_start_fallback(self, k: int) -> pd.DataFrame:
-        """Precomputed popular/latest rows for unknown users."""
+        """``__cold_start__`` rows, else a popular/latest heuristic for unknown users."""
         ...
 
 

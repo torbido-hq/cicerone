@@ -53,12 +53,53 @@ def normalize_items_snapshot(
     return out
 
 
+def select_cold_start_fallback(
+    recommendations: pd.DataFrame,
+    k: int,
+    *,
+    sentinel: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Pick ``__cold_start__`` rows, else one popular/latest user's top-K.
+
+    ``sentinel`` may be a pre-fetched ``__cold_start__`` slice (e.g. from SQL);
+    when omitted, it is derived from ``recommendations``.
+    """
+    empty = recommendations.iloc[0:0]
+    if k < 1:
+        return empty
+
+    if sentinel is None:
+        if recommendations.empty or USER_COLUMN not in recommendations.columns:
+            return empty
+        sentinel = (
+            recommendations[recommendations[USER_COLUMN].astype(str) == COLD_START_USER_ID]
+            .sort_values(RANK_COLUMN)
+            .head(k)
+            .reset_index(drop=True)
+        )
+    elif not sentinel.empty:
+        sentinel = sentinel.sort_values(RANK_COLUMN).head(k).reset_index(drop=True)
+
+    if not sentinel.empty:
+        return sentinel
+
+    if recommendations.empty or SOURCE_COLUMN not in recommendations.columns:
+        return empty
+    candidates = recommendations[recommendations[SOURCE_COLUMN].isin(_FALLBACK_SOURCES)]
+    if candidates.empty:
+        return empty
+    sample_user = candidates[USER_COLUMN].astype(str).iloc[0]
+    rows = candidates[candidates[USER_COLUMN].astype(str) == sample_user].sort_values(RANK_COLUMN)
+    return rows.head(k).reset_index(drop=True)
+
+
 class DatasetRecommendationReader:
     def __init__(self, options: dict[str, Any]):
         self._options = options
         self._backend = options.get("storage_backend", "local")
         self._cache = pd.DataFrame(columns=[USER_COLUMN, RANK_COLUMN, SOURCE_COLUMN])
         self._items: pd.DataFrame | None = None
+        self._items_version = 0
         self._category_column: str | None = None
         self._availability_filters: list[str] = []
         self.refresh()
@@ -76,6 +117,7 @@ class DatasetRecommendationReader:
             category_column=self._category_column,
             availability_filters=self._availability_filters,
         )
+        self._items_version += 1
 
     def _read_recommendations(self) -> pd.DataFrame:
         if self._backend == "local":
@@ -124,8 +166,12 @@ class DatasetRecommendationReader:
                 category_column=self._category_column,
                 availability_filters=self._availability_filters,
             )
+            self._items_version += 1
         except Exception:
             logger.exception("Failed to refresh items snapshot; keeping previous data")
+
+    def items_version(self) -> int:
+        return self._items_version
 
     def get_items(self) -> pd.DataFrame | None:
         return self._items
@@ -135,18 +181,7 @@ class DatasetRecommendationReader:
         return rows.head(k).reset_index(drop=True)
 
     def get_cold_start_fallback(self, k: int) -> pd.DataFrame:
-        """Reuse a precomputed popular/latest list when ``user_id`` is unknown."""
-        sentinel = self.get_recommendations(COLD_START_USER_ID, k)
-        if not sentinel.empty:
-            return sentinel
-        if self._cache.empty or SOURCE_COLUMN not in self._cache.columns:
-            return sentinel
-        candidates = self._cache[self._cache[SOURCE_COLUMN].isin(_FALLBACK_SOURCES)]
-        if candidates.empty:
-            return sentinel
-        sample_user = candidates[USER_COLUMN].astype(str).iloc[0]
-        rows = candidates[candidates[USER_COLUMN].astype(str) == sample_user].sort_values(RANK_COLUMN)
-        return rows.head(k).reset_index(drop=True)
+        return select_cold_start_fallback(self._cache, k)
 
 
 class DbRecommendationReader:
@@ -162,6 +197,7 @@ class DbRecommendationReader:
         )
         self._engine = create_engine(require_option(options, "database_url", "db"), pool_pre_ping=True)
         self._items: pd.DataFrame | None = None
+        self._items_version = 0
         self._category_column: str | None = None
         self._availability_filters: list[str] = []
         self.refresh()
@@ -179,6 +215,7 @@ class DbRecommendationReader:
             category_column=self._category_column,
             availability_filters=self._availability_filters,
         )
+        self._items_version += 1
 
     def refresh(self) -> None:
         try:
@@ -186,15 +223,21 @@ class DbRecommendationReader:
 
             if not inspect(self._engine).has_table(self._items_table):
                 self._items = None
+                self._items_version += 1
                 return
             self._items = normalize_items_snapshot(
                 pd.read_sql(text(f'SELECT * FROM "{self._items_table}"'), self._engine),
                 category_column=self._category_column,
                 availability_filters=self._availability_filters,
             )
+            self._items_version += 1
         except Exception:
             logger.exception("Failed to refresh recommendation items snapshot; continuing without it")
             self._items = None
+            self._items_version += 1
+
+    def items_version(self) -> int:
+        return self._items_version
 
     def get_items(self) -> pd.DataFrame | None:
         return self._items
@@ -224,8 +267,4 @@ class DbRecommendationReader:
                 "k": max(k * 20, k),
             },
         )
-        if sample.empty:
-            return sample
-        sample_user = sample[USER_COLUMN].astype(str).iloc[0]
-        rows = sample[sample[USER_COLUMN].astype(str) == sample_user].sort_values(RANK_COLUMN)
-        return rows.head(k).reset_index(drop=True)
+        return select_cold_start_fallback(sample, k, sentinel=sentinel)

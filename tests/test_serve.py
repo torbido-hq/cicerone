@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import Settings
 from cicerone.feature_config import FeatureConfig
+from cicerone.io.recommendation_reader import select_cold_start_fallback
 from cicerone.serve import _ItemsFilterCache, _start_refresh_loop, create_app, main
 
 
@@ -21,10 +22,12 @@ class _FakeReader:
     def __init__(self, recs: pd.DataFrame, items: pd.DataFrame | None = None):
         self._recs = recs
         self._items = items
+        self._items_version = 0
         self.refresh_calls = 0
 
     def refresh(self) -> None:
         self.refresh_calls += 1
+        self._items_version += 1
 
     def get_recommendations(self, user_id: str, k: int) -> pd.DataFrame:
         rows = self._recs[self._recs["user_id"] == user_id].sort_values("rank")
@@ -33,8 +36,11 @@ class _FakeReader:
     def get_items(self) -> pd.DataFrame | None:
         return self._items
 
+    def items_version(self) -> int:
+        return self._items_version
+
     def get_cold_start_fallback(self, k: int) -> pd.DataFrame:
-        return self.get_recommendations(COLD_START_USER_ID, k)
+        return select_cold_start_fallback(self._recs, k)
 
 
 def _recs_df() -> pd.DataFrame:
@@ -105,10 +111,15 @@ def test_items_filter_cache_normalizes_once_per_refresh():
     assert available_a is available_b
     assert available_a == frozenset({"i1", "i2"})
 
-    reader._items = _items_df()
+    # In-place mutation alone must not be relied on; bump the version token.
+    reader._items.loc[reader._items["item_id"] == "i3", "published"] = True
+    items_same, _ = cache.get()
+    assert items_same is items_a
+
+    reader.refresh()
     items_c, available_c = cache.get()
     assert items_c is not items_a
-    assert available_c == frozenset({"i1", "i2"})
+    assert available_c == frozenset({"i1", "i2", "i3"})
 
 
 def test_health_requires_no_auth():

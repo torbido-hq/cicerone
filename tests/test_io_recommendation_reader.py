@@ -7,11 +7,75 @@ import pandas as pd
 import pytest
 from moto import mock_aws
 
-from cicerone.io.recommendation_reader import DatasetRecommendationReader, normalize_items_snapshot
+from cicerone.io.recommendation_reader import (
+    DatasetRecommendationReader,
+    normalize_items_snapshot,
+    select_cold_start_fallback,
+)
 
 
 def _write_recommendations(path, rows) -> None:
     pd.DataFrame(rows).to_parquet(path / "recommendations.parquet", index=False)
+
+
+def test_select_cold_start_fallback_prefers_sentinel():
+    frame = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "popular_fallback"},
+            {
+                "user_id": "__cold_start__",
+                "item_id": "i9",
+                "rank": 1,
+                "score": 0.4,
+                "source": "popular_fallback",
+            },
+            {
+                "user_id": "__cold_start__",
+                "item_id": "i8",
+                "rank": 2,
+                "score": 0.3,
+                "source": "popular_fallback",
+            },
+        ]
+    )
+    out = select_cold_start_fallback(frame, k=1)
+    assert list(out["item_id"]) == ["i9"]
+
+
+def test_select_cold_start_fallback_without_sentinel_uses_popular():
+    frame = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"},
+            {"user_id": "u2", "item_id": "i9", "rank": 1, "score": 0.4, "source": "popular_fallback"},
+            {"user_id": "u2", "item_id": "i8", "rank": 2, "score": 0.3, "source": "popular_fallback"},
+        ]
+    )
+    out = select_cold_start_fallback(frame, k=2)
+    assert list(out["item_id"]) == ["i9", "i8"]
+
+
+def test_select_cold_start_fallback_edge_cases():
+    empty = pd.DataFrame(columns=["user_id", "item_id", "rank", "score", "source"])
+    assert select_cold_start_fallback(empty, k=0).empty
+
+    no_source = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.1}])
+    assert select_cold_start_fallback(no_source, k=1).empty
+
+    frame = pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.1, "source": "popular_fallback"}]
+    )
+    sentinel = pd.DataFrame(
+        [
+            {
+                "user_id": "__cold_start__",
+                "item_id": "i9",
+                "rank": 2,
+                "score": 0.2,
+                "source": "popular_fallback",
+            }
+        ]
+    )
+    assert list(select_cold_start_fallback(frame, k=1, sentinel=sentinel)["item_id"]) == ["i9"]
 
 
 def test_normalize_items_snapshot_casts_filter_columns():

@@ -13,7 +13,6 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse
 
-from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import Settings, load_settings
 from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.http_auth import optional_bearer_deps
@@ -82,18 +81,17 @@ class _ItemsFilterCache:
         self._reader = reader
         self._category_column = category_column
         self._availability_filters = list(availability_filters)
-        self._raw_id: int | None = None
+        self._version: int | None = None
         self._items: pd.DataFrame | None = None
         self._available_ids: frozenset[str] | None = None
 
     def get(self) -> tuple[pd.DataFrame | None, frozenset[str] | None]:
-        raw = self._reader.get_items()
-        raw_id = id(raw) if raw is not None else None
-        if raw_id == self._raw_id:
+        version = self._reader.items_version()
+        if version == self._version:
             return self._items, self._available_ids
 
         items = normalize_items_snapshot(
-            raw,
+            self._reader.get_items(),
             category_column=self._category_column,
             availability_filters=self._availability_filters,
         )
@@ -102,7 +100,7 @@ class _ItemsFilterCache:
             if items is not None and not items.empty
             else None
         )
-        self._raw_id = raw_id
+        self._version = version
         self._items = items
         self._available_ids = available
         return items, available
@@ -194,10 +192,8 @@ def create_app(
         recs = reader.get_recommendations(user_id, fetch_k)
         used_fallback = False
         if recs.empty:
-            recs = reader.get_recommendations(COLD_START_USER_ID, fetch_k)
             used_fallback = True
-            if recs.empty:
-                recs = reader.get_cold_start_fallback(fetch_k)
+            recs = reader.get_cold_start_fallback(fetch_k)
         if recs.empty:
             raise HTTPException(status_code=404, detail=f"No recommendations for user_id={user_id!r}")
 
