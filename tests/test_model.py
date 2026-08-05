@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 import pytest
+from implicit.nearest_neighbours import TFIDFRecommender
 from rectools import Columns
 
 from cicerone.config import STRATEGY_NAMES, validate_model_weights
@@ -1449,14 +1450,13 @@ def test_item_based_k_neighbors_reaches_tfidf_recommender(sample_items, feature_
     events = _synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
     seen: list[int] = []
+    real_tfidf = TFIDFRecommender
 
-    real_build = __import__("cicerone.model", fromlist=["_build_item_based"])._build_item_based
+    def tracking_tfidf(*args, **kwargs):
+        seen.append(kwargs["K"])
+        return real_tfidf(*args, **kwargs)
 
-    def tracking_build(k_neighbors: int = 20):
-        seen.append(k_neighbors)
-        return real_build(k_neighbors)
-
-    monkeypatch.setattr("cicerone.model._build_item_based", tracking_build)
+    monkeypatch.setattr("cicerone.model.TFIDFRecommender", tracking_tfidf)
 
     train_and_recommend(
         built,
