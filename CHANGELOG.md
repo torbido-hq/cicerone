@@ -34,8 +34,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   checked-in schema at `docs/openapi/serve.openapi.json` can be regenerated
   with `python -m cicerone.export_serve_openapi`.
 - **Thin serve clients**: `cicerone.serve_client.ServeClient` (stdlib
-  `urllib`, no extra deps) plus copy-paste examples under `examples/serve/`
-  (Python, Node `fetch`, curl).
+  `urllib`, typed via `serve_schemas`) plus copy-paste examples under
+  `examples/serve/` (Python, Node `fetch`, curl).
 
 ### Changed
 
@@ -56,6 +56,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and `create_app` do not require dataset/DB backend imports at module load.
 - Serve OpenAPI `info.version` follows `cicerone.__version__` (single source
   of truth with the changelog / release tag).
+- `config.make_settings(**overrides)` is the shared Settings factory for
+  tests and OpenAPI schema export (replacing duplicated default blocks).
 
 ## [0.3.2] - 2026-08-04
 

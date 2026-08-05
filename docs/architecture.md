@@ -8,7 +8,8 @@ For configuration and usage, see the main [README](../README.md).
 ## Module overview
 
 ```
-config.py            load & resolve config/cicerone.toml (structural config + ${ENV_VAR} secrets)
+config.py            load & resolve config/cicerone.toml (structural config + ${ENV_VAR} secrets);
+                     also `make_settings(**overrides)` for tests / OpenAPI export
 feature_config.py     load config/features.toml (event weights, feature columns,
                      eligibility/boost policy rules)
 policy.py             declarative eligibility masks, cohort grouping, score boosts

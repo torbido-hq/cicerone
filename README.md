@@ -142,7 +142,7 @@ Thin clients (no generated SDK package — copy or import as needed):
 
 | Path | Notes |
 | --- | --- |
-| `cicerone.serve_client.ServeClient` | Stdlib `urllib` Python client shipped in the package |
+| `cicerone.serve_client.ServeClient` | Stdlib `urllib` client returning `serve_schemas` models |
 | [`examples/serve/python_client.py`](examples/serve/python_client.py) | Example using `ServeClient` |
 | [`examples/serve/fetch.mjs`](examples/serve/fetch.mjs) | Node / browser `fetch` example |
 | [`examples/serve/curl_examples.sh`](examples/serve/curl_examples.sh) | curl + `/openapi.json` peek |
@@ -151,8 +151,8 @@ Thin clients (no generated SDK package — copy or import as needed):
 from cicerone.serve_client import ServeClient
 
 client = ServeClient("http://localhost:8000", token="…")
-print(client.health())
-print(client.recommendations("alice", limit=5, category="beer"))
+print(client.health())  # HealthResponse
+print(client.recommendations("alice", limit=5, category="beer"))  # RecommendationsResponse
 ```
 
 ### Event-driven retrain trigger

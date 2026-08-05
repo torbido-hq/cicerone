@@ -15,6 +15,7 @@ from cicerone.export_serve_openapi import build_openapi
 from cicerone.export_serve_openapi import main as export_main
 from cicerone.serve import SERVE_API_TITLE, SERVE_API_VERSION, create_app
 from cicerone.serve_client import ServeClient, ServeClientError
+from cicerone.serve_schemas import HealthResponse
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 OPENAPI_PATH = REPO_ROOT / "docs" / "openapi" / "serve.openapi.json"
@@ -38,12 +39,25 @@ def test_openapi_json_lists_serve_paths_and_schemas():
     assert schema["info"]["version"] == SERVE_API_VERSION
     assert "/health" in schema["paths"]
     assert "/recommendations/{user_id}" in schema["paths"]
+
     components = schema["components"]["schemas"]
     assert "RecommendationsResponse" in components
     assert "RecommendationItem" in components
     assert "HealthResponse" in components
+    assert "ErrorDetail" in components
+
+    header_components = schema["components"]["headers"]
+    assert "X-Generated-At" in header_components
+    assert header_components["X-Generated-At"]["schema"]["type"] == "string"
+
     rec = schema["paths"]["/recommendations/{user_id}"]["get"]
     assert "X-Generated-At" in rec["responses"]["200"].get("headers", {})
+
+    for status_code in ("400", "401", "404"):
+        error_response = rec["responses"][status_code]
+        error_schema = error_response["content"]["application/json"]["schema"]
+        assert error_schema.get("$ref") == "#/components/schemas/ErrorDetail"
+
     # Bearer security is present when serve_auth_token is configured.
     assert schema["components"]["securitySchemes"]
 
@@ -74,6 +88,15 @@ def test_export_serve_openapi_stdout(capsys):
     assert json.loads(capsys.readouterr().out) == build_openapi()
 
 
+def test_generated_at_header_matches_body():
+    client = TestClient(_app())
+    response = client.get("/recommendations/u1", headers={"Authorization": "Bearer secret"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["generated_at"] == "2026-08-04T12:00:00+00:00"
+    assert response.headers["X-Generated-At"] == body["generated_at"]
+
+
 def _free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -101,20 +124,20 @@ def live_serve_url():
 
 def test_serve_client_health_and_recommendations(live_serve_url):
     client = ServeClient(live_serve_url, token="secret")
-    assert client.health() == {"status": "ok"}
+    assert client.health() == HealthResponse(status="ok")
 
     body = client.recommendations("u1", limit=1)
-    assert body["user_id"] == "u1"
-    assert body["fallback"] is False
-    assert body["generated_at"] == "2026-08-04T12:00:00+00:00"
-    assert len(body["items"]) == 1
-    assert body["items"][0]["item_id"] == "i1"
+    assert body.user_id == "u1"
+    assert body.fallback is False
+    assert body.generated_at == "2026-08-04T12:00:00+00:00"
+    assert len(body.items) == 1
+    assert body.items[0].item_id == "i1"
 
 
 def test_serve_client_category_and_auth_errors(live_serve_url):
     client = ServeClient(live_serve_url, token="secret")
     body = client.recommendations("u1", category="wine", exclude_unavailable=True)
-    assert [row["item_id"] for row in body["items"]] == ["i2"]
+    assert [row.item_id for row in body.items] == ["i2"]
 
     unauth = ServeClient(live_serve_url, token="wrong")
     with pytest.raises(ServeClientError) as exc_info:

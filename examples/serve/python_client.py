@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Thin Python client example for Cicerone serve mode.
 
-Uses ``cicerone.serve_client.ServeClient`` (stdlib urllib — no httpx/requests).
+Uses ``cicerone.serve_client.ServeClient`` (stdlib urllib + typed serve schemas).
 """
 
 from __future__ import annotations
@@ -24,9 +24,9 @@ def main() -> int:
     except ServeClientError as exc:
         print(f"recommendations failed: {exc}", file=sys.stderr)
         return 1
-    print(f"user={body['user_id']} fallback={body['fallback']} generated_at={body['generated_at']}")
-    for row in body["items"]:
-        print(f"  #{row['rank']} {row['item_id']} score={row['score']:.4f} source={row['source']}")
+    print(f"user={body.user_id} fallback={body.fallback} generated_at={body.generated_at}")
+    for row in body.items:
+        print(f"  #{row.rank} {row.item_id} score={row.score:.4f} source={row.source}")
     return 0
 
 

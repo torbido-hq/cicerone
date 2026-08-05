@@ -1,4 +1,4 @@
-"""Thin HTTP client for the serve read API (stdlib only — no extra deps)."""
+"""Thin HTTP client for the serve read API (stdlib urllib + shared Pydantic models)."""
 
 from __future__ import annotations
 
@@ -7,6 +7,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any
+
+from cicerone.serve_schemas import HealthResponse, RecommendationsResponse
 
 
 class ServeClientError(Exception):
@@ -22,8 +24,8 @@ class ServeClientError(Exception):
 class ServeClient:
     """Minimal client for `GET /health` and `GET /recommendations/{user_id}`.
 
-    Uses only the Python standard library so integrators can copy this file
-    or depend on the installed package without pulling httpx/requests.
+    Uses stdlib ``urllib`` for transport and the same Pydantic models as the
+    serve OpenAPI schema (``cicerone.serve_schemas``) for typed responses.
     """
 
     def __init__(
@@ -37,8 +39,8 @@ class ServeClient:
         self.token = token
         self.timeout = timeout
 
-    def health(self) -> dict[str, Any]:
-        return self._request("GET", "/health")
+    def health(self) -> HealthResponse:
+        return HealthResponse.model_validate(self._request("GET", "/health"))
 
     def recommendations(
         self,
@@ -48,7 +50,7 @@ class ServeClient:
         k: int | None = None,
         category: str | None = None,
         exclude_unavailable: bool | None = None,
-    ) -> dict[str, Any]:
+    ) -> RecommendationsResponse:
         params: dict[str, str] = {}
         if limit is not None:
             params["limit"] = str(limit)
@@ -59,7 +61,7 @@ class ServeClient:
         if exclude_unavailable is not None:
             params["exclude_unavailable"] = "true" if exclude_unavailable else "false"
         path = f"/recommendations/{urllib.parse.quote(str(user_id), safe='')}"
-        return self._request("GET", path, params=params)
+        return RecommendationsResponse.model_validate(self._request("GET", path, params=params))
 
     def _request(
         self,

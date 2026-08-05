@@ -205,6 +205,56 @@ class Settings:
     dashboard_history_limit: int
 
 
+def make_settings(**overrides: Any) -> Settings:
+    """Build a fully-populated ``Settings`` with the same defaults as a typical TOML load.
+
+    Used by tests and OpenAPI schema export so callers only pass the fields they
+    care about (``mode``, auth tokens, …) and stay aligned as ``Settings`` grows.
+    Prefer ``load_settings(path)`` for real config files.
+    """
+    base: dict[str, Any] = dict(
+        input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": "/tmp/in"}),
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": "/tmp/out"}),
+        feature_config_path="/app/config/features.toml",
+        top_k=10,
+        half_life_days=90,
+        cron_schedule="0 3 * * *",
+        models=None,
+        model_weights=None,
+        rrf_k=None,
+        save_model_artifact=False,
+        max_workers=DEFAULT_MAX_WORKERS,
+        epoch_metrics=None,
+        automl_enabled=False,
+        automl_n_splits=AUTOML_DEFAULT_N_SPLITS,
+        automl_test_days=AUTOML_DEFAULT_TEST_DAYS,
+        automl_primary_metric=AUTOML_DEFAULT_PRIMARY_METRIC,
+        automl_candidates=None,
+        mode="batch",
+        serve_host="0.0.0.0",
+        serve_port=8000,
+        serve_auth_token=None,
+        serve_default_k=10,
+        serve_refresh_interval_seconds=60,
+        serve_category_column="category",
+        trigger_enabled=False,
+        trigger_host="0.0.0.0",
+        trigger_port=8080,
+        trigger_auth_token=None,
+        trigger_debounce_seconds=60,
+        trigger_poll_input_bucket=False,
+        trigger_poll_interval_seconds=300,
+        dashboard_enabled=False,
+        dashboard_host="0.0.0.0",
+        dashboard_port=8090,
+        dashboard_users_path="/tmp/dashboard_users.toml",
+        dashboard_refresh_interval_seconds=30,
+        dashboard_history_limit=20,
+    )
+    base.update(overrides)
+    return Settings(**base)
+
+
 def _load_io_settings(raw: dict[str, Any], section_name: str) -> IOSettings:
     section = raw.get(section_name)
     if not section:
