@@ -4,10 +4,16 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.4.0] - 2026-08-04
+## [0.4.0] - 2026-08-05
 
 ### Added
 
+- **Content cold-item fallback** (`content_fallback` strategy): recommends
+  zero-interaction items by one-hot cosine similarity over configured
+  `item_features` against each warm user's history. Gated by
+  `[job.content_fallback].enabled` (default off); when enabled, auto-inserted
+  before the first non-personalized strategy. Independent of `item_based`.
+  Source label: `content_fallback`. Requires `scikit-learn`.
 - **Weighted multi-source blending** (`[blending]` in `config/features.toml`):
   replaces the binary personalized-vs-`popular_fallback` choice with a
   gradual per-user mix of `personalized`, `popular`, and date-based
@@ -39,6 +45,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Default model chain** is now `["collaborative", "item_based", "popular"]`
+  (was `["collaborative", "popular"]`), so sparse warm users get item-KNN
+  backfill before raw popularity.
+- **`[job.item_based].k_neighbors`** configures `TFIDFRecommender(K=…)`
+  (default `20`).
 - Serve JSON response is an object (with `generated_at` / `items`) rather
   than a bare list; `k` remains accepted as an alias for `limit`.
 - Docs: architecture data-flow covers the three combine paths (priority /

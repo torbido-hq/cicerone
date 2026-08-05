@@ -27,7 +27,7 @@ up to your own data doesn't require touching any code.
 ## Features
 
 - **Batch recommender** — cron-scheduled train + top-K write (dataset or DB I/O)
-- **Hybrid strategies** — collaborative (LightFM), item-based KNN, popular, latest
+- **Hybrid strategies** — collaborative (LightFM), item-based KNN, optional content cold-item fallback, popular, latest
 - **Priority or RRF fusion** — combine strategies by order or weighted ranks
 - **AutoML** — time-fold backtest to pick models/weights per run
 - **Business policies** — TOML eligibility filters and score boosts
@@ -316,12 +316,19 @@ plan tiers, category allowlists) are annotated in
 
 `[job].models` in `config/cicerone.toml` picks which strategies to fit and
 combine, in priority order (earlier entries win ties for the same
-user/item pair). Defaults to `["collaborative", "popular"]` if omitted:
+user/item pair). Defaults to `["collaborative", "item_based", "popular"]`
+if omitted:
 
 - `collaborative`: `LightFMWrapperModel` (rectools) — hybrid CF, uses user/item
   features for cold-start. Personalized, warm users only.
 - `item_based`: `ImplicitItemKNNWrapperModel` (rectools) — item-item
-  similarity. Personalized, warm users only.
+  similarity (`TFIDFRecommender`). Personalized, warm users only. Neighbor
+  count is `[job.item_based].k_neighbors` (default `20`).
+- `content_fallback`: feature-similarity recommendations for **zero-interaction
+  items** (one-hot over `item_features`, cosine vs user history). Personalized,
+  warm users only. Off by default — set `[job.content_fallback].enabled = true`
+  (auto-inserted before the first non-personalized strategy if not listed in
+  `models`). Independent of `item_based`.
 - `popular`: `PopularModel` (rectools) — global popularity. Non-personalized,
   runs for every target user and backfills any warm user without enough
   personalized results.
@@ -426,8 +433,8 @@ are pickle-serialized and must only be loaded from trusted internal sources
 
 `recommendations`: `user_id, item_id, rank, score, source` (`source` is the
 label of whichever strategy produced that row: `personalized`, `item_based`,
-`popular_fallback`, `latest`, or `blended` when multi-source blending
-combined more than one).
+`content_fallback`, `popular_fallback`, `latest`, or `blended` when
+multi-source blending combined more than one).
 
 `manifest`: metadata about the latest run (counts, timestamps,
 `triggered_by`, effective models, optional AutoML metrics, and

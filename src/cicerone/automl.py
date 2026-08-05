@@ -29,7 +29,12 @@ from cicerone.config import (
 )
 from cicerone.dataset import build_dataset, build_interactions
 from cicerone.feature_config import FeatureConfig
-from cicerone.model import DEFAULT_MODELS, STRATEGIES, RecommenderModel, train_and_recommend
+from cicerone.model import (
+    DEFAULT_MODELS,
+    STRATEGIES,
+    RecommenderModel,
+    train_and_recommend,
+)
 
 logger = logging.getLogger(__name__)
 

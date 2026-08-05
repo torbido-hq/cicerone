@@ -18,7 +18,10 @@ from rectools.dataset import Dataset
 
 from cicerone.dataset import BuiltDataset
 from cicerone.feature_config import FeatureConfig
-from cicerone.model import RecommenderModel, recommend_with_models
+from cicerone.model import (
+    RecommenderModel,
+    recommend_with_models,
+)
 
 logger = logging.getLogger(__name__)
 

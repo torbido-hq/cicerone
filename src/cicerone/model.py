@@ -32,9 +32,22 @@ from cicerone.blending import (
     interaction_counts,
     resolve_latest_date_column,
 )
-from cicerone.config import STRATEGY_NAMES, EpochMetricsSettings, validate_model_weights, validate_rrf_k
+from cicerone.config import (
+    DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS,
+    DEFAULT_ITEM_BASED_K_NEIGHBORS,
+    STRATEGY_NAMES,
+    EpochMetricsSettings,
+    validate_model_weights,
+    validate_rrf_k,
+)
+from cicerone.content_fallback import (
+    CONTENT_FALLBACK_SOURCE,
+    ContentFallbackModel,
+    build_content_fallback_model,
+)
 from cicerone.dataset import BuiltDataset
-from cicerone.feature_config import DEFAULT_BOOST_OVERFETCH_FACTOR, FeatureConfig
+from cicerone.feature_config import DEFAULT_BOOST_OVERFETCH_FACTOR, FeatureColumn, FeatureConfig
+from cicerone.ids import interacting_external_user_ids
 from cicerone.policy import (
     allowed_items_for_cohort,
     apply_boosts,
@@ -48,7 +61,7 @@ from cicerone.policy import (
 logger = logging.getLogger(__name__)
 
 RANDOM_STATE = 42
-DEFAULT_MODELS = ["collaborative", "popular"]
+DEFAULT_MODELS = ["collaborative", "item_based", "popular"]
 LATEST_WINDOW_DAYS = 14
 # Reciprocal rank fusion constant (Cormack et al., 2009); default for rrf_k.
 RRF_K = 60
@@ -107,6 +120,9 @@ class Strategy:
     factory: Callable[[], RecommenderModel]
     personalized: bool
     source_label: str
+    # Item-KNN / content fallback need interaction history; LightFM hybrid can
+    # still score feature-only (dataset-known) users.
+    requires_interactions: bool = False
 
 
 def _build_collaborative() -> RecommenderModel:
@@ -246,8 +262,8 @@ def _fit_lightfm_with_epoch_metrics(
     return model
 
 
-def _build_item_based() -> RecommenderModel:
-    return _as_recommender_model(ImplicitItemKNNWrapperModel(TFIDFRecommender(K=20)))
+def _build_item_based(k_neighbors: int = DEFAULT_ITEM_BASED_K_NEIGHBORS) -> RecommenderModel:
+    return _as_recommender_model(ImplicitItemKNNWrapperModel(TFIDFRecommender(K=k_neighbors)))
 
 
 def _build_popular() -> RecommenderModel:
@@ -260,9 +276,25 @@ def _build_latest() -> RecommenderModel:
     )
 
 
+def _build_content_fallback() -> RecommenderModel:
+    """Placeholder factory; real instances are built in ``_fit_strategy`` with items/features."""
+    return _as_recommender_model(ContentFallbackModel())
+
+
 STRATEGIES: dict[str, Strategy] = {
     "collaborative": Strategy(_build_collaborative, personalized=True, source_label="personalized"),
-    "item_based": Strategy(_build_item_based, personalized=True, source_label="item_based"),
+    "item_based": Strategy(
+        _build_item_based,
+        personalized=True,
+        source_label="item_based",
+        requires_interactions=True,
+    ),
+    "content_fallback": Strategy(
+        _build_content_fallback,
+        personalized=True,
+        source_label=CONTENT_FALLBACK_SOURCE,
+        requires_interactions=True,
+    ),
     "popular": Strategy(_build_popular, personalized=False, source_label="popular_fallback"),
     "latest": Strategy(_build_latest, personalized=False, source_label="latest"),
 }
@@ -330,9 +362,26 @@ def _fit_strategy(
     epoch_interactions: pd.DataFrame | None,
     epoch_metrics: EpochMetricsSettings | None,
     epoch_metrics_top_k: int,
+    item_based_k_neighbors: int = DEFAULT_ITEM_BASED_K_NEIGHBORS,
+    content_feature_columns: list[FeatureColumn] | None = None,
+    content_max_neighbors: int = DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS,
+    content_items: pd.DataFrame | None = None,
+    content_interactions: pd.DataFrame | None = None,
 ) -> tuple[str, RecommenderModel]:
     """Fit one strategy (picklable for ProcessPoolExecutor workers)."""
-    model = STRATEGIES[name].factory()
+    if name == "item_based":
+        model = _build_item_based(item_based_k_neighbors)
+    elif name == "content_fallback":
+        model = _as_recommender_model(
+            build_content_fallback_model(
+                feature_columns=content_feature_columns or [],
+                max_neighbors=content_max_neighbors,
+                items=content_items,
+                interactions=content_interactions,
+            )
+        )
+    else:
+        model = STRATEGIES[name].factory()
     if name == "collaborative" and epoch_metrics is not None:
         if epoch_interactions is None:
             raise ValueError("epoch_interactions is required when epoch metric logging is enabled")
@@ -357,6 +406,74 @@ def _resolve_enabled_models(enabled_models: list[str] | None) -> list[str]:
     return resolved
 
 
+def content_fallback_enabled_from_models(models: list[str] | tuple[str, ...] | None) -> bool:
+    """Whether a stored/candidate model list should run content_fallback.
+
+    Shared by artifact replay and AutoML: presence of ``content_fallback`` in
+    the list means the tier was active when that list was produced (config
+    ``enabled`` already applied at list-build time).
+    """
+    if not models:
+        return False
+    return "content_fallback" in models
+
+
+@dataclass(frozen=True)
+class ModelRunPlan:
+    """Resolved model lists for one train/recommend run.
+
+    Built once via ``plan_model_run`` so content_fallback / blending adjustments
+    are not re-derived at every call site.
+    """
+
+    enabled_models: tuple[str, ...]
+    recommend_models: tuple[str, ...]
+
+    @property
+    def content_fallback_active(self) -> bool:
+        return "content_fallback" in self.recommend_models
+
+
+def plan_model_run(
+    enabled_models: list[str] | None,
+    *,
+    blending_enabled: bool,
+    content_fallback_enabled: bool | None = None,
+) -> ModelRunPlan:
+    """Resolve enabled + recommend model lists for a run.
+
+    When ``content_fallback_enabled`` is omitted, it is derived from whether
+    ``content_fallback`` is already present in the requested model list
+    (artifact / AutoML replay). Job runs pass the config flag explicitly.
+    """
+    resolved = _resolve_enabled_models(enabled_models)
+    if content_fallback_enabled is None:
+        content_fallback_enabled = content_fallback_enabled_from_models(resolved)
+    recommend = resolve_recommend_models(
+        resolved, blending_enabled, content_fallback_enabled=content_fallback_enabled
+    )
+    return ModelRunPlan(enabled_models=tuple(resolved), recommend_models=tuple(recommend))
+
+
+def resolve_run_models(
+    enabled_models: list[str] | None,
+    *,
+    blending_enabled: bool,
+    content_fallback_enabled: bool = False,
+) -> tuple[list[str], list[str]]:
+    """Resolve requested models and the effective fit/recommend list.
+
+    Prefer ``plan_model_run`` for new call sites; this returns plain lists for
+    existing callers/tests.
+    """
+    plan = plan_model_run(
+        enabled_models,
+        blending_enabled=blending_enabled,
+        content_fallback_enabled=content_fallback_enabled,
+    )
+    return list(plan.enabled_models), list(plan.recommend_models)
+
+
 def fit_strategies(
     built: BuiltDataset,
     target_users: list[str],
@@ -365,6 +482,9 @@ def fit_strategies(
     max_workers: int = 1,
     epoch_metrics: EpochMetricsSettings | None = None,
     epoch_metrics_top_k: int = 10,
+    item_based_k_neighbors: int = DEFAULT_ITEM_BASED_K_NEIGHBORS,
+    content_fallback_max_neighbors: int = DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS,
+    content_feature_columns: list[FeatureColumn] | None = None,
 ) -> tuple[list[str], dict[str, RecommenderModel]]:
     """Fit (or cache-hit) enabled strategies. ``max_workers > 1`` fits in parallel.
 
@@ -412,6 +532,9 @@ def fit_strategies(
         if epoch_metrics is not None and "collaborative" in to_fit
         else None
     )
+    content_cols = list(content_feature_columns or [])
+    content_items = built.items if "content_fallback" in to_fit else None
+    content_interactions = built.interactions if "content_fallback" in to_fit else None
     if to_fit:
         if max_workers > 1 and len(to_fit) > 1:
             with ProcessPoolExecutor(max_workers=min(max_workers, len(to_fit))) as executor:
@@ -422,6 +545,11 @@ def fit_strategies(
                     repeat(epoch_interactions),
                     repeat(epoch_metrics),
                     repeat(epoch_metrics_top_k),
+                    repeat(item_based_k_neighbors),
+                    repeat(content_cols),
+                    repeat(content_fallback_max_neighbors),
+                    repeat(content_items),
+                    repeat(content_interactions),
                 ):
                     logger.info("Fitted '%s' on %d interactions", name, len(built.interactions))
                     models[name] = model
@@ -434,6 +562,11 @@ def fit_strategies(
                     epoch_interactions,
                     epoch_metrics,
                     epoch_metrics_top_k,
+                    item_based_k_neighbors,
+                    content_cols,
+                    content_fallback_max_neighbors,
+                    content_items,
+                    content_interactions,
                 )
                 models[name] = model
         if strategy_cache is not None:
@@ -443,14 +576,36 @@ def fit_strategies(
     return enabled_models, models
 
 
-def resolve_recommend_models(enabled_models: list[str], blending_enabled: bool) -> list[str]:
+def resolve_recommend_models(
+    enabled_models: list[str],
+    blending_enabled: bool,
+    content_fallback_enabled: bool = False,
+) -> list[str]:
     """Models to fit/recommend for a run.
+
+    When ``content_fallback_enabled`` is true and the strategy is not already
+    listed, insert it immediately before the first non-personalized strategy.
+    When false, drop it even if listed (with a log line).
 
     When blending is on: ensure ``popular`` is present, and drop strategy
     ``latest`` (trending PopularModel) — blending's date-based ``latest`` is
     built from items, not that strategy.
     """
     models = list(enabled_models)
+    if not content_fallback_enabled:
+        if "content_fallback" in models:
+            logger.info(
+                "content_fallback is listed in models but job.content_fallback.enabled is false — skipping"
+            )
+            models = [name for name in models if name != "content_fallback"]
+    elif "content_fallback" not in models:
+        insert_at = len(models)
+        for index, name in enumerate(models):
+            if name in STRATEGIES and not STRATEGIES[name].personalized:
+                insert_at = index
+                break
+        models.insert(insert_at, "content_fallback")
+
     if not blending_enabled:
         return models
     if "latest" in models:
@@ -469,15 +624,28 @@ def recommend_with_models(
     enabled_models: list[str],
     weights: dict[str, float] | None = None,
     rrf_k: float | None = None,
+    run_plan: ModelRunPlan | None = None,
 ) -> pd.DataFrame:
     """Runs recommend + combine on already-fitted strategies (no fit).
 
     Used by ``train_and_recommend`` and by ``artifact.recommend_from_artifact``
     so a loaded model artifact can produce recommendations without re-training.
+
+    Pass ``run_plan`` from ``plan_model_run`` when available so content_fallback
+    / blending resolution is not repeated. Without a plan, content_fallback is
+    derived from ``enabled_models`` (artifact / AutoML lists already include it
+    when that tier was active).
     """
-    enabled_models = _resolve_enabled_models(enabled_models)
     blending = config.blending
     blending_enabled = blending.enabled
+    if run_plan is None:
+        run_plan = plan_model_run(
+            enabled_models,
+            blending_enabled=blending_enabled,
+            content_fallback_enabled=None,
+        )
+    enabled_models = list(run_plan.enabled_models)
+    recommend_models = list(run_plan.recommend_models)
     if blending_enabled and "latest" in enabled_models:
         logger.warning(
             "Blending is enabled: date-based 'latest' comes from items; "
@@ -488,13 +656,12 @@ def recommend_with_models(
             "Blending is enabled: job.model_weights / AutoML weights are ignored "
             "(per-user blend curve controls source mix instead)"
         )
-    recommend_models = resolve_recommend_models(enabled_models, blending_enabled)
 
     if weights is not None and not blending_enabled:
-        unknown_weights = [name for name in weights if name not in enabled_models]
+        unknown_weights = [name for name in weights if name not in recommend_models]
         if unknown_weights:
             raise ValueError(
-                f"model_weights key(s) {unknown_weights} are not in enabled_models {enabled_models}"
+                f"model_weights key(s) {unknown_weights} are not in recommend models {recommend_models}"
             )
         validate_model_weights(weights)
     validate_rrf_k(rrf_k)
@@ -516,6 +683,10 @@ def recommend_with_models(
     known_users = set(dataset.user_id_map.external_ids)
     unique_target_users = list(dict.fromkeys(target_users))
     has_any_warm_user = bool(known_users.intersection(unique_target_users))
+    needs_interacting_users = any(
+        STRATEGIES[name].requires_interactions for name in recommend_models if name in STRATEGIES
+    )
+    interacting_users = interacting_external_user_ids(built) if needs_interacting_users else set()
 
     users_by_id = index_users_by_id(users_frame)
     if use_cohorts:
@@ -576,6 +747,8 @@ def recommend_with_models(
 
             if strategy.personalized:
                 cohort_warm = [u for u in cohort_users if u in known_users]
+                if strategy.requires_interactions:
+                    cohort_warm = [u for u in cohort_warm if u in interacting_users]
                 if not cohort_warm:
                     continue
                 recommend_users = cohort_warm
@@ -690,7 +863,7 @@ def recommend_with_models(
     elif not frames:
         return pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN])
     elif weights is not None:
-        source_label_order = [STRATEGIES[name].source_label for name in enabled_models]
+        source_label_order = [STRATEGIES[name].source_label for name in recommend_models]
         combined = _combine_by_weighted_fusion(
             frames, combine_k, rrf_k if rrf_k is not None else RRF_K, source_label_order
         )
@@ -714,20 +887,35 @@ def train_and_recommend(
     strategy_cache: dict[str, RecommenderModel] | None = None,
     max_workers: int = 1,
     epoch_metrics: EpochMetricsSettings | None = None,
+    item_based_k_neighbors: int = DEFAULT_ITEM_BASED_K_NEIGHBORS,
+    content_fallback_enabled: bool | None = None,
+    content_fallback_max_neighbors: int = DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS,
+    run_plan: ModelRunPlan | None = None,
 ) -> pd.DataFrame:
     """Fit enabled strategies, then recommend + combine. See ``fit_strategies``
     and ``recommend_with_models`` for the split used by model artifacts.
+
+    Pass ``run_plan`` from ``plan_model_run`` when the caller already resolved
+    models (e.g. job). Otherwise ``content_fallback_enabled`` is the config
+    flag, or ``None`` to derive from ``enabled_models`` (AutoML lists).
     """
-    resolved_models = _resolve_enabled_models(enabled_models)
-    fit_models = resolve_recommend_models(resolved_models, config.blending.enabled)
+    if run_plan is None:
+        run_plan = plan_model_run(
+            enabled_models,
+            blending_enabled=config.blending.enabled,
+            content_fallback_enabled=content_fallback_enabled,
+        )
     _, fitted = fit_strategies(
         built,
         target_users,
-        enabled_models=fit_models,
+        enabled_models=list(run_plan.recommend_models),
         strategy_cache=strategy_cache,
         max_workers=max_workers,
         epoch_metrics=epoch_metrics,
         epoch_metrics_top_k=top_k,
+        item_based_k_neighbors=item_based_k_neighbors,
+        content_fallback_max_neighbors=content_fallback_max_neighbors,
+        content_feature_columns=config.item_features,
     )
     return recommend_with_models(
         fitted,
@@ -735,7 +923,8 @@ def train_and_recommend(
         target_users,
         config,
         top_k=top_k,
-        enabled_models=resolved_models,
+        enabled_models=list(run_plan.enabled_models),
         weights=weights,
         rrf_k=rrf_k,
+        run_plan=run_plan,
     )
