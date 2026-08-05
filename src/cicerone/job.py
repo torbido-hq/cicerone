@@ -22,7 +22,7 @@ from cicerone.model import (
     DEFAULT_MODELS,
     RRF_K,
     RecommenderModel,
-    resolve_recommend_models,
+    resolve_run_models,
     train_and_recommend,
 )
 
@@ -129,10 +129,9 @@ def run(triggered_by: str = "manual") -> None:
             content_fallback_max_neighbors=settings.content_fallback_max_neighbors,
         )
 
-        resolved_models = enabled_models or DEFAULT_MODELS
-        run_models = resolve_recommend_models(
-            resolved_models,
-            feature_config.blending.enabled,
+        _, run_models = resolve_run_models(
+            enabled_models or DEFAULT_MODELS,
+            blending_enabled=feature_config.blending.enabled,
             content_fallback_enabled=settings.content_fallback_enabled,
         )
         model_weights_str = (

@@ -38,6 +38,20 @@ def _require_id_column(frame: pd.DataFrame, candidates: tuple[str, ...], *, fram
     )
 
 
+def _is_missing(value: object) -> bool:
+    """True for None / NaN / pd.NA / NaT; False for containers and other values."""
+    if value is None:
+        return True
+    try:
+        result = pd.isna(value)
+    except (TypeError, ValueError):
+        return False
+    # pd.isna on array-likes returns an array; treat the value as present.
+    if isinstance(result, (np.ndarray, pd.Series, list)):
+        return False
+    return bool(result)
+
+
 def _feature_dict(
     row: pd.Series,
     feature_columns: Sequence[FeatureColumn | tuple[str, str]],
@@ -53,15 +67,15 @@ def _feature_dict(
             continue
         value = row[column]
         if ftype == "list":
-            if value is None or (isinstance(value, float) and np.isnan(value)):
+            if _is_missing(value):
                 continue
             values = value if isinstance(value, (list, tuple, set)) else [value]
             for entry in values:
-                if entry is None or (isinstance(entry, float) and np.isnan(entry)):
+                if _is_missing(entry):
                     continue
                 tokens[f"{column}={entry}"] = 1.0
         else:
-            if value is None or (isinstance(value, float) and np.isnan(value)):
+            if _is_missing(value):
                 continue
             tokens[f"{column}={value}"] = 1.0
     return tokens

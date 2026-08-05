@@ -405,6 +405,48 @@ def _resolve_enabled_models(enabled_models: list[str] | None) -> list[str]:
     return resolved
 
 
+def content_fallback_enabled_from_models(models: list[str] | tuple[str, ...] | None) -> bool:
+    """Whether a stored/candidate model list should run content_fallback.
+
+    Shared by artifact replay and AutoML: presence of ``content_fallback`` in
+    the list means the tier was active when that list was produced (config
+    ``enabled`` already applied at list-build time).
+    """
+    if not models:
+        return False
+    return "content_fallback" in models
+
+
+def resolve_run_models(
+    enabled_models: list[str] | None,
+    *,
+    blending_enabled: bool,
+    content_fallback_enabled: bool = False,
+) -> tuple[list[str], list[str]]:
+    """Resolve requested models and the effective fit/recommend list.
+
+    Single entry point so content_fallback / blending adjustments cannot
+    drift across job, train_and_recommend, and recommend_with_models.
+    """
+    resolved = _resolve_enabled_models(enabled_models)
+    recommend = resolve_recommend_models(
+        resolved, blending_enabled, content_fallback_enabled=content_fallback_enabled
+    )
+    return resolved, recommend
+
+
+def _interacting_external_user_ids(built: BuiltDataset) -> set:
+    """External user IDs with ≥1 interaction (same namespace as ``target_users``).
+
+    ``BuiltDataset.interactions`` keeps original event user/item ids under
+    rectools ``Columns.User`` / ``Columns.Item`` — these are *external* ids,
+    not rectools' dense internal indices.
+    """
+    if built.interactions is None or built.interactions.empty:
+        return set()
+    return set(built.interactions[Columns.User].tolist())
+
+
 def fit_strategies(
     built: BuiltDataset,
     target_users: list[str],
@@ -562,9 +604,13 @@ def recommend_with_models(
     Used by ``train_and_recommend`` and by ``artifact.recommend_from_artifact``
     so a loaded model artifact can produce recommendations without re-training.
     """
-    enabled_models = _resolve_enabled_models(enabled_models)
     blending = config.blending
     blending_enabled = blending.enabled
+    enabled_models, recommend_models = resolve_run_models(
+        enabled_models,
+        blending_enabled=blending_enabled,
+        content_fallback_enabled=content_fallback_enabled,
+    )
     if blending_enabled and "latest" in enabled_models:
         logger.warning(
             "Blending is enabled: date-based 'latest' comes from items; "
@@ -575,9 +621,6 @@ def recommend_with_models(
             "Blending is enabled: job.model_weights / AutoML weights are ignored "
             "(per-user blend curve controls source mix instead)"
         )
-    recommend_models = resolve_recommend_models(
-        enabled_models, blending_enabled, content_fallback_enabled=content_fallback_enabled
-    )
 
     if weights is not None and not blending_enabled:
         unknown_weights = [name for name in weights if name not in recommend_models]
@@ -605,11 +648,8 @@ def recommend_with_models(
     known_users = set(dataset.user_id_map.external_ids)
     unique_target_users = list(dict.fromkeys(target_users))
     has_any_warm_user = bool(known_users.intersection(unique_target_users))
-    interacting_users = (
-        set(built.interactions[Columns.User].tolist())
-        if built.interactions is not None and not built.interactions.empty
-        else set()
-    )
+    # External ids — same namespace as target_users / cohort_users.
+    interacting_users = _interacting_external_user_ids(built)
 
     users_by_id = index_users_by_id(users_frame)
     if use_cohorts:
@@ -817,9 +857,10 @@ def train_and_recommend(
     """Fit enabled strategies, then recommend + combine. See ``fit_strategies``
     and ``recommend_with_models`` for the split used by model artifacts.
     """
-    resolved_models = _resolve_enabled_models(enabled_models)
-    fit_models = resolve_recommend_models(
-        resolved_models, config.blending.enabled, content_fallback_enabled=content_fallback_enabled
+    resolved_models, fit_models = resolve_run_models(
+        enabled_models,
+        blending_enabled=config.blending.enabled,
+        content_fallback_enabled=content_fallback_enabled,
     )
     _, fitted = fit_strategies(
         built,

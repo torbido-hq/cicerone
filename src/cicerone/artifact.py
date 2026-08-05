@@ -18,7 +18,11 @@ from rectools.dataset import Dataset
 
 from cicerone.dataset import BuiltDataset
 from cicerone.feature_config import FeatureConfig
-from cicerone.model import RecommenderModel, recommend_with_models
+from cicerone.model import (
+    RecommenderModel,
+    content_fallback_enabled_from_models,
+    recommend_with_models,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -120,5 +124,5 @@ def recommend_from_artifact(
         enabled_models=artifact.models,
         weights=artifact.model_weights,
         rrf_k=artifact.rrf_k,
-        content_fallback_enabled="content_fallback" in artifact.models,
+        content_fallback_enabled=content_fallback_enabled_from_models(artifact.models),
     )

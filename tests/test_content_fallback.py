@@ -20,7 +20,7 @@ def test_feature_dict_handles_list_features_and_nans():
             {
                 "item_id": "i1",
                 "category": "beer",
-                "tags": ["ipa", "hoppy", float("nan")],
+                "tags": ["ipa", "hoppy", float("nan"), pd.NA],
                 "region_slug": None,
             },
             {
@@ -28,6 +28,12 @@ def test_feature_dict_handles_list_features_and_nans():
                 "category": float("nan"),
                 "tags": None,
                 "region_slug": "lazio",
+            },
+            {
+                "item_id": "i3",
+                "category": pd.NA,
+                "tags": pd.NA,
+                "region_slug": pd.NA,
             },
         ]
     )
@@ -52,6 +58,12 @@ def test_feature_dict_handles_list_features_and_nans():
     model.fit(_DummyDataset())
     assert "i1" in model._item_ids
     assert "i2" in model._item_ids
+    # i3 has only null feature values → no tokens → skipped from matrix
+    assert "i3" not in model._item_ids
+    # No "<NA>" / "nan" token pollution in the fitted vocabulary.
+    assert model._vectorizer is not None
+    feature_names = set(model._vectorizer.get_feature_names_out())
+    assert not any("NA" in name or "nan" in name.lower() for name in feature_names)
 
 
 def test_fit_with_no_items_or_features_is_noop():

@@ -1422,6 +1422,20 @@ def test_resolve_recommend_models_skips_content_fallback_when_disabled(caplog):
     assert "content_fallback is listed" in caplog.text
 
 
+def test_resolve_run_models_centralizes_content_fallback_and_blending():
+    from cicerone.model import content_fallback_enabled_from_models, resolve_run_models
+
+    resolved, recommend = resolve_run_models(
+        ["collaborative", "popular"],
+        blending_enabled=False,
+        content_fallback_enabled=True,
+    )
+    assert resolved == ["collaborative", "popular"]
+    assert recommend == ["collaborative", "content_fallback", "popular"]
+    assert content_fallback_enabled_from_models(recommend) is True
+    assert content_fallback_enabled_from_models(["collaborative", "popular"]) is False
+
+
 def test_item_based_k_neighbors_reaches_tfidf_recommender(sample_items, feature_config, monkeypatch):
     events = _synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
