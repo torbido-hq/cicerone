@@ -4,24 +4,6 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.4.1] - 2026-08-05
-
-### Added
-
-- **Serve OpenAPI contract**: response models for `/health` and
-  `/recommendations/{user_id}` so FastAPI's `/openapi.json`, `/docs`, and
-  `/redoc` document the real JSON shape (including `X-Generated-At`). A
-  checked-in schema at `docs/openapi/serve.openapi.json` can be regenerated
-  with `python -m cicerone.export_serve_openapi`.
-- **Thin serve clients**: `cicerone.serve_client.ServeClient` (stdlib
-  `urllib`, no extra deps) plus copy-paste examples under `examples/serve/`
-  (Python, Node `fetch`, curl).
-
-### Changed
-
-- `cicerone.serve.main` imports I/O factory helpers lazily so OpenAPI export
-  and `create_app` do not require dataset/DB backend imports at module load.
-
 ## [0.4.0] - 2026-08-04
 
 ### Added
@@ -46,6 +28,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (`items_snapshot.parquet` / `recommendation_items`) so filters stay on
   the configured output without loading ML deps. Documented in the README
   Serve section alongside the existing Dashboard style.
+- **Serve OpenAPI contract**: response models for `/health` and
+  `/recommendations/{user_id}` so FastAPI's `/openapi.json`, `/docs`, and
+  `/redoc` document the real JSON shape (including `X-Generated-At`). A
+  checked-in schema at `docs/openapi/serve.openapi.json` can be regenerated
+  with `python -m cicerone.export_serve_openapi`.
+- **Thin serve clients**: `cicerone.serve_client.ServeClient` (stdlib
+  `urllib`, no extra deps) plus copy-paste examples under `examples/serve/`
+  (Python, Node `fetch`, curl).
 
 ### Changed
 
@@ -61,6 +51,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   best rank before RRF; sigmoid maps `n=0 → 0`; strategy `latest` is
   skipped while blending is on; serve heuristic fallback never reuses
   warm `blended` rows.
+- `cicerone.serve.main` imports I/O factory helpers lazily so OpenAPI export
+  and `create_app` do not require dataset/DB backend imports at module load.
 
 ## [0.3.2] - 2026-08-04
 
