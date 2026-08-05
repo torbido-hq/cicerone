@@ -36,7 +36,11 @@ def _start_refresh_loop(reader: RecommendationReader, interval_seconds: float) -
 def _generated_at(manifest_reader: ManifestReader | None) -> str | None:
     if manifest_reader is None:
         return None
-    latest = manifest_reader.read_latest()
+    try:
+        latest = manifest_reader.read_latest()
+    except Exception:
+        logger.exception("Failed to read latest manifest for generated_at; omitting header")
+        return None
     if not latest:
         return None
     value = latest.get("generated_at")

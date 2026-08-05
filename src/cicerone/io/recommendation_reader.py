@@ -238,9 +238,8 @@ class DbRecommendationReader(BaseRecommendationReader):
             self._items = None
             self._items_version += 1
         except Exception:
-            logger.exception("Failed to refresh recommendation items snapshot; continuing without it")
-            self._items = None
-            self._items_version += 1
+            # Keep the previous snapshot on transient failures (matches dataset reader).
+            logger.exception("Failed to refresh recommendation items snapshot; keeping previous data")
 
     def items_version(self) -> int:
         return self._items_version

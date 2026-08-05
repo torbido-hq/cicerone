@@ -363,6 +363,28 @@ def test_recommendations_manifest_without_generated_at():
     assert body["generated_at"] is None
 
 
+def test_recommendations_survive_manifest_reader_errors():
+    class BrokenManifest:
+        def read_latest(self):
+            raise RuntimeError("manifest store down")
+
+        def read_recent(self, limit: int):
+            del limit
+            raise RuntimeError("manifest store down")
+
+    app = create_app(
+        _settings(),
+        _FakeReader(_recs_df(), _items_df()),
+        manifest_reader=BrokenManifest(),
+        feature_config=_feature_config(),
+    )
+    client = TestClient(app)
+    response = client.get("/recommendations/u1", headers={"Authorization": "Bearer secret"})
+    assert response.status_code == 200
+    assert response.json()["generated_at"] is None
+    assert "X-Generated-At" not in response.headers
+
+
 def test_start_refresh_loop_calls_refresh_periodically(monkeypatch):
     reader = _FakeReader(_recs_df())
     calls = {"sleep": 0}

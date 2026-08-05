@@ -55,6 +55,23 @@ def test_db_reader_missing_items_table_returns_none():
     assert reader.get_items() is None
 
 
+def test_db_reader_keeps_items_on_transient_refresh_error(monkeypatch):
+    sink = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})
+    sink.write_items_snapshot(pd.DataFrame([{"item_id": "i1", "category": "beer", "published": True}]))
+    reader = DbRecommendationReader({"database_url": TEST_DATABASE_URL})
+    assert list(reader.get_items()["item_id"]) == ["i1"]
+    version_before = reader.items_version()
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("connection reset")
+
+    monkeypatch.setattr(pd, "read_sql", boom)
+    reader.refresh()
+
+    assert list(reader.get_items()["item_id"]) == ["i1"]
+    assert reader.items_version() == version_before
+
+
 def test_db_reader_items_snapshot_and_cold_start_fallback():
     sink = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})
     sink.write_recommendations(

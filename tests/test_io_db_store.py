@@ -95,8 +95,18 @@ def test_database_output_writes_and_replaces_recommendations():
     engine = create_engine(TEST_DATABASE_URL)
     stored = pd.read_sql('SELECT * FROM "recommendations"', engine)
 
-    # TRUNCATE before the second write means only the latest snapshot remains.
+    # Clear-before-write means only the latest snapshot remains.
     assert list(stored["user_id"]) == ["u2"]
+
+
+def test_database_output_writes_and_replaces_items_snapshot():
+    sink = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})
+    sink.write_items_snapshot(pd.DataFrame([{"item_id": "i1", "category": "beer"}]))
+    sink.write_items_snapshot(pd.DataFrame([{"item_id": "i2", "category": "wine"}]))
+
+    engine = create_engine(TEST_DATABASE_URL)
+    stored = pd.read_sql('SELECT * FROM "recommendation_items"', engine)
+    assert list(stored["item_id"]) == ["i2"]
 
 
 def test_database_output_writes_manifest_appends():

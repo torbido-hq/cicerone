@@ -45,6 +45,29 @@ DEFAULT_DB_TABLES = frozenset(
 )
 
 
+def _clear_table_for_replace(conn, table: str) -> None:
+    """Empty ``table`` before a full rewrite; prefer TRUNCATE, fall back to DELETE.
+
+    Some backends (e.g. SQLite) lack TRUNCATE. Rolling back only the TRUNCATE
+    savepoint and then appending would duplicate rows, so DELETE is tried next.
+    If the table does not exist yet, both fail and ``to_sql`` creates it.
+    """
+    savepoint = conn.begin_nested()
+    try:
+        conn.execute(text(f'TRUNCATE TABLE "{table}"'))
+        savepoint.commit()
+        return
+    except ProgrammingError:
+        savepoint.rollback()
+
+    savepoint = conn.begin_nested()
+    try:
+        conn.execute(text(f'DELETE FROM "{table}"'))
+        savepoint.commit()
+    except ProgrammingError:
+        savepoint.rollback()
+
+
 class DatabaseInputSource:
     def __init__(self, options: dict[str, Any]):
         self._options = options
@@ -103,12 +126,7 @@ class DatabaseOutputSink:
         )
         logger.info("Writing %d rows to database table %r", len(df), table)
         with self._engine.begin() as conn:
-            savepoint = conn.begin_nested()
-            try:
-                conn.execute(text(f'TRUNCATE TABLE "{table}"'))
-                savepoint.commit()
-            except ProgrammingError:
-                savepoint.rollback()
+            _clear_table_for_replace(conn, table)
             df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
 
     def write_manifest(self, manifest: dict) -> None:
@@ -145,10 +163,5 @@ class DatabaseOutputSink:
         )
         logger.info("Writing %d item snapshot rows to database table %r", len(df), table)
         with self._engine.begin() as conn:
-            savepoint = conn.begin_nested()
-            try:
-                conn.execute(text(f'TRUNCATE TABLE "{table}"'))
-                savepoint.commit()
-            except ProgrammingError:
-                savepoint.rollback()
+            _clear_table_for_replace(conn, table)
             df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
