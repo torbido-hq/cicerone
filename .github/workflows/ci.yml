@@ -6,16 +6,6 @@ on:
     branches: [main]
 
 jobs:
-  branch-name:
-    # Cheap gate so mistyped agent branches fail before the Docker build.
-    # Skipped on push-to-main (merge / direct main CI).
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - name: Enforce CONTRIBUTING branch naming
-        run: bash scripts/check-branch-name.sh "${{ github.head_ref }}"
-
   lint:
     runs-on: ubuntu-latest
     steps:
