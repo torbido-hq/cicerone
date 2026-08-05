@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.4.0] - Unreleased
 
 ### Added
 
@@ -17,19 +17,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **CI branch-name gate** (`scripts/check-branch-name.sh`): PRs from
   `cursor/<slug>-<id>` (or other opaque agent suffixes) fail before
   lint/tests — enforces CONTRIBUTING.md naming.
-
-### Changed
-
-- **Default model chain** is now `["collaborative", "item_based", "popular"]`
-  (was `["collaborative", "popular"]`), so sparse warm users get item-KNN
-  backfill before raw popularity.
-- **`[job.item_based].k_neighbors`** configures `TFIDFRecommender(K=…)`
-  (default `20`).
-
-## [0.4.0] - 2026-08-04
-
-### Added
-
 - **Weighted multi-source blending** (`[blending]` in `config/features.toml`):
   replaces the binary personalized-vs-`popular_fallback` choice with a
   gradual per-user mix of `personalized`, `popular`, and date-based
@@ -61,6 +48,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Default model chain** is now `["collaborative", "item_based", "popular"]`
+  (was `["collaborative", "popular"]`), so sparse warm users get item-KNN
+  backfill before raw popularity.
+- **`[job.item_based].k_neighbors`** configures `TFIDFRecommender(K=…)`
+  (default `20`).
 - Serve JSON response is an object (with `generated_at` / `items`) rather
   than a bare list; `k` remains accepted as an alias for `limit`.
 - Docs: architecture data-flow covers the three combine paths (priority /
