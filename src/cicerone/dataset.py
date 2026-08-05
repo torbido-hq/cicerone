@@ -40,17 +40,25 @@ class BuiltDataset:
 
 
 @dataclass(frozen=True)
-class _NormalizedFeatures:
-    """Non-empty exploded feature frame + categorical feature names for Dataset.construct."""
+class _EmptyNormalizedFeatures:
+    frame: None = None
+    categorical: None = None
 
-    frame: pd.DataFrame | None
-    categorical: list[str] | None
+
+@dataclass(frozen=True)
+class _PresentNormalizedFeatures:
+    frame: pd.DataFrame
+    categorical: list[str]
+
+
+# Either both fields are None, or both are set — never mixed.
+_NormalizedFeatures = _EmptyNormalizedFeatures | _PresentNormalizedFeatures
 
 
 def _normalize_feature_df(df: pd.DataFrame | None) -> _NormalizedFeatures:
     if df is None or df.empty:
-        return _NormalizedFeatures(frame=None, categorical=None)
-    return _NormalizedFeatures(frame=df, categorical=list(df["feature"].unique()))
+        return _EmptyNormalizedFeatures()
+    return _PresentNormalizedFeatures(frame=df, categorical=list(df["feature"].unique()))
 
 
 def _time_decay_multiplier(occurred_at: pd.Series, half_life_days: float) -> pd.Series:
