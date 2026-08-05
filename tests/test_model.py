@@ -1433,8 +1433,10 @@ def test_content_fallback_surfaces_cold_item_for_matching_user(feature_config):
     now = pd.Timestamp.utcnow()
     events = pd.DataFrame(
         [
+            # u1 is a beer buyer — should match cold beer i_new.
             {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},
             {"user_id": "u1", "item_id": "i2", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+            # u2 is a wine buyer — must not receive cold beer i_new.
             {"user_id": "u2", "item_id": "i3", "event_type": "purchase", "quantity": 1, "occurred_at": now},
         ]
     )
@@ -1443,7 +1445,7 @@ def test_content_fallback_surfaces_cold_item_for_matching_user(feature_config):
             {"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True},
             {"item_id": "i2", "category": "beer", "producer_id": "p2", "published": True, "in_stock": True},
             {"item_id": "i3", "category": "wine", "producer_id": "p1", "published": True, "in_stock": True},
-            # Brand-new beer with zero events — should surface for u1 via content_fallback.
+            # Brand-new beer with zero events — similar to u1 history, not u2.
             {
                 "item_id": "i_new",
                 "category": "beer",
@@ -1468,6 +1470,9 @@ def test_content_fallback_surfaces_cold_item_for_matching_user(feature_config):
     assert not u1.empty
     assert "i_new" in set(u1[Columns.Item])
     assert (u1[u1[Columns.Item] == "i_new"]["source"] == "content_fallback").all()
+
+    u2 = recommendations[recommendations[Columns.User] == "u2"]
+    assert "i_new" not in set(u2[Columns.Item])
 
 
 def test_content_fallback_disabled_emits_no_content_source(feature_config):
