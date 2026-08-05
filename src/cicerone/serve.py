@@ -18,7 +18,7 @@ from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.io.base import ManifestReader, RecommendationReader
 from cicerone.io.factory import build_manifest_reader, build_recommendation_reader
-from cicerone.io.recommendation_reader import normalize_items_snapshot
+from cicerone.io.recommendation_reader import ITEM_COLUMN, normalize_items_snapshot
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -58,14 +58,14 @@ def _configure_reader_item_filters(
 
 
 def _available_item_ids(items: pd.DataFrame, availability_filters: Sequence[str]) -> frozenset[str] | None:
-    if not availability_filters or "item_id" not in items.columns:
+    if not availability_filters or ITEM_COLUMN not in items.columns:
         return None
     mask = pd.Series(True, index=items.index)
     for column in availability_filters:
         if column not in items.columns:
             continue
         mask &= items[column]
-    return frozenset(items.loc[mask, "item_id"].tolist())
+    return frozenset(items.loc[mask, ITEM_COLUMN].tolist())
 
 
 class _ItemsFilterCache:
@@ -122,16 +122,16 @@ def _filter_recommendations(
     if items is None or items.empty:
         return out.reset_index(drop=True)
 
-    item_ids = out["item_id"].astype(str)
+    item_ids = out[ITEM_COLUMN].astype(str)
 
     if category is not None:
         if category_column not in items.columns:
             if on_missing_category_column is not None:
                 on_missing_category_column()
             return out.iloc[0:0].reset_index(drop=True)
-        allowed = set(items.loc[items[category_column] == str(category), "item_id"])
+        allowed = set(items.loc[items[category_column] == str(category), ITEM_COLUMN])
         out = out[item_ids.isin(allowed)]
-        item_ids = out["item_id"].astype(str)
+        item_ids = out[ITEM_COLUMN].astype(str)
 
     if exclude_unavailable and available_ids is not None:
         out = out[item_ids.isin(available_ids)]
@@ -181,7 +181,17 @@ def create_app(
         category: str | None = Query(default=None),
         exclude_unavailable: bool = Query(default=True),
     ) -> JSONResponse:
-        top_k = limit or k or settings.serve_default_k
+        if limit is not None and k is not None and limit != k:
+            raise HTTPException(
+                status_code=400,
+                detail="limit and k disagree; pass only one (or the same value)",
+            )
+        if limit is not None:
+            top_k = limit
+        elif k is not None:
+            top_k = k
+        else:
+            top_k = settings.serve_default_k
         items, available_ids = items_cache.get()
         can_filter = bool(
             items is not None
@@ -217,7 +227,7 @@ def create_app(
             "fallback": used_fallback,
             "items": [
                 {
-                    "item_id": row["item_id"],
+                    ITEM_COLUMN: row[ITEM_COLUMN],
                     "rank": int(row["rank"]),
                     "score": float(row["score"]),
                     "source": row["source"],

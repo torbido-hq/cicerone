@@ -22,6 +22,7 @@ LATEST_SOURCE = "latest"
 COLD_START_USER_ID = "__cold_start__"
 
 _WEIGHT_EPS = 1e-9
+_SIGMOID_EXP_CLAMP = 50.0
 _EMPTY_COLS = [Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN]
 
 
@@ -37,7 +38,9 @@ def personalized_weight(n_interactions: int, config: BlendingConfig) -> float:
     if config.curve == "linear":
         saturate = config.saturate_at if config.saturate_at > 0 else 1.0
         return min(1.0, n / saturate)
-    return 1.0 / (1.0 + math.exp(-config.steepness * (n - config.midpoint)))
+    # Clamp to avoid math.exp overflow for extreme n / steepness.
+    exponent = max(-_SIGMOID_EXP_CLAMP, min(_SIGMOID_EXP_CLAMP, -config.steepness * (n - config.midpoint)))
+    return 1.0 / (1.0 + math.exp(exponent))
 
 
 def source_weights(
@@ -113,7 +116,9 @@ def build_latest_ranking(
         return _empty_recs()
 
     allowed = {str(i) for i in allowed_item_ids}
-    item_col = "item_id" if "item_id" in items.columns else Columns.Item
+    if Columns.Item not in items.columns:
+        return _empty_recs()
+    item_col = Columns.Item
     frame = items.loc[items[item_col].astype(str).isin(allowed)].copy()
     if frame.empty:
         return _empty_recs()

@@ -10,7 +10,7 @@ from typing import Any
 
 import pandas as pd
 from sqlalchemy import create_engine, text
-from sqlalchemy.exc import OperationalError, ProgrammingError
+from sqlalchemy.exc import ProgrammingError
 
 from cicerone.blending import COLD_START_USER_ID, LATEST_SOURCE, POPULAR_SOURCE
 from cicerone.io.base import BaseRecommendationReader
@@ -30,7 +30,8 @@ ITEMS_SNAPSHOT_FILENAME = "items_snapshot.parquet"
 
 # When __cold_start__ is missing: popular/latest only (never warm "blended").
 _FALLBACK_SOURCES = frozenset({POPULAR_SOURCE, LATEST_SOURCE})
-_MISSING_TABLE_ERRORS = (ProgrammingError, OperationalError)
+# Schema-level only (e.g. missing table). OperationalError stays on the generic path.
+_MISSING_TABLE_ERRORS = (ProgrammingError,)
 
 
 def normalize_items_snapshot(

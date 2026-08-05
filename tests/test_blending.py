@@ -57,6 +57,13 @@ def test_personalized_weight_linear_saturates():
     assert personalized_weight(99, config) == 1.0
 
 
+def test_personalized_weight_sigmoid_clamps_extreme_exponent():
+    config = _blending(curve="sigmoid", midpoint=5.0, steepness=1e9)
+    assert personalized_weight(10**12, config) == 1.0
+    assert personalized_weight(0, config) == 0.0
+    assert 0.0 <= personalized_weight(1, config) <= 1.0
+
+
 def test_source_weights_redistribute_when_latest_unavailable():
     config = _blending(curve="linear", saturate_at=10.0, popular_share=0.7)
     with_latest = source_weights(0, config, latest_available=True)

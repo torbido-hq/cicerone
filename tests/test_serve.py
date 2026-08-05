@@ -196,6 +196,37 @@ def test_recommendations_respects_limit_query_param():
     assert len(response.json()["items"]) == 1
 
 
+def test_recommendations_rejects_conflicting_limit_and_k():
+    app = create_app(
+        _settings(),
+        _FakeReader(_recs_df(), _items_df()),
+        feature_config=_feature_config(),
+    )
+    client = TestClient(app)
+
+    response = client.get(
+        "/recommendations/u1?limit=1&k=2",
+        headers={"Authorization": "Bearer secret"},
+    )
+    assert response.status_code == 400
+
+
+def test_recommendations_accepts_matching_limit_and_k():
+    app = create_app(
+        _settings(),
+        _FakeReader(_recs_df(), _items_df()),
+        feature_config=_feature_config(),
+    )
+    client = TestClient(app)
+
+    response = client.get(
+        "/recommendations/u1?limit=1&k=1",
+        headers={"Authorization": "Bearer secret"},
+    )
+    assert response.status_code == 200
+    assert len(response.json()["items"]) == 1
+
+
 def test_recommendations_limit_larger_than_available():
     app = create_app(
         _settings(),
