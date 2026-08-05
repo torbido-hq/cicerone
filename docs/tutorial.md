@@ -487,6 +487,18 @@ curl -s -H "Authorization: Bearer $SERVE_TOKEN" \
   "http://localhost:8000/recommendations/nobody?limit=5"
 ```
 
+OpenAPI (Swagger UI) is at `http://localhost:8000/docs`; the JSON schema is
+`/openapi.json`. For a non-curl client, point the thin package helper at the
+same URL:
+
+```sh
+docker run --rm --network host -e PYTHONPATH=/app/src \
+  -e CICERONE_SERVE_URL=http://localhost:8000 \
+  -e CICERONE_SERVE_TOKEN="$SERVE_TOKEN" \
+  -v "$PWD":/app -w /app cicerone-test \
+  python examples/serve/python_client.py
+```
+
 For a `dataset` output (as here), the recommendations file and optional
 `items_snapshot.parquet` are cached in memory and reloaded every
 `[serve].refresh_interval_seconds` (default 60s) — re-run
