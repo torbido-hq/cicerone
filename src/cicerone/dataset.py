@@ -123,28 +123,25 @@ def build_dataset(
         _explode_features(items, "item_id", Columns.Item, config.item_features) if items is not None else None
     )
 
-    has_user_features = user_features_df is not None and not user_features_df.empty
-    has_item_features = item_features_df is not None and not item_features_df.empty
-
     cat_user_features: list[str] | None
-    if has_user_features:
-        assert user_features_df is not None
+    if user_features_df is not None and not user_features_df.empty:
         cat_user_features = list(user_features_df["feature"].unique())
     else:
+        user_features_df = None
         cat_user_features = None
 
     cat_item_features: list[str] | None
-    if has_item_features:
-        assert item_features_df is not None
+    if item_features_df is not None and not item_features_df.empty:
         cat_item_features = list(item_features_df["feature"].unique())
     else:
+        item_features_df = None
         cat_item_features = None
 
     dataset = Dataset.construct(
         interactions_df=interactions,
-        user_features_df=user_features_df if has_user_features else None,
+        user_features_df=user_features_df,
         cat_user_features=cat_user_features,
-        item_features_df=item_features_df if has_item_features else None,
+        item_features_df=item_features_df,
         cat_item_features=cat_item_features,
     )
     return BuiltDataset(dataset=dataset, interactions=interactions, items=items, users=users)
