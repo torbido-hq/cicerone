@@ -12,7 +12,7 @@ boto3==1.43.46
 s3fs==2026.6.0
 pyarrow==25.0.0
 SQLAlchemy==2.0.51
-psycopg[binary]==3.2.1
+psycopg[binary]==3.3.4
 
 # Cron-in-container scheduler (no system cron daemon needed)
 croniter==6.2.4
