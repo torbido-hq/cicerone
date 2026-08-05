@@ -39,6 +39,20 @@ class BuiltDataset:
     users: pd.DataFrame | None = None
 
 
+@dataclass(frozen=True)
+class _NormalizedFeatures:
+    """Non-empty exploded feature frame + categorical feature names for Dataset.construct."""
+
+    frame: pd.DataFrame | None
+    categorical: list[str] | None
+
+
+def _normalize_feature_df(df: pd.DataFrame | None) -> _NormalizedFeatures:
+    if df is None or df.empty:
+        return _NormalizedFeatures(frame=None, categorical=None)
+    return _NormalizedFeatures(frame=df, categorical=list(df["feature"].unique()))
+
+
 def _time_decay_multiplier(occurred_at: pd.Series, half_life_days: float) -> pd.Series:
     now = pd.Timestamp.now(tz="UTC")
     age_days = (now - occurred_at).dt.total_seconds() / 86_400
@@ -116,36 +130,18 @@ def build_dataset(
 ) -> BuiltDataset:
     interactions = build_interactions(events, config, half_life_days)
 
-    user_features_df = (
+    user_features = _normalize_feature_df(
         _explode_features(users, "user_id", Columns.User, config.user_features) if users is not None else None
     )
-    item_features_df = (
+    item_features = _normalize_feature_df(
         _explode_features(items, "item_id", Columns.Item, config.item_features) if items is not None else None
     )
 
-    user_features_for_dataset: pd.DataFrame | None
-    cat_user_features: list[str] | None
-    if user_features_df is not None and not user_features_df.empty:
-        user_features_for_dataset = user_features_df
-        cat_user_features = list(user_features_df["feature"].unique())
-    else:
-        user_features_for_dataset = None
-        cat_user_features = None
-
-    item_features_for_dataset: pd.DataFrame | None
-    cat_item_features: list[str] | None
-    if item_features_df is not None and not item_features_df.empty:
-        item_features_for_dataset = item_features_df
-        cat_item_features = list(item_features_df["feature"].unique())
-    else:
-        item_features_for_dataset = None
-        cat_item_features = None
-
     dataset = Dataset.construct(
         interactions_df=interactions,
-        user_features_df=user_features_for_dataset,
-        cat_user_features=cat_user_features,
-        item_features_df=item_features_for_dataset,
-        cat_item_features=cat_item_features,
+        user_features_df=user_features.frame,
+        cat_user_features=user_features.categorical,
+        item_features_df=item_features.frame,
+        cat_item_features=item_features.categorical,
     )
     return BuiltDataset(dataset=dataset, interactions=interactions, items=items, users=users)
