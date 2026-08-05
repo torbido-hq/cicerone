@@ -47,6 +47,14 @@ def test_db_reader_returns_top_k_sorted_by_rank():
     assert list(recs["item_id"]) == ["i1", "i2"]
 
 
+def test_db_reader_missing_items_table_returns_none():
+    # Autouse fixture drops recommendation_items; construct with no snapshot written.
+    reader = DbRecommendationReader({"database_url": TEST_DATABASE_URL})
+    assert reader.get_items() is None
+    reader.refresh()
+    assert reader.get_items() is None
+
+
 def test_db_reader_items_snapshot_and_cold_start_fallback():
     sink = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})
     sink.write_recommendations(

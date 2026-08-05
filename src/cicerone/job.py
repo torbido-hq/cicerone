@@ -129,18 +129,14 @@ def run(triggered_by: str = "manual") -> None:
         resolved_models = enabled_models or DEFAULT_MODELS
         run_models = resolve_recommend_models(resolved_models, feature_config.blending.enabled)
         model_weights_str = (
-            ",".join(f"{name}={weights.get(name, 1.0)}" for name in resolved_models)
-            if weights is not None
-            else ""
+            ",".join(f"{name}={weights.get(name, 1.0)}" for name in run_models) if weights is not None else ""
         )
 
         artifact_bytes: bytes | None = None
         if settings.save_model_artifact:
             artifact_models = [name for name in run_models if name in fitted]
             artifact_weights = (
-                {name: weight for name, weight in weights.items() if name in artifact_models}
-                if weights is not None
-                else None
+                {name: weights.get(name, 1.0) for name in artifact_models} if weights is not None else None
             )
             artifact_bytes = dumps_artifact(
                 build_artifact(
@@ -171,7 +167,7 @@ def run(triggered_by: str = "manual") -> None:
                 "n_target_users": len(target_users),
                 "n_users_with_recommendations": int(recommendations["user_id"].nunique()),
                 "n_items": int(built.dataset.item_id_map.external_ids.shape[0]),
-                "models": ",".join(resolved_models),
+                "models": ",".join(run_models),
                 "model_weights": model_weights_str,
                 "rrf_k": rrf_k if rrf_k is not None else RRF_K,
                 "automl_metrics": (
