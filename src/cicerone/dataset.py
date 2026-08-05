@@ -126,16 +126,19 @@ def build_dataset(
     has_user_features = user_features_df is not None and not user_features_df.empty
     has_item_features = item_features_df is not None and not item_features_df.empty
 
-    cat_user_features = (
-        list(user_features_df["feature"].unique())
-        if user_features_df is not None and has_user_features
-        else None
-    )
-    cat_item_features = (
-        list(item_features_df["feature"].unique())
-        if item_features_df is not None and has_item_features
-        else None
-    )
+    cat_user_features: list[str] | None
+    if has_user_features:
+        assert user_features_df is not None
+        cat_user_features = list(user_features_df["feature"].unique())
+    else:
+        cat_user_features = None
+
+    cat_item_features: list[str] | None
+    if has_item_features:
+        assert item_features_df is not None
+        cat_item_features = list(item_features_df["feature"].unique())
+    else:
+        cat_item_features = None
 
     dataset = Dataset.construct(
         interactions_df=interactions,
