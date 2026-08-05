@@ -159,7 +159,10 @@ needs that approval and is pure process drag.
 
 1. On the feature PR that completes the version, change
    `## [X.Y.Z] - Unreleased` to `## [X.Y.Z] - YYYY-MM-DD` (today's date)
-   in the same branch before merge.
+   in the same branch before merge, and set `cicerone.__version__`
+   (`src/cicerone/__init__.py`) to the same `X.Y.Z` (serve OpenAPI
+   metadata uses it via `SERVE_API_VERSION` — regenerate
+   `docs/openapi/serve.openapi.json` if the version string changed).
 2. Merge that PR to `main`.
 3. Tag the merge commit: `git tag -a vX.Y.Z <sha> -m "…"` and
    `git push origin vX.Y.Z`.

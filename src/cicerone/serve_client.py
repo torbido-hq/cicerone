@@ -86,5 +86,9 @@ class ServeClient:
                 body = json.loads(raw) if raw else None
             except json.JSONDecodeError:
                 body = raw
-            detail = body.get("detail") if isinstance(body, dict) else (raw or exc.reason)
+            detail: Any = None
+            if isinstance(body, dict):
+                detail = body.get("detail") or body.get("message")
+            if not detail:
+                detail = raw or exc.reason
             raise ServeClientError(exc.code, str(detail), body=body) from exc

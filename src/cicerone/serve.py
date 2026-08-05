@@ -12,6 +12,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.openapi.utils import get_openapi
 
+from cicerone import __version__
 from cicerone.config import Settings, load_settings
 from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.http_auth import optional_bearer_deps
@@ -23,7 +24,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logger = logging.getLogger(__name__)
 
 SERVE_API_TITLE = "Cicerone Serve API"
-SERVE_API_VERSION = "0.4.0"
+SERVE_API_VERSION = __version__
 SERVE_API_DESCRIPTION = """
 Read-only HTTP API over **precomputed** recommendations written by the batch job.
 

@@ -54,6 +54,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   warm `blended` rows.
 - `cicerone.serve.main` imports I/O factory helpers lazily so OpenAPI export
   and `create_app` do not require dataset/DB backend imports at module load.
+- Serve OpenAPI `info.version` follows `cicerone.__version__` (single source
+  of truth with the changelog / release tag).
 
 ## [0.3.2] - 2026-08-04
 

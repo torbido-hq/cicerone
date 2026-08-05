@@ -127,3 +127,56 @@ def test_serve_client_conflict_limit_k(live_serve_url):
     with pytest.raises(ServeClientError) as exc_info:
         client.recommendations("u1", limit=1, k=2)
     assert exc_info.value.status_code == 400
+
+
+def test_serve_api_version_tracks_package_version():
+    from cicerone import __version__
+
+    assert __version__ == SERVE_API_VERSION
+
+
+def test_serve_client_error_detail_fallbacks(monkeypatch):
+    import io
+    import urllib.error
+
+    import cicerone.serve_client as client_mod
+
+    class _FakeHTTPError(urllib.error.HTTPError):
+        def __init__(self, *, code: int, payload: bytes, reason: str = "Boom"):
+            super().__init__(
+                url="http://example.test/x",
+                code=code,
+                msg=reason,
+                hdrs=None,
+                fp=io.BytesIO(payload),
+            )
+
+    def _patch(payload: bytes, reason: str = "Boom"):
+        def fake_urlopen(_request, timeout=None):
+            del timeout
+            raise _FakeHTTPError(code=502, payload=payload, reason=reason)
+
+        monkeypatch.setattr(client_mod.urllib.request, "urlopen", fake_urlopen)
+
+    client = ServeClient("http://example.test")
+
+    _patch(b'{"error":"nope"}')
+    with pytest.raises(ServeClientError) as missing_detail:
+        client.health()
+    assert missing_detail.value.detail == '{"error":"nope"}'
+    assert "None" not in str(missing_detail.value)
+
+    _patch(b'{"message":"upstream failed"}')
+    with pytest.raises(ServeClientError) as message_only:
+        client.health()
+    assert message_only.value.detail == "upstream failed"
+
+    _patch(b"not-json", reason="Bad Gateway")
+    with pytest.raises(ServeClientError) as plain:
+        client.health()
+    assert plain.value.detail == "not-json"
+
+    _patch(b"", reason="Bad Gateway")
+    with pytest.raises(ServeClientError) as empty:
+        client.health()
+    assert empty.value.detail == "Bad Gateway"
