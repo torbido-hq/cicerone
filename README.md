@@ -80,6 +80,8 @@ lightfm/rectools/implicit, never trains or imports):
 | --- | --- | --- |
 | `GET` | `/health` | Liveness probe (no auth) |
 | `GET` | `/recommendations/{user_id}` | Precomputed top-K for that user |
+| `GET` | `/docs` / `/redoc` | Interactive OpenAPI docs (Swagger / ReDoc) |
+| `GET` | `/openapi.json` | Machine-readable OpenAPI schema |
 
 Query parameters for `/recommendations/{user_id}`:
 

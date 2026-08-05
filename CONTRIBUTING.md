@@ -124,6 +124,21 @@ Input and output are pluggable independently of each other — see
 [docs/architecture.md](docs/architecture.md) for how `cicerone.io` is
 structured before adding a new `kind`.
 
+## Serve API contract
+
+Changing the serve HTTP surface (`cicerone.serve` / `serve_schemas.py`)
+means regenerating the checked-in OpenAPI document and keeping the thin
+client in sync:
+
+```sh
+docker run --rm -v "$PWD":/app -w /app -e PYTHONPATH=/app/src cicerone-test \
+  python -m cicerone.export_serve_openapi -o docs/openapi/serve.openapi.json
+```
+
+`tests/test_serve_openapi_client.py` asserts the committed file matches
+`create_app(...).openapi()`. Update `cicerone.serve_client.ServeClient`
+and/or `examples/serve/` when request/response fields change.
+
 ## Pull requests
 
 - Branch off `main`, keep PRs focused on one change.

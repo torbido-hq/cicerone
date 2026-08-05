@@ -44,7 +44,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Docs: architecture data-flow covers the three combine paths (priority /
   RRF / `[blending]`) and the items snapshot write; tutorial gains a
   blending walkthrough and an updated serve-API section (response shape,
-  `limit` / `category` / cold-start fallback).
+  `limit` / `category` / cold-start fallback, OpenAPI `/docs`,
+  `examples/serve/` clients).
 - Blending correctness: date-based `latest` is ranked per eligibility
   cohort (no cross-cohort allowlist union); `__cold_start__` uses the
   global item-scoped allowlist; multi-personalized strategies collapse to

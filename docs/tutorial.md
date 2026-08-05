@@ -488,8 +488,8 @@ curl -s -H "Authorization: Bearer $SERVE_TOKEN" \
 ```
 
 OpenAPI (Swagger UI) is at `http://localhost:8000/docs`; the JSON schema is
-`/openapi.json`. For a non-curl client, point the thin package helper at the
-same URL:
+`/openapi.json`. For a non-curl client, use the thin package helper (or the
+Node / curl snippets under [`examples/serve/`](../examples/serve/)):
 
 ```sh
 docker run --rm --network host -e PYTHONPATH=/app/src \

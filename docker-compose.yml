@@ -16,7 +16,8 @@ version: "3.9"
 #                 see [job.trigger] in config/cicerone.toml).
 #   serve       — the lightweight read API over precomputed recommendations
 #                 (config/cicerone.serve.toml, job.mode = "serve"). Optional:
-#                 comment it out if you only need the batch job.
+#                 comment it out if you only need the batch job. OpenAPI at
+#                 /docs and /openapi.json; thin clients in examples/serve/.
 #   dashboard   — a small status page over job run history
 #                 (config/cicerone.dashboard.toml). Optional: comment it out
 #                 if you don't need it. Manage its login users with:
