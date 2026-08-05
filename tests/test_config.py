@@ -60,6 +60,9 @@ def test_load_settings_dataset_backends(tmp_path):
     assert settings.models is None
     assert settings.model_weights is None
     assert settings.rrf_k is None
+    assert settings.item_based_k_neighbors == 20
+    assert settings.content_fallback_enabled is False
+    assert settings.content_fallback_max_neighbors == 50
     assert settings.automl_enabled is False
     assert settings.automl_n_splits == 2
     assert settings.automl_test_days == 14
@@ -91,6 +94,64 @@ def test_load_settings_with_explicit_models(tmp_path):
     settings = load_settings(config_path)
 
     assert settings.models == ["collaborative", "item_based", "popular", "latest"]
+
+
+def test_load_settings_item_based_and_content_fallback(tmp_path):
+    config_path = _write_toml(
+        tmp_path,
+        """
+        [job]
+        [job.item_based]
+        k_neighbors = 15
+        [job.content_fallback]
+        enabled = true
+        max_neighbors = 25
+
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+
+    settings = load_settings(config_path)
+
+    assert settings.item_based_k_neighbors == 15
+    assert settings.content_fallback_enabled is True
+    assert settings.content_fallback_max_neighbors == 25
+
+
+def test_load_settings_rejects_invalid_item_based_k_neighbors(tmp_path):
+    config_path = _write_toml(
+        tmp_path,
+        """
+        [job]
+        [job.item_based]
+        k_neighbors = 0
+
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+
+    with pytest.raises(RuntimeError, match="job.item_based.k_neighbors"):
+        load_settings(config_path)
 
 
 def test_load_settings_rejects_unknown_model(tmp_path):

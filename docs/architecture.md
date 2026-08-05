@@ -26,7 +26,10 @@ io/
 dataset.py            raw events/users/items -> weighted rectools Dataset (BuiltDataset;
                      keeps users+items frames for policy evaluation)
 model.py              BuiltDataset -> STRATEGIES registry (collaborative/item_based/
-                     popular/latest) -> cohort-aware recommend -> combine/blend -> boosts
+                     content_fallback/popular/latest) -> cohort-aware recommend ->
+                     combine/blend -> boosts
+content_fallback.py   optional content-based cold-item strategy (one-hot item
+                     features + cosine vs user history)
 artifact.py           optional versioned fitted-model bundle (save/load + recommend
                      without re-fitting); written by the batch job when enabled
 automl.py            optional: backtests candidate models/weights/rrf_k configs over
@@ -92,8 +95,11 @@ flowchart LR
    `rectools.dataset.Dataset`.
 3. `model.train_and_recommend()` fits every strategy listed in
    `Settings.models` (`STRATEGIES` registry in `model.py`; defaults to
-   `["collaborative", "popular"]`) and produces top-K recommendations:
-   personalized strategies (`collaborative`, `item_based`) only run for "warm"
+   `["collaborative", "item_based", "popular"]`) and produces top-K
+   recommendations. When `[job.content_fallback].enabled` is true,
+   `content_fallback` is inserted before the first non-personalized
+   strategy if not already listed. Personalized strategies
+   (`collaborative`, `item_based`, `content_fallback`) only run for "warm"
    users (any user present in the dataset, with or without interactions — see
    the cold-start note below); non-personalized strategies (`popular`,
    `latest`) run for every target user and backfill any warm user who didn't

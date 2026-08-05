@@ -4,6 +4,25 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **Content cold-item fallback** (`content_fallback` strategy): recommends
+  zero-interaction items by one-hot cosine similarity over configured
+  `item_features` against each warm user's history. Gated by
+  `[job.content_fallback].enabled` (default off); when enabled, auto-inserted
+  before the first non-personalized strategy. Independent of `item_based`.
+  Source label: `content_fallback`. Requires `scikit-learn`.
+
+### Changed
+
+- **Default model chain** is now `["collaborative", "item_based", "popular"]`
+  (was `["collaborative", "popular"]`), so sparse warm users get item-KNN
+  backfill before raw popularity.
+- **`[job.item_based].k_neighbors`** configures `TFIDFRecommender(K=…)`
+  (default `20`).
+
 ## [0.4.0] - 2026-08-04
 
 ### Added

@@ -152,8 +152,11 @@ Available strategies:
 
 - `collaborative`: `LightFMWrapperModel` — hybrid CF using user/item
   features for cold-start. Personalized, warm users only.
-- `item_based`: `ImplicitItemKNNWrapperModel` — item-item similarity.
-  Personalized, warm users only.
+- `item_based`: `ImplicitItemKNNWrapperModel` — item-item similarity
+  (`[job.item_based].k_neighbors`, default 20). Personalized; users with
+  interactions only (feature-only warm users stay on collaborative/popular).
+- `content_fallback`: zero-interaction items via categorical feature
+  similarity (opt-in: `[job.content_fallback].enabled = true`).
 - `popular`: `PopularModel` — global popularity. Non-personalized, backfills
   every warm user without enough personalized results.
 - `latest`: `PopularModel` restricted to the last two weeks of interactions —

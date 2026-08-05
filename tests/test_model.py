@@ -238,7 +238,7 @@ def test_train_and_recommend_respects_top_k_and_availability_filter(sample_items
     assert (recommendations.groupby(Columns.User).size() <= 2).all()
     # i3 is out of stock, i4 is unpublished — neither should ever be recommended.
     assert not recommendations[Columns.Item].isin(["i3", "i4"]).any()
-    assert set(recommendations["source"]) <= {"personalized", "popular_fallback"}
+    assert set(recommendations["source"]) <= {"personalized", "item_based", "popular_fallback"}
 
 
 def test_train_and_recommend_falls_back_to_popularity_for_cold_users(
@@ -459,12 +459,13 @@ def test_train_and_recommend_weighted_fusion_with_default_models(sample_items, f
 
     # enabled_models omitted (None) but weights given -> fusion mode still
     # applies, against DEFAULT_MODELS rather than an explicit list.
+    weights = {"collaborative": 1.0, "item_based": 0.5, "popular": 0.3}
     from_default = train_and_recommend(
         built,
         target_users=["u1", "u2", "u3"],
         config=feature_config,
         top_k=5,
-        weights={"collaborative": 1.0, "popular": 0.3},
+        weights=weights,
     )
     from_explicit = train_and_recommend(
         built,
@@ -472,10 +473,18 @@ def test_train_and_recommend_weighted_fusion_with_default_models(sample_items, f
         config=feature_config,
         top_k=5,
         enabled_models=DEFAULT_MODELS,
-        weights={"collaborative": 1.0, "popular": 0.3},
+        weights=weights,
     )
 
-    fused_labels = {"personalized", "popular_fallback", "personalized+popular_fallback"}
+    fused_labels = {
+        "personalized",
+        "item_based",
+        "popular_fallback",
+        "personalized+item_based",
+        "personalized+popular_fallback",
+        "item_based+popular_fallback",
+        "personalized+item_based+popular_fallback",
+    }
     assert set(from_default["source"]) <= fused_labels
     pd.testing.assert_frame_equal(from_default.reset_index(drop=True), from_explicit.reset_index(drop=True))
 
@@ -1367,3 +1376,171 @@ def test_train_and_recommend_skips_epoch_metrics_by_default(sample_items, featur
         )
 
     assert "Collaborative epoch" not in caplog.text
+
+
+def test_default_models_three_tier_chain():
+    assert DEFAULT_MODELS == ["collaborative", "item_based", "popular"]
+
+
+def test_resolve_recommend_models_inserts_content_fallback_before_popular():
+    from cicerone.model import resolve_recommend_models
+
+    assert resolve_recommend_models(
+        ["collaborative", "item_based", "popular"],
+        blending_enabled=False,
+        content_fallback_enabled=True,
+    ) == ["collaborative", "item_based", "content_fallback", "popular"]
+
+
+def test_resolve_recommend_models_skips_content_fallback_when_disabled(caplog):
+    from cicerone.model import resolve_recommend_models
+
+    with caplog.at_level("INFO"):
+        resolved = resolve_recommend_models(
+            ["collaborative", "content_fallback", "popular"],
+            blending_enabled=False,
+            content_fallback_enabled=False,
+        )
+    assert resolved == ["collaborative", "popular"]
+    assert "content_fallback is listed" in caplog.text
+
+
+def test_item_based_k_neighbors_reaches_tfidf_recommender(sample_items, feature_config, monkeypatch):
+    events = _synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+    seen: list[int] = []
+
+    real_build = __import__("cicerone.model", fromlist=["_build_item_based"])._build_item_based
+
+    def tracking_build(k_neighbors: int = 20):
+        seen.append(k_neighbors)
+        return real_build(k_neighbors)
+
+    monkeypatch.setattr("cicerone.model._build_item_based", tracking_build)
+
+    train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=2,
+        enabled_models=["item_based"],
+        item_based_k_neighbors=7,
+    )
+    assert seen == [7]
+
+
+def test_content_fallback_surfaces_cold_item_for_matching_user(feature_config):
+    now = pd.Timestamp.utcnow()
+    events = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+            {"user_id": "u1", "item_id": "i2", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+            {"user_id": "u2", "item_id": "i3", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+        ]
+    )
+    items = pd.DataFrame(
+        [
+            {"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True},
+            {"item_id": "i2", "category": "beer", "producer_id": "p2", "published": True, "in_stock": True},
+            {"item_id": "i3", "category": "wine", "producer_id": "p1", "published": True, "in_stock": True},
+            # Brand-new beer with zero events — should surface for u1 via content_fallback.
+            {
+                "item_id": "i_new",
+                "category": "beer",
+                "producer_id": "p9",
+                "published": True,
+                "in_stock": True,
+            },
+        ]
+    )
+    built = build_dataset(events, None, items, feature_config, half_life_days=90)
+
+    recommendations = train_and_recommend(
+        built,
+        target_users=["u1", "u2"],
+        config=feature_config,
+        top_k=5,
+        enabled_models=["content_fallback"],
+        content_fallback_enabled=True,
+    )
+
+    u1 = recommendations[recommendations[Columns.User] == "u1"]
+    assert not u1.empty
+    assert "i_new" in set(u1[Columns.Item])
+    assert (u1[u1[Columns.Item] == "i_new"]["source"] == "content_fallback").all()
+
+
+def test_content_fallback_disabled_emits_no_content_source(feature_config):
+    now = pd.Timestamp.utcnow()
+    events = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+        ]
+    )
+    items = pd.DataFrame(
+        [
+            {"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True},
+            {
+                "item_id": "i_new",
+                "category": "beer",
+                "producer_id": "p9",
+                "published": True,
+                "in_stock": True,
+            },
+        ]
+    )
+    built = build_dataset(events, None, items, feature_config, half_life_days=90)
+
+    recommendations = train_and_recommend(
+        built,
+        target_users=["u1"],
+        config=feature_config,
+        top_k=5,
+        enabled_models=["content_fallback", "popular"],
+        content_fallback_enabled=False,
+    )
+
+    assert "content_fallback" not in set(recommendations["source"])
+    assert not recommendations.empty
+
+
+def test_content_fallback_respects_availability_filters(feature_config):
+    now = pd.Timestamp.utcnow()
+    events = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+        ]
+    )
+    items = pd.DataFrame(
+        [
+            {"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True},
+            {
+                "item_id": "i_new_ok",
+                "category": "beer",
+                "producer_id": "p9",
+                "published": True,
+                "in_stock": True,
+            },
+            {
+                "item_id": "i_new_blocked",
+                "category": "beer",
+                "producer_id": "p9",
+                "published": False,
+                "in_stock": True,
+            },
+        ]
+    )
+    built = build_dataset(events, None, items, feature_config, half_life_days=90)
+
+    recommendations = train_and_recommend(
+        built,
+        target_users=["u1"],
+        config=feature_config,
+        top_k=5,
+        enabled_models=["content_fallback"],
+        content_fallback_enabled=True,
+    )
+
+    recommended_items = set(recommendations[Columns.Item])
+    assert "i_new_ok" in recommended_items
+    assert "i_new_blocked" not in recommended_items

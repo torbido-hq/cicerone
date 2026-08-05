@@ -17,7 +17,13 @@ from typing import Any
 DEFAULT_CONFIG_PATH = "/app/config/cicerone.toml"
 
 # Kept here (not cicerone.model) so Settings.models validates without ML deps.
-STRATEGY_NAMES: tuple[str, ...] = ("collaborative", "item_based", "popular", "latest")
+STRATEGY_NAMES: tuple[str, ...] = (
+    "collaborative",
+    "item_based",
+    "content_fallback",
+    "popular",
+    "latest",
+)
 
 AUTOML_DEFAULT_N_SPLITS = 2
 AUTOML_DEFAULT_TEST_DAYS = 14
@@ -30,6 +36,8 @@ DEFAULT_EPOCH_METRICS_MAX_USERS = 500
 DEFAULT_EPOCH_METRICS_REGRESSION_DROP = 0.25
 DEFAULT_EPOCH_METRICS_PLATEAU_EPS = 0.01
 DEFAULT_EPOCH_METRICS_PLATEAU_WINDOW = 3
+DEFAULT_ITEM_BASED_K_NEIGHBORS = 20
+DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS = 50
 
 
 @dataclass(frozen=True)
@@ -178,6 +186,9 @@ class Settings:
     save_model_artifact: bool
     max_workers: int
     epoch_metrics: EpochMetricsSettings | None
+    item_based_k_neighbors: int
+    content_fallback_enabled: bool
+    content_fallback_max_neighbors: int
     automl_enabled: bool
     automl_n_splits: int
     automl_test_days: int
@@ -225,6 +236,9 @@ def make_settings(**overrides: Any) -> Settings:
         save_model_artifact=False,
         max_workers=DEFAULT_MAX_WORKERS,
         epoch_metrics=None,
+        item_based_k_neighbors=DEFAULT_ITEM_BASED_K_NEIGHBORS,
+        content_fallback_enabled=False,
+        content_fallback_max_neighbors=DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS,
         automl_enabled=False,
         automl_n_splits=AUTOML_DEFAULT_N_SPLITS,
         automl_test_days=AUTOML_DEFAULT_TEST_DAYS,
@@ -326,6 +340,9 @@ def load_settings(config_path: str | None = None) -> Settings:
 
     log_epoch_metrics = bool(job.get("log_epoch_metrics", False))
 
+    item_based = job.get("item_based", {}) or {}
+    content_fallback = job.get("content_fallback", {}) or {}
+
     return Settings(
         input=_load_io_settings(raw, "input"),
         output=_load_io_settings(raw, "output"),
@@ -347,6 +364,15 @@ def load_settings(config_path: str | None = None) -> Settings:
             regression_drop=job.get("epoch_metrics_regression_drop"),
             plateau_eps=job.get("epoch_metrics_plateau_eps"),
             plateau_window=job.get("epoch_metrics_plateau_window"),
+        ),
+        item_based_k_neighbors=_require_positive_int(
+            int(item_based.get("k_neighbors", DEFAULT_ITEM_BASED_K_NEIGHBORS)),
+            name="job.item_based.k_neighbors",
+        ),
+        content_fallback_enabled=bool(content_fallback.get("enabled", False)),
+        content_fallback_max_neighbors=_require_positive_int(
+            int(content_fallback.get("max_neighbors", DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS)),
+            name="job.content_fallback.max_neighbors",
         ),
         automl_enabled=bool(automl.get("enabled", False)),
         automl_n_splits=_require_positive_int(

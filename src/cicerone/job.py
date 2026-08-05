@@ -124,10 +124,17 @@ def run(triggered_by: str = "manual") -> None:
             strategy_cache=fitted if settings.save_model_artifact else None,
             max_workers=settings.max_workers,
             epoch_metrics=settings.epoch_metrics,
+            item_based_k_neighbors=settings.item_based_k_neighbors,
+            content_fallback_enabled=settings.content_fallback_enabled,
+            content_fallback_max_neighbors=settings.content_fallback_max_neighbors,
         )
 
         resolved_models = enabled_models or DEFAULT_MODELS
-        run_models = resolve_recommend_models(resolved_models, feature_config.blending.enabled)
+        run_models = resolve_recommend_models(
+            resolved_models,
+            feature_config.blending.enabled,
+            content_fallback_enabled=settings.content_fallback_enabled,
+        )
         model_weights_str = (
             ",".join(f"{name}={weights.get(name, 1.0)}" for name in run_models) if weights is not None else ""
         )

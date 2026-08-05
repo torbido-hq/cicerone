@@ -27,10 +27,25 @@ cron_schedule = "0 3 * * *" # 5-field cron expression, evaluated in UTC
 feature_config_path = "/app/config/features.toml"
 # Recommendation strategies to fit and combine, in priority order (earlier
 # entries win ties for the same user/item pair). Defaults to
-# ["collaborative", "popular"] if omitted. Available: "collaborative"
-# (LightFM, hybrid CF), "item_based" (item-item KNN), "popular" (global
-# popularity fallback), "latest" (trending in the last two weeks).
+# ["collaborative", "item_based", "popular"] if omitted. Available:
+# "collaborative" (LightFM, hybrid CF), "item_based" (item-item KNN),
+# "content_fallback" (feature similarity for zero-interaction items; also
+# gated by [job.content_fallback].enabled), "popular" (global popularity
+# fallback), "latest" (trending in the last two weeks).
 # models = ["collaborative", "item_based", "popular", "latest"]
+
+# Optional: item-item KNN neighbor count for the item_based strategy
+# (ImplicitItemKNNWrapperModel / TFIDFRecommender K=).
+# [job.item_based]
+# k_neighbors = 20
+
+# Optional: content-based cold-item tier. When enabled, inserted before the
+# first non-personalized strategy (popular/latest) if not already listed in
+# models. Recommends zero-interaction items by categorical feature similarity
+# to each user's history. Independent of item_based.
+# [job.content_fallback]
+# enabled = false
+# max_neighbors = 50
 
 # Optional: also write a versioned fitted-model artifact (model.artifact /
 # model_artifacts table) alongside recommendations. Loadable later via

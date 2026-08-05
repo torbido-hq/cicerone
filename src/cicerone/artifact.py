@@ -120,4 +120,5 @@ def recommend_from_artifact(
         enabled_models=artifact.models,
         weights=artifact.model_weights,
         rrf_k=artifact.rrf_k,
+        content_fallback_enabled="content_fallback" in artifact.models,
     )

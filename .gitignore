@@ -27,3 +27,4 @@ config/dashboard_users.toml
 # Local Cursor / cloud-agent notes (never commit — branch naming and other
 # agent rules that belong in-repo live in CONTRIBUTING.md).
 AGENTS.md
+*.egg-info/

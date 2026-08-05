@@ -186,6 +186,7 @@ def _evaluate_fold(
             weights=candidate.weights,
             rrf_k=candidate.rrf_k,
             strategy_cache=strategy_cache,
+            content_fallback_enabled="content_fallback" in candidate.models,
         )
         fold_metrics.append(calc_metrics(metrics, reco=reco, interactions=test_interactions))
     return fold_metrics
