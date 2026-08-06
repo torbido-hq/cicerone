@@ -527,7 +527,6 @@ def test_train_and_recommend_weighted_fusion_merges_sources_for_shared_items(sam
         weights={"popular": 1.0, "latest": 1.0},
     )
 
-    # Joined label follows enabled_models order, not alphabetical.
     assert set(recommendations["source"]) == {"popular_fallback+latest"}
 
 
