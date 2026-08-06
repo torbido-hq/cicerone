@@ -678,3 +678,22 @@ def test_boolean_boost_respects_string_false():
     factors = item_boost_factors(items, boosts)
     assert factors["a"] == 2.0
     assert factors["b"] == 1.0
+
+
+def test_boolean_boost_respects_numeric_zero_and_nonzero():
+    items = pd.DataFrame(
+        [
+            {"item_id": "z", "featured": 0},
+            {"item_id": "one", "featured": 1},
+            {"item_id": "two", "featured": 2},
+            {"item_id": "zf", "featured": 0.0},
+            {"item_id": "half", "featured": 0.5},
+        ]
+    )
+    boosts = [BoostRule(name="f", kind="boolean", item_column="featured", factor=3.0)]
+    factors = item_boost_factors(items, boosts)
+    assert factors["z"] == 1.0
+    assert factors["one"] == 3.0
+    assert factors["two"] == 3.0
+    assert factors["zf"] == 1.0
+    assert factors["half"] == 3.0

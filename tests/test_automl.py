@@ -13,6 +13,7 @@ from cicerone.automl import (
     evaluate_candidates,
     select_best_candidate,
 )
+from cicerone.config import ConfigError
 from cicerone.dataset import build_dataset, build_interactions
 from cicerone.model import train_and_recommend
 
@@ -138,13 +139,13 @@ def test_parse_candidates_rejects_empty_models():
 
 def test_parse_candidates_rejects_negative_weight():
     entry = {"models": ["popular", "latest"], "weights": {"popular": -1.0, "latest": 0.5}}
-    with pytest.raises(ValueError, match="non-negative"):
+    with pytest.raises(ConfigError, match="non-negative"):
         _parse_candidates([entry])
 
 
 def test_parse_candidates_rejects_non_positive_rrf_k():
     entry = {"models": ["popular"], "weights": {"popular": 1.0}, "rrf_k": 0}
-    with pytest.raises(ValueError, match="rrf_k must be positive"):
+    with pytest.raises(ConfigError, match="rrf_k must be positive"):
         _parse_candidates([entry])
 
 

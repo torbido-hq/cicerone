@@ -5,7 +5,7 @@ import pytest
 from implicit.nearest_neighbours import TFIDFRecommender
 from rectools import Columns
 
-from cicerone.config import STRATEGY_NAMES, validate_model_weights
+from cicerone.config import STRATEGY_NAMES, ConfigError, validate_model_weights
 from cicerone.dataset import build_dataset
 from cicerone.model import (
     DEFAULT_MODELS,
@@ -371,6 +371,12 @@ def test_as_recommender_model_rejects_recommend_missing_expected_parameters():
 
 def test_validate_model_weights_no_op_when_none():
     validate_model_weights(None)
+    validate_model_weights({"popular": 1.0})
+
+
+def test_validate_model_weights_rejects_negative():
+    with pytest.raises(ConfigError, match="non-negative"):
+        validate_model_weights({"popular": -1.0})
 
 
 def test_train_and_recommend_no_warm_users_and_only_personalized_strategies_returns_empty(
@@ -416,7 +422,7 @@ def test_train_and_recommend_rejects_negative_weight(sample_items, feature_confi
     events = _synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
 
-    with pytest.raises(ValueError, match="non-negative"):
+    with pytest.raises(ConfigError, match="non-negative"):
         train_and_recommend(
             built,
             target_users=["u1"],
@@ -431,7 +437,7 @@ def test_train_and_recommend_rejects_non_positive_rrf_k(sample_items, feature_co
     events = _synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
 
-    with pytest.raises(ValueError, match="rrf_k must be positive"):
+    with pytest.raises(ConfigError, match="rrf_k must be positive"):
         train_and_recommend(
             built,
             target_users=["u1"],

@@ -10,6 +10,7 @@ from cicerone.config import (
     load_settings,
     resolve_epoch_metrics,
     resolve_max_workers,
+    validate_model_weights,
 )
 
 
@@ -290,8 +291,16 @@ def test_load_settings_rejects_negative_model_weight(tmp_path):
     )
 
     # Shared validate_model_weights runs at config load, not only at train time.
-    with pytest.raises(ValueError, match="non-negative"):
+    with pytest.raises(ConfigError, match="non-negative"):
         load_settings(config_path)
+
+
+def test_validate_model_weights_rejects_negative_and_allows_non_negative():
+    validate_model_weights(None)
+    validate_model_weights({})
+    validate_model_weights({"popular": 0.0, "latest": 1.5})
+    with pytest.raises(ConfigError, match="non-negative"):
+        validate_model_weights({"popular": -0.1})
 
 
 def test_load_settings_rejects_non_positive_rrf_k(tmp_path):
@@ -319,7 +328,7 @@ def test_load_settings_rejects_non_positive_rrf_k(tmp_path):
         """,
     )
 
-    with pytest.raises(ValueError, match="job.rrf_k must be positive"):
+    with pytest.raises(ConfigError, match="job.rrf_k must be positive"):
         load_settings(config_path)
 
 

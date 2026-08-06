@@ -734,7 +734,6 @@ def _recommend_per_strategy(
     blending_enabled: bool,
     blending_latest_date_columns: tuple[str, ...],
     top_k: int,
-    weights: dict[str, float] | None,
 ) -> _StrategyFrames:
     frames: list[pd.DataFrame] = []
     personalized_frames: list[pd.DataFrame] = []
@@ -783,7 +782,7 @@ def _recommend_per_strategy(
                 items_to_recommend=allowed_items,
             )
             recs[SOURCE_COLUMN] = strategy.source_label
-            recs[WEIGHT_COLUMN] = weights.get(name, 1.0) if weights is not None else 1.0
+            recs[WEIGHT_COLUMN] = 1.0
             frames.append(recs)
             if blending_enabled:
                 if strategy.personalized:
@@ -916,9 +915,15 @@ def _combine_strategy_frames(
     if not strategy_frames.frames:
         return empty_recs
     if weights is not None:
+        label_weights = {STRATEGIES[name].source_label: weights.get(name, 1.0) for name in recommend_models}
+        stamped: list[pd.DataFrame] = []
+        for frame in strategy_frames.frames:
+            part = frame.copy()
+            part[WEIGHT_COLUMN] = part[SOURCE_COLUMN].map(label_weights).fillna(1.0)
+            stamped.append(part)
         source_label_order = [STRATEGIES[name].source_label for name in recommend_models]
         return _combine_by_weighted_fusion(
-            strategy_frames.frames, combine_k, rrf_k if rrf_k is not None else RRF_K, source_label_order
+            stamped, combine_k, rrf_k if rrf_k is not None else RRF_K, source_label_order
         )
     return _combine_by_priority(strategy_frames.frames, combine_k)
 
@@ -978,7 +983,6 @@ def recommend_with_models(
         blending_enabled=blending_enabled,
         blending_latest_date_columns=tuple(blending.latest_date_columns),
         top_k=top_k,
-        weights=weights,
     )
     combined = _combine_strategy_frames(
         models,
