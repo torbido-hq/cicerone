@@ -145,9 +145,8 @@ and/or `examples/serve/` when request/response fields change.
 - **Branch names (required):** short and human-readable only —
   `feature/…`, `fix/…`, `release/0.3.1`, `docs/…`, `chore/…`.
   **Never** use `cursor/<slug>-<id>` (or any other opaque agent/id suffix).
-  Cloud / Cursor agents: read [AGENTS.md](AGENTS.md) first and follow this
-  rule even if a default template suggests a `cursor/…` prefix.
-  Do not delete or gitignore `AGENTS.md`.
+  Cloud / Cursor agents: follow this rule even if a default template
+  suggests a `cursor/…` prefix.
 - Add/update tests for any behavior change — the coverage gate is enforced
   in CI, not just locally.
 - Make sure both the lint job and the test job pass before requesting review.
