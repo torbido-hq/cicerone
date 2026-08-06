@@ -1,4 +1,16 @@
-"""Declarative eligibility filters and score boosts (see config/features.toml)."""
+"""Declarative eligibility filters and score boosts (see config/features.toml).
+
+Eligibility fail-open / fail-closed matrix (intentional):
+
+- Missing configured ``item_column`` on the items frame → skip that rule
+  (fail-open for the rule; other rules still apply).
+- Empty allowlist after evaluating rules → skip the cohort (fail-closed;
+  no silent full-catalog fallback).
+- Missing/empty items frame with user-scoped rules → empty allowlist
+  (fail-closed; cannot evaluate item attributes).
+- Missing/empty items frame with only item-global rules (e.g. ``item_true``)
+  → full catalog (fail-open; cannot filter without item rows).
+"""
 
 from __future__ import annotations
 
@@ -10,12 +22,19 @@ import pandas as pd
 from rectools import Columns
 
 from cicerone.feature_config import BoostRule, EligibilityRule, FeatureConfig
+from cicerone.ids import items_id_column
 
 logger = logging.getLogger(__name__)
 
 _MISSING = object()
 _warned_missing_columns: set[tuple[str, str, str]] = set()
 _warned_boost_without_items = False
+
+# Explicit truthy/falsy *string* tokens for ``item_true``.
+# Bool/numeric columns are handled separately in ``_coerce_item_true``.
+# Avoid ``astype(bool)``, which treats any non-empty string (including "false") as True.
+_ITEM_TRUE_STRINGS = frozenset({"1", "true", "True", "TRUE", "yes", "Yes", "YES"})
+_ITEM_FALSE_STRINGS = frozenset({"0", "false", "False", "FALSE", "no", "No", "NO", ""})
 
 
 def _warn_missing_column(kind: str, rule_name: str, column: str) -> None:
@@ -24,11 +43,32 @@ def _warn_missing_column(kind: str, rule_name: str, column: str) -> None:
         return
     _warned_missing_columns.add(key)
     logger.warning(
-        "Configured %s rule %r item_column %r not found — skipping",
+        "Configured %s rule %r item_column %r not found — skipping rule (fail-open for this rule)",
         kind,
         rule_name,
         column,
     )
+
+
+def _coerce_item_true(value: object) -> bool:
+    """Return True only for explicit truthy tokens; unknowns are False."""
+    if _is_missing(value):
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value != 0
+    token = str(value).strip()
+    if token in _ITEM_TRUE_STRINGS:
+        return True
+    if token in _ITEM_FALSE_STRINGS:
+        return False
+    return False
+
+
+def _item_true_mask(item_values: pd.Series) -> pd.Series:
+    """Boolean mask for ``item_true`` without silent string→True coercion."""
+    return item_values.map(_coerce_item_true).astype(bool)
 
 
 def _warn_boost_without_items() -> None:
@@ -149,7 +189,7 @@ def eligible_item_mask(
         item_values = items[rule.item_column]
 
         if rule.op == "item_true":
-            mask &= item_values.fillna(False).astype(bool)
+            mask &= _item_true_mask(item_values)
             continue
 
         user_value = _user_attr(user_row, rule.user_column)
@@ -239,7 +279,8 @@ def allowed_items_for_cohort(
     lookup = users_by_id if users_by_id is not None else index_users_by_id(users)
     representative = _user_row_for(users, users_slice[0], users_by_id=lookup) if users_slice else None
     mask = eligible_item_mask(representative, items, rules)
-    allowed = set(items.loc[mask, "item_id"].astype(str))
+    id_col = items_id_column(items)
+    allowed = set(items.loc[mask, id_col].astype(str))
     filtered = [i for i in catalog if str(i) in allowed]
     if not filtered and catalog:
         logger.warning(
@@ -273,7 +314,14 @@ def group_users_by_cohort(
 def _boolean_factor(value: object, factor: float) -> float:
     if _is_missing(value):
         return 1.0
-    return factor if bool(value) else 1.0
+    if isinstance(value, bool):
+        return factor if value else 1.0
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return factor if value != 0 else 1.0
+    token = str(value).strip()
+    if token in _ITEM_TRUE_STRINGS or token.lower() in {"true", "1", "yes"}:
+        return factor
+    return 1.0
 
 
 def _value_map_factor(value: object, value_factors: dict[str, float]) -> float:
@@ -318,7 +366,8 @@ def item_boost_factors(items: pd.DataFrame | None, boosts: Sequence[BoostRule]) 
         else:
             raise ValueError(f"Unknown boost kind {boost.kind!r} in rule {boost.name!r}")
 
-    return dict(zip(items["item_id"].astype(str), factors.astype(float), strict=True))
+    id_col = items_id_column(items)
+    return dict(zip(items[id_col].astype(str), factors.astype(float), strict=True))
 
 
 def apply_boosts(

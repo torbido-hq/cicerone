@@ -10,11 +10,13 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from collections.abc import Sequence
+from typing import Any
 
 import numpy as np
 import pandas as pd
 from rectools import Columns
 from rectools.dataset import Dataset
+from scipy.sparse import csr_matrix
 from sklearn.feature_extraction import DictVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
@@ -52,7 +54,8 @@ def _feature_dict(
     tokens: dict[str, float] = {}
     for spec in feature_columns:
         if isinstance(spec, FeatureColumn):
-            column, ftype = spec.column, spec.type
+            column = spec.column
+            ftype: str = spec.type
         else:
             column, ftype = spec
         if column not in row.index:
@@ -61,7 +64,25 @@ def _feature_dict(
         if ftype == "list":
             if _is_missing(value):
                 continue
-            values = value if isinstance(value, (list, tuple, set)) else [value]
+            if isinstance(value, (list, tuple, set)):
+                values = list(value)
+            elif isinstance(value, str):
+                # Parquet/DB often store list features as comma-separated or JSON-ish strings.
+                stripped = value.strip()
+                if stripped.startswith("[") and stripped.endswith("]"):
+                    try:
+                        import json
+
+                        parsed = json.loads(stripped)
+                        values = list(parsed) if isinstance(parsed, list) else [value]
+                    except (json.JSONDecodeError, TypeError):
+                        values = [part.strip() for part in stripped.strip("[]").split(",") if part.strip()]
+                elif "," in stripped:
+                    values = [part.strip() for part in stripped.split(",") if part.strip()]
+                else:
+                    values = [value]
+            else:
+                values = [value]
             for entry in values:
                 if _is_missing(entry):
                     continue
@@ -112,12 +133,12 @@ class ContentFallbackModel:
         self.max_neighbors = max_neighbors
         self.items = items
         self.interactions = interactions
-        self._item_ids: list = []
-        self._item_index: dict = {}
-        self._matrix = None
-        self._cold_ids: list = []
+        self._item_ids: list[Any] = []
+        self._item_index: dict[Any, int] = {}
+        self._matrix: csr_matrix | None = None
+        self._cold_ids: list[Any] = []
         self._cold_indices: np.ndarray = np.array([], dtype=int)
-        self._user_history: dict = {}
+        self._user_history: dict[Any, list[Any]] = {}
         self._vectorizer: DictVectorizer | None = None
 
     def _reset_item_state(self) -> None:

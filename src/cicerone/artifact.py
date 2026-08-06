@@ -29,11 +29,11 @@ ARTIFACT_SCHEMA_VERSION = 2
 ARTIFACT_FILENAME = "model.artifact"
 
 
-@dataclass
+@dataclass(frozen=True)
 class ModelArtifact:
     schema_version: int
     created_at: str
-    models: list[str]
+    models: tuple[str, ...]
     model_weights: dict[str, float] | None
     rrf_k: float | None
     fitted: dict[str, RecommenderModel]
@@ -55,7 +55,7 @@ def build_artifact(
     return ModelArtifact(
         schema_version=ARTIFACT_SCHEMA_VERSION,
         created_at=datetime.now(UTC).isoformat(),
-        models=list(models),
+        models=tuple(models),
         model_weights=dict(model_weights) if model_weights is not None else None,
         rrf_k=rrf_k,
         fitted=dict(fitted),
@@ -101,26 +101,26 @@ def recommend_from_artifact(
     target_users: list[str],
     top_k: int,
 ) -> pd.DataFrame:
-    users = getattr(artifact, "users", None)
     # Artifacts omit interactions → blending sees n=0 for every user.
     built = BuiltDataset(
         dataset=artifact.dataset,
         interactions=pd.DataFrame(),
         items=artifact.items,
-        users=users,
+        users=artifact.users,
     )
     if artifact.feature_config.blending.enabled:
         logger.warning(
             "recommend_from_artifact with blending.enabled: interactions are not stored in the "
             "artifact, so the blend curve sees n_interactions=0 for every user"
         )
+    weights = dict(artifact.model_weights) if artifact.model_weights is not None else None
     return recommend_with_models(
-        artifact.fitted,
+        dict(artifact.fitted),
         built,
         target_users,
         artifact.feature_config,
         top_k=top_k,
-        enabled_models=artifact.models,
-        weights=artifact.model_weights,
+        enabled_models=list(artifact.models),
+        weights=weights,
         rrf_k=artifact.rrf_k,
     )

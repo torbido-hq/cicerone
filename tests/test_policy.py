@@ -117,6 +117,21 @@ def test_eligible_item_mask_item_true():
     assert set(items.loc[mask, "item_id"]) == {"i1", "i2", "i3"}
 
 
+def test_eligible_item_mask_item_true_string_false_is_ineligible():
+    items = pd.DataFrame(
+        [
+            {"item_id": "a", "published": "true"},
+            {"item_id": "b", "published": "false"},
+            {"item_id": "c", "published": "0"},
+            {"item_id": "d", "published": "1"},
+            {"item_id": "e", "published": ""},
+        ]
+    )
+    rules = [EligibilityRule(name="pub", op="item_true", item_column="published")]
+    mask = eligible_item_mask(None, items, rules)
+    assert set(items.loc[mask, "item_id"]) == {"a", "d"}
+
+
 def test_eligible_item_mask_eq():
     items = _items()
     user = {"user_id": "u1", "market": "eu"}
@@ -655,3 +670,16 @@ def test_apply_boosts_empty_recs_and_no_boosts_paths():
     assert list(truncated[Columns.Item]) == ["i1"]
     untruncated = apply_boosts(recs, _items(), [], top_k=None)
     assert len(untruncated) == 2
+
+
+def test_boolean_boost_respects_string_false():
+    items = pd.DataFrame(
+        [
+            {"item_id": "a", "featured": "true"},
+            {"item_id": "b", "featured": "false"},
+        ]
+    )
+    boosts = [BoostRule(name="f", kind="boolean", item_column="featured", factor=2.0)]
+    factors = item_boost_factors(items, boosts)
+    assert factors["a"] == 2.0
+    assert factors["b"] == 1.0

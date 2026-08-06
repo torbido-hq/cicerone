@@ -241,3 +241,29 @@ def test_fit_raises_clear_error_when_items_missing_id_column():
     )
     with pytest.raises(ValueError, match="items is missing a required id column"):
         model.fit(_DummyDataset())
+
+
+def test_feature_dict_parses_list_like_strings():
+    from cicerone.content_fallback import _feature_dict
+
+    row = pd.Series(
+        {
+            "item_id": "i1",
+            "tags": "ipa, stout",
+            "styles": '["lager", "pils"]',
+            "solo": "single",
+        }
+    )
+    tokens = _feature_dict(
+        row,
+        [
+            FeatureColumn(column="tags", type="list"),
+            FeatureColumn(column="styles", type="list"),
+            FeatureColumn(column="solo", type="list"),
+        ],
+    )
+    assert tokens["tags=ipa"] == 1.0
+    assert tokens["tags=stout"] == 1.0
+    assert tokens["styles=lager"] == 1.0
+    assert tokens["styles=pils"] == 1.0
+    assert tokens["solo=single"] == 1.0

@@ -57,14 +57,14 @@ def _clear_table_for_replace(conn, table: str) -> None:
         conn.execute(text(f'TRUNCATE TABLE "{table}"'))
         savepoint.commit()
         return
-    except ProgrammingError:
+    except _MISSING_TABLE_ERRORS:
         savepoint.rollback()
 
     savepoint = conn.begin_nested()
     try:
         conn.execute(text(f'DELETE FROM "{table}"'))
         savepoint.commit()
-    except ProgrammingError:
+    except _MISSING_TABLE_ERRORS:
         savepoint.rollback()
 
 

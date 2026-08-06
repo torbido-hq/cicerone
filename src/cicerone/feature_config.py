@@ -10,7 +10,7 @@ from __future__ import annotations
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
 DEFAULT_CONFIG_PATH = Path("/app/config/features.toml")
 
@@ -27,26 +27,32 @@ DEFAULT_BLENDING_POPULAR_SHARE = 0.7
 DEFAULT_BLENDING_RRF_K = 60.0
 DEFAULT_LATEST_DATE_COLUMNS: tuple[str, ...] = ("published_at", "created_at", "occurred_at")
 
+FeatureColumnType = Literal["categorical", "list"]
+EligibilityOp = Literal["item_true", "eq", "user_in_item_list", "item_in_user_list"]
+BoostKind = Literal["boolean", "value_map", "numeric"]
+OnMissingUser = Literal["exclude", "allow"]
+BlendingCurve = Literal["sigmoid", "linear"]
+
 
 @dataclass(frozen=True)
 class FeatureColumn:
     column: str
-    type: str
+    type: FeatureColumnType
 
 
 @dataclass(frozen=True)
 class EligibilityRule:
     name: str
-    op: str
+    op: EligibilityOp
     item_column: str
     user_column: str | None = None
-    on_missing_user: str = "exclude"
+    on_missing_user: OnMissingUser = "exclude"
 
 
 @dataclass(frozen=True)
 class BoostRule:
     name: str
-    kind: str
+    kind: BoostKind
     item_column: str
     factor: float = 1.0
     value_factors: dict[str, float] = field(default_factory=dict)
@@ -58,7 +64,7 @@ class BlendingConfig:
     """Per-user weighted blend of personalized / popular / latest sources."""
 
     enabled: bool = False
-    curve: str = "sigmoid"
+    curve: BlendingCurve = "sigmoid"
     midpoint: float = DEFAULT_BLENDING_MIDPOINT
     steepness: float = DEFAULT_BLENDING_STEEPNESS
     saturate_at: float = DEFAULT_BLENDING_SATURATE_AT
@@ -110,10 +116,10 @@ def _parse_eligibility(raw_rules: list[dict[str, Any]]) -> list[EligibilityRule]
         rules.append(
             EligibilityRule(
                 name=name,
-                op=op,
+                op=cast(EligibilityOp, op),
                 item_column=item_column,
                 user_column=str(user_column) if user_column is not None else None,
-                on_missing_user=on_missing_user,
+                on_missing_user=cast(OnMissingUser, on_missing_user),
             )
         )
     return rules
@@ -142,7 +148,7 @@ def _parse_boosts(raw_boosts: list[dict[str, Any]]) -> list[BoostRule]:
         boosts.append(
             BoostRule(
                 name=name,
-                kind=kind,
+                kind=cast(BoostKind, kind),
                 item_column=item_column,
                 factor=float(raw.get("factor", 1.0)),
                 value_factors=value_factors,
@@ -177,7 +183,7 @@ def _parse_blending(raw: dict[str, Any] | None) -> BlendingConfig:
         date_columns = tuple(str(c) for c in date_columns_raw)
     return BlendingConfig(
         enabled=bool(raw.get("enabled", False)),
-        curve=curve,
+        curve=cast(BlendingCurve, curve),
         midpoint=float(raw.get("midpoint", DEFAULT_BLENDING_MIDPOINT)),
         steepness=steepness,
         saturate_at=saturate_at,
@@ -202,7 +208,7 @@ def load_feature_config(path: Path | str | None = None) -> FeatureConfig:
                     f"Unknown feature type {column_type!r} for {key} column {column!r}; "
                     f"available: {sorted(FEATURE_COLUMN_TYPES)}"
                 )
-            columns.append(FeatureColumn(column=column, type=column_type))
+            columns.append(FeatureColumn(column=column, type=cast(FeatureColumnType, column_type)))
         return columns
 
     return FeatureConfig(
@@ -213,7 +219,16 @@ def load_feature_config(path: Path | str | None = None) -> FeatureConfig:
         item_features=_columns("item_features"),
         item_availability_filters=list(raw.get("item_availability_filters", [])),
         eligibility=_parse_eligibility(list(raw.get("eligibility", []))),
-        boosts=_parse_boosts(list(raw.get("boost", []))),
+        boosts=_parse_boosts(_raw_boost_rules(raw)),
         boost_overfetch_factor=_parse_boost_overfetch_factor(raw.get("boost_overfetch_factor")),
         blending=_parse_blending(raw.get("blending")),
     )
+
+
+def _raw_boost_rules(raw: dict[str, Any]) -> list[dict[str, Any]]:
+    """Accept ``[[boost]]`` (canonical) or ``[[boosts]]`` (alias)."""
+    if "boost" in raw and "boosts" in raw:
+        raise ValueError("features.toml must not define both [[boost]] and [[boosts]]; use [[boost]]")
+    if "boosts" in raw:
+        return list(raw.get("boosts", []))
+    return list(raw.get("boost", []))

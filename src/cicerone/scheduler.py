@@ -42,7 +42,7 @@ def main() -> None:
     if not croniter.is_valid(schedule):
         raise RuntimeError(f"Invalid cron_schedule: {schedule!r}")
 
-    if settings.trigger_enabled:
+    if settings.trigger.enabled:
         _run_with_trigger(settings, schedule)
     else:
         _cron_loop(schedule, lambda: job.run(triggered_by="cron"))
@@ -51,18 +51,18 @@ def main() -> None:
 def _run_with_trigger(settings: Settings, schedule: str) -> None:
     from cicerone.trigger import RunGuard, create_app, poll_input_forever
 
-    guard = RunGuard(settings.trigger_debounce_seconds)
+    guard = RunGuard(settings.trigger.debounce_seconds)
     threading.Thread(target=_cron_loop, args=(schedule, lambda: guard.trigger("cron")), daemon=True).start()
 
-    if settings.trigger_poll_input_bucket:
+    if settings.trigger.poll_input_bucket:
         threading.Thread(
             target=poll_input_forever,
-            args=(settings.input, guard, settings.trigger_poll_interval_seconds),
+            args=(settings.input, guard, settings.trigger.poll_interval_seconds),
             daemon=True,
         ).start()
 
     app = create_app(settings, guard)
-    uvicorn.run(app, host=settings.trigger_host, port=settings.trigger_port)
+    uvicorn.run(app, host=settings.trigger.host, port=settings.trigger.port)
 
 
 if __name__ == "__main__":

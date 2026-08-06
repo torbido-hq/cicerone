@@ -17,3 +17,4 @@ def test_base_recommendation_reader_defaults():
     assert reader.items_version() == 0
     assert reader.get_cold_start_fallback(5).empty
     reader.refresh()  # no-op default
+    reader.configure_item_filters(category_column="category", availability_filters=["published"])

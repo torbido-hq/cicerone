@@ -93,8 +93,10 @@ def build_interactions(events: pd.DataFrame, config: FeatureConfig, half_life_da
         mask = df["event_type"] == event_type
         if not mask.any():
             continue
-        rank = df[mask].groupby(["user_id", "item_id"]).cumcount()
-        drop_idx = df[mask].index[rank >= cap]
+        # Keep the most recent ``cap`` events per (user, item); older rows drop.
+        capped = df.loc[mask].sort_values("occurred_at", ascending=False)
+        rank = capped.groupby(["user_id", "item_id"]).cumcount()
+        drop_idx = capped.index[rank >= cap]
         df = df.drop(index=drop_idx)
 
     decay = _time_decay_multiplier(df["occurred_at"], half_life_days)
@@ -103,8 +105,16 @@ def build_interactions(events: pd.DataFrame, config: FeatureConfig, half_life_da
     aggregated = df.groupby(["user_id", "item_id"], as_index=False).agg(
         weight=("weight", "sum"), datetime=("occurred_at", "max")
     )
-    # Floor negative review sums: rectools/LightFM expect non-negative weights.
-    aggregated["weight"] = aggregated["weight"].clip(lower=1e-3)
+    # Drop non-positive aggregates: negative review sums must not become weak
+    # positive LightFM signals (rectools/LightFM still require weight > 0).
+    before = len(aggregated)
+    aggregated = aggregated.loc[aggregated["weight"] > 0].reset_index(drop=True)
+    dropped = before - len(aggregated)
+    if dropped:
+        logger.info(
+            "Dropped %d (user, item) pairs with non-positive aggregated weight",
+            dropped,
+        )
 
     aggregated = aggregated.rename(columns={"user_id": Columns.User, "item_id": Columns.Item})
     aggregated[Columns.Weight] = aggregated.pop("weight")

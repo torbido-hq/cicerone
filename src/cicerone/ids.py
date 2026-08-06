@@ -9,6 +9,8 @@ touch one module.
 
 from __future__ import annotations
 
+from collections.abc import Hashable
+
 import pandas as pd
 from rectools import Columns
 
@@ -41,7 +43,7 @@ def items_id_column(items: pd.DataFrame) -> str:
     return require_id_column(items, ITEM_ID_COLUMNS, frame_name="items")
 
 
-def interacting_external_user_ids(built: BuiltDataset) -> set:
+def interacting_external_user_ids(built: BuiltDataset) -> set[Hashable]:
     """External user IDs with ≥1 interaction (same namespace as ``target_users``)."""
     interactions = built.interactions
     if interactions is None or interactions.empty:

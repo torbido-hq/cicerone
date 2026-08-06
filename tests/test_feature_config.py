@@ -91,6 +91,43 @@ def test_load_feature_config_defaults_to_empty_sections(tmp_path):
     assert config.blending.enabled is False
 
 
+def test_load_feature_config_accepts_boosts_alias(tmp_path):
+    config_path = tmp_path / "boosts_alias.toml"
+    config_path.write_text(
+        """
+[[boosts]]
+name = "featured"
+kind = "boolean"
+item_column = "is_featured"
+factor = 1.2
+"""
+    )
+    config = load_feature_config(config_path)
+    assert len(config.boosts) == 1
+    assert config.boosts[0].name == "featured"
+
+
+def test_load_feature_config_rejects_both_boost_and_boosts(tmp_path):
+    config_path = tmp_path / "both.toml"
+    config_path.write_text(
+        """
+[[boost]]
+name = "a"
+kind = "boolean"
+item_column = "x"
+factor = 1.1
+
+[[boosts]]
+name = "b"
+kind = "boolean"
+item_column = "y"
+factor = 1.2
+"""
+    )
+    with pytest.raises(ValueError, match="both"):
+        load_feature_config(config_path)
+
+
 def test_load_feature_config_parses_blending(tmp_path):
     config_path = tmp_path / "blending.toml"
     config_path.write_text(

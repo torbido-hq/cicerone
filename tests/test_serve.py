@@ -42,6 +42,15 @@ class _FakeReader:
     def get_cold_start_fallback(self, k: int) -> pd.DataFrame:
         return select_cold_start_fallback(self._recs, k)
 
+    def configure_item_filters(
+        self,
+        *,
+        category_column: str | None = None,
+        availability_filters=(),
+    ) -> None:
+        del category_column, availability_filters
+        self._items_version += 1
+
 
 def _recs_df() -> pd.DataFrame:
     return pd.DataFrame(

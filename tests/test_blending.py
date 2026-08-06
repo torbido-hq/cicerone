@@ -14,8 +14,10 @@ from cicerone.blending import (
     append_cold_start_rows,
     blend_for_users,
     build_latest_ranking,
+    expand_latest_ranking,
     interaction_counts,
     personalized_weight,
+    rank_latest_items,
     resolve_latest_date_column,
     source_weights,
 )
@@ -485,3 +487,47 @@ def test_train_and_recommend_blending_without_date_column(feature_config: Featur
     )
     assert not recs.empty
     assert LATEST_SOURCE not in set(recs["source"])
+
+
+def test_rank_latest_items_and_expand_latest_ranking():
+    items = pd.DataFrame(
+        [
+            {"item_id": "old", "published_at": "2020-01-01"},
+            {"item_id": "new", "published_at": "2024-06-01"},
+        ]
+    )
+    ranked = rank_latest_items(items, "published_at", ["old", "new"], top_k=2)
+    assert [item for item, _rank, _score in ranked] == ["new", "old"]
+    expanded = expand_latest_ranking(ranked, ["u1", "u2"])
+    assert set(expanded[Columns.User]) == {"u1", "u2"}
+    assert list(expanded[expanded[Columns.User] == "u1"][Columns.Item]) == ["new", "old"]
+
+
+def test_blend_for_users_shared_latest_avoids_cartesian_frame():
+    config = _blending(curve="linear", saturate_at=1.0, popular_share=0.5)
+    popular = pd.DataFrame(
+        [
+            {
+                Columns.User: "u1",
+                Columns.Item: "pop1",
+                Columns.Rank: 1,
+                Columns.Score: 1.0,
+                "source": POPULAR_SOURCE,
+            }
+        ]
+    )
+    shared = [("lat1", 1, 2.0), ("lat2", 2, 1.0)]
+    out = blend_for_users(
+        personalized=pd.DataFrame(
+            columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, "source"]
+        ),
+        popular=popular,
+        latest=None,
+        counts={"u1": 0},
+        target_users=["u1"],
+        config=config,
+        top_k=3,
+        latest_available=True,
+        shared_latest=shared,
+    )
+    assert "lat1" in set(out[Columns.Item])

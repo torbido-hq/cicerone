@@ -66,12 +66,10 @@ def _configure_reader_item_filters(
     category_column: str | None,
     availability_filters: Sequence[str],
 ) -> None:
-    configure = getattr(reader, "configure_item_filters", None)
-    if callable(configure):
-        configure(
-            category_column=category_column,
-            availability_filters=availability_filters,
-        )
+    reader.configure_item_filters(
+        category_column=category_column,
+        availability_filters=availability_filters,
+    )
 
 
 def _available_item_ids(items: pd.DataFrame, availability_filters: Sequence[str]) -> frozenset[str] | None:
@@ -81,7 +79,12 @@ def _available_item_ids(items: pd.DataFrame, availability_filters: Sequence[str]
     for column in availability_filters:
         if column not in items.columns:
             continue
-        mask &= items[column]
+        # Snapshot columns are normalized to bool; coerce defensively for raw frames.
+        col = items[column]
+        if not pd.api.types.is_bool_dtype(col):
+            with pd.option_context("future.no_silent_downcasting", True):
+                col = col.fillna(False).infer_objects(copy=False).astype(bool)
+        mask &= col
     return frozenset(items.loc[mask, ITEM_COLUMN].tolist())
 
 
@@ -168,9 +171,9 @@ def create_app(
         version=SERVE_API_VERSION,
         description=SERVE_API_DESCRIPTION,
     )
-    dependencies = optional_bearer_deps(settings.serve_auth_token)
+    dependencies = optional_bearer_deps(settings.serve.auth_token)
     availability_filters = list(feature_config.item_availability_filters) if feature_config else []
-    category_column = settings.serve_category_column
+    category_column = settings.serve.category_column
     # Reader filters are configured by main() before create_app; the cache still
     # normalizes for test doubles / callers that skip that step.
     items_cache = _ItemsFilterCache(
@@ -235,7 +238,7 @@ def create_app(
         elif k is not None:
             top_k = k
         else:
-            top_k = settings.serve_default_k
+            top_k = settings.serve.default_k
         items, available_ids = items_cache.get()
         can_filter = bool(
             items is not None
@@ -272,12 +275,12 @@ def create_app(
             fallback=used_fallback,
             items=[
                 RecommendationItem(
-                    item_id=str(row[ITEM_COLUMN]),
-                    rank=int(row["rank"]),
-                    score=float(row["score"]),
-                    source=str(row["source"]),
+                    item_id=str(row.item_id),
+                    rank=int(row.rank),
+                    score=float(row.score),
+                    source=str(row.source),
                 )
-                for _, row in filtered.iterrows()
+                for row in filtered.itertuples(index=False)
             ],
         )
         if generated_at is not None:
@@ -330,10 +333,10 @@ def main() -> None:
     availability_filters = list(feature_config.item_availability_filters) if feature_config else []
     _configure_reader_item_filters(
         reader,
-        category_column=settings.serve_category_column,
+        category_column=settings.serve.category_column,
         availability_filters=availability_filters,
     )
-    _start_refresh_loop(reader, settings.serve_refresh_interval_seconds)
+    _start_refresh_loop(reader, settings.serve.refresh_interval_seconds)
 
     app = create_app(
         settings,
@@ -341,7 +344,7 @@ def main() -> None:
         manifest_reader=manifest_reader,
         feature_config=feature_config,
     )
-    uvicorn.run(app, host=settings.serve_host, port=settings.serve_port)
+    uvicorn.run(app, host=settings.serve.host, port=settings.serve.port)
 
 
 if __name__ == "__main__":

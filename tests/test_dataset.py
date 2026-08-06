@@ -94,7 +94,7 @@ def test_weighted_interactions_caps_repeated_events(feature_config):
     assert result.iloc[0][Columns.Weight] == pytest.approx(max_weight, rel=1e-3)
 
 
-def test_weighted_interactions_negative_reviews_floor_at_epsilon(feature_config):
+def test_weighted_interactions_negative_reviews_are_dropped(feature_config):
     now = pd.Timestamp.utcnow()
     events = pd.DataFrame(
         [
@@ -109,8 +109,36 @@ def test_weighted_interactions_negative_reviews_floor_at_epsilon(feature_config)
     )
     result = build_interactions(events, feature_config, half_life_days=90)
 
-    assert result.iloc[0][Columns.Weight] > 0
-    assert result.iloc[0][Columns.Weight] == pytest.approx(1e-3, rel=1e-6)
+    assert result.empty
+
+
+def test_weighted_interactions_caps_keep_most_recent(feature_config):
+    base = pd.Timestamp("2024-01-01", tz="UTC")
+    events = pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "event_type": "view",
+                "quantity": 1,
+                "occurred_at": base + pd.Timedelta(days=i),
+            }
+            for i in range(10)
+        ]
+    )
+    # Put oldest rows first so unsorted cumcount would keep the wrong set.
+    events = events.sort_values("occurred_at", ascending=True).reset_index(drop=True)
+    cap = feature_config.event_caps["view"]
+    result = build_interactions(events, feature_config, half_life_days=90)
+
+    newest = events.sort_values("occurred_at", ascending=False).head(cap)
+    oldest = events.sort_values("occurred_at", ascending=True).head(cap)
+    newest_weight = build_interactions(newest, feature_config, half_life_days=90).iloc[0][Columns.Weight]
+    oldest_weight = build_interactions(oldest, feature_config, half_life_days=90).iloc[0][Columns.Weight]
+    got = result.iloc[0][Columns.Weight]
+    assert got == pytest.approx(newest_weight, rel=1e-6)
+    assert abs(got - newest_weight) < abs(got - oldest_weight)
+    assert result.iloc[0][Columns.Datetime] == newest["occurred_at"].max()
 
 
 def test_explode_features_categorical_column():
