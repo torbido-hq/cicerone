@@ -9,25 +9,29 @@ For configuration and usage, see the main [README](../README.md).
 
 ```
 config.py            load & resolve config/cicerone.toml (structural config + ${ENV_VAR} secrets);
-                     also `make_settings(**overrides)` for tests / OpenAPI export
+                     nested Serve/Trigger/Dashboard/Automl settings (+ flat property aliases);
+                     `ConfigError` for invalid knobs; `make_settings(**overrides)` for tests / OpenAPI export
 feature_config.py     load config/features.toml (event weights, feature columns,
-                     eligibility/boost policy rules)
-policy.py             declarative eligibility masks, cohort grouping, score boosts
+                     eligibility/boost policy rules; `[[boost]]` / `[[boosts]]`)
+policy.py             declarative eligibility masks (documented fail-open/fail-closed matrix),
+                     cohort grouping, score boosts
 blending.py           per-user weighted mix of personalized/popular/latest (optional)
 io/
-  base.py             InputSource / OutputSink / RecommendationReader protocols;
+  base.py             InputSource / OutputSink / RecommendationReader protocols
+                      (including configure_item_filters);
                       BaseRecommendationReader with empty defaults for custom readers
-  factory.py          picks a concrete backend by IOSettings.kind ("dataset" | "db")
+  factory.py          kind→backend registry ("dataset" | "db")
   dataset_store.py     backend: parquet files (S3-compatible or local disk)
   db_store.py          backend: SQLAlchemy-backed database tables/queries
-  recommendation_reader.py  read-only lookup of precomputed recs for serve mode (no rectools/lightfm import)
+  recommendation_reader.py  read-only lookup of precomputed recs for serve mode (no rectools/lightfm import);
+                      dataset path indexes by user_id at refresh; shared cold-start selection rule
   manifest_reader.py    read-only lookup of job-run manifests for the dashboard (no rectools/lightfm import)
   options.py           shared "require_option"/build_s3_client helpers
 dataset.py            raw events/users/items -> weighted rectools Dataset (BuiltDataset;
-                     keeps users+items frames for policy evaluation)
+                     keeps users+items frames for policy evaluation; caps keep most recent N)
 model.py              BuiltDataset -> STRATEGIES registry (collaborative/item_based/
                      content_fallback/popular/latest) -> cohort-aware recommend ->
-                     combine/blend -> boosts
+                     combine/blend -> boosts (phased recommend_with_models)
 content_fallback.py   optional content-based cold-item strategy (one-hot item
                      features + cosine vs user history)
 artifact.py           optional versioned fitted-model bundle (save/load + recommend

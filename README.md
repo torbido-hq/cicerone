@@ -291,22 +291,25 @@ run at **batch recommend time** (serve mode stays a lookup of already
 policy-aware rows):
 
 - **Eligibility** (hard): drop items a user must not see. Ops:
-  `item_true`, `eq`, `user_in_item_list`, `item_in_user_list`. Users with
-  the same eligibility attributes are recommended together as a cohort so
-  each cohort gets a correct `items_to_recommend` set; that allowed-item
-  list is computed once per cohort and reused across every strategy.
-  A missing user attribute defaults to excluding all items under that rule
-  (`on_missing_user = "exclude"`); set `"allow"` to skip the rule for that
-  user. A configured `item_column` missing from `items` fails open (rule
-  skipped) and logs a one-time warning. If eligibility excludes every catalog
-  item for a cohort, that cohort gets an empty allowlist (no silent fallback
-  to the full catalog) and is skipped at recommend time.
+  `item_true`, `eq`, `user_in_item_list`, `item_in_user_list`. For
+  `item_true`, only explicit truthy values pass (`true` / `1` / `yes`,
+  non-zero numerics, bools) — string `"false"` / `"0"` are ineligible.
+  Users with the same eligibility attributes are recommended together as a
+  cohort so each cohort gets a correct `items_to_recommend` set; that
+  allowed-item list is computed once per cohort and reused across every
+  strategy. A missing user attribute defaults to excluding all items under
+  that rule (`on_missing_user = "exclude"`); set `"allow"` to skip the rule
+  for that user. A configured `item_column` missing from `items` fails open
+  (rule skipped) and logs a one-time warning. If eligibility excludes every
+  catalog item for a cohort, that cohort gets an empty allowlist (no silent
+  fallback to the full catalog) and is skipped at recommend time.
 - **Boosts** (soft): after strategies are combined, multiply scores by the product
   of boost factors, re-rank, then truncate to `top_k`. Kinds: `boolean`,
   `value_map`, `numeric`. Candidates are over-fetched (`boost_overfetch_factor`
   × `top_k`, default 3) before boosting so an item ranked just outside the
   raw top-K can still be promoted. Source labels stay strategy names — boosts
-  are a commercial overlay, not a new strategy.
+  are a commercial overlay, not a new strategy. TOML tables are `[[boost]]`
+  (canonical) or `[[boosts]]` (alias).
 
 Common ecommerce recipes (region/nationality shipping, paying producers,
 plan tiers, category allowlists) are annotated in

@@ -37,8 +37,9 @@ cart_add = 1.0
 view = 0.3
 
 # Caps how many times a given event_type counts per (user, item) pair before
-# time-decay is applied. Protects against noisy high-frequency signals like
-# repeated page views/bot traffic drowning out purchases/reviews.
+# time-decay is applied. Keeps the most recent N events (by occurred_at).
+# Protects against noisy high-frequency signals like repeated page views/bot
+# traffic drowning out purchases/reviews.
 [event_caps]
 view = 5
 
@@ -83,7 +84,9 @@ type = "categorical"
 # time. Serve mode stays a plain lookup of already-policy-aware rows.
 #
 # Eligibility ops:
-#   item_true          — item[item_column] is truthy (global; no user_column)
+#   item_true          — item[item_column] is explicitly truthy (bool / non-zero
+#                        numeric / "true"|"1"|"yes"); string "false"/"0" fail.
+#                        Global; no user_column.
 #   eq                 — user[user_column] == item[item_column]
 #   user_in_item_list  — user scalar is in item list column
 #   item_in_user_list  — item scalar is in user list column
@@ -99,10 +102,10 @@ type = "categorical"
 #   value_map — map categorical item values to factors via value_factors
 #   numeric   — score *= 1 + weight * min-max-normalized(item column)
 #
-# When any [[boost]] is present, candidates are over-fetched
+# When any [[boost]] (or alias [[boosts]]) is present, candidates are over-fetched
 # (boost_overfetch_factor × top_k, default 3) so a boosted item ranked just
 # outside the raw top-K can still be promoted. Tune boost_overfetch_factor
-# at the top of this file.
+# at the top of this file. Do not define both [[boost]] and [[boosts]].
 #
 # If eligibility excludes every catalog item for a cohort, that cohort gets
 # an empty allowlist (no silent fallback to the full catalog) and is skipped
