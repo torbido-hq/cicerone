@@ -140,8 +140,8 @@ def _index_recommendations_by_user(frame: pd.DataFrame) -> dict[str, pd.DataFram
 class _ItemFilterMixin:
     """Shared items-snapshot filter configuration for recommendation readers.
 
-    Subclasses must call ``_init_item_filter_state()`` from ``__init__`` before
-    any mixin method (or ``refresh`` that writes ``_items``) runs.
+    Call ``_init_item_filter_state()`` from subclass ``__init__`` before
+    ``refresh`` / mixin methods. Methods also lazy-init if that was skipped.
     """
 
     _items: pd.DataFrame | None
@@ -157,12 +157,17 @@ class _ItemFilterMixin:
         self._availability_filters = []
         self._lock = threading.RLock()
 
+    def _ensure_item_filter_state(self) -> None:
+        if getattr(self, "_lock", None) is None:
+            self._init_item_filter_state()
+
     def configure_item_filters(
         self,
         *,
         category_column: str | None = None,
         availability_filters: Sequence[str] = (),
     ) -> None:
+        self._ensure_item_filter_state()
         with self._lock:
             self._category_column = category_column
             self._availability_filters = list(availability_filters)
@@ -174,10 +179,12 @@ class _ItemFilterMixin:
             self._items_version += 1
 
     def items_version(self) -> int:
+        self._ensure_item_filter_state()
         with self._lock:
             return self._items_version
 
     def get_items(self) -> pd.DataFrame | None:
+        self._ensure_item_filter_state()
         with self._lock:
             return self._items
 

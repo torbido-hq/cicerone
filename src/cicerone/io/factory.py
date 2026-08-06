@@ -57,8 +57,8 @@ def build_output_sink(settings: IOSettings) -> OutputSink:
 
 
 def build_recommendation_reader(settings: IOSettings) -> RecommendationReader:
-    return _build_from_registry(settings, _RECOMMENDATION_READERS, role="output")
+    return _build_from_registry(settings, _RECOMMENDATION_READERS, role="recommendation")
 
 
 def build_manifest_reader(settings: IOSettings) -> ManifestReader:
-    return _build_from_registry(settings, _MANIFEST_READERS, role="output")
+    return _build_from_registry(settings, _MANIFEST_READERS, role="manifest")

@@ -59,7 +59,7 @@ def test_build_recommendation_reader_db():
 
 def test_build_recommendation_reader_unknown_kind_raises():
     settings = IOSettings(kind="carrier-pigeon", options={})
-    with pytest.raises(ValueError, match="Unknown output kind"):
+    with pytest.raises(ValueError, match="Unknown recommendation kind"):
         build_recommendation_reader(settings)
 
 
@@ -75,5 +75,5 @@ def test_build_manifest_reader_db():
 
 def test_build_manifest_reader_unknown_kind_raises():
     settings = IOSettings(kind="carrier-pigeon", options={})
-    with pytest.raises(ValueError, match="Unknown output kind"):
+    with pytest.raises(ValueError, match="Unknown manifest kind"):
         build_manifest_reader(settings)

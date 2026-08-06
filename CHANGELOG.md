@@ -34,7 +34,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `recommend_with_models` split into cohort → recommend → combine → boost
   phases; blending uses per-user indexes and optional shared latest rankings;
   serve dataset reader indexes recommendations by `user_id` at refresh time.
-- ProcessPool strategy fits initialize LightFM with `num_threads=1` inside
+- ProcessPool strategy now initializes LightFM with `num_threads=1` inside
   workers to avoid CPU oversubscription.
 
 ### Fixed

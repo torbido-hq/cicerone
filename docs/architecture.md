@@ -9,7 +9,7 @@ For configuration and usage, see the main [README](../README.md).
 
 ```
 config.py            load & resolve config/cicerone.toml (structural config + ${ENV_VAR} secrets);
-                     nested Serve/Trigger/Dashboard/Automl settings (+ flat property aliases);
+                     nested Serve/Trigger/Dashboard/AutoML settings (+ flat property aliases);
                      `ConfigError` for invalid knobs; `make_settings(**overrides)` for tests / OpenAPI export
 feature_config.py     load config/features.toml (event weights, feature columns,
                      eligibility/boost policy rules; `[[boost]]` / `[[boosts]]`)
