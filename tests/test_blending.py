@@ -418,7 +418,6 @@ def test_train_and_recommend_with_blending_end_to_end(feature_config: FeatureCon
         now - pd.Timedelta(days=10),
         now - pd.Timedelta(days=5),
     ]
-    # Many interactions for u1, none for cold user u4.
     events = pd.DataFrame(
         [
             {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},

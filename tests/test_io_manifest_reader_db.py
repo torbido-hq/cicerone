@@ -66,11 +66,7 @@ def test_db_reader_read_recent_missing_table_returns_empty_list():
 
 
 def test_db_reader_read_recent_propagates_real_connection_errors():
-    # A missing table (above) is "no runs recorded yet" and returns [], but
-    # a genuine connection/auth failure must propagate instead of also
-    # silently degrading to an empty history -- otherwise a real
-    # operational problem (bad credentials, unreachable host, ...) would
-    # look identical to "nothing's run yet" on the dashboard.
+    # Missing table → []; connection/auth failures must still raise.
     reader = DbManifestReader(
         {"database_url": "postgresql+psycopg://baduser:badpass@127.0.0.1:1/nonexistent"}
     )
@@ -80,9 +76,7 @@ def test_db_reader_read_recent_propagates_real_connection_errors():
 
 
 def test_db_reader_nan_columns_from_a_pre_upgrade_row_become_none():
-    # Simulates a manifest row written before "status"/"error" existed:
-    # to_sql will have left those columns NULL for older rows once the
-    # columns are added, which pandas' read_sql surfaces as NaN, not None.
+    # Pre-upgrade NULL status/error columns surface as NaN via read_sql.
     engine = create_engine(TEST_DATABASE_URL)
     with engine.begin() as conn:
         conn.execute(

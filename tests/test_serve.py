@@ -247,7 +247,6 @@ def test_recommendations_limit_larger_than_available():
     response = client.get("/recommendations/u1?limit=100", headers={"Authorization": "Bearer secret"})
 
     assert response.status_code == 200
-    # i3 filtered by availability; only i1/i2 remain.
     assert len(response.json()["items"]) == 2
 
 
@@ -476,7 +475,6 @@ def test_main_starts_serve_app_in_serve_mode(tmp_path, monkeypatch):
     monkeypatch.setattr(serve_module, "_start_refresh_loop", fake_start_refresh_loop)
     monkeypatch.setattr(serve_module, "uvicorn", type("_U", (), {"run": staticmethod(fake_uvicorn_run)}))
 
-    # Serve main loads recommendations on reader construction.
     pd.DataFrame(
         [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"}]
     ).to_parquet(tmp_path / "recommendations.parquet", index=False)

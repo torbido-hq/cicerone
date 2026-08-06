@@ -201,9 +201,7 @@ def test_load_settings_rejects_empty_models(tmp_path):
         """,
     )
 
-    # An explicit empty list is a configuration error caught as early as
-    # possible (at config load, not later inside train_and_recommend) so
-    # it surfaces clearly in job logs rather than as a downstream failure.
+    # Empty models list is a config-load error, not a late train failure.
     with pytest.raises(ConfigError, match="job.models is empty"):
         load_settings(config_path)
 
@@ -291,8 +289,7 @@ def test_load_settings_rejects_negative_model_weight(tmp_path):
         """,
     )
 
-    # Caught at config load (via the shared validate_model_weights), not
-    # only later inside train_and_recommend.
+    # Shared validate_model_weights runs at config load, not only at train time.
     with pytest.raises(ValueError, match="non-negative"):
         load_settings(config_path)
 
@@ -543,8 +540,7 @@ def test_load_settings_log_epoch_metrics(tmp_path):
 
 
 def test_load_settings_ignores_epoch_metrics_every_when_logging_disabled(tmp_path):
-    # epoch_metrics_* knobs are unused when logging is off — even invalid
-    # values must not fail config load (validated only when logging is on).
+    # Invalid epoch_metrics_* must not fail load when logging is off.
     config_path = _write_toml(
         tmp_path,
         """

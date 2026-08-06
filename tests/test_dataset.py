@@ -126,7 +126,7 @@ def test_weighted_interactions_caps_keep_most_recent(feature_config):
             for i in range(10)
         ]
     )
-    # Put oldest rows first so unsorted cumcount would keep the wrong set.
+    # Unsorted input: newest must win after sort.
     events = events.sort_values("occurred_at", ascending=True).reset_index(drop=True)
     cap = feature_config.event_caps["view"]
     result = build_interactions(events, feature_config, half_life_days=90)

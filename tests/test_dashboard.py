@@ -171,8 +171,7 @@ def test_main_raises_when_no_users_configured(tmp_path, monkeypatch):
 
 
 def test_require_basic_auth_used_directly_rejects_unknown_user():
-    # Exercises require_basic_auth's dependency function outside the FastAPI
-    # dependency-injection path, for the timing-safe "unknown username" branch.
+    # Call dependency directly for the timing-safe unknown-username branch.
     from fastapi import HTTPException
     from fastapi.security import HTTPBasicCredentials
 
@@ -201,9 +200,7 @@ def test_compute_staleness_invalid_cron_schedule_is_unknown_not_a_crash():
 
 
 def test_compute_staleness_accepts_a_datetime_generated_at():
-    # A db-backed manifest can come back with "generated_at" already
-    # deserialized as a datetime/Timestamp by pandas/the driver, not the
-    # ISO string a dataset-backed manifest always has.
+    # Db-backed manifests may yield datetime/Timestamp, not ISO strings.
     from cicerone.dashboard import _compute_staleness
 
     manifest = {"status": "success", "generated_at": datetime(2026, 7, 28, tzinfo=UTC)}
@@ -225,10 +222,7 @@ def test_compute_staleness_malformed_generated_at_is_unknown_not_a_crash():
 
 
 def test_compute_staleness_naive_generated_at_is_treated_as_utc_not_a_crash():
-    # A naive "generated_at" (an ISO string with no UTC offset, or a naive
-    # datetime from some db driver/row) must not be compared directly
-    # against the always-aware `now` -- that would raise TypeError instead
-    # of degrading to "unknown" like other bad-input cases here.
+    # Naive generated_at must not TypeError against aware `now` — degrade to unknown.
     from cicerone.dashboard import _compute_staleness
 
     manifest = {"status": "success", "generated_at": "2026-07-28T00:00:00"}

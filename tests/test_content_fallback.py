@@ -58,7 +58,7 @@ def test_feature_dict_handles_list_features_and_nans():
     model.fit(_DummyDataset())
     assert "i1" in model._item_ids
     assert "i2" in model._item_ids
-    # i3 has only null feature values → no tokens → skipped from matrix
+    # Null-only features → no tokens → skipped from matrix.
     assert "i3" not in model._item_ids
     # No "<NA>" / "nan" token pollution in the fitted vocabulary.
     assert model._vectorizer is not None
@@ -108,7 +108,7 @@ def test_recommend_skips_users_without_history_or_unmapped_history():
         interactions=interactions,
     )
     model.fit(_DummyDataset())
-    # u2 has no history; u3's history item is unknown to the feature matrix.
+    # u2: no history; u3: history item unknown to the feature matrix.
     model._user_history["u3"] = ["ghost_item"]
     recs = model.recommend(
         users=["u2", "u3"],

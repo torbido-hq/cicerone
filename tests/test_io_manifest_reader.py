@@ -85,9 +85,7 @@ def test_dataset_reader_s3_backend_missing_object_returns_none(s3_options):
 
 
 def test_dataset_reader_s3_backend_raises_on_hard_failure(s3_options):
-    # A real backend/configuration error (here: bucket doesn't exist) must
-    # propagate rather than being conflated with "no manifest yet" -- only
-    # a genuine not-found response should return None.
+    # Real backend errors must propagate; only not-found returns None.
     from botocore.exceptions import ClientError
 
     reader = DatasetManifestReader({**s3_options, "bucket": "no-such-bucket"})

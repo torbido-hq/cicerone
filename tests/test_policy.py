@@ -382,8 +382,7 @@ def test_group_users_by_cohort_with_missing_attributes():
             user_column="nationality",
         )
     ]
-    # u3 already has nationality=None in the fixture; share a cohort with a
-    # completely unknown user.
+    # u3 has nationality=None; share that cohort with an unknown user.
     cohorts = group_users_by_cohort(["u1", "u3", "ghost"], users, rules)
     missing_cohort = [ids for key, ids in cohorts if key == (("nationality", None),)][0]
     assert missing_cohort == ["u3", "ghost"]
@@ -402,7 +401,6 @@ def test_allowed_items_for_cohort_intersects_availability_and_region():
     )
     rules = resolve_eligibility(config)
     allowed = allowed_items_for_cohort(["u1"], _users(), _items(), rules, ["i1", "i2", "i3", "i4"])
-    # i1 published+stock and ships to IT; i3 OOS; i2 US-only; i4 unpublished
     assert allowed == ["i1"]
 
 
@@ -563,7 +561,6 @@ def test_user_attr_missing_columns_and_empty_mask_edges():
     ]
     # Empty / all-missing list cells → no matches (explode edges).
     assert not eligible_item_mask({"nationality": "IT"}, items, ships).any()
-    # All-empty lists → explode yields an empty series.
     only_empty = pd.DataFrame([{"item_id": "i1", "available_countries": []}])
     assert not eligible_item_mask({"nationality": "IT"}, only_empty, ships).any()
 
@@ -575,10 +572,8 @@ def test_user_attr_missing_columns_and_empty_mask_edges():
             user_column="allowed_categories",
         )
     ]
-    # Missing user column on a Series row → exclude.
     user_row = pd.Series({"user_id": "u1"})
     assert not eligible_item_mask(user_row, _items(), cats).any()
-    # Missing key on a dict → exclude.
     assert not eligible_item_mask({"user_id": "u1"}, _items(), cats).any()
 
 
