@@ -301,9 +301,10 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             logger.exception("Failed to refresh recommendation items snapshot; keeping previous data")
 
     def get_recommendations(self, user_id: str, k: int) -> pd.DataFrame:
-        cols = ", ".join(f'"{c}"' for c in RECOMMENDATION_COLUMNS)
+        # SELECT * so older/partial schemas without optional columns (e.g. source)
+        # still serve. Job output always includes RECOMMENDATION_COLUMNS.
         sql = text(
-            f'SELECT {cols} FROM "{self._table}" WHERE "{USER_COLUMN}" = :user_id '
+            f'SELECT * FROM "{self._table}" WHERE "{USER_COLUMN}" = :user_id '
             f'ORDER BY "{RANK_COLUMN}" ASC LIMIT :k'
         )
         return pd.read_sql(sql, self._engine, params={"user_id": user_id, "k": k})
@@ -323,11 +324,15 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             f'"{USER_COLUMN}" ASC '
             f"LIMIT 1"
         )
-        picked = pd.read_sql(
-            pick_sql,
-            self._engine,
-            params={"popular": POPULAR_SOURCE, "latest": LATEST_SOURCE},
-        )
+        try:
+            picked = pd.read_sql(
+                pick_sql,
+                self._engine,
+                params={"popular": POPULAR_SOURCE, "latest": LATEST_SOURCE},
+            )
+        except _MISSING_TABLE_ERRORS:
+            # No table, or schema without source — same as empty fallback candidates.
+            return sentinel
         if picked.empty:
             return sentinel
         sample_user = str(picked.iloc[0][USER_COLUMN])
