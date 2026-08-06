@@ -139,13 +139,24 @@ def _index_recommendations_by_user(frame: pd.DataFrame) -> dict[str, pd.DataFram
 
 
 class _ItemFilterMixin:
-    """Shared items-snapshot filter configuration for recommendation readers."""
+    """Shared items-snapshot filter configuration for recommendation readers.
+
+    Subclasses must call ``_init_item_filter_state()`` from ``__init__`` before
+    any mixin method (or ``refresh`` that writes ``_items``) runs.
+    """
 
     _items: pd.DataFrame | None
     _items_version: int
     _category_column: str | None
     _availability_filters: list[str]
     _lock: threading.RLock
+
+    def _init_item_filter_state(self) -> None:
+        self._items = None
+        self._items_version = 0
+        self._category_column = None
+        self._availability_filters = []
+        self._lock = threading.RLock()
 
     def configure_item_filters(
         self,
@@ -178,11 +189,7 @@ class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
         self._backend = options.get("storage_backend", "local")
         self._cache = pd.DataFrame(columns=[USER_COLUMN, RANK_COLUMN, SOURCE_COLUMN])
         self._by_user: dict[str, pd.DataFrame] = {}
-        self._items: pd.DataFrame | None = None
-        self._items_version = 0
-        self._category_column: str | None = None
-        self._availability_filters: list[str] = []
-        self._lock = threading.RLock()
+        self._init_item_filter_state()
         self._s3_client = None
         self.refresh()
 
@@ -270,11 +277,7 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             option="recommendation_items_table",
         )
         self._engine = create_engine(require_option(options, "database_url", "db"), pool_pre_ping=True)
-        self._items: pd.DataFrame | None = None
-        self._items_version = 0
-        self._category_column: str | None = None
-        self._availability_filters: list[str] = []
-        self._lock = threading.RLock()
+        self._init_item_filter_state()
         self.refresh()
 
     def refresh(self) -> None:

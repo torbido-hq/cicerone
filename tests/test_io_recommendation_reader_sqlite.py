@@ -48,6 +48,20 @@ def test_sqlite_db_reader_cold_start_prefers_popular(tmp_path):
     assert list(cold["user_id"]) == ["z_user"]
 
 
+def test_sqlite_db_reader_cold_start_missing_source_column(tmp_path):
+    url = _sqlite_url(tmp_path)
+    engine = create_engine(url)
+    pd.DataFrame([{"user_id": "z_user", "item_id": "i1", "rank": 1, "score": 0.9}]).to_sql(
+        "recommendations", engine, index=False, if_exists="replace"
+    )
+
+    reader = DbRecommendationReader({"database_url": url})
+    cold = reader.get_cold_start_fallback(k=1)
+
+    assert isinstance(cold, pd.DataFrame)
+    assert cold.empty
+
+
 def test_sqlite_db_reader_get_recommendations_and_items(tmp_path):
     url = _sqlite_url(tmp_path)
     sink = DatabaseOutputSink({"database_url": url})

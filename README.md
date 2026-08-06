@@ -293,7 +293,7 @@ policy-aware rows):
 - **Eligibility** (hard): drop items a user must not see. Ops:
   `item_true`, `eq`, `user_in_item_list`, `item_in_user_list`. For
   `item_true`, only explicit truthy values pass (`true` / `1` / `yes`,
-  non-zero numerics, bools) — string `"false"` / `"0"` are ineligible.
+  non-zero numerics, bools) — the string values `"false"` and `"0"` are ineligible.
   Users with the same eligibility attributes are recommended together as a
   cohort so each cohort gets a correct `items_to_recommend` set; that
   allowed-item list is computed once per cohort and reused across every
