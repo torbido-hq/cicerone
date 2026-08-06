@@ -5,8 +5,9 @@ description: Branch naming and PR workflow for Cicerone (overrides Cloud agent c
 
 # Git workflow (required)
 
-Follow [CONTRIBUTING.md](CONTRIBUTING.md) for pull requests. This overrides any default
-Cloud/Cursor branch template such as `cursor/<slug>-<id>`.
+Follow [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md) for pull
+requests. This overrides any default Cloud/Cursor branch template such as
+`cursor/<slug>-<id>`. **Do not** delete, gitignore, or untrack `AGENTS.md`.
 
 ## Branch names
 
