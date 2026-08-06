@@ -39,6 +39,32 @@ class BuiltDataset:
     users: pd.DataFrame | None = None
 
 
+@dataclass(frozen=True)
+class _NormalizedFeatures:
+    """Optional exploded feature frame + categorical names for Dataset.construct.
+
+    Both fields are None, or both are set (never mixed).
+    """
+
+    frame: pd.DataFrame | None
+    categorical: list[str] | None
+
+
+def _normalize_feature_df(df: pd.DataFrame | None) -> _NormalizedFeatures:
+    """Collapse empty/missing frames to None; otherwise read categorical names.
+
+    Expects ``None`` or an ``_explode_features`` result (``feature`` column present).
+    """
+    if df is None or df.empty:
+        return _NormalizedFeatures(frame=None, categorical=None)
+    if "feature" not in df.columns:
+        raise ValueError(
+            "_normalize_feature_df expected an _explode_features frame with a 'feature' column, "
+            f"got columns {list(df.columns)}"
+        )
+    return _NormalizedFeatures(frame=df, categorical=list(df["feature"].unique()))
+
+
 def _time_decay_multiplier(occurred_at: pd.Series, half_life_days: float) -> pd.Series:
     now = pd.Timestamp.now(tz="UTC")
     age_days = (now - occurred_at).dt.total_seconds() / 86_400
@@ -89,6 +115,7 @@ def build_interactions(events: pd.DataFrame, config: FeatureConfig, half_life_da
 def _explode_features(
     df: pd.DataFrame, id_column: str, rectools_id_column: str, columns: list[FeatureColumn]
 ) -> pd.DataFrame:
+    """Long-form features with columns ``{id, feature, value}`` (possibly empty)."""
     frames = []
     for feature in columns:
         if feature.column not in df.columns:
@@ -116,21 +143,18 @@ def build_dataset(
 ) -> BuiltDataset:
     interactions = build_interactions(events, config, half_life_days)
 
-    user_features_df = (
+    user_features = _normalize_feature_df(
         _explode_features(users, "user_id", Columns.User, config.user_features) if users is not None else None
     )
-    item_features_df = (
+    item_features = _normalize_feature_df(
         _explode_features(items, "item_id", Columns.Item, config.item_features) if items is not None else None
     )
 
-    has_user_features = user_features_df is not None and not user_features_df.empty
-    has_item_features = item_features_df is not None and not item_features_df.empty
-
     dataset = Dataset.construct(
         interactions_df=interactions,
-        user_features_df=user_features_df if has_user_features else None,
-        cat_user_features=list(user_features_df["feature"].unique()) if has_user_features else None,
-        item_features_df=item_features_df if has_item_features else None,
-        cat_item_features=list(item_features_df["feature"].unique()) if has_item_features else None,
+        user_features_df=user_features.frame,
+        cat_user_features=user_features.categorical,
+        item_features_df=item_features.frame,
+        cat_item_features=item_features.categorical,
     )
     return BuiltDataset(dataset=dataset, interactions=interactions, items=items, users=users)

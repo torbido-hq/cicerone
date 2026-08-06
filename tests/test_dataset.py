@@ -4,7 +4,13 @@ import pandas as pd
 import pytest
 from rectools import Columns
 
-from cicerone.dataset import _explode_features, _time_decay_multiplier, build_dataset, build_interactions
+from cicerone.dataset import (
+    _explode_features,
+    _normalize_feature_df,
+    _time_decay_multiplier,
+    build_dataset,
+    build_interactions,
+)
 from cicerone.feature_config import FeatureColumn
 
 
@@ -133,6 +139,17 @@ def test_explode_features_missing_column_is_skipped(caplog):
         df, "item_id", Columns.Item, [FeatureColumn(column="does_not_exist", type="categorical")]
     )
     assert result.empty
+
+
+def test_normalize_feature_df_requires_feature_column():
+    with pytest.raises(ValueError, match="feature"):
+        _normalize_feature_df(pd.DataFrame([{"value": 1}]))
+
+
+def test_normalize_feature_df_empty_is_none_pair():
+    normalized = _normalize_feature_df(pd.DataFrame(columns=["feature", "value"]))
+    assert normalized.frame is None
+    assert normalized.categorical is None
 
 
 def test_build_dataset_end_to_end(sample_events, sample_users, sample_items, feature_config):
