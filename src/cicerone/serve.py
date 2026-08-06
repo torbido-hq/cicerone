@@ -174,8 +174,7 @@ def create_app(
     dependencies = optional_bearer_deps(settings.serve.auth_token)
     availability_filters = list(feature_config.item_availability_filters) if feature_config else []
     category_column = settings.serve.category_column
-    # Reader filters are configured by main() before create_app; the cache still
-    # normalizes for test doubles / callers that skip that step.
+    # Normalize here too for callers that skip main()'s configure_item_filters.
     items_cache = _ItemsFilterCache(
         reader,
         category_column=category_column,

@@ -157,10 +157,7 @@ def run(triggered_by: str = "manual") -> None:
                 )
             )
 
-        # Persist in order: artifact → items snapshot → recommendations last
-        # (serve reads recommendations). Mark success only after all writes
-        # succeed so a failed manifest never pairs with orphaned recs without
-        # ``partial_outputs``.
+        # Artifact → snapshot → recommendations; success only after all writes.
         outputs_written = False
         try:
             if artifact_bytes is not None:
@@ -210,8 +207,7 @@ def run(triggered_by: str = "manual") -> None:
         except Exception:
             logger.exception("Failed to write manifest; original job error (if any) is preserved")
             if manifest.get("status") != "success":
-                # Avoid masking the original failure when manifest write also fails.
-                pass
+                pass  # keep original job failure
             else:
                 raise
         logger.info("Job finished: %s", json.dumps(manifest))

@@ -30,9 +30,7 @@ _MISSING = object()
 _warned_missing_columns: set[tuple[str, str, str]] = set()
 _warned_boost_without_items = False
 
-# Explicit truthy/falsy *string* tokens for ``item_true``.
-# Bool/numeric columns are handled separately in ``_coerce_item_true``.
-# Avoid ``astype(bool)``, which treats any non-empty string (including "false") as True.
+# ``item_true`` string tokens only; avoid ``astype(bool)`` ("false" → True).
 _ITEM_TRUE_STRINGS = frozenset({"1", "true", "True", "TRUE", "yes", "Yes", "YES"})
 _ITEM_FALSE_STRINGS = frozenset({"0", "false", "False", "FALSE", "no", "No", "NO", ""})
 

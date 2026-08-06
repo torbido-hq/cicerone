@@ -93,7 +93,7 @@ def build_interactions(events: pd.DataFrame, config: FeatureConfig, half_life_da
         mask = df["event_type"] == event_type
         if not mask.any():
             continue
-        # Keep the most recent ``cap`` events per (user, item); older rows drop.
+        # Keep most recent ``cap`` events per (user, item).
         capped = df.loc[mask].sort_values("occurred_at", ascending=False)
         rank = capped.groupby(["user_id", "item_id"]).cumcount()
         drop_idx = capped.index[rank >= cap]
@@ -105,8 +105,7 @@ def build_interactions(events: pd.DataFrame, config: FeatureConfig, half_life_da
     aggregated = df.groupby(["user_id", "item_id"], as_index=False).agg(
         weight=("weight", "sum"), datetime=("occurred_at", "max")
     )
-    # Drop non-positive aggregates: negative review sums must not become weak
-    # positive LightFM signals (rectools/LightFM still require weight > 0).
+    # Drop non-positive aggregates (rectools/LightFM require weight > 0).
     before = len(aggregated)
     aggregated = aggregated.loc[aggregated["weight"] > 0].reset_index(drop=True)
     dropped = before - len(aggregated)

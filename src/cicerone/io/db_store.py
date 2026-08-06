@@ -27,9 +27,7 @@ DEFAULT_ITEMS_TABLE = "items"
 DEFAULT_RECOMMENDATIONS_TABLE = "recommendations"
 DEFAULT_MANIFEST_TABLE = "recommendation_runs"
 DEFAULT_MODEL_ARTIFACT_TABLE = "model_artifacts"
-# Snapshot of items written next to recommendations for serve-time filters
-# (category / availability). Kept separate from DEFAULT_ITEMS_TABLE so a
-# shared input+output database cannot clobber the source items table.
+# Separate from DEFAULT_ITEMS_TABLE so shared in/out DBs do not clobber source items.
 DEFAULT_RECOMMENDATION_ITEMS_TABLE = "recommendation_items"
 
 DEFAULT_DB_TABLES = frozenset(

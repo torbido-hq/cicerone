@@ -37,11 +37,10 @@ RECOMMENDATION_COLUMNS: tuple[str, ...] = (
 )
 ITEMS_SNAPSHOT_FILENAME = "items_snapshot.parquet"
 
-# When __cold_start__ is missing: popular/latest only (never warm "blended").
+# Cold-start without __cold_start__: popular/latest only (never warm "blended"),
+# prefer popular → latest → min user_id. Missing-table: ProgrammingError / OperationalError.
 _FALLBACK_SOURCES = frozenset({POPULAR_SOURCE, LATEST_SOURCE})
-# Prefer popular_fallback, then latest, then lowest user_id (stable across backends).
 _FALLBACK_SOURCE_PRIORITY = {POPULAR_SOURCE: 0, LATEST_SOURCE: 1}
-# Missing-table errors (Postgres ProgrammingError; SQLite OperationalError).
 _MISSING_TABLE_ERRORS = (ProgrammingError, OperationalError)
 
 
@@ -300,12 +299,11 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
                 self._items = None
                 self._items_version += 1
         except Exception:
-            # Keep the previous snapshot on transient failures (matches dataset reader).
+            # Keep previous snapshot on transient failure.
             logger.exception("Failed to refresh recommendation items snapshot; keeping previous data")
 
     def get_recommendations(self, user_id: str, k: int) -> pd.DataFrame:
-        # SELECT * so older/partial schemas without optional columns (e.g. source)
-        # still serve. Job output always includes RECOMMENDATION_COLUMNS.
+        # SELECT *: older schemas may omit optional columns such as source.
         sql = text(
             f'SELECT * FROM "{self._table}" WHERE "{USER_COLUMN}" = :user_id '
             f'ORDER BY "{RANK_COLUMN}" ASC LIMIT :k'
@@ -316,8 +314,7 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
         sentinel = self.get_recommendations(COLD_START_USER_ID, k)
         if not sentinel.empty:
             return sentinel
-        # Pick one fallback user with the same priority rule as the in-memory path,
-        # then fetch that user's full top-k (avoids LIMIT k*20 under-fill).
+        # Same popular→latest→user_id priority as the in-memory path; full top-k fetch.
         pick_sql = text(
             f'SELECT "{USER_COLUMN}", "{SOURCE_COLUMN}" FROM "{self._table}" '
             f'WHERE "{SOURCE_COLUMN}" IN (:popular, :latest) '
@@ -334,7 +331,7 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
                 params={"popular": POPULAR_SOURCE, "latest": LATEST_SOURCE},
             )
         except _MISSING_TABLE_ERRORS:
-            # No table, or schema without source — same as empty fallback candidates.
+            # Missing table/source column → empty fallback candidates.
             return sentinel
         if picked.empty:
             return sentinel

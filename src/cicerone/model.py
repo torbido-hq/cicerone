@@ -70,8 +70,7 @@ SOURCE_COLUMN = "source"
 WEIGHT_COLUMN = "_weight"  # internal-only; dropped before returning to callers
 
 COLLABORATIVE_EPOCHS = 30  # LightFMWrapperModel.fit() runs these in one fit_partial
-# Inside ProcessPool workers keep LightFM single-threaded to avoid oversubscribing
-# CPUs (workers × BLAS threads). Sequential fits may use a few threads.
+# ProcessPool: LightFM num_threads=1 to avoid workers × BLAS oversubscription.
 _LIGHTFM_NUM_THREADS_SEQUENTIAL = 4
 _LIGHTFM_NUM_THREADS_PARALLEL = 1
 _EPOCH_METRICS_RNG = random.Random()
@@ -126,8 +125,7 @@ class Strategy:
     factory: Callable[[], RecommenderModel]
     personalized: bool
     source_label: str
-    # Item-KNN / content fallback need interaction history; LightFM hybrid can
-    # still score feature-only (dataset-known) users.
+    # Item-KNN / content_fallback need history; LightFM hybrid can score feature-only users.
     requires_interactions: bool = False
 
 
@@ -171,8 +169,7 @@ def _epoch_metric_fit_partial(model: object) -> Callable:
 
 
 def _epoch_metric_total_epochs(model: object) -> int:
-    # rectools LightFMWrapperModel stores constructor epochs= as n_epochs;
-    # accept epochs as a fallback for other wrappers.
+    # rectools stores epochs as n_epochs; accept epochs for other wrappers.
     for attr in ("n_epochs", "epochs"):
         value = getattr(model, attr, None)
         if value is not None:
@@ -537,8 +534,7 @@ def fit_strategies(
             if name not in models and not (STRATEGIES[name].personalized and not warm_users)
         )
     )
-    # Pre-slice in the parent so ProcessPool workers do not pickle the full
-    # interactions frame (None when epoch logging is off or collaborative isn't fitting).
+    # Pre-slice interactions in the parent to shrink ProcessPool pickles.
     epoch_interactions = (
         _interactions_for_epoch_metrics(dataset, built.interactions, epoch_metrics.max_users)
         if epoch_metrics is not None and "collaborative" in to_fit
@@ -549,8 +545,6 @@ def fit_strategies(
     content_interactions = built.interactions if "content_fallback" in to_fit else None
     if to_fit:
         if max_workers > 1 and len(to_fit) > 1:
-            # Dataset is still pickled per task; initializer sets LightFM thread
-            # count so workers do not oversubscribe CPUs (workers × BLAS threads).
             with ProcessPoolExecutor(
                 max_workers=min(max_workers, len(to_fit)),
                 initializer=_init_fit_worker,
@@ -855,7 +849,6 @@ def _combine_strategy_frames(
             popular = popular.copy()
             popular[SOURCE_COLUMN] = POPULAR_SOURCE
 
-        # Expand per-cohort latest rankings only for users in that cohort.
         latest_parts: list[pd.DataFrame] = []
         for cohort_key, cohort_users in cohort_plan.cohorts:
             ranked = strategy_frames.latest_by_cohort.get(cohort_key)
