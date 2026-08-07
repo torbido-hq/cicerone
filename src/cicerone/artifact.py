@@ -42,7 +42,7 @@ _PICKLE_SUFFIX = ".pkl"
 @dataclass(frozen=True)
 class ModelArtifact:
     schema_version: int
-    created_at: str
+    created_at: datetime
     models: tuple[str, ...]
     model_weights: dict[str, float] | None
     rrf_k: float | None
@@ -64,7 +64,7 @@ def build_artifact(
 ) -> ModelArtifact:
     return ModelArtifact(
         schema_version=ARTIFACT_SCHEMA_VERSION,
-        created_at=datetime.now(UTC).isoformat(),
+        created_at=datetime.now(UTC),
         models=tuple(models),
         model_weights=dict(model_weights) if model_weights is not None else None,
         rrf_k=rrf_k,
@@ -94,7 +94,7 @@ def dumps_artifact(artifact: ModelArtifact) -> bytes:
     """Serialize artifact (zip: meta + pickle envelope + model blobs)."""
     meta = {
         "schema_version": artifact.schema_version,
-        "created_at": artifact.created_at,
+        "created_at": artifact.created_at.isoformat(),
         "models": list(artifact.models),
         "model_weights": artifact.model_weights,
         "rrf_k": artifact.rrf_k,
@@ -157,7 +157,7 @@ def loads_artifact(payload: bytes) -> ModelArtifact:
                     raise ValueError(f"Artifact is missing serialized model for strategy {name!r}")
             return ModelArtifact(
                 schema_version=schema_version,
-                created_at=str(meta["created_at"]),
+                created_at=datetime.fromisoformat(str(meta["created_at"])),
                 models=tuple(meta["models"]),
                 model_weights=(
                     dict(meta["model_weights"]) if meta.get("model_weights") is not None else None

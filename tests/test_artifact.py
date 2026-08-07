@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime
 
 import pandas as pd
 import pytest
@@ -50,6 +51,8 @@ def test_artifact_round_trip_recommendations_match(
     loaded = load_artifact(path)
     assert loaded.schema_version == ARTIFACT_SCHEMA_VERSION
     assert list(loaded.models) == enabled
+    assert isinstance(loaded.created_at, datetime)
+    assert loaded.created_at == artifact.created_at
 
     reloaded = recommend_from_artifact(loaded, target_users, top_k=top_k)
     pd.testing.assert_frame_equal(
