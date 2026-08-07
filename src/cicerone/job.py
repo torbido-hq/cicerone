@@ -33,6 +33,7 @@ _MAX_ERROR_LENGTH = 500
 
 _MANIFEST_DEFAULTS: dict[str, Any] = {
     "triggered_by": None,
+    "lock_backend": None,
     "status": "failed",
     "error": None,
     "n_events": None,
@@ -66,6 +67,7 @@ def run(triggered_by: str = "manual") -> None:
 
     manifest = dict(_MANIFEST_DEFAULTS)
     manifest["triggered_by"] = triggered_by
+    manifest["lock_backend"] = settings.trigger.lock_backend
     manifest["top_k"] = settings.top_k
     manifest["automl_enabled"] = settings.automl.enabled
 

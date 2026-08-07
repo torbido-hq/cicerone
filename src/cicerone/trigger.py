@@ -18,6 +18,7 @@ from cicerone import job
 from cicerone.config import IOSettings, Settings
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.io.options import build_s3_client, object_key, require_option
+from cicerone.locks import InProcessLock, LockBackend
 
 logger = logging.getLogger(__name__)
 
@@ -29,10 +30,16 @@ class _RunFn(Protocol):
 class RunGuard:
     """At most one run at a time; triggers within debounce_seconds are ignored."""
 
-    def __init__(self, debounce_seconds: float, run_fn: _RunFn = job.run):
+    def __init__(
+        self,
+        debounce_seconds: float,
+        run_fn: _RunFn = job.run,
+        lock_backend: LockBackend | None = None,
+    ):
         self._debounce_seconds = debounce_seconds
         self._run_fn = run_fn
         self._lock = threading.Lock()
+        self._backend: LockBackend = lock_backend or InProcessLock()
         self._running = False
         self._last_started_at: float | None = None
 
@@ -44,6 +51,9 @@ class RunGuard:
                 return False
             if self._last_started_at is not None and now - self._last_started_at < self._debounce_seconds:
                 logger.info("Ignoring %s trigger: within debounce window", triggered_by)
+                return False
+            if not self._backend.acquire():
+                logger.info("Ignoring %s trigger: distributed lock held by another instance", triggered_by)
                 return False
             self._running = True
             self._last_started_at = now
@@ -57,8 +67,11 @@ class RunGuard:
         except Exception:
             logger.exception("Triggered run (%s) failed", triggered_by)
         finally:
-            with self._lock:
-                self._running = False
+            try:
+                self._backend.release()
+            finally:
+                with self._lock:
+                    self._running = False
 
 
 def _current_marker(input_settings: IOSettings) -> str | None:

@@ -13,6 +13,7 @@ from croniter import croniter
 
 from cicerone import job
 from cicerone.config import Settings, load_settings
+from cicerone.locks import LockBackend, build_lock_backend
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -36,6 +37,17 @@ def _cron_loop(schedule: str, run: Callable[[], None]) -> None:
             logger.exception("Scheduled run failed; will retry at the next scheduled time")
 
 
+def _cron_run_with_lock(backend: LockBackend) -> None:
+    """Synchronous cron path: skip this tick if another replica holds the lock."""
+    if not backend.acquire():
+        logger.info("Skipping cron run: distributed lock held by another instance")
+        return
+    try:
+        job.run(triggered_by="cron")
+    finally:
+        backend.release()
+
+
 def main() -> None:
     settings = load_settings()
     schedule = settings.cron_schedule
@@ -44,6 +56,9 @@ def main() -> None:
 
     if settings.trigger.enabled:
         _run_with_trigger(settings, schedule)
+    elif settings.trigger.lock_backend != "in_process":
+        backend = build_lock_backend(settings)
+        _cron_loop(schedule, lambda: _cron_run_with_lock(backend))
     else:
         _cron_loop(schedule, lambda: job.run(triggered_by="cron"))
 
@@ -51,7 +66,10 @@ def main() -> None:
 def _run_with_trigger(settings: Settings, schedule: str) -> None:
     from cicerone.trigger import RunGuard, create_app, poll_input_forever
 
-    guard = RunGuard(settings.trigger.debounce_seconds)
+    guard = RunGuard(
+        settings.trigger.debounce_seconds,
+        lock_backend=build_lock_backend(settings),
+    )
     threading.Thread(target=_cron_loop, args=(schedule, lambda: guard.trigger("cron")), daemon=True).start()
 
     if settings.trigger.poll_input_bucket:

@@ -34,6 +34,7 @@ Mode = Literal["batch", "serve"]
 StrategyName = str
 
 MODES: tuple[Mode, ...] = ("batch", "serve")
+LOCK_BACKENDS: tuple[str, ...] = ("in_process", "postgres", "redis")
 
 
 class ConfigError(ValueError):

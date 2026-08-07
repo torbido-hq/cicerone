@@ -73,6 +73,52 @@ def test_main_runs_job_each_iteration_and_survives_failures(tmp_path, monkeypatc
     assert calls["run"] == 1
 
 
+def test_main_with_distributed_lock_uses_locked_cron_path(tmp_path, monkeypatch):
+    config_path = tmp_path / "cicerone.toml"
+    config_path.write_text(
+        f"""
+        [job]
+        cron_schedule = "* * * * *"
+
+        [job.trigger]
+        lock_backend = "redis"
+        redis_url = "redis://localhost:6379/0"
+
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "{tmp_path}"
+
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "{tmp_path}"
+        """
+    )
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", str(config_path))
+
+    calls = {"locked": 0, "sleep": 0}
+
+    def fake_sleep(_seconds):
+        calls["sleep"] += 1
+        if calls["sleep"] >= 2:
+            raise SystemExit("stop")
+
+    def fake_locked():
+        calls["locked"] += 1
+
+    monkeypatch.setattr(scheduler.time, "sleep", fake_sleep)
+    monkeypatch.setattr(scheduler, "build_lock_backend", lambda _settings: object())
+    monkeypatch.setattr(scheduler, "_cron_run_with_lock", lambda _backend: fake_locked())
+
+    with pytest.raises(SystemExit):
+        scheduler.main()
+
+    assert calls["locked"] == 1
+
+
 def test_main_with_trigger_enabled_starts_cron_thread_and_serves_http(tmp_path, monkeypatch):
     config_path = tmp_path / "cicerone.toml"
     config_path.write_text(

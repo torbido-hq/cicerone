@@ -47,6 +47,9 @@ class TriggerSettings:
     debounce_seconds: float = 60.0
     poll_input_bucket: bool = False
     poll_interval_seconds: float = 300.0
+    lock_backend: str = "in_process"
+    postgres_url: str | None = None
+    redis_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -149,6 +152,18 @@ class Settings:
     @property
     def trigger_poll_interval_seconds(self) -> float:
         return self.trigger.poll_interval_seconds
+
+    @property
+    def trigger_lock_backend(self) -> str:
+        return self.trigger.lock_backend
+
+    @property
+    def trigger_postgres_url(self) -> str | None:
+        return self.trigger.postgres_url
+
+    @property
+    def trigger_redis_url(self) -> str | None:
+        return self.trigger.redis_url
 
     @property
     def dashboard_enabled(self) -> bool:

@@ -56,6 +56,7 @@ serve_client.py        thin stdlib HTTP client for the serve read API
 export_serve_openapi.py  CLI to dump FastAPI's OpenAPI JSON (docs/openapi/…)
 trigger.py             event-driven retrain trigger: webhook + optional input-bucket poll,
                        debounce guard (RunGuard) shared with the cron loop
+locks.py               optional RunGuard lock backends (in_process / postgres / redis)
 http_auth.py           shared bearer-token (serve.py/trigger.py) and HTTP Basic Auth
                        (dashboard.py) dependencies
 dashboard.py            standalone FastAPI dashboard: job status/history, own container/port
@@ -270,10 +271,14 @@ rectools/lightfm/implicit needed in that process or its request path):
   (R2, MinIO) — polling avoids adding that infra while still being
   event-driven from the operator's point of view.
 - Every successful run's manifest (written by `job.run()`) records
-  `triggered_by` (`"cron"`, `"webhook"`, or `"s3-poll"`).
-- No new required infra: debounce state is a single in-process
-  `threading.Lock`, which assumes one running instance of the scheduler
-  process (the confirmed deployment topology for this repo).
+  `triggered_by` (`"cron"`, `"webhook"`, or `"s3-poll"`) and
+  `lock_backend`.
+- Debounce exclusion defaults to an in-process `threading.Lock`
+  (`lock_backend = "in_process"`). Optional `postgres` /
+  `redis` backends (see `cicerone.locks`) coordinate across scheduler
+  replicas; clients are imported only when selected. Prefer `postgres`
+  when a DB URL is available; use `redis` (optional
+  `requirements-redis.txt`) for dataset/S3-only HA.
 
 ## Dashboard
 

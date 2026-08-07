@@ -1054,6 +1054,9 @@ def test_load_settings_trigger_enabled_with_auth_token(tmp_path, monkeypatch):
     assert settings.trigger_debounce_seconds == 30.0
     assert settings.trigger_poll_input_bucket is True
     assert settings.trigger_poll_interval_seconds == 120.0
+    assert settings.trigger_lock_backend == "in_process"
+    assert settings.trigger_postgres_url is None
+    assert settings.trigger_redis_url is None
 
 
 def test_load_settings_trigger_defaults_when_disabled(tmp_path):
@@ -1067,3 +1070,105 @@ def test_load_settings_trigger_defaults_when_disabled(tmp_path):
     assert settings.trigger_debounce_seconds == 60.0
     assert settings.trigger_poll_input_bucket is False
     assert settings.trigger_poll_interval_seconds == 300.0
+    assert settings.trigger_lock_backend == "in_process"
+
+
+def test_load_settings_lock_backend_rejects_unknown(tmp_path):
+    config_path = write_toml(
+        tmp_path,
+        f"""
+        [job]
+        [job.trigger]
+        lock_backend = "zookeeper"
+        {_base_io_toml()}
+        """,
+    )
+    with pytest.raises(ConfigError, match="job.trigger.lock_backend must be one of"):
+        load_settings(config_path)
+
+
+def test_load_settings_postgres_lock_requires_database_url(tmp_path):
+    config_path = write_toml(
+        tmp_path,
+        f"""
+        [job]
+        [job.trigger]
+        lock_backend = "postgres"
+        {_base_io_toml()}
+        """,
+    )
+    with pytest.raises(ConfigError, match="needs a database URL"):
+        load_settings(config_path)
+
+
+def test_load_settings_postgres_lock_accepts_explicit_url_with_dataset_output(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCK_PG", "postgresql+psycopg://u:p@h/db")
+    config_path = write_toml(
+        tmp_path,
+        f"""
+        [job]
+        [job.trigger]
+        lock_backend = "postgres"
+        postgres_url = "${{LOCK_PG}}"
+        {_base_io_toml()}
+        """,
+    )
+    settings = load_settings(config_path)
+    assert settings.trigger_lock_backend == "postgres"
+    assert settings.trigger_postgres_url == "postgresql+psycopg://u:p@h/db"
+
+
+def test_load_settings_postgres_lock_accepts_output_db(tmp_path):
+    config_path = write_toml(
+        tmp_path,
+        """
+        [job]
+        [job.trigger]
+        lock_backend = "postgres"
+
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+
+        [output]
+        kind = "db"
+        [output.options]
+        database_url = "postgresql+psycopg://u:p@h/db"
+        """,
+    )
+    settings = load_settings(config_path)
+    assert settings.trigger_lock_backend == "postgres"
+    assert settings.output.kind == "db"
+
+
+def test_load_settings_redis_lock_requires_redis_url(tmp_path):
+    config_path = write_toml(
+        tmp_path,
+        f"""
+        [job]
+        [job.trigger]
+        lock_backend = "redis"
+        {_base_io_toml()}
+        """,
+    )
+    with pytest.raises(ConfigError, match="job.trigger.redis_url is required"):
+        load_settings(config_path)
+
+
+def test_load_settings_redis_lock_with_url(tmp_path, monkeypatch):
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+    config_path = write_toml(
+        tmp_path,
+        f"""
+        [job]
+        [job.trigger]
+        lock_backend = "redis"
+        redis_url = "${{REDIS_URL}}"
+        {_base_io_toml()}
+        """,
+    )
+    settings = load_settings(config_path)
+    assert settings.trigger_lock_backend == "redis"
+    assert settings.trigger_redis_url == "redis://localhost:6379/0"
