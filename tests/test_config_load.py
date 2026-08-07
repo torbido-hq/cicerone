@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 import pytest
+from support.toml_config import write_toml
 
 from cicerone.config import (
     ConfigError,
@@ -10,18 +11,11 @@ from cicerone.config import (
     load_settings,
     resolve_epoch_metrics,
     resolve_max_workers,
-    validate_model_weights,
 )
 
 
-def _write_toml(tmp_path, content: str) -> str:
-    path = tmp_path / "cicerone.toml"
-    path.write_text(content)
-    return str(path)
-
-
 def test_load_settings_dataset_backends(tmp_path):
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         """
         [job]
@@ -73,7 +67,7 @@ def test_load_settings_dataset_backends(tmp_path):
 
 
 def test_load_settings_with_explicit_models(tmp_path):
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         """
         [job]
@@ -99,7 +93,7 @@ def test_load_settings_with_explicit_models(tmp_path):
 
 
 def test_load_settings_item_based_and_content_fallback(tmp_path):
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         """
         [job]
@@ -131,7 +125,7 @@ def test_load_settings_item_based_and_content_fallback(tmp_path):
 
 
 def test_load_settings_rejects_invalid_item_based_k_neighbors(tmp_path):
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         """
         [job]
@@ -157,7 +151,7 @@ def test_load_settings_rejects_invalid_item_based_k_neighbors(tmp_path):
 
 
 def test_load_settings_rejects_unknown_model(tmp_path):
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         """
         [job]
@@ -182,7 +176,7 @@ def test_load_settings_rejects_unknown_model(tmp_path):
 
 
 def test_load_settings_rejects_empty_models(tmp_path):
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         """
         [job]
@@ -208,7 +202,7 @@ def test_load_settings_rejects_empty_models(tmp_path):
 
 
 def test_load_settings_with_explicit_model_weights(tmp_path):
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         """
         [job]
@@ -240,7 +234,7 @@ def test_load_settings_with_explicit_model_weights(tmp_path):
 
 
 def test_load_settings_rejects_model_weights_not_in_models(tmp_path):
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         """
         [job]
@@ -267,7 +261,7 @@ def test_load_settings_rejects_model_weights_not_in_models(tmp_path):
 
 
 def test_load_settings_rejects_negative_model_weight(tmp_path):
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         """
         [job]
@@ -295,16 +289,8 @@ def test_load_settings_rejects_negative_model_weight(tmp_path):
         load_settings(config_path)
 
 
-def test_validate_model_weights_rejects_negative_and_allows_non_negative():
-    validate_model_weights(None)
-    validate_model_weights({})
-    validate_model_weights({"popular": 0.0, "latest": 1.5})
-    with pytest.raises(ConfigError, match="non-negative"):
-        validate_model_weights({"popular": -0.1})
-
-
 def test_load_settings_rejects_non_positive_rrf_k(tmp_path):
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         """
         [job]
@@ -333,7 +319,7 @@ def test_load_settings_rejects_non_positive_rrf_k(tmp_path):
 
 
 def test_load_settings_with_explicit_automl(tmp_path):
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         """
         [job]
@@ -380,7 +366,7 @@ def test_load_settings_with_explicit_automl(tmp_path):
 
 
 def test_load_settings_defaults_when_job_section_missing(tmp_path):
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         """
         [input]
@@ -417,7 +403,7 @@ def test_load_settings_defaults_when_job_section_missing(tmp_path):
 
 
 def test_load_settings_save_model_artifact(tmp_path):
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         """
         [job]
@@ -444,7 +430,7 @@ def test_load_settings_save_model_artifact(tmp_path):
 def test_load_settings_max_workers_and_rejects_non_positive(tmp_path):
     good_dir = tmp_path / "good"
     good_dir.mkdir()
-    good = _write_toml(
+    good = write_toml(
         good_dir,
         """
         [job]
@@ -465,7 +451,7 @@ def test_load_settings_max_workers_and_rejects_non_positive(tmp_path):
 
     omitted_dir = tmp_path / "omitted"
     omitted_dir.mkdir()
-    omitted = _write_toml(
+    omitted = write_toml(
         omitted_dir,
         """
         [job]
@@ -488,7 +474,7 @@ def test_load_settings_max_workers_and_rejects_non_positive(tmp_path):
 
     bad_dir = tmp_path / "bad"
     bad_dir.mkdir()
-    bad = _write_toml(
+    bad = write_toml(
         bad_dir,
         """
         [job]
@@ -510,7 +496,7 @@ def test_load_settings_max_workers_and_rejects_non_positive(tmp_path):
 
 
 def test_load_settings_log_epoch_metrics(tmp_path):
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         """
         [job]
@@ -550,7 +536,7 @@ def test_load_settings_log_epoch_metrics(tmp_path):
 
 def test_load_settings_ignores_epoch_metrics_every_when_logging_disabled(tmp_path):
     # Invalid epoch_metrics_* must not fail load when logging is off.
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         """
         [job]
@@ -573,7 +559,7 @@ def test_load_settings_ignores_epoch_metrics_every_when_logging_disabled(tmp_pat
 
 
 def test_load_settings_rejects_non_positive_epoch_metrics_every_when_enabled(tmp_path):
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         """
         [job]
@@ -595,21 +581,8 @@ def test_load_settings_rejects_non_positive_epoch_metrics_every_when_enabled(tmp
         load_settings(config_path)
 
 
-def test_resolve_epoch_metrics_rejects_non_positive_when_enabled():
-    with pytest.raises(ConfigError, match="epoch_metrics_every"):
-        resolve_epoch_metrics(log_epoch_metrics=True, every=0)
-
-
-def test_resolve_epoch_metrics_rejects_fraction_outside_unit_interval():
-    with pytest.raises(ConfigError, match="epoch_metrics_regression_drop"):
-        resolve_epoch_metrics(log_epoch_metrics=True, regression_drop=1.5)
-    with pytest.raises(ConfigError, match="epoch_metrics_plateau_eps"):
-        resolve_epoch_metrics(log_epoch_metrics=True, plateau_eps=0)
-    assert resolve_epoch_metrics(log_epoch_metrics=True, regression_drop=1.0).regression_drop == 1.0
-
-
 def test_load_settings_rejects_non_positive_half_life_days(tmp_path):
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         """
         [job]
@@ -631,7 +604,7 @@ def test_load_settings_rejects_non_positive_half_life_days(tmp_path):
 
 
 def test_load_settings_db_backend_with_defaults(tmp_path):
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         """
         [input]
@@ -657,7 +630,7 @@ def test_load_settings_db_backend_with_defaults(tmp_path):
 
 def test_load_settings_resolves_env_placeholders(tmp_path, monkeypatch):
     monkeypatch.setenv("MY_SECRET_BUCKET", "resolved-bucket")
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         """
         [input]
@@ -681,7 +654,7 @@ def test_load_settings_resolves_env_placeholders(tmp_path, monkeypatch):
 
 def test_load_settings_resolves_partial_env_placeholders(tmp_path, monkeypatch):
     monkeypatch.setenv("ENV_NAME", "staging")
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         """
         [input]
@@ -706,7 +679,7 @@ def test_load_settings_resolves_partial_env_placeholders(tmp_path, monkeypatch):
 
 def test_load_settings_missing_env_placeholder_raises(tmp_path, monkeypatch):
     monkeypatch.delenv("SOME_UNSET_VAR", raising=False)
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         """
         [input]
@@ -729,7 +702,7 @@ def test_load_settings_missing_env_placeholder_raises(tmp_path, monkeypatch):
 
 def test_load_settings_missing_env_placeholder_error_names_config_path(tmp_path, monkeypatch):
     monkeypatch.delenv("SOME_UNSET_VAR", raising=False)
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         """
         [input]
@@ -753,7 +726,7 @@ def test_load_settings_missing_env_placeholder_error_names_config_path(tmp_path,
 def test_load_settings_resolves_multiple_placeholders_in_one_string(tmp_path, monkeypatch):
     monkeypatch.setenv("ENV_NAME", "staging")
     monkeypatch.setenv("BUCKET_NAME", "my-bucket")
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         """
         [input]
@@ -779,7 +752,7 @@ def test_load_settings_resolves_multiple_placeholders_in_one_string(tmp_path, mo
 def test_load_settings_resolves_env_placeholders_in_nested_dicts(tmp_path, monkeypatch):
     monkeypatch.setenv("NESTED_KEY", "resolved-key")
     monkeypatch.setenv("NESTED_SECRET", "resolved-secret")
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         """
         [input]
@@ -805,7 +778,7 @@ def test_load_settings_resolves_env_placeholders_in_nested_dicts(tmp_path, monke
 
 
 def test_load_settings_escaped_placeholder_is_left_literal(tmp_path):
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         """
         [input]
@@ -830,7 +803,7 @@ def test_load_settings_escaped_placeholder_is_left_literal(tmp_path):
 
 def test_load_settings_resolves_env_placeholders_in_lists(tmp_path, monkeypatch):
     monkeypatch.setenv("MY_TAG", "resolved-tag")
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         """
         [input]
@@ -854,7 +827,7 @@ def test_load_settings_resolves_env_placeholders_in_lists(tmp_path, monkeypatch)
 
 
 def test_load_settings_non_string_option_values_pass_through(tmp_path):
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         """
         [input]
@@ -894,7 +867,7 @@ def test_load_settings_falls_back_to_default_path_when_env_var_is_empty(tmp_path
 
 
 def test_load_settings_missing_kind_raises(tmp_path):
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         """
         [input]
@@ -915,7 +888,7 @@ def test_load_settings_missing_kind_raises(tmp_path):
 
 
 def test_load_settings_missing_section_raises(tmp_path):
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         """
         [output]
@@ -931,7 +904,7 @@ def test_load_settings_missing_section_raises(tmp_path):
 
 
 def test_load_settings_normalizes_kind_case(tmp_path):
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         """
         [input]
@@ -971,7 +944,7 @@ def _base_io_toml() -> str:
 
 
 def test_load_settings_mode_defaults_to_batch(tmp_path):
-    config_path = _write_toml(tmp_path, _base_io_toml())
+    config_path = write_toml(tmp_path, _base_io_toml())
 
     settings = load_settings(config_path)
 
@@ -981,14 +954,14 @@ def test_load_settings_mode_defaults_to_batch(tmp_path):
 
 
 def test_load_settings_rejects_unknown_mode(tmp_path):
-    config_path = _write_toml(tmp_path, f'[job]\nmode = "not_a_mode"\n{_base_io_toml()}')
+    config_path = write_toml(tmp_path, f'[job]\nmode = "not_a_mode"\n{_base_io_toml()}')
 
     with pytest.raises(ConfigError, match="job.mode must be one of"):
         load_settings(config_path)
 
 
 def test_load_settings_serve_mode_requires_auth_token(tmp_path):
-    config_path = _write_toml(tmp_path, f'[job]\nmode = "serve"\n{_base_io_toml()}')
+    config_path = write_toml(tmp_path, f'[job]\nmode = "serve"\n{_base_io_toml()}')
 
     with pytest.raises(ConfigError, match="serve.auth_token is required"):
         load_settings(config_path)
@@ -996,7 +969,7 @@ def test_load_settings_serve_mode_requires_auth_token(tmp_path):
 
 def test_load_settings_serve_mode_with_auth_token(tmp_path, monkeypatch):
     monkeypatch.setenv("MY_SERVE_TOKEN", "secret-token")
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         f"""
         [job]
@@ -1025,7 +998,7 @@ def test_load_settings_serve_mode_with_auth_token(tmp_path, monkeypatch):
 
 def test_load_settings_serve_defaults(tmp_path, monkeypatch):
     monkeypatch.setenv("MY_SERVE_TOKEN", "secret-token")
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         f"""
         [job]
@@ -1047,7 +1020,7 @@ def test_load_settings_serve_defaults(tmp_path, monkeypatch):
 
 
 def test_load_settings_trigger_enabled_requires_auth_token(tmp_path):
-    config_path = _write_toml(tmp_path, f"[job]\n[job.trigger]\nenabled = true\n{_base_io_toml()}")
+    config_path = write_toml(tmp_path, f"[job]\n[job.trigger]\nenabled = true\n{_base_io_toml()}")
 
     with pytest.raises(ConfigError, match="job.trigger.auth_token is required"):
         load_settings(config_path)
@@ -1055,7 +1028,7 @@ def test_load_settings_trigger_enabled_requires_auth_token(tmp_path):
 
 def test_load_settings_trigger_enabled_with_auth_token(tmp_path, monkeypatch):
     monkeypatch.setenv("MY_TRIGGER_TOKEN", "trigger-secret")
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         f"""
         [job]
@@ -1084,7 +1057,7 @@ def test_load_settings_trigger_enabled_with_auth_token(tmp_path, monkeypatch):
 
 
 def test_load_settings_trigger_defaults_when_disabled(tmp_path):
-    config_path = _write_toml(tmp_path, _base_io_toml())
+    config_path = write_toml(tmp_path, _base_io_toml())
 
     settings = load_settings(config_path)
 

@@ -152,15 +152,29 @@ Available strategies:
 
 - `collaborative`: `LightFMWrapperModel` — hybrid CF using user/item
   features for cold-start. Personalized, warm users only.
-- `item_based`: `ImplicitItemKNNWrapperModel` — item-item similarity
-  (`[job.item_based].k_neighbors`, default 20). Personalized; users with
-  interactions only (feature-only warm users stay on collaborative/popular).
+- `item_based`: `ImplicitItemKNNWrapperModel` — item-item similarity.
+  Neighbor count is RecTools `model.item_based.model.K` (default 20);
+  legacy `[job.item_based].k_neighbors` still works. Personalized; users
+  with interactions only (feature-only warm users stay on
+  collaborative/popular).
 - `content_fallback`: zero-interaction items via categorical feature
   similarity (opt-in: `[job.content_fallback].enabled = true`).
 - `popular`: `PopularModel` — global popularity. Non-personalized, backfills
-  every warm user without enough personalized results.
+  every warm user without enough personalized results. Optional
+  `[model.popular]`.
 - `latest`: `PopularModel` restricted to the last two weeks of interactions —
   trending items. Non-personalized, same backfill role as `popular`.
+  Optional `[model.latest]` (`period = { days = 14 }`).
+
+Optional RecTools hyperparameters (omit to keep built-in defaults):
+
+```toml
+[model.item_based]
+cls = "ImplicitItemKNNWrapperModel"
+[model.item_based.model]
+cls = "TFIDFRecommender"
+K = 20
+```
 
 ## 6. Weighted reciprocal rank fusion
 
@@ -324,7 +338,7 @@ save_model_artifact = true
 Re-run the job from [step 3](#3-run-the-job-once). Alongside
 `recommendations.parquet` / `manifest.json` you should now see
 `model.artifact` in `data/output/`. The manifest gains
-`artifact_written = true` and `artifact_schema_version = 2`.
+`artifact_written = true` and `artifact_schema_version = 3`.
 
 Load it and recommend without calling `job.run` again:
 

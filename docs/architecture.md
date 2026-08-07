@@ -8,7 +8,8 @@ For configuration and usage, see the main [README](../README.md).
 ## Module overview
 
 ```
-config.py            load & resolve config/cicerone.toml (structural config + ${ENV_VAR} secrets);
+config/               load & resolve config/cicerone.toml (structural config + ${ENV_VAR} secrets);
+                     package: constants / settings / validation / load;
                      nested Serve/Trigger/Dashboard/AutoML settings (+ flat property aliases);
                      `ConfigError` for invalid knobs; `make_settings(**overrides)` for tests / OpenAPI export
 feature_config.py     load config/features.toml (event weights, feature columns,
@@ -29,13 +30,21 @@ io/
   options.py           shared "require_option"/build_s3_client helpers
 dataset.py            raw events/users/items -> weighted rectools Dataset (BuiltDataset;
                      keeps users+items frames for policy evaluation; caps keep most recent N)
-model.py              BuiltDataset -> STRATEGIES registry (collaborative/item_based/
-                     content_fallback/popular/latest) -> cohort-aware recommend ->
-                     combine/blend -> boosts (phased recommend_with_models)
+model/                BuiltDataset -> STRATEGIES registry -> fit / recommend / combine
+  strategies.py       RecommenderModel protocol, Strategy, STRATEGIES, build_strategy_model
+  fit.py              fit_strategies, plan_model_run, ProcessPool workers
+  recommend.py        recommend_with_models, cohort plan, train_and_recommend
+  combine.py          priority + weighted RRF combiners
+  epoch_metrics.py    optional LightFM per-epoch Precision/Recall logging
+  constants.py        RRF_K, DEFAULT_MODELS, source column names
+model_config.py       default + TOML [model.*] RecTools `model_from_config`
+                     configs; legacy `job.item_based.k_neighbors` → `model.K`
+                     (no ML imports — safe for serve)
 content_fallback.py   optional content-based cold-item strategy (one-hot item
                      features + cosine vs user history)
-artifact.py           optional versioned fitted-model bundle (save/load + recommend
-                     without re-fitting); written by the batch job when enabled
+artifact.py           optional versioned fitted-model bundle (schema **v3**:
+                     RecTools `save`/`load_model` for library models + pickle
+                     envelope; `content_fallback` still pickle)
 automl.py            optional: backtests candidate models/weights/rrf_k configs over
                      time-based folds of event history and picks the best one
 job.py                orchestrates one end-to-end run (source -> dataset -> model -> sink)
@@ -65,6 +74,28 @@ CONTRIBUTING.md). CI uses a separate throwaway instance via
 exercises the full job → recommendations/manifest/artifact →
 serve/dashboard reader path against that real Postgres (resetting only
 `cicerone.io.db_store.DEFAULT_DB_TABLES`).
+
+Public imports stay stable after the package splits:
+`from cicerone.model import …` and `from cicerone.config import …`.
+Cross-module helpers are public; `_` is for true module-locals only.
+
+## Tests
+
+Test modules mirror the packages (same pattern as `tests/test_io_*.py`):
+
+```
+tests/test_config_load.py          TOML load / Settings / env placeholders
+tests/test_config_validation.py    weights, epoch metrics, max_workers helpers
+tests/test_model_strategies.py     STRATEGIES registry / RecommenderModel checks
+tests/test_model_fit.py            fit cache, parallel fit, resolve_run_models
+tests/test_model_recommend.py      train_and_recommend / boosts / content_fallback
+tests/test_model_combine.py        priority combiner unit tests
+tests/test_model_epoch_metrics.py  LightFM per-epoch metric helpers
+tests/test_model_config.py         RecTools [model.*] + save/load round trips
+tests/support/model_events.py      shared synthetic events helper
+tests/support/toml_config.py       shared write_toml helper
+```
+
 ## Data flow
 
 ```mermaid
@@ -98,9 +129,11 @@ flowchart LR
    columns into rectools' long format, then constructs a
    `rectools.dataset.Dataset`.
 3. `model.train_and_recommend()` fits every strategy listed in
-   `Settings.models` (`STRATEGIES` registry in `model.py`; defaults to
-   `["collaborative", "item_based", "popular"]`) and produces top-K
-   recommendations. When `[job.content_fallback].enabled` is true,
+   `Settings.models` (`STRATEGIES` in `model/strategies.py`; defaults to
+   `["collaborative", "item_based", "popular"]`) via RecTools
+   `model_from_config` using `Settings.model_configs` (from
+   `model_config.resolve_model_configs` + optional `[model.*]` TOML) and
+   produces top-K recommendations. When `[job.content_fallback].enabled` is true,
    `content_fallback` is inserted before the first non-personalized
    strategy if not already listed. Personalized strategies
    (`collaborative`, `item_based`, `content_fallback`) only run for "warm"
@@ -117,7 +150,7 @@ flowchart LR
    - **Priority order** (default) — earlier strategies fill top-K first;
      later ones only backfill.
    - **Weighted RRF** — if `Settings.model_weights` is set (even an empty
-     table), `_combine_by_weighted_fusion` sums `weight / (rrf_k + rank)`
+     table), `combine_by_weighted_fusion` sums `weight / (rrf_k + rank)`
      across strategies; `rrf_k` defaults to `model.RRF_K` and is
      overridable via `Settings.rrf_k`/`[job].rrf_k`. Combined `source`
      labels join contributing strategy labels in `enabled_models` order.
@@ -311,8 +344,11 @@ Implementation details:
   frame fails open (rule skipped). The warning is emitted once per
   `(kind, rule name, column)` for the process lifetime to avoid log spam
   when eligibility runs per cohort.
-- **Artifacts:** schema version 2+ persists the `users` frame so
-  `recommend_from_artifact` can re-apply user-scoped eligibility offline.
+- **Artifacts:** schema version **3** persists RecTools models with
+  `model.save` / `load_model` (zip envelope); `users`/`items` frames and
+  `content_fallback` stay pickle-backed so `recommend_from_artifact` can
+  re-apply user-scoped eligibility offline. Schema v2 bare pickles are not
+  loadable.
 
 ## Extensibility: adding a new I/O backend
 
@@ -327,7 +363,7 @@ keys a given backend requires. To add a new backend (e.g. a message queue):
    `build_input_source`/`build_output_sink`.
 3. Document the new `kind` and its `options` in `config/cicerone.toml`.
 
-Nothing in `config.py`, `job.py`, `dataset.py`, or `model.py` needs to
+Nothing in `config/`, `job.py`, `dataset.py`, or `model/` needs to
 change — they only ever see the `InputSource`/`OutputSink` protocol and the
 generic `IOSettings`.
 

@@ -1,0 +1,27 @@
+---
+alwaysApply: true
+description: Enforceable policy is .cursor/rules; AGENTS.md is optional local scratch
+---
+
+# Agent policy source of truth
+
+**Do not** look for `AGENTS.md`, debate it, or ask about it. It is gitignored
+and usually absent on Cloud VMs — it cannot enforce anything here.
+
+## What actually sticks across Cloud sessions
+
+| Mechanism | Sticks on Cloud? |
+|---|---|
+| `.cursor/rules/*.mdc` (`alwaysApply: true`) | **Yes** (in git) |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | **Yes** (in git) |
+| Cursor User Rules / Team Rules | Yes (account/dashboard, not git) |
+| Workspace `AGENTS.md` | **No** if gitignored |
+
+Put non‑negotiables in `.cursor/rules/` (short `.mdc` files). That *is*
+enforcement. Do not re‑create a giant `AGENTS.md` in git.
+
+## In this repo
+
+- `git-workflow.mdc` — branch / PR naming
+- `coding-standards.mdc` — no essay comments
+- `verification.mdc` — always run ruff / mypy / pytest

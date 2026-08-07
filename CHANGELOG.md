@@ -4,6 +4,33 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.0] - Unreleased
+
+### Added
+
+- Optional `[model.<strategy>]` TOML tables for RecTools `model_from_config`
+  (`collaborative`, `item_based`, `popular`, `latest`).
+
+### Changed
+
+- Strategies built via RecTools `model_from_config` / `get_config`.
+- Artifacts schema **v3**: RecTools `model.save` / `load_model` in a zip
+  envelope; `content_fallback` still pickle. Schema v2 no longer loadable.
+  `created_at` is stored as ISO-8601 in `meta.json` and loaded as `datetime`.
+- Split `model` / `config` into packages; import paths unchanged. Cross-module
+  helpers are public (`_` = module-local only). Tests follow the same split
+  (`test_model_*.py`, `test_config_*.py`).
+- Docs: architecture test/module map, tutorial `[model.*]` knobs, README /
+  CONTRIBUTING test layout notes.
+- Shared defaults: item-based `K` from `DEFAULT_ITEM_BASED_K_NEIGHBORS`;
+  latest window from `model_config.LATEST_WINDOW_DAYS` (re-exported by
+  `model.constants`).
+
+### Renamed config keys (legacy still accepted)
+
+- `job.item_based.k_neighbors` → `model.item_based.model.K`. Conflicting
+  values raise `ConfigError`.
+
 ## [0.4.1] - 2026-08-07
 
 ### Added

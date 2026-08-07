@@ -34,10 +34,38 @@ feature_config_path = "/app/config/features.toml"
 # fallback), "latest" (trending in the last two weeks).
 # models = ["collaborative", "item_based", "popular", "latest"]
 
-# Optional: item-item KNN neighbor count for the item_based strategy
-# (ImplicitItemKNNWrapperModel / TFIDFRecommender K=).
+# Optional: item-item KNN neighbor count (legacy → model.item_based.model.K).
+# Prefer [model.item_based] below.
 # [job.item_based]
 # k_neighbors = 20
+
+# Optional RecTools [model.<name>] tables (model_from_config; include cls).
+# content_fallback stays under [job.content_fallback].
+# [model.collaborative]
+# cls = "LightFMWrapperModel"
+# epochs = 30
+# num_threads = 4
+# [model.collaborative.model]
+# no_components = 64
+# loss = "warp"
+# learning_rate = 0.05
+# item_alpha = 1.0e-6
+# user_alpha = 1.0e-6
+# random_state = 42
+#
+# [model.item_based]
+# cls = "ImplicitItemKNNWrapperModel"
+# [model.item_based.model]
+# cls = "TFIDFRecommender"
+# K = 20
+#
+# [model.popular]
+# cls = "PopularModel"
+#
+# [model.latest]
+# cls = "PopularModel"
+# popularity = "n_interactions"
+# period = { days = 14 }
 
 # Optional: content-based cold-item tier. When enabled, inserted before the
 # first non-personalized strategy (popular/latest) if not already listed in

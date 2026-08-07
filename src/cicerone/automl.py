@@ -171,6 +171,7 @@ def _evaluate_fold(
     half_life_days: float,
     candidates: list[Candidate],
     metrics: dict[str, MetricAtK],
+    model_configs: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, float]]:
     """Score every candidate on one fold (picklable for ProcessPoolExecutor)."""
     built = build_dataset(train_events, users, items, config, half_life_days=half_life_days)
@@ -189,6 +190,7 @@ def _evaluate_fold(
             weights=candidate.weights,
             rrf_k=candidate.rrf_k,
             strategy_cache=strategy_cache,
+            model_configs=model_configs,
         )
         fold_metrics.append(calc_metrics(metrics, reco=reco, interactions=test_interactions))
     return fold_metrics
@@ -205,6 +207,7 @@ def evaluate_candidates(
     n_splits: int = DEFAULT_N_SPLITS,
     test_days: int = DEFAULT_TEST_DAYS,
     max_workers: int = 1,
+    model_configs: dict[str, dict[str, Any]] | None = None,
 ) -> list[CandidateResult]:
     """Backtest candidates over time folds. ``max_workers > 1`` evaluates folds in parallel."""
     parsed_candidates = _parse_candidates(candidates)
@@ -238,6 +241,7 @@ def evaluate_candidates(
                     repeat(half_life_days),
                     repeat(parsed_candidates),
                     repeat(metrics),
+                    repeat(model_configs),
                 )
             )
     else:
@@ -252,6 +256,7 @@ def evaluate_candidates(
                 half_life_days,
                 parsed_candidates,
                 metrics,
+                model_configs,
             )
             for train_events, test_events in folds
         ]

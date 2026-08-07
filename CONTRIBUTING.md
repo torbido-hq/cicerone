@@ -18,7 +18,9 @@ docker compose -f docker-compose.ci.yml --env-file docker/postgres/defaults.env 
 This runs the full pytest suite, including the Postgres-backed `db` I/O
 tests and the system-style end-to-end check in `tests/test_system_db.py`,
 and enforces the 95% coverage gate (`pyproject.toml`,
-`[tool.coverage.report].fail_under`). A plain `docker run --rm cicerone-test`
+`[tool.coverage.report].fail_under`). Model/config tests mirror the
+packages (`tests/test_model_*.py`, `tests/test_config_*.py`; shared helpers
+under `tests/support/`). A plain `docker run --rm cicerone-test`
 (after `docker build --target test -t cicerone-test -f docker/Dockerfile .`)
 skips the `db` tests (no `TEST_DATABASE_URL`) and will under-report coverage
 — always validate with the compose file above before opening a PR.
@@ -147,6 +149,11 @@ and/or `examples/serve/` when request/response fields change.
   **Never** use `cursor/<slug>-<id>` (or any other opaque agent/id suffix).
   Cloud / Cursor agents: follow this rule even if a default template
   suggests a `cursor/…` prefix.
+- **Agent instructions:** Enforceable agent rules live in
+  [`.cursor/rules/`](.cursor/rules/) (`alwaysApply: true`) and this file —
+  that is what Cloud Agents actually see every session. A local `AGENTS.md`
+  is gitignored and **cannot** enforce anything on Cloud. Extra personal
+  notes (not repo policy): Cursor **User Rules** / **Team Rules**.
 - Add/update tests for any behavior change — the coverage gate is enforced
   in CI, not just locally.
 - Make sure both the lint job and the test job pass before requesting review.

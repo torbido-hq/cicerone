@@ -1,0 +1,18 @@
+---
+alwaysApply: true
+description: Mandatory lint/typecheck/tests before work is done
+---
+
+# Verification (required every change)
+
+Before considering work done, **always** run (venv or Docker — see
+[CONTRIBUTING.md](CONTRIBUTING.md)):
+
+1. `ruff check src tests`
+2. `ruff format --check src tests`
+3. `mypy src`
+4. `pytest` with coverage ≥95% (`--cov=cicerone --cov-fail-under=95`)
+
+Do not skip these because the change “looks small.” Fix failures before
+pushing / updating the PR. Prefer Docker CI image when that is the project
+norm; local `.venv` is acceptable in Cloud VMs that already have it.

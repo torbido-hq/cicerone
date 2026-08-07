@@ -1,0 +1,22 @@
+---
+alwaysApply: true
+description: No essay comments; keep code and docs terse
+---
+
+# Coding standards (required)
+
+## Comments and docstrings
+
+- **No essay comments.** Do not narrate what the code does, restate the
+  function name, or leave multi-paragraph “why we did this” blocks in source.
+- Comment only when the *intent* is non-obvious (invariant, quirk, workaround).
+  Prefer one short line.
+- Do not add module/class/function docstrings that only repeat the signature
+  or walk through the implementation. Existing short module headers are fine;
+  do not expand them into essays.
+- CHANGELOG / PR bodies: short bullets, not prose essays.
+
+## Style
+
+- Match existing code. No drive-by refactors or unrelated file edits.
+- Prefer public names for cross-module symbols; `_` only for true module-locals.
