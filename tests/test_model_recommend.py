@@ -3,42 +3,12 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 from rectools import Columns
+from support.model_events import synthetic_events
 
-from cicerone.config import STRATEGY_NAMES, ConfigError, validate_model_weights
+from cicerone.config import ConfigError
 from cicerone.dataset import build_dataset
-from cicerone.model import (
-    DEFAULT_MODELS,
-    STRATEGIES,
-    RecommenderModel,
-    Strategy,
-    train_and_recommend,
-)
-from cicerone.model.combine import combine_by_priority
-from cicerone.model.strategies import as_recommender_model, validate_strategy_names
+from cicerone.model import DEFAULT_MODELS, train_and_recommend
 from cicerone.policy import allowed_items_for_cohort, resolve_eligibility
-
-
-def _synthetic_events() -> pd.DataFrame:
-    now = pd.Timestamp.utcnow()
-    rows = []
-    # Enough interactions for LightFM to fit.
-    interactions = {
-        "u1": ["i1", "i2"],
-        "u2": ["i2", "i3"],
-        "u3": ["i1", "i3"],
-    }
-    for user, items in interactions.items():
-        for item in items:
-            rows.append(
-                {
-                    "user_id": user,
-                    "item_id": item,
-                    "event_type": "purchase",
-                    "quantity": 1,
-                    "occurred_at": now,
-                }
-            )
-    return pd.DataFrame(rows)
 
 
 def test_availability_filters_via_policy_allowlist(sample_items, feature_config):
@@ -47,186 +17,8 @@ def test_availability_filters_via_policy_allowlist(sample_items, feature_config)
     assert allowed == ["i1", "i2"]
 
 
-def testcombine_by_priority_fills_from_earlier_strategies_first():
-    frames = [
-        pd.DataFrame(
-            [
-                {"user_id": "u1", "item_id": "a", "rank": 1, "score": 1.0, "source": "first", "_weight": 1.0},
-                {"user_id": "u1", "item_id": "b", "rank": 2, "score": 0.5, "source": "first", "_weight": 1.0},
-            ]
-        ),
-        pd.DataFrame(
-            [
-                {
-                    "user_id": "u1",
-                    "item_id": "c",
-                    "rank": 1,
-                    "score": 9.0,
-                    "source": "second",
-                    "_weight": 1.0,
-                },
-                {
-                    "user_id": "u1",
-                    "item_id": "b",
-                    "rank": 2,
-                    "score": 8.0,
-                    "source": "second",
-                    "_weight": 1.0,
-                },
-            ]
-        ),
-    ]
-    out = combine_by_priority(frames, top_k=2)
-    assert list(out[Columns.Item]) == ["a", "b"]
-    assert list(out[Columns.Rank]) == [1, 2]
-    assert list(out["source"]) == ["first", "first"]
-
-
-def testcombine_by_priority_fills_from_later_strategies_when_earlier_insufficient():
-    frames = [
-        pd.DataFrame(
-            [
-                {
-                    "user_id": "u1",
-                    "item_id": "a",
-                    "rank": 1,
-                    "score": 1.0,
-                    "source": "first",
-                    "_weight": 1.0,
-                },
-            ]
-        ),
-        pd.DataFrame(
-            [
-                {
-                    "user_id": "u1",
-                    "item_id": "b",
-                    "rank": 1,
-                    "score": 0.8,
-                    "source": "second",
-                    "_weight": 1.0,
-                },
-                {
-                    "user_id": "u1",
-                    "item_id": "c",
-                    "rank": 2,
-                    "score": 0.7,
-                    "source": "second",
-                    "_weight": 1.0,
-                },
-            ]
-        ),
-        pd.DataFrame(
-            [
-                {
-                    "user_id": "u1",
-                    "item_id": "d",
-                    "rank": 1,
-                    "score": 0.9,
-                    "source": "third",
-                    "_weight": 1.0,
-                },
-            ]
-        ),
-    ]
-
-    combined = combine_by_priority(frames, top_k=2)
-
-    assert list(combined[Columns.User].unique()) == ["u1"]
-    assert len(combined) == 2
-    assert list(combined[Columns.Item]) == ["a", "b"]
-    assert list(combined[Columns.Rank]) == [1, 2]
-
-
-def testcombine_by_priority_recomputes_ranks_per_user():
-    frames = [
-        pd.DataFrame(
-            [
-                {
-                    "user_id": "u1",
-                    "item_id": "a",
-                    "rank": 1,
-                    "score": 1.0,
-                    "source": "first",
-                    "_weight": 1.0,
-                },
-                {
-                    "user_id": "u2",
-                    "item_id": "b",
-                    "rank": 1,
-                    "score": 0.9,
-                    "source": "first",
-                    "_weight": 1.0,
-                },
-                {
-                    "user_id": "u2",
-                    "item_id": "c",
-                    "rank": 2,
-                    "score": 0.8,
-                    "source": "first",
-                    "_weight": 1.0,
-                },
-            ]
-        ),
-        pd.DataFrame(
-            [
-                {
-                    "user_id": "u1",
-                    "item_id": "d",
-                    "rank": 1,
-                    "score": 0.7,
-                    "source": "second",
-                    "_weight": 1.0,
-                },
-                {
-                    "user_id": "u1",
-                    "item_id": "e",
-                    "rank": 2,
-                    "score": 0.6,
-                    "source": "second",
-                    "_weight": 1.0,
-                },
-                {
-                    "user_id": "u2",
-                    "item_id": "f",
-                    "rank": 1,
-                    "score": 0.85,
-                    "source": "second",
-                    "_weight": 1.0,
-                },
-            ]
-        ),
-    ]
-
-    top_k = 2
-    combined = combine_by_priority(frames, top_k=top_k)
-
-    counts = combined.groupby(Columns.User)[Columns.Item].count().to_dict()
-    assert counts == {"u1": 2, "u2": 2}
-
-    ranks_per_user = (
-        combined.sort_values([Columns.User, Columns.Rank])
-        .groupby(Columns.User)[Columns.Rank]
-        .apply(list)
-        .to_dict()
-    )
-    assert ranks_per_user == {"u1": [1, 2], "u2": [1, 2]}
-
-    items_per_user = (
-        combined.sort_values([Columns.User, Columns.Rank])
-        .groupby(Columns.User)[Columns.Item]
-        .apply(list)
-        .to_dict()
-    )
-    assert items_per_user == {"u1": ["a", "d"], "u2": ["b", "c"]}
-
-    for _, group in combined.groupby(Columns.User):
-        ordered = group.sort_values(Columns.Rank)
-        assert list(ordered[Columns.Rank]) == list(range(1, top_k + 1))
-
-
 def test_train_and_recommend_respects_top_k_and_availability_filter(sample_items, feature_config):
-    events = _synthetic_events()
+    events = synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
 
     recommendations = train_and_recommend(
@@ -242,7 +34,7 @@ def test_train_and_recommend_respects_top_k_and_availability_filter(sample_items
 def test_train_and_recommend_falls_back_to_popularity_for_cold_users(
     sample_items, feature_config, sample_users
 ):
-    events = _synthetic_events()
+    events = synthetic_events()
     # u4: features only (hybrid cold-start via rectools).
     built = build_dataset(events, sample_users, sample_items, feature_config, half_life_days=90)
 
@@ -253,7 +45,7 @@ def test_train_and_recommend_falls_back_to_popularity_for_cold_users(
 
 
 def test_train_and_recommend_falls_back_to_popularity_for_fully_unknown_users(sample_items, feature_config):
-    events = _synthetic_events()
+    events = synthetic_events()
     # ghost: no interactions/features → popularity fallback.
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
 
@@ -265,7 +57,7 @@ def test_train_and_recommend_falls_back_to_popularity_for_fully_unknown_users(sa
 
 
 def test_train_and_recommend_rejects_unknown_model(sample_items, feature_config):
-    events = _synthetic_events()
+    events = synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
 
     with pytest.raises(ValueError, match="not_a_real_model"):
@@ -275,7 +67,7 @@ def test_train_and_recommend_rejects_unknown_model(sample_items, feature_config)
 
 
 def test_train_and_recommend_rejects_empty_enabled_models(sample_items, feature_config):
-    events = _synthetic_events()
+    events = synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
 
     # Empty list ≠ omit; must raise, not succeed empty.
@@ -284,7 +76,7 @@ def test_train_and_recommend_rejects_empty_enabled_models(sample_items, feature_
 
 
 def test_train_and_recommend_item_based_strategy(sample_items, feature_config):
-    events = _synthetic_events()
+    events = synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
 
     recommendations = train_and_recommend(
@@ -295,7 +87,7 @@ def test_train_and_recommend_item_based_strategy(sample_items, feature_config):
 
 
 def test_train_and_recommend_latest_strategy(sample_items, feature_config):
-    events = _synthetic_events()
+    events = synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
 
     recommendations = train_and_recommend(
@@ -307,7 +99,7 @@ def test_train_and_recommend_latest_strategy(sample_items, feature_config):
 
 
 def test_train_and_recommend_combines_multiple_personalized_strategies(sample_items, feature_config):
-    events = _synthetic_events()
+    events = synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
 
     recommendations = train_and_recommend(
@@ -330,59 +122,10 @@ def test_train_and_recommend_combines_multiple_personalized_strategies(sample_it
     assert not recommendations.duplicated(subset=[Columns.User, Columns.Item]).any()
 
 
-def test_strategies_keys_match_config_strategy_names():
-    # Keep STRATEGIES in sync with config STRATEGY_NAMES.
-    assert set(STRATEGIES) == set(STRATEGY_NAMES)
-
-
-def testvalidate_strategy_names_raises_on_mismatch():
-    with pytest.raises(RuntimeError, match="must match"):
-        validate_strategy_names({"popular": STRATEGIES["popular"]}, ("popular", "latest"))
-
-
-def testas_recommender_model_accepts_every_registered_strategy():
-    from cicerone.model import build_strategy_model
-
-    for name, strategy in STRATEGIES.items():
-        model = strategy.factory() if strategy.factory is not None else build_strategy_model(name)
-        assert as_recommender_model(model) is model, name
-
-
-def testas_recommender_model_rejects_object_missing_recommend():
-    class NotAModel:
-        def fit(self, dataset):
-            return self
-
-    with pytest.raises(TypeError, match="does not implement the RecommenderModel protocol"):
-        as_recommender_model(NotAModel())
-
-
-def testas_recommender_model_rejects_recommend_missing_expected_parameters():
-    class WrongSignatureModel:
-        def fit(self, dataset):
-            return self
-
-        def recommend(self, *, users, dataset, k):
-            return pd.DataFrame()
-
-    with pytest.raises(TypeError, match="missing expected parameter"):
-        as_recommender_model(WrongSignatureModel())
-
-
-def test_validate_model_weights_no_op_when_none():
-    validate_model_weights(None)
-    validate_model_weights({"popular": 1.0})
-
-
-def test_validate_model_weights_rejects_negative():
-    with pytest.raises(ConfigError, match="non-negative"):
-        validate_model_weights({"popular": -1.0})
-
-
 def test_train_and_recommend_no_warm_users_and_only_personalized_strategies_returns_empty(
     sample_items, feature_config, caplog
 ):
-    events = _synthetic_events()
+    events = synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
 
     with caplog.at_level("INFO"):
@@ -404,7 +147,7 @@ def test_train_and_recommend_no_warm_users_and_only_personalized_strategies_retu
 
 
 def test_train_and_recommend_rejects_unknown_weight_key(sample_items, feature_config):
-    events = _synthetic_events()
+    events = synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
 
     with pytest.raises(ValueError, match="not_enabled"):
@@ -419,7 +162,7 @@ def test_train_and_recommend_rejects_unknown_weight_key(sample_items, feature_co
 
 
 def test_train_and_recommend_rejects_negative_weight(sample_items, feature_config):
-    events = _synthetic_events()
+    events = synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
 
     with pytest.raises(ConfigError, match="non-negative"):
@@ -434,7 +177,7 @@ def test_train_and_recommend_rejects_negative_weight(sample_items, feature_confi
 
 
 def test_train_and_recommend_rejects_non_positive_rrf_k(sample_items, feature_config):
-    events = _synthetic_events()
+    events = synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
 
     with pytest.raises(ConfigError, match="rrf_k must be positive"):
@@ -451,7 +194,7 @@ def test_train_and_recommend_rejects_non_positive_rrf_k(sample_items, feature_co
 
 def test_train_and_recommend_rejects_weights_for_models_dropped_from_recommend(sample_items, feature_config):
     """Weights must match the resolved recommend set, not just the requested models list."""
-    events = _synthetic_events()
+    events = synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
 
     with pytest.raises(ValueError, match="not in recommend models"):
@@ -467,7 +210,7 @@ def test_train_and_recommend_rejects_weights_for_models_dropped_from_recommend(s
 
 
 def test_train_and_recommend_weighted_fusion_with_default_models(sample_items, feature_config):
-    events = _synthetic_events()
+    events = synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
 
     # weights alone still trigger fusion against DEFAULT_MODELS.
@@ -502,7 +245,7 @@ def test_train_and_recommend_weighted_fusion_with_default_models(sample_items, f
 
 
 def test_train_and_recommend_weighted_fusion_respects_top_k_and_ranks_by_score(sample_items, feature_config):
-    events = _synthetic_events()
+    events = synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
 
     recommendations = train_and_recommend(
@@ -521,7 +264,7 @@ def test_train_and_recommend_weighted_fusion_respects_top_k_and_ranks_by_score(s
 
 
 def test_train_and_recommend_weighted_fusion_merges_sources_for_shared_items(sample_items, feature_config):
-    events = _synthetic_events()
+    events = synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
 
     recommendations = train_and_recommend(
@@ -539,7 +282,7 @@ def test_train_and_recommend_weighted_fusion_merges_sources_for_shared_items(sam
 def test_train_and_recommend_weighted_fusion_joins_labels_in_enabled_models_order(
     sample_items, feature_config
 ):
-    events = _synthetic_events()
+    events = synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
 
     # Source label must follow enabled_models order, not alphabetical.
@@ -564,177 +307,8 @@ def test_train_and_recommend_weighted_fusion_joins_labels_in_enabled_models_orde
     assert set(latest_first["source"]) == {"latest+popular_fallback"}
 
 
-def test_train_and_recommend_reuses_strategy_cache_across_calls(sample_items, feature_config, monkeypatch):
-    events = _synthetic_events()
-    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
-
-    fit_calls = []
-    from cicerone.model import build_strategy_model
-
-    def counting_factory():
-        model = build_strategy_model("popular")
-        original_fit = model.fit
-
-        def counting_fit(dataset):
-            fit_calls.append(1)
-            return original_fit(dataset)
-
-        model.fit = counting_fit
-        return model
-
-    monkeypatch.setitem(
-        STRATEGIES,
-        "popular",
-        Strategy(personalized=False, source_label="popular_fallback", factory=counting_factory),
-    )
-
-    cache: dict[str, RecommenderModel] = {}
-    first = train_and_recommend(
-        built,
-        target_users=["u1", "u2", "u3"],
-        config=feature_config,
-        top_k=2,
-        enabled_models=["popular"],
-        strategy_cache=cache,
-    )
-    second = train_and_recommend(
-        built,
-        target_users=["u1", "u2", "u3"],
-        config=feature_config,
-        top_k=2,
-        enabled_models=["popular"],
-        strategy_cache=cache,
-    )
-
-    assert len(fit_calls) == 1
-    assert "popular" in cache
-    pd.testing.assert_frame_equal(first.reset_index(drop=True), second.reset_index(drop=True))
-
-
-def test_train_and_recommend_strategy_cache_reused_across_different_top_k_and_weights(
-    sample_items, feature_config, monkeypatch
-):
-    # Cache fitted models, not recommend() output — different top_k/weights reuse the fit.
-    events = _synthetic_events()
-    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
-
-    fit_calls = []
-    from cicerone.model import build_strategy_model
-
-    def counting_factory():
-        model = build_strategy_model("popular")
-        original_fit = model.fit
-
-        def counting_fit(dataset):
-            fit_calls.append(1)
-            return original_fit(dataset)
-
-        model.fit = counting_fit
-        return model
-
-    monkeypatch.setitem(
-        STRATEGIES,
-        "popular",
-        Strategy(personalized=False, source_label="popular_fallback", factory=counting_factory),
-    )
-
-    cache: dict[str, RecommenderModel] = {}
-    small_top_k = train_and_recommend(
-        built,
-        target_users=["u1", "u2", "u3"],
-        config=feature_config,
-        top_k=1,
-        enabled_models=["popular"],
-        strategy_cache=cache,
-    )
-    large_top_k = train_and_recommend(
-        built,
-        target_users=["u1", "u2", "u3"],
-        config=feature_config,
-        top_k=5,
-        enabled_models=["popular"],
-        weights={"popular": 2.0},
-        strategy_cache=cache,
-    )
-
-    assert len(fit_calls) == 1
-    assert (small_top_k.groupby(Columns.User).size() <= 1).all()
-    assert (large_top_k.groupby(Columns.User).size() <= 5).all()
-
-
-def test_train_and_recommend_without_cache_refits_every_call(sample_items, feature_config, monkeypatch):
-    events = _synthetic_events()
-    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
-
-    fit_calls = []
-    from cicerone.model import build_strategy_model
-
-    def counting_factory():
-        model = build_strategy_model("popular")
-        original_fit = model.fit
-
-        def counting_fit(dataset):
-            fit_calls.append(1)
-            return original_fit(dataset)
-
-        model.fit = counting_fit
-        return model
-
-    monkeypatch.setitem(
-        STRATEGIES,
-        "popular",
-        Strategy(personalized=False, source_label="popular_fallback", factory=counting_factory),
-    )
-
-    train_and_recommend(
-        built, target_users=["u1", "u2", "u3"], config=feature_config, top_k=2, enabled_models=["popular"]
-    )
-    train_and_recommend(
-        built, target_users=["u1", "u2", "u3"], config=feature_config, top_k=2, enabled_models=["popular"]
-    )
-
-    assert len(fit_calls) == 2
-
-
-def test_train_and_recommend_parallel_fit_matches_sequential(sample_items, feature_config):
-    # Deterministic strategies: parallel fit must match sequential.
-    events = _synthetic_events()
-    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
-    kwargs = dict(
-        built=built,
-        target_users=["u1", "u2", "u3"],
-        config=feature_config,
-        top_k=2,
-        enabled_models=["popular", "latest"],
-    )
-
-    sequential = train_and_recommend(**kwargs, max_workers=1)
-    # max_workers > model count must be capped, not raise.
-    parallel = train_and_recommend(**kwargs, max_workers=10)
-
-    pd.testing.assert_frame_equal(sequential.reset_index(drop=True), parallel.reset_index(drop=True))
-
-
-def test_train_and_recommend_parallel_fit_populates_strategy_cache(sample_items, feature_config):
-    events = _synthetic_events()
-    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
-    cache: dict[str, RecommenderModel] = {}
-
-    train_and_recommend(
-        built,
-        target_users=["u1", "u2", "u3"],
-        config=feature_config,
-        top_k=2,
-        enabled_models=["popular", "latest"],
-        strategy_cache=cache,
-        max_workers=2,
-    )
-
-    assert set(cache) == {"popular", "latest"}
-
-
 def test_train_and_recommend_empty_weights_dict_enables_fusion(sample_items, feature_config):
-    events = _synthetic_events()
+    events = synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
 
     # Empty {} still opts into fusion (implicit weight 1.0).
@@ -751,7 +325,7 @@ def test_train_and_recommend_empty_weights_dict_enables_fusion(sample_items, fea
 
 
 def test_train_and_recommend_weighted_fusion_defaults_missing_weight_to_one(sample_items, feature_config):
-    events = _synthetic_events()
+    events = synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
 
     # Omitted weight key defaults to 1.0.
@@ -796,7 +370,7 @@ def test_train_and_recommend_weighted_fusion_defaults_missing_weight_to_one(samp
 
 
 def test_train_and_recommend_custom_rrf_k_changes_fused_scores(sample_items, feature_config):
-    events = _synthetic_events()
+    events = synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
 
     small_k = train_and_recommend(
@@ -1183,250 +757,6 @@ def test_topk_extraction_preserves_external_ids_no_duplicates_or_seen_items(feat
         assert set(group[Columns.Item]).isdisjoint(seen)
 
 
-def testshould_log_epoch_first_last_and_interval():
-    from cicerone.model.epoch_metrics import should_log_epoch
-
-    assert should_log_epoch(1, 30, 5)
-    assert should_log_epoch(5, 30, 5)
-    assert should_log_epoch(30, 30, 5)
-    assert not should_log_epoch(2, 30, 5)
-    assert not should_log_epoch(29, 30, 5)
-
-
-def testwarn_on_epoch_metric_trajectory_regression_and_plateau(caplog):
-    from cicerone.config import EpochMetricsSettings
-    from cicerone.model.epoch_metrics import warn_on_epoch_metric_trajectory
-
-    settings = EpochMetricsSettings(every=5)
-
-    with caplog.at_level("WARNING"):
-        warn_on_epoch_metric_trajectory([(1, {"Precision@2": 0.5})], settings)
-    assert caplog.text == ""
-
-    with caplog.at_level("WARNING"):
-        warn_on_epoch_metric_trajectory(
-            [
-                (1, {"Precision@2": 0.8}),
-                (5, {"Precision@2": 0.7}),
-                (10, {"Precision@2": 0.4}),
-            ],
-            settings,
-        )
-    assert "regressed" in caplog.text
-
-    caplog.clear()
-    with caplog.at_level("WARNING"):
-        warn_on_epoch_metric_trajectory(
-            [
-                (1, {"Recall@2": 0.50}),
-                (5, {"Recall@2": 0.501}),
-                (10, {"Recall@2": 0.502}),
-            ],
-            settings,
-        )
-    assert "plateaued" in caplog.text
-
-
-def testwarn_on_epoch_metric_trajectory_skips_metrics_missing_from_some_snapshots(caplog):
-    from cicerone.config import EpochMetricsSettings
-    from cicerone.model.epoch_metrics import warn_on_epoch_metric_trajectory
-
-    # Heterogeneous keys: no KeyError; singleton values skip regression WARN.
-    with caplog.at_level("WARNING"):
-        warn_on_epoch_metric_trajectory(
-            [
-                (1, {"Precision@2": 0.9, "Recall@2": 0.5}),
-                (5, {"Precision@2": 0.4}),
-            ],
-            EpochMetricsSettings(every=5),
-        )
-    assert "Precision@2" in caplog.text
-    assert "regressed" in caplog.text
-    assert "Recall@2" not in caplog.text
-
-
-def testfit_lightfm_with_epoch_metrics_rejects_non_lightfm_wrapper():
-    from cicerone.config import EpochMetricsSettings
-    from cicerone.model.epoch_metrics import fit_lightfm_with_epoch_metrics
-
-    class NoPartial:
-        def fit(self, dataset):
-            return self
-
-        def recommend(self, **kwargs):
-            return pd.DataFrame()
-
-    with pytest.raises(TypeError, match="fit_partial"):
-        fit_lightfm_with_epoch_metrics(
-            NoPartial(), None, pd.DataFrame(), settings=EpochMetricsSettings(every=1), top_k=2
-        )
-
-
-def testepoch_metric_total_epochs_prefers_n_epochs_then_epochs():
-    from cicerone.model.epoch_metrics import epoch_metric_total_epochs
-
-    class WithNEpochs:
-        n_epochs = 7
-
-    class WithEpochs:
-        epochs = 3
-
-    class WithNeither:
-        pass
-
-    assert epoch_metric_total_epochs(WithNEpochs()) == 7
-    assert epoch_metric_total_epochs(WithEpochs()) == 3
-    with pytest.raises(TypeError, match="n_epochs/epochs"):
-        epoch_metric_total_epochs(WithNeither())
-
-
-def testwarn_on_epoch_metric_trajectory_plateau_scale_handles_negative_values(caplog):
-    from cicerone.config import EpochMetricsSettings
-    from cicerone.model.epoch_metrics import warn_on_epoch_metric_trajectory
-
-    # All-negative window: scale by max(|v|), not abs(max(v)).
-    with caplog.at_level("WARNING"):
-        warn_on_epoch_metric_trajectory(
-            [
-                (1, {"Score": -10.0}),
-                (5, {"Score": -10.01}),
-                (10, {"Score": -10.02}),
-            ],
-            EpochMetricsSettings(every=5),
-        )
-    assert "plateaued" in caplog.text
-
-
-def testsample_epoch_metric_users_is_seeded_not_prefix():
-    from cicerone.model.constants import RANDOM_STATE
-    from cicerone.model.epoch_metrics import sample_epoch_metric_users
-
-    ordered = list(range(1000))
-    sampled = sample_epoch_metric_users(ordered, max_users=10)
-    assert len(sampled) == 10
-    assert sampled != ordered[:10]
-    assert sample_epoch_metric_users(ordered, max_users=10) == sampled
-    assert set(sampled).issubset(ordered)
-    assert sample_epoch_metric_users([3, 1, 2], max_users=10) == [3, 1, 2]
-    assert RANDOM_STATE == 42
-
-
-def test_train_and_recommend_logs_epoch_metrics_when_configured(
-    sample_items, feature_config, monkeypatch, caplog
-):
-    from cicerone.config import EpochMetricsSettings
-    from cicerone.model_config import default_model_configs
-
-    # Short epoch loop so this stays a unit test.
-    configs = default_model_configs()
-    configs["collaborative"]["epochs"] = 4
-    events = _synthetic_events()
-    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
-
-    with caplog.at_level("INFO"):
-        recommendations = train_and_recommend(
-            built,
-            target_users=["u1", "u2", "u3"],
-            config=feature_config,
-            top_k=2,
-            enabled_models=["collaborative"],
-            epoch_metrics=EpochMetricsSettings(every=2),
-            model_configs=configs,
-        )
-
-    assert not recommendations.empty
-    assert "Collaborative epoch 1/4 metrics:" in caplog.text
-    assert "Collaborative epoch 2/4 metrics:" in caplog.text
-    assert "Collaborative epoch 4/4 metrics:" in caplog.text
-    assert "Collaborative epoch 3/4 metrics:" not in caplog.text
-    assert "Precision@2" in caplog.text
-    assert "Recall@2" in caplog.text
-
-
-def test_train_and_recommend_skips_epoch_metrics_by_default(sample_items, feature_config, caplog):
-    events = _synthetic_events()
-    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
-
-    with caplog.at_level("INFO"):
-        train_and_recommend(
-            built,
-            target_users=["u1", "u2", "u3"],
-            config=feature_config,
-            top_k=2,
-            enabled_models=["collaborative"],
-        )
-
-    assert "Collaborative epoch" not in caplog.text
-
-
-def test_default_models_three_tier_chain():
-    assert DEFAULT_MODELS == ["collaborative", "item_based", "popular"]
-
-
-def test_resolve_recommend_models_inserts_content_fallback_before_popular():
-    from cicerone.model import resolve_recommend_models
-
-    assert resolve_recommend_models(
-        ["collaborative", "item_based", "popular"],
-        blending_enabled=False,
-        content_fallback_enabled=True,
-    ) == ["collaborative", "item_based", "content_fallback", "popular"]
-
-
-def test_resolve_recommend_models_skips_content_fallback_when_disabled(caplog):
-    from cicerone.model import resolve_recommend_models
-
-    with caplog.at_level("INFO"):
-        resolved = resolve_recommend_models(
-            ["collaborative", "content_fallback", "popular"],
-            blending_enabled=False,
-            content_fallback_enabled=False,
-        )
-    assert resolved == ["collaborative", "popular"]
-    assert "content_fallback is listed" in caplog.text
-
-
-def test_resolve_run_models_centralizes_content_fallback_and_blending():
-    from cicerone.model import content_fallback_enabled_from_models, plan_model_run, resolve_run_models
-
-    resolved, recommend = resolve_run_models(
-        ["collaborative", "popular"],
-        blending_enabled=False,
-        content_fallback_enabled=True,
-    )
-    assert resolved == ["collaborative", "popular"]
-    assert recommend == ["collaborative", "content_fallback", "popular"]
-    assert content_fallback_enabled_from_models(recommend) is True
-    assert content_fallback_enabled_from_models(["collaborative", "popular"]) is False
-
-    # Artifact/AutoML path: omit the flag and derive from the stored list.
-    plan = plan_model_run(
-        ["collaborative", "content_fallback", "popular"],
-        blending_enabled=False,
-        content_fallback_enabled=None,
-    )
-    assert plan.content_fallback_active is True
-    assert list(plan.recommend_models) == ["collaborative", "content_fallback", "popular"]
-
-
-def test_item_based_k_neighbors_reaches_tfidf_recommender(sample_items, feature_config):
-    events = _synthetic_events()
-    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
-
-    fitted: dict = {}
-    train_and_recommend(
-        built,
-        target_users=["u1", "u2", "u3"],
-        config=feature_config,
-        top_k=2,
-        enabled_models=["item_based"],
-        item_based_k_neighbors=7,
-        strategy_cache=fitted,
-    )
-    params = fitted["item_based"].get_params(simple_types=True)
-    assert params["model.K"] == 7
-
-
 def test_content_fallback_surfaces_cold_item_for_matching_user(feature_config):
     now = pd.Timestamp.utcnow()
     events = pd.DataFrame(
@@ -1547,66 +877,3 @@ def test_content_fallback_respects_availability_filters(feature_config):
     recommended_items = set(recommendations[Columns.Item])
     assert "i_new_ok" in recommended_items
     assert "i_new_blocked" not in recommended_items
-
-
-def test_item_based_and_content_fallback_require_interactions(feature_config, sample_users):
-    """Feature-only warm users must not get item_based / content_fallback rows."""
-    now = pd.Timestamp.utcnow()
-    # u4 is feature-only in sample_users; give u1 beer interactions + a cold beer.
-    events = pd.DataFrame(
-        [
-            {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},
-            {"user_id": "u1", "item_id": "i2", "event_type": "purchase", "quantity": 1, "occurred_at": now},
-        ]
-    )
-    items = pd.DataFrame(
-        [
-            {"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True},
-            {"item_id": "i2", "category": "beer", "producer_id": "p2", "published": True, "in_stock": True},
-            {
-                "item_id": "i_new",
-                "category": "beer",
-                "producer_id": "p9",
-                "published": True,
-                "in_stock": True,
-            },
-        ]
-    )
-    built = build_dataset(events, sample_users, items, feature_config, half_life_days=90)
-    gated_models = ["item_based", "content_fallback"]
-    gated_sources = {"item_based", "content_fallback"}
-
-    # Full chain: feature-only u4 may get collaborative/popular, never gated sources.
-    mixed = train_and_recommend(
-        built,
-        target_users=["u1", "u4"],
-        config=feature_config,
-        top_k=5,
-        enabled_models=["collaborative", *gated_models, "popular"],
-        content_fallback_enabled=True,
-    )
-    assert "u4" in set(mixed[Columns.User])
-    feature_only = mixed[mixed[Columns.User] == "u4"]
-    assert not feature_only["source"].isin(gated_sources).any()
-
-    # Gated strategies alone: interacting user gets rows; feature-only gets none.
-    interacting_only = train_and_recommend(
-        built,
-        target_users=["u1"],
-        config=feature_config,
-        top_k=5,
-        enabled_models=gated_models,
-        content_fallback_enabled=True,
-    )
-    assert not interacting_only.empty
-    assert interacting_only["source"].isin(gated_sources).all()
-
-    feature_only_gated = train_and_recommend(
-        built,
-        target_users=["u4"],
-        config=feature_config,
-        top_k=5,
-        enabled_models=gated_models,
-        content_fallback_enabled=True,
-    )
-    assert feature_only_gated.empty

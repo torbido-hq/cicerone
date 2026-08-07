@@ -17,7 +17,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Artifacts schema **v3**: RecTools `model.save` / `load_model` in a zip
   envelope; `content_fallback` still pickle. Schema v2 no longer loadable.
 - Split `model` / `config` into packages; import paths unchanged. Cross-module
-  helpers are public (`_` = module-local only).
+  helpers are public (`_` = module-local only). Tests follow the same split
+  (`test_model_*.py`, `test_config_*.py`).
 
 ### Renamed config keys (legacy still accepted)
 

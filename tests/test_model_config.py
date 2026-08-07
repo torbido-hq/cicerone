@@ -1,4 +1,4 @@
-"""RecTools-native model config + persistence tests."""
+"""RecTools model_from_config / save-load tests."""
 
 from __future__ import annotations
 
