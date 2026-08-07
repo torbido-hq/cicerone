@@ -324,7 +324,7 @@ save_model_artifact = true
 Re-run the job from [step 3](#3-run-the-job-once). Alongside
 `recommendations.parquet` / `manifest.json` you should now see
 `model.artifact` in `data/output/`. The manifest gains
-`artifact_written = true` and `artifact_schema_version = 2`.
+`artifact_written = true` and `artifact_schema_version = 3`.
 
 Load it and recommend without calling `job.run` again:
 

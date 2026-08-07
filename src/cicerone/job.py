@@ -99,6 +99,7 @@ def run(triggered_by: str = "manual") -> None:
                 n_splits=settings.automl.n_splits,
                 test_days=settings.automl.test_days,
                 max_workers=settings.max_workers,
+                model_configs=settings.model_configs,
             )
             automl_result = select_best_candidate(
                 candidate_results, primary_metric=settings.automl.primary_metric
@@ -131,6 +132,7 @@ def run(triggered_by: str = "manual") -> None:
             max_workers=settings.max_workers,
             epoch_metrics=settings.epoch_metrics,
             item_based_k_neighbors=settings.item_based_k_neighbors,
+            model_configs=settings.model_configs,
             content_fallback_max_neighbors=settings.content_fallback_max_neighbors,
             run_plan=run_plan,
         )

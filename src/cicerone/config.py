@@ -233,6 +233,9 @@ class Settings:
     max_workers: int
     epoch_metrics: EpochMetricsSettings | None
     item_based_k_neighbors: int
+    # RecTools model_from_config dicts keyed by strategy name (collaborative,
+    # item_based, popular, latest). content_fallback is not included.
+    model_configs: dict[str, dict[str, Any]]
     content_fallback_enabled: bool
     content_fallback_max_neighbors: int
     automl: AutomlSettings
@@ -426,6 +429,7 @@ def make_settings(**overrides: Any) -> Settings:
         max_workers=DEFAULT_MAX_WORKERS,
         epoch_metrics=None,
         item_based_k_neighbors=DEFAULT_ITEM_BASED_K_NEIGHBORS,
+        model_configs=None,
         content_fallback_enabled=False,
         content_fallback_max_neighbors=DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS,
         automl=automl,
@@ -435,6 +439,20 @@ def make_settings(**overrides: Any) -> Settings:
         dashboard=dashboard,
     )
     base.update(overrides)
+    if base.get("model_configs") is None:
+        from cicerone.model_config import item_based_k_from_config, resolve_model_configs
+
+        # Honor make_settings(item_based_k_neighbors=N) via the legacy translator.
+        k_neighbors = int(base["item_based_k_neighbors"])
+        k_explicit = "item_based_k_neighbors" in overrides
+        configs = resolve_model_configs(
+            legacy_k_neighbors=k_neighbors,
+            legacy_k_neighbors_explicit=k_explicit,
+        )
+        base["model_configs"] = configs
+        k_from_cfg = item_based_k_from_config(configs["item_based"])
+        if k_from_cfg is not None:
+            base["item_based_k_neighbors"] = k_from_cfg
     return Settings(**base)
 
 
@@ -513,6 +531,25 @@ def load_settings(config_path: str | None = None) -> Settings:
 
     item_based = job.get("item_based", {}) or {}
     content_fallback = job.get("content_fallback", {}) or {}
+    legacy_k_explicit = "k_neighbors" in item_based
+    legacy_k_neighbors = _require_positive_int(
+        int(item_based.get("k_neighbors", DEFAULT_ITEM_BASED_K_NEIGHBORS)),
+        name="job.item_based.k_neighbors",
+    )
+
+    from cicerone.model_config import item_based_k_from_config, resolve_model_configs
+
+    model_configs = resolve_model_configs(
+        raw.get("model"),
+        legacy_k_neighbors=legacy_k_neighbors,
+        legacy_k_neighbors_explicit=legacy_k_explicit,
+    )
+    resolved_k = item_based_k_from_config(model_configs["item_based"])
+    item_based_k_neighbors = (
+        _require_positive_int(resolved_k, name="model.item_based.model.K")
+        if resolved_k is not None
+        else legacy_k_neighbors
+    )
 
     return Settings(
         input=_load_io_settings(raw, "input"),
@@ -536,10 +573,8 @@ def load_settings(config_path: str | None = None) -> Settings:
             plateau_eps=job.get("epoch_metrics_plateau_eps"),
             plateau_window=job.get("epoch_metrics_plateau_window"),
         ),
-        item_based_k_neighbors=_require_positive_int(
-            int(item_based.get("k_neighbors", DEFAULT_ITEM_BASED_K_NEIGHBORS)),
-            name="job.item_based.k_neighbors",
-        ),
+        item_based_k_neighbors=item_based_k_neighbors,
+        model_configs=model_configs,
         content_fallback_enabled=bool(content_fallback.get("enabled", False)),
         content_fallback_max_neighbors=_require_positive_int(
             int(content_fallback.get("max_neighbors", DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS)),

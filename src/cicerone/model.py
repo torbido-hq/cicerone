@@ -10,17 +10,16 @@ import logging
 import random
 from collections.abc import Callable, Sequence
 from concurrent.futures import ProcessPoolExecutor
+from copy import deepcopy
 from dataclasses import dataclass
 from itertools import repeat
-from typing import Protocol
+from typing import Any, Protocol
 
 import pandas as pd
-from implicit.nearest_neighbours import TFIDFRecommender
-from lightfm import LightFM
 from rectools import Columns
 from rectools.dataset import Dataset
 from rectools.metrics import Precision, Recall, calc_metrics
-from rectools.models import ImplicitItemKNNWrapperModel, LightFMWrapperModel, PopularModel
+from rectools.models import model_from_config
 
 from cicerone.blending import (
     COLD_START_USER_ID,
@@ -35,7 +34,6 @@ from cicerone.blending import (
 )
 from cicerone.config import (
     DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS,
-    DEFAULT_ITEM_BASED_K_NEIGHBORS,
     STRATEGY_NAMES,
     EpochMetricsSettings,
     validate_model_weights,
@@ -49,6 +47,11 @@ from cicerone.content_fallback import (
 from cicerone.dataset import BuiltDataset
 from cicerone.feature_config import DEFAULT_BOOST_OVERFETCH_FACTOR, FeatureColumn, FeatureConfig
 from cicerone.ids import interacting_external_user_ids
+from cicerone.model_config import (
+    RECTOOLS_STRATEGY_NAMES,
+    default_model_configs,
+    resolve_model_configs,
+)
 from cicerone.policy import (
     allowed_items_for_cohort,
     apply_boosts,
@@ -122,28 +125,60 @@ def _as_recommender_model(model: object) -> RecommenderModel:
 
 @dataclass(frozen=True)
 class Strategy:
-    factory: Callable[[], RecommenderModel]
     personalized: bool
     source_label: str
     # Item-KNN / content_fallback need history; LightFM hybrid can score feature-only users.
     requires_interactions: bool = False
+    # Optional factory override (tests / content_fallback placeholder). When set,
+    # skips RecTools model_from_config for this strategy.
+    factory: Callable[[], RecommenderModel] | None = None
 
 
-def _build_collaborative() -> RecommenderModel:
-    return _as_recommender_model(
-        LightFMWrapperModel(
-            LightFM(
-                no_components=64,
-                loss="warp",
-                learning_rate=0.05,
-                item_alpha=1e-6,
-                user_alpha=1e-6,
-                random_state=RANDOM_STATE,
-            ),
-            epochs=COLLABORATIVE_EPOCHS,
-            num_threads=_FIT_POOL_LIGHTFM_THREADS,
+def build_strategy_model(
+    name: str,
+    *,
+    model_configs: dict[str, dict[str, Any]] | None = None,
+    lightfm_num_threads: int | None = None,
+) -> RecommenderModel:
+    """Instantiate one RecTools strategy via ``model_from_config``.
+
+    ``content_fallback`` is not RecTools-backed — use ``build_content_fallback_model``.
+    """
+    if name not in RECTOOLS_STRATEGY_NAMES:
+        raise ValueError(
+            f"Cannot build {name!r} via RecTools config; available: {list(RECTOOLS_STRATEGY_NAMES)}"
         )
-    )
+    configs = model_configs if model_configs is not None else default_model_configs()
+    if name not in configs:
+        raise ValueError(f"No model config for strategy {name!r}; have {sorted(configs)}")
+    cfg = deepcopy(configs[name])
+    if name == "collaborative":
+        threads = lightfm_num_threads if lightfm_num_threads is not None else _FIT_POOL_LIGHTFM_THREADS
+        cfg["num_threads"] = threads
+    return _as_recommender_model(model_from_config(cfg))
+
+
+def _build_content_fallback() -> RecommenderModel:
+    """Placeholder factory; real instances are built in ``_fit_strategy`` with items/features."""
+    return _as_recommender_model(ContentFallbackModel())
+
+
+STRATEGIES: dict[str, Strategy] = {
+    "collaborative": Strategy(personalized=True, source_label="personalized"),
+    "item_based": Strategy(
+        personalized=True,
+        source_label="item_based",
+        requires_interactions=True,
+    ),
+    "content_fallback": Strategy(
+        factory=_build_content_fallback,
+        personalized=True,
+        source_label=CONTENT_FALLBACK_SOURCE,
+        requires_interactions=True,
+    ),
+    "popular": Strategy(personalized=False, source_label="popular_fallback"),
+    "latest": Strategy(personalized=False, source_label="latest"),
+}
 
 
 def _should_log_epoch(epoch: int, total_epochs: int, every: int) -> bool:
@@ -265,44 +300,6 @@ def _fit_lightfm_with_epoch_metrics(
     return model
 
 
-def _build_item_based(k_neighbors: int = DEFAULT_ITEM_BASED_K_NEIGHBORS) -> RecommenderModel:
-    return _as_recommender_model(ImplicitItemKNNWrapperModel(TFIDFRecommender(K=k_neighbors)))
-
-
-def _build_popular() -> RecommenderModel:
-    return _as_recommender_model(PopularModel())
-
-
-def _build_latest() -> RecommenderModel:
-    return _as_recommender_model(
-        PopularModel(popularity="n_interactions", period=pd.Timedelta(days=LATEST_WINDOW_DAYS))
-    )
-
-
-def _build_content_fallback() -> RecommenderModel:
-    """Placeholder factory; real instances are built in ``_fit_strategy`` with items/features."""
-    return _as_recommender_model(ContentFallbackModel())
-
-
-STRATEGIES: dict[str, Strategy] = {
-    "collaborative": Strategy(_build_collaborative, personalized=True, source_label="personalized"),
-    "item_based": Strategy(
-        _build_item_based,
-        personalized=True,
-        source_label="item_based",
-        requires_interactions=True,
-    ),
-    "content_fallback": Strategy(
-        _build_content_fallback,
-        personalized=True,
-        source_label=CONTENT_FALLBACK_SOURCE,
-        requires_interactions=True,
-    ),
-    "popular": Strategy(_build_popular, personalized=False, source_label="popular_fallback"),
-    "latest": Strategy(_build_latest, personalized=False, source_label="latest"),
-}
-
-
 def _validate_strategy_names(strategies: dict[str, Strategy], strategy_names: tuple[str, ...]) -> None:
     """Raises if STRATEGIES' keys and cicerone.config.STRATEGY_NAMES drift apart."""
     if set(strategies) != set(strategy_names):
@@ -365,22 +362,42 @@ def _init_fit_worker(lightfm_threads: int) -> None:
     _FIT_POOL_LIGHTFM_THREADS = lightfm_threads
 
 
+def _resolve_model_configs_for_fit(
+    model_configs: dict[str, dict[str, Any]] | None,
+    item_based_k_neighbors: int | None,
+) -> dict[str, dict[str, Any]]:
+    """Apply optional k_neighbors override onto a copy of model configs."""
+    if model_configs is None and item_based_k_neighbors is None:
+        return default_model_configs()
+    if model_configs is None:
+        return resolve_model_configs(
+            legacy_k_neighbors=item_based_k_neighbors,
+            legacy_k_neighbors_explicit=item_based_k_neighbors is not None,
+        )
+    configs = {name: deepcopy(cfg) for name, cfg in model_configs.items()}
+    if item_based_k_neighbors is not None:
+        item_cfg = configs.setdefault("item_based", deepcopy(default_model_configs()["item_based"]))
+        model_section = item_cfg.setdefault("model", {})
+        model_section["K"] = int(item_based_k_neighbors)
+        configs["item_based"] = item_cfg
+    return configs
+
+
 def _fit_strategy(
     name: str,
     dataset: Dataset,
     epoch_interactions: pd.DataFrame | None,
     epoch_metrics: EpochMetricsSettings | None,
     epoch_metrics_top_k: int,
-    item_based_k_neighbors: int = DEFAULT_ITEM_BASED_K_NEIGHBORS,
+    model_configs: dict[str, dict[str, Any]] | None = None,
     content_feature_columns: list[FeatureColumn] | None = None,
     content_max_neighbors: int = DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS,
     content_items: pd.DataFrame | None = None,
     content_interactions: pd.DataFrame | None = None,
 ) -> tuple[str, RecommenderModel]:
     """Fit one strategy (picklable for ProcessPoolExecutor workers)."""
-    if name == "item_based":
-        model = _build_item_based(item_based_k_neighbors)
-    elif name == "content_fallback":
+    strategy = STRATEGIES[name]
+    if name == "content_fallback":
         model = _as_recommender_model(
             build_content_fallback_model(
                 feature_columns=content_feature_columns or [],
@@ -389,8 +406,14 @@ def _fit_strategy(
                 interactions=content_interactions,
             )
         )
+    elif strategy.factory is not None:
+        model = strategy.factory()
     else:
-        model = STRATEGIES[name].factory()
+        model = build_strategy_model(
+            name,
+            model_configs=model_configs,
+            lightfm_num_threads=_FIT_POOL_LIGHTFM_THREADS,
+        )
     if name == "collaborative" and epoch_metrics is not None:
         if epoch_interactions is None:
             raise ValueError("epoch_interactions is required when epoch metric logging is enabled")
@@ -491,7 +514,8 @@ def fit_strategies(
     max_workers: int = 1,
     epoch_metrics: EpochMetricsSettings | None = None,
     epoch_metrics_top_k: int = 10,
-    item_based_k_neighbors: int = DEFAULT_ITEM_BASED_K_NEIGHBORS,
+    item_based_k_neighbors: int | None = None,
+    model_configs: dict[str, dict[str, Any]] | None = None,
     content_fallback_max_neighbors: int = DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS,
     content_feature_columns: list[FeatureColumn] | None = None,
 ) -> tuple[list[str], dict[str, RecommenderModel]]:
@@ -499,9 +523,14 @@ def fit_strategies(
 
     ``epoch_metrics`` enables collaborative fit_partial logging; default
     ``None`` keeps a single LightFM ``fit()``.
+
+    Models are built via RecTools ``model_from_config`` using ``model_configs``
+    (defaults from ``cicerone.model_config``). ``item_based_k_neighbors`` remains
+    as a convenience override for the legacy ``job.item_based.k_neighbors`` knob.
     """
     dataset = built.dataset
     enabled_models = _resolve_enabled_models(enabled_models)
+    resolved_configs = _resolve_model_configs_for_fit(model_configs, item_based_k_neighbors)
 
     known_users = set(dataset.user_id_map.external_ids)
     warm_users = [u for u in target_users if u in known_users]
@@ -557,7 +586,7 @@ def fit_strategies(
                     repeat(epoch_interactions),
                     repeat(epoch_metrics),
                     repeat(epoch_metrics_top_k),
-                    repeat(item_based_k_neighbors),
+                    repeat(resolved_configs),
                     repeat(content_cols),
                     repeat(content_fallback_max_neighbors),
                     repeat(content_items),
@@ -574,7 +603,7 @@ def fit_strategies(
                     epoch_interactions,
                     epoch_metrics,
                     epoch_metrics_top_k,
-                    item_based_k_neighbors,
+                    resolved_configs,
                     content_cols,
                     content_fallback_max_neighbors,
                     content_items,
@@ -1014,7 +1043,8 @@ def train_and_recommend(
     strategy_cache: dict[str, RecommenderModel] | None = None,
     max_workers: int = 1,
     epoch_metrics: EpochMetricsSettings | None = None,
-    item_based_k_neighbors: int = DEFAULT_ITEM_BASED_K_NEIGHBORS,
+    item_based_k_neighbors: int | None = None,
+    model_configs: dict[str, dict[str, Any]] | None = None,
     content_fallback_enabled: bool | None = None,
     content_fallback_max_neighbors: int = DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS,
     run_plan: ModelRunPlan | None = None,
@@ -1041,6 +1071,7 @@ def train_and_recommend(
         epoch_metrics=epoch_metrics,
         epoch_metrics_top_k=top_k,
         item_based_k_neighbors=item_based_k_neighbors,
+        model_configs=model_configs,
         content_fallback_max_neighbors=content_fallback_max_neighbors,
         content_feature_columns=config.item_features,
     )

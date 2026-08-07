@@ -30,11 +30,16 @@ io/
 dataset.py            raw events/users/items -> weighted rectools Dataset (BuiltDataset;
                      keeps users+items frames for policy evaluation; caps keep most recent N)
 model.py              BuiltDataset -> STRATEGIES registry (collaborative/item_based/
-                     content_fallback/popular/latest) -> cohort-aware recommend ->
+                     content_fallback/popular/latest) via RecTools
+                     model_from_config -> cohort-aware recommend ->
                      combine/blend -> boosts (phased recommend_with_models)
+model_config.py       default + TOML [model.*] RecTools configs; legacy
+                     job.item_based.k_neighbors → model.K translation
+                     (no rectools import — safe for serve)
 content_fallback.py   optional content-based cold-item strategy (one-hot item
                      features + cosine vs user history)
-artifact.py           optional versioned fitted-model bundle (save/load + recommend
+artifact.py           optional versioned fitted-model bundle (RecTools
+                     save/load_model for library models + recommend
                      without re-fitting); written by the batch job when enabled
 automl.py            optional: backtests candidate models/weights/rrf_k configs over
                      time-based folds of event history and picks the best one

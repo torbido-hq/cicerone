@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import pandas as pd
 import pytest
-from implicit.nearest_neighbours import TFIDFRecommender
 from rectools import Columns
 
 from cicerone.config import STRATEGY_NAMES, ConfigError, validate_model_weights
@@ -342,9 +341,11 @@ def test_validate_strategy_names_raises_on_mismatch():
         _validate_strategy_names({"popular": STRATEGIES["popular"]}, ("popular", "latest"))
 
 
-def test_as_recommender_model_accepts_every_registered_strategy_factory():
+def test_as_recommender_model_accepts_every_registered_strategy():
+    from cicerone.model import build_strategy_model
+
     for name, strategy in STRATEGIES.items():
-        model = strategy.factory()
+        model = strategy.factory() if strategy.factory is not None else build_strategy_model(name)
         assert _as_recommender_model(model) is model, name
 
 
@@ -569,10 +570,10 @@ def test_train_and_recommend_reuses_strategy_cache_across_calls(sample_items, fe
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
 
     fit_calls = []
-    original_factory = STRATEGIES["popular"].factory
+    from cicerone.model import build_strategy_model
 
     def counting_factory():
-        model = original_factory()
+        model = build_strategy_model("popular")
         original_fit = model.fit
 
         def counting_fit(dataset):
@@ -583,7 +584,9 @@ def test_train_and_recommend_reuses_strategy_cache_across_calls(sample_items, fe
         return model
 
     monkeypatch.setitem(
-        STRATEGIES, "popular", Strategy(counting_factory, personalized=False, source_label="popular_fallback")
+        STRATEGIES,
+        "popular",
+        Strategy(personalized=False, source_label="popular_fallback", factory=counting_factory),
     )
 
     cache: dict[str, RecommenderModel] = {}
@@ -617,10 +620,10 @@ def test_train_and_recommend_strategy_cache_reused_across_different_top_k_and_we
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
 
     fit_calls = []
-    original_factory = STRATEGIES["popular"].factory
+    from cicerone.model import build_strategy_model
 
     def counting_factory():
-        model = original_factory()
+        model = build_strategy_model("popular")
         original_fit = model.fit
 
         def counting_fit(dataset):
@@ -631,7 +634,9 @@ def test_train_and_recommend_strategy_cache_reused_across_different_top_k_and_we
         return model
 
     monkeypatch.setitem(
-        STRATEGIES, "popular", Strategy(counting_factory, personalized=False, source_label="popular_fallback")
+        STRATEGIES,
+        "popular",
+        Strategy(personalized=False, source_label="popular_fallback", factory=counting_factory),
     )
 
     cache: dict[str, RecommenderModel] = {}
@@ -663,10 +668,10 @@ def test_train_and_recommend_without_cache_refits_every_call(sample_items, featu
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
 
     fit_calls = []
-    original_factory = STRATEGIES["popular"].factory
+    from cicerone.model import build_strategy_model
 
     def counting_factory():
-        model = original_factory()
+        model = build_strategy_model("popular")
         original_fit = model.fit
 
         def counting_fit(dataset):
@@ -677,7 +682,9 @@ def test_train_and_recommend_without_cache_refits_every_call(sample_items, featu
         return model
 
     monkeypatch.setitem(
-        STRATEGIES, "popular", Strategy(counting_factory, personalized=False, source_label="popular_fallback")
+        STRATEGIES,
+        "popular",
+        Strategy(personalized=False, source_label="popular_fallback", factory=counting_factory),
     )
 
     train_and_recommend(
@@ -1307,11 +1314,12 @@ def test_sample_epoch_metric_users_is_seeded_not_prefix():
 def test_train_and_recommend_logs_epoch_metrics_when_configured(
     sample_items, feature_config, monkeypatch, caplog
 ):
-    import cicerone.model as model_module
     from cicerone.config import EpochMetricsSettings
+    from cicerone.model_config import default_model_configs
 
     # Short epoch loop so this stays a unit test.
-    monkeypatch.setattr(model_module, "COLLABORATIVE_EPOCHS", 4)
+    configs = default_model_configs()
+    configs["collaborative"]["epochs"] = 4
     events = _synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
 
@@ -1323,6 +1331,7 @@ def test_train_and_recommend_logs_epoch_metrics_when_configured(
             top_k=2,
             enabled_models=["collaborative"],
             epoch_metrics=EpochMetricsSettings(every=2),
+            model_configs=configs,
         )
 
     assert not recommendations.empty
@@ -1400,18 +1409,11 @@ def test_resolve_run_models_centralizes_content_fallback_and_blending():
     assert list(plan.recommend_models) == ["collaborative", "content_fallback", "popular"]
 
 
-def test_item_based_k_neighbors_reaches_tfidf_recommender(sample_items, feature_config, monkeypatch):
+def test_item_based_k_neighbors_reaches_tfidf_recommender(sample_items, feature_config):
     events = _synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
-    seen: list[int] = []
-    real_tfidf = TFIDFRecommender
 
-    def tracking_tfidf(*args, **kwargs):
-        seen.append(kwargs["K"])
-        return real_tfidf(*args, **kwargs)
-
-    monkeypatch.setattr("cicerone.model.TFIDFRecommender", tracking_tfidf)
-
+    fitted: dict = {}
     train_and_recommend(
         built,
         target_users=["u1", "u2", "u3"],
@@ -1419,8 +1421,10 @@ def test_item_based_k_neighbors_reaches_tfidf_recommender(sample_items, feature_
         top_k=2,
         enabled_models=["item_based"],
         item_based_k_neighbors=7,
+        strategy_cache=fitted,
     )
-    assert seen == [7]
+    params = fitted["item_based"].get_params(simple_types=True)
+    assert params["model.K"] == 7
 
 
 def test_content_fallback_surfaces_cold_item_for_matching_user(feature_config):

@@ -4,6 +4,32 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.0] - Unreleased
+
+### Added
+
+- RecTools-native model configuration: optional `[model.<strategy>]` TOML
+  tables map 1:1 onto `rectools.models.model_from_config` (with a required
+  `cls` key). Defaults preserve the previous hardcoded LightFM / item-KNN /
+  Popular hyperparameters. Strategies: `collaborative`, `item_based`,
+  `popular`, `latest` (`content_fallback` stays under `[job.content_fallback]`).
+
+### Changed
+
+- Strategy construction uses RecTools `model_from_config` / `get_config`
+  instead of hand-written `LightFM(...)` / `TFIDFRecommender(...)` factories.
+- Model artifact persistence (`[job].save_model_artifact`) now serializes
+  RecTools strategies with `model.save` / `load_model` (artifact schema
+  version **3**, zip envelope). `content_fallback` remains pickle-backed
+  inside the same artifact. Schema v2 bare-pickle artifacts are no longer
+  loadable.
+
+### Renamed config keys (legacy still accepted)
+
+- `job.item_based.k_neighbors` → RecTools `model.item_based.model.K`
+  (`TFIDFRecommender.K`). Setting both to different values raises
+  `ConfigError`. Prefer `[model.item_based]`.
+
 ## [0.4.1] - 2026-08-07
 
 ### Added

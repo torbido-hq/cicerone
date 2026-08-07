@@ -323,10 +323,12 @@ user/item pair). Defaults to `["collaborative", "item_based", "popular"]`
 if omitted:
 
 - `collaborative`: `LightFMWrapperModel` (rectools) — hybrid CF, uses user/item
-  features for cold-start. Personalized, warm users only.
+  features for cold-start. Personalized, warm users only. Hyperparameters
+  via `[model.collaborative]` (RecTools `model_from_config` schema).
 - `item_based`: `ImplicitItemKNNWrapperModel` (rectools) — item-item
   similarity (`TFIDFRecommender`). Personalized, warm users only. Neighbor
-  count is `[job.item_based].k_neighbors` (default `20`).
+  count is RecTools `model.item_based.model.K` (default `20`); the legacy
+  `[job.item_based].k_neighbors` key is still accepted and translated.
 - `content_fallback`: feature-similarity recommendations for **zero-interaction
   items** (one-hot over `item_features`, cosine vs user history). Personalized,
   warm users only. Off by default — set `[job.content_fallback].enabled = true`
@@ -334,10 +336,10 @@ if omitted:
   `models`). Independent of `item_based`.
 - `popular`: `PopularModel` (rectools) — global popularity. Non-personalized,
   runs for every target user and backfills any warm user without enough
-  personalized results.
+  personalized results. Optional `[model.popular]`.
 - `latest`: `PopularModel` restricted to the last two weeks of interactions —
   trending/recently active items. Non-personalized, same backfill role as
-  `popular`.
+  `popular`. Optional `[model.latest]` (`period = { days = 14 }`).
 
 By default, strategies are combined in priority order: earlier strategies
 fill top-K slots first (later ones only backfill remaining slots), and
@@ -428,9 +430,11 @@ artifact was saved.
 
 This is a train/serve *artifact* split (inspired by tools like
 LibRecommender), not live inference: serve mode still reads precomputed
-recommendation rows only and never loads the artifact or ML deps. Artifacts
-are pickle-serialized and must only be loaded from trusted internal sources
-(never user uploads).
+recommendation rows only and never loads the artifact or ML deps. RecTools
+strategies inside the artifact are written with `model.save` /
+`load_model`; the envelope (dataset, feature config) and custom
+`content_fallback` weights still use pickle and must only be loaded from
+trusted internal sources (never user uploads).
 
 ## Output
 
