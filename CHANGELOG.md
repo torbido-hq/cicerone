@@ -16,6 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Strategies built via RecTools `model_from_config` / `get_config`.
 - Artifacts schema **v3**: RecTools `model.save` / `load_model` in a zip
   envelope; `content_fallback` still pickle. Schema v2 no longer loadable.
+  `created_at` is stored as ISO-8601 in `meta.json` and loaded as `datetime`.
 - Split `model` / `config` into packages; import paths unchanged. Cross-module
   helpers are public (`_` = module-local only). Tests follow the same split
   (`test_model_*.py`, `test_config_*.py`).
