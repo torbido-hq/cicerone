@@ -8,7 +8,8 @@ For configuration and usage, see the main [README](../README.md).
 ## Module overview
 
 ```
-config.py            load & resolve config/cicerone.toml (structural config + ${ENV_VAR} secrets);
+config/               load & resolve config/cicerone.toml (structural config + ${ENV_VAR} secrets);
+                     package: constants / settings / validation / load;
                      nested Serve/Trigger/Dashboard/AutoML settings (+ flat property aliases);
                      `ConfigError` for invalid knobs; `make_settings(**overrides)` for tests / OpenAPI export
 feature_config.py     load config/features.toml (event weights, feature columns,
@@ -29,10 +30,13 @@ io/
   options.py           shared "require_option"/build_s3_client helpers
 dataset.py            raw events/users/items -> weighted rectools Dataset (BuiltDataset;
                      keeps users+items frames for policy evaluation; caps keep most recent N)
-model.py              BuiltDataset -> STRATEGIES registry (collaborative/item_based/
-                     content_fallback/popular/latest) via RecTools
-                     model_from_config -> cohort-aware recommend ->
-                     combine/blend -> boosts (phased recommend_with_models)
+model/                BuiltDataset -> STRATEGIES registry -> fit / recommend / combine
+  strategies.py       RecommenderModel protocol, Strategy, STRATEGIES, build_strategy_model
+  fit.py              fit_strategies, plan_model_run, ProcessPool workers
+  recommend.py        recommend_with_models, cohort plan, train_and_recommend
+  combine.py          priority + weighted RRF combiners
+  epoch_metrics.py    optional LightFM per-epoch Precision/Recall logging
+  constants.py        RRF_K, DEFAULT_MODELS, source column names
 model_config.py       default + TOML [model.*] RecTools configs; legacy
                      job.item_based.k_neighbors → model.K translation
                      (no rectools import — safe for serve)
@@ -103,7 +107,7 @@ flowchart LR
    columns into rectools' long format, then constructs a
    `rectools.dataset.Dataset`.
 3. `model.train_and_recommend()` fits every strategy listed in
-   `Settings.models` (`STRATEGIES` registry in `model.py`; defaults to
+   `Settings.models` (`STRATEGIES` registry in `model/`; defaults to
    `["collaborative", "item_based", "popular"]`) and produces top-K
    recommendations. When `[job.content_fallback].enabled` is true,
    `content_fallback` is inserted before the first non-personalized
@@ -332,7 +336,7 @@ keys a given backend requires. To add a new backend (e.g. a message queue):
    `build_input_source`/`build_output_sink`.
 3. Document the new `kind` and its `options` in `config/cicerone.toml`.
 
-Nothing in `config.py`, `job.py`, `dataset.py`, or `model.py` needs to
+Nothing in `config/`, `job.py`, `dataset.py`, or `model/` needs to
 change — they only ever see the `InputSource`/`OutputSink` protocol and the
 generic `IOSettings`.
 

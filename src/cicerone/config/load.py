@@ -1,345 +1,44 @@
-"""Configuration for the Cicerone recommender job.
-
-Loaded from a TOML file (default /app/config/cicerone.toml, override with
-CICERONE_CONFIG_PATH). Secrets use ${ENV_VAR_NAME} placeholders; escape a
-literal "${...}" as "$${...}".
-"""
+"""Load Settings from TOML / build Settings for tests."""
 
 from __future__ import annotations
 
 import os
 import re
 import tomllib
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, cast
 
-DEFAULT_CONFIG_PATH = "/app/config/cicerone.toml"
-
-# Kept here (not cicerone.model) so Settings.models validates without ML deps.
-STRATEGY_NAMES: tuple[str, ...] = (
-    "collaborative",
-    "item_based",
-    "content_fallback",
-    "popular",
-    "latest",
+from cicerone.config.constants import (
+    AUTOML_DEFAULT_N_SPLITS,
+    AUTOML_DEFAULT_PRIMARY_METRIC,
+    AUTOML_DEFAULT_TEST_DAYS,
+    DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS,
+    DEFAULT_ITEM_BASED_K_NEIGHBORS,
+    DEFAULT_MAX_WORKERS,
+    MODES,
+    STRATEGY_NAMES,
+    ConfigError,
+    Mode,
+)
+from cicerone.config.settings import (
+    AutomlSettings,
+    DashboardSettings,
+    IOSettings,
+    ServeSettings,
+    Settings,
+    TriggerSettings,
+)
+from cicerone.config.validation import (
+    _require_positive_float,
+    _require_positive_int,
+    resolve_epoch_metrics,
+    resolve_max_workers,
+    validate_model_weights,
+    validate_rrf_k,
 )
 
-AUTOML_DEFAULT_N_SPLITS = 2
-AUTOML_DEFAULT_TEST_DAYS = 14
-AUTOML_DEFAULT_PRIMARY_METRIC = "MAP"
-# Sequential default: ProcessPool after threaded I/O deadlocks easily (LightFM/OpenBLAS).
-DEFAULT_MAX_WORKERS = 1
-DEFAULT_EPOCH_METRICS_EVERY = 5
-DEFAULT_EPOCH_METRICS_MAX_USERS = 500
-DEFAULT_EPOCH_METRICS_REGRESSION_DROP = 0.25
-DEFAULT_EPOCH_METRICS_PLATEAU_EPS = 0.01
-DEFAULT_EPOCH_METRICS_PLATEAU_WINDOW = 3
-DEFAULT_ITEM_BASED_K_NEIGHBORS = 20
-DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS = 50
-
-Mode = Literal["batch", "serve"]
-# Strategy names stay as ``str`` and are validated against STRATEGY_NAMES at load.
-StrategyName = str
-
-MODES: tuple[Mode, ...] = ("batch", "serve")
-
-
-class ConfigError(ValueError):
-    """Invalid config content or knobs (not missing files / unset env vars)."""
-
-
-@dataclass(frozen=True)
-class EpochMetricsSettings:
-    """Tunables for optional LightFM per-epoch metric logging."""
-
-    every: int
-    max_users: int = DEFAULT_EPOCH_METRICS_MAX_USERS
-    regression_drop: float = DEFAULT_EPOCH_METRICS_REGRESSION_DROP
-    plateau_eps: float = DEFAULT_EPOCH_METRICS_PLATEAU_EPS
-    plateau_window: int = DEFAULT_EPOCH_METRICS_PLATEAU_WINDOW
-
-
-@dataclass(frozen=True)
-class ServeSettings:
-    host: str = "0.0.0.0"
-    port: int = 8000
-    auth_token: str | None = None
-    default_k: int = 10
-    refresh_interval_seconds: float = 60.0
-    category_column: str = "category"
-
-
-@dataclass(frozen=True)
-class TriggerSettings:
-    enabled: bool = False
-    host: str = "0.0.0.0"
-    port: int = 8080
-    auth_token: str | None = None
-    debounce_seconds: float = 60.0
-    poll_input_bucket: bool = False
-    poll_interval_seconds: float = 300.0
-
-
-@dataclass(frozen=True)
-class DashboardSettings:
-    enabled: bool = False
-    host: str = "0.0.0.0"
-    port: int = 8090
-    users_path: str = "/app/config/dashboard_users.toml"
-    refresh_interval_seconds: float = 30.0
-    history_limit: int = 20
-
-
-@dataclass(frozen=True)
-class AutomlSettings:
-    enabled: bool = False
-    n_splits: int = AUTOML_DEFAULT_N_SPLITS
-    test_days: int = AUTOML_DEFAULT_TEST_DAYS
-    primary_metric: str = AUTOML_DEFAULT_PRIMARY_METRIC
-    candidates: list[dict[str, Any]] | None = None
-
-
-def resolve_max_workers(raw: Any | None = None) -> int:
-    """Process-pool size for AutoML folds / strategy fitting.
-
-    Omit or pass ``None`` for sequential (``1``). An explicit integer must be >= 1.
-    """
-    if raw is None:
-        return DEFAULT_MAX_WORKERS
-    workers = int(raw)
-    if workers < 1:
-        raise ConfigError(f"job.max_workers must be >= 1, got {workers}")
-    return workers
-
-
-def resolve_epoch_metrics(
-    *,
-    log_epoch_metrics: bool,
-    every: Any | None = None,
-    max_users: Any | None = None,
-    regression_drop: Any | None = None,
-    plateau_eps: Any | None = None,
-    plateau_window: Any | None = None,
-) -> EpochMetricsSettings | None:
-    """Build epoch-metric settings, or ``None`` when logging is off.
-
-    Interval / threshold knobs are validated only when logging is enabled.
-    """
-    if not log_epoch_metrics:
-        return None
-    return EpochMetricsSettings(
-        every=_require_positive_int(
-            DEFAULT_EPOCH_METRICS_EVERY if every is None else int(every),
-            name="job.epoch_metrics_every",
-        ),
-        max_users=_require_positive_int(
-            DEFAULT_EPOCH_METRICS_MAX_USERS if max_users is None else int(max_users),
-            name="job.epoch_metrics_max_users",
-        ),
-        regression_drop=_require_unit_interval(
-            DEFAULT_EPOCH_METRICS_REGRESSION_DROP if regression_drop is None else float(regression_drop),
-            name="job.epoch_metrics_regression_drop",
-        ),
-        plateau_eps=_require_unit_interval(
-            DEFAULT_EPOCH_METRICS_PLATEAU_EPS if plateau_eps is None else float(plateau_eps),
-            name="job.epoch_metrics_plateau_eps",
-        ),
-        plateau_window=_require_positive_int(
-            DEFAULT_EPOCH_METRICS_PLATEAU_WINDOW if plateau_window is None else int(plateau_window),
-            name="job.epoch_metrics_plateau_window",
-        ),
-    )
-
-
-def validate_model_weights(weights: dict[str, float] | None, *, context: str = "model_weights") -> None:
-    if weights is None:
-        return
-    negative_weights = {name: weight for name, weight in weights.items() if weight < 0}
-    if negative_weights:
-        raise ConfigError(f"{context} value(s) must be non-negative, got {negative_weights}")
-
-
-def validate_rrf_k(rrf_k: float | None, *, context: str = "rrf_k") -> None:
-    if rrf_k is not None and rrf_k <= 0:
-        raise ConfigError(f"{context} must be positive, got {rrf_k}")
-
-
-def _require_positive_int(value: int, *, name: str) -> int:
-    if value < 1:
-        raise ConfigError(f"{name} must be >= 1, got {value}")
-    return value
-
-
-def _require_positive_float(value: float, *, name: str) -> float:
-    if value <= 0:
-        raise ConfigError(f"{name} must be > 0, got {value}")
-    return value
-
-
-def _require_unit_interval(value: float, *, name: str) -> float:
-    """Require a relative fraction in (0, 1]."""
-    if value <= 0 or value > 1:
-        raise ConfigError(f"{name} must be in (0, 1], got {value}")
-    return value
-
-
 _ENV_PLACEHOLDER = re.compile(r"\$(\$?)\{([A-Za-z_][A-Za-z0-9_]*)\}")
-
-
-def _resolve_env_placeholders(value: Any, path: str = "") -> Any:
-    if isinstance(value, str):
-
-        def _replace(match: re.Match[str]) -> str:
-            escaped, name = match.group(1), match.group(2)
-            if escaped:
-                return f"${{{name}}}"
-            if name not in os.environ:
-                location = f" (at '{path}')" if path else ""
-                raise RuntimeError(
-                    f"Config references ${{{name}}}{location} but that environment variable is not set"
-                )
-            return os.environ[name]
-
-        return _ENV_PLACEHOLDER.sub(_replace, value)
-    if isinstance(value, dict):
-        return {
-            key: _resolve_env_placeholders(item, f"{path}.{key}" if path else str(key))
-            for key, item in value.items()
-        }
-    if isinstance(value, list):
-        return [_resolve_env_placeholders(item, f"{path}[{index}]") for index, item in enumerate(value)]
-    return value
-
-
-@dataclass(frozen=True)
-class IOSettings:
-    kind: str
-    options: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class Settings:
-    input: IOSettings
-    output: IOSettings
-    feature_config_path: str
-    top_k: int
-    half_life_days: float
-    cron_schedule: str
-    models: list[str] | None
-    model_weights: dict[str, float] | None
-    rrf_k: float | None
-    save_model_artifact: bool
-    max_workers: int
-    epoch_metrics: EpochMetricsSettings | None
-    item_based_k_neighbors: int
-    # RecTools model_from_config dicts keyed by strategy name (collaborative,
-    # item_based, popular, latest). content_fallback is not included.
-    model_configs: dict[str, dict[str, Any]]
-    content_fallback_enabled: bool
-    content_fallback_max_neighbors: int
-    automl: AutomlSettings
-    mode: Mode
-    serve: ServeSettings
-    trigger: TriggerSettings
-    dashboard: DashboardSettings
-
-    @property
-    def serve_host(self) -> str:
-        return self.serve.host
-
-    @property
-    def serve_port(self) -> int:
-        return self.serve.port
-
-    @property
-    def serve_auth_token(self) -> str | None:
-        return self.serve.auth_token
-
-    @property
-    def serve_default_k(self) -> int:
-        return self.serve.default_k
-
-    @property
-    def serve_refresh_interval_seconds(self) -> float:
-        return self.serve.refresh_interval_seconds
-
-    @property
-    def serve_category_column(self) -> str:
-        return self.serve.category_column
-
-    @property
-    def trigger_enabled(self) -> bool:
-        return self.trigger.enabled
-
-    @property
-    def trigger_host(self) -> str:
-        return self.trigger.host
-
-    @property
-    def trigger_port(self) -> int:
-        return self.trigger.port
-
-    @property
-    def trigger_auth_token(self) -> str | None:
-        return self.trigger.auth_token
-
-    @property
-    def trigger_debounce_seconds(self) -> float:
-        return self.trigger.debounce_seconds
-
-    @property
-    def trigger_poll_input_bucket(self) -> bool:
-        return self.trigger.poll_input_bucket
-
-    @property
-    def trigger_poll_interval_seconds(self) -> float:
-        return self.trigger.poll_interval_seconds
-
-    @property
-    def dashboard_enabled(self) -> bool:
-        return self.dashboard.enabled
-
-    @property
-    def dashboard_host(self) -> str:
-        return self.dashboard.host
-
-    @property
-    def dashboard_port(self) -> int:
-        return self.dashboard.port
-
-    @property
-    def dashboard_users_path(self) -> str:
-        return self.dashboard.users_path
-
-    @property
-    def dashboard_refresh_interval_seconds(self) -> float:
-        return self.dashboard.refresh_interval_seconds
-
-    @property
-    def dashboard_history_limit(self) -> int:
-        return self.dashboard.history_limit
-
-    @property
-    def automl_enabled(self) -> bool:
-        return self.automl.enabled
-
-    @property
-    def automl_n_splits(self) -> int:
-        return self.automl.n_splits
-
-    @property
-    def automl_test_days(self) -> int:
-        return self.automl.test_days
-
-    @property
-    def automl_primary_metric(self) -> str:
-        return self.automl.primary_metric
-
-    @property
-    def automl_candidates(self) -> list[dict[str, Any]] | None:
-        return self.automl.candidates
-
 
 _SERVE_FLAT_KEYS = (
     ("serve_host", "host"),
@@ -373,6 +72,31 @@ _AUTOML_FLAT_KEYS = (
     ("automl_primary_metric", "primary_metric"),
     ("automl_candidates", "candidates"),
 )
+
+
+def _resolve_env_placeholders(value: Any, path: str = "") -> Any:
+    if isinstance(value, str):
+
+        def _replace(match: re.Match[str]) -> str:
+            escaped, name = match.group(1), match.group(2)
+            if escaped:
+                return f"${{{name}}}"
+            if name not in os.environ:
+                location = f" (at '{path}')" if path else ""
+                raise RuntimeError(
+                    f"Config references ${{{name}}}{location} but that environment variable is not set"
+                )
+            return os.environ[name]
+
+        return _ENV_PLACEHOLDER.sub(_replace, value)
+    if isinstance(value, dict):
+        return {
+            key: _resolve_env_placeholders(item, f"{path}.{key}" if path else str(key))
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_resolve_env_placeholders(item, f"{path}[{index}]") for index, item in enumerate(value)]
+    return value
 
 
 def _coerce_nested(
@@ -467,7 +191,11 @@ def _load_io_settings(raw: dict[str, Any], section_name: str) -> IOSettings:
 
 
 def load_settings(config_path: str | None = None) -> Settings:
-    path = Path(config_path or os.environ.get("CICERONE_CONFIG_PATH") or DEFAULT_CONFIG_PATH)
+    # Read DEFAULT_CONFIG_PATH via the package so tests can monkeypatch
+    # ``cicerone.config.DEFAULT_CONFIG_PATH``.
+    import cicerone.config as config_pkg
+
+    path = Path(config_path or os.environ.get("CICERONE_CONFIG_PATH") or config_pkg.DEFAULT_CONFIG_PATH)
     if not path.exists():
         raise RuntimeError(f"Config file not found: {path}")
 

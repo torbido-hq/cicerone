@@ -23,6 +23,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   version **3**, zip envelope). `content_fallback` remains pickle-backed
   inside the same artifact. Schema v2 bare-pickle artifacts are no longer
   loadable.
+- Split oversized modules into packages while keeping import paths stable:
+  `cicerone.model` (`strategies` / `fit` / `recommend` / `combine` /
+  `epoch_metrics`) and `cicerone.config` (`constants` / `settings` /
+  `validation` / `load`).
 
 ### Renamed config keys (legacy still accepted)
 

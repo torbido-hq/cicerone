@@ -20,6 +20,8 @@ omit = [
     "*/cicerone/io/base.py",
     "*/cicerone/__init__.py",
     "*/cicerone/io/__init__.py",
+    "*/cicerone/model/__init__.py",
+    "*/cicerone/config/__init__.py",
 ]
 
 [tool.coverage.report]
