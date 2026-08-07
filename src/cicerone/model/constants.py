@@ -12,5 +12,5 @@ WEIGHT_COLUMN = "_weight"  # internal-only; dropped before returning to callers
 
 COLLABORATIVE_EPOCHS = 30  # LightFMWrapperModel.fit() runs these in one fit_partial
 # ProcessPool: LightFM num_threads=1 to avoid workers × BLAS oversubscription.
-_LIGHTFM_NUM_THREADS_SEQUENTIAL = 4
-_LIGHTFM_NUM_THREADS_PARALLEL = 1
+LIGHTFM_NUM_THREADS_SEQUENTIAL = 4
+LIGHTFM_NUM_THREADS_PARALLEL = 1

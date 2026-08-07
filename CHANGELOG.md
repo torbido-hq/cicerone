@@ -26,7 +26,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Split oversized modules into packages while keeping import paths stable:
   `cicerone.model` (`strategies` / `fit` / `recommend` / `combine` /
   `epoch_metrics`) and `cicerone.config` (`constants` / `settings` /
-  `validation` / `load`).
+  `validation` / `load`). Shared helpers used across those submodules are
+  public (no leading `_`); truly module-local helpers keep `_`.
 
 ### Renamed config keys (legacy still accepted)
 

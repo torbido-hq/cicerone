@@ -14,7 +14,7 @@ from rectools.models import model_from_config
 
 from cicerone.config import STRATEGY_NAMES
 from cicerone.content_fallback import CONTENT_FALLBACK_SOURCE, ContentFallbackModel
-from cicerone.model.constants import _LIGHTFM_NUM_THREADS_SEQUENTIAL
+from cicerone.model.constants import LIGHTFM_NUM_THREADS_SEQUENTIAL
 from cicerone.model_config import RECTOOLS_STRATEGY_NAMES, default_model_configs
 
 
@@ -35,7 +35,7 @@ class RecommenderModel(Protocol):
 _RECOMMEND_PARAMS = {"users", "dataset", "k", "filter_viewed", "items_to_recommend"}
 
 
-def _as_recommender_model(model: object) -> RecommenderModel:
+def as_recommender_model(model: object) -> RecommenderModel:
     """Fail fast if `model` does not implement RecommenderModel."""
     fit = getattr(model, "fit", None)
     recommend = getattr(model, "recommend", None)
@@ -84,14 +84,14 @@ def build_strategy_model(
         raise ValueError(f"No model config for strategy {name!r}; have {sorted(configs)}")
     cfg = deepcopy(configs[name])
     if name == "collaborative":
-        threads = lightfm_num_threads if lightfm_num_threads is not None else _LIGHTFM_NUM_THREADS_SEQUENTIAL
+        threads = lightfm_num_threads if lightfm_num_threads is not None else LIGHTFM_NUM_THREADS_SEQUENTIAL
         cfg["num_threads"] = threads
-    return _as_recommender_model(model_from_config(cfg))
+    return as_recommender_model(model_from_config(cfg))
 
 
 def _build_content_fallback() -> RecommenderModel:
     """Placeholder factory; real instances are built in ``_fit_strategy`` with items/features."""
-    return _as_recommender_model(ContentFallbackModel())
+    return as_recommender_model(ContentFallbackModel())
 
 
 STRATEGIES: dict[str, Strategy] = {
@@ -112,7 +112,7 @@ STRATEGIES: dict[str, Strategy] = {
 }
 
 
-def _validate_strategy_names(strategies: dict[str, Strategy], strategy_names: tuple[str, ...]) -> None:
+def validate_strategy_names(strategies: dict[str, Strategy], strategy_names: tuple[str, ...]) -> None:
     """Raises if STRATEGIES' keys and cicerone.config.STRATEGY_NAMES drift apart."""
     if set(strategies) != set(strategy_names):
         raise RuntimeError(
@@ -121,4 +121,4 @@ def _validate_strategy_names(strategies: dict[str, Strategy], strategy_names: tu
         )
 
 
-_validate_strategy_names(STRATEGIES, STRATEGY_NAMES)
+validate_strategy_names(STRATEGIES, STRATEGY_NAMES)

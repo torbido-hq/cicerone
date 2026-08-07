@@ -30,8 +30,8 @@ from cicerone.config.settings import (
     TriggerSettings,
 )
 from cicerone.config.validation import (
-    _require_positive_float,
-    _require_positive_int,
+    require_positive_float,
+    require_positive_int,
     resolve_epoch_metrics,
     resolve_max_workers,
     validate_model_weights,
@@ -260,7 +260,7 @@ def load_settings(config_path: str | None = None) -> Settings:
     item_based = job.get("item_based", {}) or {}
     content_fallback = job.get("content_fallback", {}) or {}
     legacy_k_explicit = "k_neighbors" in item_based
-    legacy_k_neighbors = _require_positive_int(
+    legacy_k_neighbors = require_positive_int(
         int(item_based.get("k_neighbors", DEFAULT_ITEM_BASED_K_NEIGHBORS)),
         name="job.item_based.k_neighbors",
     )
@@ -274,7 +274,7 @@ def load_settings(config_path: str | None = None) -> Settings:
     )
     resolved_k = item_based_k_from_config(model_configs["item_based"])
     item_based_k_neighbors = (
-        _require_positive_int(resolved_k, name="model.item_based.model.K")
+        require_positive_int(resolved_k, name="model.item_based.model.K")
         if resolved_k is not None
         else legacy_k_neighbors
     )
@@ -283,8 +283,8 @@ def load_settings(config_path: str | None = None) -> Settings:
         input=_load_io_settings(raw, "input"),
         output=_load_io_settings(raw, "output"),
         feature_config_path=job.get("feature_config_path", "/app/config/features.toml"),
-        top_k=_require_positive_int(int(job.get("top_k", 10)), name="job.top_k"),
-        half_life_days=_require_positive_float(
+        top_k=require_positive_int(int(job.get("top_k", 10)), name="job.top_k"),
+        half_life_days=require_positive_float(
             float(job.get("half_life_days", 90)), name="job.half_life_days"
         ),
         cron_schedule=job.get("cron_schedule", "0 3 * * *"),
@@ -304,16 +304,16 @@ def load_settings(config_path: str | None = None) -> Settings:
         item_based_k_neighbors=item_based_k_neighbors,
         model_configs=model_configs,
         content_fallback_enabled=bool(content_fallback.get("enabled", False)),
-        content_fallback_max_neighbors=_require_positive_int(
+        content_fallback_max_neighbors=require_positive_int(
             int(content_fallback.get("max_neighbors", DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS)),
             name="job.content_fallback.max_neighbors",
         ),
         automl=AutomlSettings(
             enabled=bool(automl.get("enabled", False)),
-            n_splits=_require_positive_int(
+            n_splits=require_positive_int(
                 int(automl.get("n_splits", AUTOML_DEFAULT_N_SPLITS)), name="job.automl.n_splits"
             ),
-            test_days=_require_positive_int(
+            test_days=require_positive_int(
                 int(automl.get("test_days", AUTOML_DEFAULT_TEST_DAYS)), name="job.automl.test_days"
             ),
             primary_metric=automl.get("primary_metric", AUTOML_DEFAULT_PRIMARY_METRIC),
@@ -326,8 +326,8 @@ def load_settings(config_path: str | None = None) -> Settings:
             host=serve_raw.get("host", "0.0.0.0"),
             port=int(serve_raw.get("port", 8000)),
             auth_token=serve_auth_token,
-            default_k=_require_positive_int(int(serve_raw.get("default_k", 10)), name="serve.default_k"),
-            refresh_interval_seconds=_require_positive_float(
+            default_k=require_positive_int(int(serve_raw.get("default_k", 10)), name="serve.default_k"),
+            refresh_interval_seconds=require_positive_float(
                 float(serve_raw.get("refresh_interval_seconds", 60)),
                 name="serve.refresh_interval_seconds",
             ),
@@ -338,12 +338,12 @@ def load_settings(config_path: str | None = None) -> Settings:
             host=trigger_raw.get("host", "0.0.0.0"),
             port=int(trigger_raw.get("port", 8080)),
             auth_token=trigger_auth_token,
-            debounce_seconds=_require_positive_float(
+            debounce_seconds=require_positive_float(
                 float(trigger_raw.get("debounce_seconds", 60)),
                 name="job.trigger.debounce_seconds",
             ),
             poll_input_bucket=bool(trigger_raw.get("poll_input_bucket", False)),
-            poll_interval_seconds=_require_positive_float(
+            poll_interval_seconds=require_positive_float(
                 float(trigger_raw.get("poll_interval_seconds", 300)),
                 name="job.trigger.poll_interval_seconds",
             ),
@@ -353,11 +353,11 @@ def load_settings(config_path: str | None = None) -> Settings:
             host=dashboard_raw.get("host", "0.0.0.0"),
             port=int(dashboard_raw.get("port", 8090)),
             users_path=dashboard_raw.get("users_path", "/app/config/dashboard_users.toml"),
-            refresh_interval_seconds=_require_positive_float(
+            refresh_interval_seconds=require_positive_float(
                 float(dashboard_raw.get("refresh_interval_seconds", 30)),
                 name="dashboard.refresh_interval_seconds",
             ),
-            history_limit=_require_positive_int(
+            history_limit=require_positive_int(
                 int(dashboard_raw.get("history_limit", 20)), name="dashboard.history_limit"
             ),
         ),

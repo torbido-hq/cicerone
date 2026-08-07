@@ -20,11 +20,11 @@ logger = logging.getLogger(__name__)
 _EPOCH_METRICS_RNG = random.Random()
 
 
-def _should_log_epoch(epoch: int, total_epochs: int, every: int) -> bool:
+def should_log_epoch(epoch: int, total_epochs: int, every: int) -> bool:
     return epoch == 1 or epoch == total_epochs or epoch % every == 0
 
 
-def _sample_epoch_metric_users(external_ids, max_users: int) -> list:
+def sample_epoch_metric_users(external_ids, max_users: int) -> list:
     users = list(external_ids)
     if len(users) <= max_users:
         return users
@@ -42,7 +42,7 @@ def _epoch_metric_fit_partial(model: object) -> Callable:
     return fit_partial
 
 
-def _epoch_metric_total_epochs(model: object) -> int:
+def epoch_metric_total_epochs(model: object) -> int:
     # rectools stores epochs as n_epochs; accept epochs for other wrappers.
     for attr in ("n_epochs", "epochs"):
         value = getattr(model, attr, None)
@@ -54,7 +54,7 @@ def _epoch_metric_total_epochs(model: object) -> int:
     )
 
 
-def _warn_on_epoch_metric_trajectory(
+def warn_on_epoch_metric_trajectory(
     history: list[tuple[int, dict[str, float]]], settings: EpochMetricsSettings
 ) -> None:
     """WARN when a tracked metric regresses from its best or plateaus late."""
@@ -93,14 +93,14 @@ def _warn_on_epoch_metric_trajectory(
                 )
 
 
-def _interactions_for_epoch_metrics(
+def interactions_for_epoch_metrics(
     dataset: Dataset, interactions: pd.DataFrame, max_users: int
 ) -> pd.DataFrame:
-    users = _sample_epoch_metric_users(dataset.user_id_map.external_ids, max_users)
+    users = sample_epoch_metric_users(dataset.user_id_map.external_ids, max_users)
     return interactions[interactions[Columns.User].isin(users)]
 
 
-def _fit_lightfm_with_epoch_metrics(
+def fit_lightfm_with_epoch_metrics(
     model: RecommenderModel,
     dataset: Dataset,
     interactions: pd.DataFrame,
@@ -113,7 +113,7 @@ def _fit_lightfm_with_epoch_metrics(
     Scores with filter_viewed=False (trajectory signal, not holdout).
     """
     fit_partial = _epoch_metric_fit_partial(model)
-    total_epochs = _epoch_metric_total_epochs(model)
+    total_epochs = epoch_metric_total_epochs(model)
     metric_defs = {
         f"Precision@{top_k}": Precision(k=top_k),
         f"Recall@{top_k}": Recall(k=top_k),
@@ -123,7 +123,7 @@ def _fit_lightfm_with_epoch_metrics(
 
     for epoch in range(1, total_epochs + 1):
         fit_partial(dataset, 1)
-        if not _should_log_epoch(epoch, total_epochs, settings.every):
+        if not should_log_epoch(epoch, total_epochs, settings.every):
             continue
         reco = model.recommend(
             users=users,
@@ -135,5 +135,5 @@ def _fit_lightfm_with_epoch_metrics(
         history.append((epoch, snapshot))
         logger.info("Collaborative epoch %d/%d metrics: %s", epoch, total_epochs, snapshot)
 
-    _warn_on_epoch_metric_trajectory(history, settings)
+    warn_on_epoch_metric_trajectory(history, settings)
     return model

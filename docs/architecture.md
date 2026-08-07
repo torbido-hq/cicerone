@@ -126,7 +126,7 @@ flowchart LR
    - **Priority order** (default) — earlier strategies fill top-K first;
      later ones only backfill.
    - **Weighted RRF** — if `Settings.model_weights` is set (even an empty
-     table), `_combine_by_weighted_fusion` sums `weight / (rrf_k + rank)`
+     table), `combine_by_weighted_fusion` sums `weight / (rrf_k + rank)`
      across strategies; `rrf_k` defaults to `model.RRF_K` and is
      overridable via `Settings.rrf_k`/`[job].rrf_k`. Combined `source`
      labels join contributing strategy labels in `enabled_models` order.

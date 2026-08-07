@@ -30,7 +30,7 @@ from cicerone.config import (
 from cicerone.dataset import BuiltDataset
 from cicerone.feature_config import DEFAULT_BOOST_OVERFETCH_FACTOR, FeatureConfig
 from cicerone.ids import interacting_external_user_ids
-from cicerone.model.combine import _combine_by_priority, _combine_by_weighted_fusion
+from cicerone.model.combine import combine_by_priority, combine_by_weighted_fusion
 from cicerone.model.constants import RRF_K, SOURCE_COLUMN, WEIGHT_COLUMN
 from cicerone.model.fit import ModelRunPlan, fit_strategies, plan_model_run
 from cicerone.model.strategies import STRATEGIES, RecommenderModel
@@ -47,7 +47,9 @@ from cicerone.policy import (
 logger = logging.getLogger(__name__)
 
 
-def _recommend_k(top_k: int, has_boosts: bool, overfetch_factor: int = DEFAULT_BOOST_OVERFETCH_FACTOR) -> int:
+def boost_overfetch_k(
+    top_k: int, has_boosts: bool, overfetch_factor: int = DEFAULT_BOOST_OVERFETCH_FACTOR
+) -> int:
     if not has_boosts:
         return top_k
     factor = overfetch_factor if overfetch_factor >= 1 else DEFAULT_BOOST_OVERFETCH_FACTOR
@@ -98,7 +100,7 @@ def _resolve_cohort_plan(
         eligibility = [r for r in eligibility if not is_user_scoped(r)]
     use_cohorts = has_user_scoped_eligibility(eligibility) and users_frame is not None
     has_boosts = bool(config.boosts)
-    recommend_k = _recommend_k(top_k, has_boosts, config.boost_overfetch_factor)
+    recommend_k = boost_overfetch_k(top_k, has_boosts, config.boost_overfetch_factor)
 
     known_users = set(dataset.user_id_map.external_ids)
     unique_target_users = list(dict.fromkeys(target_users))
@@ -349,10 +351,10 @@ def _combine_strategy_frames(
             part[WEIGHT_COLUMN] = part[SOURCE_COLUMN].map(label_weights).fillna(1.0)
             stamped.append(part)
         source_label_order = [STRATEGIES[name].source_label for name in recommend_models]
-        return _combine_by_weighted_fusion(
+        return combine_by_weighted_fusion(
             stamped, combine_k, rrf_k if rrf_k is not None else RRF_K, source_label_order
         )
-    return _combine_by_priority(strategy_frames.frames, combine_k)
+    return combine_by_priority(strategy_frames.frames, combine_k)
 
 
 def recommend_with_models(

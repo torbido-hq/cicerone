@@ -11,11 +11,10 @@ from cicerone.model import (
     STRATEGIES,
     RecommenderModel,
     Strategy,
-    _as_recommender_model,
-    _combine_by_priority,
-    _validate_strategy_names,
     train_and_recommend,
 )
+from cicerone.model.combine import combine_by_priority
+from cicerone.model.strategies import as_recommender_model, validate_strategy_names
 from cicerone.policy import allowed_items_for_cohort, resolve_eligibility
 
 
@@ -48,7 +47,7 @@ def test_availability_filters_via_policy_allowlist(sample_items, feature_config)
     assert allowed == ["i1", "i2"]
 
 
-def test_combine_by_priority_fills_from_earlier_strategies_first():
+def testcombine_by_priority_fills_from_earlier_strategies_first():
     frames = [
         pd.DataFrame(
             [
@@ -77,13 +76,13 @@ def test_combine_by_priority_fills_from_earlier_strategies_first():
             ]
         ),
     ]
-    out = _combine_by_priority(frames, top_k=2)
+    out = combine_by_priority(frames, top_k=2)
     assert list(out[Columns.Item]) == ["a", "b"]
     assert list(out[Columns.Rank]) == [1, 2]
     assert list(out["source"]) == ["first", "first"]
 
 
-def test_combine_by_priority_fills_from_later_strategies_when_earlier_insufficient():
+def testcombine_by_priority_fills_from_later_strategies_when_earlier_insufficient():
     frames = [
         pd.DataFrame(
             [
@@ -131,7 +130,7 @@ def test_combine_by_priority_fills_from_later_strategies_when_earlier_insufficie
         ),
     ]
 
-    combined = _combine_by_priority(frames, top_k=2)
+    combined = combine_by_priority(frames, top_k=2)
 
     assert list(combined[Columns.User].unique()) == ["u1"]
     assert len(combined) == 2
@@ -139,7 +138,7 @@ def test_combine_by_priority_fills_from_later_strategies_when_earlier_insufficie
     assert list(combined[Columns.Rank]) == [1, 2]
 
 
-def test_combine_by_priority_recomputes_ranks_per_user():
+def testcombine_by_priority_recomputes_ranks_per_user():
     frames = [
         pd.DataFrame(
             [
@@ -200,7 +199,7 @@ def test_combine_by_priority_recomputes_ranks_per_user():
     ]
 
     top_k = 2
-    combined = _combine_by_priority(frames, top_k=top_k)
+    combined = combine_by_priority(frames, top_k=top_k)
 
     counts = combined.groupby(Columns.User)[Columns.Item].count().to_dict()
     assert counts == {"u1": 2, "u2": 2}
@@ -336,29 +335,29 @@ def test_strategies_keys_match_config_strategy_names():
     assert set(STRATEGIES) == set(STRATEGY_NAMES)
 
 
-def test_validate_strategy_names_raises_on_mismatch():
+def testvalidate_strategy_names_raises_on_mismatch():
     with pytest.raises(RuntimeError, match="must match"):
-        _validate_strategy_names({"popular": STRATEGIES["popular"]}, ("popular", "latest"))
+        validate_strategy_names({"popular": STRATEGIES["popular"]}, ("popular", "latest"))
 
 
-def test_as_recommender_model_accepts_every_registered_strategy():
+def testas_recommender_model_accepts_every_registered_strategy():
     from cicerone.model import build_strategy_model
 
     for name, strategy in STRATEGIES.items():
         model = strategy.factory() if strategy.factory is not None else build_strategy_model(name)
-        assert _as_recommender_model(model) is model, name
+        assert as_recommender_model(model) is model, name
 
 
-def test_as_recommender_model_rejects_object_missing_recommend():
+def testas_recommender_model_rejects_object_missing_recommend():
     class NotAModel:
         def fit(self, dataset):
             return self
 
     with pytest.raises(TypeError, match="does not implement the RecommenderModel protocol"):
-        _as_recommender_model(NotAModel())
+        as_recommender_model(NotAModel())
 
 
-def test_as_recommender_model_rejects_recommend_missing_expected_parameters():
+def testas_recommender_model_rejects_recommend_missing_expected_parameters():
     class WrongSignatureModel:
         def fit(self, dataset):
             return self
@@ -367,7 +366,7 @@ def test_as_recommender_model_rejects_recommend_missing_expected_parameters():
             return pd.DataFrame()
 
     with pytest.raises(TypeError, match="missing expected parameter"):
-        _as_recommender_model(WrongSignatureModel())
+        as_recommender_model(WrongSignatureModel())
 
 
 def test_validate_model_weights_no_op_when_none():
@@ -1025,10 +1024,10 @@ def test_train_and_recommend_paying_producer_boost_overfetch(feature_config):
     from dataclasses import replace
 
     from cicerone.feature_config import DEFAULT_BOOST_OVERFETCH_FACTOR, BoostRule
-    from cicerone.model import _recommend_k
+    from cicerone.model.recommend import boost_overfetch_k
 
     assert DEFAULT_BOOST_OVERFETCH_FACTOR > 1
-    assert _recommend_k(2, True, overfetch_factor=5) == 10
+    assert boost_overfetch_k(2, True, overfetch_factor=5) == 10
     assert feature_config.boost_overfetch_factor >= 1
 
     now = pd.Timestamp.utcnow()
@@ -1184,28 +1183,28 @@ def test_topk_extraction_preserves_external_ids_no_duplicates_or_seen_items(feat
         assert set(group[Columns.Item]).isdisjoint(seen)
 
 
-def test_should_log_epoch_first_last_and_interval():
-    from cicerone.model import _should_log_epoch
+def testshould_log_epoch_first_last_and_interval():
+    from cicerone.model.epoch_metrics import should_log_epoch
 
-    assert _should_log_epoch(1, 30, 5)
-    assert _should_log_epoch(5, 30, 5)
-    assert _should_log_epoch(30, 30, 5)
-    assert not _should_log_epoch(2, 30, 5)
-    assert not _should_log_epoch(29, 30, 5)
+    assert should_log_epoch(1, 30, 5)
+    assert should_log_epoch(5, 30, 5)
+    assert should_log_epoch(30, 30, 5)
+    assert not should_log_epoch(2, 30, 5)
+    assert not should_log_epoch(29, 30, 5)
 
 
-def test_warn_on_epoch_metric_trajectory_regression_and_plateau(caplog):
+def testwarn_on_epoch_metric_trajectory_regression_and_plateau(caplog):
     from cicerone.config import EpochMetricsSettings
-    from cicerone.model import _warn_on_epoch_metric_trajectory
+    from cicerone.model.epoch_metrics import warn_on_epoch_metric_trajectory
 
     settings = EpochMetricsSettings(every=5)
 
     with caplog.at_level("WARNING"):
-        _warn_on_epoch_metric_trajectory([(1, {"Precision@2": 0.5})], settings)
+        warn_on_epoch_metric_trajectory([(1, {"Precision@2": 0.5})], settings)
     assert caplog.text == ""
 
     with caplog.at_level("WARNING"):
-        _warn_on_epoch_metric_trajectory(
+        warn_on_epoch_metric_trajectory(
             [
                 (1, {"Precision@2": 0.8}),
                 (5, {"Precision@2": 0.7}),
@@ -1217,7 +1216,7 @@ def test_warn_on_epoch_metric_trajectory_regression_and_plateau(caplog):
 
     caplog.clear()
     with caplog.at_level("WARNING"):
-        _warn_on_epoch_metric_trajectory(
+        warn_on_epoch_metric_trajectory(
             [
                 (1, {"Recall@2": 0.50}),
                 (5, {"Recall@2": 0.501}),
@@ -1228,13 +1227,13 @@ def test_warn_on_epoch_metric_trajectory_regression_and_plateau(caplog):
     assert "plateaued" in caplog.text
 
 
-def test_warn_on_epoch_metric_trajectory_skips_metrics_missing_from_some_snapshots(caplog):
+def testwarn_on_epoch_metric_trajectory_skips_metrics_missing_from_some_snapshots(caplog):
     from cicerone.config import EpochMetricsSettings
-    from cicerone.model import _warn_on_epoch_metric_trajectory
+    from cicerone.model.epoch_metrics import warn_on_epoch_metric_trajectory
 
     # Heterogeneous keys: no KeyError; singleton values skip regression WARN.
     with caplog.at_level("WARNING"):
-        _warn_on_epoch_metric_trajectory(
+        warn_on_epoch_metric_trajectory(
             [
                 (1, {"Precision@2": 0.9, "Recall@2": 0.5}),
                 (5, {"Precision@2": 0.4}),
@@ -1246,9 +1245,9 @@ def test_warn_on_epoch_metric_trajectory_skips_metrics_missing_from_some_snapsho
     assert "Recall@2" not in caplog.text
 
 
-def test_fit_lightfm_with_epoch_metrics_rejects_non_lightfm_wrapper():
+def testfit_lightfm_with_epoch_metrics_rejects_non_lightfm_wrapper():
     from cicerone.config import EpochMetricsSettings
-    from cicerone.model import _fit_lightfm_with_epoch_metrics
+    from cicerone.model.epoch_metrics import fit_lightfm_with_epoch_metrics
 
     class NoPartial:
         def fit(self, dataset):
@@ -1258,13 +1257,13 @@ def test_fit_lightfm_with_epoch_metrics_rejects_non_lightfm_wrapper():
             return pd.DataFrame()
 
     with pytest.raises(TypeError, match="fit_partial"):
-        _fit_lightfm_with_epoch_metrics(
+        fit_lightfm_with_epoch_metrics(
             NoPartial(), None, pd.DataFrame(), settings=EpochMetricsSettings(every=1), top_k=2
         )
 
 
-def test_epoch_metric_total_epochs_prefers_n_epochs_then_epochs():
-    from cicerone.model import _epoch_metric_total_epochs
+def testepoch_metric_total_epochs_prefers_n_epochs_then_epochs():
+    from cicerone.model.epoch_metrics import epoch_metric_total_epochs
 
     class WithNEpochs:
         n_epochs = 7
@@ -1275,19 +1274,19 @@ def test_epoch_metric_total_epochs_prefers_n_epochs_then_epochs():
     class WithNeither:
         pass
 
-    assert _epoch_metric_total_epochs(WithNEpochs()) == 7
-    assert _epoch_metric_total_epochs(WithEpochs()) == 3
+    assert epoch_metric_total_epochs(WithNEpochs()) == 7
+    assert epoch_metric_total_epochs(WithEpochs()) == 3
     with pytest.raises(TypeError, match="n_epochs/epochs"):
-        _epoch_metric_total_epochs(WithNeither())
+        epoch_metric_total_epochs(WithNeither())
 
 
-def test_warn_on_epoch_metric_trajectory_plateau_scale_handles_negative_values(caplog):
+def testwarn_on_epoch_metric_trajectory_plateau_scale_handles_negative_values(caplog):
     from cicerone.config import EpochMetricsSettings
-    from cicerone.model import _warn_on_epoch_metric_trajectory
+    from cicerone.model.epoch_metrics import warn_on_epoch_metric_trajectory
 
     # All-negative window: scale by max(|v|), not abs(max(v)).
     with caplog.at_level("WARNING"):
-        _warn_on_epoch_metric_trajectory(
+        warn_on_epoch_metric_trajectory(
             [
                 (1, {"Score": -10.0}),
                 (5, {"Score": -10.01}),
@@ -1298,16 +1297,17 @@ def test_warn_on_epoch_metric_trajectory_plateau_scale_handles_negative_values(c
     assert "plateaued" in caplog.text
 
 
-def test_sample_epoch_metric_users_is_seeded_not_prefix():
-    from cicerone.model import RANDOM_STATE, _sample_epoch_metric_users
+def testsample_epoch_metric_users_is_seeded_not_prefix():
+    from cicerone.model.constants import RANDOM_STATE
+    from cicerone.model.epoch_metrics import sample_epoch_metric_users
 
     ordered = list(range(1000))
-    sampled = _sample_epoch_metric_users(ordered, max_users=10)
+    sampled = sample_epoch_metric_users(ordered, max_users=10)
     assert len(sampled) == 10
     assert sampled != ordered[:10]
-    assert _sample_epoch_metric_users(ordered, max_users=10) == sampled
+    assert sample_epoch_metric_users(ordered, max_users=10) == sampled
     assert set(sampled).issubset(ordered)
-    assert _sample_epoch_metric_users([3, 1, 2], max_users=10) == [3, 1, 2]
+    assert sample_epoch_metric_users([3, 1, 2], max_users=10) == [3, 1, 2]
     assert RANDOM_STATE == 42
 
 

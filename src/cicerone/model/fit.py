@@ -16,25 +16,25 @@ from cicerone.content_fallback import build_content_fallback_model
 from cicerone.dataset import BuiltDataset
 from cicerone.feature_config import FeatureColumn
 from cicerone.model.constants import (
-    _LIGHTFM_NUM_THREADS_PARALLEL,
-    _LIGHTFM_NUM_THREADS_SEQUENTIAL,
     DEFAULT_MODELS,
+    LIGHTFM_NUM_THREADS_PARALLEL,
+    LIGHTFM_NUM_THREADS_SEQUENTIAL,
 )
 from cicerone.model.epoch_metrics import (
-    _fit_lightfm_with_epoch_metrics,
-    _interactions_for_epoch_metrics,
+    fit_lightfm_with_epoch_metrics,
+    interactions_for_epoch_metrics,
 )
 from cicerone.model.strategies import (
     STRATEGIES,
     RecommenderModel,
-    _as_recommender_model,
+    as_recommender_model,
     build_strategy_model,
 )
 from cicerone.model_config import default_model_configs, resolve_model_configs
 
 logger = logging.getLogger(__name__)
 
-_FIT_POOL_LIGHTFM_THREADS = _LIGHTFM_NUM_THREADS_SEQUENTIAL
+_FIT_POOL_LIGHTFM_THREADS = LIGHTFM_NUM_THREADS_SEQUENTIAL
 
 
 def _init_fit_worker(lightfm_threads: int) -> None:
@@ -79,7 +79,7 @@ def _fit_strategy(
     """Fit one strategy (picklable for ProcessPoolExecutor workers)."""
     strategy = STRATEGIES[name]
     if name == "content_fallback":
-        model = _as_recommender_model(
+        model = as_recommender_model(
             build_content_fallback_model(
                 feature_columns=content_feature_columns or [],
                 max_neighbors=content_max_neighbors,
@@ -98,7 +98,7 @@ def _fit_strategy(
     if name == "collaborative" and epoch_metrics is not None:
         if epoch_interactions is None:
             raise ValueError("epoch_interactions is required when epoch metric logging is enabled")
-        _fit_lightfm_with_epoch_metrics(
+        fit_lightfm_with_epoch_metrics(
             model,
             dataset,
             epoch_interactions,  # type: ignore[arg-type]
@@ -289,7 +289,7 @@ def fit_strategies(
     )
     # Pre-slice interactions in the parent to shrink ProcessPool pickles.
     epoch_interactions = (
-        _interactions_for_epoch_metrics(dataset, built.interactions, epoch_metrics.max_users)
+        interactions_for_epoch_metrics(dataset, built.interactions, epoch_metrics.max_users)
         if epoch_metrics is not None and "collaborative" in to_fit
         else None
     )
@@ -301,7 +301,7 @@ def fit_strategies(
             with ProcessPoolExecutor(
                 max_workers=min(max_workers, len(to_fit)),
                 initializer=_init_fit_worker,
-                initargs=(_LIGHTFM_NUM_THREADS_PARALLEL,),
+                initargs=(LIGHTFM_NUM_THREADS_PARALLEL,),
             ) as executor:
                 for name, model in executor.map(
                     _fit_strategy,
