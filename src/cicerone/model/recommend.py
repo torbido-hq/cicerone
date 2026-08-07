@@ -368,11 +368,7 @@ def recommend_with_models(
     rrf_k: float | None = None,
     run_plan: ModelRunPlan | None = None,
 ) -> pd.DataFrame:
-    """Runs recommend + combine on already-fitted strategies (no fit).
-
-    Phases: resolve cohorts → recommend per strategy → combine → boosts.
-    Used by ``train_and_recommend`` and by ``artifact.recommend_from_artifact``.
-    """
+    """Recommend + combine on already-fitted strategies (no fit)."""
     blending = config.blending
     blending_enabled = blending.enabled
     if run_plan is None:
@@ -449,13 +445,7 @@ def train_and_recommend(
     content_fallback_max_neighbors: int = DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS,
     run_plan: ModelRunPlan | None = None,
 ) -> pd.DataFrame:
-    """Fit enabled strategies, then recommend + combine. See ``fit_strategies``
-    and ``recommend_with_models`` for the split used by model artifacts.
-
-    Pass ``run_plan`` from ``plan_model_run`` when the caller already resolved
-    models (e.g. job). Otherwise ``content_fallback_enabled`` is the config
-    flag, or ``None`` to derive from ``enabled_models`` (AutoML lists).
-    """
+    """Fit enabled strategies, then recommend + combine."""
     if run_plan is None:
         run_plan = plan_model_run(
             enabled_models,

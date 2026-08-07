@@ -123,15 +123,7 @@ def _coerce_nested(
 
 
 def make_settings(**overrides: Any) -> Settings:
-    """Build a fully-populated ``Settings`` with the same defaults as a typical TOML load.
-
-    Used by tests and OpenAPI schema export so callers only pass the fields they
-    care about (``mode``, auth tokens, …) and stay aligned as ``Settings`` grows.
-    Prefer ``load_settings(path)`` for real config files.
-
-    Accepts flat kwargs (``serve_host=…``, ``automl_enabled=…``) and/or nested
-    objects (``serve=ServeSettings(…)``).
-    """
+    """``Settings`` with TOML-like defaults; overrides for tests / OpenAPI export."""
     serve = _coerce_nested(ServeSettings, overrides.pop("serve", None), _SERVE_FLAT_KEYS, overrides)
     trigger = _coerce_nested(TriggerSettings, overrides.pop("trigger", None), _TRIGGER_FLAT_KEYS, overrides)
     dashboard = _coerce_nested(
@@ -166,7 +158,6 @@ def make_settings(**overrides: Any) -> Settings:
     if base.get("model_configs") is None:
         from cicerone.model_config import item_based_k_from_config, resolve_model_configs
 
-        # Honor make_settings(item_based_k_neighbors=N) via the legacy translator.
         k_neighbors = int(base["item_based_k_neighbors"])
         k_explicit = "item_based_k_neighbors" in overrides
         configs = resolve_model_configs(

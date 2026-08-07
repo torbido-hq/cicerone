@@ -107,11 +107,7 @@ def fit_lightfm_with_epoch_metrics(
     settings: EpochMetricsSettings,
     top_k: int,
 ) -> RecommenderModel:
-    """Epoch-by-epoch LightFM fit with in-sample Precision/Recall@K logs.
-
-    ``interactions`` should already be limited to the scored-user subset.
-    Scores with filter_viewed=False (trajectory signal, not holdout).
-    """
+    """LightFM ``fit_partial`` with in-sample Precision/Recall@K logs."""
     fit_partial = _epoch_metric_fit_partial(model)
     total_epochs = epoch_metric_total_epochs(model)
     metric_defs = {

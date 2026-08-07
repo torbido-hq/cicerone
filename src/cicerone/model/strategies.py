@@ -60,8 +60,7 @@ class Strategy:
     source_label: str
     # Item-KNN / content_fallback need history; LightFM hybrid can score feature-only users.
     requires_interactions: bool = False
-    # Optional factory override (tests / content_fallback placeholder). When set,
-    # skips RecTools model_from_config for this strategy.
+    # Optional factory (tests / content_fallback); skips model_from_config.
     factory: Callable[[], RecommenderModel] | None = None
 
 
@@ -71,10 +70,7 @@ def build_strategy_model(
     model_configs: dict[str, dict[str, Any]] | None = None,
     lightfm_num_threads: int | None = None,
 ) -> RecommenderModel:
-    """Instantiate one RecTools strategy via ``model_from_config``.
-
-    ``content_fallback`` is not RecTools-backed — use ``build_content_fallback_model``.
-    """
+    """Build one RecTools strategy via ``model_from_config``."""
     if name not in RECTOOLS_STRATEGY_NAMES:
         raise ValueError(
             f"Cannot build {name!r} via RecTools config; available: {list(RECTOOLS_STRATEGY_NAMES)}"
@@ -90,7 +86,7 @@ def build_strategy_model(
 
 
 def _build_content_fallback() -> RecommenderModel:
-    """Placeholder factory; real instances are built in ``_fit_strategy`` with items/features."""
+    """Placeholder; real fit builds ContentFallbackModel with items/features."""
     return as_recommender_model(ContentFallbackModel())
 
 
@@ -113,7 +109,7 @@ STRATEGIES: dict[str, Strategy] = {
 
 
 def validate_strategy_names(strategies: dict[str, Strategy], strategy_names: tuple[str, ...]) -> None:
-    """Raises if STRATEGIES' keys and cicerone.config.STRATEGY_NAMES drift apart."""
+    """Raise if STRATEGIES keys drift from ``STRATEGY_NAMES``."""
     if set(strategies) != set(strategy_names):
         raise RuntimeError(
             f"cicerone.model.STRATEGIES keys {sorted(strategies)} must match "

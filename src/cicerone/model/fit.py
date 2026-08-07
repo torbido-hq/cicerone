@@ -124,12 +124,7 @@ def _resolve_enabled_models(enabled_models: list[str] | None) -> list[str]:
 
 
 def content_fallback_enabled_from_models(models: list[str] | tuple[str, ...] | None) -> bool:
-    """Whether a stored/candidate model list should run content_fallback.
-
-    Shared by artifact replay and AutoML: presence of ``content_fallback`` in
-    the list means the tier was active when that list was produced (config
-    ``enabled`` already applied at list-build time).
-    """
+    """True when ``content_fallback`` is present in a stored/candidate model list."""
     if not models:
         return False
     return "content_fallback" in models
@@ -137,11 +132,7 @@ def content_fallback_enabled_from_models(models: list[str] | tuple[str, ...] | N
 
 @dataclass(frozen=True)
 class ModelRunPlan:
-    """Resolved model lists for one train/recommend run.
-
-    Built once via ``plan_model_run`` so content_fallback / blending adjustments
-    are not re-derived at every call site.
-    """
+    """Resolved enabled + recommend model lists for one run."""
 
     enabled_models: tuple[str, ...]
     recommend_models: tuple[str, ...]
@@ -156,16 +147,7 @@ def resolve_recommend_models(
     blending_enabled: bool,
     content_fallback_enabled: bool = False,
 ) -> list[str]:
-    """Models to fit/recommend for a run.
-
-    When ``content_fallback_enabled`` is true and the strategy is not already
-    listed, insert it immediately before the first non-personalized strategy.
-    When false, drop it even if listed (with a log line).
-
-    When blending is on: ensure ``popular`` is present, and drop strategy
-    ``latest`` (trending PopularModel) — blending's date-based ``latest`` is
-    built from items, not that strategy.
-    """
+    """Adjust enabled models for content_fallback insertion/drop and blending."""
     models = list(enabled_models)
     if not content_fallback_enabled:
         if "content_fallback" in models:
@@ -196,12 +178,7 @@ def plan_model_run(
     blending_enabled: bool,
     content_fallback_enabled: bool | None = None,
 ) -> ModelRunPlan:
-    """Resolve enabled + recommend model lists for a run.
-
-    When ``content_fallback_enabled`` is omitted, it is derived from whether
-    ``content_fallback`` is already present in the requested model list
-    (artifact / AutoML replay). Job runs pass the config flag explicitly.
-    """
+    """Build a ``ModelRunPlan`` (enabled + recommend lists)."""
     resolved = _resolve_enabled_models(enabled_models)
     if content_fallback_enabled is None:
         content_fallback_enabled = content_fallback_enabled_from_models(resolved)
@@ -217,11 +194,7 @@ def resolve_run_models(
     blending_enabled: bool,
     content_fallback_enabled: bool = False,
 ) -> tuple[list[str], list[str]]:
-    """Resolve requested models and the effective fit/recommend list.
-
-    Prefer ``plan_model_run`` for new call sites; this returns plain lists for
-    existing callers/tests.
-    """
+    """Like ``plan_model_run``, returning plain lists for existing callers."""
     plan = plan_model_run(
         enabled_models,
         blending_enabled=blending_enabled,
@@ -243,15 +216,7 @@ def fit_strategies(
     content_fallback_max_neighbors: int = DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS,
     content_feature_columns: list[FeatureColumn] | None = None,
 ) -> tuple[list[str], dict[str, RecommenderModel]]:
-    """Fit (or cache-hit) enabled strategies. ``max_workers > 1`` fits in parallel.
-
-    ``epoch_metrics`` enables collaborative fit_partial logging; default
-    ``None`` keeps a single LightFM ``fit()``.
-
-    Models are built via RecTools ``model_from_config`` using ``model_configs``
-    (defaults from ``cicerone.model_config``). ``item_based_k_neighbors`` remains
-    as a convenience override for the legacy ``job.item_based.k_neighbors`` knob.
-    """
+    """Fit (or cache-hit) enabled strategies; parallel when ``max_workers > 1``."""
     dataset = built.dataset
     enabled_models = _resolve_enabled_models(enabled_models)
     resolved_configs = _resolve_model_configs_for_fit(model_configs, item_based_k_neighbors)

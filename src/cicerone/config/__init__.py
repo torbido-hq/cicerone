@@ -1,12 +1,4 @@
-"""Configuration for the Cicerone recommender job.
-
-Loaded from a TOML file (default /app/config/cicerone.toml, override with
-CICERONE_CONFIG_PATH). Secrets use ${ENV_VAR_NAME} placeholders; escape a
-literal "${...}" as "$${...}".
-
-This package replaces the former monolithic ``config.py``; public imports stay
-``from cicerone.config import …``.
-"""
+"""Public config API (``from cicerone.config import …``)."""
 
 from __future__ import annotations
 

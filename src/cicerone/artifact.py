@@ -1,13 +1,7 @@
-"""Versioned, portable fitted-model artifacts.
+"""Versioned fitted-model artifacts (RecTools save/load + pickle envelope).
 
-RecTools strategies are persisted with the library-native ``model.save`` /
-``load_model`` APIs (bytes via ``BytesIO``). Non-RecTools strategies
-(``content_fallback``) and the artifact envelope (dataset, feature config,
-frames) still use pickle.
-
-Trust boundary: only load artifacts produced by a trusted Cicerone batch
-job. Never load user-uploaded or otherwise untrusted payloads — pickle is an
-RCE vector. Not used on the serve HTTP path.
+Trust boundary: load only trusted batch-job artifacts — never untrusted
+uploads (pickle RCE). Not used on the serve HTTP path.
 """
 
 from __future__ import annotations
@@ -97,7 +91,7 @@ def _load_rectools_model(payload: bytes) -> RecommenderModel:
 
 
 def dumps_artifact(artifact: ModelArtifact) -> bytes:
-    """Serialize an artifact: zip of meta + pickle envelope + per-model blobs."""
+    """Serialize artifact (zip: meta + pickle envelope + model blobs)."""
     meta = {
         "schema_version": artifact.schema_version,
         "created_at": artifact.created_at,
@@ -134,7 +128,7 @@ def dumps_artifact(artifact: ModelArtifact) -> bytes:
 
 
 def loads_artifact(payload: bytes) -> ModelArtifact:
-    """Deserialize a trusted ModelArtifact (never untrusted input)."""
+    """Deserialize a trusted ModelArtifact."""
     try:
         buffer = io.BytesIO(payload)
         with zipfile.ZipFile(buffer, mode="r") as zf:
@@ -205,14 +199,14 @@ def load_artifact(path: Path | str) -> ModelArtifact:
 
 
 def save_rectools_model(path: Path | str, model: ModelBase) -> None:
-    """Persist one RecTools model with ``model.save`` (library-native)."""
+    """``model.save`` → bytes."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     model.save(path)
 
 
 def load_rectools_model(path: Path | str) -> RecommenderModel:
-    """Reload one RecTools model with ``load_model`` (library-native)."""
+    """``load_model`` from bytes."""
     return load_model(Path(path))  # type: ignore[return-value]
 
 

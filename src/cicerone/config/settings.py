@@ -89,9 +89,7 @@ class Settings:
     max_workers: int
     epoch_metrics: EpochMetricsSettings | None
     item_based_k_neighbors: int
-    # RecTools model_from_config dicts keyed by strategy name (collaborative,
-    # item_based, popular, latest). content_fallback is not included.
-    model_configs: dict[str, dict[str, Any]]
+    model_configs: dict[str, dict[str, Any]]  # RecTools configs; no content_fallback
     content_fallback_enabled: bool
     content_fallback_max_neighbors: int
     automl: AutomlSettings

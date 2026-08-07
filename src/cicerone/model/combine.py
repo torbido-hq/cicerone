@@ -9,9 +9,7 @@ from cicerone.model.constants import SOURCE_COLUMN, WEIGHT_COLUMN
 
 
 def combine_by_priority(frames: list[pd.DataFrame], top_k: int) -> pd.DataFrame:
-    """Fill top-K from strategy outputs in list order: earlier strategies keep
-    duplicate (user, item) pairs and fill slots before later ones.
-    """
+    """Fill top-K in list order; earlier strategies win duplicate (user, item)."""
     tagged = []
     for priority, frame in enumerate(frames):
         part = frame.copy()
@@ -28,11 +26,7 @@ def combine_by_priority(frames: list[pd.DataFrame], top_k: int) -> pd.DataFrame:
 def combine_by_weighted_fusion(
     frames: list[pd.DataFrame], top_k: int, rrf_k: float, source_label_order: list[str]
 ) -> pd.DataFrame:
-    """Weighted reciprocal rank fusion: each strategy's contribution to an
-    item's fused score is `weight / (rrf_k + rank)`, summed across every
-    strategy that recommended that (user, item) pair. Combined source labels
-    are joined in `source_label_order` rather than alphabetically.
-    """
+    """Weighted RRF: ``weight / (rrf_k + rank)``, sources joined in order."""
     combined = pd.concat(frames, ignore_index=True)
     combined[Columns.Score] = combined[WEIGHT_COLUMN] / (rrf_k + combined[Columns.Rank])
 

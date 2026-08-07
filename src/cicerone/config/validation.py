@@ -17,10 +17,7 @@ from cicerone.config.settings import EpochMetricsSettings
 
 
 def resolve_max_workers(raw: Any | None = None) -> int:
-    """Process-pool size for AutoML folds / strategy fitting.
-
-    Omit or pass ``None`` for sequential (``1``). An explicit integer must be >= 1.
-    """
+    """Process-pool size; omit/None → sequential (1)."""
     if raw is None:
         return DEFAULT_MAX_WORKERS
     workers = int(raw)
@@ -38,10 +35,7 @@ def resolve_epoch_metrics(
     plateau_eps: Any | None = None,
     plateau_window: Any | None = None,
 ) -> EpochMetricsSettings | None:
-    """Build epoch-metric settings, or ``None`` when logging is off.
-
-    Interval / threshold knobs are validated only when logging is enabled.
-    """
+    """Epoch-metric settings, or ``None`` when logging is off."""
     if not log_epoch_metrics:
         return None
     return EpochMetricsSettings(

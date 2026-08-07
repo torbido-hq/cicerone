@@ -34,16 +34,13 @@ feature_config_path = "/app/config/features.toml"
 # fallback), "latest" (trending in the last two weeks).
 # models = ["collaborative", "item_based", "popular", "latest"]
 
-# Optional: item-item KNN neighbor count for the item_based strategy.
-# Legacy key — translated to RecTools ``model.item_based.model.K``
-# (TFIDFRecommender.K). Prefer the native form under [model.item_based].
+# Optional: item-item KNN neighbor count (legacy → model.item_based.model.K).
+# Prefer [model.item_based] below.
 # [job.item_based]
 # k_neighbors = 20
 
-# Optional: RecTools-native per-strategy hyperparameters. Each [model.<name>]
-# table maps 1:1 onto rectools.models.model_from_config (include ``cls``).
-# Omitted tables use built-in defaults equivalent to the previous hardcoded
-# factories. content_fallback is NOT configured here — see [job.content_fallback].
+# Optional RecTools [model.<name>] tables (model_from_config; include cls).
+# content_fallback stays under [job.content_fallback].
 # [model.collaborative]
 # cls = "LightFMWrapperModel"
 # epochs = 30

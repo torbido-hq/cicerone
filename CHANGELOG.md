@@ -8,32 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- RecTools-native model configuration: optional `[model.<strategy>]` TOML
-  tables map 1:1 onto `rectools.models.model_from_config` (with a required
-  `cls` key). Defaults preserve the previous hardcoded LightFM / item-KNN /
-  Popular hyperparameters. Strategies: `collaborative`, `item_based`,
-  `popular`, `latest` (`content_fallback` stays under `[job.content_fallback]`).
+- Optional `[model.<strategy>]` TOML tables for RecTools `model_from_config`
+  (`collaborative`, `item_based`, `popular`, `latest`).
 
 ### Changed
 
-- Strategy construction uses RecTools `model_from_config` / `get_config`
-  instead of hand-written `LightFM(...)` / `TFIDFRecommender(...)` factories.
-- Model artifact persistence (`[job].save_model_artifact`) now serializes
-  RecTools strategies with `model.save` / `load_model` (artifact schema
-  version **3**, zip envelope). `content_fallback` remains pickle-backed
-  inside the same artifact. Schema v2 bare-pickle artifacts are no longer
-  loadable.
-- Split oversized modules into packages while keeping import paths stable:
-  `cicerone.model` (`strategies` / `fit` / `recommend` / `combine` /
-  `epoch_metrics`) and `cicerone.config` (`constants` / `settings` /
-  `validation` / `load`). Shared helpers used across those submodules are
-  public (no leading `_`); truly module-local helpers keep `_`.
+- Strategies built via RecTools `model_from_config` / `get_config`.
+- Artifacts schema **v3**: RecTools `model.save` / `load_model` in a zip
+  envelope; `content_fallback` still pickle. Schema v2 no longer loadable.
+- Split `model` / `config` into packages; import paths unchanged. Cross-module
+  helpers are public (`_` = module-local only).
 
 ### Renamed config keys (legacy still accepted)
 
-- `job.item_based.k_neighbors` → RecTools `model.item_based.model.K`
-  (`TFIDFRecommender.K`). Setting both to different values raises
-  `ConfigError`. Prefer `[model.item_based]`.
+- `job.item_based.k_neighbors` → `model.item_based.model.K`. Conflicting
+  values raise `ConfigError`.
 
 ## [0.4.1] - 2026-08-07
 
