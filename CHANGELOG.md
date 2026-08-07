@@ -21,6 +21,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (`test_model_*.py`, `test_config_*.py`).
 - Docs: architecture test/module map, tutorial `[model.*]` knobs, README /
   CONTRIBUTING test layout notes.
+- Shared defaults: item-based `K` from `DEFAULT_ITEM_BASED_K_NEIGHBORS`;
+  latest window from `model_config.LATEST_WINDOW_DAYS` (re-exported by
+  `model.constants`).
 
 ### Renamed config keys (legacy still accepted)
 
