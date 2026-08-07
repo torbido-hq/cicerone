@@ -13,6 +13,7 @@ from rectools.models import (
     PopularModel,
     model_from_config,
 )
+from support.toml_config import write_toml
 
 from cicerone.artifact import (
     ARTIFACT_SCHEMA_VERSION,
@@ -32,12 +33,6 @@ from cicerone.model_config import (
     item_based_k_from_config,
     resolve_model_configs,
 )
-
-
-def _write_toml(tmp_path: Path, content: str) -> str:
-    path = tmp_path / "cicerone.toml"
-    path.write_text(content)
-    return str(path)
 
 
 def _minimal_io_toml() -> str:
@@ -127,7 +122,7 @@ def test_legacy_k_neighbors_translates_to_model_K():
 
 
 def test_native_model_item_based_K_from_toml(tmp_path):
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         f"""
         [job]
@@ -147,7 +142,7 @@ def test_native_model_item_based_K_from_toml(tmp_path):
 
 
 def test_legacy_and_native_k_conflict_raises(tmp_path):
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         f"""
         [job]
@@ -163,7 +158,7 @@ def test_legacy_and_native_k_conflict_raises(tmp_path):
 
 
 def test_legacy_k_neighbors_still_loads(tmp_path):
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         f"""
         [job]
@@ -244,7 +239,7 @@ def test_item_based_save_load_model_recommend_round_trip(tmp_path, feature_confi
 
 
 def test_legacy_and_native_k_same_value_ok(tmp_path):
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         f"""
         [job]
@@ -260,7 +255,7 @@ def test_legacy_and_native_k_same_value_ok(tmp_path):
 
 
 def test_unknown_model_table_raises(tmp_path):
-    config_path = _write_toml(
+    config_path = write_toml(
         tmp_path,
         f"""
         [job]
