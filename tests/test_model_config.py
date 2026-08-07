@@ -25,6 +25,7 @@ from cicerone.model import build_strategy_model
 from cicerone.model_config import (
     DEFAULT_COLLABORATIVE_CONFIG,
     DEFAULT_ITEM_BASED_CONFIG,
+    DEFAULT_LATEST_CONFIG,
     apply_legacy_item_based_k_neighbors,
     deep_merge,
     default_model_configs,
@@ -284,6 +285,15 @@ def test_model_config_module_does_not_import_ml_stack():
 
 def test_artifact_schema_version_is_v3():
     assert ARTIFACT_SCHEMA_VERSION == 3
+
+
+def test_item_based_and_latest_defaults_use_canonical_constants():
+    from cicerone.config import DEFAULT_ITEM_BASED_K_NEIGHBORS
+    from cicerone.model import LATEST_WINDOW_DAYS as MODEL_LATEST
+    from cicerone.model_config import LATEST_WINDOW_DAYS as CONFIG_LATEST
+
+    assert DEFAULT_ITEM_BASED_CONFIG["model"]["K"] == DEFAULT_ITEM_BASED_K_NEIGHBORS
+    assert DEFAULT_LATEST_CONFIG["period"]["days"] == CONFIG_LATEST == MODEL_LATEST
 
 
 def test_deep_merge_replaces_non_dict_leaves():

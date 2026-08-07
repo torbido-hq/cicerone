@@ -5,9 +5,10 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-# Avoid import cycles with config.load_settings.
-_DEFAULT_ITEM_BASED_K = 20
-_LATEST_WINDOW_DAYS = 14
+from cicerone.config.constants import DEFAULT_ITEM_BASED_K_NEIGHBORS
+
+# Single source for latest PopularModel period; re-exported via model.constants.
+LATEST_WINDOW_DAYS = 14
 
 RECTOOLS_STRATEGY_NAMES: tuple[str, ...] = (
     "collaborative",
@@ -34,7 +35,7 @@ DEFAULT_ITEM_BASED_CONFIG: dict[str, Any] = {
     "cls": "ImplicitItemKNNWrapperModel",
     "model": {
         "cls": "TFIDFRecommender",
-        "K": _DEFAULT_ITEM_BASED_K,
+        "K": DEFAULT_ITEM_BASED_K_NEIGHBORS,
     },
 }
 
@@ -45,7 +46,7 @@ DEFAULT_POPULAR_CONFIG: dict[str, Any] = {
 DEFAULT_LATEST_CONFIG: dict[str, Any] = {
     "cls": "PopularModel",
     "popularity": "n_interactions",
-    "period": {"days": _LATEST_WINDOW_DAYS},
+    "period": {"days": LATEST_WINDOW_DAYS},
 }
 
 
@@ -155,7 +156,7 @@ def resolve_model_configs(
 
     configs = apply_legacy_item_based_k_neighbors(
         configs,
-        k_neighbors=legacy_k_neighbors if legacy_k_neighbors is not None else _DEFAULT_ITEM_BASED_K,
+        k_neighbors=legacy_k_neighbors if legacy_k_neighbors is not None else DEFAULT_ITEM_BASED_K_NEIGHBORS,
         k_neighbors_explicit=legacy_k_neighbors_explicit,
     )
 
