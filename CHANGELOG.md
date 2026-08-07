@@ -19,6 +19,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Split `model` / `config` into packages; import paths unchanged. Cross-module
   helpers are public (`_` = module-local only). Tests follow the same split
   (`test_model_*.py`, `test_config_*.py`).
+- Docs: architecture test/module map, tutorial `[model.*]` knobs, README /
+  CONTRIBUTING test layout notes.
 
 ### Renamed config keys (legacy still accepted)
 

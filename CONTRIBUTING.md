@@ -18,7 +18,9 @@ docker compose -f docker-compose.ci.yml --env-file docker/postgres/defaults.env 
 This runs the full pytest suite, including the Postgres-backed `db` I/O
 tests and the system-style end-to-end check in `tests/test_system_db.py`,
 and enforces the 95% coverage gate (`pyproject.toml`,
-`[tool.coverage.report].fail_under`). A plain `docker run --rm cicerone-test`
+`[tool.coverage.report].fail_under`). Model/config tests mirror the
+packages (`tests/test_model_*.py`, `tests/test_config_*.py`; shared helpers
+under `tests/support/`). A plain `docker run --rm cicerone-test`
 (after `docker build --target test -t cicerone-test -f docker/Dockerfile .`)
 skips the `db` tests (no `TEST_DATABASE_URL`) and will under-report coverage
 — always validate with the compose file above before opening a PR.

@@ -341,6 +341,10 @@ if omitted:
   trending/recently active items. Non-personalized, same backfill role as
   `popular`. Optional `[model.latest]` (`period = { days = 14 }`).
 
+Strategy construction and hyperparameters live in `cicerone.model_config`
++ `cicerone.model` (`strategies` / `fit` / `recommend` / `combine`); see
+[docs/architecture.md](docs/architecture.md).
+
 By default, strategies are combined in priority order: earlier strategies
 fill top-K slots first (later ones only backfill remaining slots), and
 duplicate (user, item) pairs keep the earlier strategy. Optionally,
@@ -430,11 +434,12 @@ artifact was saved.
 
 This is a train/serve *artifact* split (inspired by tools like
 LibRecommender), not live inference: serve mode still reads precomputed
-recommendation rows only and never loads the artifact or ML deps. RecTools
-strategies inside the artifact are written with `model.save` /
-`load_model`; the envelope (dataset, feature config) and custom
+recommendation rows only and never loads the artifact or ML deps. Schema
+**v3** writes RecTools strategies with `model.save` / `load_model` inside a
+zip envelope; the envelope (dataset, feature config) and custom
 `content_fallback` weights still use pickle and must only be loaded from
-trusted internal sources (never user uploads).
+trusted internal sources (never user uploads). Schema v2 bare pickles are
+not loadable.
 
 ## Output
 
@@ -513,7 +518,8 @@ The minimum required coverage is 95% (`pyproject.toml`,
 `[tool.coverage.report].fail_under`) and is enforced on every PR by
 `.github/workflows/ci.yml`, which also runs
 [Ruff](https://docs.astral.sh/ruff/) (lint + format check), mypy, and
-`pip-audit` in the same test image. See
+`pip-audit` in the same test image. Model/config tests follow the package
+layout (`tests/test_model_*.py`, `tests/test_config_*.py`). See
 [CONTRIBUTING.md](CONTRIBUTING.md) for how to run tests/lint locally,
 [docs/tutorial.md](docs/tutorial.md) for a hands-on walkthrough with local
 sample data, and [docs/architecture.md](docs/architecture.md) for how the
