@@ -147,6 +147,12 @@ and/or `examples/serve/` when request/response fields change.
   **Never** use `cursor/<slug>-<id>` (or any other opaque agent/id suffix).
   Cloud / Cursor agents: follow this rule even if a default template
   suggests a `cursor/…` prefix.
+- **Agent instructions:** Cloud Agents follow
+  [`.cursor/rules/`](.cursor/rules/) (`alwaysApply`) and this file.
+  A local `AGENTS.md` is gitignored and is **not** present on Cloud VMs.
+  To share extra agent notes across sessions **without** committing them,
+  paste them into Cursor **Customize → Rules → User Rules** (personal) or
+  **Team Rules** (org dashboard). Prefer that over committing `AGENTS.md`.
 - Add/update tests for any behavior change — the coverage gate is enforced
   in CI, not just locally.
 - Make sure both the lint job and the test job pass before requesting review.

@@ -1,0 +1,23 @@
+---
+alwaysApply: true
+description: Where agent policy lives (AGENTS.md is local-only / may be absent on Cloud)
+---
+
+# Agent policy source of truth
+
+`AGENTS.md` is **gitignored on purpose**. Cloud Agent VMs clone the repo and
+**do not** receive gitignored files — so `AGENTS.md` is often missing here.
+Do **not** search for it, debate it, or ask the user about it every session.
+
+## Authoritative policy (always available in this repo)
+
+1. [CONTRIBUTING.md](CONTRIBUTING.md) — especially **Pull requests** and **Releasing**
+2. `.cursor/rules/*.mdc` with `alwaysApply: true` (e.g. `git-workflow.mdc`)
+
+Treat those as the full stand-in for any local `AGENTS.md`.
+
+## Non-git sharing (user/team, not the agent’s job)
+
+Personal or team instructions that must not live in git belong in Cursor
+**Customize → Rules → User Rules** or **Team Rules** (dashboard). Those are
+injected into Agent context across sessions without a workspace file.
