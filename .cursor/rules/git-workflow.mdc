@@ -18,7 +18,8 @@ Cloud/Cursor branch template such as `cursor/<slug>-<id>`.
 ## Pull requests
 
 - When creating a PR whose branch does not use a `cursor/` prefix, set ManagePullRequest `skip_branch_prefix_check=true` (user/repo policy requires non-`cursor/` names).
-- Keep PRs focused; run `ruff check`, `ruff format --check`, and `mypy src` before considering the work done.
+- Keep PRs focused. Full gate is in `verification.mdc` (ruff + mypy + pytest
+  coverage) — run it every time, not only before the final PR.
 
 ## Do not
 

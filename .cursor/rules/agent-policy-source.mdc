@@ -1,23 +1,27 @@
 ---
 alwaysApply: true
-description: Where agent policy lives (AGENTS.md is local-only / may be absent on Cloud)
+description: Enforceable policy is .cursor/rules; AGENTS.md is optional local scratch
 ---
 
 # Agent policy source of truth
 
-`AGENTS.md` is **gitignored on purpose**. Cloud Agent VMs clone the repo and
-**do not** receive gitignored files — so `AGENTS.md` is often missing here.
-Do **not** search for it, debate it, or ask the user about it every session.
+**Do not** look for `AGENTS.md`, debate it, or ask about it. It is gitignored
+and usually absent on Cloud VMs — it cannot enforce anything here.
 
-## Authoritative policy (always available in this repo)
+## What actually sticks across Cloud sessions
 
-1. [CONTRIBUTING.md](CONTRIBUTING.md) — especially **Pull requests** and **Releasing**
-2. `.cursor/rules/*.mdc` with `alwaysApply: true` (e.g. `git-workflow.mdc`)
+| Mechanism | Sticks on Cloud? |
+|---|---|
+| `.cursor/rules/*.mdc` (`alwaysApply: true`) | **Yes** (in git) |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | **Yes** (in git) |
+| Cursor User Rules / Team Rules | Yes (account/dashboard, not git) |
+| Workspace `AGENTS.md` | **No** if gitignored |
 
-Treat those as the full stand-in for any local `AGENTS.md`.
+Put non‑negotiables in `.cursor/rules/` (short `.mdc` files). That *is*
+enforcement. Do not re‑create a giant `AGENTS.md` in git.
 
-## Non-git sharing (user/team, not the agent’s job)
+## In this repo
 
-Personal or team instructions that must not live in git belong in Cursor
-**Customize → Rules → User Rules** or **Team Rules** (dashboard). Those are
-injected into Agent context across sessions without a workspace file.
+- `git-workflow.mdc` — branch / PR naming
+- `coding-standards.mdc` — no essay comments
+- `verification.mdc` — always run ruff / mypy / pytest
