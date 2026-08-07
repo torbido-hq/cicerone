@@ -25,7 +25,10 @@ from cicerone.model import build_strategy_model
 from cicerone.model_config import (
     DEFAULT_COLLABORATIVE_CONFIG,
     DEFAULT_ITEM_BASED_CONFIG,
+    apply_legacy_item_based_k_neighbors,
+    deep_merge,
     default_model_configs,
+    item_based_k_from_config,
     resolve_model_configs,
 )
 
@@ -281,3 +284,37 @@ def test_model_config_module_does_not_import_ml_stack():
 
 def test_artifact_schema_version_is_v3():
     assert ARTIFACT_SCHEMA_VERSION == 3
+
+
+def test_deep_merge_replaces_non_dict_leaves():
+    merged = deep_merge({"a": {"b": 1}, "c": 2}, {"a": {"b": 9}, "c": {"d": 3}})
+    assert merged == {"a": {"b": 9}, "c": {"d": 3}}
+
+
+def test_item_based_k_from_config_missing_path_returns_none():
+    assert item_based_k_from_config({}) is None
+    assert item_based_k_from_config({"model": "not-a-dict"}) is None
+    assert item_based_k_from_config({"model": {}}) is None
+
+
+def test_legacy_k_neighbors_creates_model_dict_when_absent():
+    configs = apply_legacy_item_based_k_neighbors(
+        {"item_based": {"cls": "ImplicitItemKNNWrapperModel"}},
+        k_neighbors=7,
+        k_neighbors_explicit=True,
+    )
+    assert configs["item_based"]["model"]["K"] == 7
+
+
+def test_resolve_model_configs_rejects_non_table_override():
+    with pytest.raises(ConfigError, match="must be a table"):
+        resolve_model_configs({"popular": "PopularModel"})
+
+
+def test_resolve_model_configs_rejects_missing_cls(monkeypatch):
+    monkeypatch.setattr(
+        "cicerone.model_config.default_model_configs",
+        lambda: {"popular": {"popularity": "n_interactions"}},
+    )
+    with pytest.raises(ConfigError, match="missing required key 'cls'"):
+        resolve_model_configs({})
