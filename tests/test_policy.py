@@ -117,6 +117,21 @@ def test_eligible_item_mask_item_true():
     assert set(items.loc[mask, "item_id"]) == {"i1", "i2", "i3"}
 
 
+def test_eligible_item_mask_item_true_string_false_is_ineligible():
+    items = pd.DataFrame(
+        [
+            {"item_id": "a", "published": "true"},
+            {"item_id": "b", "published": "false"},
+            {"item_id": "c", "published": "0"},
+            {"item_id": "d", "published": "1"},
+            {"item_id": "e", "published": ""},
+        ]
+    )
+    rules = [EligibilityRule(name="pub", op="item_true", item_column="published")]
+    mask = eligible_item_mask(None, items, rules)
+    assert set(items.loc[mask, "item_id"]) == {"a", "d"}
+
+
 def test_eligible_item_mask_eq():
     items = _items()
     user = {"user_id": "u1", "market": "eu"}
@@ -367,8 +382,7 @@ def test_group_users_by_cohort_with_missing_attributes():
             user_column="nationality",
         )
     ]
-    # u3 already has nationality=None in the fixture; share a cohort with a
-    # completely unknown user.
+    # u3 has nationality=None; share that cohort with an unknown user.
     cohorts = group_users_by_cohort(["u1", "u3", "ghost"], users, rules)
     missing_cohort = [ids for key, ids in cohorts if key == (("nationality", None),)][0]
     assert missing_cohort == ["u3", "ghost"]
@@ -387,7 +401,6 @@ def test_allowed_items_for_cohort_intersects_availability_and_region():
     )
     rules = resolve_eligibility(config)
     allowed = allowed_items_for_cohort(["u1"], _users(), _items(), rules, ["i1", "i2", "i3", "i4"])
-    # i1 published+stock and ships to IT; i3 OOS; i2 US-only; i4 unpublished
     assert allowed == ["i1"]
 
 
@@ -548,7 +561,6 @@ def test_user_attr_missing_columns_and_empty_mask_edges():
     ]
     # Empty / all-missing list cells → no matches (explode edges).
     assert not eligible_item_mask({"nationality": "IT"}, items, ships).any()
-    # All-empty lists → explode yields an empty series.
     only_empty = pd.DataFrame([{"item_id": "i1", "available_countries": []}])
     assert not eligible_item_mask({"nationality": "IT"}, only_empty, ships).any()
 
@@ -560,10 +572,8 @@ def test_user_attr_missing_columns_and_empty_mask_edges():
             user_column="allowed_categories",
         )
     ]
-    # Missing user column on a Series row → exclude.
     user_row = pd.Series({"user_id": "u1"})
     assert not eligible_item_mask(user_row, _items(), cats).any()
-    # Missing key on a dict → exclude.
     assert not eligible_item_mask({"user_id": "u1"}, _items(), cats).any()
 
 
@@ -655,3 +665,35 @@ def test_apply_boosts_empty_recs_and_no_boosts_paths():
     assert list(truncated[Columns.Item]) == ["i1"]
     untruncated = apply_boosts(recs, _items(), [], top_k=None)
     assert len(untruncated) == 2
+
+
+def test_boolean_boost_respects_string_false():
+    items = pd.DataFrame(
+        [
+            {"item_id": "a", "featured": "true"},
+            {"item_id": "b", "featured": "false"},
+        ]
+    )
+    boosts = [BoostRule(name="f", kind="boolean", item_column="featured", factor=2.0)]
+    factors = item_boost_factors(items, boosts)
+    assert factors["a"] == 2.0
+    assert factors["b"] == 1.0
+
+
+def test_boolean_boost_respects_numeric_zero_and_nonzero():
+    items = pd.DataFrame(
+        [
+            {"item_id": "z", "featured": 0},
+            {"item_id": "one", "featured": 1},
+            {"item_id": "two", "featured": 2},
+            {"item_id": "zf", "featured": 0.0},
+            {"item_id": "half", "featured": 0.5},
+        ]
+    )
+    boosts = [BoostRule(name="f", kind="boolean", item_column="featured", factor=3.0)]
+    factors = item_boost_factors(items, boosts)
+    assert factors["z"] == 1.0
+    assert factors["one"] == 3.0
+    assert factors["two"] == 3.0
+    assert factors["zf"] == 1.0
+    assert factors["half"] == 3.0

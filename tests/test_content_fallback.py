@@ -58,7 +58,7 @@ def test_feature_dict_handles_list_features_and_nans():
     model.fit(_DummyDataset())
     assert "i1" in model._item_ids
     assert "i2" in model._item_ids
-    # i3 has only null feature values → no tokens → skipped from matrix
+    # Null-only features → no tokens → skipped from matrix.
     assert "i3" not in model._item_ids
     # No "<NA>" / "nan" token pollution in the fitted vocabulary.
     assert model._vectorizer is not None
@@ -108,7 +108,7 @@ def test_recommend_skips_users_without_history_or_unmapped_history():
         interactions=interactions,
     )
     model.fit(_DummyDataset())
-    # u2 has no history; u3's history item is unknown to the feature matrix.
+    # u2: no history; u3: history item unknown to the feature matrix.
     model._user_history["u3"] = ["ghost_item"]
     recs = model.recommend(
         users=["u2", "u3"],
@@ -241,3 +241,29 @@ def test_fit_raises_clear_error_when_items_missing_id_column():
     )
     with pytest.raises(ValueError, match="items is missing a required id column"):
         model.fit(_DummyDataset())
+
+
+def test_feature_dict_parses_list_like_strings():
+    from cicerone.content_fallback import _feature_dict
+
+    row = pd.Series(
+        {
+            "item_id": "i1",
+            "tags": "ipa, stout",
+            "styles": '["lager", "pils"]',
+            "solo": "single",
+        }
+    )
+    tokens = _feature_dict(
+        row,
+        [
+            FeatureColumn(column="tags", type="list"),
+            FeatureColumn(column="styles", type="list"),
+            FeatureColumn(column="solo", type="list"),
+        ],
+    )
+    assert tokens["tags=ipa"] == 1.0
+    assert tokens["tags=stout"] == 1.0
+    assert tokens["styles=lager"] == 1.0
+    assert tokens["styles=pils"] == 1.0
+    assert tokens["solo=single"] == 1.0

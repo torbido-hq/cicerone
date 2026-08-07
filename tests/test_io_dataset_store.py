@@ -104,8 +104,7 @@ def test_s3_backend_round_trip(s3_options):
     sink.write_recommendations(df)
     sink.write_manifest({"n_events": 1})
 
-    # The output sink writes recommendations.parquet; point a source at the
-    # same prefix and re-read it back as if it were events.parquet.
+    # Re-read sink output as if it were events.parquet.
     source = DatasetInputSource(s3_options)
     client = boto3.client("s3", region_name="us-east-1")
     bucket = s3_options["bucket"]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from typing import Protocol
 
 import pandas as pd
@@ -24,7 +25,7 @@ class OutputSink(Protocol):
     def write_model_artifact(self, payload: bytes) -> None: ...
 
     def write_items_snapshot(self, df: pd.DataFrame) -> None:
-        """Optional: persist items for serve-time category/availability filters."""
+        """Persist items for serve-time category/availability filters."""
         ...
 
 
@@ -45,6 +46,15 @@ class RecommendationReader(Protocol):
 
     def get_cold_start_fallback(self, k: int) -> pd.DataFrame:
         """``__cold_start__`` rows, else a popular/latest heuristic for unknown users."""
+        ...
+
+    def configure_item_filters(
+        self,
+        *,
+        category_column: str | None = None,
+        availability_filters: Sequence[str] = (),
+    ) -> None:
+        """Configure serve-time category / availability columns on the items snapshot."""
         ...
 
 
@@ -68,6 +78,14 @@ class BaseRecommendationReader(ABC):
     def get_cold_start_fallback(self, k: int) -> pd.DataFrame:
         del k
         return pd.DataFrame()
+
+    def configure_item_filters(
+        self,
+        *,
+        category_column: str | None = None,
+        availability_filters: Sequence[str] = (),
+    ) -> None:
+        del category_column, availability_filters
 
     @abstractmethod
     def get_recommendations(self, user_id: str, k: int) -> pd.DataFrame: ...

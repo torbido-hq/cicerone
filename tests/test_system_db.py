@@ -112,7 +112,6 @@ def test_system_job_db_round_trip_with_artifact_and_readers(
 
     expected_users = set(sample_events["user_id"]) | set(sample_users["user_id"])
 
-    # Serve-path reader (same store the HTTP API would query).
     rec_reader = DbRecommendationReader({"database_url": TEST_DATABASE_URL})
     for user_id in sorted(expected_users):
         served_all = rec_reader.get_recommendations(user_id, k=10)
@@ -123,11 +122,9 @@ def test_system_job_db_round_trip_with_artifact_and_readers(
     served = rec_reader.get_recommendations("u1", k=2)
     assert len(served) == 2
     assert set(served["user_id"]) == {"u1"}
-    # Ordered by rank ascending (priority combine may leave equal ranks
-    # across strategies for different items).
+    # Priority combine may leave equal ranks across strategies.
     assert list(served["rank"]) == sorted(served["rank"].tolist())
 
-    # Dashboard-path reader.
     manifest_reader = DbManifestReader({"database_url": TEST_DATABASE_URL})
     latest = manifest_reader.read_latest()
     assert latest is not None
@@ -139,7 +136,7 @@ def test_system_job_db_round_trip_with_artifact_and_readers(
     recent = manifest_reader.read_recent(limit=5)
     assert len(recent) == 1
 
-    # Artifact blob has no dedicated reader — load via the public artifact API.
+    # No dedicated artifact reader — load via public artifact API.
     artifacts = pd.read_sql(
         text(f'SELECT payload FROM "{DEFAULT_MODEL_ARTIFACT_TABLE}"'),
         db_engine,

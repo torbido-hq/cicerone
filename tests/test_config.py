@@ -5,10 +5,12 @@ import re
 import pytest
 
 from cicerone.config import (
+    ConfigError,
     EpochMetricsSettings,
     load_settings,
     resolve_epoch_metrics,
     resolve_max_workers,
+    validate_model_weights,
 )
 
 
@@ -150,7 +152,7 @@ def test_load_settings_rejects_invalid_item_based_k_neighbors(tmp_path):
         """,
     )
 
-    with pytest.raises(RuntimeError, match="job.item_based.k_neighbors"):
+    with pytest.raises(ConfigError, match="job.item_based.k_neighbors"):
         load_settings(config_path)
 
 
@@ -175,7 +177,7 @@ def test_load_settings_rejects_unknown_model(tmp_path):
         """,
     )
 
-    with pytest.raises(RuntimeError, match="not_a_real_model"):
+    with pytest.raises(ConfigError, match="not_a_real_model"):
         load_settings(config_path)
 
 
@@ -200,10 +202,8 @@ def test_load_settings_rejects_empty_models(tmp_path):
         """,
     )
 
-    # An explicit empty list is a configuration error caught as early as
-    # possible (at config load, not later inside train_and_recommend) so
-    # it surfaces clearly in job logs rather than as a downstream failure.
-    with pytest.raises(RuntimeError, match="job.models is empty"):
+    # Empty models list is a config-load error, not a late train failure.
+    with pytest.raises(ConfigError, match="job.models is empty"):
         load_settings(config_path)
 
 
@@ -262,7 +262,7 @@ def test_load_settings_rejects_model_weights_not_in_models(tmp_path):
         path = "/tmp/out"
         """,
     )
-    with pytest.raises(RuntimeError, match="model_weights"):
+    with pytest.raises(ConfigError, match="model_weights"):
         load_settings(config_path)
 
 
@@ -290,10 +290,17 @@ def test_load_settings_rejects_negative_model_weight(tmp_path):
         """,
     )
 
-    # Caught at config load (via the shared validate_model_weights), not
-    # only later inside train_and_recommend.
-    with pytest.raises(ValueError, match="non-negative"):
+    # Shared validate_model_weights runs at config load, not only at train time.
+    with pytest.raises(ConfigError, match="non-negative"):
         load_settings(config_path)
+
+
+def test_validate_model_weights_rejects_negative_and_allows_non_negative():
+    validate_model_weights(None)
+    validate_model_weights({})
+    validate_model_weights({"popular": 0.0, "latest": 1.5})
+    with pytest.raises(ConfigError, match="non-negative"):
+        validate_model_weights({"popular": -0.1})
 
 
 def test_load_settings_rejects_non_positive_rrf_k(tmp_path):
@@ -321,7 +328,7 @@ def test_load_settings_rejects_non_positive_rrf_k(tmp_path):
         """,
     )
 
-    with pytest.raises(ValueError, match="job.rrf_k must be positive"):
+    with pytest.raises(ConfigError, match="job.rrf_k must be positive"):
         load_settings(config_path)
 
 
@@ -498,7 +505,7 @@ def test_load_settings_max_workers_and_rejects_non_positive(tmp_path):
         path = "/tmp/out"
         """,
     )
-    with pytest.raises(RuntimeError, match="max_workers"):
+    with pytest.raises(ConfigError, match="max_workers"):
         load_settings(bad)
 
 
@@ -542,8 +549,7 @@ def test_load_settings_log_epoch_metrics(tmp_path):
 
 
 def test_load_settings_ignores_epoch_metrics_every_when_logging_disabled(tmp_path):
-    # epoch_metrics_* knobs are unused when logging is off — even invalid
-    # values must not fail config load (validated only when logging is on).
+    # Invalid epoch_metrics_* must not fail load when logging is off.
     config_path = _write_toml(
         tmp_path,
         """
@@ -585,19 +591,19 @@ def test_load_settings_rejects_non_positive_epoch_metrics_every_when_enabled(tmp
         path = "/tmp/out"
         """,
     )
-    with pytest.raises(RuntimeError, match="epoch_metrics_every"):
+    with pytest.raises(ConfigError, match="epoch_metrics_every"):
         load_settings(config_path)
 
 
 def test_resolve_epoch_metrics_rejects_non_positive_when_enabled():
-    with pytest.raises(RuntimeError, match="epoch_metrics_every"):
+    with pytest.raises(ConfigError, match="epoch_metrics_every"):
         resolve_epoch_metrics(log_epoch_metrics=True, every=0)
 
 
 def test_resolve_epoch_metrics_rejects_fraction_outside_unit_interval():
-    with pytest.raises(RuntimeError, match="epoch_metrics_regression_drop"):
+    with pytest.raises(ConfigError, match="epoch_metrics_regression_drop"):
         resolve_epoch_metrics(log_epoch_metrics=True, regression_drop=1.5)
-    with pytest.raises(RuntimeError, match="epoch_metrics_plateau_eps"):
+    with pytest.raises(ConfigError, match="epoch_metrics_plateau_eps"):
         resolve_epoch_metrics(log_epoch_metrics=True, plateau_eps=0)
     assert resolve_epoch_metrics(log_epoch_metrics=True, regression_drop=1.0).regression_drop == 1.0
 
@@ -620,7 +626,7 @@ def test_load_settings_rejects_non_positive_half_life_days(tmp_path):
         path = "/tmp/out"
         """,
     )
-    with pytest.raises(RuntimeError, match="half_life_days"):
+    with pytest.raises(ConfigError, match="half_life_days"):
         load_settings(config_path)
 
 
@@ -904,7 +910,7 @@ def test_load_settings_missing_kind_raises(tmp_path):
         """,
     )
 
-    with pytest.raises(RuntimeError, match=r"\[input\]\.kind"):
+    with pytest.raises(ConfigError, match=r"\[input\]\.kind"):
         load_settings(config_path)
 
 
@@ -920,7 +926,7 @@ def test_load_settings_missing_section_raises(tmp_path):
         """,
     )
 
-    with pytest.raises(RuntimeError, match=r"Missing required config section: \[input\]$"):
+    with pytest.raises(ConfigError, match=r"Missing required config section: \[input\]$"):
         load_settings(config_path)
 
 
@@ -977,14 +983,14 @@ def test_load_settings_mode_defaults_to_batch(tmp_path):
 def test_load_settings_rejects_unknown_mode(tmp_path):
     config_path = _write_toml(tmp_path, f'[job]\nmode = "not_a_mode"\n{_base_io_toml()}')
 
-    with pytest.raises(RuntimeError, match="job.mode must be one of"):
+    with pytest.raises(ConfigError, match="job.mode must be one of"):
         load_settings(config_path)
 
 
 def test_load_settings_serve_mode_requires_auth_token(tmp_path):
     config_path = _write_toml(tmp_path, f'[job]\nmode = "serve"\n{_base_io_toml()}')
 
-    with pytest.raises(RuntimeError, match="serve.auth_token is required"):
+    with pytest.raises(ConfigError, match="serve.auth_token is required"):
         load_settings(config_path)
 
 
@@ -1043,7 +1049,7 @@ def test_load_settings_serve_defaults(tmp_path, monkeypatch):
 def test_load_settings_trigger_enabled_requires_auth_token(tmp_path):
     config_path = _write_toml(tmp_path, f"[job]\n[job.trigger]\nenabled = true\n{_base_io_toml()}")
 
-    with pytest.raises(RuntimeError, match="job.trigger.auth_token is required"):
+    with pytest.raises(ConfigError, match="job.trigger.auth_token is required"):
         load_settings(config_path)
 
 

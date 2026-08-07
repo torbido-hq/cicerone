@@ -35,9 +35,7 @@ def reset_schema(engine: Engine) -> None:
     """
     db_name = engine.url.database
     if not is_dedicated_test_database(db_name):
-        # Use canonical_postgres_test_db() (defaults.env only) in the message —
-        # postgres_test_db() can raise ValueError if POSTGRES_TEST_DB is a
-        # hostile override, which would mask this refusal.
+        # Prefer canonical_postgres_test_db() — postgres_test_db() can raise on hostile overrides.
         raise RuntimeError(
             f"Refusing to reset schema for non-test database {db_name!r}. "
             "TEST_DATABASE_URL must point at a dedicated test DB "

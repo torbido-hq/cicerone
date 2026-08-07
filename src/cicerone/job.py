@@ -45,6 +45,7 @@ _MANIFEST_DEFAULTS: dict[str, Any] = {
     "rrf_k": None,
     "artifact_written": False,
     "artifact_schema_version": None,
+    "partial_outputs": False,
     "automl_enabled": False,
     "automl_metrics": "",
 }
@@ -66,7 +67,7 @@ def run(triggered_by: str = "manual") -> None:
     manifest = dict(_MANIFEST_DEFAULTS)
     manifest["triggered_by"] = triggered_by
     manifest["top_k"] = settings.top_k
-    manifest["automl_enabled"] = settings.automl_enabled
+    manifest["automl_enabled"] = settings.automl.enabled
 
     try:
         source = build_input_source(settings.input)
@@ -86,7 +87,7 @@ def run(triggered_by: str = "manual") -> None:
 
         automl_result = None
         enabled_models, weights, rrf_k = settings.models, settings.model_weights, settings.rrf_k
-        if settings.automl_enabled:
+        if settings.automl.enabled:
             candidate_results = evaluate_candidates(
                 events,
                 users,
@@ -94,13 +95,13 @@ def run(triggered_by: str = "manual") -> None:
                 feature_config,
                 top_k=settings.top_k,
                 half_life_days=settings.half_life_days,
-                candidates=settings.automl_candidates,
-                n_splits=settings.automl_n_splits,
-                test_days=settings.automl_test_days,
+                candidates=settings.automl.candidates,
+                n_splits=settings.automl.n_splits,
+                test_days=settings.automl.test_days,
                 max_workers=settings.max_workers,
             )
             automl_result = select_best_candidate(
-                candidate_results, primary_metric=settings.automl_primary_metric
+                candidate_results, primary_metric=settings.automl.primary_metric
             )
             enabled_models = automl_result.candidate.models
             weights = automl_result.candidate.weights
@@ -156,16 +157,23 @@ def run(triggered_by: str = "manual") -> None:
                 )
             )
 
-        # Persist outputs only after in-memory work succeeds so a failed run
-        # does not leave recommendations without a matching success manifest.
-        if artifact_bytes is not None:
-            sink.write_model_artifact(artifact_bytes)
-            manifest["artifact_written"] = True
-            manifest["artifact_schema_version"] = ARTIFACT_SCHEMA_VERSION
+        # Artifact → snapshot → recommendations; success only after all writes.
+        outputs_written = False
+        try:
+            if artifact_bytes is not None:
+                sink.write_model_artifact(artifact_bytes)
+                manifest["artifact_written"] = True
+                manifest["artifact_schema_version"] = ARTIFACT_SCHEMA_VERSION
 
-        sink.write_recommendations(recommendations)
-        if items is not None and not items.empty:
-            sink.write_items_snapshot(items)
+            if items is not None and not items.empty:
+                sink.write_items_snapshot(items)
+
+            sink.write_recommendations(recommendations)
+            outputs_written = True
+        except Exception:
+            if outputs_written or manifest.get("artifact_written"):
+                manifest["partial_outputs"] = True
+            raise
 
         manifest.update(
             {
@@ -194,7 +202,14 @@ def run(triggered_by: str = "manual") -> None:
         raise
     finally:
         manifest["generated_at"] = datetime.now(UTC).isoformat()
-        sink.write_manifest(manifest)
+        try:
+            sink.write_manifest(manifest)
+        except Exception:
+            logger.exception("Failed to write manifest; original job error (if any) is preserved")
+            if manifest.get("status") != "success":
+                pass  # keep original job failure
+            else:
+                raise
         logger.info("Job finished: %s", json.dumps(manifest))
 
 

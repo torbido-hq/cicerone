@@ -77,7 +77,7 @@ def create_app(settings: Settings, reader: ManifestReader, users: dict[str, str]
 
     def _status_context() -> dict[str, Any]:
         manifest = reader.read_latest()
-        history = reader.read_recent(settings.dashboard_history_limit)
+        history = reader.read_recent(settings.dashboard.history_limit)
         staleness = _compute_staleness(manifest, settings.cron_schedule, datetime.now(UTC))
         return {"manifest": manifest, "history": history, "staleness": staleness}
 
@@ -88,7 +88,7 @@ def create_app(settings: Settings, reader: ManifestReader, users: dict[str, str]
     @app.get("/dashboard", dependencies=[Depends(auth)])
     def dashboard(request: Request):
         context = _status_context()
-        context["refresh_interval_seconds"] = settings.dashboard_refresh_interval_seconds
+        context["refresh_interval_seconds"] = settings.dashboard.refresh_interval_seconds
         return _TEMPLATES.TemplateResponse(request, "dashboard.html", context)
 
     return app
@@ -96,19 +96,19 @@ def create_app(settings: Settings, reader: ManifestReader, users: dict[str, str]
 
 def main() -> None:
     settings = load_settings()
-    if not settings.dashboard_enabled:
+    if not settings.dashboard.enabled:
         raise RuntimeError("dashboard.enabled must be true in the loaded config to run cicerone.dashboard")
 
-    users = load_users(settings.dashboard_users_path)
+    users = load_users(settings.dashboard.users_path)
     if not users:
         raise RuntimeError(
-            f"No dashboard users configured at {settings.dashboard_users_path!r} -- "
+            f"No dashboard users configured at {settings.dashboard.users_path!r} -- "
             "add one with `python -m cicerone.manage_dashboard_users add <username>`"
         )
 
     reader = build_manifest_reader(settings.output)
     app = create_app(settings, reader, users)
-    uvicorn.run(app, host=settings.dashboard_host, port=settings.dashboard_port)
+    uvicorn.run(app, host=settings.dashboard.host, port=settings.dashboard.port)
 
 
 if __name__ == "__main__":

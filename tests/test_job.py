@@ -220,9 +220,7 @@ def test_job_run_with_automl_enabled_selects_and_records_best_candidate(tmp_path
     assert manifest["automl_enabled"] is True
     assert manifest["models"] in ("popular", "latest")
     assert manifest["automl_metrics"] != ""
-    # Neither candidate in this test configures model_weights, so whichever
-    # one AutoML picks, the manifest should report the priority-mode
-    # defaults rather than leftover/stale fusion values.
+    # Priority-mode candidates → empty model_weights, not stale fusion values.
     assert manifest["model_weights"] == ""
     assert manifest["rrf_k"] == RRF_K
     automl_metrics = manifest["automl_metrics"].split(",")
@@ -232,10 +230,7 @@ def test_job_run_with_automl_enabled_selects_and_records_best_candidate(tmp_path
 
 
 def test_job_run_with_automl_fusion_candidate_reports_effective_weights(tmp_path, monkeypatch):
-    # Only one candidate is offered (a weighted fusion of every enabled
-    # model), so it's always the one AutoML selects -- this lets us assert
-    # deterministically that model_weights/rrf_k reflect the *fusion*
-    # candidate's fields end-to-end through the manifest.
+    # Single fusion candidate → manifest model_weights/rrf_k are deterministic.
     input_dir = tmp_path / "in"
     output_dir = tmp_path / "out"
     input_dir.mkdir()
@@ -314,10 +309,7 @@ def test_job_run_with_automl_fusion_candidate_reports_effective_weights(tmp_path
 
 
 def test_job_run_with_manual_fusion_configuration_reports_manifest_fields(tmp_path, monkeypatch):
-    # AutoML disabled (no [job.automl] section at all): job.models,
-    # [job.model_weights] and job.rrf_k are configured directly in TOML, and
-    # the manifest should reflect those values end-to-end, exactly as it
-    # does when AutoML selects a fusion candidate.
+    # AutoML off: TOML job.models / model_weights / rrf_k must reach the manifest.
     input_dir = tmp_path / "in"
     output_dir = tmp_path / "out"
     input_dir.mkdir()
@@ -377,7 +369,6 @@ def test_job_run_with_manual_fusion_configuration_reports_manifest_fields(tmp_pa
 
 
 def test_job_run_raises_on_failure(tmp_path, monkeypatch):
-    # no events.parquet present in tmp_path -> should fail
     config_path = _write_config(tmp_path, tmp_path, tmp_path)
     monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
 
@@ -390,8 +381,7 @@ def test_job_run_raises_on_failure(tmp_path, monkeypatch):
 
 
 def test_job_run_truncates_an_overly_long_error_message(tmp_path, monkeypatch):
-    # A manifest["error"] shouldn't grow unbounded (e.g. a verbose driver
-    # exception) -- it's persisted and shown as-is on the dashboard.
+    # Manifest error is persisted/shown as-is — must stay bounded.
     config_path = _write_config(tmp_path, tmp_path, tmp_path)
     monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
 
@@ -433,3 +423,73 @@ def test_job_run_records_custom_triggered_by(tmp_path, monkeypatch):
 
     manifest = json.loads((output_dir / "manifest.json").read_text())
     assert manifest["triggered_by"] == "webhook"
+
+
+def test_job_marks_partial_outputs_when_recommendation_write_fails(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+
+    now = pd.Timestamp.utcnow()
+    events = pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    )
+    items = pd.DataFrame(
+        [{"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True}]
+    )
+    events.to_parquet(input_dir / "events.parquet", index=False)
+    items.to_parquet(input_dir / "items.parquet", index=False)
+
+    config_path = _write_config(tmp_path, input_dir, output_dir, extra_job="save_model_artifact = true")
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
+
+    from cicerone.io.dataset_store import DatasetOutputSink
+
+    original_write = DatasetOutputSink.write_recommendations
+
+    def boom(self, df):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(DatasetOutputSink, "write_recommendations", boom)
+
+    with pytest.raises(RuntimeError, match="disk full"):
+        job.run()
+
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    assert manifest["status"] == "failed"
+    assert manifest["partial_outputs"] is True
+    assert manifest["artifact_written"] is True
+    del original_write
+
+
+def test_job_preserves_success_when_manifest_write_fails(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+
+    now = pd.Timestamp.utcnow()
+    events = pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    )
+    items = pd.DataFrame(
+        [{"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True}]
+    )
+    events.to_parquet(input_dir / "events.parquet", index=False)
+    items.to_parquet(input_dir / "items.parquet", index=False)
+
+    config_path = _write_config(tmp_path, input_dir, output_dir)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
+
+    from cicerone.io.dataset_store import DatasetOutputSink
+
+    def boom(self, manifest):
+        raise RuntimeError("manifest unavailable")
+
+    monkeypatch.setattr(DatasetOutputSink, "write_manifest", boom)
+
+    with pytest.raises(RuntimeError, match="manifest unavailable"):
+        job.run()
+
+    assert (output_dir / "recommendations.parquet").exists()

@@ -4,6 +4,47 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.1] - 2026-08-07
+
+### Added
+
+- Nested settings surfaces on `Settings`: `serve`, `trigger`, `dashboard`, and
+  `automl` dataclasses (flat `settings.serve_host`-style accessors remain as
+  compatibility properties). Invalid config knobs raise `ConfigError`
+  (`ValueError` subclass); missing files / unset `${ENV}` still raise
+  `RuntimeError`.
+- Manifest field `partial_outputs` when a sink write fails after some outputs
+  were already persisted (success is set only after all writes succeed).
+- `[[boosts]]` accepted as an alias for `[[boost]]` in `features.toml`
+  (defining both is an error).
+- I/O factory kind registry; `configure_item_filters` on the
+  `RecommendationReader` protocol; frozen `ModelArtifact`.
+
+### Changed
+
+- Event caps keep the **most recent** N events per `(user, item, event_type)`
+  (sorted by `occurred_at` descending before `cumcount`).
+- Aggregated `(user, item)` pairs with non-positive weight are **dropped**
+  instead of being floored to `1e-3` (negative review sums no longer become
+  weak positive LightFM signals).
+- Serve cold-start heuristic is deterministic across dataset and DB backends:
+  prefer `popular_fallback`, then `latest`, then lexicographic `user_id`;
+  DB path picks one user then fetches that user's top-K (no `LIMIT k*20`
+  under-fill).
+- `recommend_with_models` split into cohort → recommend → combine → boost
+  phases; blending uses per-user indexes and optional shared latest rankings;
+  serve dataset reader indexes recommendations by `user_id` at refresh time.
+- ProcessPool strategy now initializes LightFM with `num_threads=1` inside
+  workers to avoid CPU oversubscription.
+
+### Fixed
+
+- `item_true` eligibility no longer treats non-empty strings such as
+  `"false"` / `"0"` as true (`astype(bool)`); only explicit truthy tokens
+  / non-zero numerics / bools pass.
+- DB `_clear_table_for_replace` catches the same missing-table errors as the
+  rest of the DB store (including SQLite `OperationalError` on `TRUNCATE`).
+
 ## [0.4.0] - 2026-08-06
 
 ### Added

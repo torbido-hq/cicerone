@@ -42,6 +42,19 @@ def test_select_cold_start_fallback_prefers_sentinel():
     assert list(out["item_id"]) == ["i9"]
 
 
+def test_select_cold_start_fallback_prefers_popular_over_latest_user_order():
+    frame = pd.DataFrame(
+        [
+            {"user_id": "z_user", "item_id": "i1", "rank": 1, "score": 0.9, "source": "popular_fallback"},
+            {"user_id": "a_user", "item_id": "i9", "rank": 1, "score": 0.4, "source": "latest"},
+            {"user_id": "a_user", "item_id": "i8", "rank": 2, "score": 0.3, "source": "latest"},
+        ]
+    )
+    out = select_cold_start_fallback(frame, k=1)
+    assert list(out["item_id"]) == ["i1"]
+    assert list(out["user_id"]) == ["z_user"]
+
+
 def test_select_cold_start_fallback_without_sentinel_uses_popular():
     frame = pd.DataFrame(
         [

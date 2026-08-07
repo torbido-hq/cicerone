@@ -58,7 +58,6 @@ def test_openapi_json_lists_serve_paths_and_schemas():
         error_schema = error_response["content"]["application/json"]["schema"]
         assert error_schema.get("$ref") == "#/components/schemas/ErrorDetail"
 
-    # Bearer security is present when serve_auth_token is configured.
     assert schema["components"]["securitySchemes"]
 
 

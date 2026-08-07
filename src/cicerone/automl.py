@@ -42,9 +42,7 @@ DEFAULT_N_SPLITS = AUTOML_DEFAULT_N_SPLITS
 DEFAULT_TEST_DAYS = AUTOML_DEFAULT_TEST_DAYS
 DEFAULT_PRIMARY_METRIC = AUTOML_DEFAULT_PRIMARY_METRIC
 
-# Derived from STRATEGIES/DEFAULT_MODELS so this can't drift when a
-# strategy is added/removed: every strategy alone, the default priority
-# combo, and one weighted-fusion blend across every strategy.
+# From STRATEGIES: each alone, DEFAULT_MODELS priority, and one weighted fusion of all.
 DEFAULT_CANDIDATES: list[dict[str, Any]] = [
     *({"models": [name]} for name in STRATEGIES),
     {"models": DEFAULT_MODELS},

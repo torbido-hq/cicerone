@@ -13,6 +13,7 @@ from cicerone.automl import (
     evaluate_candidates,
     select_best_candidate,
 )
+from cicerone.config import ConfigError
 from cicerone.dataset import build_dataset, build_interactions
 from cicerone.model import train_and_recommend
 
@@ -25,8 +26,7 @@ def _spread_events(n_days: int) -> pd.DataFrame:
         "u2": ["i2", "i3"],
         "u3": ["i1", "i3"],
     }
-    # Repeat the same purchases every few days across the window so both
-    # sides of a time-based split have signal regardless of where the cut falls.
+    # Repeat purchases across the window so both sides of a time split have signal.
     for day_offset in range(0, n_days, 3):
         occurred_at = now - pd.Timedelta(days=day_offset)
         for user, items in interactions.items():
@@ -63,9 +63,7 @@ def test_time_based_folds_skips_folds_without_enough_history():
 
 
 def test_time_based_folds_includes_most_recent_event_in_latest_fold():
-    # Regression test: the most recent event's timestamp must not fall
-    # exactly on the strict "< test_end" upper bound of the newest fold's
-    # test window, or it would never be included in any fold's test set.
+    # Latest event must not land on the exclusive `< test_end` bound.
     now = pd.Timestamp.utcnow()
     events = pd.DataFrame(
         [
@@ -141,13 +139,13 @@ def test_parse_candidates_rejects_empty_models():
 
 def test_parse_candidates_rejects_negative_weight():
     entry = {"models": ["popular", "latest"], "weights": {"popular": -1.0, "latest": 0.5}}
-    with pytest.raises(ValueError, match="non-negative"):
+    with pytest.raises(ConfigError, match="non-negative"):
         _parse_candidates([entry])
 
 
 def test_parse_candidates_rejects_non_positive_rrf_k():
     entry = {"models": ["popular"], "weights": {"popular": 1.0}, "rrf_k": 0}
-    with pytest.raises(ValueError, match="rrf_k must be positive"):
+    with pytest.raises(ConfigError, match="rrf_k must be positive"):
         _parse_candidates([entry])
 
 
@@ -156,8 +154,7 @@ def test_parse_candidates_defaults_to_default_candidates():
 
 
 def test_default_candidates_includes_every_registered_strategy_solo():
-    # DEFAULT_CANDIDATES is derived from STRATEGIES rather than hard-coded,
-    # so it can't silently omit a strategy that's added later.
+    # Derived from STRATEGIES so new strategies can't be silently omitted.
     from cicerone.model import STRATEGIES
 
     solo_candidate_models = {
@@ -189,9 +186,7 @@ def test_evaluate_candidates_raises_without_enough_history(sample_items, feature
 
 
 def test_evaluate_candidates_raises_without_enough_history_with_max_workers(sample_items, feature_config):
-    # The empty-folds check must run before any ProcessPoolExecutor is
-    # constructed, since ProcessPoolExecutor(max_workers=min(max_workers, 0))
-    # would be invalid.
+    # Empty-folds check must run before ProcessPoolExecutor(max_workers=0).
     now = pd.Timestamp.utcnow()
     events = pd.DataFrame(
         [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
@@ -219,10 +214,7 @@ def test_evaluate_candidates_raises_on_empty_candidates_list(sample_items, featu
 
 
 def test_evaluate_candidates_warns_when_fewer_folds_than_requested(sample_items, feature_config, caplog):
-    # 21 days of history only supports 1 fold of test_days=7 (needs history
-    # before the test window too), but n_splits=3 is requested -- the run
-    # should still succeed with the folds it can build, while logging that
-    # backtest coverage is reduced instead of silently under-delivering.
+    # 21 days → 1 fold of test_days=7; n_splits=3 must warn, not silently under-deliver.
     events = _spread_events(n_days=21)
     with caplog.at_level("WARNING", logger="cicerone.automl"):
         results = evaluate_candidates(
@@ -266,9 +258,7 @@ def test_evaluate_candidates_scores_each_candidate(sample_items, feature_config)
 
 
 def test_evaluate_candidates_parallel_folds_match_sequential(sample_items, feature_config):
-    # popular/latest are deterministic (no LightFM randomness), so a
-    # ProcessPoolExecutor-parallelized run over folds must score identically
-    # to the default sequential (max_workers=1) run.
+    # Deterministic strategies: parallel fold scoring must match sequential.
     events = _spread_events(n_days=35)
     candidates = [{"models": ["popular"]}, {"models": ["latest"]}]
     kwargs = dict(
@@ -284,7 +274,7 @@ def test_evaluate_candidates_parallel_folds_match_sequential(sample_items, featu
     )
 
     sequential = evaluate_candidates(**kwargs, max_workers=1)
-    # max_workers exceeding the fold count must be capped, not raise.
+    # max_workers > fold count must be capped, not raise.
     parallel = evaluate_candidates(**kwargs, max_workers=10)
 
     assert len(sequential) == len(parallel) == 2
@@ -296,9 +286,7 @@ def test_evaluate_candidates_parallel_folds_match_sequential(sample_items, featu
 
 
 def test_evaluate_candidates_handles_weighted_rrf_and_averages_across_folds(sample_items, feature_config):
-    # 35 days gives 3 non-overlapping 7-day test folds plus enough leftover
-    # history for each fold's train side, so multi-fold averaging is
-    # actually exercised (not just a single fold repeated).
+    # 35 days → 3 folds of test_days=7 so multi-fold averaging is exercised.
     events = _spread_events(n_days=35)
     candidate_cfg = {
         "models": ["popular", "latest"],
@@ -325,9 +313,7 @@ def test_evaluate_candidates_handles_weighted_rrf_and_averages_across_folds(samp
     assert result.candidate.rrf_k == 30.0
     assert result.n_folds > 1
 
-    # Independently recompute each fold's own metrics and confirm
-    # evaluate_candidates' averaged result is actually their mean -- i.e.
-    # multi-fold averaging isn't just echoing a single fold's numbers.
+    # Recompute per-fold metrics; averaged result must be their mean.
     folds = _time_based_folds(events, n_splits=3, test_days=7)
     assert len(folds) == result.n_folds
     metrics_defs = automl._make_metrics(top_k=2)
@@ -401,9 +387,7 @@ def test_select_best_candidate_accepts_exact_metric_name():
 
 
 def test_select_best_candidate_validates_metric_key_per_result():
-    # Second result is missing "MAP@5" entirely (heterogeneous metrics) -- must
-    # be caught even though the first result does have a "MAP@5" key, i.e. the
-    # metric key can't just be derived once from results[0] and reused.
+    # Metric key must be validated per result, not derived once from results[0].
     has_map = CandidateResult(candidate=Candidate(models=["popular"]), metrics={"MAP@5": 0.5}, n_folds=1)
     missing_map = CandidateResult(candidate=Candidate(models=["latest"]), metrics={"NDCG@5": 0.9}, n_folds=1)
     with pytest.raises(ValueError, match="latest"):

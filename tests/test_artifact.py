@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pandas as pd
 import pytest
 
@@ -47,7 +49,7 @@ def test_artifact_round_trip_recommendations_match(
 
     loaded = load_artifact(path)
     assert loaded.schema_version == ARTIFACT_SCHEMA_VERSION
-    assert loaded.models == enabled
+    assert list(loaded.models) == enabled
 
     reloaded = recommend_from_artifact(loaded, target_users, top_k=top_k)
     pd.testing.assert_frame_equal(
@@ -105,9 +107,9 @@ def test_loads_artifact_rejects_wrong_schema_version(
         model_weights=None,
         rrf_k=None,
     )
-    artifact.schema_version = ARTIFACT_SCHEMA_VERSION + 1
+    bad = replace(artifact, schema_version=ARTIFACT_SCHEMA_VERSION + 1)
     with pytest.raises(ValueError, match="Unsupported artifact schema_version"):
-        loads_artifact(dumps_artifact(artifact))
+        loads_artifact(dumps_artifact(bad))
 
 
 def test_loads_artifact_rejects_non_artifact_payload():

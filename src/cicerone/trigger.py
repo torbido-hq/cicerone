@@ -99,7 +99,7 @@ def poll_input_forever(input_settings: IOSettings, guard: RunGuard, interval_sec
 
 def create_app(settings: Settings, guard: RunGuard) -> FastAPI:
     app = FastAPI(title="cicerone-trigger")
-    dependencies = optional_bearer_deps(settings.trigger_auth_token)
+    dependencies = optional_bearer_deps(settings.trigger.auth_token)
 
     @app.get("/health")
     def health() -> dict[str, str]:
