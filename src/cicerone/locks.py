@@ -1,8 +1,7 @@
-"""Optional distributed lock backends for the scheduler RunGuard.
+"""Optional distributed lock backends for multi-replica schedulers.
 
-Default ``in_process`` needs no extra config or deps. ``postgres`` and ``redis``
-are opt-in for multi-replica schedulers; their clients are imported only when
-selected.
+Default single-instance exclusion is RunGuard's threading.Lock (no backend).
+``postgres`` / ``redis`` are opt-in; clients are imported only when selected.
 """
 
 from __future__ import annotations
@@ -10,13 +9,14 @@ from __future__ import annotations
 import hashlib
 import logging
 import uuid
-from typing import Any, Protocol
+from typing import Protocol
 
 from cicerone.config.constants import (
     DEFAULT_LOCK_KEY,
     DEFAULT_LOCK_TTL_SECONDS,
     ConfigError,
 )
+from cicerone.config.lock_url import require_postgres_lock_url
 from cicerone.config.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -27,12 +27,6 @@ REDIS_LOCK_TTL_MS = DEFAULT_LOCK_TTL_SECONDS * 1000
 _PG_LOCK_DIGEST = hashlib.sha256(DEFAULT_LOCK_KEY.encode()).digest()
 PG_ADVISORY_KEY1 = int.from_bytes(_PG_LOCK_DIGEST[:4], "big") & 0x7FFFFFFF
 PG_ADVISORY_KEY2 = int.from_bytes(_PG_LOCK_DIGEST[4:8], "big") & 0x7FFFFFFF
-
-POSTGRES_LOCK_URL_REQUIRED = (
-    'job.trigger.lock_backend = "postgres" needs a database URL: set '
-    '[job.trigger].postgres_url, or use [output].kind = "db" with '
-    "[output.options].database_url"
-)
 
 _REDIS_RELEASE_SCRIPT = """
 if redis.call('get', KEYS[1]) == ARGV[1] then
@@ -47,16 +41,6 @@ class LockBackend(Protocol):
     def acquire(self) -> bool: ...
 
     def release(self) -> None: ...
-
-
-class InProcessLock:
-    """Stub backend that always acquires; RunGuard's threading.Lock does exclusion."""
-
-    def acquire(self) -> bool:
-        return True
-
-    def release(self) -> None:
-        return None
 
 
 def advisory_keys_from_lock_key(lock_key: str) -> tuple[int, int]:
@@ -139,6 +123,7 @@ class RedisLock:
         self._ttl_ms = ttl_ms
         self._token = str(uuid.uuid4())
         self._held = False
+        self._release_script = self._client.register_script(_REDIS_RELEASE_SCRIPT)
 
     def acquire(self) -> bool:
         if self._held:
@@ -151,49 +136,21 @@ class RedisLock:
         if not self._held:
             return
         try:
-            self._client.eval(_REDIS_RELEASE_SCRIPT, 1, self._key, self._token)
+            self._release_script(keys=[self._key], args=[self._token])
         except Exception:
             logger.exception("Failed to release Redis lock")
         finally:
             self._held = False
 
 
-def resolve_postgres_lock_url_parts(
-    *,
-    postgres_url: str | None,
-    output_kind: str,
-    output_options: dict[str, Any],
-) -> str | None:
-    """Explicit trigger URL wins; otherwise reuse ``[output]`` when ``kind = "db"``."""
-    if postgres_url:
-        return postgres_url
-    if output_kind == "db":
-        url = output_options.get("database_url")
-        return str(url) if url else None
-    return None
-
-
-def resolve_postgres_lock_url(settings: Settings) -> str | None:
-    return resolve_postgres_lock_url_parts(
-        postgres_url=settings.trigger.postgres_url,
-        output_kind=settings.output.kind,
-        output_options=settings.output.options,
-    )
-
-
-def require_postgres_lock_url(settings: Settings) -> str:
-    url = resolve_postgres_lock_url(settings)
-    if not url:
-        raise ConfigError(POSTGRES_LOCK_URL_REQUIRED)
-    return url
-
-
 def build_lock_backend(settings: Settings) -> LockBackend:
-    """Build a lock backend. ``lock_backend`` must already be validated at config load."""
+    """Build a distributed lock backend (``postgres`` / ``redis`` only).
+
+    ``lock_backend`` must already be validated at config load. Callers must
+    not invoke this for ``in_process`` — that path uses RunGuard with no backend.
+    """
     backend = settings.trigger.lock_backend
     lock_key = settings.trigger.lock_key
-    if backend == "in_process":
-        return InProcessLock()
     if backend == "postgres":
         return PostgresAdvisoryLock(require_postgres_lock_url(settings), lock_key=lock_key)
     if backend == "redis":
@@ -205,4 +162,4 @@ def build_lock_backend(settings: Settings) -> LockBackend:
             key=lock_key,
             ttl_ms=int(settings.trigger.lock_ttl_seconds * 1000),
         )
-    raise AssertionError(f"unexpected lock_backend after config validation: {backend!r}")
+    raise AssertionError(f"build_lock_backend is only for distributed backends, got {backend!r}")

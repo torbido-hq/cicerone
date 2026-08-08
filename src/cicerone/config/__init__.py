@@ -25,6 +25,12 @@ from cicerone.config.constants import (
     StrategyName,
 )
 from cicerone.config.load import load_settings, make_settings
+from cicerone.config.lock_url import (
+    POSTGRES_LOCK_URL_REQUIRED,
+    require_postgres_lock_url,
+    resolve_postgres_lock_url,
+    resolve_postgres_lock_url_parts,
+)
 from cicerone.config.settings import (
     AutomlSettings,
     DashboardSettings,
@@ -64,6 +70,7 @@ __all__ = [
     "LOCK_BACKENDS",
     "MODES",
     "Mode",
+    "POSTGRES_LOCK_URL_REQUIRED",
     "STRATEGY_NAMES",
     "ServeSettings",
     "Settings",
@@ -71,8 +78,11 @@ __all__ = [
     "TriggerSettings",
     "load_settings",
     "make_settings",
+    "require_postgres_lock_url",
     "resolve_epoch_metrics",
     "resolve_max_workers",
+    "resolve_postgres_lock_url",
+    "resolve_postgres_lock_url_parts",
     "validate_model_weights",
     "validate_rrf_k",
 ]

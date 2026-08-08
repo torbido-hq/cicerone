@@ -299,7 +299,7 @@ def load_settings(config_path: str | None = None) -> Settings:
     input_settings = _load_io_settings(raw, "input")
     output_settings = _load_io_settings(raw, "output")
     if lock_backend == "postgres":
-        from cicerone.locks import POSTGRES_LOCK_URL_REQUIRED, resolve_postgres_lock_url_parts
+        from cicerone.config.lock_url import POSTGRES_LOCK_URL_REQUIRED, resolve_postgres_lock_url_parts
 
         if not resolve_postgres_lock_url_parts(
             postgres_url=trigger_postgres_url,

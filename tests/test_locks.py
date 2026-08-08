@@ -7,35 +7,36 @@ import time
 from unittest.mock import MagicMock
 
 import pytest
-from support.postgres_defaults import resolve_test_database_url
 
-from cicerone.config import ConfigError, IOSettings, make_settings
+from cicerone.config import (
+    POSTGRES_LOCK_URL_REQUIRED,
+    ConfigError,
+    IOSettings,
+    make_settings,
+    resolve_postgres_lock_url,
+)
 from cicerone.locks import (
-    InProcessLock,
     PostgresAdvisoryLock,
     RedisLock,
+    advisory_keys_from_lock_key,
     build_lock_backend,
-    resolve_postgres_lock_url,
 )
 from cicerone.trigger import RunGuard
 
-TEST_DATABASE_URL = resolve_test_database_url()
-_SKIP_NO_TEST_DB = not TEST_DATABASE_URL
-_SKIP_NO_TEST_DB_REASON = (
-    "TEST_DATABASE_URL / POSTGRES_TEST_HOST not set — DB-backed tests run against compose Postgres"
-)
+
+def _mock_redis_module(monkeypatch, *, client: MagicMock | None = None) -> MagicMock:
+    client = client or MagicMock()
+    client.register_script.return_value = MagicMock()
+    fake_redis = MagicMock()
+    fake_redis.Redis.from_url.return_value = client
+    monkeypatch.setitem(__import__("sys").modules, "redis", fake_redis)
+    return client
 
 
-def test_in_process_lock_always_acquires():
-    lock = InProcessLock()
-    assert lock.acquire() is True
-    assert lock.acquire() is True
-    lock.release()
-
-
-def test_build_lock_backend_in_process_default():
+def test_build_lock_backend_rejects_in_process():
     settings = make_settings()
-    assert isinstance(build_lock_backend(settings), InProcessLock)
+    with pytest.raises(AssertionError, match="only for distributed backends"):
+        build_lock_backend(settings)
 
 
 def test_resolve_postgres_lock_url_prefers_explicit():
@@ -61,8 +62,6 @@ def test_resolve_postgres_lock_url_none_for_dataset_without_explicit():
 
 
 def test_build_postgres_lock_without_url_raises():
-    from cicerone.locks import POSTGRES_LOCK_URL_REQUIRED
-
     settings = make_settings(trigger_lock_backend="postgres")
     with pytest.raises(ConfigError, match="needs a database URL") as exc_info:
         build_lock_backend(settings)
@@ -70,7 +69,7 @@ def test_build_postgres_lock_without_url_raises():
 
 
 def test_advisory_keys_stable_for_default_and_differ_by_lock_key():
-    from cicerone.locks import PG_ADVISORY_KEY1, PG_ADVISORY_KEY2, advisory_keys_from_lock_key
+    from cicerone.locks import PG_ADVISORY_KEY1, PG_ADVISORY_KEY2
 
     assert advisory_keys_from_lock_key("cicerone:scheduler:run_guard") == (
         PG_ADVISORY_KEY1,
@@ -83,11 +82,8 @@ def test_advisory_keys_stable_for_default_and_differ_by_lock_key():
 
 
 def test_build_redis_lock_uses_configured_key_and_ttl(monkeypatch):
-    client = MagicMock()
+    client = _mock_redis_module(monkeypatch)
     client.set.return_value = True
-    fake_redis = MagicMock()
-    fake_redis.Redis.from_url.return_value = client
-    monkeypatch.setitem(__import__("sys").modules, "redis", fake_redis)
 
     settings = make_settings(
         trigger_lock_backend="redis",
@@ -99,11 +95,10 @@ def test_build_redis_lock_uses_configured_key_and_ttl(monkeypatch):
     assert isinstance(lock, RedisLock)
     assert lock.acquire() is True
     client.set.assert_called_with("my-job:run", lock._token, nx=True, px=120_000)
+    client.register_script.assert_called_once()
 
 
 def test_build_postgres_lock_uses_configured_lock_key(monkeypatch):
-    from cicerone.locks import advisory_keys_from_lock_key
-
     settings = make_settings(
         trigger_lock_backend="postgres",
         trigger_postgres_url="postgresql+psycopg://u:p@h/db",
@@ -117,26 +112,21 @@ def test_build_postgres_lock_uses_configured_lock_key(monkeypatch):
 
 
 def test_redis_lock_acquire_release(monkeypatch):
-    client = MagicMock()
+    client = _mock_redis_module(monkeypatch)
     client.set.return_value = True
-    fake_redis = MagicMock()
-    fake_redis.Redis.from_url.return_value = client
-    monkeypatch.setitem(__import__("sys").modules, "redis", fake_redis)
+    release_script = client.register_script.return_value
 
     lock = RedisLock("redis://localhost:6379/0")
     assert lock.acquire() is True
     assert lock.acquire() is False
     lock.release()
-    client.eval.assert_called_once()
+    release_script.assert_called_once_with(keys=[lock._key], args=[lock._token])
     assert lock.acquire() is True
 
 
 def test_redis_lock_contention(monkeypatch):
-    client = MagicMock()
+    client = _mock_redis_module(monkeypatch)
     client.set.return_value = False
-    fake_redis = MagicMock()
-    fake_redis.Redis.from_url.return_value = client
-    monkeypatch.setitem(__import__("sys").modules, "redis", fake_redis)
 
     lock = RedisLock("redis://localhost:6379/0")
     assert lock.acquire() is False
@@ -155,6 +145,22 @@ def test_redis_lock_missing_package(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", fake_import)
     with pytest.raises(ConfigError, match="requirements-redis"):
         RedisLock("redis://localhost:6379/0")
+
+
+def test_run_guard_without_backend_uses_local_exclusion_only():
+    done = threading.Event()
+    calls: list[str] = []
+
+    def fake_run(triggered_by: str) -> None:
+        calls.append(triggered_by)
+        done.set()
+
+    guard = RunGuard(debounce_seconds=60, run_fn=fake_run)
+    assert guard._backend is None
+    assert guard.trigger("webhook") is True
+    assert done.wait(timeout=5)
+    assert guard.trigger("webhook") is False
+    assert calls == ["webhook"]
 
 
 def test_run_guard_respects_distributed_lock_failure():
@@ -244,11 +250,7 @@ def test_build_redis_lock_without_url_raises():
 
 
 def test_build_redis_lock_backend(monkeypatch):
-    client = MagicMock()
-    fake_redis = MagicMock()
-    fake_redis.Redis.from_url.return_value = client
-    monkeypatch.setitem(__import__("sys").modules, "redis", fake_redis)
-
+    _mock_redis_module(monkeypatch)
     settings = make_settings(trigger_lock_backend="redis", trigger_redis_url="redis://localhost:6379/0")
     backend = build_lock_backend(settings)
     assert isinstance(backend, RedisLock)
@@ -270,28 +272,24 @@ def test_build_lock_backend_unknown_is_programming_error():
 
     settings = make_settings()
     settings = replace(settings, trigger=replace(settings.trigger, lock_backend="etcd"))
-    with pytest.raises(AssertionError, match="unexpected lock_backend"):
+    with pytest.raises(AssertionError, match="only for distributed backends"):
         build_lock_backend(settings)
 
 
 def test_redis_release_when_not_held(monkeypatch):
-    client = MagicMock()
-    fake_redis = MagicMock()
-    fake_redis.Redis.from_url.return_value = client
-    monkeypatch.setitem(__import__("sys").modules, "redis", fake_redis)
+    client = _mock_redis_module(monkeypatch)
+    release_script = client.register_script.return_value
 
     lock = RedisLock("redis://localhost:6379/0")
     lock.release()
-    client.eval.assert_not_called()
+    release_script.assert_not_called()
 
 
 def test_redis_release_logs_on_failure(monkeypatch):
-    client = MagicMock()
+    client = _mock_redis_module(monkeypatch)
     client.set.return_value = True
-    client.eval.side_effect = RuntimeError("boom")
-    fake_redis = MagicMock()
-    fake_redis.Redis.from_url.return_value = client
-    monkeypatch.setitem(__import__("sys").modules, "redis", fake_redis)
+    release_script = client.register_script.return_value
+    release_script.side_effect = RuntimeError("boom")
 
     lock = RedisLock("redis://localhost:6379/0")
     assert lock.acquire() is True
@@ -312,7 +310,7 @@ def test_postgres_advisory_lock_mocked(monkeypatch):
     lock.release()
     conn.close.assert_called()
     assert lock._conn is None
-    lock.release()  # no-op when not held
+    lock.release()
 
 
 def test_postgres_advisory_lock_contention_mocked(monkeypatch):
