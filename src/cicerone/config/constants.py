@@ -34,6 +34,9 @@ Mode = Literal["batch", "serve"]
 StrategyName = str
 
 MODES: tuple[Mode, ...] = ("batch", "serve")
+LOCK_BACKENDS: tuple[str, ...] = ("in_process", "postgres", "redis")
+DEFAULT_LOCK_KEY = "cicerone:scheduler:run_guard"
+DEFAULT_LOCK_TTL_SECONDS = 24 * 60 * 60
 
 
 class ConfigError(ValueError):

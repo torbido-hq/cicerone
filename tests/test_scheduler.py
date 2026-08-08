@@ -73,6 +73,164 @@ def test_main_runs_job_each_iteration_and_survives_failures(tmp_path, monkeypatc
     assert calls["run"] == 1
 
 
+def test_main_with_distributed_lock_uses_locked_cron_path(tmp_path, monkeypatch):
+    config_path = tmp_path / "cicerone.toml"
+    config_path.write_text(
+        f"""
+        [job]
+        cron_schedule = "* * * * *"
+
+        [job.trigger]
+        lock_backend = "redis"
+        redis_url = "redis://localhost:6379/0"
+
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "{tmp_path}"
+
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "{tmp_path}"
+        """
+    )
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", str(config_path))
+
+    calls = {"locked": 0, "sleep": 0}
+
+    def fake_sleep(_seconds):
+        calls["sleep"] += 1
+        if calls["sleep"] >= 2:
+            raise SystemExit("stop")
+
+    def fake_locked():
+        calls["locked"] += 1
+
+    monkeypatch.setattr(scheduler.time, "sleep", fake_sleep)
+    monkeypatch.setattr(scheduler, "build_lock_backend", lambda _settings: object())
+    monkeypatch.setattr(scheduler, "_cron_run_with_lock", lambda _backend: fake_locked())
+
+    with pytest.raises(SystemExit):
+        scheduler.main()
+
+    assert calls["locked"] == 1
+
+
+def test_main_with_trigger_and_distributed_lock_wires_runguard(tmp_path, monkeypatch):
+    config_path = tmp_path / "cicerone.toml"
+    config_path.write_text(
+        f"""
+        [job]
+        cron_schedule = "* * * * *"
+
+        [job.trigger]
+        enabled = true
+        auth_token = "secret"
+        lock_backend = "redis"
+        redis_url = "redis://localhost:6379/0"
+
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "{tmp_path}"
+
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "{tmp_path}"
+        """
+    )
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", str(config_path))
+
+    sentinel_backend = object()
+    captured: dict = {}
+
+    monkeypatch.setattr(scheduler, "build_lock_backend", lambda settings: sentinel_backend)
+
+    import cicerone.trigger as trigger_mod
+
+    class FakeRunGuard:
+        def __init__(self, debounce_seconds, run_fn=None, lock_backend=None):
+            captured["lock_backend"] = lock_backend
+            captured["debounce_seconds"] = debounce_seconds
+            captured["triggers"] = []
+
+        def trigger(self, triggered_by: str) -> bool:
+            captured["triggers"].append(triggered_by)
+            return True
+
+    monkeypatch.setattr(trigger_mod, "RunGuard", FakeRunGuard)
+
+    started: list = []
+    real_thread_init = scheduler.threading.Thread.__init__
+
+    def fake_thread_init(self, *args, **kwargs):
+        started.append({"target": kwargs.get("target"), "args": kwargs.get("args", ())})
+        real_thread_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(scheduler.threading.Thread, "__init__", fake_thread_init)
+    monkeypatch.setattr(scheduler.threading.Thread, "start", lambda self: None)
+    monkeypatch.setattr(
+        scheduler,
+        "uvicorn",
+        type("_U", (), {"run": staticmethod(lambda *a, **k: None)}),
+    )
+
+    scheduler.main()
+
+    assert captured["lock_backend"] is sentinel_backend
+    cron_threads = [t for t in started if t["target"] is scheduler._cron_loop]
+    assert len(cron_threads) == 1
+    cron_callback = cron_threads[0]["args"][1]
+    cron_callback()
+    assert captured["triggers"] == ["cron"]
+
+
+def test_main_with_trigger_in_process_skips_build_lock_backend(tmp_path, monkeypatch):
+    config_path = tmp_path / "cicerone.toml"
+    config_path.write_text(
+        f"""
+        [job]
+        cron_schedule = "* * * * *"
+
+        [job.trigger]
+        enabled = true
+        auth_token = "secret"
+
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "{tmp_path}"
+
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "{tmp_path}"
+        """
+    )
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", str(config_path))
+
+    def boom(_settings):
+        raise AssertionError("build_lock_backend must not run for in_process")
+
+    monkeypatch.setattr(scheduler, "build_lock_backend", boom)
+    monkeypatch.setattr(scheduler.threading.Thread, "start", lambda self: None)
+    monkeypatch.setattr(
+        scheduler,
+        "uvicorn",
+        type("_U", (), {"run": staticmethod(lambda *a, **k: None)}),
+    )
+
+    scheduler.main()
+
+
 def test_main_with_trigger_enabled_starts_cron_thread_and_serves_http(tmp_path, monkeypatch):
     config_path = tmp_path / "cicerone.toml"
     config_path.write_text(

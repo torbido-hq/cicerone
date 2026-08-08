@@ -15,7 +15,10 @@ from cicerone.config.constants import (
     AUTOML_DEFAULT_TEST_DAYS,
     DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS,
     DEFAULT_ITEM_BASED_K_NEIGHBORS,
+    DEFAULT_LOCK_KEY,
+    DEFAULT_LOCK_TTL_SECONDS,
     DEFAULT_MAX_WORKERS,
+    LOCK_BACKENDS,
     MODES,
     STRATEGY_NAMES,
     ConfigError,
@@ -56,6 +59,11 @@ _TRIGGER_FLAT_KEYS = (
     ("trigger_debounce_seconds", "debounce_seconds"),
     ("trigger_poll_input_bucket", "poll_input_bucket"),
     ("trigger_poll_interval_seconds", "poll_interval_seconds"),
+    ("trigger_lock_backend", "lock_backend"),
+    ("trigger_postgres_url", "postgres_url"),
+    ("trigger_redis_url", "redis_url"),
+    ("trigger_lock_key", "lock_key"),
+    ("trigger_lock_ttl_seconds", "lock_ttl_seconds"),
 )
 _DASHBOARD_FLAT_KEYS = (
     ("dashboard_enabled", "enabled"),
@@ -243,6 +251,24 @@ def load_settings(config_path: str | None = None) -> Settings:
     if trigger_enabled and not trigger_auth_token:
         raise ConfigError("job.trigger.auth_token is required when job.trigger.enabled = true")
 
+    lock_backend = str(trigger_raw.get("lock_backend", "in_process")).lower()
+    if lock_backend not in LOCK_BACKENDS:
+        raise ConfigError(
+            f"job.trigger.lock_backend must be one of {list(LOCK_BACKENDS)}, got {lock_backend!r}"
+        )
+    trigger_postgres_url = (
+        _resolve_env_placeholders(trigger_raw["postgres_url"], "job.trigger.postgres_url")
+        if "postgres_url" in trigger_raw
+        else None
+    )
+    trigger_redis_url = (
+        _resolve_env_placeholders(trigger_raw["redis_url"], "job.trigger.redis_url")
+        if "redis_url" in trigger_raw
+        else None
+    )
+    if lock_backend == "redis" and not trigger_redis_url:
+        raise ConfigError('job.trigger.redis_url is required when lock_backend = "redis"')
+
     dashboard_raw = raw.get("dashboard", {})
     dashboard_enabled = bool(dashboard_raw.get("enabled", False))
 
@@ -270,9 +296,29 @@ def load_settings(config_path: str | None = None) -> Settings:
         else legacy_k_neighbors
     )
 
+    input_settings = _load_io_settings(raw, "input")
+    output_settings = _load_io_settings(raw, "output")
+    if lock_backend == "postgres":
+        from cicerone.config.lock_url import POSTGRES_LOCK_URL_REQUIRED, resolve_postgres_lock_url_parts
+
+        if not resolve_postgres_lock_url_parts(
+            postgres_url=trigger_postgres_url,
+            output_kind=output_settings.kind,
+            output_options=output_settings.options,
+        ):
+            raise ConfigError(POSTGRES_LOCK_URL_REQUIRED)
+
+    trigger_lock_key = str(trigger_raw.get("lock_key", DEFAULT_LOCK_KEY)).strip()
+    if not trigger_lock_key:
+        raise ConfigError("job.trigger.lock_key must be a non-empty string")
+    trigger_lock_ttl_seconds = require_positive_float(
+        float(trigger_raw.get("lock_ttl_seconds", DEFAULT_LOCK_TTL_SECONDS)),
+        name="job.trigger.lock_ttl_seconds",
+    )
+
     return Settings(
-        input=_load_io_settings(raw, "input"),
-        output=_load_io_settings(raw, "output"),
+        input=input_settings,
+        output=output_settings,
         feature_config_path=job.get("feature_config_path", "/app/config/features.toml"),
         top_k=require_positive_int(int(job.get("top_k", 10)), name="job.top_k"),
         half_life_days=require_positive_float(
@@ -338,6 +384,11 @@ def load_settings(config_path: str | None = None) -> Settings:
                 float(trigger_raw.get("poll_interval_seconds", 300)),
                 name="job.trigger.poll_interval_seconds",
             ),
+            lock_backend=lock_backend,
+            postgres_url=trigger_postgres_url,
+            redis_url=trigger_redis_url,
+            lock_key=trigger_lock_key,
+            lock_ttl_seconds=trigger_lock_ttl_seconds,
         ),
         dashboard=DashboardSettings(
             enabled=dashboard_enabled,

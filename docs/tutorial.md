@@ -561,9 +561,12 @@ curl -X POST -H "Authorization: Bearer $TRIGGER_TOKEN" http://localhost:8080/tri
 A trigger fired while a run is already in flight, or within
 `[job.trigger].debounce_seconds` (default 60) of the last one, is skipped
 rather than queued — check `docker logs cicerone-tutorial-scheduler` to see
-it happen if you call the webhook twice in a row. The written manifest also
-now records `triggered_by` (`"cron"`, `"webhook"`, or `"s3-poll"` if
-`poll_input_bucket = true`). Clean up when you're done:
+it happen if you call the webhook twice in a row. Single-instance locking is
+the default; see the README Event-driven retrain trigger section for optional
+`postgres` / `redis` backends when running multiple scheduler replicas. The
+written manifest also records `triggered_by` (`"cron"`, `"webhook"`, or
+`"s3-poll"` if `poll_input_bucket = true`) and `lock_backend`. Clean up when
+you're done:
 
 ```sh
 docker stop cicerone-tutorial-scheduler
