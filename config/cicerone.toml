@@ -169,6 +169,8 @@ feature_config_path = "/app/config/features.toml"
 # # lock_backend = "in_process"  # "in_process" | "postgres" | "redis"
 # # postgres_url = "${LOCK_DATABASE_URL}"  # optional override / non-db output
 # # redis_url = "${REDIS_URL}"             # required when lock_backend = "redis"
+# # lock_key = "cicerone:scheduler:run_guard"  # namespace Redis key / PG advisory hash
+# # lock_ttl_seconds = 86400                   # Redis lock TTL only
 
 [input]
 kind = "dataset"

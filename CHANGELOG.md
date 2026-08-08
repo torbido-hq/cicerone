@@ -13,7 +13,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Optional scheduler lock backends (`[job.trigger].lock_backend`:
   `in_process` default, `postgres`, `redis`) for multi-replica mutual
   exclusion; manifest records `lock_backend`. Redis is an optional
-  install (`requirements-redis.txt`).
+  install (`requirements-redis.txt`). Optional `lock_key` /
+  `lock_ttl_seconds` namespace shared Redis/Postgres lock stores.
 
 ### Changed
 

@@ -15,6 +15,8 @@ from cicerone.config.constants import (
     AUTOML_DEFAULT_TEST_DAYS,
     DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS,
     DEFAULT_ITEM_BASED_K_NEIGHBORS,
+    DEFAULT_LOCK_KEY,
+    DEFAULT_LOCK_TTL_SECONDS,
     DEFAULT_MAX_WORKERS,
     LOCK_BACKENDS,
     MODES,
@@ -60,6 +62,8 @@ _TRIGGER_FLAT_KEYS = (
     ("trigger_lock_backend", "lock_backend"),
     ("trigger_postgres_url", "postgres_url"),
     ("trigger_redis_url", "redis_url"),
+    ("trigger_lock_key", "lock_key"),
+    ("trigger_lock_ttl_seconds", "lock_ttl_seconds"),
 )
 _DASHBOARD_FLAT_KEYS = (
     ("dashboard_enabled", "enabled"),
@@ -295,13 +299,22 @@ def load_settings(config_path: str | None = None) -> Settings:
     input_settings = _load_io_settings(raw, "input")
     output_settings = _load_io_settings(raw, "output")
     if lock_backend == "postgres":
-        has_output_db_url = output_settings.kind == "db" and bool(output_settings.options.get("database_url"))
-        if not trigger_postgres_url and not has_output_db_url:
-            raise ConfigError(
-                'job.trigger.lock_backend = "postgres" needs a database URL: set '
-                'job.trigger.postgres_url, or use [output].kind = "db" with '
-                "[output.options].database_url"
-            )
+        from cicerone.locks import POSTGRES_LOCK_URL_REQUIRED, resolve_postgres_lock_url_parts
+
+        if not resolve_postgres_lock_url_parts(
+            postgres_url=trigger_postgres_url,
+            output_kind=output_settings.kind,
+            output_options=output_settings.options,
+        ):
+            raise ConfigError(POSTGRES_LOCK_URL_REQUIRED)
+
+    trigger_lock_key = str(trigger_raw.get("lock_key", DEFAULT_LOCK_KEY)).strip()
+    if not trigger_lock_key:
+        raise ConfigError("job.trigger.lock_key must be a non-empty string")
+    trigger_lock_ttl_seconds = require_positive_float(
+        float(trigger_raw.get("lock_ttl_seconds", DEFAULT_LOCK_TTL_SECONDS)),
+        name="job.trigger.lock_ttl_seconds",
+    )
 
     return Settings(
         input=input_settings,
@@ -374,6 +387,8 @@ def load_settings(config_path: str | None = None) -> Settings:
             lock_backend=lock_backend,
             postgres_url=trigger_postgres_url,
             redis_url=trigger_redis_url,
+            lock_key=trigger_lock_key,
+            lock_ttl_seconds=trigger_lock_ttl_seconds,
         ),
         dashboard=DashboardSettings(
             enabled=dashboard_enabled,

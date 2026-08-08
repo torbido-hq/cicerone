@@ -1055,6 +1055,8 @@ def test_load_settings_trigger_enabled_with_auth_token(tmp_path, monkeypatch):
     assert settings.trigger_poll_input_bucket is True
     assert settings.trigger_poll_interval_seconds == 120.0
     assert settings.trigger_lock_backend == "in_process"
+    assert settings.trigger_lock_key == "cicerone:scheduler:run_guard"
+    assert settings.trigger_lock_ttl_seconds == 86400.0
     assert settings.trigger_postgres_url is None
     assert settings.trigger_redis_url is None
 
@@ -1071,6 +1073,8 @@ def test_load_settings_trigger_defaults_when_disabled(tmp_path):
     assert settings.trigger_poll_input_bucket is False
     assert settings.trigger_poll_interval_seconds == 300.0
     assert settings.trigger_lock_backend == "in_process"
+    assert settings.trigger_lock_key == "cicerone:scheduler:run_guard"
+    assert settings.trigger_lock_ttl_seconds == 86400.0
 
 
 def test_load_settings_lock_backend_rejects_unknown(tmp_path):
@@ -1172,3 +1176,35 @@ def test_load_settings_redis_lock_with_url(tmp_path, monkeypatch):
     settings = load_settings(config_path)
     assert settings.trigger_lock_backend == "redis"
     assert settings.trigger_redis_url == "redis://localhost:6379/0"
+
+
+def test_load_settings_lock_key_and_ttl(tmp_path):
+    config_path = write_toml(
+        tmp_path,
+        f"""
+        [job]
+        [job.trigger]
+        lock_backend = "redis"
+        redis_url = "redis://localhost:6379/0"
+        lock_key = "shop-a:scheduler"
+        lock_ttl_seconds = 3600
+        {_base_io_toml()}
+        """,
+    )
+    settings = load_settings(config_path)
+    assert settings.trigger_lock_key == "shop-a:scheduler"
+    assert settings.trigger_lock_ttl_seconds == 3600.0
+
+
+def test_load_settings_empty_lock_key_rejected(tmp_path):
+    config_path = write_toml(
+        tmp_path,
+        f"""
+        [job]
+        [job.trigger]
+        lock_key = "   "
+        {_base_io_toml()}
+        """,
+    )
+    with pytest.raises(ConfigError, match="job.trigger.lock_key must be a non-empty string"):
+        load_settings(config_path)

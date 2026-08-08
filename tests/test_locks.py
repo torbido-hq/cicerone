@@ -26,7 +26,7 @@ _SKIP_NO_TEST_DB_REASON = (
 )
 
 
-def test_in_process_lock_is_noop():
+def test_in_process_lock_always_acquires():
     lock = InProcessLock()
     assert lock.acquire() is True
     assert lock.acquire() is True
@@ -61,9 +61,59 @@ def test_resolve_postgres_lock_url_none_for_dataset_without_explicit():
 
 
 def test_build_postgres_lock_without_url_raises():
+    from cicerone.locks import POSTGRES_LOCK_URL_REQUIRED
+
     settings = make_settings(trigger_lock_backend="postgres")
-    with pytest.raises(ConfigError, match="needs a database URL"):
+    with pytest.raises(ConfigError, match="needs a database URL") as exc_info:
         build_lock_backend(settings)
+    assert str(exc_info.value) == POSTGRES_LOCK_URL_REQUIRED
+
+
+def test_advisory_keys_stable_for_default_and_differ_by_lock_key():
+    from cicerone.locks import PG_ADVISORY_KEY1, PG_ADVISORY_KEY2, advisory_keys_from_lock_key
+
+    assert advisory_keys_from_lock_key("cicerone:scheduler:run_guard") == (
+        PG_ADVISORY_KEY1,
+        PG_ADVISORY_KEY2,
+    )
+    assert advisory_keys_from_lock_key("other-job") != (
+        PG_ADVISORY_KEY1,
+        PG_ADVISORY_KEY2,
+    )
+
+
+def test_build_redis_lock_uses_configured_key_and_ttl(monkeypatch):
+    client = MagicMock()
+    client.set.return_value = True
+    fake_redis = MagicMock()
+    fake_redis.Redis.from_url.return_value = client
+    monkeypatch.setitem(__import__("sys").modules, "redis", fake_redis)
+
+    settings = make_settings(
+        trigger_lock_backend="redis",
+        trigger_redis_url="redis://localhost:6379/0",
+        trigger_lock_key="my-job:run",
+        trigger_lock_ttl_seconds=120,
+    )
+    lock = build_lock_backend(settings)
+    assert isinstance(lock, RedisLock)
+    assert lock.acquire() is True
+    client.set.assert_called_with("my-job:run", lock._token, nx=True, px=120_000)
+
+
+def test_build_postgres_lock_uses_configured_lock_key(monkeypatch):
+    from cicerone.locks import advisory_keys_from_lock_key
+
+    settings = make_settings(
+        trigger_lock_backend="postgres",
+        trigger_postgres_url="postgresql+psycopg://u:p@h/db",
+        trigger_lock_key="job-a",
+    )
+    fake_engine = MagicMock()
+    monkeypatch.setattr("sqlalchemy.create_engine", lambda *a, **k: fake_engine)
+    backend = build_lock_backend(settings)
+    assert isinstance(backend, PostgresAdvisoryLock)
+    assert (backend._key1, backend._key2) == advisory_keys_from_lock_key("job-a")
 
 
 def test_redis_lock_acquire_release(monkeypatch):

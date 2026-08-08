@@ -13,6 +13,8 @@ from cicerone.config.constants import (
     DEFAULT_EPOCH_METRICS_PLATEAU_EPS,
     DEFAULT_EPOCH_METRICS_PLATEAU_WINDOW,
     DEFAULT_EPOCH_METRICS_REGRESSION_DROP,
+    DEFAULT_LOCK_KEY,
+    DEFAULT_LOCK_TTL_SECONDS,
     Mode,
 )
 
@@ -50,6 +52,8 @@ class TriggerSettings:
     lock_backend: str = "in_process"
     postgres_url: str | None = None
     redis_url: str | None = None
+    lock_key: str = DEFAULT_LOCK_KEY
+    lock_ttl_seconds: float = float(DEFAULT_LOCK_TTL_SECONDS)
 
 
 @dataclass(frozen=True)
@@ -164,6 +168,14 @@ class Settings:
     @property
     def trigger_redis_url(self) -> str | None:
         return self.trigger.redis_url
+
+    @property
+    def trigger_lock_key(self) -> str:
+        return self.trigger.lock_key
+
+    @property
+    def trigger_lock_ttl_seconds(self) -> float:
+        return self.trigger.lock_ttl_seconds
 
     @property
     def dashboard_enabled(self) -> bool:
