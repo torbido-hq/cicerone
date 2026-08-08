@@ -66,9 +66,11 @@ def main() -> None:
 def _run_with_trigger(settings: Settings, schedule: str) -> None:
     from cicerone.trigger import RunGuard, create_app, poll_input_forever
 
+    # Default in_process: omit backend so RunGuard uses its threading.Lock path.
+    lock_backend = None if settings.trigger.lock_backend == "in_process" else build_lock_backend(settings)
     guard = RunGuard(
         settings.trigger.debounce_seconds,
-        lock_backend=build_lock_backend(settings),
+        lock_backend=lock_backend,
     )
     threading.Thread(target=_cron_loop, args=(schedule, lambda: guard.trigger("cron")), daemon=True).start()
 

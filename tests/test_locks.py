@@ -175,6 +175,38 @@ def test_run_guard_respects_distributed_lock_failure():
     assert calls == []
 
 
+def test_run_guard_debounce_with_distributed_lock_backend():
+    class AlwaysAcquiringLock:
+        def __init__(self) -> None:
+            self.acquires = 0
+
+        def acquire(self) -> bool:
+            self.acquires += 1
+            return True
+
+        def release(self) -> None:
+            return None
+
+    calls: list[str] = []
+    lock_backend = AlwaysAcquiringLock()
+    done = threading.Event()
+
+    def fake_run(triggered_by: str) -> None:
+        calls.append(triggered_by)
+        done.set()
+
+    guard = RunGuard(
+        debounce_seconds=60,
+        run_fn=fake_run,
+        lock_backend=lock_backend,
+    )
+    assert guard.trigger("first") is True
+    assert done.wait(timeout=5)
+    assert guard.trigger("second") is False
+    assert calls == ["first"]
+    assert lock_backend.acquires == 1
+
+
 def test_run_guard_releases_backend_after_run():
     events: list[str] = []
 
@@ -233,12 +265,12 @@ def test_build_postgres_lock_backend(monkeypatch):
     assert isinstance(backend, PostgresAdvisoryLock)
 
 
-def test_build_lock_backend_unknown_raises():
+def test_build_lock_backend_unknown_is_programming_error():
     from dataclasses import replace
 
     settings = make_settings()
     settings = replace(settings, trigger=replace(settings.trigger, lock_backend="etcd"))
-    with pytest.raises(ConfigError, match="must be one of"):
+    with pytest.raises(AssertionError, match="unexpected lock_backend"):
         build_lock_backend(settings)
 
 

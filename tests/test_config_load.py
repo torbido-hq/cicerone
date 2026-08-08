@@ -1196,6 +1196,38 @@ def test_load_settings_lock_key_and_ttl(tmp_path):
     assert settings.trigger_lock_ttl_seconds == 3600.0
 
 
+def test_load_settings_lock_ttl_seconds_must_be_positive(tmp_path):
+    config_path = write_toml(
+        tmp_path,
+        f"""
+        [job]
+        [job.trigger]
+        lock_backend = "redis"
+        redis_url = "redis://localhost:6379/0"
+        lock_ttl_seconds = 0
+        {_base_io_toml()}
+        """,
+    )
+    with pytest.raises(ConfigError, match="job.trigger.lock_ttl_seconds must be > 0"):
+        load_settings(config_path)
+
+
+def test_load_settings_lock_ttl_seconds_rejects_negative(tmp_path):
+    config_path = write_toml(
+        tmp_path,
+        f"""
+        [job]
+        [job.trigger]
+        lock_backend = "redis"
+        redis_url = "redis://localhost:6379/0"
+        lock_ttl_seconds = -1
+        {_base_io_toml()}
+        """,
+    )
+    with pytest.raises(ConfigError, match="job.trigger.lock_ttl_seconds must be > 0"):
+        load_settings(config_path)
+
+
 def test_load_settings_empty_lock_key_rejected(tmp_path):
     config_path = write_toml(
         tmp_path,

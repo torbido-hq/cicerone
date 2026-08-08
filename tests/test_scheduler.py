@@ -191,6 +191,46 @@ def test_main_with_trigger_and_distributed_lock_wires_runguard(tmp_path, monkeyp
     assert captured["triggers"] == ["cron"]
 
 
+def test_main_with_trigger_in_process_skips_build_lock_backend(tmp_path, monkeypatch):
+    config_path = tmp_path / "cicerone.toml"
+    config_path.write_text(
+        f"""
+        [job]
+        cron_schedule = "* * * * *"
+
+        [job.trigger]
+        enabled = true
+        auth_token = "secret"
+
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "{tmp_path}"
+
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "{tmp_path}"
+        """
+    )
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", str(config_path))
+
+    def boom(_settings):
+        raise AssertionError("build_lock_backend must not run for in_process")
+
+    monkeypatch.setattr(scheduler, "build_lock_backend", boom)
+    monkeypatch.setattr(scheduler.threading.Thread, "start", lambda self: None)
+    monkeypatch.setattr(
+        scheduler,
+        "uvicorn",
+        type("_U", (), {"run": staticmethod(lambda *a, **k: None)}),
+    )
+
+    scheduler.main()
+
+
 def test_main_with_trigger_enabled_starts_cron_thread_and_serves_http(tmp_path, monkeypatch):
     config_path = tmp_path / "cicerone.toml"
     config_path.write_text(

@@ -15,7 +15,6 @@ from typing import Any, Protocol
 from cicerone.config.constants import (
     DEFAULT_LOCK_KEY,
     DEFAULT_LOCK_TTL_SECONDS,
-    LOCK_BACKENDS,
     ConfigError,
 )
 from cicerone.config.settings import Settings
@@ -190,6 +189,7 @@ def require_postgres_lock_url(settings: Settings) -> str:
 
 
 def build_lock_backend(settings: Settings) -> LockBackend:
+    """Build a lock backend. ``lock_backend`` must already be validated at config load."""
     backend = settings.trigger.lock_backend
     lock_key = settings.trigger.lock_key
     if backend == "in_process":
@@ -205,4 +205,4 @@ def build_lock_backend(settings: Settings) -> LockBackend:
             key=lock_key,
             ttl_ms=int(settings.trigger.lock_ttl_seconds * 1000),
         )
-    raise ConfigError(f"job.trigger.lock_backend must be one of {list(LOCK_BACKENDS)}, got {backend!r}")
+    raise AssertionError(f"unexpected lock_backend after config validation: {backend!r}")
