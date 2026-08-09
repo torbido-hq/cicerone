@@ -17,7 +17,7 @@ from cicerone.config.constants import (
     DEFAULT_LOCK_TTL_SECONDS,
     ConfigError,
 )
-from cicerone.config.lock_url import require_postgres_lock_url
+from cicerone.config.lock_url import resolve_postgres_lock_url
 from cicerone.config.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -186,7 +186,8 @@ class RedisLock:
         if thread is None:
             return
         self._stop_refresh.set()
-        thread.join(timeout=1.0)
+        # Non-blocking: daemon refresher exits on the stop event without delaying release.
+        thread.join(timeout=0)
         self._refresh_thread = None
 
     def acquire(self) -> bool:
@@ -219,17 +220,18 @@ class RedisLock:
 def build_lock_backend(settings: Settings) -> LockBackend:
     """Build a distributed lock backend (``postgres`` / ``redis`` only).
 
-    ``lock_backend`` must already be validated at config load. Callers must
-    not invoke this for ``in_process`` — that path uses RunGuard with no backend.
+    ``lock_backend`` and required URLs must already be validated at config load.
+    Callers must not invoke this for ``in_process``.
     """
     backend = settings.trigger.lock_backend
     lock_key = settings.trigger.lock_key
     if backend == "postgres":
-        return PostgresAdvisoryLock(require_postgres_lock_url(settings), lock_key=lock_key)
+        url = resolve_postgres_lock_url(settings)
+        assert url is not None, "postgres lock URL should be validated at config load"
+        return PostgresAdvisoryLock(url, lock_key=lock_key)
     if backend == "redis":
         redis_url = settings.trigger.redis_url
-        if not redis_url:
-            raise ConfigError('lock_backend = "redis" requires job.trigger.redis_url')
+        assert redis_url is not None, "redis_url should be validated at config load"
         return RedisLock(
             redis_url,
             key=lock_key,

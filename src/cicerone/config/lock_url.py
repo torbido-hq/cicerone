@@ -29,16 +29,26 @@ def resolve_postgres_lock_url_parts(
     return None
 
 
+def require_postgres_lock_url_parts(
+    *,
+    postgres_url: str | None,
+    output_kind: str,
+    output_options: dict[str, Any],
+) -> str:
+    """Validate at config load; returns the resolved URL."""
+    url = resolve_postgres_lock_url_parts(
+        postgres_url=postgres_url,
+        output_kind=output_kind,
+        output_options=output_options,
+    )
+    if not url:
+        raise ConfigError(POSTGRES_LOCK_URL_REQUIRED)
+    return url
+
+
 def resolve_postgres_lock_url(settings: Settings) -> str | None:
     return resolve_postgres_lock_url_parts(
         postgres_url=settings.trigger.postgres_url,
         output_kind=settings.output.kind,
         output_options=settings.output.options,
     )
-
-
-def require_postgres_lock_url(settings: Settings) -> str:
-    url = resolve_postgres_lock_url(settings)
-    if not url:
-        raise ConfigError(POSTGRES_LOCK_URL_REQUIRED)
-    return url

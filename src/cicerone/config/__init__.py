@@ -27,7 +27,7 @@ from cicerone.config.constants import (
 from cicerone.config.load import load_settings, make_settings
 from cicerone.config.lock_url import (
     POSTGRES_LOCK_URL_REQUIRED,
-    require_postgres_lock_url,
+    require_postgres_lock_url_parts,
     resolve_postgres_lock_url,
     resolve_postgres_lock_url_parts,
 )
@@ -78,7 +78,7 @@ __all__ = [
     "TriggerSettings",
     "load_settings",
     "make_settings",
-    "require_postgres_lock_url",
+    "require_postgres_lock_url_parts",
     "resolve_epoch_metrics",
     "resolve_max_workers",
     "resolve_postgres_lock_url",

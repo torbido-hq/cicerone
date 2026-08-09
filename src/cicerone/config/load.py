@@ -299,14 +299,13 @@ def load_settings(config_path: str | None = None) -> Settings:
     input_settings = _load_io_settings(raw, "input")
     output_settings = _load_io_settings(raw, "output")
     if lock_backend == "postgres":
-        from cicerone.config.lock_url import POSTGRES_LOCK_URL_REQUIRED, resolve_postgres_lock_url_parts
+        from cicerone.config.lock_url import require_postgres_lock_url_parts
 
-        if not resolve_postgres_lock_url_parts(
+        require_postgres_lock_url_parts(
             postgres_url=trigger_postgres_url,
             output_kind=output_settings.kind,
             output_options=output_settings.options,
-        ):
-            raise ConfigError(POSTGRES_LOCK_URL_REQUIRED)
+        )
 
     trigger_lock_key = str(trigger_raw.get("lock_key", DEFAULT_LOCK_KEY)).strip()
     if not trigger_lock_key:

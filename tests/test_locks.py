@@ -9,7 +9,6 @@ from unittest.mock import MagicMock
 import pytest
 
 from cicerone.config import (
-    POSTGRES_LOCK_URL_REQUIRED,
     ConfigError,
     IOSettings,
     make_settings,
@@ -66,11 +65,19 @@ def test_resolve_postgres_lock_url_none_for_dataset_without_explicit():
     assert resolve_postgres_lock_url(settings) is None
 
 
-def test_build_postgres_lock_without_url_raises():
+def test_build_postgres_lock_without_url_is_programming_error():
     settings = make_settings(trigger_lock_backend="postgres")
-    with pytest.raises(ConfigError, match="needs a database URL") as exc_info:
+    with pytest.raises(AssertionError, match="validated at config load"):
         build_lock_backend(settings)
-    assert str(exc_info.value) == POSTGRES_LOCK_URL_REQUIRED
+
+
+def test_build_redis_lock_without_url_is_programming_error():
+    from dataclasses import replace
+
+    settings = make_settings(trigger_lock_backend="redis", trigger_redis_url="redis://x")
+    settings = replace(settings, trigger=replace(settings.trigger, redis_url=None))
+    with pytest.raises(AssertionError, match="validated at config load"):
+        build_lock_backend(settings)
 
 
 def test_advisory_keys_stable_for_default_and_differ_by_lock_key():
@@ -245,15 +252,6 @@ def test_run_guard_releases_backend_after_run():
             break
         time.sleep(0.05)
     assert events == ["acquire", "run:cron", "release"]
-
-
-def test_build_redis_lock_without_url_raises():
-    from dataclasses import replace
-
-    settings = make_settings(trigger_lock_backend="redis", trigger_redis_url="redis://x")
-    settings = replace(settings, trigger=replace(settings.trigger, redis_url=None))
-    with pytest.raises(ConfigError, match="job.trigger.redis_url"):
-        build_lock_backend(settings)
 
 
 def test_build_redis_lock_backend(monkeypatch):
