@@ -70,44 +70,47 @@ class PostgresAdvisoryLock:
         self._engine = create_engine(database_url, pool_pre_ping=True)
         self._conn: Connection | None = None
         self._key1, self._key2 = advisory_keys_from_lock_key(lock_key)
+        self._mutex = threading.Lock()
 
     def acquire(self) -> bool:
         from sqlalchemy import text
 
-        if self._conn is not None:
-            return False
-        conn = self._engine.connect()
-        try:
-            got = bool(
-                conn.execute(
-                    text("SELECT pg_try_advisory_lock(:k1, :k2)"),
-                    {"k1": self._key1, "k2": self._key2},
-                ).scalar()
-            )
-        except Exception:
-            conn.close()
-            raise
-        if not got:
-            conn.close()
-            return False
-        self._conn = conn
-        return True
+        with self._mutex:
+            if self._conn is not None:
+                return False
+            conn = self._engine.connect()
+            try:
+                got = bool(
+                    conn.execute(
+                        text("SELECT pg_try_advisory_lock(:k1, :k2)"),
+                        {"k1": self._key1, "k2": self._key2},
+                    ).scalar()
+                )
+            except Exception:
+                conn.close()
+                raise
+            if not got:
+                conn.close()
+                return False
+            self._conn = conn
+            return True
 
     def release(self) -> None:
         from sqlalchemy import text
 
-        if self._conn is None:
-            return
-        try:
-            self._conn.execute(
-                text("SELECT pg_advisory_unlock(:k1, :k2)"),
-                {"k1": self._key1, "k2": self._key2},
-            )
-        except Exception:
-            logger.exception("Failed to release Postgres advisory lock")
-        finally:
-            self._conn.close()
-            self._conn = None
+        with self._mutex:
+            if self._conn is None:
+                return
+            try:
+                self._conn.execute(
+                    text("SELECT pg_advisory_unlock(:k1, :k2)"),
+                    {"k1": self._key1, "k2": self._key2},
+                )
+            except Exception:
+                logger.exception("Failed to release Postgres advisory lock")
+            finally:
+                self._conn.close()
+                self._conn = None
 
 
 class RedisLock:
@@ -136,25 +139,39 @@ class RedisLock:
         )
         self._token = str(uuid.uuid4())
         self._held = False
+        self._mutex = threading.Lock()
         self._release_script = self._client.register_script(_REDIS_RELEASE_SCRIPT)
         self._refresh_script = self._client.register_script(_REDIS_REFRESH_SCRIPT)
         self._stop_refresh = threading.Event()
         self._refresh_thread: threading.Thread | None = None
 
+    def _mark_lost(self) -> None:
+        """Clear local hold state so a later acquire() can succeed after TTL loss."""
+        with self._mutex:
+            self._held = False
+            self._token = str(uuid.uuid4())
+        self._stop_refresh.set()
+        # Drop the handle so acquire() can start a new refresher (we may be that thread).
+        self._refresh_thread = None
+
     def _start_refresh(self) -> None:
-        if self._refresh_thread is not None:
+        if self._refresh_thread is not None and self._refresh_thread.is_alive():
             return
         self._stop_refresh.clear()
 
         def _run() -> None:
             while not self._stop_refresh.wait(self._refresh_interval_ms / 1000.0):
-                if not self._held:
-                    break
+                with self._mutex:
+                    if not self._held:
+                        break
+                    token = self._token
                 try:
-                    if not self._refresh_script(keys=[self._key], args=[self._token, self._ttl_ms]):
+                    if not self._refresh_script(keys=[self._key], args=[token, self._ttl_ms]):
+                        self._mark_lost()
                         break
                 except Exception:
                     logger.exception("Failed to refresh Redis lock TTL")
+                    self._mark_lost()
                     break
 
         self._refresh_thread = threading.Thread(
@@ -173,24 +190,30 @@ class RedisLock:
         self._refresh_thread = None
 
     def acquire(self) -> bool:
-        if self._held:
+        with self._mutex:
+            if self._held:
+                return False
+            token = self._token
+        ok = bool(self._client.set(self._key, token, nx=True, px=self._ttl_ms))
+        if not ok:
             return False
-        ok = bool(self._client.set(self._key, self._token, nx=True, px=self._ttl_ms))
-        self._held = ok
-        if ok:
-            self._start_refresh()
-        return ok
+        with self._mutex:
+            self._held = True
+        self._start_refresh()
+        return True
 
     def release(self) -> None:
-        if not self._held:
-            return
         self._stop_refresh_thread()
+        with self._mutex:
+            if not self._held:
+                return
+            token = self._token
+            self._held = False
+            self._token = str(uuid.uuid4())
         try:
-            self._release_script(keys=[self._key], args=[self._token])
+            self._release_script(keys=[self._key], args=[token])
         except Exception:
             logger.exception("Failed to release Redis lock")
-        finally:
-            self._held = False
 
 
 def build_lock_backend(settings: Settings) -> LockBackend:

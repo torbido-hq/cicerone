@@ -122,10 +122,11 @@ def test_redis_lock_acquire_release(monkeypatch):
     client.set.return_value = True
 
     lock = RedisLock("redis://localhost:6379/0")
+    token = lock._token
     assert lock.acquire() is True
     assert lock.acquire() is False
     lock.release()
-    client.release_script.assert_called_once_with(keys=[lock._key], args=[lock._token])
+    client.release_script.assert_called_once_with(keys=[lock._key], args=[token])
     assert lock.acquire() is True
     lock.release()
 
@@ -310,13 +311,65 @@ def test_redis_lock_refreshes_ttl_while_held(monkeypatch):
         ttl_ms=200,
         refresh_interval_ms=20,
     )
+    token = lock._token
     assert lock.acquire() is True
     deadline = time.time() + 2.0
     while time.time() < deadline and client.refresh_script.call_count < 1:
         time.sleep(0.02)
     lock.release()
     assert client.refresh_script.call_count >= 1
-    client.refresh_script.assert_called_with(keys=[lock._key], args=[lock._token, 200])
+    client.refresh_script.assert_any_call(keys=[lock._key], args=[token, 200])
+
+
+def test_redis_lock_allows_reacquire_after_refresh_loss(monkeypatch):
+    client = _mock_redis_module(monkeypatch)
+    client.set.return_value = True
+    refresh_calls = {"n": 0}
+
+    def refresh(*_args, **_kwargs):
+        refresh_calls["n"] += 1
+        return 0 if refresh_calls["n"] == 1 else 1
+
+    client.refresh_script.side_effect = refresh
+
+    lock = RedisLock(
+        "redis://localhost:6379/0",
+        ttl_ms=200,
+        refresh_interval_ms=20,
+    )
+    first_token = lock._token
+    assert lock.acquire() is True
+    deadline = time.time() + 2.0
+    while time.time() < deadline and lock._held:
+        time.sleep(0.02)
+    assert lock._held is False
+    assert lock._token != first_token
+    assert lock.acquire() is True
+    lock.release()
+
+
+def test_postgres_advisory_lock_is_thread_safe(monkeypatch):
+    conn = MagicMock()
+    conn.execute.return_value.scalar.return_value = True
+    engine = MagicMock()
+    engine.connect.return_value = conn
+    monkeypatch.setattr("sqlalchemy.create_engine", lambda *a, **k: engine)
+
+    lock = PostgresAdvisoryLock("postgresql+psycopg://u:p@h/db")
+    results: list[bool] = []
+    barrier = threading.Barrier(2)
+
+    def worker() -> None:
+        barrier.wait()
+        results.append(lock.acquire())
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+    assert sorted(results) == [False, True]
+    lock.release()
 
 
 def test_postgres_advisory_lock_mocked(monkeypatch):
