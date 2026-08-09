@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import threading
 import uuid
 from typing import Protocol
 
@@ -31,6 +32,14 @@ PG_ADVISORY_KEY2 = int.from_bytes(_PG_LOCK_DIGEST[4:8], "big") & 0x7FFFFFFF
 _REDIS_RELEASE_SCRIPT = """
 if redis.call('get', KEYS[1]) == ARGV[1] then
     return redis.call('del', KEYS[1])
+else
+    return 0
+end
+"""
+
+_REDIS_REFRESH_SCRIPT = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('pexpire', KEYS[1], ARGV[2])
 else
     return 0
 end
@@ -102,7 +111,7 @@ class PostgresAdvisoryLock:
 
 
 class RedisLock:
-    """``SET key token NX PX ttl`` with compare-and-delete release."""
+    """``SET NX PX`` lock; TTL is refreshed while held so long jobs stay exclusive."""
 
     def __init__(
         self,
@@ -110,6 +119,7 @@ class RedisLock:
         *,
         key: str = DEFAULT_LOCK_KEY,
         ttl_ms: int = REDIS_LOCK_TTL_MS,
+        refresh_interval_ms: int | None = None,
     ):
         try:
             import redis
@@ -121,20 +131,60 @@ class RedisLock:
         self._client = redis.Redis.from_url(redis_url)
         self._key = key
         self._ttl_ms = ttl_ms
+        self._refresh_interval_ms = (
+            max(ttl_ms // 2, 1) if refresh_interval_ms is None else max(refresh_interval_ms, 1)
+        )
         self._token = str(uuid.uuid4())
         self._held = False
         self._release_script = self._client.register_script(_REDIS_RELEASE_SCRIPT)
+        self._refresh_script = self._client.register_script(_REDIS_REFRESH_SCRIPT)
+        self._stop_refresh = threading.Event()
+        self._refresh_thread: threading.Thread | None = None
+
+    def _start_refresh(self) -> None:
+        if self._refresh_thread is not None:
+            return
+        self._stop_refresh.clear()
+
+        def _run() -> None:
+            while not self._stop_refresh.wait(self._refresh_interval_ms / 1000.0):
+                if not self._held:
+                    break
+                try:
+                    if not self._refresh_script(keys=[self._key], args=[self._token, self._ttl_ms]):
+                        break
+                except Exception:
+                    logger.exception("Failed to refresh Redis lock TTL")
+                    break
+
+        self._refresh_thread = threading.Thread(
+            target=_run,
+            name=f"cicerone-redis-lock-refresh-{self._key}",
+            daemon=True,
+        )
+        self._refresh_thread.start()
+
+    def _stop_refresh_thread(self) -> None:
+        thread = self._refresh_thread
+        if thread is None:
+            return
+        self._stop_refresh.set()
+        thread.join(timeout=1.0)
+        self._refresh_thread = None
 
     def acquire(self) -> bool:
         if self._held:
             return False
         ok = bool(self._client.set(self._key, self._token, nx=True, px=self._ttl_ms))
         self._held = ok
+        if ok:
+            self._start_refresh()
         return ok
 
     def release(self) -> None:
         if not self._held:
             return
+        self._stop_refresh_thread()
         try:
             self._release_script(keys=[self._key], args=[self._token])
         except Exception:

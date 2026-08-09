@@ -179,8 +179,9 @@ process:
   `"postgres"` or `"redis"` — use `postgres` if your output is already `db`
   (or set `postgres_url`); use `redis` only if you're on dataset/S3 output
   and need HA (`pip install -r requirements-redis.txt`). Optional `lock_key`
-  (and Redis-only `lock_ttl_seconds`) namespaces the lock when several
-  schedulers share one Postgres/Redis. This is a lock, not a job queue;
+  (and Redis-only `lock_ttl_seconds`) that namespace the lock when several
+  schedulers share one Postgres/Redis; Redis refreshes TTL while the lock is
+  held so long jobs stay exclusive. This is a lock, not a job queue;
   `serve` mode is already safe to scale horizontally as-is.
 - The run manifest records `triggered_by` (`"cron"`, `"webhook"`, or
   `"s3-poll"`) and `lock_backend` alongside its existing counts/timestamp

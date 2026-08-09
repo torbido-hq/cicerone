@@ -26,7 +26,12 @@ from cicerone.trigger import RunGuard
 
 def _mock_redis_module(monkeypatch, *, client: MagicMock | None = None) -> MagicMock:
     client = client or MagicMock()
-    client.register_script.return_value = MagicMock()
+    release_script = MagicMock(name="release_script")
+    refresh_script = MagicMock(name="refresh_script")
+    refresh_script.return_value = 1
+    client.register_script.side_effect = [release_script, refresh_script]
+    client.release_script = release_script
+    client.refresh_script = refresh_script
     fake_redis = MagicMock()
     fake_redis.Redis.from_url.return_value = client
     monkeypatch.setitem(__import__("sys").modules, "redis", fake_redis)
@@ -95,7 +100,8 @@ def test_build_redis_lock_uses_configured_key_and_ttl(monkeypatch):
     assert isinstance(lock, RedisLock)
     assert lock.acquire() is True
     client.set.assert_called_with("my-job:run", lock._token, nx=True, px=120_000)
-    client.register_script.assert_called_once()
+    assert client.register_script.call_count == 2
+    lock.release()
 
 
 def test_build_postgres_lock_uses_configured_lock_key(monkeypatch):
@@ -114,14 +120,14 @@ def test_build_postgres_lock_uses_configured_lock_key(monkeypatch):
 def test_redis_lock_acquire_release(monkeypatch):
     client = _mock_redis_module(monkeypatch)
     client.set.return_value = True
-    release_script = client.register_script.return_value
 
     lock = RedisLock("redis://localhost:6379/0")
     assert lock.acquire() is True
     assert lock.acquire() is False
     lock.release()
-    release_script.assert_called_once_with(keys=[lock._key], args=[lock._token])
+    client.release_script.assert_called_once_with(keys=[lock._key], args=[lock._token])
     assert lock.acquire() is True
+    lock.release()
 
 
 def test_redis_lock_contention(monkeypatch):
@@ -278,23 +284,39 @@ def test_build_lock_backend_unknown_is_programming_error():
 
 def test_redis_release_when_not_held(monkeypatch):
     client = _mock_redis_module(monkeypatch)
-    release_script = client.register_script.return_value
 
     lock = RedisLock("redis://localhost:6379/0")
     lock.release()
-    release_script.assert_not_called()
+    client.release_script.assert_not_called()
 
 
 def test_redis_release_logs_on_failure(monkeypatch):
     client = _mock_redis_module(monkeypatch)
     client.set.return_value = True
-    release_script = client.register_script.return_value
-    release_script.side_effect = RuntimeError("boom")
+    client.release_script.side_effect = RuntimeError("boom")
 
     lock = RedisLock("redis://localhost:6379/0")
     assert lock.acquire() is True
     lock.release()
     assert lock._held is False
+
+
+def test_redis_lock_refreshes_ttl_while_held(monkeypatch):
+    client = _mock_redis_module(monkeypatch)
+    client.set.return_value = True
+
+    lock = RedisLock(
+        "redis://localhost:6379/0",
+        ttl_ms=200,
+        refresh_interval_ms=20,
+    )
+    assert lock.acquire() is True
+    deadline = time.time() + 2.0
+    while time.time() < deadline and client.refresh_script.call_count < 1:
+        time.sleep(0.02)
+    lock.release()
+    assert client.refresh_script.call_count >= 1
+    client.refresh_script.assert_called_with(keys=[lock._key], args=[lock._token, 200])
 
 
 def test_postgres_advisory_lock_mocked(monkeypatch):

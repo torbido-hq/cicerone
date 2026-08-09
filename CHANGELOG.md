@@ -14,7 +14,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `in_process` default, `postgres`, `redis`) for multi-replica mutual
   exclusion; manifest records `lock_backend`. Redis is an optional
   install (`requirements-redis.txt`). Optional `lock_key` /
-  `lock_ttl_seconds` namespace shared Redis/Postgres lock stores.
+  `lock_ttl_seconds` that namespace shared Redis/Postgres lock stores.
+  Redis lock TTL is refreshed while held so long runs stay exclusive.
 
 ### Changed
 
