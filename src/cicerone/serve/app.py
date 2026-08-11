@@ -47,16 +47,23 @@ A checked-in copy lives at `docs/openapi/serve.openapi.json` (regenerate with
 """.strip()
 
 
-def _start_refresh_loop(reader: RecommendationReader, interval_seconds: float) -> None:
+def _start_refresh_loop(
+    reader: RecommendationReader,
+    interval_seconds: float,
+    *,
+    generated_at_cache: _GeneratedAtCache | None = None,
+) -> None:
     def _loop() -> None:
         while True:
             time.sleep(interval_seconds)
             reader.refresh()
+            if generated_at_cache is not None:
+                generated_at_cache.refresh()
 
     threading.Thread(target=_loop, daemon=True).start()
 
 
-def _generated_at(manifest_reader: ManifestReader | None) -> str | None:
+def _read_generated_at(manifest_reader: ManifestReader | None) -> str | None:
     if manifest_reader is None:
         return None
     try:
@@ -68,6 +75,25 @@ def _generated_at(manifest_reader: ManifestReader | None) -> str | None:
         return None
     value = latest.get("generated_at")
     return str(value) if value is not None else None
+
+
+class _GeneratedAtCache:
+    """Cache manifest ``generated_at``; refresh with the recommendations loop."""
+
+    def __init__(self, manifest_reader: ManifestReader | None) -> None:
+        self._manifest_reader = manifest_reader
+        self._lock = threading.Lock()
+        self._value: str | None = None
+        self.refresh()
+
+    def refresh(self) -> None:
+        value = _read_generated_at(self._manifest_reader)
+        with self._lock:
+            self._value = value
+
+    def get(self) -> str | None:
+        with self._lock:
+            return self._value
 
 
 def _configure_reader_item_filters(
@@ -195,6 +221,8 @@ def create_app(
         category_column=category_column,
         availability_filters=availability_filters,
     )
+    generated_at_cache = _GeneratedAtCache(manifest_reader)
+    app.state.generated_at_cache = generated_at_cache
     missing_category_warned = False
 
     @app.middleware("http")
@@ -309,7 +337,7 @@ def create_app(
             if SOURCE_COLUMN in filtered.columns:
                 record_recommendations_served(set(filtered[SOURCE_COLUMN].astype(str)))
 
-        generated_at = _generated_at(manifest_reader)
+        generated_at = generated_at_cache.get()
         body = RecommendationsResponse(
             generated_at=generated_at,
             user_id=user_id,
@@ -366,24 +394,24 @@ def main() -> None:
 
     reader = build_recommendation_reader(settings.output)
     manifest_reader = build_manifest_reader(settings.output)
-    try:
-        feature_config = load_feature_config(settings.feature_config_path)
-    except Exception:
-        logger.exception("Failed to load feature config for serve filters; continuing without them")
-        feature_config = None
+    feature_config = load_feature_config(settings.feature_config_path)
 
-    availability_filters = list(feature_config.item_availability_filters) if feature_config else []
+    availability_filters = list(feature_config.item_availability_filters)
     _configure_reader_item_filters(
         reader,
         category_column=settings.serve.category_column,
         availability_filters=availability_filters,
     )
-    _start_refresh_loop(reader, settings.serve.refresh_interval_seconds)
 
     app = create_app(
         settings,
         reader,
         manifest_reader=manifest_reader,
         feature_config=feature_config,
+    )
+    _start_refresh_loop(
+        reader,
+        settings.serve.refresh_interval_seconds,
+        generated_at_cache=app.state.generated_at_cache,
     )
     uvicorn.run(app, host=settings.serve.host, port=settings.serve.port)

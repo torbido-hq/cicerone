@@ -466,7 +466,7 @@ def test_main_starts_serve_app_in_serve_mode(tmp_path, monkeypatch):
 
     import cicerone.serve.app as serve_module
 
-    def fake_start_refresh_loop(reader, interval):
+    def fake_start_refresh_loop(reader, interval, **kwargs):
         refresh_calls.append(reader)
 
     def fake_uvicorn_run(app, host, port):
@@ -483,3 +483,37 @@ def test_main_starts_serve_app_in_serve_mode(tmp_path, monkeypatch):
 
     assert len(refresh_calls) == 1
     assert uvicorn_calls == {"host": "0.0.0.0", "port": 8000}
+
+
+def test_main_fails_closed_on_invalid_feature_config(tmp_path, monkeypatch):
+    config_path = tmp_path / "cicerone.toml"
+    features_path = tmp_path / "features.toml"
+    features_path.write_text("blending = { enabled = true, steepness = -1 }\n")
+    config_path.write_text(
+        f"""
+        [job]
+        mode = "serve"
+        feature_config_path = "{features_path}"
+
+        [serve]
+        auth_token = "secret"
+
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "{tmp_path}"
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "{tmp_path}"
+        """
+    )
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", str(config_path))
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"}]
+    ).to_parquet(tmp_path / "recommendations.parquet", index=False)
+
+    with pytest.raises(ValueError, match="steepness"):
+        main()

@@ -21,6 +21,9 @@ logger = logging.getLogger(__name__)
 
 _MISSING_TABLE_ERRORS = (ProgrammingError, OperationalError)
 
+# Prefer the public alias used by readers and writers.
+MISSING_TABLE_ERRORS = _MISSING_TABLE_ERRORS
+
 DEFAULT_EVENTS_TABLE = "events"
 DEFAULT_USERS_TABLE = "users"
 DEFAULT_ITEMS_TABLE = "items"

@@ -62,6 +62,24 @@ def test_run_guard_records_retrain_trigger_metrics():
     assert debounced >= 1
 
 
+def test_run_guard_records_cron_retrain_source():
+    done = threading.Event()
+
+    def fake_run(triggered_by: str) -> None:
+        del triggered_by
+        done.set()
+
+    guard = RunGuard(debounce_seconds=0, run_fn=fake_run)
+    assert guard.trigger("cron") is True
+    assert done.wait(timeout=5)
+
+    from prometheus_client import generate_latest
+
+    body = generate_latest().decode()
+    accepted = _metric_value(body, "cicerone_retrain_trigger_total", {"source": "cron", "status": "accepted"})
+    assert accepted >= 1
+
+
 def test_run_guard_starts_a_run_when_idle():
     done = threading.Event()
     calls = []

@@ -356,6 +356,59 @@ def test_redis_lock_allows_reacquire_after_refresh_loss(monkeypatch):
     lock.release()
 
 
+def test_redis_release_ignores_in_flight_refresh_failure(monkeypatch):
+    """Release must not let a racing refresh call _mark_lost on a new acquire."""
+    client = _mock_redis_module(monkeypatch)
+    client.set.return_value = True
+
+    refresh_entered = threading.Event()
+    allow_refresh_return = threading.Event()
+    mark_lost_calls: list[str] = []
+
+    def refresh(*args, **kwargs):
+        refresh_entered.set()
+        allow_refresh_return.wait(timeout=5)
+        return 0
+
+    client.refresh_script.side_effect = refresh
+
+    lock = RedisLock(
+        "redis://localhost:6379/0",
+        ttl_ms=200,
+        refresh_interval_ms=1,
+    )
+    real_mark_lost = lock._mark_lost
+
+    def mark_lost() -> None:
+        mark_lost_calls.append("lost")
+        real_mark_lost()
+
+    lock._mark_lost = mark_lost  # type: ignore[method-assign]
+
+    assert lock.acquire() is True
+    _wait_for_event(refresh_entered)
+    # Stop refresher while it is blocked inside refresh; release then unblocks it.
+    release_done = threading.Event()
+
+    def do_release() -> None:
+        lock.release()
+        release_done.set()
+
+    releaser = threading.Thread(target=do_release)
+    releaser.start()
+    # Give release() time to set stop and begin joining before refresh returns 0.
+    time.sleep(0.05)
+    allow_refresh_return.set()
+    releaser.join(timeout=5)
+    assert release_done.is_set()
+    assert mark_lost_calls == []
+    assert lock._held is False
+    # A subsequent acquire must succeed without leftover lost-state churn.
+    assert lock.acquire() is True
+    allow_refresh_return.set()
+    lock.release()
+
+
 def test_postgres_advisory_lock_is_thread_safe(monkeypatch):
     conn = MagicMock()
     conn.execute.return_value.scalar.return_value = True

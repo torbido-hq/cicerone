@@ -22,6 +22,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 from cicerone.feature_config import FeatureColumn
 from cicerone.ids import interactions_item_column, interactions_user_column, items_id_column
+from cicerone.values import is_missing as _is_missing
 
 logger = logging.getLogger(__name__)
 
@@ -30,20 +31,6 @@ CONTENT_FALLBACK_SOURCE = "content_fallback"
 _MAX_HISTORY_ITEMS = 50
 # Soft cap on a single dense cosine block; larger cold sets are scored in batches.
 _DENSE_SIM_BATCH_PRODUCT = 50_000
-
-
-def _is_missing(value: object) -> bool:
-    """True for None / NaN / pd.NA / NaT; False for containers and other values."""
-    if value is None:
-        return True
-    try:
-        result = pd.isna(value)
-    except (TypeError, ValueError):
-        return False
-    # pd.isna on array-likes returns an array; treat the value as present.
-    if isinstance(result, (np.ndarray, pd.Series, list)):
-        return False
-    return bool(result)
 
 
 def _feature_dict(

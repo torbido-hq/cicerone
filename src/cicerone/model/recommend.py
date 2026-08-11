@@ -16,7 +16,6 @@ from cicerone.blending import (
     POPULAR_SOURCE,
     append_cold_start_rows,
     blend_for_users,
-    expand_latest_ranking,
     interaction_counts,
     rank_latest_items,
     resolve_latest_date_column,
@@ -277,23 +276,24 @@ def _combine_strategy_frames(
             popular = popular.copy()
             popular[SOURCE_COLUMN] = POPULAR_SOURCE
 
-        latest_parts: list[pd.DataFrame] = []
+        latest_by_user: dict[str, list[tuple[str, int, float]]] = {}
         for cohort_key, cohort_users in cohort_plan.cohorts:
             ranked = strategy_frames.latest_by_cohort.get(cohort_key)
             if ranked:
-                latest_parts.append(expand_latest_ranking(ranked, cohort_users))
-        latest_frame = pd.concat(latest_parts, ignore_index=True) if latest_parts else None
+                for user_id in cohort_users:
+                    latest_by_user[str(user_id)] = ranked
 
         counts = interaction_counts(built.interactions)
         combined = blend_for_users(
             personalized=personalized,
             popular=popular,
-            latest=latest_frame,
+            latest=None,
             counts=counts,
             target_users=cohort_plan.unique_target_users,
             config=blending,
             top_k=combine_k,
             latest_available=strategy_frames.latest_available,
+            latest_by_user=latest_by_user or None,
         )
 
         cold_popular = empty_recs.copy()

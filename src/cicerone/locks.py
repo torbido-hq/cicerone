@@ -167,9 +167,14 @@ class RedisLock:
                     token = self._token
                 try:
                     if not self._refresh_script(keys=[self._key], args=[token, self._ttl_ms]):
+                        # Intentional release sets stop before clearing hold; skip _mark_lost.
+                        if self._stop_refresh.is_set():
+                            break
                         self._mark_lost()
                         break
                 except Exception:
+                    if self._stop_refresh.is_set():
+                        break
                     logger.exception("Failed to refresh Redis lock TTL")
                     self._mark_lost()
                     break
@@ -186,8 +191,8 @@ class RedisLock:
         if thread is None:
             return
         self._stop_refresh.set()
-        # Non-blocking: daemon refresher exits on the stop event without delaying release.
-        thread.join(timeout=0)
+        # Wait so a refresh past wait() cannot call _mark_lost after we rotate the token.
+        thread.join(timeout=max(self._refresh_interval_ms / 1000.0, 0.05) + 1.0)
         self._refresh_thread = None
 
     def acquire(self) -> bool:
