@@ -83,6 +83,7 @@ def test_job_run_end_to_end_with_local_dataset_backend(tmp_path, monkeypatch):
     assert manifest["automl_enabled"] is False
     assert manifest["automl_metrics"] == ""
     assert manifest["triggered_by"] == "manual"
+    assert manifest["lock_backend"] == "in_process"
     assert manifest["artifact_written"] is False
     assert manifest["artifact_schema_version"] is None
     assert not (output_dir / "model.artifact").exists()
@@ -423,6 +424,37 @@ def test_job_run_records_custom_triggered_by(tmp_path, monkeypatch):
 
     manifest = json.loads((output_dir / "manifest.json").read_text())
     assert manifest["triggered_by"] == "webhook"
+    assert manifest["lock_backend"] == "in_process"
+
+
+def test_job_run_records_configured_lock_backend(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+
+    now = pd.Timestamp.utcnow()
+    events = pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    )
+    items = pd.DataFrame(
+        [{"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True}]
+    )
+    events.to_parquet(input_dir / "events.parquet", index=False)
+    items.to_parquet(input_dir / "items.parquet", index=False)
+
+    config_path = _write_config(
+        tmp_path,
+        input_dir,
+        output_dir,
+        extra_job='[job.trigger]\nlock_backend = "redis"\nredis_url = "redis://localhost:6379/0"\n',
+    )
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
+
+    job.run(triggered_by="cron")
+
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    assert manifest["lock_backend"] == "redis"
 
 
 def test_job_marks_partial_outputs_when_recommendation_write_fails(tmp_path, monkeypatch):

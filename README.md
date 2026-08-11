@@ -173,11 +173,19 @@ process:
 - Both paths funnel through the same debounce guard
   (`[job.trigger].debounce_seconds`), so a burst of triggers (or a trigger
   firing while cron already kicked off a run) never causes overlapping runs.
-- No new required infra: no Redis, no message queue — the debounce guard is
-  in-process (`threading.Lock`), which assumes a single running instance
-  of the `recommender`/scheduler service (true today).
-- The run manifest now records `triggered_by` (`"cron"`, `"webhook"`, or
-  `"s3-poll"`) alongside its existing counts/timestamp fields.
+- Single-instance is the default (`lock_backend = "in_process"`, an
+  in-process `threading.Lock`) and needs no extra config or dependencies.
+  For multiple scheduler replicas, set `[job.trigger].lock_backend` to
+  `"postgres"` or `"redis"` — use `postgres` if your output is already `db`
+  (or set `postgres_url`); use `redis` only if you're on dataset/S3 output
+  and need HA (`pip install -r requirements-redis.txt`). Optional `lock_key`
+  (and Redis-only `lock_ttl_seconds`) that namespace the lock when several
+  schedulers share one Postgres/Redis; Redis refreshes TTL while the lock is
+  held so long jobs stay exclusive. This is a lock, not a job queue;
+  `serve` mode is already safe to scale horizontally as-is.
+- The run manifest records `triggered_by` (`"cron"`, `"webhook"`, or
+  `"s3-poll"`) and `lock_backend` alongside its existing counts/timestamp
+  fields.
 
 ## Dashboard
 
@@ -537,6 +545,10 @@ code is structured. See [CHANGELOG.md](CHANGELOG.md) for release notes.
   `[job.trigger].enabled = true`, `[dashboard].enabled = true`), and are
   each protected — a bearer token for serve/trigger, HTTP Basic Auth for
   the dashboard — see their respective sections above.
+- The scheduler defaults to a single-instance in-process debounce lock.
+  Multi-replica deployments must opt into `[job.trigger].lock_backend`
+  (`postgres` or `redis`); see Event-driven retrain trigger above. `serve`
+  remains independently scalable.
 - Credentials only ever live in environment variables (`.env`, not
   committed), referenced from `config/cicerone.toml` via `${...}`
   placeholders — never written into the config file itself.
