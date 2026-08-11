@@ -516,7 +516,7 @@ empty, treat the endpoint as network-boundary protected.
 
 OpenAPI (Swagger UI) is at `http://localhost:8000/docs`; the JSON schema is
 `/openapi.json` (`/metrics` is omitted from the schema). For a non-curl
-client, use the thin package helper (or the Node / curl snippets under
+client, use the thin package helper (or the Node / Ruby / curl snippets under
 [`examples/serve/`](../examples/serve/)):
 
 ```sh
@@ -525,6 +525,12 @@ docker run --rm --network host -e PYTHONPATH=/app/src \
   -e CICERONE_SERVE_TOKEN="$SERVE_TOKEN" \
   -v "$PWD":/app -w /app cicerone-test \
   python examples/serve/python_client.py
+```
+
+```sh
+CICERONE_SERVE_URL=http://localhost:8000 \
+CICERONE_SERVE_TOKEN="$SERVE_TOKEN" \
+ruby examples/serve/ruby_client.rb
 ```
 
 For a `dataset` output (as here), the recommendations file and optional

@@ -150,6 +150,7 @@ Thin clients (no generated SDK package — copy or import as needed):
 | `cicerone.serve_client.ServeClient` | Stdlib `urllib` client returning `serve_schemas` models |
 | [`examples/serve/python_client.py`](examples/serve/python_client.py) | Example using `ServeClient` |
 | [`examples/serve/fetch.mjs`](examples/serve/fetch.mjs) | Node / browser `fetch` example |
+| [`examples/serve/ruby_client.rb`](examples/serve/ruby_client.rb) | Ruby stdlib `Net::HTTP` example |
 | [`examples/serve/curl_examples.sh`](examples/serve/curl_examples.sh) | curl + `/openapi.json` peek |
 
 ```python
