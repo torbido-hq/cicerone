@@ -552,3 +552,20 @@ def test_blend_for_users_latest_by_user_avoids_cartesian_frame():
     by_user = {user: list(group[Columns.Item]) for user, group in out.groupby(Columns.User)}
     assert by_user["u1"] == ["a"]
     assert by_user["u2"] == ["b"]
+
+
+def test_blend_for_users_latest_by_user_normalizes_non_string_keys():
+    config = _blending(curve="linear", saturate_at=1.0, popular_share=0.5)
+    empty = pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, "source"])
+    out = blend_for_users(
+        personalized=empty,
+        popular=empty,
+        latest=None,
+        counts={"1": 0},
+        target_users=[1],
+        config=config,
+        top_k=1,
+        latest_available=True,
+        latest_by_user={1: [("a", 1, 2.0)]},  # type: ignore[dict-item]
+    )
+    assert list(out[Columns.Item]) == ["a"]

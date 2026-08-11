@@ -231,9 +231,13 @@ def blend_for_users(
     """Weighted RRF with per-user source weights (best rank per item within each source).
 
     Prefer ``shared_latest`` (one ranking for all users) or ``latest_by_user``
-    (per-user / per-cohort rankings) over a Cartesian ``latest`` frame.
+    (per-user / per-cohort rankings; keys must be ``str`` user ids) over a
+    Cartesian ``latest`` frame.
     """
     use_indexed_latest = shared_latest is not None or latest_by_user is not None
+    latest_index = (
+        None if latest_by_user is None else {str(uid): ranking for uid, ranking in latest_by_user.items()}
+    )
     frames = {
         PERSONALIZED_SOURCE: _normalize_source_frame(personalized, PERSONALIZED_SOURCE),
         POPULAR_SOURCE: _normalize_source_frame(popular, POPULAR_SOURCE),
@@ -267,8 +271,8 @@ def blend_for_users(
             ranking: Sequence[tuple[str, int, float]] | None = None
             if shared_latest is not None:
                 ranking = shared_latest
-            elif latest_by_user is not None:
-                ranking = latest_by_user.get(user_id)
+            elif latest_index is not None:
+                ranking = latest_index.get(user_id)
             if ranking:
                 weight = weights.get(LATEST_SOURCE, 0.0)
                 if weight > _WEIGHT_EPS:

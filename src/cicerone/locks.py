@@ -191,8 +191,9 @@ class RedisLock:
         if thread is None:
             return
         self._stop_refresh.set()
-        # Wait so a refresh past wait() cannot call _mark_lost after we rotate the token.
-        thread.join(timeout=max(self._refresh_interval_ms / 1000.0, 0.05) + 1.0)
+        # Brief wait for a refresh already past wait(); stop flag skips _mark_lost.
+        # Cap at 250ms so a stuck Redis Lua call cannot delay release() for a full interval.
+        thread.join(timeout=0.25)
         self._refresh_thread = None
 
     def acquire(self) -> bool:

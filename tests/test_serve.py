@@ -469,14 +469,19 @@ def test_main_starts_serve_app_in_serve_mode(tmp_path, monkeypatch):
     monkeypatch.setenv("CICERONE_CONFIG_PATH", str(config_path))
 
     refresh_calls = []
+    refresh_kwargs: list[dict] = []
     uvicorn_calls = {}
+    served_app = None
 
     import cicerone.serve.app as serve_module
 
     def fake_start_refresh_loop(reader, interval, **kwargs):
         refresh_calls.append(reader)
+        refresh_kwargs.append(kwargs)
 
     def fake_uvicorn_run(app, host, port):
+        nonlocal served_app
+        served_app = app
         uvicorn_calls.update(host=host, port=port)
 
     monkeypatch.setattr(serve_module, "_start_refresh_loop", fake_start_refresh_loop)
@@ -490,6 +495,8 @@ def test_main_starts_serve_app_in_serve_mode(tmp_path, monkeypatch):
 
     assert len(refresh_calls) == 1
     assert uvicorn_calls == {"host": "0.0.0.0", "port": 8000}
+    assert served_app is not None
+    assert refresh_kwargs[0]["generated_at_cache"] is served_app.state.generated_at_cache
 
 
 def test_main_fails_closed_on_invalid_feature_config(tmp_path, monkeypatch):

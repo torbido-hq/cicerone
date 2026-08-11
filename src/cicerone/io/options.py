@@ -66,9 +66,8 @@ def storage_backend(options: dict[str, Any]) -> str:
 
 
 def validate_storage_options(options: dict[str, Any], backend: str | None = None) -> str:
-    resolved = backend if backend is not None else storage_backend(options)
-    if resolved not in STORAGE_BACKENDS:
-        raise ValueError(f"Unknown storage_backend: {resolved!r} (expected 's3' or 'local')")
+    """Validate ``storage_backend`` and required options; return the resolved backend."""
+    resolved = storage_backend(options) if backend is None else storage_backend({"storage_backend": backend})
     if resolved == "local":
         require_option(options, "path", "local")
     else:
