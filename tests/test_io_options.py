@@ -5,7 +5,13 @@ from __future__ import annotations
 import pytest
 from botocore.exceptions import ClientError
 
-from cicerone.io.options import S3_NOT_FOUND_CODES, is_s3_not_found, object_key
+from cicerone.io.options import (
+    S3_NOT_FOUND_CODES,
+    is_s3_not_found,
+    object_key,
+    storage_backend,
+    validate_storage_options,
+)
 
 
 @pytest.mark.parametrize(
@@ -43,3 +49,17 @@ def test_is_s3_not_found_false_for_other_client_error():
 @pytest.mark.parametrize("exc", [ValueError("boom"), Exception("boom")])
 def test_is_s3_not_found_false_for_non_client_error_exceptions(exc):
     assert is_s3_not_found(exc) is False
+
+
+def test_validate_storage_options_resolves_from_options():
+    assert validate_storage_options({"storage_backend": "local", "path": "/tmp"}) == "local"
+
+
+def test_validate_storage_options_rejects_explicit_backend_mismatch():
+    with pytest.raises(ValueError, match="does not match"):
+        validate_storage_options({"storage_backend": "local", "path": "/tmp"}, backend="s3")
+
+
+def test_storage_backend_rejects_unknown():
+    with pytest.raises(ValueError, match="Unknown storage_backend"):
+        storage_backend({"storage_backend": "gcs"})

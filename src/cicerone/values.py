@@ -7,6 +7,9 @@ from collections.abc import Iterable
 import numpy as np
 import pandas as pd
 
+# Sentinel for "attribute absent" (distinct from None / NaN on a present column).
+MISSING = object()
+
 
 def is_sequence_attr(value: object) -> bool:
     if isinstance(value, (list, tuple, set, pd.Series)):
@@ -15,8 +18,8 @@ def is_sequence_attr(value: object) -> bool:
 
 
 def is_missing(value: object) -> bool:
-    """True for None / NaN / pd.NA / NaT; False for containers and other values."""
-    if value is None:
+    """True for None / NaN / pd.NA / NaT / ``MISSING``; False for containers."""
+    if value is None or value is MISSING:
         return True
     if is_sequence_attr(value):
         return False

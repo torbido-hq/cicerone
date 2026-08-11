@@ -66,8 +66,14 @@ def storage_backend(options: dict[str, Any]) -> str:
 
 
 def validate_storage_options(options: dict[str, Any], backend: str | None = None) -> str:
-    """Validate ``storage_backend`` and required options; return the resolved backend."""
-    resolved = storage_backend(options) if backend is None else storage_backend({"storage_backend": backend})
+    """Validate ``storage_backend`` and required options; return the resolved backend.
+
+    Always resolves from ``options``. If ``backend`` is passed, it must match
+    ``options['storage_backend']`` (or the default ``local``).
+    """
+    resolved = storage_backend(options)
+    if backend is not None and str(backend) != resolved:
+        raise ValueError(f"explicit backend {backend!r} does not match options storage_backend {resolved!r}")
     if resolved == "local":
         require_option(options, "path", "local")
     else:

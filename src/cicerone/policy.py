@@ -22,13 +22,14 @@ from rectools import Columns
 
 from cicerone.feature_config import BoostRule, EligibilityRule, FeatureConfig
 from cicerone.ids import items_id_column
-from cicerone.values import as_list as _values_as_list
-from cicerone.values import is_missing as _values_is_missing
+from cicerone.values import MISSING as _MISSING
+from cicerone.values import as_list as _as_list
+from cicerone.values import is_missing as _is_missing
 from cicerone.values import is_sequence_attr as _is_sequence_attr
+from cicerone.values import str_set as _str_set
 
 logger = logging.getLogger(__name__)
 
-_MISSING = object()
 _warned_missing_columns: set[tuple[str, str, str]] = set()
 _warned_boost_without_items = False
 
@@ -104,20 +105,6 @@ def is_user_scoped(rule: EligibilityRule) -> bool:
 
 def has_user_scoped_eligibility(rules: Sequence[EligibilityRule]) -> bool:
     return any(is_user_scoped(r) for r in rules)
-
-
-def _is_missing(value: object) -> bool:
-    return value is _MISSING or _values_is_missing(value)
-
-
-def _as_list(value: object) -> list:
-    if value is _MISSING:
-        return []
-    return _values_as_list(value)
-
-
-def _str_set(values: Iterable) -> set[str]:
-    return {str(v) for v in values if not _is_missing(v)}
 
 
 def _user_attr(user_row: pd.Series | dict | None, column: str | None) -> object:
