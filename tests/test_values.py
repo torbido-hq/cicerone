@@ -43,4 +43,6 @@ def test_as_list_and_str_set():
     assert str_set(np.array([1, np.nan])) == {"1.0"}
 
     assert is_sequence_attr([1])
+    assert is_sequence_attr(np.array([1, 2]))
+    assert not is_sequence_attr(np.array(3))
     assert not is_sequence_attr(math.nan)

@@ -164,7 +164,7 @@ class _ItemsFilterCache:
             and ITEM_COLUMN in items.columns
         ):
             grouped = items.groupby(self._category_column, sort=False)[ITEM_COLUMN]
-            ids_by_category = {str(cat): frozenset(ids.tolist()) for cat, ids in grouped}
+            ids_by_category = {str(cat): frozenset(ids.astype(str).tolist()) for cat, ids in grouped}
         self._version = version
         self._items = items
         self._available_ids = available

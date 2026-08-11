@@ -141,6 +141,7 @@ def test_items_filter_cache_normalizes_once_per_refresh():
     assert available_a == frozenset({"i1", "i2"})
     assert by_cat_a["beer"] == frozenset({"i1", "i3"})
     assert by_cat_a["wine"] == frozenset({"i2"})
+    assert all(isinstance(item_id, str) for item_id in by_cat_a["beer"])
 
     # In-place mutation alone must not be relied on; bump the version token.
     reader._items.loc[reader._items["item_id"] == "i3", "published"] = True
@@ -271,6 +272,42 @@ def test_recommendations_unknown_user_returns_cold_start_fallback():
     body = response.json()
     assert body["fallback"] is True
     assert [row["item_id"] for row in body["items"]] == ["i2", "i1"]
+
+
+def test_items_filter_cache_stringifies_non_string_item_ids():
+    """Category allowlists must be str so they match filtered recommendation ids."""
+    from cicerone.serve.app import _filter_recommendations
+
+    recs = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "10", "rank": 1, "score": 1.0, "source": "personalized"},
+            {"user_id": "u1", "item_id": "20", "rank": 2, "score": 0.5, "source": "personalized"},
+        ]
+    )
+    items = pd.DataFrame(
+        [
+            {"item_id": 10, "category": "beer", "published": True},
+            {"item_id": 20, "category": "wine", "published": True},
+        ]
+    )
+    reader = _FakeReader(recs, items)
+    cache = _ItemsFilterCache(
+        reader,
+        category_column="category",
+        availability_filters=["published"],
+    )
+    cached_items, available, by_cat = cache.get()
+    assert by_cat["beer"] == frozenset({"10"})
+    filtered = _filter_recommendations(
+        recs,
+        items=cached_items,
+        available_ids=available,
+        category="beer",
+        category_column="category",
+        exclude_unavailable=True,
+        ids_by_category=by_cat,
+    )
+    assert list(filtered["item_id"]) == ["10"]
 
 
 def test_recommendations_category_filter_can_empty_results():
