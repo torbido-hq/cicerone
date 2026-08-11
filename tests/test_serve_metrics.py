@@ -99,6 +99,29 @@ def test_metrics_does_not_require_bearer_token():
     assert response.status_code == 200
 
 
+def test_metrics_endpoint_excluded_from_request_counters():
+    app = create_app(_settings(), _FakeReader(_recs_df()))
+    client = TestClient(app)
+    before = client.get("/metrics").text
+    before_metrics_requests = sum(
+        value
+        for labels, value in _metric_samples(before, "cicerone_requests_total")
+        if labels.get("endpoint") == "/metrics"
+    )
+
+    for _ in range(3):
+        assert client.get("/metrics").status_code == 200
+
+    after = client.get("/metrics").text
+    after_metrics_requests = sum(
+        value
+        for labels, value in _metric_samples(after, "cicerone_requests_total")
+        if labels.get("endpoint") == "/metrics"
+    )
+    assert before_metrics_requests == 0
+    assert after_metrics_requests == 0
+
+
 def test_recommend_request_increments_request_and_source_metrics():
     app = create_app(_settings(), _FakeReader(_recs_df()))
     client = TestClient(app)
