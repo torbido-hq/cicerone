@@ -528,12 +528,6 @@ docker run --rm --network host -e PYTHONPATH=/app/src \
   python examples/serve/python_client.py
 ```
 
-```sh
-CICERONE_SERVE_URL=http://localhost:8000 \
-CICERONE_SERVE_TOKEN="$SERVE_TOKEN" \
-ruby examples/serve/ruby_client.rb
-```
-
 For a `dataset` output (as here), the recommendations file and optional
 `items_snapshot.parquet` are cached in memory and reloaded every
 `[serve].refresh_interval_seconds` (default 60s) — re-run

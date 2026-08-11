@@ -258,8 +258,8 @@ rectools/lightfm/implicit needed in that process or its request path):
   `serve_schemas.py` populate `/openapi.json` (and `/docs` / `/redoc`);
   `export_serve_openapi` writes the checked-in copy under `docs/openapi/`.
   Integrators can call the same contract via `serve_client.ServeClient`, the
-  Python / Node / Ruby / curl snippets in `examples/serve/`, or the
-  `x-codeSamples` embedded in OpenAPI / ReDoc (Ruby, Python, JavaScript, Shell).
+  snippets in `examples/serve/`, or the `x-codeSamples` embedded in OpenAPI /
+  ReDoc (Ruby, Python, JavaScript, Shell).
 - When `[serve].metrics_enabled` (default `true`), `GET /metrics` exposes
   Prometheus text-format process metrics (request volume/latency, cache
   health, recommendation source tiers, `cicerone_up`). It does **not** use
