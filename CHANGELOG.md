@@ -4,6 +4,32 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.1] - 2026-08-12
+
+### Fixed
+
+- Redis lock `release()` joins the refresher (≤250ms) and ignores in-flight
+  refresh failures after an intentional stop, avoiding a `_mark_lost` race.
+- Retrain Prometheus labels use the real trigger source (`cron`, `s3-poll`,
+  `webhook`, …) instead of collapsing non-webhook to `poll`.
+- Serve fails closed when `features.toml` cannot be loaded (no silent disable
+  of availability filters).
+- Input poller treats local `stat` errors like S3 failures (log and continue).
+
+### Changed
+
+- Blending warm path uses per-user / shared latest rankings without building
+  Cartesian U×K latest frames; `latest_by_user` keys are normalized to `str`.
+- Serve caches `generated_at` with the refresh loop; cold-start prefers the
+  per-user index / refresh-time fallback; category filters use a refresh-time
+  `category → item_id` map.
+- Content-fallback fit avoids `iterrows`; recommend uses vectorized top-K.
+- Event caps apply in one sort across all capped event types.
+- Shared helpers: `cicerone.values` (`is_missing` / `as_list`),
+  `io.options.read_parquet` / `validate_storage_options`, and
+  `MISSING_TABLE_ERRORS`.
+- `cicerone.serve` package `__all__` exports only the public API.
+
 ## [0.5.0] - 2026-08-11
 
 ### Added
