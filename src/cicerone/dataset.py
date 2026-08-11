@@ -89,15 +89,16 @@ def build_interactions(events: pd.DataFrame, config: FeatureConfig, half_life_da
         df["event_type"].isin(config.quantity_scaled_events), np.log1p(df["quantity"]), 1.0
     )
 
-    for event_type, cap in config.event_caps.items():
-        mask = df["event_type"] == event_type
-        if not mask.any():
-            continue
-        # Keep most recent ``cap`` events per (user, item).
-        capped = df.loc[mask].sort_values("occurred_at", ascending=False)
-        rank = capped.groupby(["user_id", "item_id"]).cumcount()
-        drop_idx = capped.index[rank >= cap]
-        df = df.drop(index=drop_idx)
+    if config.event_caps:
+        capped_types = set(config.event_caps)
+        mask = df["event_type"].isin(capped_types)
+        if mask.any():
+            # One sort for all capped event types; keep most recent ``cap`` per
+            # (user, item, event_type).
+            capped = df.loc[mask].sort_values("occurred_at", ascending=False)
+            rank = capped.groupby(["user_id", "item_id", "event_type"], sort=False).cumcount()
+            limits = capped["event_type"].map(config.event_caps)
+            df = df.drop(index=capped.index[rank >= limits])
 
     decay = _time_decay_multiplier(df["occurred_at"], half_life_days)
     df["weight"] = df["base_weight"] * df["_qty_multiplier"] * decay

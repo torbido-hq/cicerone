@@ -11,7 +11,8 @@ from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import Settings
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.recommendation_reader import select_cold_start_fallback
-from cicerone.serve import _available_item_ids, _ItemsFilterCache, _start_refresh_loop, create_app, main
+from cicerone.serve import create_app, main
+from cicerone.serve.app import _available_item_ids, _ItemsFilterCache, _start_refresh_loop
 
 
 def _settings(**overrides) -> Settings:
@@ -119,9 +120,10 @@ def test_items_filter_cache_tolerates_snapshot_without_item_id():
         category_column="category",
         availability_filters=["published"],
     )
-    items, available = cache.get()
+    items, available, by_category = cache.get()
     assert items is not None
     assert available is None
+    assert by_category == {}
 
 
 def test_items_filter_cache_normalizes_once_per_refresh():
@@ -131,21 +133,26 @@ def test_items_filter_cache_normalizes_once_per_refresh():
         category_column="category",
         availability_filters=["published", "in_stock"],
     )
-    items_a, available_a = cache.get()
-    items_b, available_b = cache.get()
+    items_a, available_a, by_cat_a = cache.get()
+    items_b, available_b, by_cat_b = cache.get()
     assert items_a is items_b
     assert available_a is available_b
+    assert by_cat_a is by_cat_b
     assert available_a == frozenset({"i1", "i2"})
+    assert by_cat_a["beer"] == frozenset({"i1", "i3"})
+    assert by_cat_a["wine"] == frozenset({"i2"})
 
     # In-place mutation alone must not be relied on; bump the version token.
     reader._items.loc[reader._items["item_id"] == "i3", "published"] = True
-    items_same, _ = cache.get()
+    items_same, _, by_cat_same = cache.get()
     assert items_same is items_a
+    assert by_cat_same is by_cat_a
 
     reader.refresh()
-    items_c, available_c = cache.get()
+    items_c, available_c, by_cat_c = cache.get()
     assert items_c is not items_a
     assert available_c == frozenset({"i1", "i2", "i3"})
+    assert by_cat_c is not by_cat_a
 
 
 def test_health_requires_no_auth():

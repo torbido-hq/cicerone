@@ -83,11 +83,13 @@ class RunGuard:
 def _current_marker(input_settings: IOSettings) -> str | None:
     options = input_settings.options
     backend = options.get("storage_backend", "local")
-    if backend == "local":
-        path = Path(require_option(options, "path", "local")) / "events.parquet"
-        return str(path.stat().st_mtime) if path.exists() else None
-
     try:
+        if backend == "local":
+            path = Path(require_option(options, "path", "local")) / "events.parquet"
+            if not path.exists():
+                return None
+            return str(path.stat().st_mtime)
+
         client = build_s3_client(options)
         bucket = require_option(options, "bucket", "s3")
         key = object_key(options, "events.parquet")

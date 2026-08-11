@@ -8,13 +8,6 @@ __all__ = [
     "SERVE_API_DESCRIPTION",
     "SERVE_API_TITLE",
     "SERVE_API_VERSION",
-    "_GeneratedAtCache",
-    "_ItemsFilterCache",
-    "_available_item_ids",
-    "_configure_reader_item_filters",
-    "_filter_recommendations",
-    "_read_generated_at",
-    "_start_refresh_loop",
     "create_app",
     "main",
 ]

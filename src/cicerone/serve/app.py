@@ -139,11 +139,12 @@ class _ItemsFilterCache:
         self._version: int | None = None
         self._items: pd.DataFrame | None = None
         self._available_ids: frozenset[str] | None = None
+        self._ids_by_category: dict[str, frozenset[str]] = {}
 
-    def get(self) -> tuple[pd.DataFrame | None, frozenset[str] | None]:
+    def get(self) -> tuple[pd.DataFrame | None, frozenset[str] | None, dict[str, frozenset[str]]]:
         version = self._reader.items_version()
         if version == self._version:
-            return self._items, self._available_ids
+            return self._items, self._available_ids, self._ids_by_category
 
         items = normalize_items_snapshot(
             self._reader.get_items(),
@@ -155,10 +156,20 @@ class _ItemsFilterCache:
             if items is not None and not items.empty
             else None
         )
+        ids_by_category: dict[str, frozenset[str]] = {}
+        if (
+            items is not None
+            and not items.empty
+            and self._category_column in items.columns
+            and ITEM_COLUMN in items.columns
+        ):
+            grouped = items.groupby(self._category_column, sort=False)[ITEM_COLUMN]
+            ids_by_category = {str(cat): frozenset(ids.tolist()) for cat, ids in grouped}
         self._version = version
         self._items = items
         self._available_ids = available
-        return items, available
+        self._ids_by_category = ids_by_category
+        return items, available, ids_by_category
 
 
 def _filter_recommendations(
@@ -169,6 +180,7 @@ def _filter_recommendations(
     category: str | None,
     category_column: str,
     exclude_unavailable: bool,
+    ids_by_category: dict[str, frozenset[str]] | None = None,
     on_missing_category_column: Callable[[], None] | None = None,
 ) -> pd.DataFrame:
     if recs.empty:
@@ -184,7 +196,10 @@ def _filter_recommendations(
             if on_missing_category_column is not None:
                 on_missing_category_column()
             return out.iloc[0:0].reset_index(drop=True)
-        allowed = set(items.loc[items[category_column] == str(category), ITEM_COLUMN])
+        if ids_by_category is not None:
+            allowed: set[str] | frozenset[str] = ids_by_category.get(str(category), frozenset())
+        else:
+            allowed = set(items.loc[items[category_column] == str(category), ITEM_COLUMN].astype(str))
         out = out[item_ids.isin(allowed)]
         item_ids = out[ITEM_COLUMN].astype(str)
 
@@ -306,7 +321,7 @@ def create_app(
             top_k = k
         else:
             top_k = settings.serve.default_k
-        items, available_ids = items_cache.get()
+        items, available_ids, ids_by_category = items_cache.get()
         can_filter = bool(
             items is not None
             and not items.empty
@@ -328,6 +343,7 @@ def create_app(
             category=category,
             category_column=category_column,
             exclude_unavailable=exclude_unavailable,
+            ids_by_category=ids_by_category,
             on_missing_category_column=_warn_missing_category_column,
         )
         filtered = filtered.head(top_k).reset_index(drop=True)

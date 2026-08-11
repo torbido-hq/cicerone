@@ -245,6 +245,19 @@ def test_current_marker_local_backend_reflects_mtime(tmp_path):
     assert _current_marker(input_settings) is not None
 
 
+def test_current_marker_local_stat_error_returns_none(tmp_path, monkeypatch):
+    from cicerone.trigger import _current_marker
+
+    input_settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    (tmp_path / "events.parquet").write_bytes(b"data")
+
+    def boom(self):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr("pathlib.Path.stat", boom)
+    assert _current_marker(input_settings) is None
+
+
 @pytest.fixture
 def s3_input_options():
     with mock_aws():
