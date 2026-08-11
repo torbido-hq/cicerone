@@ -37,6 +37,10 @@ def _mock_redis_module(monkeypatch, *, client: MagicMock | None = None) -> Magic
     return client
 
 
+def _wait_for_event(event: threading.Event, *, timeout: float = 5.0) -> None:
+    assert event.wait(timeout=timeout), f"event not set within {timeout}s"
+
+
 def test_build_lock_backend_rejects_in_process():
     settings = make_settings()
     with pytest.raises(AssertionError, match="only for distributed backends"):
@@ -303,17 +307,22 @@ def test_redis_release_logs_on_failure(monkeypatch):
 def test_redis_lock_refreshes_ttl_while_held(monkeypatch):
     client = _mock_redis_module(monkeypatch)
     client.set.return_value = True
+    refreshed = threading.Event()
+
+    def refresh(*args, **kwargs):
+        refreshed.set()
+        return 1
+
+    client.refresh_script.side_effect = refresh
 
     lock = RedisLock(
         "redis://localhost:6379/0",
         ttl_ms=200,
-        refresh_interval_ms=20,
+        refresh_interval_ms=1,
     )
     token = lock._token
     assert lock.acquire() is True
-    deadline = time.time() + 2.0
-    while time.time() < deadline and client.refresh_script.call_count < 1:
-        time.sleep(0.02)
+    _wait_for_event(refreshed)
     lock.release()
     assert client.refresh_script.call_count >= 1
     client.refresh_script.assert_any_call(keys=[lock._key], args=[token, 200])
@@ -322,24 +331,25 @@ def test_redis_lock_refreshes_ttl_while_held(monkeypatch):
 def test_redis_lock_allows_reacquire_after_refresh_loss(monkeypatch):
     client = _mock_redis_module(monkeypatch)
     client.set.return_value = True
-    refresh_calls = {"n": 0}
-
-    def refresh(*_args, **_kwargs):
-        refresh_calls["n"] += 1
-        return 0 if refresh_calls["n"] == 1 else 1
-
-    client.refresh_script.side_effect = refresh
+    client.refresh_script.return_value = 0
 
     lock = RedisLock(
         "redis://localhost:6379/0",
         ttl_ms=200,
-        refresh_interval_ms=20,
+        refresh_interval_ms=1,
     )
     first_token = lock._token
+    lost = threading.Event()
+    real_mark_lost = lock._mark_lost
+
+    def mark_lost() -> None:
+        real_mark_lost()
+        lost.set()
+
+    lock._mark_lost = mark_lost  # type: ignore[method-assign]
+
     assert lock.acquire() is True
-    deadline = time.time() + 2.0
-    while time.time() < deadline and lock._held:
-        time.sleep(0.02)
+    _wait_for_event(lost)
     assert lock._held is False
     assert lock._token != first_token
     assert lock.acquire() is True
