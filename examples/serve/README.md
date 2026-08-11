@@ -16,3 +16,7 @@ examples/serve/curl_examples.sh          # curl + /openapi.json peek
 
 Interactive docs while serve is up: `http://localhost:8000/docs`.
 Checked-in OpenAPI schema: [`docs/openapi/serve.openapi.json`](../docs/openapi/serve.openapi.json).
+
+Prometheus process metrics (no bearer token): `GET /metrics`. Optional
+`[serve].metrics_token` → send `X-Metrics-Token`. See the README Serve
+section.

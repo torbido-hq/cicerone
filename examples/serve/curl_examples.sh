@@ -18,6 +18,14 @@ echo "## GET /health"
 curl -sS "${BASE_URL}/health" | python -m json.tool
 
 echo
+echo "## GET /metrics (first lines; no bearer token)"
+metrics_header=()
+if [[ -n "${CICERONE_METRICS_TOKEN:-}" ]]; then
+  metrics_header=(-H "X-Metrics-Token: ${CICERONE_METRICS_TOKEN}")
+fi
+curl -sS "${metrics_header[@]}" "${BASE_URL}/metrics" | head -n 20
+
+echo
 echo "## GET /recommendations/${USER_ID}?limit=5"
 curl -sS "${auth_header[@]}" \
   "${BASE_URL}/recommendations/${USER_ID}?limit=5" | python -m json.tool
