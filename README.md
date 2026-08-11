@@ -118,6 +118,11 @@ table, the API returns the precomputed cold-start fallback
 - Auth is a bearer token (`Authorization: Bearer <token>`), configured via
   `[serve].auth_token` (`${ENV_VAR}` placeholder, never a literal secret in
   the TOML file).
+- Prometheus metrics are exposed at `GET /metrics` (text format; no bearer
+  token). Disable with `[serve].metrics_enabled = false`. When
+  `[serve].metrics_token` is set, scrapers must send it in the
+  `X-Metrics-Token` header; when empty (default), the endpoint is open — bind
+  serve to a trusted network or protect it at your reverse proxy.
 
 See `config/cicerone.serve.toml` for a standalone example config, and the
 `serve` service in `docker-compose.yml` for how it's wired up alongside the

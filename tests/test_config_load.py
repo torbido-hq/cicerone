@@ -994,6 +994,48 @@ def test_load_settings_serve_mode_with_auth_token(tmp_path, monkeypatch):
     assert settings.serve_default_k == 5
     assert settings.serve_refresh_interval_seconds == 30.0
     assert settings.serve_category_column == "category"
+    assert settings.serve_metrics_enabled is True
+    assert settings.serve_metrics_token is None
+
+
+def test_load_settings_serve_metrics_token(tmp_path, monkeypatch):
+    monkeypatch.setenv("MY_METRICS_TOKEN", "metrics-secret")
+    config_path = write_toml(
+        tmp_path,
+        f"""
+        [job]
+        mode = "serve"
+
+        [serve]
+        auth_token = "secret"
+        metrics_token = "${{MY_METRICS_TOKEN}}"
+        {_base_io_toml()}
+        """,
+    )
+
+    settings = load_settings(config_path)
+
+    assert settings.serve_metrics_token == "metrics-secret"
+    assert settings.serve_metrics_enabled is True
+
+
+def test_load_settings_serve_metrics_disabled(tmp_path):
+    config_path = write_toml(
+        tmp_path,
+        f"""
+        [job]
+        mode = "serve"
+
+        [serve]
+        auth_token = "secret"
+        metrics_enabled = false
+        {_base_io_toml()}
+        """,
+    )
+
+    settings = load_settings(config_path)
+
+    assert settings.serve_metrics_enabled is False
 
 
 def test_load_settings_serve_defaults(tmp_path, monkeypatch):
@@ -1017,6 +1059,8 @@ def test_load_settings_serve_defaults(tmp_path, monkeypatch):
     assert settings.serve_default_k == 10
     assert settings.serve_refresh_interval_seconds == 60.0
     assert settings.serve_category_column == "category"
+    assert settings.serve_metrics_enabled is True
+    assert settings.serve_metrics_token is None
 
 
 def test_load_settings_trigger_enabled_requires_auth_token(tmp_path):

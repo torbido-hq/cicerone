@@ -13,6 +13,16 @@ from cicerone.config import IOSettings, Settings
 from cicerone.trigger import RunGuard, create_app, poll_input_forever
 
 
+def _metric_value(body: str, name: str, labels: dict[str, str]) -> float:
+    from prometheus_client.parser import text_string_to_metric_families
+
+    for family in text_string_to_metric_families(body):
+        for sample in family.samples:
+            if sample.name == name and dict(sample.labels) == labels:
+                return sample.value
+    return 0.0
+
+
 def _settings(**overrides) -> Settings:
     return make_settings(**{"trigger_enabled": True, "trigger_auth_token": "secret", **overrides})
 
@@ -25,6 +35,31 @@ class _FakeGuard:
     def trigger(self, triggered_by: str) -> bool:
         self.calls.append(triggered_by)
         return self.result
+
+
+def test_run_guard_records_retrain_trigger_metrics():
+    done = threading.Event()
+
+    def fake_run(triggered_by: str) -> None:
+        del triggered_by
+        done.set()
+
+    guard = RunGuard(debounce_seconds=60, run_fn=fake_run)
+    assert guard.trigger("webhook") is True
+    assert done.wait(timeout=5)
+    assert guard.trigger("webhook") is False
+
+    from prometheus_client import generate_latest
+
+    body = generate_latest().decode()
+    accepted = _metric_value(
+        body, "cicerone_retrain_trigger_total", {"source": "webhook", "status": "accepted"}
+    )
+    debounced = _metric_value(
+        body, "cicerone_retrain_trigger_total", {"source": "webhook", "status": "debounced"}
+    )
+    assert accepted >= 1
+    assert debounced >= 1
 
 
 def test_run_guard_starts_a_run_when_idle():

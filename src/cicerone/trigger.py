@@ -19,6 +19,7 @@ from cicerone.config import IOSettings, Settings
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.io.options import build_s3_client, object_key, require_option
 from cicerone.locks import LockBackend
+from cicerone.serve.metrics import record_retrain_trigger
 
 logger = logging.getLogger(__name__)
 
@@ -48,16 +49,20 @@ class RunGuard:
             now = time.monotonic()
             if self._running:
                 logger.info("Ignoring %s trigger: a run is already in progress", triggered_by)
+                record_retrain_trigger(triggered_by, accepted=False)
                 return False
             if self._last_started_at is not None and now - self._last_started_at < self._debounce_seconds:
                 logger.info("Ignoring %s trigger: within debounce window", triggered_by)
+                record_retrain_trigger(triggered_by, accepted=False)
                 return False
             if self._backend is not None and not self._backend.acquire():
                 logger.info("Ignoring %s trigger: distributed lock held by another instance", triggered_by)
+                record_retrain_trigger(triggered_by, accepted=False)
                 return False
             self._running = True
             self._last_started_at = now
 
+        record_retrain_trigger(triggered_by, accepted=True)
         threading.Thread(target=self._run, args=(triggered_by,), daemon=True).start()
         return True
 

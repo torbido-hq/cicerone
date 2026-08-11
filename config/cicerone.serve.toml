@@ -31,6 +31,8 @@ port = 8000
 default_k = 10
 refresh_interval_seconds = 60
 category_column = "category"
+metrics_enabled = true
+metrics_token = ""   # empty = open endpoint; bind to a trusted network or reverse proxy
 
 # [input] is required by config.load_settings() even in serve mode (kept
 # generic/simple rather than special-casing it away) but is never read from

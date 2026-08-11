@@ -9,15 +9,23 @@ from collections.abc import Callable, Sequence
 
 import pandas as pd
 import uvicorn
-from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.openapi.utils import get_openapi
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from cicerone import __version__
 from cicerone.config import Settings, load_settings
 from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.io.base import ManifestReader, RecommendationReader
-from cicerone.io.recommendation_reader import ITEM_COLUMN, normalize_items_snapshot
+from cicerone.io.recommendation_reader import ITEM_COLUMN, SOURCE_COLUMN, normalize_items_snapshot
+from cicerone.serve.metrics import (
+    METRICS_TOKEN_HEADER,
+    REQUEST_LATENCY_SECONDS,
+    REQUESTS_TOTAL,
+    record_recommendations_served,
+    update_cache_age_gauge,
+)
 from cicerone.serve_schemas import ErrorDetail, HealthResponse, RecommendationItem, RecommendationsResponse
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -79,7 +87,6 @@ def _available_item_ids(items: pd.DataFrame, availability_filters: Sequence[str]
     for column in availability_filters:
         if column not in items.columns:
             continue
-        # Snapshot columns are normalized to bool; coerce defensively for raw frames.
         col = items[column]
         if not pd.api.types.is_bool_dtype(col):
             with pd.option_context("future.no_silent_downcasting", True):
@@ -159,6 +166,13 @@ def _filter_recommendations(
     return out.reset_index(drop=True)
 
 
+def _route_endpoint(request: Request) -> str:
+    route = request.scope.get("route")
+    if route is not None:
+        return route.path
+    return request.url.path
+
+
 def create_app(
     settings: Settings,
     reader: RecommendationReader,
@@ -174,13 +188,27 @@ def create_app(
     dependencies = optional_bearer_deps(settings.serve.auth_token)
     availability_filters = list(feature_config.item_availability_filters) if feature_config else []
     category_column = settings.serve.category_column
-    # Normalize here too for callers that skip main()'s configure_item_filters.
     items_cache = _ItemsFilterCache(
         reader,
         category_column=category_column,
         availability_filters=availability_filters,
     )
     missing_category_warned = False
+
+    @app.middleware("http")
+    async def record_request_metrics(request: Request, call_next):
+        if request.url.path == "/metrics":
+            return await call_next(request)
+        start = time.perf_counter()
+        response = await call_next(request)
+        endpoint = _route_endpoint(request)
+        REQUESTS_TOTAL.labels(
+            endpoint=endpoint,
+            method=request.method,
+            status=str(response.status_code),
+        ).inc()
+        REQUEST_LATENCY_SECONDS.labels(endpoint=endpoint).observe(time.perf_counter() - start)
+        return response
 
     def _warn_missing_category_column() -> None:
         nonlocal missing_category_warned
@@ -200,6 +228,16 @@ def create_app(
     )
     def health() -> HealthResponse:
         return HealthResponse(status="ok")
+
+    if settings.serve.metrics_enabled:
+
+        @app.get("/metrics", tags=["metrics"], include_in_schema=False)
+        def metrics(request: Request) -> Response:
+            metrics_token = settings.serve.metrics_token
+            if metrics_token and request.headers.get(METRICS_TOKEN_HEADER) != metrics_token:
+                raise HTTPException(status_code=401, detail="Invalid or missing metrics token")
+            update_cache_age_gauge()
+            return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
     @app.get(
         "/recommendations/{user_id}",
@@ -244,7 +282,7 @@ def create_app(
             and not items.empty
             and (category is not None or (exclude_unavailable and availability_filters))
         )
-        fetch_k = max(top_k * 5, top_k) if can_filter else top_k  # over-fetch only if filters apply
+        fetch_k = max(top_k * 5, top_k) if can_filter else top_k
         recs = reader.get_recommendations(user_id, fetch_k)
         used_fallback = False
         if recs.empty:
@@ -266,6 +304,8 @@ def create_app(
         if not filtered.empty:
             filtered = filtered.copy()
             filtered["rank"] = range(1, len(filtered) + 1)
+            if SOURCE_COLUMN in filtered.columns:
+                record_recommendations_served(set(filtered[SOURCE_COLUMN].astype(str)))
 
         generated_at = _generated_at(manifest_reader)
         body = RecommendationsResponse(
@@ -344,7 +384,3 @@ def main() -> None:
         feature_config=feature_config,
     )
     uvicorn.run(app, host=settings.serve.host, port=settings.serve.port)
-
-
-if __name__ == "__main__":
-    main()
