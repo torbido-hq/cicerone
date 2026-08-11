@@ -16,7 +16,6 @@ export CICERONE_SERVE_TOKEN=tutorial-token   # matches [serve].auth_token
 
 python examples/serve/python_client.py   # ServeClient → typed HealthResponse / RecommendationsResponse
 node examples/serve/fetch.mjs            # Node 18+ / browser-style fetch
-ruby examples/serve/ruby_client.rb       # stdlib Net::HTTP + JSON (matches OpenAPI Ruby sample)
 examples/serve/curl_examples.sh          # curl + /openapi.json peek
 ```
 
