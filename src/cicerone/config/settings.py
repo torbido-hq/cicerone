@@ -38,6 +38,8 @@ class ServeSettings:
     default_k: int = 10
     refresh_interval_seconds: float = 60.0
     category_column: str = "category"
+    metrics_enabled: bool = True
+    metrics_token: str | None = None
 
 
 @dataclass(frozen=True)
@@ -128,6 +130,14 @@ class Settings:
     @property
     def serve_category_column(self) -> str:
         return self.serve.category_column
+
+    @property
+    def serve_metrics_enabled(self) -> bool:
+        return self.serve.metrics_enabled
+
+    @property
+    def serve_metrics_token(self) -> str | None:
+        return self.serve.metrics_token
 
     @property
     def trigger_enabled(self) -> bool:

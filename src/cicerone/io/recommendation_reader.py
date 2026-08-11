@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import logging
 import threading
+import time
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,7 @@ from cicerone.io.db_store import (
     DEFAULT_RECOMMENDATIONS_TABLE,
 )
 from cicerone.io.options import build_s3_client, is_s3_not_found, object_key, require_option, sql_identifier
+from cicerone.serve.metrics import observe_cache_refresh, record_cache_hit, record_cache_miss
 
 logger = logging.getLogger(__name__)
 
@@ -239,12 +241,15 @@ class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             return None
 
     def refresh(self) -> None:
+        started = time.perf_counter()
+        recommendations_ok = False
         try:
             cache = self._read_recommendations()
             by_user = _index_recommendations_by_user(cache)
             with self._lock:
                 self._cache = cache
                 self._by_user = by_user
+            recommendations_ok = True
         except Exception:
             logger.exception("Failed to refresh recommendations cache; keeping previous data")
         try:
@@ -258,12 +263,15 @@ class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
                 self._items_version += 1
         except Exception:
             logger.exception("Failed to refresh items snapshot; keeping previous data")
+        observe_cache_refresh(duration_seconds=time.perf_counter() - started, success=recommendations_ok)
 
     def get_recommendations(self, user_id: str, k: int) -> pd.DataFrame:
         with self._lock:
             rows = self._by_user.get(str(user_id))
             if rows is None:
+                record_cache_miss()
                 return self._cache.iloc[0:0]
+            record_cache_hit()
             return rows.head(k).reset_index(drop=True)
 
     def get_cold_start_fallback(self, k: int) -> pd.DataFrame:
@@ -287,6 +295,8 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
         self.refresh()
 
     def refresh(self) -> None:
+        started = time.perf_counter()
+        items_ok = False
         try:
             frame = pd.read_sql(text(f'SELECT * FROM "{self._items_table}"'), self._engine)
             items = normalize_items_snapshot(
@@ -297,6 +307,7 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             with self._lock:
                 self._items = items
                 self._items_version += 1
+            items_ok = True
         except _MISSING_TABLE_ERRORS:
             logger.debug(
                 "recommendation items table %r not present; continuing without it",
@@ -305,17 +316,22 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             with self._lock:
                 self._items = None
                 self._items_version += 1
+            items_ok = True
         except Exception:
-            # Keep previous snapshot on transient failure.
             logger.exception("Failed to refresh recommendation items snapshot; keeping previous data")
+        observe_cache_refresh(duration_seconds=time.perf_counter() - started, success=items_ok)
 
     def get_recommendations(self, user_id: str, k: int) -> pd.DataFrame:
-        # SELECT *: older schemas may omit optional columns such as source.
         sql = text(
             f'SELECT * FROM "{self._table}" WHERE "{USER_COLUMN}" = :user_id '
             f'ORDER BY "{RANK_COLUMN}" ASC LIMIT :k'
         )
-        return pd.read_sql(sql, self._engine, params={"user_id": user_id, "k": k})
+        rows = pd.read_sql(sql, self._engine, params={"user_id": user_id, "k": k})
+        if rows.empty:
+            record_cache_miss()
+        else:
+            record_cache_hit()
+        return rows
 
     def get_cold_start_fallback(self, k: int) -> pd.DataFrame:
         sentinel = self.get_recommendations(COLD_START_USER_ID, k)

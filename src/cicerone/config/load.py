@@ -50,6 +50,8 @@ _SERVE_FLAT_KEYS = (
     ("serve_default_k", "default_k"),
     ("serve_refresh_interval_seconds", "refresh_interval_seconds"),
     ("serve_category_column", "category_column"),
+    ("serve_metrics_enabled", "metrics_enabled"),
+    ("serve_metrics_token", "metrics_token"),
 )
 _TRIGGER_FLAT_KEYS = (
     ("trigger_enabled", "enabled"),
@@ -241,6 +243,12 @@ def load_settings(config_path: str | None = None) -> Settings:
     if mode == "serve" and not serve_auth_token:
         raise ConfigError('serve.auth_token is required when job.mode = "serve"')
 
+    serve_metrics_token = (
+        _resolve_env_placeholders(serve_raw["metrics_token"], "serve.metrics_token")
+        if serve_raw.get("metrics_token")
+        else None
+    )
+
     trigger_raw = job.get("trigger", {})
     trigger_enabled = bool(trigger_raw.get("enabled", False))
     trigger_auth_token = (
@@ -368,6 +376,8 @@ def load_settings(config_path: str | None = None) -> Settings:
                 name="serve.refresh_interval_seconds",
             ),
             category_column=str(serve_raw.get("category_column", "category")),
+            metrics_enabled=bool(serve_raw.get("metrics_enabled", True)),
+            metrics_token=serve_metrics_token,
         ),
         trigger=TriggerSettings(
             enabled=trigger_enabled,

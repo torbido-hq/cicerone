@@ -50,16 +50,19 @@ automl.py            optional: backtests candidate models/weights/rrf_k configs 
 job.py                orchestrates one end-to-end run (source -> dataset -> model -> sink)
 scheduler.py           in-process cron loop that calls job.run(); when [job.trigger]
                        is enabled, also hosts the retrain-trigger HTTP server (trigger.py)
-serve.py               serve mode: FastAPI read API over precomputed recommendations
+serve/                 serve mode package: FastAPI read API over precomputed recommendations
+  app.py               routes, middleware, refresh loop (`python -m cicerone.serve`)
+  metrics.py           Prometheus metric objects + helpers (default in-process registry)
 serve_schemas.py       Pydantic models that drive the serve OpenAPI schema
 serve_client.py        thin stdlib HTTP client for the serve read API
 export_serve_openapi.py  CLI to dump FastAPI's OpenAPI JSON (docs/openapi/…)
 trigger.py             event-driven retrain trigger: webhook + optional input-bucket poll,
-                       debounce guard (RunGuard) shared with the cron loop
+                       debounce guard (RunGuard) shared with the cron loop;
+                       increments `cicerone_retrain_trigger_total` (per replica)
 locks.py               optional RunGuard lock backends (postgres / redis; default is none)
 config/lock_url.py     postgres lock URL resolution for config load + lock builder
-http_auth.py           shared bearer-token (serve.py/trigger.py) and HTTP Basic Auth
-                       (dashboard.py) dependencies
+http_auth.py           shared bearer-token (serve/trigger) and HTTP Basic Auth
+                       (dashboard) dependencies
 dashboard.py            standalone FastAPI dashboard: job status/history, own container/port
 dashboard_users.py      load/save the dashboard's Basic Auth users file (TOML, username -> bcrypt hash)
 manage_dashboard_users.py  CLI to add/remove/list dashboard users
@@ -242,9 +245,11 @@ rectools/lightfm/implicit needed in that process or its request path):
   `RecommendationReader` (`io/recommendation_reader.py`) matching the
   configured output `kind` — `DatasetRecommendationReader` caches the whole
   parquet file (and optional `items_snapshot.parquet`) in memory and refreshes
-  it on a background timer (`serve.py`'s `_start_refresh_loop`);
+  it on a background timer (`serve.app`'s `_start_refresh_loop`);
   `DbRecommendationReader` queries the recommendations table directly per
-  request and caches the `recommendation_items` snapshot for filters.
+  request and caches the `recommendation_items` snapshot for filters. Both
+  readers record cache hit/miss and refresh success/failure/duration metrics
+  (`cicerone.serve.metrics`).
 - `serve.create_app()` exposes `GET /health` and
   `GET /recommendations/{user_id}` (`limit`/`k`, `category`,
   `exclude_unavailable`) behind `http_auth.require_bearer_token`. Unknown
@@ -254,6 +259,14 @@ rectools/lightfm/implicit needed in that process or its request path):
   `export_serve_openapi` writes the checked-in copy under `docs/openapi/`.
   Integrators can call the same contract via `serve_client.ServeClient` or the
   snippets in `examples/serve/`.
+- When `[serve].metrics_enabled` (default `true`), `GET /metrics` exposes
+  Prometheus text-format process metrics (request volume/latency, cache
+  health, recommendation source tiers, `cicerone_up`). It does **not** use
+  the recommendation bearer token; optional `[serve].metrics_token` gates it
+  via the `X-Metrics-Token` header. When the token is empty, bind serve to a
+  trusted network or reverse proxy. Metrics are per replica (default
+  `prometheus-client` registry; no multiprocess mode) — cross-replica
+  aggregation is Prometheus's job via scrape targets.
 
 `cicerone.trigger` implements the event-driven retrain trigger, additive to
 (not a replacement for) `scheduler.py`'s cron loop:
@@ -287,7 +300,7 @@ rectools/lightfm/implicit needed in that process or its request path):
 its own container/port `8090` in `docker-compose.yml`) for checking whether
 the last job run succeeded — it is **not** gated by `[job].mode` like
 serve/batch, so it's available even in plain batch-only deployments with no
-other HTTP surface. Like `serve.py`, it never imports
+other HTTP surface. Like serve mode, it never imports
 `cicerone.model`/`dataset`/`automl`.
 
 - `io.factory.build_manifest_reader(settings.output)` builds a

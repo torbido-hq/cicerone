@@ -4,10 +4,16 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.5.0] - Unreleased
+## [0.5.0] - 2026-08-11
 
 ### Added
 
+- Serve-mode Prometheus metrics at `GET /metrics` (`prometheus-client`):
+  request volume/latency, cache hit/miss/age/refresh, recommendation
+  source tiers, retrain-trigger counts, and `cicerone_up`. Configured via
+  `[serve].metrics_enabled` (default `true`) and optional
+  `[serve].metrics_token` (`X-Metrics-Token` header; empty = open endpoint).
+  Per-replica registry; no multiprocess mode.
 - Optional `[model.<strategy>]` TOML tables for RecTools `model_from_config`
   (`collaborative`, `item_based`, `popular`, `latest`).
 - Optional scheduler lock backends (`[job.trigger].lock_backend`:
@@ -27,7 +33,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   helpers are public (`_` = module-local only). Tests follow the same split
   (`test_model_*.py`, `test_config_*.py`).
 - Docs: architecture test/module map, tutorial `[model.*]` knobs, README /
-  CONTRIBUTING test layout notes.
+  CONTRIBUTING test layout notes; serve `/metrics` in README, architecture,
+  tutorial, and `examples/serve/`.
+- `cicerone.serve` is a package (`serve/app.py`, `serve/metrics.py`);
+  `python -m cicerone.serve` and `from cicerone.serve import create_app`
+  unchanged.
 - Shared defaults: item-based `K` from `DEFAULT_ITEM_BASED_K_NEIGHBORS`;
   latest window from `model_config.LATEST_WINDOW_DAYS` (re-exported by
   `model.constants`).

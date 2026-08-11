@@ -402,7 +402,7 @@ def test_start_refresh_loop_calls_refresh_periodically(monkeypatch):
         if calls["sleep"] >= 3:
             raise SystemExit("stop after three ticks")
 
-    monkeypatch.setattr("cicerone.serve.time.sleep", fake_sleep)
+    monkeypatch.setattr("cicerone.serve.app.time.sleep", fake_sleep)
     monkeypatch.setattr(threading.Thread, "start", lambda self: self.run())
 
     with pytest.raises(SystemExit):
@@ -464,7 +464,7 @@ def test_main_starts_serve_app_in_serve_mode(tmp_path, monkeypatch):
     refresh_calls = []
     uvicorn_calls = {}
 
-    import cicerone.serve as serve_module
+    import cicerone.serve.app as serve_module
 
     def fake_start_refresh_loop(reader, interval):
         refresh_calls.append(reader)

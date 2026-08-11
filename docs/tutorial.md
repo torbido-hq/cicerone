@@ -504,11 +504,20 @@ curl -s -H "Authorization: Bearer $SERVE_TOKEN" \
 # Unknown user → cold-start fallback (popular/latest/blended), not a bare 404
 curl -s -H "Authorization: Bearer $SERVE_TOKEN" \
   "http://localhost:8000/recommendations/nobody?limit=5"
+
+# Prometheus metrics (no bearer token; optional X-Metrics-Token if configured)
+curl -s "http://localhost:8000/metrics" | head
 ```
 
+`GET /metrics` is enabled by default (`[serve].metrics_enabled = true`). It
+does not require the recommendation bearer token. Set `[serve].metrics_token`
+and send `X-Metrics-Token: …` if you want a separate scrape secret; when
+empty, treat the endpoint as network-boundary protected.
+
 OpenAPI (Swagger UI) is at `http://localhost:8000/docs`; the JSON schema is
-`/openapi.json`. For a non-curl client, use the thin package helper (or the
-Node / curl snippets under [`examples/serve/`](../examples/serve/)):
+`/openapi.json` (`/metrics` is omitted from the schema). For a non-curl
+client, use the thin package helper (or the Node / curl snippets under
+[`examples/serve/`](../examples/serve/)):
 
 ```sh
 docker run --rm --network host -e PYTHONPATH=/app/src \
