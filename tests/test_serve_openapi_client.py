@@ -60,6 +60,12 @@ def test_openapi_json_lists_serve_paths_and_schemas():
 
     assert schema["components"]["securitySchemes"]
 
+    health_samples = schema["paths"]["/health"]["get"]["x-codeSamples"]
+    assert any(sample["lang"] == "Ruby" for sample in health_samples)
+    rec_samples = rec["x-codeSamples"]
+    assert any(sample["lang"] == "Ruby" for sample in rec_samples)
+    assert any(sample["lang"] == "Python" for sample in rec_samples)
+
 
 def test_docs_ui_is_available():
     client = TestClient(_app())

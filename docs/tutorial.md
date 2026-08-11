@@ -514,10 +514,11 @@ does not require the recommendation bearer token. Set `[serve].metrics_token`
 and send `X-Metrics-Token: …` if you want a separate scrape secret; when
 empty, treat the endpoint as network-boundary protected.
 
-OpenAPI (Swagger UI) is at `http://localhost:8000/docs`; the JSON schema is
-`/openapi.json` (`/metrics` is omitted from the schema). For a non-curl
-client, use the thin package helper (or the Node / Ruby / curl snippets under
-[`examples/serve/`](../examples/serve/)):
+OpenAPI (Swagger UI) is at `http://localhost:8000/docs`; ReDoc (with
+language `x-codeSamples`, including Ruby) is at
+`http://localhost:8000/redoc`. The JSON schema is `/openapi.json`
+(`/metrics` is omitted from the schema). For a runnable client, use the thin
+package helper or the snippets under [`examples/serve/`](../examples/serve/):
 
 ```sh
 docker run --rm --network host -e PYTHONPATH=/app/src \

@@ -19,6 +19,7 @@ from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.io.base import ManifestReader, RecommendationReader
 from cicerone.io.recommendation_reader import ITEM_COLUMN, SOURCE_COLUMN, normalize_items_snapshot
+from cicerone.serve.code_samples import attach_code_samples
 from cicerone.serve.metrics import (
     METRICS_TOKEN_HEADER,
     REQUEST_LATENCY_SECONDS,
@@ -39,7 +40,8 @@ Read-only HTTP API over **precomputed** recommendations written by the batch job
 There is no live inference in the request path: `GET /recommendations/{user_id}`
 looks up rows already stored in the configured output (dataset parquet or DB).
 
-Interactive docs: `/docs` (Swagger UI) and `/redoc`. Machine-readable schema: `/openapi.json`.
+Interactive docs: `/docs` (Swagger UI) and `/redoc` (includes language
+code samples via ``x-codeSamples``). Machine-readable schema: `/openapi.json`.
 A checked-in copy lives at `docs/openapi/serve.openapi.json` (regenerate with
 `python -m cicerone.export_serve_openapi`).
 """.strip()
@@ -347,6 +349,7 @@ def create_app(
             ok.setdefault("headers", {})["X-Generated-At"] = {
                 "$ref": "#/components/headers/X-Generated-At",
             }
+        attach_code_samples(schema)
         app.openapi_schema = schema
         return app.openapi_schema
 

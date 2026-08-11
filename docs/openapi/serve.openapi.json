@@ -181,7 +181,7 @@
     }
   },
   "info": {
-    "description": "Read-only HTTP API over **precomputed** recommendations written by the batch job.\n\nThere is no live inference in the request path: `GET /recommendations/{user_id}`\nlooks up rows already stored in the configured output (dataset parquet or DB).\n\nInteractive docs: `/docs` (Swagger UI) and `/redoc`. Machine-readable schema: `/openapi.json`.\nA checked-in copy lives at `docs/openapi/serve.openapi.json` (regenerate with\n`python -m cicerone.export_serve_openapi`).",
+    "description": "Read-only HTTP API over **precomputed** recommendations written by the batch job.\n\nThere is no live inference in the request path: `GET /recommendations/{user_id}`\nlooks up rows already stored in the configured output (dataset parquet or DB).\n\nInteractive docs: `/docs` (Swagger UI) and `/redoc` (includes language\ncode samples via ``x-codeSamples``). Machine-readable schema: `/openapi.json`.\nA checked-in copy lives at `docs/openapi/serve.openapi.json` (regenerate with\n`python -m cicerone.export_serve_openapi`).",
     "title": "Cicerone Serve API",
     "version": "0.5.0"
   },
@@ -205,6 +205,23 @@
         "summary": "Liveness probe",
         "tags": [
           "health"
+        ],
+        "x-codeSamples": [
+          {
+            "label": "Net::HTTP",
+            "lang": "Ruby",
+            "source": "require \"json\"\nrequire \"net/http\"\nrequire \"uri\"\n\nuri = URI(\"http://localhost:8000/health\")\nresponse = Net::HTTP.get_response(uri)\nputs JSON.parse(response.body)\n"
+          },
+          {
+            "label": "urllib",
+            "lang": "Python",
+            "source": "from urllib.request import urlopen\nimport json\n\nprint(json.load(urlopen(\"http://localhost:8000/health\")))\n"
+          },
+          {
+            "label": "curl",
+            "lang": "Shell",
+            "source": "curl -sS http://localhost:8000/health\n"
+          }
         ]
       }
     },
@@ -355,6 +372,28 @@
         "summary": "Precomputed top-K recommendations for a user",
         "tags": [
           "recommendations"
+        ],
+        "x-codeSamples": [
+          {
+            "label": "Net::HTTP",
+            "lang": "Ruby",
+            "source": "require \"json\"\nrequire \"net/http\"\nrequire \"uri\"\n\nbase = \"http://localhost:8000\"\ntoken = ENV.fetch(\"CICERONE_SERVE_TOKEN\")\nuser_id = ENV.fetch(\"CICERONE_USER_ID\", \"alice\")\n\nuri = URI(\"#{base}/recommendations/#{URI.encode_www_form_component(user_id)}\")\nuri.query = URI.encode_www_form(limit: 5)\n\nreq = Net::HTTP::Get.new(uri)\nreq[\"Accept\"] = \"application/json\"\nreq[\"Authorization\"] = \"Bearer #{token}\"\n\nres = Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == \"https\") do |http|\n  http.request(req)\nend\nabort(\"HTTP #{res.code}: #{res.body}\") unless res.is_a?(Net::HTTPSuccess)\n\nbody = JSON.parse(res.body)\nputs \"user=#{body['user_id']} fallback=#{body['fallback']}\"\nbody[\"items\"].each { |row| puts \"  ##{row['rank']} #{row['item_id']} score=#{row['score']}\" }\n"
+          },
+          {
+            "label": "ServeClient",
+            "lang": "Python",
+            "source": "import os\nfrom cicerone.serve_client import ServeClient\n\nclient = ServeClient(\n    os.environ.get(\"CICERONE_SERVE_URL\", \"http://localhost:8000\"),\n    token=os.environ[\"CICERONE_SERVE_TOKEN\"],\n)\nbody = client.recommendations(os.environ.get(\"CICERONE_USER_ID\", \"alice\"), limit=5)\nprint(body.user_id, body.fallback, body.generated_at)\nfor row in body.items:\n    print(f\"  #{row.rank} {row.item_id} score={row.score}\")\n"
+          },
+          {
+            "label": "fetch",
+            "lang": "JavaScript",
+            "source": "const baseUrl = (process.env.CICERONE_SERVE_URL || \"http://localhost:8000\").replace(/\\/$/, \"\");\nconst token = process.env.CICERONE_SERVE_TOKEN;\nconst userId = process.env.CICERONE_USER_ID || \"alice\";\n\nconst url = new URL(`${baseUrl}/recommendations/${encodeURIComponent(userId)}`);\nurl.searchParams.set(\"limit\", \"5\");\n\nconst response = await fetch(url, {\n  headers: {\n    Accept: \"application/json\",\n    ...(token ? { Authorization: `Bearer ${token}` } : {}),\n  },\n});\nif (!response.ok) throw new Error(`${response.status} ${await response.text()}`);\nconst body = await response.json();\nconsole.log(body.user_id, body.fallback, body.generated_at);\nfor (const row of body.items) {\n  console.log(`  #${row.rank} ${row.item_id} score=${row.score}`);\n}\n"
+          },
+          {
+            "label": "curl",
+            "lang": "Shell",
+            "source": "curl -sS \\\n  -H \"Authorization: Bearer ${CICERONE_SERVE_TOKEN}\" \\\n  \"${CICERONE_SERVE_URL:-http://localhost:8000}/recommendations/${CICERONE_USER_ID:-alice}?limit=5\"\n"
+          }
         ]
       }
     }
