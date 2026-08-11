@@ -61,6 +61,15 @@ def _metric_samples(body: str, name: str) -> list[tuple[dict[str, str], float]]:
     return out
 
 
+def _metric_value(body: str, name: str, labels: dict[str, str] | None = None) -> float:
+    total = 0.0
+    for sample_labels, value in _metric_samples(body, name):
+        if labels is not None and sample_labels != labels:
+            continue
+        total += value
+    return total
+
+
 def test_metrics_returns_prometheus_text_format():
     app = create_app(_settings(), _FakeReader(_recs_df()))
     response = TestClient(app).get("/metrics")
@@ -93,21 +102,37 @@ def test_metrics_does_not_require_bearer_token():
 def test_recommend_request_increments_request_and_source_metrics():
     app = create_app(_settings(), _FakeReader(_recs_df()))
     client = TestClient(app)
+    before = client.get("/metrics").text
+    before_requests = _metric_value(
+        before,
+        "cicerone_requests_total",
+        {"endpoint": "/recommendations/{user_id}", "method": "GET", "status": "200"},
+    )
+    before_collab = _metric_value(
+        before, "cicerone_recommendations_served_total", {"source": "collaborative"}
+    )
+    before_item = _metric_value(before, "cicerone_recommendations_served_total", {"source": "item_based"})
+
     response = client.get("/recommendations/u1", headers={"Authorization": "Bearer secret"})
     assert response.status_code == 200
 
-    metrics = client.get("/metrics").text
-    requests = _metric_samples(metrics, "cicerone_requests_total")
-    assert any(
-        labels.get("endpoint") == "/recommendations/{user_id}"
-        and labels.get("method") == "GET"
-        and labels.get("status") == "200"
-        for labels, _ in requests
+    after = client.get("/metrics").text
+    assert (
+        _metric_value(
+            after,
+            "cicerone_requests_total",
+            {"endpoint": "/recommendations/{user_id}", "method": "GET", "status": "200"},
+        )
+        == before_requests + 1
     )
-
-    served = _metric_samples(metrics, "cicerone_recommendations_served_total")
-    sources = {labels["source"] for labels, value in served if value >= 1}
-    assert sources == {"collaborative", "item_based"}
+    assert (
+        _metric_value(after, "cicerone_recommendations_served_total", {"source": "collaborative"})
+        == before_collab + 1
+    )
+    assert (
+        _metric_value(after, "cicerone_recommendations_served_total", {"source": "item_based"})
+        == before_item + 1
+    )
 
 
 def test_cache_refresh_metrics_on_success_and_failure(tmp_path: Path):
@@ -116,22 +141,28 @@ def test_cache_refresh_metrics_on_success_and_failure(tmp_path: Path):
     )
     recs.to_parquet(tmp_path / "recommendations.parquet", index=False)
 
+    # Snapshot counters before constructing the reader (its __init__ calls refresh).
+    probe = TestClient(create_app(_settings(), _FakeReader(_recs_df()))).get("/metrics").text
+    before_success = _metric_value(probe, "cicerone_cache_refresh_total", {"status": "success"})
+    before_failure = _metric_value(probe, "cicerone_cache_refresh_total", {"status": "failure"})
+
     reader = DatasetRecommendationReader({"storage_backend": "local", "path": str(tmp_path)})
     reader.refresh()
     time.sleep(0.01)
 
     app = create_app(_settings(), reader)
     metrics = TestClient(app).get("/metrics").text
-    refresh = _metric_samples(metrics, "cicerone_cache_refresh_total")
-    assert any(labels.get("status") == "success" and value >= 1 for labels, value in refresh)
+    assert _metric_value(metrics, "cicerone_cache_refresh_total", {"status": "success"}) >= before_success + 2
     age = _metric_samples(metrics, "cicerone_cache_age_seconds")
     assert any(value >= 0 for _, value in age)
 
     (tmp_path / "recommendations.parquet").unlink()
     reader.refresh()
     metrics_after_failure = TestClient(app).get("/metrics").text
-    refresh_after = _metric_samples(metrics_after_failure, "cicerone_cache_refresh_total")
-    assert any(labels.get("status") == "failure" and value >= 1 for labels, value in refresh_after)
+    assert (
+        _metric_value(metrics_after_failure, "cicerone_cache_refresh_total", {"status": "failure"})
+        == before_failure + 1
+    )
 
 
 def test_cache_hit_and_miss_counters(tmp_path: Path):
@@ -152,11 +183,43 @@ def test_cache_hit_and_miss_counters(tmp_path: Path):
 
     app = create_app(_settings(), reader)
     client = TestClient(app)
+    before = client.get("/metrics").text
+    before_hits = _metric_value(before, "cicerone_cache_hits_total")
+    before_misses = _metric_value(before, "cicerone_cache_misses_total")
+
     client.get("/recommendations/u1", headers={"Authorization": "Bearer secret"})
     client.get("/recommendations/unknown", headers={"Authorization": "Bearer secret"})
 
-    metrics = client.get("/metrics").text
-    hits = sum(value for _, value in _metric_samples(metrics, "cicerone_cache_hits_total"))
-    misses = sum(value for _, value in _metric_samples(metrics, "cicerone_cache_misses_total"))
-    assert hits >= 1
-    assert misses >= 1
+    after = client.get("/metrics").text
+    assert _metric_value(after, "cicerone_cache_hits_total") == before_hits + 1
+    assert _metric_value(after, "cicerone_cache_misses_total") == before_misses + 1
+
+
+def test_unknown_stored_source_is_ignored():
+    from prometheus_client import generate_latest
+
+    from cicerone.serve.metrics import record_recommendations_served
+
+    before = _metric_value(
+        generate_latest().decode(),
+        "cicerone_recommendations_served_total",
+        {"source": "collaborative"},
+    )
+    record_recommendations_served({"content_fallback", "personalized", "blended"})
+    after = _metric_value(
+        generate_latest().decode(),
+        "cicerone_recommendations_served_total",
+        {"source": "collaborative"},
+    )
+    # content_fallback ignored; personalized+blended collapse to one collaborative inc
+    assert after == before + 1
+
+
+def test_cache_age_zero_before_successful_refresh(monkeypatch):
+    from prometheus_client import generate_latest
+
+    import cicerone.serve.metrics as metrics_mod
+
+    monkeypatch.setattr(metrics_mod, "_last_successful_refresh_at", None)
+    metrics_mod.update_cache_age_gauge()
+    assert _metric_value(generate_latest().decode(), "cicerone_cache_age_seconds") == 0.0
