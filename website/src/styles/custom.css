@@ -1,12 +1,20 @@
-/* Brand tweaks on top of Starlight defaults. */
+/* Brand tweaks on top of Starlight defaults.
+   Starlight: :root = dark, [data-theme='light'] = light.
+   accent-high is text-on-dark in dark mode — must stay light. */
 @import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap");
 
 :root {
+	--sl-color-accent-low: #003a52;
+	--sl-color-accent: #1a9fc4;
+	--sl-color-accent-high: #b8e8f7;
+	--sl-font: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+	--sl-font-mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+:root[data-theme="light"] {
 	--sl-color-accent-low: #d7eef7;
 	--sl-color-accent: #0077a8;
 	--sl-color-accent-high: #004b75;
-	--sl-font: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
-	--sl-font-mono: "IBM Plex Mono", ui-monospace, monospace;
 }
 
 /* Keep the splash hero restrained — OSS project, not a product pitch. */
@@ -34,4 +42,9 @@
 
 .sl-markdown-content td:not(:where(.not-content *)) {
 	overflow-wrap: anywhere;
+}
+
+/* Icon mark in the nav — keep it compact next to the title text. */
+.site-title img {
+	height: calc(var(--sl-nav-height) - 2.5 * var(--sl-nav-pad-y));
 }
