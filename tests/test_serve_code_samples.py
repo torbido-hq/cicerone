@@ -44,6 +44,8 @@ def test_recommendations_javascript_requires_token_and_avoids_top_level_await():
     assert "async function main()" in js
     assert "main().catch" in js
     assert "encodeURIComponent(userId)" in js
+    assert "http://localhost:8000" in js
+    assert r'.replace(/\/$/, "")' in js
 
 
 def test_recommendations_shell_url_encodes_user_id():
@@ -60,3 +62,5 @@ def test_recommendations_shell_url_encodes_user_id():
     assert "${CICERONE_SERVE_URL:-" in shell
     assert "${BASE_URL%/}" in shell
     assert RECOMMENDATIONS_PATH_PREFIX in shell
+    assert "${CICERONE_USER_ID:-alice}" in shell
+    assert "?limit=5" in shell
