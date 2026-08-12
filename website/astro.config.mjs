@@ -45,6 +45,16 @@ export default defineConfig({
 							attrs: { target: '_blank', rel: 'noopener noreferrer' },
 						},
 						{
+							label: 'Changelog',
+							link: 'https://github.com/torbido-hq/cicerone/blob/main/CHANGELOG.md',
+							attrs: { target: '_blank', rel: 'noopener noreferrer' },
+						},
+						{
+							label: 'License',
+							link: 'https://github.com/torbido-hq/cicerone/blob/main/LICENSE',
+							attrs: { target: '_blank', rel: 'noopener noreferrer' },
+						},
+						{
 							label: 'Repository README',
 							link: 'https://github.com/torbido-hq/cicerone/blob/main/README.md',
 							attrs: { target: '_blank', rel: 'noopener noreferrer' },
