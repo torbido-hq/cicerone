@@ -6,6 +6,7 @@ from pathlib import Path
 import pandas as pd
 from conftest import make_settings
 from fastapi.testclient import TestClient
+from prometheus_client import CONTENT_TYPE_LATEST
 from prometheus_client.parser import text_string_to_metric_families
 
 from cicerone.config import Settings
@@ -74,7 +75,7 @@ def test_metrics_returns_prometheus_text_format():
     app = create_app(_settings(), _FakeReader(_recs_df()))
     response = TestClient(app).get("/metrics")
     assert response.status_code == 200
-    assert response.headers["content-type"].startswith("text/plain; version=0.0.4")
+    assert response.headers["content-type"] == CONTENT_TYPE_LATEST
     assert "cicerone_up" in response.text
     text_string_to_metric_families(response.text)
 
