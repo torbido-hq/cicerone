@@ -2,9 +2,9 @@
 @plugin "@tailwindcss/typography";
 
 @source "../index.html";
-@source "../documentation.html";
-@source "../architecture.html";
+@source "../templates/**/*.html";
 @source "../js/**/*.js";
+@source "../scripts/**/*.mjs";
 
 @theme {
   --font-display: "Syne", ui-sans-serif, system-ui, sans-serif;
@@ -134,6 +134,15 @@
 
   .flow-drift {
     animation: drift 4s ease-in-out infinite alternate;
+  }
+
+  .header-anchor {
+    opacity: 0;
+  }
+
+  .group:hover .header-anchor,
+  .header-anchor:focus {
+    opacity: 1;
   }
 
   @keyframes rise {

@@ -2,23 +2,24 @@
 
 Static project site for [cicerone.dev](https://cicerone.dev) via
 [GitHub Pages](https://docs.github.com/en/pages). Source lives here; CI
-compiles Tailwind into `dist/` and deploys that folder (including `CNAME`).
+compiles Tailwind and renders `docs/*.md` into `dist/`, then deploys that
+folder (including `CNAME`).
 
 ## Layout
 
 | Path | Role |
 | --- | --- |
 | `index.html` | Landing (brand + dashboard screenshot hero) |
-| `documentation.html` | Getting started, serve API, dashboard |
-| `architecture.html` | Package / pipeline overview |
+| `scripts/build-docs.mjs` | Renders `../docs/*.md` → `dist/docs/*.html` |
+| `templates/layout.html` | Shared chrome for rendered docs |
 | `css/input.css` | Tailwind v4 theme + typography plugin |
 | `CNAME` | Custom domain (`cicerone.dev`) |
 | `images/` | Screenshots and diagrams |
 | `assets/` | Logo / favicon |
 | `dist/` | Build output (gitignored) |
 
-Markdown under `docs/` remains the detailed source of truth; pages here
-summarize and link back to the repo.
+Markdown under repo `docs/` is the source of truth. The site rebuilds
+Tutorial and Architecture HTML from those files on every Pages deploy.
 
 ## Preview locally
 
@@ -31,14 +32,14 @@ npm run build
 python -m http.server 4173 --directory dist
 ```
 
-Then visit `http://127.0.0.1:4173/`. For CSS iteration, run `npm run build`
-again (or `npm run build:css` after an initial `npm run build`).
+Then visit `http://127.0.0.1:4173/` (docs at `/docs/`).
 
 ## Publishing
 
 [`.github/workflows/pages.yml`](../.github/workflows/pages.yml) runs
 `npm ci && npm run build` in `website/` on pushes to `main` that touch
-`website/**` (and on `workflow_dispatch`), then uploads `website/dist`.
+`website/**` or `docs/**` (and on `workflow_dispatch`), then uploads
+`website/dist`.
 
 ### One-time GitHub settings
 
