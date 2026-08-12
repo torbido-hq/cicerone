@@ -8,37 +8,39 @@
   <link rel="icon" type="image/svg+xml" href="assets/cicerone-icon.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@500;600;700&family=Source+Sans+3:wght@400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Syne:wght@700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/site.css">
 </head>
-<body>
-  <a class="skip" href="#main">Skip to content</a>
+<body class="min-h-screen">
+  <a class="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-50 focus:bg-ink focus:px-3 focus:py-2 focus:text-white" href="#main">Skip to content</a>
 
-  <header class="site-nav">
-    <div class="wrap site-nav__inner">
-      <a class="site-nav__brand" href="index.html">
-        <img src="assets/cicerone-logo.svg" alt="Cicerone" width="160" height="50">
+  <header class="sticky top-0 z-40 border-b border-line bg-paper/80 backdrop-blur-md">
+    <div class="mx-auto flex w-[min(100%-2rem,68rem)] items-center justify-between gap-4 py-3">
+      <a href="index.html">
+        <img src="assets/cicerone-logo.svg" alt="Cicerone" width="160" height="50" class="h-9 w-auto">
       </a>
       <nav aria-label="Primary">
-        <ul class="site-nav__links">
-          <li><a href="index.html">Home</a></li>
-          <li><a href="documentation.html">Docs</a></li>
-          <li><a href="architecture.html" aria-current="page">Architecture</a></li>
-          <li><a class="site-nav__github" href="https://github.com/torbido-hq/cicerone">GitHub</a></li>
+        <ul class="flex items-center gap-5 font-display text-sm font-bold tracking-tight text-ink-soft">
+          <li><a class="no-underline hover:text-deep" href="index.html">Home</a></li>
+          <li><a class="no-underline hover:text-deep" href="documentation.html">Docs</a></li>
+          <li><a class="text-deep no-underline" href="architecture.html" aria-current="page">Architecture</a></li>
+          <li>
+            <a class="inline-flex items-center rounded-full bg-ink px-3.5 py-1.5 text-white no-underline hover:bg-deep hover:text-white" href="https://github.com/torbido-hq/cicerone">GitHub</a>
+          </li>
         </ul>
       </nav>
     </div>
   </header>
 
-  <main id="main" class="wrap">
-    <header class="page-hero">
-      <h1>Architecture</h1>
-      <p>How the packages under <code>src/cicerone/</code> fit together. Batch training stays out of the serve and dashboard request paths.</p>
+  <main id="main" class="mx-auto w-[min(100%-2rem,68rem)] pb-16">
+    <header class="py-12 sm:py-14">
+      <h1 class="mb-3 font-display text-page text-ink">Architecture</h1>
+      <p class="max-w-[46ch] text-lede text-muted">How the packages under <code class="rounded bg-deep/10 px-1.5 py-0.5 font-mono text-[0.9em] text-ink">src/cicerone/</code> fit together. Batch training stays out of the serve and dashboard request paths.</p>
     </header>
 
-    <article class="doc">
-      <div class="flow-panel" style="margin-bottom: 2rem">
-        <img src="images/flow.svg" width="960" height="320" alt="Cicerone pipeline: input to train/combine to recommendations output">
+    <article class="prose-cicerone">
+      <div class="not-prose mb-8 rounded border border-line bg-gradient-to-br from-cyan/10 to-white p-5">
+        <img class="flow-drift w-full" src="images/flow.svg" width="960" height="320" alt="Cicerone pipeline: input to train/combine to recommendations output">
       </div>
 
       <h2>Core loop</h2>
@@ -74,21 +76,25 @@
       <h2>I/O backends</h2>
       <p>Input and output are independent. <code>dataset</code> uses parquet on local disk or S3-compatible storage; <code>db</code> uses SQLAlchemy tables. Compose profile <code>db</code> brings up Postgres for local exercises; CI uses a throwaway instance via <code>docker-compose.ci.yml</code>.</p>
 
-      <div class="callout">
+      <div class="not-prose my-6 border-l-[3px] border-cyan bg-cyan/10 px-4 py-3 text-ink-soft">
         Full module notes and diagrams:
         <a href="https://github.com/torbido-hq/cicerone/blob/main/docs/architecture.md">docs/architecture.md</a>.
       </div>
 
-      <p><a class="btn btn--ink" href="documentation.html">Back to docs</a>
-        <a class="btn btn--outline" href="https://github.com/torbido-hq/cicerone/blob/main/docs/architecture.md">Repo architecture</a></p>
+      <p class="not-prose mt-8 flex flex-wrap gap-3">
+        <a class="inline-flex items-center justify-center rounded-md bg-ink px-5 py-3 font-display text-base font-bold tracking-tight text-white no-underline transition hover:-translate-y-px hover:bg-deep hover:text-white" href="documentation.html">Back to docs</a>
+        <a class="inline-flex items-center justify-center rounded-md border border-line px-5 py-3 font-display text-base font-bold tracking-tight text-deep no-underline transition hover:-translate-y-px hover:border-cyan" href="https://github.com/torbido-hq/cicerone/blob/main/docs/architecture.md">Repo architecture</a>
+      </p>
     </article>
   </main>
 
-  <footer class="site-footer">
-    <div class="wrap site-footer__inner">
-      <p><a href="index.html">← Home</a></p>
-      <p><a href="https://github.com/torbido-hq/cicerone">GitHub</a></p>
+  <footer class="border-t border-line py-8 text-base text-muted">
+    <div class="mx-auto flex w-[min(100%-2rem,68rem)] flex-wrap items-center justify-between gap-4">
+      <p><a class="text-ink-soft" href="index.html">← Home</a></p>
+      <p><a class="text-ink-soft" href="https://github.com/torbido-hq/cicerone">GitHub</a></p>
     </div>
   </footer>
+
+  <script src="js/site.js" defer></script>
 </body>
 </html>

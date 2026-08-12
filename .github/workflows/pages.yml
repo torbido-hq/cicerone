@@ -1,6 +1,7 @@
 name: Deploy website to GitHub Pages
 
-# Static site under website/ → https://torbido-hq.github.io/cicerone/
+# Builds website/ with Tailwind → dist/, then publishes
+# https://torbido-hq.github.io/cicerone/
 # One-time: Settings → Pages → Source = "GitHub Actions".
 
 on:
@@ -29,13 +30,25 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install and build
+        working-directory: website
+        run: |
+          npm ci
+          npm run build
+
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
-      - name: Upload website/
+      - name: Upload dist/
         uses: actions/upload-pages-artifact@v3
         with:
-          path: website
+          path: website/dist
 
       - name: Deploy
         id: deployment

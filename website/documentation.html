@@ -8,49 +8,51 @@
   <link rel="icon" type="image/svg+xml" href="assets/cicerone-icon.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@500;600;700&family=Source+Sans+3:wght@400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Syne:wght@700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/site.css">
 </head>
-<body>
-  <a class="skip" href="#main">Skip to content</a>
+<body class="min-h-screen">
+  <a class="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-50 focus:bg-ink focus:px-3 focus:py-2 focus:text-white" href="#main">Skip to content</a>
 
-  <header class="site-nav">
-    <div class="wrap site-nav__inner">
-      <a class="site-nav__brand" href="index.html">
-        <img src="assets/cicerone-logo.svg" alt="Cicerone" width="160" height="50">
+  <header class="sticky top-0 z-40 border-b border-line bg-paper/80 backdrop-blur-md">
+    <div class="mx-auto flex w-[min(100%-2rem,68rem)] items-center justify-between gap-4 py-3">
+      <a href="index.html">
+        <img src="assets/cicerone-logo.svg" alt="Cicerone" width="160" height="50" class="h-9 w-auto">
       </a>
       <nav aria-label="Primary">
-        <ul class="site-nav__links">
-          <li><a href="index.html">Home</a></li>
-          <li><a href="documentation.html" aria-current="page">Docs</a></li>
-          <li><a href="architecture.html">Architecture</a></li>
-          <li><a class="site-nav__github" href="https://github.com/torbido-hq/cicerone">GitHub</a></li>
+        <ul class="flex items-center gap-5 font-display text-sm font-bold tracking-tight text-ink-soft">
+          <li><a class="no-underline hover:text-deep" href="index.html">Home</a></li>
+          <li><a class="text-deep no-underline" href="documentation.html" aria-current="page">Docs</a></li>
+          <li><a class="no-underline hover:text-deep" href="architecture.html">Architecture</a></li>
+          <li>
+            <a class="inline-flex items-center rounded-full bg-ink px-3.5 py-1.5 text-white no-underline hover:bg-deep hover:text-white" href="https://github.com/torbido-hq/cicerone">GitHub</a>
+          </li>
         </ul>
       </nav>
     </div>
   </header>
 
-  <main id="main" class="wrap">
-    <header class="page-hero">
-      <h1>Documentation</h1>
-      <p>From a sample dataset to recommendations, serve API, and the status dashboard. Everything runs in Docker.</p>
-      <ul class="toc">
-        <li><a href="#quick-start">Quick start</a></li>
-        <li><a href="#serve">Serve API</a></li>
-        <li><a href="#dashboard">Dashboard</a></li>
-        <li><a href="#config">Configuration</a></li>
-        <li><a href="#further">Further reading</a></li>
+  <main id="main" class="mx-auto w-[min(100%-2rem,68rem)] pb-16">
+    <header class="py-12 sm:py-14">
+      <h1 class="mb-3 font-display text-page text-ink">Documentation</h1>
+      <p class="max-w-[44ch] text-lede text-muted">From a sample dataset to recommendations, serve API, and the status dashboard. Everything runs in Docker.</p>
+      <ul class="mt-6 grid gap-2 font-display text-base font-bold tracking-tight">
+        <li><a class="no-underline hover:underline" href="#quick-start">Quick start</a></li>
+        <li><a class="no-underline hover:underline" href="#serve">Serve API</a></li>
+        <li><a class="no-underline hover:underline" href="#dashboard">Dashboard</a></li>
+        <li><a class="no-underline hover:underline" href="#config">Configuration</a></li>
+        <li><a class="no-underline hover:underline" href="#further">Further reading</a></li>
       </ul>
     </header>
 
-    <article class="doc">
+    <article class="prose-cicerone">
       <h2 id="quick-start">Quick start</h2>
       <p>Build the test image, write a tiny local dataset, point <code>config/cicerone.toml</code> at it, and run the job once:</p>
       <pre><code>docker build --target test -t cicerone-test -f docker/Dockerfile .
 mkdir -p data/input data/output
 # generate sample parquet under data/input/ — see the full tutorial
 docker compose run --rm recommender</code></pre>
-      <div class="callout">
+      <div class="not-prose my-6 border-l-[3px] border-cyan bg-cyan/10 px-4 py-3 text-ink-soft">
         Prefer the step-by-step walkthrough with sample users, items, and events:
         <a href="https://github.com/torbido-hq/cicerone/blob/main/docs/tutorial.md">docs/tutorial.md</a>
         in the repository.
@@ -80,9 +82,15 @@ print(client.recommendations("alice", limit=5, category="beer"))</code></pre>
 
       <h2 id="dashboard">Dashboard</h2>
       <p>A standalone container on port <code>8090</code> shows the latest run status, counts, models, and (with DB output) short history. Protected with HTTP Basic Auth.</p>
-      <figure class="shot">
-        <img src="images/dashboard.png" width="1200" height="720" alt="Cicerone recommendation job status dashboard with success and failure history">
-        <figcaption>Enable with <code>[dashboard].enabled = true</code>; manage users via <code>python -m cicerone.manage_dashboard_users</code>.</figcaption>
+      <figure class="not-prose my-6">
+        <img
+          src="images/dashboard.png"
+          width="1200"
+          height="720"
+          alt="Cicerone recommendation job status dashboard with success and failure history"
+          class="w-full rounded border border-line bg-white shadow-[0_18px_50px_rgb(2_24_36/0.14)]"
+        >
+        <figcaption class="mt-3 text-base text-muted">Enable with <code class="rounded bg-deep/10 px-1.5 py-0.5 font-mono text-[0.9em]">[dashboard].enabled = true</code>; manage users via <code class="rounded bg-deep/10 px-1.5 py-0.5 font-mono text-[0.9em]">python -m cicerone.manage_dashboard_users</code>.</figcaption>
       </figure>
 
       <h2 id="config">Configuration</h2>
@@ -105,10 +113,10 @@ print(client.recommendations("alice", limit=5, category="beer"))</code></pre>
     </article>
   </main>
 
-  <footer class="site-footer">
-    <div class="wrap site-footer__inner">
-      <p><a href="index.html">← Home</a></p>
-      <p><a href="https://github.com/torbido-hq/cicerone">GitHub</a></p>
+  <footer class="border-t border-line py-8 text-base text-muted">
+    <div class="mx-auto flex w-[min(100%-2rem,68rem)] flex-wrap items-center justify-between gap-4">
+      <p><a class="text-ink-soft" href="index.html">← Home</a></p>
+      <p><a class="text-ink-soft" href="https://github.com/torbido-hq/cicerone">GitHub</a></p>
     </div>
   </footer>
 </body>

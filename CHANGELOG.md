@@ -9,8 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - Static project site under `website/` (landing, docs, architecture) with
-  dashboard screenshot and pipeline diagram; GitHub Actions workflow
-  deploys to Pages (`torbido-hq.github.io/cicerone`).
+  dashboard screenshot and pipeline diagram; Tailwind v4 + typography
+  plugin, built in CI and deployed to Pages (`torbido-hq.github.io/cicerone`).
 
 ## [0.5.1] - 2026-08-12
 

@@ -1,0 +1,151 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+@source "../index.html";
+@source "../documentation.html";
+@source "../architecture.html";
+@source "../js/**/*.js";
+
+@theme {
+  --font-display: "Syne", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Figtree", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  --color-ink: #0a2438;
+  --color-ink-soft: #1a3a52;
+  --color-muted: #4a6a82;
+  --color-paper: #f4f8fb;
+  --color-cyan: #00b4db;
+  --color-cyan-bright: #00e5ff;
+  --color-deep: #004b75;
+  --color-deep-night: #021824;
+  --color-line: color-mix(in srgb, var(--color-deep) 14%, transparent);
+
+  --text-display: clamp(2.85rem, 8vw, 5.25rem);
+  --text-display--line-height: 0.96;
+  --text-display--letter-spacing: -0.05em;
+  --text-display--font-weight: 800;
+
+  --text-title: clamp(2.1rem, 4.5vw, 3.4rem);
+  --text-title--line-height: 1.02;
+  --text-title--letter-spacing: -0.04em;
+  --text-title--font-weight: 700;
+
+  --text-page: clamp(2.4rem, 5vw, 3.75rem);
+  --text-page--line-height: 1;
+  --text-page--letter-spacing: -0.045em;
+  --text-page--font-weight: 800;
+
+  --text-lede: clamp(1.2rem, 2.1vw, 1.5rem);
+  --text-lede--line-height: 1.4;
+  --text-lede--letter-spacing: -0.015em;
+  --text-lede--font-weight: 500;
+
+  --text-eyebrow: 0.78rem;
+  --text-eyebrow--line-height: 1;
+  --text-eyebrow--letter-spacing: 0.14em;
+  --text-eyebrow--font-weight: 700;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+
+    .reveal,
+    .hero-rise,
+    .flow-drift {
+      animation: none !important;
+      transition: none !important;
+      opacity: 1 !important;
+      transform: none !important;
+    }
+  }
+
+  body {
+    @apply bg-paper font-sans text-lg text-ink antialiased;
+    background-image:
+      radial-gradient(1200px 600px at 85% -10%, rgb(0 229 255 / 0.16), transparent 55%),
+      radial-gradient(900px 500px at -10% 20%, rgb(0 180 219 / 0.1), transparent 50%),
+      linear-gradient(180deg, #e8f4fa 0%, var(--color-paper) 40%, #eef5f9 100%);
+  }
+
+  a {
+    @apply text-deep underline-offset-[0.18em];
+  }
+
+  a:hover {
+    @apply text-cyan;
+  }
+}
+
+@layer components {
+  .prose-cicerone {
+    @apply prose prose-lg max-w-none
+      prose-headings:font-display prose-headings:font-bold prose-headings:tracking-tight prose-headings:text-ink
+      prose-h2:mt-12 prose-h2:mb-3 prose-h2:text-3xl prose-h2:leading-tight
+      prose-h3:mt-8 prose-h3:text-xl
+      prose-p:text-ink-soft prose-li:text-ink-soft
+      prose-a:font-medium prose-a:text-deep prose-a:no-underline hover:prose-a:text-cyan hover:prose-a:underline
+      prose-code:rounded prose-code:bg-deep/10 prose-code:px-1.5 prose-code:py-0.5 prose-code:font-mono prose-code:text-[0.9em] prose-code:font-medium prose-code:text-ink prose-code:before:content-none prose-code:after:content-none
+      prose-pre:bg-deep-night prose-pre:text-[#d7f4ff] prose-pre:font-mono
+      prose-strong:font-semibold prose-strong:text-ink
+      prose-th:font-display prose-th:text-sm prose-th:uppercase prose-th:tracking-wide prose-th:text-muted
+      prose-td:text-ink-soft;
+  }
+}
+
+@layer utilities {
+  .reveal {
+    opacity: 0;
+    transform: translateY(1.1rem);
+    transition:
+      opacity 0.7s cubic-bezier(0.22, 1, 0.36, 1),
+      transform 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .reveal.is-visible {
+    opacity: 1;
+    transform: none;
+  }
+
+  .hero-rise {
+    opacity: 0;
+    transform: translateY(1rem);
+    animation: rise 0.85s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  }
+
+  .hero-rise-2 {
+    animation-delay: 0.12s;
+  }
+
+  .hero-rise-3 {
+    animation-delay: 0.22s;
+  }
+
+  .hero-rise-4 {
+    animation-delay: 0.34s;
+  }
+
+  .flow-drift {
+    animation: drift 4s ease-in-out infinite alternate;
+  }
+
+  @keyframes rise {
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  @keyframes drift {
+    to {
+      transform: translateY(-6px);
+    }
+  }
+}

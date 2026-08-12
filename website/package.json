@@ -1,0 +1,15 @@
+{
+  "name": "cicerone-website",
+  "private": true,
+  "description": "Build-only: Tailwind CSS for the GitHub Pages site. CI compiles to dist/ and deploys that folder.",
+  "scripts": {
+    "build:css": "tailwindcss -i ./css/input.css -o ./dist/css/site.css --minify",
+    "build": "rm -rf dist && mkdir -p dist/css && npm run build:css && cp index.html documentation.html architecture.html dist/ && cp -r assets images js dist/",
+    "dev": "tailwindcss -i ./css/input.css -o ./dist/css/site.css --watch"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "4.3.3",
+    "@tailwindcss/typography": "0.5.19",
+    "tailwindcss": "4.3.3"
+  }
+}
