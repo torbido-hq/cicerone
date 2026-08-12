@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.5.1] - 2026-08-12
 
+### Added
+
+- Serve OpenAPI / ReDoc ``x-codeSamples`` (Ruby, Python, JavaScript, Shell)
+  for `/health` and `/recommendations/{user_id}`.
+
 ### Fixed
 
 - Redis lock `release()` joins the refresher (≤250ms) and ignores in-flight
