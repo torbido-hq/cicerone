@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Documentation — Cicerone</title>
+  <meta name="description" content="Get Cicerone running locally: sample data, batch job, serve API, and dashboard.">
+  <link rel="icon" type="image/svg+xml" href="assets/cicerone-icon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@500;600;700&family=Source+Sans+3:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/site.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="site-nav">
+    <div class="wrap site-nav__inner">
+      <a class="site-nav__brand" href="index.html">
+        <img src="assets/cicerone-logo.svg" alt="Cicerone" width="160" height="50">
+      </a>
+      <nav aria-label="Primary">
+        <ul class="site-nav__links">
+          <li><a href="index.html">Home</a></li>
+          <li><a href="documentation.html" aria-current="page">Docs</a></li>
+          <li><a href="architecture.html">Architecture</a></li>
+          <li><a class="site-nav__github" href="https://github.com/torbido-hq/cicerone">GitHub</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main" class="wrap">
+    <header class="page-hero">
+      <h1>Documentation</h1>
+      <p>From a sample dataset to recommendations, serve API, and the status dashboard. Everything runs in Docker.</p>
+      <ul class="toc">
+        <li><a href="#quick-start">Quick start</a></li>
+        <li><a href="#serve">Serve API</a></li>
+        <li><a href="#dashboard">Dashboard</a></li>
+        <li><a href="#config">Configuration</a></li>
+        <li><a href="#further">Further reading</a></li>
+      </ul>
+    </header>
+
+    <article class="doc">
+      <h2 id="quick-start">Quick start</h2>
+      <p>Build the test image, write a tiny local dataset, point <code>config/cicerone.toml</code> at it, and run the job once:</p>
+      <pre><code>docker build --target test -t cicerone-test -f docker/Dockerfile .
+mkdir -p data/input data/output
+# generate sample parquet under data/input/ — see the full tutorial
+docker compose run --rm recommender</code></pre>
+      <div class="callout">
+        Prefer the step-by-step walkthrough with sample users, items, and events:
+        <a href="https://github.com/torbido-hq/cicerone/blob/main/docs/tutorial.md">docs/tutorial.md</a>
+        in the repository.
+      </div>
+
+      <h2 id="serve">Serve API</h2>
+      <p>Set <code>[job].mode = "serve"</code> to expose a read-only FastAPI over precomputed recommendations (no LightFM/rectools in the request path):</p>
+      <table>
+        <thead>
+          <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>GET</code></td><td><code>/health</code></td><td>Liveness (no auth)</td></tr>
+          <tr><td><code>GET</code></td><td><code>/recommendations/{user_id}</code></td><td>Top-K for a user</td></tr>
+          <tr><td><code>GET</code></td><td><code>/docs</code> · <code>/redoc</code></td><td>Interactive OpenAPI</td></tr>
+          <tr><td><code>GET</code></td><td><code>/metrics</code></td><td>Prometheus text format</td></tr>
+        </tbody>
+      </table>
+      <p>Auth is a bearer token from <code>[serve].auth_token</code> (<code>${ENV_VAR}</code> placeholder — never a literal secret in TOML). Query params: <code>limit</code>, <code>category</code>, <code>exclude_unavailable</code>.</p>
+      <pre><code>from cicerone.serve_client import ServeClient
+
+client = ServeClient("http://localhost:8000", token="…")
+print(client.recommendations("alice", limit=5, category="beer"))</code></pre>
+      <p>Checked-in schema:
+        <a href="https://github.com/torbido-hq/cicerone/blob/main/docs/openapi/serve.openapi.json">docs/openapi/serve.openapi.json</a>.
+        Language samples live under <a href="https://github.com/torbido-hq/cicerone/tree/main/examples/serve">examples/serve/</a>.</p>
+
+      <h2 id="dashboard">Dashboard</h2>
+      <p>A standalone container on port <code>8090</code> shows the latest run status, counts, models, and (with DB output) short history. Protected with HTTP Basic Auth.</p>
+      <figure class="shot">
+        <img src="images/dashboard.png" width="1200" height="720" alt="Cicerone recommendation job status dashboard with success and failure history">
+        <figcaption>Enable with <code>[dashboard].enabled = true</code>; manage users via <code>python -m cicerone.manage_dashboard_users</code>.</figcaption>
+      </figure>
+
+      <h2 id="config">Configuration</h2>
+      <p>One TOML file drives structural settings and <code>${ENV_VAR}</code> secrets; feature weights and policies live in <code>config/features.toml</code>.</p>
+      <ul>
+        <li><code>config/cicerone.toml</code> — job mode, I/O, cron, model, serve, trigger, dashboard</li>
+        <li><code>config/cicerone.serve.toml</code> — standalone serve example</li>
+        <li><code>config/cicerone.dashboard.toml</code> — standalone dashboard example</li>
+        <li><code>config/features.toml</code> — event weights, eligibility, boosts</li>
+      </ul>
+
+      <h2 id="further">Further reading</h2>
+      <ul>
+        <li><a href="architecture.html">Architecture overview</a> (this site)</li>
+        <li><a href="https://github.com/torbido-hq/cicerone/blob/main/README.md">README</a> — full feature reference</li>
+        <li><a href="https://github.com/torbido-hq/cicerone/blob/main/docs/tutorial.md">Tutorial</a> — zero to full local run</li>
+        <li><a href="https://github.com/torbido-hq/cicerone/blob/main/docs/architecture.md">Architecture (repo)</a> — module map</li>
+        <li><a href="https://github.com/torbido-hq/cicerone/blob/main/CONTRIBUTING.md">Contributing</a> — Docker CI, lint, coverage gate</li>
+      </ul>
+    </article>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap site-footer__inner">
+      <p><a href="index.html">← Home</a></p>
+      <p><a href="https://github.com/torbido-hq/cicerone">GitHub</a></p>
+    </div>
+  </footer>
+</body>
+</html>

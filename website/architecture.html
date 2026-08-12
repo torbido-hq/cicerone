@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Architecture — Cicerone</title>
+  <meta name="description" content="How Cicerone's packages fit together: I/O, model strategies, job loop, serve, and dashboard.">
+  <link rel="icon" type="image/svg+xml" href="assets/cicerone-icon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@500;600;700&family=Source+Sans+3:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/site.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="site-nav">
+    <div class="wrap site-nav__inner">
+      <a class="site-nav__brand" href="index.html">
+        <img src="assets/cicerone-logo.svg" alt="Cicerone" width="160" height="50">
+      </a>
+      <nav aria-label="Primary">
+        <ul class="site-nav__links">
+          <li><a href="index.html">Home</a></li>
+          <li><a href="documentation.html">Docs</a></li>
+          <li><a href="architecture.html" aria-current="page">Architecture</a></li>
+          <li><a class="site-nav__github" href="https://github.com/torbido-hq/cicerone">GitHub</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main" class="wrap">
+    <header class="page-hero">
+      <h1>Architecture</h1>
+      <p>How the packages under <code>src/cicerone/</code> fit together. Batch training stays out of the serve and dashboard request paths.</p>
+    </header>
+
+    <article class="doc">
+      <div class="flow-panel" style="margin-bottom: 2rem">
+        <img src="images/flow.svg" width="960" height="320" alt="Cicerone pipeline: input to train/combine to recommendations output">
+      </div>
+
+      <h2>Core loop</h2>
+      <ol>
+        <li><strong>Input</strong> — <code>io</code> backends (<code>dataset</code> or <code>db</code>) load events, users, and items.</li>
+        <li><strong>Dataset</strong> — weighted interactions become a rectools <code>BuiltDataset</code>; policies keep user/item frames.</li>
+        <li><strong>Model</strong> — strategies fit and recommend; combiners merge by priority or weighted RRF.</li>
+        <li><strong>Output</strong> — top-K rows (and optional artifacts / items snapshot) written to the configured sink.</li>
+        <li><strong>Schedule</strong> — in-process cron, plus optional retrain webhook / input poll behind a debounce lock.</li>
+      </ol>
+
+      <h2>Package map</h2>
+      <table>
+        <thead>
+          <tr><th>Area</th><th>Responsibility</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>config/</code></td><td>Load and validate TOML; nested serve/trigger/dashboard/AutoML settings</td></tr>
+          <tr><td><code>io/</code></td><td>InputSource / OutputSink / recommendation &amp; manifest readers</td></tr>
+          <tr><td><code>model/</code></td><td>Strategy registry, fit workers, recommend, combine</td></tr>
+          <tr><td><code>job.py</code> · <code>scheduler.py</code></td><td>One end-to-end run; cron + trigger hosting</td></tr>
+          <tr><td><code>serve/</code></td><td>FastAPI read API + Prometheus helpers (no ML imports)</td></tr>
+          <tr><td><code>dashboard.py</code></td><td>Standalone status UI (Jinja + htmx)</td></tr>
+          <tr><td><code>automl.py</code> · <code>policy.py</code></td><td>Backtests; eligibility masks and boosts</td></tr>
+          <tr><td><code>artifact.py</code></td><td>Optional versioned fitted-model bundle</td></tr>
+        </tbody>
+      </table>
+
+      <h2>Serve vs batch</h2>
+      <p><code>python -m cicerone.serve</code> never loads LightFM, rectools, or implicit. It refreshes a lookup table (dataset cache or DB query) and returns precomputed rows — cold-start falls back to the <code>__cold_start__</code> ranking when a user is missing.</p>
+      <p>The dashboard similarly reads manifests only. Both keep ML out of the hot path so you can scale read replicas without shipping the training stack.</p>
+
+      <h2>I/O backends</h2>
+      <p>Input and output are independent. <code>dataset</code> uses parquet on local disk or S3-compatible storage; <code>db</code> uses SQLAlchemy tables. Compose profile <code>db</code> brings up Postgres for local exercises; CI uses a throwaway instance via <code>docker-compose.ci.yml</code>.</p>
+
+      <div class="callout">
+        Full module notes and diagrams:
+        <a href="https://github.com/torbido-hq/cicerone/blob/main/docs/architecture.md">docs/architecture.md</a>.
+      </div>
+
+      <p><a class="btn btn--ink" href="documentation.html">Back to docs</a>
+        <a class="btn btn--outline" href="https://github.com/torbido-hq/cicerone/blob/main/docs/architecture.md">Repo architecture</a></p>
+    </article>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap site-footer__inner">
+      <p><a href="index.html">← Home</a></p>
+      <p><a href="https://github.com/torbido-hq/cicerone">GitHub</a></p>
+    </div>
+  </footer>
+</body>
+</html>

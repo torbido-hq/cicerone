@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- Static project site under `website/` (landing, docs, architecture) with
+  dashboard screenshot and pipeline diagram; GitHub Actions workflow
+  deploys to Pages (`torbido-hq.github.io/cicerone`).
+
 ## [0.5.1] - 2026-08-12
 
 ### Added

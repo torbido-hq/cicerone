@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 320" role="img" aria-labelledby="flowTitle flowDesc">
+  <title id="flowTitle">Cicerone batch flow</title>
+  <desc id="flowDesc">Events flow into Cicerone, which trains strategies and writes top-K recommendations.</desc>
+  <defs>
+    <linearGradient id="nodeFill" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f7fcff"/>
+      <stop offset="100%" stop-color="#e6f4fa"/>
+    </linearGradient>
+    <linearGradient id="arrowStroke" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#00B4DB"/>
+      <stop offset="100%" stop-color="#004B75"/>
+    </linearGradient>
+    <marker id="arrowHead" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M0,0 L10,4 L0,8 Z" fill="#004B75"/>
+    </marker>
+  </defs>
+
+  <rect x="24" y="90" width="200" height="120" rx="8" fill="url(#nodeFill)" stroke="#004B75" stroke-opacity="0.25"/>
+  <text x="124" y="138" text-anchor="middle" font-family="Sora, system-ui, sans-serif" font-size="15" font-weight="600" fill="#0a2438">Input</text>
+  <text x="124" y="162" text-anchor="middle" font-family="Source Sans 3, system-ui, sans-serif" font-size="13" fill="#4a6a82">events · users · items</text>
+  <text x="124" y="182" text-anchor="middle" font-family="Source Sans 3, system-ui, sans-serif" font-size="12" fill="#4a6a82">dataset or database</text>
+
+  <line x1="224" y1="150" x2="300" y2="150" stroke="url(#arrowStroke)" stroke-width="2.5" marker-end="url(#arrowHead)"/>
+
+  <rect x="310" y="70" width="280" height="160" rx="8" fill="url(#nodeFill)" stroke="#00B4DB" stroke-width="1.5"/>
+  <text x="450" y="112" text-anchor="middle" font-family="Sora, system-ui, sans-serif" font-size="15" font-weight="600" fill="#0a2438">Cicerone</text>
+  <text x="450" y="138" text-anchor="middle" font-family="Source Sans 3, system-ui, sans-serif" font-size="13" fill="#4a6a82">weigh · train · combine</text>
+  <text x="450" y="162" text-anchor="middle" font-family="Source Sans 3, system-ui, sans-serif" font-size="12" fill="#4a6a82">collaborative · KNN · popular · latest</text>
+  <text x="450" y="186" text-anchor="middle" font-family="Source Sans 3, system-ui, sans-serif" font-size="12" fill="#4a6a82">policies · AutoML · cron / trigger</text>
+
+  <line x1="590" y1="150" x2="666" y2="150" stroke="url(#arrowStroke)" stroke-width="2.5" marker-end="url(#arrowHead)"/>
+
+  <rect x="676" y="90" width="260" height="120" rx="8" fill="url(#nodeFill)" stroke="#004B75" stroke-opacity="0.25"/>
+  <text x="806" y="138" text-anchor="middle" font-family="Sora, system-ui, sans-serif" font-size="15" font-weight="600" fill="#0a2438">Output</text>
+  <text x="806" y="162" text-anchor="middle" font-family="Source Sans 3, system-ui, sans-serif" font-size="13" fill="#4a6a82">top-K recommendations</text>
+  <text x="806" y="182" text-anchor="middle" font-family="Source Sans 3, system-ui, sans-serif" font-size="12" fill="#4a6a82">serve API · dashboard</text>
+</svg>

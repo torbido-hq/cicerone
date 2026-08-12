@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cicerone — self-hosted batch recommender</title>
+  <meta name="description" content="Cicerone is a self-hosted batch recommender: train hybrid models, write top-K recommendations, optionally serve them over a read-only HTTP API.">
+  <link rel="icon" type="image/svg+xml" href="assets/cicerone-icon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@500;600;700&family=Source+Sans+3:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/site.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="site-nav">
+    <div class="wrap site-nav__inner">
+      <a class="site-nav__brand" href="index.html" aria-current="page">
+        <img src="assets/cicerone-logo.svg" alt="Cicerone" width="160" height="50">
+      </a>
+      <nav aria-label="Primary">
+        <ul class="site-nav__links">
+          <li class="nav-hide-sm"><a href="#dashboard">Dashboard</a></li>
+          <li class="nav-hide-sm"><a href="#how-it-works">How it works</a></li>
+          <li><a href="documentation.html">Docs</a></li>
+          <li><a class="site-nav__github" href="https://github.com/torbido-hq/cicerone">GitHub</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero" aria-label="Introduction">
+      <div class="hero__bg" role="img" aria-label="Cicerone dashboard showing recommendation job status and history"></div>
+      <div class="hero__content">
+        <p class="hero__brand">
+          <img src="assets/cicerone-logo.svg" alt="Cicerone" width="240" height="75">
+        </p>
+        <h1 class="hero__headline">Recommend offline. Serve what you already computed.</h1>
+        <p class="hero__lede">A self-hosted batch recommender — hybrid models, policies, and a read-only API with no live inference in the request path.</p>
+        <div class="cta-row">
+          <a class="btn btn--primary" href="documentation.html">Read the docs</a>
+          <a class="btn btn--ghost" href="https://github.com/torbido-hq/cicerone">View on GitHub</a>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="dashboard">
+      <div class="wrap">
+        <p class="section__eyebrow reveal">Dashboard</p>
+        <h2 class="section__title reveal">See every run succeed — or fail loudly</h2>
+        <p class="section__lede reveal">A Basic-Auth status page for the latest job, counts, models, and history when you use a database output.</p>
+        <figure class="shot reveal">
+          <img src="images/dashboard.png" width="1200" height="720" alt="Cicerone dashboard: latest successful run summary and a history table that includes a failed S3 access error">
+          <figcaption>Job status dashboard — scheduled and manual runs, with error detail when something breaks.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="section" id="how-it-works">
+      <div class="wrap">
+        <p class="section__eyebrow reveal">Pipeline</p>
+        <h2 class="section__title reveal">Batch in, top-K out</h2>
+        <p class="section__lede reveal">Read interactions from a dataset or database, train configured strategies, write recommendations — then optionally serve them.</p>
+        <div class="flow-panel reveal">
+          <img src="images/flow.svg" width="960" height="320" alt="Flow diagram: input events to Cicerone training to output recommendations and serve API">
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="features">
+      <div class="wrap">
+        <p class="section__eyebrow reveal">Capabilities</p>
+        <h2 class="section__title reveal">What ships in the box</h2>
+        <p class="section__lede reveal">Configured through TOML. Runs in Docker. Domain-agnostic — drinks, books, courses, anything with users and items.</p>
+        <ul class="feature-list reveal">
+          <li>
+            <strong>Batch job</strong>
+            <span>Cron-scheduled train and top-K write from dataset or DB I/O.</span>
+          </li>
+          <li>
+            <strong>Hybrid strategies</strong>
+            <span>Collaborative (LightFM), item KNN, content cold-item fallback, popular, latest — fused by priority or RRF.</span>
+          </li>
+          <li>
+            <strong>Serve mode</strong>
+            <span>Read-only HTTP API over precomputed recommendations; OpenAPI at <code>/docs</code>.</span>
+          </li>
+          <li>
+            <strong>Policies &amp; AutoML</strong>
+            <span>Eligibility filters, score boosts, and time-fold backtests to pick models per run.</span>
+          </li>
+          <li>
+            <strong>Ops surface</strong>
+            <span>Retrain webhook, optional input poll, Prometheus metrics, and the status dashboard.</span>
+          </li>
+        </ul>
+        <div class="cta-row" style="margin-top: 2rem">
+          <a class="btn btn--ink" href="documentation.html">Getting started</a>
+          <a class="btn btn--outline" href="architecture.html">Architecture</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap site-footer__inner">
+      <p>Cicerone — Beerware licensed. Self-hosted recommendations without live inference.</p>
+      <p>
+        <a href="https://github.com/torbido-hq/cicerone">Source</a>
+        ·
+        <a href="https://github.com/torbido-hq/cicerone/blob/main/docs/tutorial.md">Tutorial (repo)</a>
+      </p>
+    </div>
+  </footer>
+
+  <script src="js/site.js" defer></script>
+</body>
+</html>
