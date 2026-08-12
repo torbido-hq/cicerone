@@ -14,7 +14,14 @@ from test_serve import _FakeManifest, _FakeReader, _feature_config, _items_df, _
 from cicerone.export_serve_openapi import build_openapi
 from cicerone.export_serve_openapi import main as export_main
 from cicerone.serve import SERVE_API_TITLE, SERVE_API_VERSION, create_app
-from cicerone.serve.code_samples import HEALTH_PATH, RECOMMENDATIONS_PATH
+from cicerone.serve.code_samples import (
+    ENV_SERVE_TOKEN,
+    ENV_SERVE_URL,
+    HEALTH_CODE_SAMPLES,
+    HEALTH_PATH,
+    RECOMMENDATIONS_CODE_SAMPLES,
+    RECOMMENDATIONS_PATH,
+)
 from cicerone.serve_client import ServeClient, ServeClientError
 from cicerone.serve_schemas import HealthResponse
 
@@ -62,14 +69,14 @@ def test_openapi_json_lists_serve_paths_and_schemas():
     assert schema["components"]["securitySchemes"]
 
     health_samples = schema["paths"][HEALTH_PATH]["get"]["x-codeSamples"]
-    assert any(sample["lang"] == "Ruby" for sample in health_samples)
-    assert all("CICERONE_SERVE_URL" in sample["source"] for sample in health_samples)
+    assert {s["lang"] for s in health_samples} >= {s["lang"] for s in HEALTH_CODE_SAMPLES}
+    assert all(ENV_SERVE_URL in sample["source"] for sample in health_samples)
+
     rec_samples = rec["x-codeSamples"]
-    assert any(sample["lang"] == "Ruby" for sample in rec_samples)
-    assert any(sample["lang"] == "Python" for sample in rec_samples)
+    assert {s["lang"] for s in rec_samples} >= {s["lang"] for s in RECOMMENDATIONS_CODE_SAMPLES}
     ruby_rec = next(sample for sample in rec_samples if sample["lang"] == "Ruby")
-    assert "CICERONE_SERVE_URL" in ruby_rec["source"]
-    assert "CICERONE_SERVE_TOKEN" in ruby_rec["source"]
+    assert ENV_SERVE_URL in ruby_rec["source"]
+    assert ENV_SERVE_TOKEN in ruby_rec["source"]
 
 
 def test_docs_ui_is_available():

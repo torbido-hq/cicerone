@@ -218,9 +218,14 @@
             "source": "import json\nimport os\nfrom urllib.request import urlopen\n\nbase = os.environ.get(\"CICERONE_SERVE_URL\", \"http://localhost:8000\").rstrip(\"/\")\n# /health is unauthenticated (no CICERONE_SERVE_TOKEN).\nprint(json.load(urlopen(f\"{base}/health\")))\n"
           },
           {
+            "label": "fetch",
+            "lang": "JavaScript",
+            "source": "const baseUrl = (process.env.CICERONE_SERVE_URL || \"http://localhost:8000\").replace(/\\/$/, \"\");\n\nasync function main() {\n  const response = await fetch(`${baseUrl}/health`, {\n    headers: { Accept: \"application/json\" },\n  });\n  if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);\n  console.log(await response.json());\n}\n\nmain().catch((err) => {\n  console.error(err);\n  process.exitCode = 1;\n});\n"
+          },
+          {
             "label": "curl",
             "lang": "Shell",
-            "source": "# /health is unauthenticated (no CICERONE_SERVE_TOKEN).\ncurl -sS \"${CICERONE_SERVE_URL:-http://localhost:8000}/health\"\n"
+            "source": "# /health is unauthenticated (no CICERONE_SERVE_TOKEN).\ncurl -fsS \"${CICERONE_SERVE_URL:-http://localhost:8000}/health\" || exit 1\n"
           }
         ]
       }
@@ -382,7 +387,7 @@
           {
             "label": "ServeClient",
             "lang": "Python",
-            "source": "import os\nfrom cicerone.serve_client import ServeClient\n\nclient = ServeClient(\n    os.environ.get(\"CICERONE_SERVE_URL\", \"http://localhost:8000\"),\n    token=os.environ[\"CICERONE_SERVE_TOKEN\"],\n)\nbody = client.recommendations(os.environ.get(\"CICERONE_USER_ID\", \"alice\"), limit=5)\nprint(body.user_id, body.fallback, body.generated_at)\nfor row in body.items:\n    print(f\"  #{row.rank} {row.item_id} score={row.score}\")\n"
+            "source": "import os\nfrom cicerone.serve_client import ServeClient\n\nclient = ServeClient(\n    os.environ.get(\"CICERONE_SERVE_URL\", \"http://localhost:8000\"),\n    token=os.environ[\"CICERONE_SERVE_TOKEN\"],\n)\nbody = client.recommendations(\n    os.environ.get(\"CICERONE_USER_ID\", \"alice\"),\n    limit=5,\n)\nprint(body.user_id, body.fallback, body.generated_at)\nfor row in body.items:\n    print(f\"  #{row.rank} {row.item_id} score={row.score}\")\n"
           },
           {
             "label": "fetch",
@@ -392,7 +397,7 @@
           {
             "label": "curl",
             "lang": "Shell",
-            "source": "BASE_URL=\"${CICERONE_SERVE_URL:-http://localhost:8000}\"\nBASE_URL=\"${BASE_URL%/}\"\nTOKEN=\"${CICERONE_SERVE_TOKEN:?set CICERONE_SERVE_TOKEN}\"\nUSER_ID=\"${CICERONE_USER_ID:-alice}\"\nUSER_ID_ENC=\"$(\n  USER_ID=\"$USER_ID\" python3 -c \\\n    'import os, urllib.parse; print(urllib.parse.quote(os.environ[\"USER_ID\"], safe=\"\"))'\n)\"\ncurl -sS \\\n  -H \"Authorization: Bearer $TOKEN\" \\\n  \"$BASE_URL/recommendations/${USER_ID_ENC}?limit=5\"\n"
+            "source": "BASE_URL=\"${CICERONE_SERVE_URL:-http://localhost:8000}\"\nBASE_URL=\"${BASE_URL%/}\"\nTOKEN=\"${CICERONE_SERVE_TOKEN:?set CICERONE_SERVE_TOKEN}\"\nUSER_ID=\"${CICERONE_USER_ID:-alice}\"\nUSER_ID_ENC=\"$(\n  USER_ID=\"$USER_ID\" python3 -c \\\n    'import os, urllib.parse; print(urllib.parse.quote(os.environ[\"USER_ID\"], safe=\"\"))'\n)\"\ncurl -fsS \\\n  -H \"Authorization: Bearer $TOKEN\" \\\n  \"$BASE_URL/recommendations/${USER_ID_ENC}?limit=5\" || exit 1\n"
           }
         ]
       }

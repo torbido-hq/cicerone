@@ -8,17 +8,21 @@ HEALTH_PATH = "/health"
 RECOMMENDATIONS_PATH = "/recommendations/{user_id}"
 RECOMMENDATIONS_PATH_PREFIX = RECOMMENDATIONS_PATH.rsplit("/", 1)[0] + "/"
 
-# Shared default; every snippet reads CICERONE_SERVE_URL the same way.
-_DEFAULT_SERVE_URL = "http://localhost:8000"
+DEFAULT_SERVE_URL = "http://localhost:8000"
+DEFAULT_USER_ID = "alice"
+DEFAULT_LIMIT = 5
+ENV_SERVE_URL = "CICERONE_SERVE_URL"
+ENV_SERVE_TOKEN = "CICERONE_SERVE_TOKEN"
+ENV_USER_ID = "CICERONE_USER_ID"
 
 _HEALTH_RUBY = f"""\
 require "json"
 require "net/http"
 require "uri"
 
-base = ENV.fetch("CICERONE_SERVE_URL", "{_DEFAULT_SERVE_URL}").sub(%r{{/\\z}}, "")
+base = ENV.fetch("{ENV_SERVE_URL}", "{DEFAULT_SERVE_URL}").sub(%r{{/\\z}}, "")
 uri = URI("#{{base}}{HEALTH_PATH}")
-# {HEALTH_PATH} is unauthenticated (no CICERONE_SERVE_TOKEN).
+# {HEALTH_PATH} is unauthenticated (no {ENV_SERVE_TOKEN}).
 response = Net::HTTP.get_response(uri)
 abort("HTTP #{{response.code}}: #{{response.body}}") unless response.is_a?(Net::HTTPSuccess)
 puts JSON.parse(response.body)
@@ -29,14 +33,32 @@ import json
 import os
 from urllib.request import urlopen
 
-base = os.environ.get("CICERONE_SERVE_URL", "{_DEFAULT_SERVE_URL}").rstrip("/")
-# {HEALTH_PATH} is unauthenticated (no CICERONE_SERVE_TOKEN).
+base = os.environ.get("{ENV_SERVE_URL}", "{DEFAULT_SERVE_URL}").rstrip("/")
+# {HEALTH_PATH} is unauthenticated (no {ENV_SERVE_TOKEN}).
 print(json.load(urlopen(f"{{base}}{HEALTH_PATH}")))
 """
 
+# Node 18+ (built-in fetch). Works in CommonJS and ESM.
+_HEALTH_JAVASCRIPT = f"""\
+const baseUrl = (process.env.{ENV_SERVE_URL} || "{DEFAULT_SERVE_URL}").replace(/\\/$/, "");
+
+async function main() {{
+  const response = await fetch(`${{baseUrl}}{HEALTH_PATH}`, {{
+    headers: {{ Accept: "application/json" }},
+  }});
+  if (!response.ok) throw new Error(`${{response.status}} ${{await response.text()}}`);
+  console.log(await response.json());
+}}
+
+main().catch((err) => {{
+  console.error(err);
+  process.exitCode = 1;
+}});
+"""
+
 _HEALTH_SHELL = f"""\
-# {HEALTH_PATH} is unauthenticated (no CICERONE_SERVE_TOKEN).
-curl -sS "${{CICERONE_SERVE_URL:-{_DEFAULT_SERVE_URL}}}{HEALTH_PATH}"
+# {HEALTH_PATH} is unauthenticated (no {ENV_SERVE_TOKEN}).
+curl -fsS "${{{ENV_SERVE_URL}:-{DEFAULT_SERVE_URL}}}{HEALTH_PATH}" || exit 1
 """
 
 _RECOMMENDATIONS_RUBY = f"""\
@@ -44,12 +66,12 @@ require "json"
 require "net/http"
 require "uri"
 
-base = ENV.fetch("CICERONE_SERVE_URL", "{_DEFAULT_SERVE_URL}").sub(%r{{/\\z}}, "")
-token = ENV.fetch("CICERONE_SERVE_TOKEN")
-user_id = ENV.fetch("CICERONE_USER_ID", "alice")
+base = ENV.fetch("{ENV_SERVE_URL}", "{DEFAULT_SERVE_URL}").sub(%r{{/\\z}}, "")
+token = ENV.fetch("{ENV_SERVE_TOKEN}")
+user_id = ENV.fetch("{ENV_USER_ID}", "{DEFAULT_USER_ID}")
 
 uri = URI("#{{base}}{RECOMMENDATIONS_PATH_PREFIX}#{{URI.encode_www_form_component(user_id)}}")
-uri.query = URI.encode_www_form(limit: 5)
+uri.query = URI.encode_www_form(limit: {DEFAULT_LIMIT})
 
 req = Net::HTTP::Get.new(uri)
 req["Accept"] = "application/json"
@@ -70,10 +92,13 @@ import os
 from cicerone.serve_client import ServeClient
 
 client = ServeClient(
-    os.environ.get("CICERONE_SERVE_URL", "{_DEFAULT_SERVE_URL}"),
-    token=os.environ["CICERONE_SERVE_TOKEN"],
+    os.environ.get("{ENV_SERVE_URL}", "{DEFAULT_SERVE_URL}"),
+    token=os.environ["{ENV_SERVE_TOKEN}"],
 )
-body = client.recommendations(os.environ.get("CICERONE_USER_ID", "alice"), limit=5)
+body = client.recommendations(
+    os.environ.get("{ENV_USER_ID}", "{DEFAULT_USER_ID}"),
+    limit={DEFAULT_LIMIT},
+)
 print(body.user_id, body.fallback, body.generated_at)
 for row in body.items:
     print(f"  #{{row.rank}} {{row.item_id}} score={{row.score}}")
@@ -81,17 +106,17 @@ for row in body.items:
 
 # Node 18+ (built-in fetch). Works in CommonJS and ESM.
 _RECOMMENDATIONS_JAVASCRIPT = f"""\
-const baseUrl = (process.env.CICERONE_SERVE_URL || "{_DEFAULT_SERVE_URL}").replace(/\\/$/, "");
-const token = process.env.CICERONE_SERVE_TOKEN;
+const baseUrl = (process.env.{ENV_SERVE_URL} || "{DEFAULT_SERVE_URL}").replace(/\\/$/, "");
+const token = process.env.{ENV_SERVE_TOKEN};
 if (!token) {{
-  console.error("Set CICERONE_SERVE_TOKEN to a bearer token");
+  console.error("Set {ENV_SERVE_TOKEN} to a bearer token");
   process.exit(1);
 }}
-const userId = process.env.CICERONE_USER_ID || "alice";
+const userId = process.env.{ENV_USER_ID} || "{DEFAULT_USER_ID}";
 
 async function main() {{
   const url = new URL(`${{baseUrl}}{RECOMMENDATIONS_PATH_PREFIX}${{encodeURIComponent(userId)}}`);
-  url.searchParams.set("limit", "5");
+  url.searchParams.set("limit", "{DEFAULT_LIMIT}");
 
   const response = await fetch(url, {{
     headers: {{
@@ -114,22 +139,23 @@ main().catch((err) => {{
 """
 
 _RECOMMENDATIONS_SHELL = f"""\
-BASE_URL="${{CICERONE_SERVE_URL:-{_DEFAULT_SERVE_URL}}}"
+BASE_URL="${{{ENV_SERVE_URL}:-{DEFAULT_SERVE_URL}}}"
 BASE_URL="${{BASE_URL%/}}"
-TOKEN="${{CICERONE_SERVE_TOKEN:?set CICERONE_SERVE_TOKEN}}"
-USER_ID="${{CICERONE_USER_ID:-alice}}"
+TOKEN="${{{ENV_SERVE_TOKEN}:?set {ENV_SERVE_TOKEN}}}"
+USER_ID="${{{ENV_USER_ID}:-{DEFAULT_USER_ID}}}"
 USER_ID_ENC="$(
   USER_ID="$USER_ID" python3 -c \\
     'import os, urllib.parse; print(urllib.parse.quote(os.environ["USER_ID"], safe=""))'
 )"
-curl -sS \\
+curl -fsS \\
   -H "Authorization: Bearer $TOKEN" \\
-  "$BASE_URL{RECOMMENDATIONS_PATH_PREFIX}${{USER_ID_ENC}}?limit=5"
+  "$BASE_URL{RECOMMENDATIONS_PATH_PREFIX}${{USER_ID_ENC}}?limit={DEFAULT_LIMIT}" || exit 1
 """
 
 HEALTH_CODE_SAMPLES: list[dict[str, str]] = [
     {"lang": "Ruby", "label": "Net::HTTP", "source": _HEALTH_RUBY},
     {"lang": "Python", "label": "urllib", "source": _HEALTH_PYTHON},
+    {"lang": "JavaScript", "label": "fetch", "source": _HEALTH_JAVASCRIPT},
     {"lang": "Shell", "label": "curl", "source": _HEALTH_SHELL},
 ]
 
