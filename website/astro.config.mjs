@@ -12,10 +12,9 @@ export default defineConfig({
 				'Self-hosted batch recommender (rectools + LightFM) with serve API, policies, AutoML, and dashboard.',
 			favicon: '/favicon.svg',
 			logo: {
-				light: './src/assets/cicerone-logo.svg',
-				dark: './src/assets/cicerone-logo-dark.svg',
+				src: './src/assets/cicerone-mark.svg',
 				alt: 'Cicerone',
-				replacesTitle: true,
+				replacesTitle: false,
 			},
 			social: [
 				{

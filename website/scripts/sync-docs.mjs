@@ -34,8 +34,13 @@ const PAGES = [
 function rewrite(source) {
   let text = source;
 
+  // Drop the repo logo banner — Starlight already brands the chrome.
   text = text.replace(
-    /^\s*<img\s+src="\.\.\/src\/cicerone\/static\/cicerone-logo\.svg"[^>]*>\s*\n+/i,
+    /^(?:\s*!\[[^\]]*\]\([^)]*cicerone-logo[^)]*\)\s*\n+)+/i,
+    "",
+  );
+  text = text.replace(
+    /^\s*(?:<picture>[\s\S]*?<\/picture>|<img\s+[^>]*cicerone-logo[^>]*>)\s*\n+/i,
     "",
   );
 

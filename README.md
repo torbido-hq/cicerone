@@ -1,4 +1,5 @@
-<img src="src/cicerone/static/cicerone-logo.svg" alt="Cicerone" width="200">
+![Cicerone](src/cicerone/static/cicerone-logo.svg#gh-light-mode-only)
+![Cicerone](src/cicerone/static/cicerone-logo-dark.svg#gh-dark-mode-only)
 
 # Cicerone
 
