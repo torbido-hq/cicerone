@@ -7,67 +7,47 @@ For configuration and usage, see the main [README](../README.md).
 
 ## Module overview
 
-```
-config/               load & resolve config/cicerone.toml (structural config + ${ENV_VAR} secrets);
-                     package: constants / settings / validation / load;
-                     nested Serve/Trigger/Dashboard/AutoML settings (+ flat property aliases);
-                     `ConfigError` for invalid knobs; `make_settings(**overrides)` for tests / OpenAPI export
-feature_config.py     load config/features.toml (event weights, feature columns,
-                     eligibility/boost policy rules; `[[boost]]` / `[[boosts]]`)
-policy.py             declarative eligibility masks (documented fail-open/fail-closed matrix),
-                     cohort grouping, score boosts
-blending.py           per-user weighted mix of personalized/popular/latest (optional)
-io/
-  base.py             InputSource / OutputSink / RecommendationReader protocols
-                      (including configure_item_filters);
-                      BaseRecommendationReader with empty defaults for custom readers
-  factory.py          kind→backend registry ("dataset" | "db")
-  dataset_store.py     backend: parquet files (S3-compatible or local disk)
-  db_store.py          backend: SQLAlchemy-backed database tables/queries
-  recommendation_reader.py  read-only lookup of precomputed recs for serve mode (no rectools/lightfm import);
-                      dataset path indexes by user_id at refresh; shared cold-start selection rule
-  manifest_reader.py    read-only lookup of job-run manifests for the dashboard (no rectools/lightfm import)
-  options.py           shared "require_option"/build_s3_client helpers
-dataset.py            raw events/users/items -> weighted rectools Dataset (BuiltDataset;
-                     keeps users+items frames for policy evaluation; caps keep most recent N)
-model/                BuiltDataset -> STRATEGIES registry -> fit / recommend / combine
-  strategies.py       RecommenderModel protocol, Strategy, STRATEGIES, build_strategy_model
-  fit.py              fit_strategies, plan_model_run, ProcessPool workers
-  recommend.py        recommend_with_models, cohort plan, train_and_recommend
-  combine.py          priority + weighted RRF combiners
-  epoch_metrics.py    optional LightFM per-epoch Precision/Recall logging
-  constants.py        RRF_K, DEFAULT_MODELS, source column names
-model_config.py       default + TOML [model.*] RecTools `model_from_config`
-                     configs; legacy `job.item_based.k_neighbors` → `model.K`
-                     (no ML imports — safe for serve)
-content_fallback.py   optional content-based cold-item strategy (one-hot item
-                     features + cosine vs user history)
-artifact.py           optional versioned fitted-model bundle (schema **v3**:
-                     RecTools `save`/`load_model` for library models + pickle
-                     envelope; `content_fallback` still pickle)
-automl.py            optional: backtests candidate models/weights/rrf_k configs over
-                     time-based folds of event history and picks the best one
-job.py                orchestrates one end-to-end run (source -> dataset -> model -> sink)
-scheduler.py           in-process cron loop that calls job.run(); when [job.trigger]
-                       is enabled, also hosts the retrain-trigger HTTP server (trigger.py)
-serve/                 serve mode package: FastAPI read API over precomputed recommendations
-  app.py               routes, middleware, refresh loop (`python -m cicerone.serve`)
-  metrics.py           Prometheus metric objects + helpers (default in-process registry)
-serve_schemas.py       Pydantic models that drive the serve OpenAPI schema
-serve_client.py        thin stdlib HTTP client for the serve read API
-export_serve_openapi.py  CLI to dump FastAPI's OpenAPI JSON (docs/openapi/…)
-trigger.py             event-driven retrain trigger: webhook + optional input-bucket poll,
-                       debounce guard (RunGuard) shared with the cron loop;
-                       increments `cicerone_retrain_trigger_total` (per replica)
-locks.py               optional RunGuard lock backends (postgres / redis; default is none)
-config/lock_url.py     postgres lock URL resolution for config load + lock builder
-http_auth.py           shared bearer-token (serve/trigger) and HTTP Basic Auth
-                       (dashboard) dependencies
-dashboard.py            standalone FastAPI dashboard: job status/history, own container/port
-dashboard_users.py      load/save the dashboard's Basic Auth users file (TOML, username -> bcrypt hash)
-manage_dashboard_users.py  CLI to add/remove/list dashboard users
-templates/, static/      Jinja2 templates + vendored htmx/Stimulus/Tailwind assets for the dashboard
-```
+| Path | Role |
+| --- | --- |
+| `config/` | Load & resolve `config/cicerone.toml` (structural config + `${ENV_VAR}` secrets); package: constants / settings / validation / load; nested Serve/Trigger/Dashboard/AutoML settings (+ flat property aliases); `ConfigError` for invalid knobs; `make_settings(**overrides)` for tests / OpenAPI export |
+| `feature_config.py` | Load `config/features.toml` (event weights, feature columns, eligibility/boost policy rules; `[[boost]]` / `[[boosts]]`) |
+| `policy.py` | Declarative eligibility masks (documented fail-open/fail-closed matrix), cohort grouping, score boosts |
+| `blending.py` | Per-user weighted mix of personalized/popular/latest (optional) |
+| `io/base.py` | `InputSource` / `OutputSink` / `RecommendationReader` protocols (including `configure_item_filters`); `BaseRecommendationReader` with empty defaults for custom readers |
+| `io/factory.py` | kind→backend registry (`"dataset"` or `"db"`) |
+| `io/dataset_store.py` | Backend: parquet files (S3-compatible or local disk) |
+| `io/db_store.py` | Backend: SQLAlchemy-backed database tables/queries |
+| `io/recommendation_reader.py` | Read-only lookup of precomputed recs for serve mode (no rectools/lightfm import); dataset path indexes by `user_id` at refresh; shared cold-start selection rule |
+| `io/manifest_reader.py` | Read-only lookup of job-run manifests for the dashboard (no rectools/lightfm import) |
+| `io/options.py` | Shared `require_option` / `build_s3_client` helpers |
+| `dataset.py` | Raw events/users/items → weighted rectools Dataset (`BuiltDataset`; keeps users+items frames for policy evaluation; caps keep most recent N) |
+| `model/` | `BuiltDataset` → `STRATEGIES` registry → fit / recommend / combine |
+| `model/strategies.py` | `RecommenderModel` protocol, `Strategy`, `STRATEGIES`, `build_strategy_model` |
+| `model/fit.py` | `fit_strategies`, `plan_model_run`, ProcessPool workers |
+| `model/recommend.py` | `recommend_with_models`, cohort plan, `train_and_recommend` |
+| `model/combine.py` | Priority + weighted RRF combiners |
+| `model/epoch_metrics.py` | Optional LightFM per-epoch Precision/Recall logging |
+| `model/constants.py` | `RRF_K`, `DEFAULT_MODELS`, source column names |
+| `model_config.py` | Default + TOML `[model.*]` RecTools `model_from_config` configs; legacy `job.item_based.k_neighbors` → `model.K` (no ML imports — safe for serve) |
+| `content_fallback.py` | Optional content-based cold-item strategy (one-hot item features + cosine vs user history) |
+| `artifact.py` | Optional versioned fitted-model bundle (schema **v3**: RecTools `save`/`load_model` for library models + pickle envelope; `content_fallback` still pickle) |
+| `automl.py` | Optional: backtests candidate models/weights/`rrf_k` configs over time-based folds of event history and picks the best one |
+| `job.py` | Orchestrates one end-to-end run (source → dataset → model → sink) |
+| `scheduler.py` | In-process cron loop that calls `job.run()`; when `[job.trigger]` is enabled, also hosts the retrain-trigger HTTP server (`trigger.py`) |
+| `serve/` | Serve mode package: FastAPI read API over precomputed recommendations |
+| `serve/app.py` | Routes, middleware, refresh loop (`python -m cicerone.serve`) |
+| `serve/metrics.py` | Prometheus metric objects + helpers (default in-process registry) |
+| `serve_schemas.py` | Pydantic models that drive the serve OpenAPI schema |
+| `serve_client.py` | Thin stdlib HTTP client for the serve read API |
+| `export_serve_openapi.py` | CLI to dump FastAPI's OpenAPI JSON (`docs/openapi/…`) |
+| `trigger.py` | Event-driven retrain trigger: webhook + optional input-bucket poll, debounce guard (`RunGuard`) shared with the cron loop; increments `cicerone_retrain_trigger_total` (per replica) |
+| `locks.py` | Optional `RunGuard` lock backends (postgres / redis; default is none) |
+| `config/lock_url.py` | Postgres lock URL resolution for config load + lock builder |
+| `http_auth.py` | Shared bearer-token (serve/trigger) and HTTP Basic Auth (dashboard) dependencies |
+| `dashboard.py` | Standalone FastAPI dashboard: job status/history, own container/port |
+| `dashboard_users.py` | Load/save the dashboard's Basic Auth users file (TOML, username → bcrypt hash) |
+| `manage_dashboard_users.py` | CLI to add/remove/list dashboard users |
+| `templates/`, `static/` | Jinja2 templates + vendored htmx/Stimulus/Tailwind assets for the dashboard |
 
 Local Docker Compose (`docker-compose.yml`) also offers an optional
 `postgres` service under profile `db`
@@ -88,18 +68,18 @@ Cross-module helpers are public; `_` is for true module-locals only.
 
 Test modules mirror the packages (same pattern as `tests/test_io_*.py`):
 
-```
-tests/test_config_load.py          TOML load / Settings / env placeholders
-tests/test_config_validation.py    weights, epoch metrics, max_workers helpers
-tests/test_model_strategies.py     STRATEGIES registry / RecommenderModel checks
-tests/test_model_fit.py            fit cache, parallel fit, resolve_run_models
-tests/test_model_recommend.py      train_and_recommend / boosts / content_fallback
-tests/test_model_combine.py        priority combiner unit tests
-tests/test_model_epoch_metrics.py  LightFM per-epoch metric helpers
-tests/test_model_config.py         RecTools [model.*] + save/load round trips
-tests/support/model_events.py      shared synthetic events helper
-tests/support/toml_config.py       shared write_toml helper
-```
+| Path | Covers |
+| --- | --- |
+| `tests/test_config_load.py` | TOML load / Settings / env placeholders |
+| `tests/test_config_validation.py` | Weights, epoch metrics, max_workers helpers |
+| `tests/test_model_strategies.py` | `STRATEGIES` registry / `RecommenderModel` checks |
+| `tests/test_model_fit.py` | Fit cache, parallel fit, `resolve_run_models` |
+| `tests/test_model_recommend.py` | `train_and_recommend` / boosts / `content_fallback` |
+| `tests/test_model_combine.py` | Priority combiner unit tests |
+| `tests/test_model_epoch_metrics.py` | LightFM per-epoch metric helpers |
+| `tests/test_model_config.py` | RecTools `[model.*]` + save/load round trips |
+| `tests/support/model_events.py` | Shared synthetic events helper |
+| `tests/support/toml_config.py` | Shared `write_toml` helper |
 
 ## Data flow
 

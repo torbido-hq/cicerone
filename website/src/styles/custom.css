@@ -26,3 +26,12 @@
 	color: var(--sl-color-gray-2);
 	font-size: var(--sl-text-sm);
 }
+
+/* Module maps belong in tables; wrap long table cells instead of a nested scrollport. */
+.sl-markdown-content table:not(:where(.not-content *)) {
+	overflow-x: visible;
+}
+
+.sl-markdown-content td:not(:where(.not-content *)) {
+	overflow-wrap: anywhere;
+}
