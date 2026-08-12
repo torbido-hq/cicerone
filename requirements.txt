@@ -1,7 +1,7 @@
 # Core recommender stack
 rectools[lightfm]==0.13.0
 implicit==0.7.3
-pandas==2.2.2
+pandas==3.0.5
 numpy==1.26.4
 scipy==1.12.0
 scikit-learn==1.5.2
