@@ -387,12 +387,12 @@
           {
             "label": "fetch",
             "lang": "JavaScript",
-            "source": "const baseUrl = (process.env.CICERONE_SERVE_URL || \"http://localhost:8000\").replace(/\\/$/, \"\");\nconst token = process.env.CICERONE_SERVE_TOKEN;\nconst userId = process.env.CICERONE_USER_ID || \"alice\";\n\nconst url = new URL(`${baseUrl}/recommendations/${encodeURIComponent(userId)}`);\nurl.searchParams.set(\"limit\", \"5\");\n\nconst response = await fetch(url, {\n  headers: {\n    Accept: \"application/json\",\n    ...(token ? { Authorization: `Bearer ${token}` } : {}),\n  },\n});\nif (!response.ok) throw new Error(`${response.status} ${await response.text()}`);\nconst body = await response.json();\nconsole.log(body.user_id, body.fallback, body.generated_at);\nfor (const row of body.items) {\n  console.log(`  #${row.rank} ${row.item_id} score=${row.score}`);\n}\n"
+            "source": "const baseUrl = (process.env.CICERONE_SERVE_URL || \"http://localhost:8000\").replace(/\\/$/, \"\");\nconst token = process.env.CICERONE_SERVE_TOKEN;\nif (!token) {\n  console.error(\"Set CICERONE_SERVE_TOKEN to a bearer token\");\n  process.exit(1);\n}\nconst userId = process.env.CICERONE_USER_ID || \"alice\";\n\nasync function main() {\n  const url = new URL(`${baseUrl}/recommendations/${encodeURIComponent(userId)}`);\n  url.searchParams.set(\"limit\", \"5\");\n\n  const response = await fetch(url, {\n    headers: {\n      Accept: \"application/json\",\n      Authorization: `Bearer ${token}`,\n    },\n  });\n  if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);\n  const body = await response.json();\n  console.log(body.user_id, body.fallback, body.generated_at);\n  for (const row of body.items) {\n    console.log(`  #${row.rank} ${row.item_id} score=${row.score}`);\n  }\n}\n\nmain().catch((err) => {\n  console.error(err);\n  process.exitCode = 1;\n});\n"
           },
           {
             "label": "curl",
             "lang": "Shell",
-            "source": "curl -sS \\\n  -H \"Authorization: Bearer ${CICERONE_SERVE_TOKEN}\" \\\n  \"${CICERONE_SERVE_URL:-http://localhost:8000}/recommendations/${CICERONE_USER_ID:-alice}?limit=5\"\n"
+            "source": "BASE_URL=\"${CICERONE_SERVE_URL:-http://localhost:8000}\"\nBASE_URL=\"${BASE_URL%/}\"\nTOKEN=\"${CICERONE_SERVE_TOKEN:?set CICERONE_SERVE_TOKEN}\"\nUSER_ID=\"${CICERONE_USER_ID:-alice}\"\nUSER_ID_ENC=\"$(\n  USER_ID=\"$USER_ID\" python3 -c \\\n    'import os, urllib.parse; print(urllib.parse.quote(os.environ[\"USER_ID\"], safe=\"\"))'\n)\"\ncurl -sS \\\n  -H \"Authorization: Bearer $TOKEN\" \\\n  \"$BASE_URL/recommendations/${USER_ID_ENC}?limit=5\"\n"
           }
         ]
       }

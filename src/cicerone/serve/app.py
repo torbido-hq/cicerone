@@ -19,7 +19,7 @@ from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.io.base import ManifestReader, RecommendationReader
 from cicerone.io.recommendation_reader import ITEM_COLUMN, SOURCE_COLUMN, normalize_items_snapshot
-from cicerone.serve.code_samples import attach_code_samples
+from cicerone.serve.code_samples import HEALTH_PATH, RECOMMENDATIONS_PATH, attach_code_samples
 from cicerone.serve.metrics import (
     METRICS_TOKEN_HEADER,
     REQUEST_LATENCY_SECONDS,
@@ -34,10 +34,10 @@ logger = logging.getLogger(__name__)
 
 SERVE_API_TITLE = "Cicerone Serve API"
 SERVE_API_VERSION = __version__
-SERVE_API_DESCRIPTION = """
+SERVE_API_DESCRIPTION = f"""
 Read-only HTTP API over **precomputed** recommendations written by the batch job.
 
-There is no live inference in the request path: `GET /recommendations/{user_id}`
+There is no live inference in the request path: `GET {RECOMMENDATIONS_PATH}`
 looks up rows already stored in the configured output (dataset parquet or DB).
 
 Interactive docs: `/docs` (Swagger UI) and `/redoc` (includes language
@@ -223,7 +223,7 @@ def create_app(
         )
 
     @app.get(
-        "/health",
+        HEALTH_PATH,
         response_model=HealthResponse,
         tags=["health"],
         summary="Liveness probe",
@@ -242,7 +242,7 @@ def create_app(
             return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
     @app.get(
-        "/recommendations/{user_id}",
+        RECOMMENDATIONS_PATH,
         response_model=RecommendationsResponse,
         dependencies=dependencies,
         tags=["recommendations"],
@@ -342,7 +342,7 @@ def create_app(
             "schema": {"type": "string", "example": "2026-08-04T03:00:00+00:00"},
         }
         rec_responses = (
-            schema.get("paths", {}).get("/recommendations/{user_id}", {}).get("get", {}).get("responses", {})
+            schema.get("paths", {}).get(RECOMMENDATIONS_PATH, {}).get("get", {}).get("responses", {})
         )
         ok = rec_responses.get("200")
         if isinstance(ok, dict):
