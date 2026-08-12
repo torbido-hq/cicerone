@@ -6,7 +6,7 @@
   "scripts": {
     "build:css": "tailwindcss -i ./css/input.css -o ./dist/css/site.css --minify",
     "build:docs": "node scripts/build-docs.mjs",
-    "build": "rm -rf dist && mkdir -p dist/css && npm run build:css && npm run build:docs && cp index.html CNAME dist/ && cp -r assets images js dist/",
+    "build": "rm -rf dist && mkdir -p dist/css && npm run build:css && npm run build:docs && cp index.html CNAME robots.txt dist/ && cp -r assets images js dist/",
     "dev": "tailwindcss -i ./css/input.css -o ./dist/css/site.css --watch"
   },
   "devDependencies": {

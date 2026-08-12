@@ -9,8 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - Static project site under `website/` (README-style landing + docs
-  rendered from `docs/*.md`); Tailwind v4 + IBM Plex, built in CI and
-  deployed to Pages at [cicerone.dev](https://cicerone.dev).
+  rendered from `docs/*.md`); Tailwind v4 + IBM Plex, with accessibility
+  and SEO basics (landmarks, focus, canonical/OG/JSON-LD, sitemap), built
+  in CI and deployed to Pages at [cicerone.dev](https://cicerone.dev).
 
 ## [0.5.1] - 2026-08-12
 

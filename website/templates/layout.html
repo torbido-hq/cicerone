@@ -5,40 +5,60 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{TITLE}} — Cicerone</title>
   <meta name="description" content="{{DESCRIPTION}}">
+  <meta name="theme-color" content="#004b75">
+  <meta name="color-scheme" content="light">
+  <link rel="canonical" href="{{CANONICAL}}">
+  <meta property="og:type" content="{{OG_TYPE}}">
+  <meta property="og:site_name" content="Cicerone">
+  <meta property="og:locale" content="en_US">
+  <meta property="og:title" content="{{TITLE}} — Cicerone">
+  <meta property="og:description" content="{{DESCRIPTION}}">
+  <meta property="og:url" content="{{CANONICAL}}">
+  <meta property="og:image" content="https://cicerone.dev/images/dashboard.png">
+  <meta property="og:image:alt" content="Cicerone recommendation job status dashboard">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{TITLE}} — Cicerone">
+  <meta name="twitter:description" content="{{DESCRIPTION}}">
+  <meta name="twitter:image" content="https://cicerone.dev/images/dashboard.png">
   <link rel="icon" type="image/svg+xml" href="{{ROOT}}assets/cicerone-icon.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ROOT}}css/site.css">
+  <script type="application/ld+json">{{JSON_LD}}</script>
 </head>
 <body class="min-h-screen">
-  <a class="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-50 focus:bg-ink focus:px-3 focus:py-2 focus:text-white" href="#main">Skip to content</a>
+  <a class="skip-link" href="#main">Skip to content</a>
 
   <header class="border-b border-line bg-panel/90 backdrop-blur-sm">
     <div class="site-wrap flex items-center justify-between gap-4 py-3">
-      <a href="{{ROOT}}index.html">
+      <a href="{{ROOT}}index.html" {{HOME_CURRENT}}>
         <img src="{{ROOT}}assets/cicerone-logo.svg" alt="Cicerone" width="140" height="44" class="h-8 w-auto">
       </a>
       <nav aria-label="Primary">
         <ul class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
-          <li><a class="site-nav-link" href="{{ROOT}}index.html">Home</a></li>
+          <li><a class="site-nav-link" href="{{ROOT}}index.html" {{HOME_CURRENT}}>Home</a></li>
           <li><a class="site-nav-link" href="{{ROOT}}docs/" {{DOCS_CURRENT}}>Docs</a></li>
-          <li><a class="site-nav-link" href="{{ROOT}}docs/tutorial.html">Tutorial</a></li>
-          <li><a class="site-nav-link" href="{{ROOT}}docs/architecture.html">Architecture</a></li>
-          <li><a class="site-nav-link" href="https://github.com/torbido-hq/cicerone">GitHub</a></li>
+          <li><a class="site-nav-link" href="{{ROOT}}docs/tutorial.html" {{TUTORIAL_CURRENT}}>Tutorial</a></li>
+          <li><a class="site-nav-link" href="{{ROOT}}docs/architecture.html" {{ARCHITECTURE_CURRENT}}>Architecture</a></li>
+          <li><a class="site-nav-link" href="https://github.com/torbido-hq/cicerone" rel="noopener noreferrer">GitHub<span class="sr-only"> (opens on GitHub)</span></a></li>
         </ul>
       </nav>
     </div>
   </header>
 
-  <main id="main" class="site-wrap py-10 sm:py-12 pb-16">
+  <main id="main" class="site-wrap py-10 sm:py-12 pb-16" tabindex="-1">
     {{CONTENT}}
   </main>
 
   <footer class="border-t border-line py-6 text-sm text-muted">
     <div class="site-wrap flex flex-wrap items-center justify-between gap-3">
-      <p><a class="text-ink-soft" href="{{ROOT}}index.html">Home</a> · <a class="text-ink-soft" href="{{ROOT}}docs/">Docs</a></p>
-      <p><a class="text-ink-soft" href="https://github.com/torbido-hq/cicerone">GitHub</a></p>
+      <nav aria-label="Footer">
+        <a class="text-ink-soft" href="{{ROOT}}index.html">Home</a>
+        ·
+        <a class="text-ink-soft" href="{{ROOT}}docs/">Docs</a>
+      </nav>
+      <p><a class="text-ink-soft" href="https://github.com/torbido-hq/cicerone" rel="noopener noreferrer">GitHub<span class="sr-only"> (opens on GitHub)</span></a></p>
     </div>
   </footer>
 </body>

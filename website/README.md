@@ -13,6 +13,7 @@ folder (including `CNAME`).
 | `scripts/build-docs.mjs` | Renders `../docs/*.md` → `dist/docs/*.html` |
 | `templates/layout.html` | Shared chrome for rendered docs |
 | `css/input.css` | Tailwind v4 theme + typography plugin |
+| `robots.txt` / `sitemap.xml` | SEO crawl hints (sitemap written at build) |
 | `CNAME` | Custom domain (`cicerone.dev`) |
 | `images/` | Screenshots and diagrams |
 | `assets/` | Logo / favicon |

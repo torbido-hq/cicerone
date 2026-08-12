@@ -12,17 +12,14 @@
 
   --color-ink: #15202b;
   --color-ink-soft: #2c3a47;
-  --color-muted: #5a6b78;
+  /* ~4.7:1+ on paper for small text (WCAG AA) */
+  --color-muted: #4a5a66;
   --color-paper: #f7f8f8;
   --color-panel: #ffffff;
-  --color-cyan: #0077a8;
+  --color-cyan: #006d99;
   --color-deep: #004b75;
-  --color-line: #d7dde2;
-
-  --text-display: clamp(1.85rem, 3.5vw, 2.35rem);
-  --text-display--line-height: 1.2;
-  --text-display--letter-spacing: -0.02em;
-  --text-display--font-weight: 600;
+  --color-line: #c9d1d7;
+  --color-focus: #004b75;
 
   --text-title: clamp(1.35rem, 2.2vw, 1.65rem);
   --text-title--line-height: 1.25;
@@ -62,6 +59,15 @@
     background-position: -1px -1px;
   }
 
+  :focus {
+    outline: none;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
+  }
+
   a {
     @apply text-deep underline-offset-2;
   }
@@ -76,6 +82,16 @@
 }
 
 @layer components {
+  .skip-link {
+    @apply sr-only;
+  }
+
+  .skip-link:focus {
+    @apply not-sr-only absolute left-2 top-2 z-50 bg-ink px-3 py-2 text-sm font-medium text-white no-underline;
+    outline: 2px solid var(--color-panel);
+    outline-offset: 2px;
+  }
+
   .site-wrap {
     @apply mx-auto w-[min(100%-2rem,44rem)] sm:w-[min(100%-2.5rem,52rem)];
   }
@@ -108,6 +124,7 @@
   }
 
   .group:hover .header-anchor,
+  .group:focus-within .header-anchor,
   .header-anchor:focus {
     @apply opacity-100;
   }
