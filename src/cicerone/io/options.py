@@ -13,6 +13,8 @@ import pandas as pd
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
+from cicerone.config import ConfigError
+
 logger = logging.getLogger(__name__)
 
 _SQL_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -23,7 +25,7 @@ STORAGE_BACKENDS = frozenset({"s3", "local"})
 def require_option(options: dict[str, Any], key: str, backend: str) -> Any:
     value = options.get(key)
     if value is None:
-        raise RuntimeError(f"Missing required option '{key}' for backend {backend!r}")
+        raise ConfigError(f"Missing required option '{key}' for backend {backend!r}")
     return value
 
 
@@ -61,7 +63,7 @@ def build_s3_client(options: dict[str, Any]):
 def storage_backend(options: dict[str, Any]) -> str:
     backend = options.get("storage_backend", "local")
     if backend not in STORAGE_BACKENDS:
-        raise RuntimeError(f"Unknown storage_backend: {backend!r} (expected 's3' or 'local')")
+        raise ConfigError(f"Unknown storage_backend: {backend!r} (expected 's3' or 'local')")
     return str(backend)
 
 
@@ -71,14 +73,12 @@ def validate_storage_options(options: dict[str, Any], backend: str | None = None
     Always resolves from ``options``. If ``backend`` is passed, it must match
     ``options['storage_backend']`` (or the default ``local``).
 
-    Raises ``RuntimeError`` for unknown backends, backend mismatches, or missing
+    Raises ``ConfigError`` for unknown backends, backend mismatches, or missing
     required options.
     """
     resolved = storage_backend(options)
     if backend is not None and str(backend) != resolved:
-        raise RuntimeError(
-            f"explicit backend {backend!r} does not match options storage_backend {resolved!r}"
-        )
+        raise ConfigError(f"explicit backend {backend!r} does not match options storage_backend {resolved!r}")
     if resolved == "local":
         require_option(options, "path", "local")
     else:

@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 from moto import mock_aws
 
+from cicerone.config import ConfigError
 from cicerone.io.recommendation_reader import (
     DatasetRecommendationReader,
     normalize_items_snapshot,
@@ -289,9 +290,9 @@ def test_dataset_reader_s3_backend_no_prefix_uses_flat_key(s3_options):
 
 
 def test_dataset_recommendation_reader_validates_storage_options():
-    with pytest.raises(RuntimeError, match="path"):
+    with pytest.raises(ConfigError, match="path"):
         DatasetRecommendationReader({"storage_backend": "local"})
-    with pytest.raises(RuntimeError, match="bucket"):
+    with pytest.raises(ConfigError, match="bucket"):
         DatasetRecommendationReader(
             {
                 "storage_backend": "s3",
