@@ -4,6 +4,11 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    ignore:
+      # rectools still requires pandas<3 (through 0.19.0). Stay on the latest
+      # 2.x pin in requirements.txt until upstream supports pandas 3.
+      - dependency-name: "pandas"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "docker"
     directory: "/docker"
