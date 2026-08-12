@@ -9,7 +9,7 @@
 [![GitHub Pages](https://img.shields.io/badge/docs-cicerone.dev-004B75.svg)](https://cicerone.dev)
 
 **Site:** [cicerone.dev](https://cicerone.dev)
-(screenshots + docs overview; source in [`website/`](website/)).
+(screenshots + docs rendered from [`docs/`](docs/); source in [`website/`](website/)).
 
 A generic, self-hosted batch recommender system. It reads your interaction
 data, trains a hybrid [rectools](https://github.com/MobileTeleSystems/RecTools)
@@ -541,8 +541,8 @@ The minimum required coverage is 95% (`pyproject.toml`,
 `pip-audit` in the same test image. Model/config tests follow the package
 layout (`tests/test_model_*.py`, `tests/test_config_*.py`). See
 [CONTRIBUTING.md](CONTRIBUTING.md) for how to run tests/lint locally,
-the [project site](https://cicerone.dev) (`website/`) for
-screenshots and a short docs overview,
+the [project site](https://cicerone.dev) (`website/`, renders `docs/*.md`) for
+screenshots and documentation,
 [docs/tutorial.md](docs/tutorial.md) for a hands-on walkthrough with local
 sample data, and [docs/architecture.md](docs/architecture.md) for how the
 code is structured. See [CHANGELOG.md](CHANGELOG.md) for release notes.
