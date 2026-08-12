@@ -14,29 +14,22 @@
     <g transform="translate(40, 45)">
       <path d="M 115 50 
                A 55 55 0 1 0 115 110" 
-            fill="none" 
-            stroke="url(#cGrad)" 
-            stroke-width="18" 
+            fill="none"   
             stroke-linecap="round" />
       <path d="M 105 62 
                A 40 40 0 1 0 105 98" 
-            fill="none" 
-            stroke="#00E5FF" 
-            stroke-width="4" 
+            fill="none"   
             stroke-linecap="round" 
             opacity="0.7"/>
       <path d="M 20 80 L 75 45 L 63 80 L 75 115 Z" 
-            fill="url(#arrowGrad)" 
-            stroke="#004B75" 
-            stroke-width="4" 
+            fill="url(#arrowGrad)"   
             stroke-linejoin="round" />
       <path d="M 5 80 L 35 80" 
-            fill="none" 
-            stroke="#004B75" 
-            stroke-width="6" 
+            fill="none"   
             stroke-linecap="round" />
     </g>
 
+    <!-- Light fill + dark stroke: readable on dark and light backgrounds -->
     <text x="210" y="125" 
           font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" 
           font-size="64" 
