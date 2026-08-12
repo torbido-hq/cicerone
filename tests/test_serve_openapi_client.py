@@ -14,6 +14,14 @@ from test_serve import _FakeManifest, _FakeReader, _feature_config, _items_df, _
 from cicerone.export_serve_openapi import build_openapi
 from cicerone.export_serve_openapi import main as export_main
 from cicerone.serve import SERVE_API_TITLE, SERVE_API_VERSION, create_app
+from cicerone.serve.code_samples import (
+    ENV_SERVE_TOKEN,
+    ENV_SERVE_URL,
+    HEALTH_CODE_SAMPLES,
+    HEALTH_PATH,
+    RECOMMENDATIONS_CODE_SAMPLES,
+    RECOMMENDATIONS_PATH,
+)
 from cicerone.serve_client import ServeClient, ServeClientError
 from cicerone.serve_schemas import HealthResponse
 
@@ -37,8 +45,8 @@ def test_openapi_json_lists_serve_paths_and_schemas():
 
     assert schema["info"]["title"] == SERVE_API_TITLE
     assert schema["info"]["version"] == SERVE_API_VERSION
-    assert "/health" in schema["paths"]
-    assert "/recommendations/{user_id}" in schema["paths"]
+    assert HEALTH_PATH in schema["paths"]
+    assert RECOMMENDATIONS_PATH in schema["paths"]
 
     components = schema["components"]["schemas"]
     assert "RecommendationsResponse" in components
@@ -50,7 +58,7 @@ def test_openapi_json_lists_serve_paths_and_schemas():
     assert "X-Generated-At" in header_components
     assert header_components["X-Generated-At"]["schema"]["type"] == "string"
 
-    rec = schema["paths"]["/recommendations/{user_id}"]["get"]
+    rec = schema["paths"][RECOMMENDATIONS_PATH]["get"]
     assert "X-Generated-At" in rec["responses"]["200"].get("headers", {})
 
     for status_code in ("400", "401", "404"):
@@ -59,6 +67,16 @@ def test_openapi_json_lists_serve_paths_and_schemas():
         assert error_schema.get("$ref") == "#/components/schemas/ErrorDetail"
 
     assert schema["components"]["securitySchemes"]
+
+    health_samples = schema["paths"][HEALTH_PATH]["get"]["x-codeSamples"]
+    assert {s["lang"] for s in health_samples} >= {s["lang"] for s in HEALTH_CODE_SAMPLES}
+    assert all(ENV_SERVE_URL in sample["source"] for sample in health_samples)
+
+    rec_samples = rec["x-codeSamples"]
+    assert {s["lang"] for s in rec_samples} >= {s["lang"] for s in RECOMMENDATIONS_CODE_SAMPLES}
+    ruby_rec = next(sample for sample in rec_samples if sample["lang"] == "Ruby")
+    assert ENV_SERVE_URL in ruby_rec["source"]
+    assert ENV_SERVE_TOKEN in ruby_rec["source"]
 
 
 def test_docs_ui_is_available():

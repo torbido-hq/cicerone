@@ -181,7 +181,7 @@
     }
   },
   "info": {
-    "description": "Read-only HTTP API over **precomputed** recommendations written by the batch job.\n\nThere is no live inference in the request path: `GET /recommendations/{user_id}`\nlooks up rows already stored in the configured output (dataset parquet or DB).\n\nInteractive docs: `/docs` (Swagger UI) and `/redoc`. Machine-readable schema: `/openapi.json`.\nA checked-in copy lives at `docs/openapi/serve.openapi.json` (regenerate with\n`python -m cicerone.export_serve_openapi`).",
+    "description": "Read-only HTTP API over **precomputed** recommendations written by the batch job.\n\nThere is no live inference in the request path: `GET /recommendations/{user_id}`\nlooks up rows already stored in the configured output (dataset parquet or DB).\n\nInteractive docs: `/docs` (Swagger UI) and `/redoc` (includes language\ncode samples via ``x-codeSamples``). Machine-readable schema: `/openapi.json`.\nA checked-in copy lives at `docs/openapi/serve.openapi.json` (regenerate with\n`python -m cicerone.export_serve_openapi`).",
     "title": "Cicerone Serve API",
     "version": "0.5.0"
   },
@@ -205,6 +205,28 @@
         "summary": "Liveness probe",
         "tags": [
           "health"
+        ],
+        "x-codeSamples": [
+          {
+            "label": "Net::HTTP",
+            "lang": "Ruby",
+            "source": "require \"json\"\nrequire \"net/http\"\nrequire \"uri\"\n\nbase = ENV.fetch(\"CICERONE_SERVE_URL\", \"http://localhost:8000\").sub(%r{/\\z}, \"\")\nuri = URI(\"#{base}/health\")\n# /health is unauthenticated (no CICERONE_SERVE_TOKEN).\nresponse = Net::HTTP.get_response(uri)\nabort(\"HTTP #{response.code}: #{response.body}\") unless response.is_a?(Net::HTTPSuccess)\nputs JSON.parse(response.body)\n"
+          },
+          {
+            "label": "urllib",
+            "lang": "Python",
+            "source": "import json\nimport os\nfrom urllib.request import urlopen\n\nbase = os.environ.get(\"CICERONE_SERVE_URL\", \"http://localhost:8000\").rstrip(\"/\")\n# /health is unauthenticated (no CICERONE_SERVE_TOKEN).\nprint(json.load(urlopen(f\"{base}/health\")))\n"
+          },
+          {
+            "label": "fetch",
+            "lang": "JavaScript",
+            "source": "const baseUrl = (process.env.CICERONE_SERVE_URL || \"http://localhost:8000\").replace(/\\/$/, \"\");\n\nasync function main() {\n  const response = await fetch(`${baseUrl}/health`, {\n    headers: { Accept: \"application/json\" },\n  });\n  if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);\n  console.log(await response.json());\n}\n\nmain().catch((err) => {\n  console.error(err);\n  process.exitCode = 1;\n});\n"
+          },
+          {
+            "label": "curl",
+            "lang": "Shell",
+            "source": "# /health is unauthenticated (no CICERONE_SERVE_TOKEN).\ncurl -fsS \"${CICERONE_SERVE_URL:-http://localhost:8000}/health\" || exit 1\n"
+          }
         ]
       }
     },
@@ -355,6 +377,28 @@
         "summary": "Precomputed top-K recommendations for a user",
         "tags": [
           "recommendations"
+        ],
+        "x-codeSamples": [
+          {
+            "label": "Net::HTTP",
+            "lang": "Ruby",
+            "source": "require \"json\"\nrequire \"net/http\"\nrequire \"uri\"\n\nbase = ENV.fetch(\"CICERONE_SERVE_URL\", \"http://localhost:8000\").sub(%r{/\\z}, \"\")\ntoken = ENV.fetch(\"CICERONE_SERVE_TOKEN\")\nuser_id = ENV.fetch(\"CICERONE_USER_ID\", \"alice\")\n\nuri = URI(\"#{base}/recommendations/#{URI.encode_www_form_component(user_id)}\")\nuri.query = URI.encode_www_form(limit: 5)\n\nreq = Net::HTTP::Get.new(uri)\nreq[\"Accept\"] = \"application/json\"\nreq[\"Authorization\"] = \"Bearer #{token}\"\n\nres = Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == \"https\") do |http|\n  http.request(req)\nend\nabort(\"HTTP #{res.code}: #{res.body}\") unless res.is_a?(Net::HTTPSuccess)\n\nbody = JSON.parse(res.body)\nputs \"user=#{body['user_id']} fallback=#{body['fallback']}\"\nbody[\"items\"].each { |row| puts \"  ##{row['rank']} #{row['item_id']} score=#{row['score']}\" }\n"
+          },
+          {
+            "label": "ServeClient",
+            "lang": "Python",
+            "source": "import os\nfrom cicerone.serve_client import ServeClient\n\nclient = ServeClient(\n    os.environ.get(\"CICERONE_SERVE_URL\", \"http://localhost:8000\"),\n    token=os.environ[\"CICERONE_SERVE_TOKEN\"],\n)\nbody = client.recommendations(\n    os.environ.get(\"CICERONE_USER_ID\", \"alice\"),\n    limit=5,\n)\nprint(body.user_id, body.fallback, body.generated_at)\nfor row in body.items:\n    print(f\"  #{row.rank} {row.item_id} score={row.score}\")\n"
+          },
+          {
+            "label": "fetch",
+            "lang": "JavaScript",
+            "source": "const baseUrl = (process.env.CICERONE_SERVE_URL || \"http://localhost:8000\").replace(/\\/$/, \"\");\nconst token = process.env.CICERONE_SERVE_TOKEN;\nif (!token) {\n  console.error(\"Set CICERONE_SERVE_TOKEN to a bearer token\");\n  process.exit(1);\n}\nconst userId = process.env.CICERONE_USER_ID || \"alice\";\n\nasync function main() {\n  const url = new URL(`${baseUrl}/recommendations/${encodeURIComponent(userId)}`);\n  url.searchParams.set(\"limit\", \"5\");\n\n  const response = await fetch(url, {\n    headers: {\n      Accept: \"application/json\",\n      Authorization: `Bearer ${token}`,\n    },\n  });\n  if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);\n  const body = await response.json();\n  console.log(body.user_id, body.fallback, body.generated_at);\n  for (const row of body.items) {\n    console.log(`  #${row.rank} ${row.item_id} score=${row.score}`);\n  }\n}\n\nmain().catch((err) => {\n  console.error(err);\n  process.exitCode = 1;\n});\n"
+          },
+          {
+            "label": "curl",
+            "lang": "Shell",
+            "source": "BASE_URL=\"${CICERONE_SERVE_URL:-http://localhost:8000}\"\nBASE_URL=\"${BASE_URL%/}\"\nTOKEN=\"${CICERONE_SERVE_TOKEN:?set CICERONE_SERVE_TOKEN}\"\nUSER_ID=\"${CICERONE_USER_ID:-alice}\"\nUSER_ID_ENC=\"$(\n  USER_ID=\"$USER_ID\" python3 -c \\\n    'import os, urllib.parse; print(urllib.parse.quote(os.environ[\"USER_ID\"], safe=\"\"))'\n)\"\ncurl -fsS \\\n  -H \"Authorization: Bearer $TOKEN\" \\\n  \"$BASE_URL/recommendations/${USER_ID_ENC}?limit=5\" || exit 1\n"
+          }
         ]
       }
     }

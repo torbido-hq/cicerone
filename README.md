@@ -143,7 +143,10 @@ docker run --rm -v "$PWD":/app -w /app -e PYTHONPATH=/app/src cicerone-test \
   python -m cicerone.export_serve_openapi -o docs/openapi/serve.openapi.json
 ```
 
-Thin clients (no generated SDK package — copy or import as needed):
+Thin clients (no generated SDK package — copy or import as needed). ReDoc
+(`http://localhost:8000/redoc`) and the checked-in OpenAPI schema also include
+`x-codeSamples` (Ruby, Python, JavaScript, Shell) on `/health` and
+`/recommendations/{user_id}`:
 
 | Path | Notes |
 | --- | --- |
