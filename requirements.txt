@@ -22,7 +22,7 @@ croniter==6.2.4
 
 # Serve mode's read API + the event-driven retrain trigger's webhook
 fastapi==0.140.13
-uvicorn[standard]==0.52.0
+uvicorn[standard]==0.52.1
 prometheus-client==0.21.1
 
 # Dashboard: server-rendered status page (Jinja2 templates) + HTTP Basic
