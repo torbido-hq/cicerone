@@ -11,7 +11,7 @@ scikit-learn==1.9.0
 # be written to a Postgres table).
 # Keep boto3 within aiobotocore's botocore pin (s3fs → aiobotocore 3.9 needs
 # botocore<1.43.57); boto3>=1.43.57 fails pip resolution with current s3fs.
-boto3==1.43.56
+boto3==1.43.67
 s3fs==2026.7.0
 pyarrow==25.0.0
 SQLAlchemy==2.0.51
