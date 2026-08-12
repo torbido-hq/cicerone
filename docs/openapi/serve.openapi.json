@@ -210,17 +210,17 @@
           {
             "label": "Net::HTTP",
             "lang": "Ruby",
-            "source": "require \"json\"\nrequire \"net/http\"\nrequire \"uri\"\n\nuri = URI(\"http://localhost:8000/health\")\nresponse = Net::HTTP.get_response(uri)\nputs JSON.parse(response.body)\n"
+            "source": "require \"json\"\nrequire \"net/http\"\nrequire \"uri\"\n\nbase = ENV.fetch(\"CICERONE_SERVE_URL\", \"http://localhost:8000\").sub(%r{/\\z}, \"\")\nuri = URI(\"#{base}/health\")\n# /health is unauthenticated (no CICERONE_SERVE_TOKEN).\nresponse = Net::HTTP.get_response(uri)\nabort(\"HTTP #{response.code}: #{response.body}\") unless response.is_a?(Net::HTTPSuccess)\nputs JSON.parse(response.body)\n"
           },
           {
             "label": "urllib",
             "lang": "Python",
-            "source": "from urllib.request import urlopen\nimport json\n\nprint(json.load(urlopen(\"http://localhost:8000/health\")))\n"
+            "source": "import json\nimport os\nfrom urllib.request import urlopen\n\nbase = os.environ.get(\"CICERONE_SERVE_URL\", \"http://localhost:8000\").rstrip(\"/\")\n# /health is unauthenticated (no CICERONE_SERVE_TOKEN).\nprint(json.load(urlopen(f\"{base}/health\")))\n"
           },
           {
             "label": "curl",
             "lang": "Shell",
-            "source": "curl -sS http://localhost:8000/health\n"
+            "source": "# /health is unauthenticated (no CICERONE_SERVE_TOKEN).\ncurl -sS \"${CICERONE_SERVE_URL:-http://localhost:8000}/health\"\n"
           }
         ]
       }
@@ -377,7 +377,7 @@
           {
             "label": "Net::HTTP",
             "lang": "Ruby",
-            "source": "require \"json\"\nrequire \"net/http\"\nrequire \"uri\"\n\nbase = \"http://localhost:8000\"\ntoken = ENV.fetch(\"CICERONE_SERVE_TOKEN\")\nuser_id = ENV.fetch(\"CICERONE_USER_ID\", \"alice\")\n\nuri = URI(\"#{base}/recommendations/#{URI.encode_www_form_component(user_id)}\")\nuri.query = URI.encode_www_form(limit: 5)\n\nreq = Net::HTTP::Get.new(uri)\nreq[\"Accept\"] = \"application/json\"\nreq[\"Authorization\"] = \"Bearer #{token}\"\n\nres = Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == \"https\") do |http|\n  http.request(req)\nend\nabort(\"HTTP #{res.code}: #{res.body}\") unless res.is_a?(Net::HTTPSuccess)\n\nbody = JSON.parse(res.body)\nputs \"user=#{body['user_id']} fallback=#{body['fallback']}\"\nbody[\"items\"].each { |row| puts \"  ##{row['rank']} #{row['item_id']} score=#{row['score']}\" }\n"
+            "source": "require \"json\"\nrequire \"net/http\"\nrequire \"uri\"\n\nbase = ENV.fetch(\"CICERONE_SERVE_URL\", \"http://localhost:8000\").sub(%r{/\\z}, \"\")\ntoken = ENV.fetch(\"CICERONE_SERVE_TOKEN\")\nuser_id = ENV.fetch(\"CICERONE_USER_ID\", \"alice\")\n\nuri = URI(\"#{base}/recommendations/#{URI.encode_www_form_component(user_id)}\")\nuri.query = URI.encode_www_form(limit: 5)\n\nreq = Net::HTTP::Get.new(uri)\nreq[\"Accept\"] = \"application/json\"\nreq[\"Authorization\"] = \"Bearer #{token}\"\n\nres = Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == \"https\") do |http|\n  http.request(req)\nend\nabort(\"HTTP #{res.code}: #{res.body}\") unless res.is_a?(Net::HTTPSuccess)\n\nbody = JSON.parse(res.body)\nputs \"user=#{body['user_id']} fallback=#{body['fallback']}\"\nbody[\"items\"].each { |row| puts \"  ##{row['rank']} #{row['item_id']} score=#{row['score']}\" }\n"
           },
           {
             "label": "ServeClient",

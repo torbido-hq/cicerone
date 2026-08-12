@@ -62,9 +62,13 @@ def test_openapi_json_lists_serve_paths_and_schemas():
 
     health_samples = schema["paths"]["/health"]["get"]["x-codeSamples"]
     assert any(sample["lang"] == "Ruby" for sample in health_samples)
+    assert all("CICERONE_SERVE_URL" in sample["source"] for sample in health_samples)
     rec_samples = rec["x-codeSamples"]
     assert any(sample["lang"] == "Ruby" for sample in rec_samples)
     assert any(sample["lang"] == "Python" for sample in rec_samples)
+    ruby_rec = next(sample for sample in rec_samples if sample["lang"] == "Ruby")
+    assert "CICERONE_SERVE_URL" in ruby_rec["source"]
+    assert "CICERONE_SERVE_TOKEN" in ruby_rec["source"]
 
 
 def test_docs_ui_is_available():
