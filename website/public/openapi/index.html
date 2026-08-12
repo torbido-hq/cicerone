@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cicerone serve API — OpenAPI</title>
+  <meta name="description" content="Interactive OpenAPI (Swagger UI) for Cicerone's read-only serve API.">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5.30.2/swagger-ui.css" crossorigin>
+  <style>
+    html { box-sizing: border-box; }
+    *, *::before, *::after { box-sizing: inherit; }
+    body {
+      margin: 0;
+      background: #f7f8f8;
+      font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    }
+    .topbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem 1.25rem;
+      padding: 0.75rem 1.25rem;
+      border-bottom: 1px solid #d7dde2;
+      background: #fff;
+    }
+    .topbar a {
+      color: #004b75;
+      text-decoration: none;
+      font-size: 0.95rem;
+    }
+    .topbar a:hover { text-decoration: underline; }
+    .topbar nav { display: flex; flex-wrap: wrap; gap: 1rem; }
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-weight: 600;
+      color: #15202b;
+      text-decoration: none;
+    }
+    .brand img { height: 1.75rem; width: auto; }
+    #swagger-ui .topbar { display: none; }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">
+      <img src="/favicon.svg" alt="" width="28" height="28">
+      Cicerone serve API
+    </a>
+    <nav aria-label="OpenAPI">
+      <a href="/">Docs home</a>
+      <a href="/openapi/serve.openapi.json">Raw OpenAPI JSON</a>
+      <a href="https://github.com/torbido-hq/cicerone" rel="noopener noreferrer">GitHub</a>
+    </nav>
+  </header>
+  <div id="swagger-ui" role="main" aria-label="Swagger UI"></div>
+  <script src="https://unpkg.com/swagger-ui-dist@5.30.2/swagger-ui-bundle.js" crossorigin></script>
+  <script>
+    window.ui = SwaggerUIBundle({
+      url: "/openapi/serve.openapi.json",
+      dom_id: "#swagger-ui",
+      deepLinking: true,
+      docExpansion: "list",
+      defaultModelsExpandDepth: 1,
+      tryItOutEnabled: false,
+      validatorUrl: null,
+      persistAuthorization: false,
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+{
+  "name": "cicerone-website",
+  "private": true,
+  "type": "module",
+  "version": "0.0.1",
+  "description": "Cicerone docs site (Astro Starlight). Syncs markdown from ../docs and deploys to GitHub Pages / cicerone.dev.",
+  "scripts": {
+    "sync-docs": "node scripts/sync-docs.mjs",
+    "dev": "npm run sync-docs && astro dev",
+    "start": "npm run dev",
+    "build": "npm run sync-docs && astro build",
+    "preview": "astro preview",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.41.7",
+    "astro": "^7.1.6",
+    "sharp": "^0.35.3"
+  }
+}

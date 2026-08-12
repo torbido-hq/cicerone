@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Changed
+
+- Project docs site (not part of the runtime product): Starlight under
+  `website/`, synced from `docs/`, published at [cicerone.dev](https://cicerone.dev).
+
 ## [0.5.1] - 2026-08-12
 
 ### Added

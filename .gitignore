@@ -16,6 +16,9 @@ src/cicerone/static/tailwind.css
 # this.
 node_modules/
 
+# GitHub Pages / Starlight site build output.
+website/dist/
+
 # Dashboard Basic Auth credentials (managed via
 # `python -m cicerone.manage_dashboard_users`) -- never commit real ones.
 config/dashboard_users.toml
