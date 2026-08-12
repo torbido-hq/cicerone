@@ -272,7 +272,7 @@ def blend_for_users(
             if shared_latest is not None:
                 ranking = shared_latest
             elif latest_index is not None:
-                ranking = latest_index.get(user_id)
+                ranking = latest_index.get(str(user_id))
             if ranking:
                 weight = weights.get(LATEST_SOURCE, 0.0)
                 if weight > _WEIGHT_EPS:

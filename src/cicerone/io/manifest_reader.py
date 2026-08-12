@@ -24,7 +24,7 @@ from cicerone.io.options import (
     object_key,
     require_option,
     sql_identifier,
-    storage_backend,
+    validate_storage_options,
 )
 
 logger = logging.getLogger(__name__)
@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 class DatasetManifestReader:
     def __init__(self, options: dict[str, Any]):
         self._options = options
-        self._backend = storage_backend(options)
+        self._backend = validate_storage_options(options)
 
     def _read(self) -> dict[str, Any] | None:
         if self._backend == "local":

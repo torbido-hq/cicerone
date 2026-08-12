@@ -17,7 +17,7 @@ from fastapi import FastAPI, HTTPException
 from cicerone import job
 from cicerone.config import IOSettings, Settings
 from cicerone.http_auth import optional_bearer_deps
-from cicerone.io.options import build_s3_client, object_key, require_option
+from cicerone.io.options import build_s3_client, object_key, validate_storage_options
 from cicerone.locks import LockBackend
 from cicerone.serve.metrics import record_retrain_trigger
 
@@ -82,21 +82,21 @@ class RunGuard:
 
 def _current_marker(input_settings: IOSettings) -> str | None:
     options = input_settings.options
-    backend = options.get("storage_backend", "local")
     try:
+        backend = validate_storage_options(options)
         if backend == "local":
-            path = Path(require_option(options, "path", "local")) / "events.parquet"
+            path = Path(options["path"]) / "events.parquet"
             if not path.exists():
                 return None
             return str(path.stat().st_mtime)
 
         client = build_s3_client(options)
-        bucket = require_option(options, "bucket", "s3")
+        bucket = options["bucket"]
         key = object_key(options, "events.parquet")
         head = client.head_object(Bucket=bucket, Key=key)
         return str(head["LastModified"])
     except Exception:
-        logger.exception("Failed to check input source for changes")
+        logger.exception("Failed to check input source for changes; treating as unchanged")
         return None
 
 

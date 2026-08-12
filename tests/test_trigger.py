@@ -245,7 +245,9 @@ def test_current_marker_local_backend_reflects_mtime(tmp_path):
     assert _current_marker(input_settings) is not None
 
 
-def test_current_marker_local_stat_error_returns_none(tmp_path, monkeypatch):
+def test_current_marker_local_stat_error_returns_none(tmp_path, monkeypatch, caplog):
+    import logging
+
     from cicerone.trigger import _current_marker
 
     input_settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
@@ -255,7 +257,9 @@ def test_current_marker_local_stat_error_returns_none(tmp_path, monkeypatch):
         raise PermissionError("denied")
 
     monkeypatch.setattr("pathlib.Path.stat", boom)
-    assert _current_marker(input_settings) is None
+    with caplog.at_level(logging.ERROR, logger="cicerone.trigger"):
+        assert _current_marker(input_settings) is None
+    assert any("Failed to check input source" in record.message for record in caplog.records)
 
 
 @pytest.fixture

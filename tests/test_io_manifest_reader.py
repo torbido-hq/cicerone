@@ -92,3 +92,16 @@ def test_dataset_reader_s3_backend_raises_on_hard_failure(s3_options):
 
     with pytest.raises(ClientError):
         reader.read_latest()
+
+
+def test_dataset_manifest_reader_validates_storage_options():
+    with pytest.raises(RuntimeError, match="path"):
+        DatasetManifestReader({"storage_backend": "local"})
+    with pytest.raises(RuntimeError, match="bucket"):
+        DatasetManifestReader(
+            {
+                "storage_backend": "s3",
+                "access_key_id": "test",
+                "secret_access_key": "test",
+            }
+        )

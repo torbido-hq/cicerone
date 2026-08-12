@@ -12,7 +12,12 @@ from cicerone.config import Settings
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.recommendation_reader import select_cold_start_fallback
 from cicerone.serve import create_app, main
-from cicerone.serve.app import _available_item_ids, _ItemsFilterCache, _start_refresh_loop
+from cicerone.serve.app import (
+    _available_item_ids,
+    _GeneratedAtCache,
+    _ItemsFilterCache,
+    _start_refresh_loop,
+)
 
 
 def _settings(**overrides) -> Settings:
@@ -437,9 +442,41 @@ def test_recommendations_survive_manifest_reader_errors():
     assert "X-Generated-At" not in response.headers
 
 
+def test_generated_at_cache_reads_and_refreshes_manifest():
+    class MutableManifest:
+        def __init__(self) -> None:
+            self.payload: dict | None = {"generated_at": "2026-08-01T00:00:00+00:00"}
+
+        def read_latest(self):
+            return self.payload
+
+        def read_recent(self, limit: int):
+            del limit
+            latest = self.read_latest()
+            return [latest] if latest else []
+
+    manifest = MutableManifest()
+    cache = _GeneratedAtCache(manifest)
+    assert cache.get() == "2026-08-01T00:00:00+00:00"
+
+    manifest.payload = {"generated_at": "2026-08-12T12:00:00+00:00"}
+    assert cache.get() == "2026-08-01T00:00:00+00:00"
+    cache.refresh()
+    assert cache.get() == "2026-08-12T12:00:00+00:00"
+
+    manifest.payload = None
+    cache.refresh()
+    assert cache.get() is None
+
+
 def test_start_refresh_loop_calls_refresh_periodically(monkeypatch):
     reader = _FakeReader(_recs_df())
     calls = {"sleep": 0}
+    cache_refreshes = {"n": 0}
+
+    class FakeCache:
+        def refresh(self) -> None:
+            cache_refreshes["n"] += 1
 
     def fake_sleep(_seconds):
         calls["sleep"] += 1
@@ -450,9 +487,10 @@ def test_start_refresh_loop_calls_refresh_periodically(monkeypatch):
     monkeypatch.setattr(threading.Thread, "start", lambda self: self.run())
 
     with pytest.raises(SystemExit):
-        _start_refresh_loop(reader, interval_seconds=0.01)
+        _start_refresh_loop(reader, interval_seconds=0.01, generated_at_cache=FakeCache())
 
     assert reader.refresh_calls >= 2
+    assert cache_refreshes["n"] >= 2
 
 
 def test_main_requires_serve_mode(tmp_path, monkeypatch):

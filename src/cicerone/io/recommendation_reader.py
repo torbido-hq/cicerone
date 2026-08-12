@@ -25,7 +25,7 @@ from cicerone.io.options import (
     read_parquet,
     require_option,
     sql_identifier,
-    storage_backend,
+    validate_storage_options,
 )
 from cicerone.serve.metrics import observe_cache_refresh, record_cache_hit, record_cache_miss
 
@@ -222,7 +222,7 @@ class _ItemFilterMixin:
 class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
     def __init__(self, options: dict[str, Any]):
         self._options = options
-        self._backend = storage_backend(options)
+        self._backend = validate_storage_options(options)
         self._cache = pd.DataFrame(columns=[USER_COLUMN, RANK_COLUMN, SOURCE_COLUMN])
         self._by_user: dict[str, pd.DataFrame] = {}
         self._fallback_user_id: str | None = None

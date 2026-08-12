@@ -286,3 +286,16 @@ def test_dataset_reader_s3_backend_no_prefix_uses_flat_key(s3_options):
     reader = DatasetRecommendationReader(flat_options)
 
     assert list(reader.get_recommendations("u1", k=10)["item_id"]) == ["i1"]
+
+
+def test_dataset_recommendation_reader_validates_storage_options():
+    with pytest.raises(RuntimeError, match="path"):
+        DatasetRecommendationReader({"storage_backend": "local"})
+    with pytest.raises(RuntimeError, match="bucket"):
+        DatasetRecommendationReader(
+            {
+                "storage_backend": "s3",
+                "access_key_id": "test",
+                "secret_access_key": "test",
+            }
+        )

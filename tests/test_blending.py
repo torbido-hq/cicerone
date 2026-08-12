@@ -569,3 +569,17 @@ def test_blend_for_users_latest_by_user_normalizes_non_string_keys():
         latest_by_user={1: [("a", 1, 2.0)]},  # type: ignore[dict-item]
     )
     assert list(out[Columns.Item]) == ["a"]
+
+    # Lookup also works when the index already uses str keys but targets are ints.
+    out_str_keys = blend_for_users(
+        personalized=empty,
+        popular=empty,
+        latest=None,
+        counts={"1": 0},
+        target_users=[1],
+        config=config,
+        top_k=1,
+        latest_available=True,
+        latest_by_user={"1": [("b", 1, 2.0)]},
+    )
+    assert list(out_str_keys[Columns.Item]) == ["b"]

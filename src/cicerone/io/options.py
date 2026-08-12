@@ -85,7 +85,7 @@ def validate_storage_options(options: dict[str, Any], backend: str | None = None
 
 def read_parquet(options: dict[str, Any], filename: str, *, s3_client: Any | None = None) -> pd.DataFrame:
     """Read a parquet object from local path or S3 using ``storage_backend`` options."""
-    backend = storage_backend(options)
+    backend = validate_storage_options(options)
     if backend == "local":
         path = Path(require_option(options, "path", "local")) / filename
         logger.info("Reading %s", path)
