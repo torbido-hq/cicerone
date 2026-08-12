@@ -29,7 +29,7 @@ RUN pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt
 # this stage is reproducible, matching requirements.txt's exact-pin style.
 # Pin Node minor/patch so 26.x floating tags cannot change the frontend build
 # without an explicit bump in this file.
-FROM node:26.5.1-slim AS frontend
+FROM node:26.7.0-slim AS frontend
 
 WORKDIR /build
 COPY package.json package-lock.json ./

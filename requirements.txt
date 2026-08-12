@@ -1,10 +1,10 @@
 # Core recommender stack
 rectools[lightfm]==0.13.0
 implicit==0.7.3
-pandas==2.2.2
+pandas==2.3.3
 numpy==1.26.4
 scipy==1.12.0
-scikit-learn==1.5.2
+scikit-learn==1.9.0
 
 # Configurable I/O: static datasets (S3/R2-compatible or local files) or a
 # database (input can be read straight from a Postgres source; output can
@@ -22,8 +22,8 @@ croniter==6.2.4
 
 # Serve mode's read API + the event-driven retrain trigger's webhook
 fastapi==0.140.13
-uvicorn[standard]==0.52.0
-prometheus-client==0.21.1
+uvicorn[standard]==0.52.1
+prometheus-client==0.26.0
 
 # Dashboard: server-rendered status page (Jinja2 templates) + HTTP Basic
 # Auth password hashing (bcrypt) for its small set of named users
