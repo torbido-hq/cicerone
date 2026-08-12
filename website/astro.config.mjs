@@ -41,8 +41,7 @@ export default defineConfig({
 					items: [
 						{
 							label: 'Serve OpenAPI',
-							link: '/openapi/serve.openapi.json',
-							attrs: { target: '_blank', rel: 'noopener noreferrer' },
+							link: '/openapi/',
 						},
 						{
 							label: 'Changelog',
