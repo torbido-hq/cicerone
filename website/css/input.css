@@ -7,44 +7,32 @@
 @source "../scripts/**/*.mjs";
 
 @theme {
-  --font-display: "Syne", ui-sans-serif, system-ui, sans-serif;
-  --font-sans: "Figtree", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, monospace;
 
-  --color-ink: #0a2438;
-  --color-ink-soft: #1a3a52;
-  --color-muted: #4a6a82;
-  --color-paper: #f4f8fb;
-  --color-cyan: #00b4db;
-  --color-cyan-bright: #00e5ff;
+  --color-ink: #15202b;
+  --color-ink-soft: #2c3a47;
+  --color-muted: #5a6b78;
+  --color-paper: #f7f8f8;
+  --color-panel: #ffffff;
+  --color-cyan: #0077a8;
   --color-deep: #004b75;
-  --color-deep-night: #021824;
-  --color-line: color-mix(in srgb, var(--color-deep) 14%, transparent);
+  --color-line: #d7dde2;
 
-  --text-display: clamp(2.85rem, 8vw, 5.25rem);
-  --text-display--line-height: 0.96;
-  --text-display--letter-spacing: -0.05em;
-  --text-display--font-weight: 800;
+  --text-display: clamp(1.85rem, 3.5vw, 2.35rem);
+  --text-display--line-height: 1.2;
+  --text-display--letter-spacing: -0.02em;
+  --text-display--font-weight: 600;
 
-  --text-title: clamp(2.1rem, 4.5vw, 3.4rem);
-  --text-title--line-height: 1.02;
-  --text-title--letter-spacing: -0.04em;
-  --text-title--font-weight: 700;
+  --text-title: clamp(1.35rem, 2.2vw, 1.65rem);
+  --text-title--line-height: 1.25;
+  --text-title--letter-spacing: -0.015em;
+  --text-title--font-weight: 600;
 
-  --text-page: clamp(2.4rem, 5vw, 3.75rem);
-  --text-page--line-height: 1;
-  --text-page--letter-spacing: -0.045em;
-  --text-page--font-weight: 800;
-
-  --text-lede: clamp(1.2rem, 2.1vw, 1.5rem);
-  --text-lede--line-height: 1.4;
-  --text-lede--letter-spacing: -0.015em;
-  --text-lede--font-weight: 500;
-
-  --text-eyebrow: 0.78rem;
-  --text-eyebrow--line-height: 1;
-  --text-eyebrow--letter-spacing: 0.14em;
-  --text-eyebrow--font-weight: 700;
+  --text-page: clamp(1.6rem, 2.8vw, 2rem);
+  --text-page--line-height: 1.2;
+  --text-page--letter-spacing: -0.02em;
+  --text-page--font-weight: 600;
 }
 
 @layer base {
@@ -57,9 +45,7 @@
       scroll-behavior: auto;
     }
 
-    .reveal,
-    .hero-rise,
-    .flow-drift {
+    .reveal {
       animation: none !important;
       transition: none !important;
       opacity: 1 !important;
@@ -68,93 +54,76 @@
   }
 
   body {
-    @apply bg-paper font-sans text-lg text-ink antialiased;
+    @apply bg-paper font-sans text-base leading-relaxed text-ink antialiased;
     background-image:
-      radial-gradient(1200px 600px at 85% -10%, rgb(0 229 255 / 0.16), transparent 55%),
-      radial-gradient(900px 500px at -10% 20%, rgb(0 180 219 / 0.1), transparent 50%),
-      linear-gradient(180deg, #e8f4fa 0%, var(--color-paper) 40%, #eef5f9 100%);
+      linear-gradient(rgb(0 75 117 / 0.035) 1px, transparent 1px),
+      linear-gradient(90deg, rgb(0 75 117 / 0.035) 1px, transparent 1px);
+    background-size: 28px 28px;
+    background-position: -1px -1px;
   }
 
   a {
-    @apply text-deep underline-offset-[0.18em];
+    @apply text-deep underline-offset-2;
   }
 
   a:hover {
     @apply text-cyan;
   }
+
+  code {
+    @apply font-mono text-[0.92em];
+  }
 }
 
 @layer components {
+  .site-wrap {
+    @apply mx-auto w-[min(100%-2rem,44rem)] sm:w-[min(100%-2.5rem,52rem)];
+  }
+
+  .site-nav-link {
+    @apply text-ink-soft no-underline hover:text-deep hover:underline;
+  }
+
+  .site-nav-link[aria-current="page"] {
+    @apply text-ink underline;
+  }
+
   .prose-cicerone {
-    @apply prose prose-lg max-w-none
-      prose-headings:font-display prose-headings:font-bold prose-headings:tracking-tight prose-headings:text-ink
-      prose-h2:mt-12 prose-h2:mb-3 prose-h2:text-3xl prose-h2:leading-tight
-      prose-h3:mt-8 prose-h3:text-xl
-      prose-p:text-ink-soft prose-li:text-ink-soft
-      prose-a:font-medium prose-a:text-deep prose-a:no-underline hover:prose-a:text-cyan hover:prose-a:underline
-      prose-code:rounded prose-code:bg-deep/10 prose-code:px-1.5 prose-code:py-0.5 prose-code:font-mono prose-code:text-[0.9em] prose-code:font-medium prose-code:text-ink prose-code:before:content-none prose-code:after:content-none
-      prose-pre:bg-deep-night prose-pre:text-[#d7f4ff] prose-pre:font-mono
+    @apply prose prose-neutral max-w-none
+      prose-headings:font-sans prose-headings:font-semibold prose-headings:tracking-[-0.015em] prose-headings:text-ink
+      prose-h1:mb-4 prose-h1:mt-0 prose-h1:text-page
+      prose-h2:mt-10 prose-h2:mb-3 prose-h2:text-title
+      prose-h3:mt-8 prose-h3:text-lg
+      prose-p:text-ink-soft prose-li:text-ink-soft prose-td:text-ink-soft
+      prose-a:font-medium prose-a:text-deep prose-a:underline hover:prose-a:text-cyan
+      prose-code:rounded prose-code:bg-black/5 prose-code:px-1 prose-code:py-0.5 prose-code:font-mono prose-code:text-[0.9em] prose-code:font-normal prose-code:text-ink prose-code:before:content-none prose-code:after:content-none
+      prose-pre:border prose-pre:border-line prose-pre:bg-[#1b242c] prose-pre:text-[#e8eef2] prose-pre:font-mono prose-pre:text-sm
       prose-strong:font-semibold prose-strong:text-ink
-      prose-th:font-display prose-th:text-sm prose-th:uppercase prose-th:tracking-wide prose-th:text-muted
-      prose-td:text-ink-soft;
+      prose-th:font-sans prose-th:text-sm prose-th:font-semibold prose-th:text-muted
+      prose-hr:border-line;
+  }
+
+  .header-anchor {
+    @apply mr-1 font-normal text-muted no-underline opacity-0;
+  }
+
+  .group:hover .header-anchor,
+  .header-anchor:focus {
+    @apply opacity-100;
   }
 }
 
 @layer utilities {
   .reveal {
     opacity: 0;
-    transform: translateY(1.1rem);
+    transform: translateY(0.4rem);
     transition:
-      opacity 0.7s cubic-bezier(0.22, 1, 0.36, 1),
-      transform 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+      opacity 0.45s ease,
+      transform 0.45s ease;
   }
 
   .reveal.is-visible {
     opacity: 1;
     transform: none;
-  }
-
-  .hero-rise {
-    opacity: 0;
-    transform: translateY(1rem);
-    animation: rise 0.85s cubic-bezier(0.22, 1, 0.36, 1) forwards;
-  }
-
-  .hero-rise-2 {
-    animation-delay: 0.12s;
-  }
-
-  .hero-rise-3 {
-    animation-delay: 0.22s;
-  }
-
-  .hero-rise-4 {
-    animation-delay: 0.34s;
-  }
-
-  .flow-drift {
-    animation: drift 4s ease-in-out infinite alternate;
-  }
-
-  .header-anchor {
-    opacity: 0;
-  }
-
-  .group:hover .header-anchor,
-  .header-anchor:focus {
-    opacity: 1;
-  }
-
-  @keyframes rise {
-    to {
-      opacity: 1;
-      transform: none;
-    }
-  }
-
-  @keyframes drift {
-    to {
-      transform: translateY(-6px);
-    }
   }
 }

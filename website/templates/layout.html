@@ -8,36 +8,36 @@
   <link rel="icon" type="image/svg+xml" href="{{ROOT}}assets/cicerone-icon.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Syne:wght@700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ROOT}}css/site.css">
 </head>
 <body class="min-h-screen">
   <a class="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-50 focus:bg-ink focus:px-3 focus:py-2 focus:text-white" href="#main">Skip to content</a>
 
-  <header class="sticky top-0 z-40 border-b border-line bg-paper/80 backdrop-blur-md">
-    <div class="mx-auto flex w-[min(100%-2rem,68rem)] items-center justify-between gap-4 py-3">
+  <header class="border-b border-line bg-panel/90 backdrop-blur-sm">
+    <div class="site-wrap flex items-center justify-between gap-4 py-3">
       <a href="{{ROOT}}index.html">
-        <img src="{{ROOT}}assets/cicerone-logo.svg" alt="Cicerone" width="160" height="50" class="h-9 w-auto">
+        <img src="{{ROOT}}assets/cicerone-logo.svg" alt="Cicerone" width="140" height="44" class="h-8 w-auto">
       </a>
       <nav aria-label="Primary">
-        <ul class="flex items-center gap-5 font-display text-sm font-bold tracking-tight text-ink-soft">
-          <li><a class="no-underline hover:text-deep" href="{{ROOT}}index.html">Home</a></li>
-          <li><a class="{{DOCS_NAV_CLASS}} no-underline hover:text-deep" href="{{ROOT}}docs/" {{DOCS_CURRENT}}>Docs</a></li>
-          <li>
-            <a class="inline-flex items-center rounded-full bg-ink px-3.5 py-1.5 text-white no-underline hover:bg-deep hover:text-white" href="https://github.com/torbido-hq/cicerone">GitHub</a>
-          </li>
+        <ul class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+          <li><a class="site-nav-link" href="{{ROOT}}index.html">Home</a></li>
+          <li><a class="site-nav-link" href="{{ROOT}}docs/" {{DOCS_CURRENT}}>Docs</a></li>
+          <li><a class="site-nav-link" href="{{ROOT}}docs/tutorial.html">Tutorial</a></li>
+          <li><a class="site-nav-link" href="{{ROOT}}docs/architecture.html">Architecture</a></li>
+          <li><a class="site-nav-link" href="https://github.com/torbido-hq/cicerone">GitHub</a></li>
         </ul>
       </nav>
     </div>
   </header>
 
-  <main id="main" class="mx-auto w-[min(100%-2rem,68rem)] pb-16">
+  <main id="main" class="site-wrap py-10 sm:py-12 pb-16">
     {{CONTENT}}
   </main>
 
-  <footer class="border-t border-line py-8 text-base text-muted">
-    <div class="mx-auto flex w-[min(100%-2rem,68rem)] flex-wrap items-center justify-between gap-4">
-      <p><a class="text-ink-soft" href="{{ROOT}}index.html">← Home</a> · <a class="text-ink-soft" href="{{ROOT}}docs/">Docs</a></p>
+  <footer class="border-t border-line py-6 text-sm text-muted">
+    <div class="site-wrap flex flex-wrap items-center justify-between gap-3">
+      <p><a class="text-ink-soft" href="{{ROOT}}index.html">Home</a> · <a class="text-ink-soft" href="{{ROOT}}docs/">Docs</a></p>
       <p><a class="text-ink-soft" href="https://github.com/torbido-hq/cicerone">GitHub</a></p>
     </div>
   </footer>

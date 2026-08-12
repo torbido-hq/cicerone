@@ -5,6 +5,9 @@
     return;
   }
 
+  const nodes = document.querySelectorAll(".reveal");
+  if (!nodes.length) return;
+
   const observer = new IntersectionObserver(
     (entries) => {
       for (const entry of entries) {
@@ -14,8 +17,8 @@
         }
       }
     },
-    { rootMargin: "0px 0px -8% 0px", threshold: 0.12 },
+    { rootMargin: "0px 0px -6% 0px", threshold: 0.08 },
   );
 
-  document.querySelectorAll(".reveal").forEach((el) => observer.observe(el));
+  nodes.forEach((el) => observer.observe(el));
 })();

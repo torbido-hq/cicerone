@@ -59,12 +59,11 @@ const md = new MarkdownIt({
   permalink: markdownItAnchor.permalink.linkInsideHeader({
     symbol: "#",
     placement: "before",
-    class: "header-anchor not-prose mr-2 text-cyan no-underline opacity-0 transition group-hover:opacity-100 focus:opacity-100",
+    class: "header-anchor",
     ariaHidden: false,
   }),
-  // markdown-it-anchor wraps headings; add group for hover permalink
   callback(token) {
-    token.attrJoin("class", "group scroll-mt-24");
+    token.attrJoin("class", "group scroll-mt-20");
   },
 });
 
@@ -110,10 +109,6 @@ function renderLayout({ title, description, content, root, docsCurrent }) {
     .replaceAll("{{ROOT}}", root)
     .replaceAll("{{CONTENT}}", content)
     .replaceAll(
-      "{{DOCS_NAV_CLASS}}",
-      docsCurrent ? "text-deep" : "",
-    )
-    .replaceAll(
       "{{DOCS_CURRENT}}",
       docsCurrent ? 'aria-current="page"' : "",
     );
@@ -121,7 +116,7 @@ function renderLayout({ title, description, content, root, docsCurrent }) {
 }
 
 function pageShell(inner) {
-  return `<div class="py-12 sm:py-14">${inner}</div>`;
+  return `<div>${inner}</div>`;
 }
 
 function buildDocPage(page) {
@@ -129,14 +124,13 @@ function buildDocPage(page) {
   const raw = readFileSync(srcPath, "utf8");
   const body = md.render(rewriteMarkdown(raw, page.source));
   const content = pageShell(`
-    <p class="mb-3 font-display text-eyebrow uppercase text-cyan">Docs · from <code class="rounded bg-deep/10 px-1.5 py-0.5 font-mono text-[0.85em] normal-case tracking-normal">docs/${page.source}</code></p>
+    <p class="mb-4 text-sm text-muted">From <code class="rounded bg-black/5 px-1">docs/${page.source}</code></p>
     <article class="prose-cicerone">
       ${body}
     </article>
-    <p class="mt-12 text-base text-muted">
+    <p class="mt-10 border-t border-line pt-4 text-sm text-muted">
       Source:
       <a href="${githubBlob}/docs/${page.source}">docs/${page.source}</a>
-      on GitHub.
     </p>
   `);
   const html = renderLayout({
@@ -154,22 +148,25 @@ function buildDocsIndex(pages) {
   const cards = pages
     .map(
       (p) => `
-      <li class="border-b border-line py-6">
-        <a class="font-display text-2xl font-bold tracking-tight text-ink no-underline hover:text-cyan" href="${p.out}">${p.title}</a>
-        <p class="mt-2 max-w-[44ch] text-lede text-muted">${p.description}</p>
-        <p class="mt-2 font-mono text-sm text-muted">docs/${p.source}</p>
+      <li class="border-b border-line py-5">
+        <a class="text-lg font-semibold text-ink no-underline hover:text-cyan hover:underline" href="${p.out}">${p.title}</a>
+        <p class="mt-1 text-ink-soft">${p.description}</p>
+        <p class="mt-1 font-mono text-sm text-muted">docs/${p.source}</p>
       </li>`,
     )
     .join("\n");
 
   const content = pageShell(`
-    <h1 class="mb-3 font-display text-page text-ink">Documentation</h1>
-    <p class="mb-8 max-w-[44ch] text-lede text-muted">Rendered from the markdown under <code class="rounded bg-deep/10 px-1.5 py-0.5 font-mono text-[0.9em]">docs/</code> in the repository. Edit those files — this site rebuilds them on deploy.</p>
-    <ul class="list-none p-0">${cards}</ul>
-    <div class="mt-10 border-l-[3px] border-cyan bg-cyan/10 px-4 py-3 text-ink-soft">
-      Serve OpenAPI schema:
+    <h1 class="mb-3 font-sans text-page text-ink">Documentation</h1>
+    <p class="mb-8 max-w-[40rem] text-ink-soft">
+      Rendered from markdown under <code class="rounded bg-black/5 px-1">docs/</code>.
+      Edit those files; this site rebuilds them on deploy.
+    </p>
+    <ul class="list-none space-y-6 p-0 border-t border-line">${cards}</ul>
+    <p class="mt-10 text-sm text-muted">
+      Serve OpenAPI:
       <a href="openapi/serve.openapi.json">docs/openapi/serve.openapi.json</a>
-    </div>
+    </p>
   `);
 
   writeFileSync(
