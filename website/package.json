@@ -4,7 +4,7 @@
   "description": "Build-only: Tailwind CSS for the GitHub Pages site. CI compiles to dist/ and deploys that folder.",
   "scripts": {
     "build:css": "tailwindcss -i ./css/input.css -o ./dist/css/site.css --minify",
-    "build": "rm -rf dist && mkdir -p dist/css && npm run build:css && cp index.html documentation.html architecture.html dist/ && cp -r assets images js dist/",
+    "build": "rm -rf dist && mkdir -p dist/css && npm run build:css && cp index.html documentation.html architecture.html CNAME dist/ && cp -r assets images js dist/",
     "dev": "tailwindcss -i ./css/input.css -o ./dist/css/site.css --watch"
   },
   "devDependencies": {

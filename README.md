@@ -6,9 +6,9 @@
 [![CodeQL](https://github.com/torbido-hq/cicerone/actions/workflows/codeql.yml/badge.svg)](https://github.com/torbido-hq/cicerone/actions/workflows/codeql.yml)
 [![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/release/python-3110/)
 [![License: Beerware](https://img.shields.io/badge/license-Beerware%20🍺-f28e1c.svg)](LICENSE)
-[![GitHub Pages](https://img.shields.io/badge/docs-GitHub%20Pages-004B75.svg)](https://torbido-hq.github.io/cicerone/)
+[![GitHub Pages](https://img.shields.io/badge/docs-cicerone.dev-004B75.svg)](https://cicerone.dev)
 
-**Site:** [torbido-hq.github.io/cicerone](https://torbido-hq.github.io/cicerone/)
+**Site:** [cicerone.dev](https://cicerone.dev)
 (screenshots + docs overview; source in [`website/`](website/)).
 
 A generic, self-hosted batch recommender system. It reads your interaction
@@ -541,7 +541,7 @@ The minimum required coverage is 95% (`pyproject.toml`,
 `pip-audit` in the same test image. Model/config tests follow the package
 layout (`tests/test_model_*.py`, `tests/test_config_*.py`). See
 [CONTRIBUTING.md](CONTRIBUTING.md) for how to run tests/lint locally,
-the [project site](https://torbido-hq.github.io/cicerone/) (`website/`) for
+the [project site](https://cicerone.dev) (`website/`) for
 screenshots and a short docs overview,
 [docs/tutorial.md](docs/tutorial.md) for a hands-on walkthrough with local
 sample data, and [docs/architecture.md](docs/architecture.md) for how the

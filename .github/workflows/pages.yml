@@ -1,8 +1,9 @@
 name: Deploy website to GitHub Pages
 
-# Builds website/ with Tailwind → dist/, then publishes
-# https://torbido-hq.github.io/cicerone/
-# One-time: Settings → Pages → Source = "GitHub Actions".
+# Builds website/ with Tailwind → dist/, then publishes to
+# https://cicerone.dev (CNAME in website/; Pages custom domain).
+# One-time: Settings → Pages → Source = "GitHub Actions",
+# Custom domain = cicerone.dev (Enforce HTTPS).
 
 on:
   push:
