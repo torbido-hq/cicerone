@@ -5,8 +5,15 @@ from __future__ import annotations
 from cicerone.serve.code_samples import (
     HEALTH_PATH,
     RECOMMENDATIONS_PATH,
+    RECOMMENDATIONS_PATH_PREFIX,
     attach_code_samples,
 )
+
+
+def test_recommendations_path_prefix_derived_from_path():
+    assert RECOMMENDATIONS_PATH_PREFIX == "/recommendations/"
+    assert RECOMMENDATIONS_PATH.startswith(RECOMMENDATIONS_PATH_PREFIX)
+    assert "{user_id}" not in RECOMMENDATIONS_PATH_PREFIX
 
 
 def test_attach_code_samples_appends_to_existing():
@@ -50,3 +57,6 @@ def test_recommendations_shell_url_encodes_user_id():
     assert "urllib.parse.quote" in shell
     assert "USER_ID_ENC" in shell
     assert "CICERONE_SERVE_TOKEN:?" in shell
+    assert "${CICERONE_SERVE_URL:-" in shell
+    assert "${BASE_URL%/}" in shell
+    assert RECOMMENDATIONS_PATH_PREFIX in shell

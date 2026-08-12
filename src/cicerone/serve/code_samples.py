@@ -6,7 +6,7 @@ from typing import Any
 
 HEALTH_PATH = "/health"
 RECOMMENDATIONS_PATH = "/recommendations/{user_id}"
-RECOMMENDATIONS_PATH_PREFIX = "/recommendations/"
+RECOMMENDATIONS_PATH_PREFIX = RECOMMENDATIONS_PATH.rsplit("/", 1)[0] + "/"
 
 # Shared default; every snippet reads CICERONE_SERVE_URL the same way.
 _DEFAULT_SERVE_URL = "http://localhost:8000"
