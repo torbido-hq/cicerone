@@ -43,8 +43,13 @@ again (or `npm run build:css` after an initial `npm run build`).
 ### One-time GitHub settings
 
 1. **Settings → Pages → Build and deployment → Source = GitHub Actions**
-2. **Custom domain** = `cicerone.dev` (check **Enforce HTTPS** after DNS
-   verifies)
+2. **Custom domain** = `cicerone.dev`, then **Save** (check **Enforce HTTPS**
+   after DNS verifies)
+
+For Actions-based Pages, the domain is owned by that Settings field (a
+`CNAME` in the artifact is not required). We still ship `website/CNAME` so
+the intended hostname is obvious in-repo and survives a switch to
+branch-based publishing.
 
 ### DNS (apex `cicerone.dev`)
 
