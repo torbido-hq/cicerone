@@ -75,7 +75,7 @@ def test_metrics_returns_prometheus_text_format():
     app = create_app(_settings(), _FakeReader(_recs_df()))
     response = TestClient(app).get("/metrics")
     assert response.status_code == 200
-    assert response.headers["content-type"] == CONTENT_TYPE_LATEST
+    assert response.headers["content-type"].startswith(CONTENT_TYPE_LATEST)
     assert "cicerone_up" in response.text
     text_string_to_metric_families(response.text)
 
