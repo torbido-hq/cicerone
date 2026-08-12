@@ -1,7 +1,6 @@
 name: Deploy website to GitHub Pages
 
-# Builds website/ with Tailwind → dist/, then publishes to
-# https://cicerone.dev (CNAME in website/; Pages custom domain).
+# Astro Starlight site under website/ → https://cicerone.dev
 # One-time: Settings → Pages → Source = "GitHub Actions",
 # Custom domain = cicerone.dev (Enforce HTTPS).
 
@@ -24,11 +23,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v7
 
@@ -44,14 +40,17 @@ jobs:
           npm ci
           npm run build
 
-      - name: Configure Pages
-        uses: actions/configure-pages@v5
-
-      - name: Upload dist/
-        uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v3
         with:
           path: website/dist
 
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - name: Deploy
         id: deployment
         uses: actions/deploy-pages@v4

@@ -1,64 +1,41 @@
-# Cicerone website
+# Cicerone website (Astro Starlight)
 
-Static project site for [cicerone.dev](https://cicerone.dev) via
-[GitHub Pages](https://docs.github.com/en/pages). Source lives here; CI
-compiles Tailwind and renders `docs/*.md` into `dist/`, then deploys that
-folder (including `CNAME`).
+Docs site for [cicerone.dev](https://cicerone.dev). Built with
+[Starlight](https://starlight.astro.build/); markdown under repo `docs/` is
+synced into the Starlight content collection at build time.
+
+## Commands
+
+```sh
+cd website
+npm ci
+npm run dev      # sync docs/ + local preview
+npm run build    # sync docs/ + production build → dist/
+npm run preview  # serve dist/
+```
 
 ## Layout
 
 | Path | Role |
 | --- | --- |
-| `index.html` | Landing (brand + dashboard screenshot hero) |
-| `scripts/build-docs.mjs` | Renders `../docs/*.md` → `dist/docs/*.html` |
-| `templates/layout.html` | Shared chrome for rendered docs |
-| `css/input.css` | Tailwind v4 theme + typography plugin |
-| `robots.txt` / `sitemap.xml` | SEO crawl hints (sitemap written at build) |
-| `CNAME` | Custom domain (`cicerone.dev`) |
-| `images/` | Screenshots and diagrams |
-| `assets/` | Logo / favicon |
-| `dist/` | Build output (gitignored) |
+| `src/content/docs/index.mdx` | Landing (Starlight splash) |
+| `scripts/sync-docs.mjs` | Copies `../docs/*.md` → `src/content/docs/` with frontmatter |
+| `astro.config.mjs` | Site URL, sidebar, logo, social |
+| `public/CNAME` | Custom domain (`cicerone.dev`) |
+| `public/images/` | Screenshots / diagrams |
 
-Markdown under repo `docs/` is the source of truth. The site rebuilds
-Tutorial and Architecture HTML from those files on every Pages deploy.
-
-## Preview locally
-
-Needs Node 22+:
-
-```sh
-cd website
-npm ci
-npm run build
-python -m http.server 4173 --directory dist
-```
-
-Then visit `http://127.0.0.1:4173/` (docs at `/docs/`).
+Generated `src/content/docs/tutorial.md` and `architecture.md` are gitignored;
+CI and local builds always sync from `docs/`.
 
 ## Publishing
 
-[`.github/workflows/pages.yml`](../.github/workflows/pages.yml) runs
-`npm ci && npm run build` in `website/` on pushes to `main` that touch
-`website/**` or `docs/**` (and on `workflow_dispatch`), then uploads
-`website/dist`.
+[`.github/workflows/pages.yml`](../.github/workflows/pages.yml) builds
+`website/` on pushes to `main` that touch `website/**` or `docs/**`.
 
-### One-time GitHub settings
-
-1. **Settings → Pages → Build and deployment → Source = GitHub Actions**
-2. **Custom domain** = `cicerone.dev`, then **Save** (check **Enforce HTTPS**
-   after DNS verifies)
-
-For Actions-based Pages, the domain is owned by that Settings field (a
-`CNAME` in the artifact is not required). We still ship `website/CNAME` so
-the intended hostname is obvious in-repo and survives a switch to
-branch-based publishing.
+**One-time:** Settings → Pages → Source = **GitHub Actions**, custom domain
+`cicerone.dev`. DNS notes for Gandi apex records are below.
 
 ### DNS (apex `cicerone.dev`)
-
-At the registrar / DNS host, point the apex at GitHub Pages. Either:
-
-**A / AAAA** (GitHub’s current Pages IPs — confirm in
-[GitHub’s docs](https://docs.github.com/en/pages/configuring-a-custom-domain-for-your-github-pages-site/managing-a-custom-domain-for-your-github-pages-site)):
 
 | Type | Name | Value |
 | --- | --- | --- |
@@ -70,12 +47,6 @@ At the registrar / DNS host, point the apex at GitHub Pages. Either:
 | `AAAA` | `@` | `2606:50c0:8001::153` |
 | `AAAA` | `@` | `2606:50c0:8002::153` |
 | `AAAA` | `@` | `2606:50c0:8003::153` |
-
-Optional www:
-
-| Type | Name | Value |
-| --- | --- | --- |
 | `CNAME` | `www` | `torbido-hq.github.io` |
 
-If the DNS host supports **ALIAS / ANAME** for apex, that can target
-`torbido-hq.github.io` instead of the A records.
+Remove Gandi web-forward / `webredir` records first.

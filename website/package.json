@@ -2,18 +2,19 @@
   "name": "cicerone-website",
   "private": true,
   "type": "module",
-  "description": "Build-only: Tailwind CSS + markdown docs for the GitHub Pages site. CI compiles to dist/ and deploys that folder.",
+  "version": "0.0.1",
+  "description": "Cicerone docs site (Astro Starlight). Syncs markdown from ../docs and deploys to GitHub Pages / cicerone.dev.",
   "scripts": {
-    "build:css": "tailwindcss -i ./css/input.css -o ./dist/css/site.css --minify",
-    "build:docs": "node scripts/build-docs.mjs",
-    "build": "rm -rf dist && mkdir -p dist/css && npm run build:css && npm run build:docs && cp index.html CNAME robots.txt dist/ && cp -r assets images js dist/",
-    "dev": "tailwindcss -i ./css/input.css -o ./dist/css/site.css --watch"
+    "sync-docs": "node scripts/sync-docs.mjs",
+    "dev": "npm run sync-docs && astro dev",
+    "start": "npm run dev",
+    "build": "npm run sync-docs && astro build",
+    "preview": "astro preview",
+    "astro": "astro"
   },
-  "devDependencies": {
-    "@tailwindcss/cli": "4.3.3",
-    "@tailwindcss/typography": "0.5.19",
-    "markdown-it": "14.1.0",
-    "markdown-it-anchor": "9.2.0",
-    "tailwindcss": "4.3.3"
+  "dependencies": {
+    "@astrojs/starlight": "^0.41.7",
+    "astro": "^7.1.6",
+    "sharp": "^0.35.3"
   }
 }
