@@ -61,7 +61,7 @@ def build_s3_client(options: dict[str, Any]):
 def storage_backend(options: dict[str, Any]) -> str:
     backend = options.get("storage_backend", "local")
     if backend not in STORAGE_BACKENDS:
-        raise ValueError(f"Unknown storage_backend: {backend!r} (expected 's3' or 'local')")
+        raise RuntimeError(f"Unknown storage_backend: {backend!r} (expected 's3' or 'local')")
     return str(backend)
 
 
@@ -70,10 +70,15 @@ def validate_storage_options(options: dict[str, Any], backend: str | None = None
 
     Always resolves from ``options``. If ``backend`` is passed, it must match
     ``options['storage_backend']`` (or the default ``local``).
+
+    Raises ``RuntimeError`` for unknown backends, backend mismatches, or missing
+    required options.
     """
     resolved = storage_backend(options)
     if backend is not None and str(backend) != resolved:
-        raise ValueError(f"explicit backend {backend!r} does not match options storage_backend {resolved!r}")
+        raise RuntimeError(
+            f"explicit backend {backend!r} does not match options storage_backend {resolved!r}"
+        )
     if resolved == "local":
         require_option(options, "path", "local")
     else:

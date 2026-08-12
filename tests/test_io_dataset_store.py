@@ -52,9 +52,9 @@ def test_local_backend_optional_inputs_propagate_corrupt_file_errors(tmp_path):
 
 
 def test_unknown_storage_backend_raises():
-    with pytest.raises(ValueError, match="Unknown storage_backend"):
+    with pytest.raises(RuntimeError, match="Unknown storage_backend"):
         DatasetInputSource({"storage_backend": "ftp"})
-    with pytest.raises(ValueError, match="Unknown storage_backend"):
+    with pytest.raises(RuntimeError, match="Unknown storage_backend"):
         DatasetOutputSink({"storage_backend": "ftp"})
 
 

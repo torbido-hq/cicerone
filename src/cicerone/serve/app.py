@@ -163,8 +163,10 @@ class _ItemsFilterCache:
             and self._category_column in items.columns
             and ITEM_COLUMN in items.columns
         ):
-            grouped = items.groupby(self._category_column, sort=False)[ITEM_COLUMN]
-            ids_by_category = {str(cat): frozenset(ids.astype(str).tolist()) for cat, ids in grouped}
+            # Normalize item ids once, then group — avoids per-group astype on refresh.
+            item_ids = items[ITEM_COLUMN].astype(str)
+            for cat, idx in items.groupby(self._category_column, sort=False).groups.items():
+                ids_by_category[str(cat)] = frozenset(item_ids.loc[idx].tolist())
         self._version = version
         self._items = items
         self._available_ids = available
