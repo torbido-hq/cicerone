@@ -77,7 +77,10 @@ def test_metrics_returns_prometheus_text_format():
     assert response.status_code == 200
     assert response.headers["content-type"].startswith(CONTENT_TYPE_LATEST)
     assert "cicerone_up" in response.text
-    text_string_to_metric_families(response.text)
+
+    families = list(text_string_to_metric_families(response.text))
+    assert families
+    assert any(family.name == "cicerone_up" for family in families)
 
 
 def test_metrics_disabled_returns_not_found():
