@@ -167,9 +167,14 @@ class RedisLock:
                     token = self._token
                 try:
                     if not self._refresh_script(keys=[self._key], args=[token, self._ttl_ms]):
+                        # Intentional release sets stop before clearing hold; skip _mark_lost.
+                        if self._stop_refresh.is_set():
+                            break
                         self._mark_lost()
                         break
                 except Exception:
+                    if self._stop_refresh.is_set():
+                        break
                     logger.exception("Failed to refresh Redis lock TTL")
                     self._mark_lost()
                     break
@@ -186,8 +191,9 @@ class RedisLock:
         if thread is None:
             return
         self._stop_refresh.set()
-        # Non-blocking: daemon refresher exits on the stop event without delaying release.
-        thread.join(timeout=0)
+        # Brief wait for a refresh already past wait(); stop flag skips _mark_lost.
+        # Cap at 250ms so a stuck Redis Lua call cannot delay release() for a full interval.
+        thread.join(timeout=0.25)
         self._refresh_thread = None
 
     def acquire(self) -> bool:

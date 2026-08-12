@@ -5,6 +5,7 @@ import pytest
 from sqlalchemy import create_engine, text
 from support.postgres_defaults import resolve_test_database_url
 
+from cicerone.config import ConfigError
 from cicerone.io.db_store import DatabaseInputSource, DatabaseOutputSink
 
 TEST_DATABASE_URL = resolve_test_database_url()
@@ -147,9 +148,9 @@ def test_database_output_model_artifact_custom_table_name():
 
 
 def test_missing_database_url_raises():
-    with pytest.raises(RuntimeError, match="database_url"):
+    with pytest.raises(ConfigError, match="database_url"):
         DatabaseInputSource({})
-    with pytest.raises(RuntimeError, match="database_url"):
+    with pytest.raises(ConfigError, match="database_url"):
         DatabaseOutputSink({})
 
 

@@ -52,6 +52,8 @@ UP.set(1)
 
 METRICS_TOKEN_HEADER = "X-Metrics-Token"
 
+_RETRAIN_SOURCES = frozenset({"webhook", "poll", "cron", "s3-poll", "manual"})
+
 _SOURCE_TO_METRIC: dict[str, str] = {
     "personalized": "collaborative",
     "blended": "collaborative",
@@ -87,7 +89,7 @@ def update_cache_age_gauge() -> None:
 
 
 def record_retrain_trigger(triggered_by: str, *, accepted: bool) -> None:
-    source = "webhook" if triggered_by == "webhook" else "poll"
+    source = triggered_by if triggered_by in _RETRAIN_SOURCES else "other"
     status = "accepted" if accepted else "debounced"
     RETRAIN_TRIGGER_TOTAL.labels(source=source, status=status).inc()
 

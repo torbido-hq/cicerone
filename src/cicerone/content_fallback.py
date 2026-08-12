@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import numpy as np
@@ -22,6 +22,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 from cicerone.feature_config import FeatureColumn
 from cicerone.ids import interactions_item_column, interactions_user_column, items_id_column
+from cicerone.values import is_missing as _is_missing
 
 logger = logging.getLogger(__name__)
 
@@ -32,22 +33,8 @@ _MAX_HISTORY_ITEMS = 50
 _DENSE_SIM_BATCH_PRODUCT = 50_000
 
 
-def _is_missing(value: object) -> bool:
-    """True for None / NaN / pd.NA / NaT; False for containers and other values."""
-    if value is None:
-        return True
-    try:
-        result = pd.isna(value)
-    except (TypeError, ValueError):
-        return False
-    # pd.isna on array-likes returns an array; treat the value as present.
-    if isinstance(result, (np.ndarray, pd.Series, list)):
-        return False
-    return bool(result)
-
-
 def _feature_dict(
-    row: pd.Series,
+    row: Mapping[str, Any] | pd.Series,
     feature_columns: Sequence[FeatureColumn | tuple[str, str]],
 ) -> dict[str, float]:
     """Map one item row to {feature=value: 1.0} tokens for DictVectorizer."""
@@ -58,9 +45,14 @@ def _feature_dict(
             ftype: str = spec.type
         else:
             column, ftype = spec
-        if column not in row.index:
-            continue
-        value = row[column]
+        if isinstance(row, pd.Series):
+            if column not in row.index:
+                continue
+            value: Any = row[column]
+        else:
+            if column not in row:
+                continue
+            value = row[column]
         if ftype == "list":
             if _is_missing(value):
                 continue
@@ -178,9 +170,17 @@ class ContentFallbackModel:
             item_col = interactions_item_column(self.interactions)
             interacted = set(self.interactions[item_col].tolist())
 
+        feature_names = []
+        for spec in self.feature_columns:
+            column = spec.column if isinstance(spec, FeatureColumn) else spec[0]
+            if column in self.items.columns and column not in feature_names:
+                feature_names.append(column)
+        cols = [id_col, *feature_names]
+        records = self.items.loc[:, cols].to_dict(orient="records")
+
         dicts = []
         item_ids = []
-        for _, row in self.items.iterrows():
+        for row in records:
             item_id = row[id_col]
             tokens = _feature_dict(row, self.feature_columns)
             if not tokens:
@@ -236,6 +236,7 @@ class ContentFallbackModel:
         cold_matrix = self._matrix[cold_mask]
         item_index = self._item_index
         take = min(k, self.max_neighbors, len(cold_ids_filtered))
+        cold_ids_arr = np.asarray(cold_ids_filtered, dtype=object)
 
         rows: list[dict] = []
         for user in users:
@@ -249,30 +250,27 @@ class ContentFallbackModel:
                 continue
             hist_matrix = self._matrix[hist_indices]
             scores = _max_cosine_scores(cold_matrix, hist_matrix)
-            seen = set(history) if filter_viewed else set()
-            candidates = [
-                (cold_ids_filtered[i], float(scores[i]))
-                for i in range(len(cold_ids_filtered))
-                if cold_ids_filtered[i] not in seen and scores[i] > 0
-            ]
-            if not candidates:
+            if filter_viewed:
+                seen = set(history)
+                for i, item_id in enumerate(cold_ids_arr):
+                    if item_id in seen:
+                        scores[i] = 0.0
+            positive = np.flatnonzero(scores > 0)
+            if positive.size == 0:
                 continue
-            if take >= len(candidates):
-                ranked = sorted(candidates, key=lambda pair: pair[1], reverse=True)
+            if take >= positive.size:
+                order = positive[np.argsort(-scores[positive], kind="mergesort")]
             else:
-                score_arr = np.fromiter((s for _, s in candidates), dtype=float, count=len(candidates))
-                top_idx = np.argpartition(score_arr, -take)[-take:]
-                ranked = sorted(
-                    (candidates[i] for i in top_idx),
-                    key=lambda pair: pair[1],
-                    reverse=True,
-                )
-            for rank, (item_id, score) in enumerate(ranked, start=1):
+                # Partition among positive scores only, then sort the top slice.
+                pos_scores = scores[positive]
+                top_local = np.argpartition(pos_scores, -take)[-take:]
+                order = positive[top_local[np.argsort(-pos_scores[top_local], kind="mergesort")]]
+            for rank, idx in enumerate(order, start=1):
                 rows.append(
                     {
                         Columns.User: user,
-                        Columns.Item: item_id,
-                        Columns.Score: score,
+                        Columns.Item: cold_ids_arr[idx],
+                        Columns.Score: float(scores[idx]),
                         Columns.Rank: rank,
                     }
                 )

@@ -11,7 +11,13 @@ from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import Settings
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.recommendation_reader import select_cold_start_fallback
-from cicerone.serve import _available_item_ids, _ItemsFilterCache, _start_refresh_loop, create_app, main
+from cicerone.serve import create_app, main
+from cicerone.serve.app import (
+    _available_item_ids,
+    _GeneratedAtCache,
+    _ItemsFilterCache,
+    _start_refresh_loop,
+)
 
 
 def _settings(**overrides) -> Settings:
@@ -119,9 +125,10 @@ def test_items_filter_cache_tolerates_snapshot_without_item_id():
         category_column="category",
         availability_filters=["published"],
     )
-    items, available = cache.get()
+    items, available, by_category = cache.get()
     assert items is not None
     assert available is None
+    assert by_category == {}
 
 
 def test_items_filter_cache_normalizes_once_per_refresh():
@@ -131,21 +138,27 @@ def test_items_filter_cache_normalizes_once_per_refresh():
         category_column="category",
         availability_filters=["published", "in_stock"],
     )
-    items_a, available_a = cache.get()
-    items_b, available_b = cache.get()
+    items_a, available_a, by_cat_a = cache.get()
+    items_b, available_b, by_cat_b = cache.get()
     assert items_a is items_b
     assert available_a is available_b
+    assert by_cat_a is by_cat_b
     assert available_a == frozenset({"i1", "i2"})
+    assert by_cat_a["beer"] == frozenset({"i1", "i3"})
+    assert by_cat_a["wine"] == frozenset({"i2"})
+    assert all(isinstance(item_id, str) for item_id in by_cat_a["beer"])
 
     # In-place mutation alone must not be relied on; bump the version token.
     reader._items.loc[reader._items["item_id"] == "i3", "published"] = True
-    items_same, _ = cache.get()
+    items_same, _, by_cat_same = cache.get()
     assert items_same is items_a
+    assert by_cat_same is by_cat_a
 
     reader.refresh()
-    items_c, available_c = cache.get()
+    items_c, available_c, by_cat_c = cache.get()
     assert items_c is not items_a
     assert available_c == frozenset({"i1", "i2", "i3"})
+    assert by_cat_c is not by_cat_a
 
 
 def test_health_requires_no_auth():
@@ -264,6 +277,42 @@ def test_recommendations_unknown_user_returns_cold_start_fallback():
     body = response.json()
     assert body["fallback"] is True
     assert [row["item_id"] for row in body["items"]] == ["i2", "i1"]
+
+
+def test_items_filter_cache_stringifies_non_string_item_ids():
+    """Category allowlists must be str so they match filtered recommendation ids."""
+    from cicerone.serve.app import _filter_recommendations
+
+    recs = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "10", "rank": 1, "score": 1.0, "source": "personalized"},
+            {"user_id": "u1", "item_id": "20", "rank": 2, "score": 0.5, "source": "personalized"},
+        ]
+    )
+    items = pd.DataFrame(
+        [
+            {"item_id": 10, "category": "beer", "published": True},
+            {"item_id": 20, "category": "wine", "published": True},
+        ]
+    )
+    reader = _FakeReader(recs, items)
+    cache = _ItemsFilterCache(
+        reader,
+        category_column="category",
+        availability_filters=["published"],
+    )
+    cached_items, available, by_cat = cache.get()
+    assert by_cat["beer"] == frozenset({"10"})
+    filtered = _filter_recommendations(
+        recs,
+        items=cached_items,
+        available_ids=available,
+        category="beer",
+        category_column="category",
+        exclude_unavailable=True,
+        ids_by_category=by_cat,
+    )
+    assert list(filtered["item_id"]) == ["10"]
 
 
 def test_recommendations_category_filter_can_empty_results():
@@ -393,9 +442,41 @@ def test_recommendations_survive_manifest_reader_errors():
     assert "X-Generated-At" not in response.headers
 
 
+def test_generated_at_cache_reads_and_refreshes_manifest():
+    class MutableManifest:
+        def __init__(self) -> None:
+            self.payload: dict | None = {"generated_at": "2026-08-01T00:00:00+00:00"}
+
+        def read_latest(self):
+            return self.payload
+
+        def read_recent(self, limit: int):
+            del limit
+            latest = self.read_latest()
+            return [latest] if latest else []
+
+    manifest = MutableManifest()
+    cache = _GeneratedAtCache(manifest)
+    assert cache.get() == "2026-08-01T00:00:00+00:00"
+
+    manifest.payload = {"generated_at": "2026-08-12T12:00:00+00:00"}
+    assert cache.get() == "2026-08-01T00:00:00+00:00"
+    cache.refresh()
+    assert cache.get() == "2026-08-12T12:00:00+00:00"
+
+    manifest.payload = None
+    cache.refresh()
+    assert cache.get() is None
+
+
 def test_start_refresh_loop_calls_refresh_periodically(monkeypatch):
     reader = _FakeReader(_recs_df())
     calls = {"sleep": 0}
+    cache_refreshes = {"n": 0}
+
+    class FakeCache:
+        def refresh(self) -> None:
+            cache_refreshes["n"] += 1
 
     def fake_sleep(_seconds):
         calls["sleep"] += 1
@@ -406,9 +487,10 @@ def test_start_refresh_loop_calls_refresh_periodically(monkeypatch):
     monkeypatch.setattr(threading.Thread, "start", lambda self: self.run())
 
     with pytest.raises(SystemExit):
-        _start_refresh_loop(reader, interval_seconds=0.01)
+        _start_refresh_loop(reader, interval_seconds=0.01, generated_at_cache=FakeCache())
 
     assert reader.refresh_calls >= 2
+    assert cache_refreshes["n"] >= 2
 
 
 def test_main_requires_serve_mode(tmp_path, monkeypatch):
@@ -462,14 +544,19 @@ def test_main_starts_serve_app_in_serve_mode(tmp_path, monkeypatch):
     monkeypatch.setenv("CICERONE_CONFIG_PATH", str(config_path))
 
     refresh_calls = []
+    refresh_kwargs: list[dict] = []
     uvicorn_calls = {}
+    served_app = None
 
     import cicerone.serve.app as serve_module
 
-    def fake_start_refresh_loop(reader, interval):
+    def fake_start_refresh_loop(reader, interval, **kwargs):
         refresh_calls.append(reader)
+        refresh_kwargs.append(kwargs)
 
     def fake_uvicorn_run(app, host, port):
+        nonlocal served_app
+        served_app = app
         uvicorn_calls.update(host=host, port=port)
 
     monkeypatch.setattr(serve_module, "_start_refresh_loop", fake_start_refresh_loop)
@@ -483,3 +570,39 @@ def test_main_starts_serve_app_in_serve_mode(tmp_path, monkeypatch):
 
     assert len(refresh_calls) == 1
     assert uvicorn_calls == {"host": "0.0.0.0", "port": 8000}
+    assert served_app is not None
+    assert refresh_kwargs[0]["generated_at_cache"] is served_app.state.generated_at_cache
+
+
+def test_main_fails_closed_on_invalid_feature_config(tmp_path, monkeypatch):
+    config_path = tmp_path / "cicerone.toml"
+    features_path = tmp_path / "features.toml"
+    features_path.write_text("blending = { enabled = true, steepness = -1 }\n")
+    config_path.write_text(
+        f"""
+        [job]
+        mode = "serve"
+        feature_config_path = "{features_path}"
+
+        [serve]
+        auth_token = "secret"
+
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "{tmp_path}"
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "{tmp_path}"
+        """
+    )
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", str(config_path))
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"}]
+    ).to_parquet(tmp_path / "recommendations.parquet", index=False)
+
+    with pytest.raises(ValueError, match="steepness"):
+        main()

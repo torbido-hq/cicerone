@@ -47,16 +47,23 @@ A checked-in copy lives at `docs/openapi/serve.openapi.json` (regenerate with
 """.strip()
 
 
-def _start_refresh_loop(reader: RecommendationReader, interval_seconds: float) -> None:
+def _start_refresh_loop(
+    reader: RecommendationReader,
+    interval_seconds: float,
+    *,
+    generated_at_cache: _GeneratedAtCache | None = None,
+) -> None:
     def _loop() -> None:
         while True:
             time.sleep(interval_seconds)
             reader.refresh()
+            if generated_at_cache is not None:
+                generated_at_cache.refresh()
 
     threading.Thread(target=_loop, daemon=True).start()
 
 
-def _generated_at(manifest_reader: ManifestReader | None) -> str | None:
+def _read_generated_at(manifest_reader: ManifestReader | None) -> str | None:
     if manifest_reader is None:
         return None
     try:
@@ -68,6 +75,25 @@ def _generated_at(manifest_reader: ManifestReader | None) -> str | None:
         return None
     value = latest.get("generated_at")
     return str(value) if value is not None else None
+
+
+class _GeneratedAtCache:
+    """Cache manifest ``generated_at``; refresh with the recommendations loop."""
+
+    def __init__(self, manifest_reader: ManifestReader | None) -> None:
+        self._manifest_reader = manifest_reader
+        self._lock = threading.Lock()
+        self._value: str | None = None
+        self.refresh()
+
+    def refresh(self) -> None:
+        value = _read_generated_at(self._manifest_reader)
+        with self._lock:
+            self._value = value
+
+    def get(self) -> str | None:
+        with self._lock:
+            return self._value
 
 
 def _configure_reader_item_filters(
@@ -113,11 +139,12 @@ class _ItemsFilterCache:
         self._version: int | None = None
         self._items: pd.DataFrame | None = None
         self._available_ids: frozenset[str] | None = None
+        self._ids_by_category: dict[str, frozenset[str]] = {}
 
-    def get(self) -> tuple[pd.DataFrame | None, frozenset[str] | None]:
+    def get(self) -> tuple[pd.DataFrame | None, frozenset[str] | None, dict[str, frozenset[str]]]:
         version = self._reader.items_version()
         if version == self._version:
-            return self._items, self._available_ids
+            return self._items, self._available_ids, self._ids_by_category
 
         items = normalize_items_snapshot(
             self._reader.get_items(),
@@ -129,10 +156,22 @@ class _ItemsFilterCache:
             if items is not None and not items.empty
             else None
         )
+        ids_by_category: dict[str, frozenset[str]] = {}
+        if (
+            items is not None
+            and not items.empty
+            and self._category_column in items.columns
+            and ITEM_COLUMN in items.columns
+        ):
+            # Normalize item ids once, then group — avoids per-group astype on refresh.
+            item_ids = items[ITEM_COLUMN].astype(str)
+            for cat, idx in items.groupby(self._category_column, sort=False).groups.items():
+                ids_by_category[str(cat)] = frozenset(item_ids.loc[idx].tolist())
         self._version = version
         self._items = items
         self._available_ids = available
-        return items, available
+        self._ids_by_category = ids_by_category
+        return items, available, ids_by_category
 
 
 def _filter_recommendations(
@@ -143,6 +182,7 @@ def _filter_recommendations(
     category: str | None,
     category_column: str,
     exclude_unavailable: bool,
+    ids_by_category: dict[str, frozenset[str]] | None = None,
     on_missing_category_column: Callable[[], None] | None = None,
 ) -> pd.DataFrame:
     if recs.empty:
@@ -158,7 +198,10 @@ def _filter_recommendations(
             if on_missing_category_column is not None:
                 on_missing_category_column()
             return out.iloc[0:0].reset_index(drop=True)
-        allowed = set(items.loc[items[category_column] == str(category), ITEM_COLUMN])
+        if ids_by_category is not None:
+            allowed: set[str] | frozenset[str] = ids_by_category.get(str(category), frozenset())
+        else:
+            allowed = set(items.loc[items[category_column] == str(category), ITEM_COLUMN].astype(str))
         out = out[item_ids.isin(allowed)]
         item_ids = out[ITEM_COLUMN].astype(str)
 
@@ -195,6 +238,8 @@ def create_app(
         category_column=category_column,
         availability_filters=availability_filters,
     )
+    generated_at_cache = _GeneratedAtCache(manifest_reader)
+    app.state.generated_at_cache = generated_at_cache
     missing_category_warned = False
 
     @app.middleware("http")
@@ -278,7 +323,7 @@ def create_app(
             top_k = k
         else:
             top_k = settings.serve.default_k
-        items, available_ids = items_cache.get()
+        items, available_ids, ids_by_category = items_cache.get()
         can_filter = bool(
             items is not None
             and not items.empty
@@ -300,6 +345,7 @@ def create_app(
             category=category,
             category_column=category_column,
             exclude_unavailable=exclude_unavailable,
+            ids_by_category=ids_by_category,
             on_missing_category_column=_warn_missing_category_column,
         )
         filtered = filtered.head(top_k).reset_index(drop=True)
@@ -309,7 +355,7 @@ def create_app(
             if SOURCE_COLUMN in filtered.columns:
                 record_recommendations_served(set(filtered[SOURCE_COLUMN].astype(str)))
 
-        generated_at = _generated_at(manifest_reader)
+        generated_at = generated_at_cache.get()
         body = RecommendationsResponse(
             generated_at=generated_at,
             user_id=user_id,
@@ -366,24 +412,24 @@ def main() -> None:
 
     reader = build_recommendation_reader(settings.output)
     manifest_reader = build_manifest_reader(settings.output)
-    try:
-        feature_config = load_feature_config(settings.feature_config_path)
-    except Exception:
-        logger.exception("Failed to load feature config for serve filters; continuing without them")
-        feature_config = None
+    feature_config = load_feature_config(settings.feature_config_path)
 
-    availability_filters = list(feature_config.item_availability_filters) if feature_config else []
+    availability_filters = list(feature_config.item_availability_filters)
     _configure_reader_item_filters(
         reader,
         category_column=settings.serve.category_column,
         availability_filters=availability_filters,
     )
-    _start_refresh_loop(reader, settings.serve.refresh_interval_seconds)
 
     app = create_app(
         settings,
         reader,
         manifest_reader=manifest_reader,
         feature_config=feature_config,
+    )
+    _start_refresh_loop(
+        reader,
+        settings.serve.refresh_interval_seconds,
+        generated_at_cache=app.state.generated_at_cache,
     )
     uvicorn.run(app, host=settings.serve.host, port=settings.serve.port)

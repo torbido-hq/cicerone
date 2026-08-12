@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import io
 import logging
 import threading
 import time
@@ -12,15 +11,22 @@ from typing import Any
 
 import pandas as pd
 from sqlalchemy import create_engine, text
-from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from cicerone.blending import COLD_START_USER_ID, LATEST_SOURCE, POPULAR_SOURCE
 from cicerone.io.base import BaseRecommendationReader
 from cicerone.io.db_store import (
     DEFAULT_RECOMMENDATION_ITEMS_TABLE,
     DEFAULT_RECOMMENDATIONS_TABLE,
+    MISSING_TABLE_ERRORS,
 )
-from cicerone.io.options import build_s3_client, is_s3_not_found, object_key, require_option, sql_identifier
+from cicerone.io.options import (
+    build_s3_client,
+    is_s3_not_found,
+    read_parquet,
+    require_option,
+    sql_identifier,
+    validate_storage_options,
+)
 from cicerone.serve.metrics import observe_cache_refresh, record_cache_hit, record_cache_miss
 
 logger = logging.getLogger(__name__)
@@ -43,7 +49,6 @@ ITEMS_SNAPSHOT_FILENAME = "items_snapshot.parquet"
 # prefer popular → latest → min user_id. Missing-table: ProgrammingError / OperationalError.
 _FALLBACK_SOURCES = frozenset({POPULAR_SOURCE, LATEST_SOURCE})
 _FALLBACK_SOURCE_PRIORITY = {POPULAR_SOURCE: 0, LATEST_SOURCE: 1}
-_MISSING_TABLE_ERRORS = (ProgrammingError, OperationalError)
 
 
 def normalize_items_snapshot(
@@ -69,15 +74,25 @@ def normalize_items_snapshot(
     return out
 
 
+def _best_fallback_user_id(priorities: dict[str, int]) -> str | None:
+    """Lowest source priority wins; ties break on lexicographically smallest user id."""
+    if not priorities:
+        return None
+    return min(priorities, key=lambda user_id: (priorities[user_id], user_id))
+
+
 def _pick_fallback_user(candidates: pd.DataFrame) -> str | None:
     """Stable fallback user: prefer popular_fallback, then latest, then min user_id."""
     if candidates.empty or USER_COLUMN not in candidates.columns:
         return None
-    frame = candidates.copy()
+    frame = candidates[[USER_COLUMN]].copy()
     frame["_user"] = frame[USER_COLUMN].astype(str)
-    frame["_src_pri"] = frame[SOURCE_COLUMN].map(_FALLBACK_SOURCE_PRIORITY).fillna(99)
-    best = frame.sort_values(["_src_pri", "_user"], ascending=[True, True]).iloc[0]
-    return str(best["_user"])
+    if SOURCE_COLUMN in candidates.columns:
+        frame["_src_pri"] = candidates[SOURCE_COLUMN].map(_FALLBACK_SOURCE_PRIORITY).fillna(99)
+    else:
+        frame["_src_pri"] = 99
+    priorities = frame.groupby("_user", sort=False)["_src_pri"].min().astype(int).to_dict()
+    return _best_fallback_user_id(priorities)
 
 
 def select_cold_start_fallback(
@@ -92,8 +107,8 @@ def select_cold_start_fallback(
     prefer ``popular_fallback``, then ``latest``, then lexicographically smallest
     ``user_id``.
 
-    ``sentinel`` may be a pre-fetched ``__cold_start__`` slice (e.g. from SQL);
-    when omitted, it is derived from ``recommendations``.
+    ``sentinel`` may be a pre-fetched ``__cold_start__`` slice (e.g. from SQL
+    or the per-user index); when omitted, it is derived from ``recommendations``.
     """
     empty = recommendations.iloc[0:0]
     if k < 1:
@@ -137,6 +152,19 @@ def _index_recommendations_by_user(frame: pd.DataFrame) -> dict[str, pd.DataFram
     return {
         user_id: group.reset_index(drop=True) for user_id, group in indexed.groupby(USER_COLUMN, sort=False)
     }
+
+
+def _resolve_fallback_user_id(by_user: dict[str, pd.DataFrame]) -> str | None:
+    """Pick popular/latest fallback user from the per-user index (no full-frame scan)."""
+    priorities: dict[str, int] = {}
+    for user_id, rows in by_user.items():
+        if user_id == COLD_START_USER_ID or rows.empty or SOURCE_COLUMN not in rows.columns:
+            continue
+        sources = set(rows[SOURCE_COLUMN].astype(str))
+        if not sources & _FALLBACK_SOURCES:
+            continue
+        priorities[user_id] = min(_FALLBACK_SOURCE_PRIORITY.get(src, 99) for src in sources)
+    return _best_fallback_user_id(priorities)
 
 
 class _ItemFilterMixin:
@@ -194,9 +222,10 @@ class _ItemFilterMixin:
 class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
     def __init__(self, options: dict[str, Any]):
         self._options = options
-        self._backend = options.get("storage_backend", "local")
+        self._backend = validate_storage_options(options)
         self._cache = pd.DataFrame(columns=[USER_COLUMN, RANK_COLUMN, SOURCE_COLUMN])
         self._by_user: dict[str, pd.DataFrame] = {}
+        self._fallback_user_id: str | None = None
         self._init_item_filter_state()
         self._s3_client = None
         self.refresh()
@@ -207,16 +236,11 @@ class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
         return self._s3_client
 
     def _read_recommendations(self) -> pd.DataFrame:
-        if self._backend == "local":
-            path = Path(require_option(self._options, "path", "local")) / "recommendations.parquet"
-            logger.info("Loading recommendations from %s", path)
-            return pd.read_parquet(path)
-
-        bucket = require_option(self._options, "bucket", "s3")
-        key = object_key(self._options, "recommendations.parquet")
-        logger.info("Loading recommendations from s3://%s/%s", bucket, key)
-        obj = self._get_s3_client().get_object(Bucket=bucket, Key=key)
-        return pd.read_parquet(io.BytesIO(obj["Body"].read()))
+        return read_parquet(
+            self._options,
+            "recommendations.parquet",
+            s3_client=self._get_s3_client() if self._backend == "s3" else None,
+        )
 
     def _read_items_snapshot(self) -> pd.DataFrame | None:
         try:
@@ -224,14 +248,11 @@ class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
                 path = Path(require_option(self._options, "path", "local")) / ITEMS_SNAPSHOT_FILENAME
                 if not path.exists():
                     return None
-                logger.info("Loading items snapshot from %s", path)
-                return pd.read_parquet(path)
-
-            bucket = require_option(self._options, "bucket", "s3")
-            key = object_key(self._options, ITEMS_SNAPSHOT_FILENAME)
-            logger.info("Loading items snapshot from s3://%s/%s", bucket, key)
-            obj = self._get_s3_client().get_object(Bucket=bucket, Key=key)
-            return pd.read_parquet(io.BytesIO(obj["Body"].read()))
+            return read_parquet(
+                self._options,
+                ITEMS_SNAPSHOT_FILENAME,
+                s3_client=self._get_s3_client() if self._backend == "s3" else None,
+            )
         except FileNotFoundError:
             return None
         except Exception as exc:
@@ -246,9 +267,13 @@ class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
         try:
             cache = self._read_recommendations()
             by_user = _index_recommendations_by_user(cache)
+            fallback_user_id = None
+            if COLD_START_USER_ID not in by_user:
+                fallback_user_id = _resolve_fallback_user_id(by_user)
             with self._lock:
                 self._cache = cache
                 self._by_user = by_user
+                self._fallback_user_id = fallback_user_id
             recommendations_ok = True
         except Exception:
             logger.exception("Failed to refresh recommendations cache; keeping previous data")
@@ -276,7 +301,14 @@ class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
 
     def get_cold_start_fallback(self, k: int) -> pd.DataFrame:
         with self._lock:
-            return select_cold_start_fallback(self._cache, k)
+            sentinel = self._by_user.get(COLD_START_USER_ID)
+            if sentinel is not None and not sentinel.empty:
+                return sentinel.head(k).reset_index(drop=True)
+            if self._fallback_user_id is not None:
+                rows = self._by_user.get(self._fallback_user_id)
+                if rows is not None and not rows.empty:
+                    return rows.head(k).reset_index(drop=True)
+            return select_cold_start_fallback(self._cache, k, sentinel=sentinel)
 
 
 class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
@@ -308,7 +340,7 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
                 self._items = items
                 self._items_version += 1
             items_ok = True
-        except _MISSING_TABLE_ERRORS:
+        except MISSING_TABLE_ERRORS:
             logger.debug(
                 "recommendation items table %r not present; continuing without it",
                 self._items_table,
@@ -353,7 +385,7 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
                 self._engine,
                 params={"popular": POPULAR_SOURCE, "latest": LATEST_SOURCE},
             )
-        except _MISSING_TABLE_ERRORS:
+        except MISSING_TABLE_ERRORS:
             # Missing table/source column → empty fallback candidates.
             return sentinel
         if picked.empty:

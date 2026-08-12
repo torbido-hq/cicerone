@@ -18,7 +18,14 @@ import pandas as pd
 from sqlalchemy import MetaData, Table, create_engine, inspect, select
 
 from cicerone.io.db_store import DEFAULT_MANIFEST_TABLE
-from cicerone.io.options import build_s3_client, is_s3_not_found, object_key, require_option, sql_identifier
+from cicerone.io.options import (
+    build_s3_client,
+    is_s3_not_found,
+    object_key,
+    require_option,
+    sql_identifier,
+    validate_storage_options,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +33,7 @@ logger = logging.getLogger(__name__)
 class DatasetManifestReader:
     def __init__(self, options: dict[str, Any]):
         self._options = options
-        self._backend = options.get("storage_backend", "local")
+        self._backend = validate_storage_options(options)
 
     def _read(self) -> dict[str, Any] | None:
         if self._backend == "local":

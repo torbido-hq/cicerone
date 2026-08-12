@@ -226,18 +226,24 @@ def blend_for_users(
     top_k: int,
     latest_available: bool,
     shared_latest: Sequence[tuple[str, int, float]] | None = None,
+    latest_by_user: Mapping[str, Sequence[tuple[str, int, float]]] | None = None,
 ) -> pd.DataFrame:
     """Weighted RRF with per-user source weights (best rank per item within each source).
 
-    When ``shared_latest`` is set, that ranking is applied to every target user
-    instead of reading a Cartesian ``latest`` frame (avoids U×K row explosion).
+    Prefer ``shared_latest`` (one ranking for all users) or ``latest_by_user``
+    (per-user / per-cohort rankings; keys must be ``str`` user ids) over a
+    Cartesian ``latest`` frame.
     """
+    use_indexed_latest = shared_latest is not None or latest_by_user is not None
+    latest_index = (
+        None if latest_by_user is None else {str(uid): ranking for uid, ranking in latest_by_user.items()}
+    )
     frames = {
         PERSONALIZED_SOURCE: _normalize_source_frame(personalized, PERSONALIZED_SOURCE),
         POPULAR_SOURCE: _normalize_source_frame(popular, POPULAR_SOURCE),
         LATEST_SOURCE: (
             _normalize_source_frame(latest, LATEST_SOURCE)
-            if shared_latest is None and latest is not None and latest_available
+            if not use_indexed_latest and latest is not None and latest_available
             else _empty_recs()
         ),
     }
@@ -261,16 +267,21 @@ def blend_for_users(
                 sources.add(source_label)
                 by_user_item[key] = (score, sources)
 
-        if shared_latest is not None and latest_available:
-            weight = weights.get(LATEST_SOURCE, 0.0)
-            if weight > _WEIGHT_EPS:
-                for item_id, rank, _score in shared_latest:
-                    key = (user_id, str(item_id))
-                    score, sources = by_user_item.get(key, (0.0, set()))
-                    score += _rrf_contrib(float(rank), weight, config.rrf_k)
-                    sources.add(LATEST_SOURCE)
-                    by_user_item[key] = (score, sources)
-
+        if latest_available:
+            ranking: Sequence[tuple[str, int, float]] | None = None
+            if shared_latest is not None:
+                ranking = shared_latest
+            elif latest_index is not None:
+                ranking = latest_index.get(str(user_id))
+            if ranking:
+                weight = weights.get(LATEST_SOURCE, 0.0)
+                if weight > _WEIGHT_EPS:
+                    for item_id, rank, _score in ranking:
+                        key = (user_id, str(item_id))
+                        score, sources = by_user_item.get(key, (0.0, set()))
+                        score += _rrf_contrib(float(rank), weight, config.rrf_k)
+                        sources.add(LATEST_SOURCE)
+                        by_user_item[key] = (score, sources)
     if not by_user_item:
         return _empty_recs()
 

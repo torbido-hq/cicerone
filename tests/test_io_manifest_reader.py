@@ -6,6 +6,7 @@ import boto3
 import pytest
 from moto import mock_aws
 
+from cicerone.config import ConfigError
 from cicerone.io.manifest_reader import DatasetManifestReader
 
 
@@ -92,3 +93,16 @@ def test_dataset_reader_s3_backend_raises_on_hard_failure(s3_options):
 
     with pytest.raises(ClientError):
         reader.read_latest()
+
+
+def test_dataset_manifest_reader_validates_storage_options():
+    with pytest.raises(ConfigError, match="path"):
+        DatasetManifestReader({"storage_backend": "local"})
+    with pytest.raises(ConfigError, match="bucket"):
+        DatasetManifestReader(
+            {
+                "storage_backend": "s3",
+                "access_key_id": "test",
+                "secret_access_key": "test",
+            }
+        )

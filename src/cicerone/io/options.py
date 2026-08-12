@@ -2,21 +2,30 @@
 
 from __future__ import annotations
 
+import io
+import logging
 import re
+from pathlib import Path
 from typing import Any
 
 import boto3
+import pandas as pd
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
+from cicerone.config import ConfigError
+
+logger = logging.getLogger(__name__)
+
 _SQL_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 S3_NOT_FOUND_CODES = frozenset({"NoSuchKey", "404", "NotFound"})
+STORAGE_BACKENDS = frozenset({"s3", "local"})
 
 
 def require_option(options: dict[str, Any], key: str, backend: str) -> Any:
     value = options.get(key)
     if value is None:
-        raise RuntimeError(f"Missing required option '{key}' for backend {backend!r}")
+        raise ConfigError(f"Missing required option '{key}' for backend {backend!r}")
     return value
 
 
@@ -49,3 +58,47 @@ def build_s3_client(options: dict[str, Any]):
         region_name="auto",
         config=Config(signature_version="s3v4", retries={"max_attempts": 3, "mode": "standard"}),
     )
+
+
+def storage_backend(options: dict[str, Any]) -> str:
+    backend = options.get("storage_backend", "local")
+    if backend not in STORAGE_BACKENDS:
+        raise ConfigError(f"Unknown storage_backend: {backend!r} (expected 's3' or 'local')")
+    return str(backend)
+
+
+def validate_storage_options(options: dict[str, Any], backend: str | None = None) -> str:
+    """Validate ``storage_backend`` and required options; return the resolved backend.
+
+    Always resolves from ``options``. If ``backend`` is passed, it must match
+    ``options['storage_backend']`` (or the default ``local``).
+
+    Raises ``ConfigError`` for unknown backends, backend mismatches, or missing
+    required options.
+    """
+    resolved = storage_backend(options)
+    if backend is not None and str(backend) != resolved:
+        raise ConfigError(f"explicit backend {backend!r} does not match options storage_backend {resolved!r}")
+    if resolved == "local":
+        require_option(options, "path", "local")
+    else:
+        require_option(options, "access_key_id", "s3")
+        require_option(options, "secret_access_key", "s3")
+        require_option(options, "bucket", "s3")
+    return resolved
+
+
+def read_parquet(options: dict[str, Any], filename: str, *, s3_client: Any | None = None) -> pd.DataFrame:
+    """Read a parquet object from local path or S3 using ``storage_backend`` options."""
+    backend = validate_storage_options(options)
+    if backend == "local":
+        path = Path(require_option(options, "path", "local")) / filename
+        logger.info("Reading %s", path)
+        return pd.read_parquet(path)
+
+    bucket = require_option(options, "bucket", "s3")
+    key = object_key(options, filename)
+    logger.info("Reading s3://%s/%s", bucket, key)
+    client = s3_client if s3_client is not None else build_s3_client(options)
+    obj = client.get_object(Bucket=bucket, Key=key)
+    return pd.read_parquet(io.BytesIO(obj["Body"].read()))

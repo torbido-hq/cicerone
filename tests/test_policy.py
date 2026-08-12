@@ -535,13 +535,16 @@ def test_apply_boosts_reorders_and_truncates():
 def test_as_list_handles_missing_series_and_zero_dim_ndarray():
     import numpy as np
 
-    from cicerone.policy import _as_list
+    from cicerone.policy import _MISSING, _as_list
 
     assert _as_list(None) == []
     assert _as_list(float("nan")) == []
+    assert _as_list(_MISSING) == []
     assert _as_list(np.array("IT")) == ["IT"]
     assert _as_list(pd.Series(["beer", None, "wine"])) == ["beer", "wine"]
     assert _as_list(np.array(["IT", None], dtype=object)) == ["IT"]
+    # Nested policy sentinel must be filtered like None / NaN.
+    assert _as_list(["IT", _MISSING, "FR"]) == ["IT", "FR"]
 
 
 def test_user_attr_missing_columns_and_empty_mask_edges():

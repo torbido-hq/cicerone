@@ -17,40 +17,25 @@ from typing import Any
 
 import pandas as pd
 
-from cicerone.io.options import build_s3_client, is_s3_not_found, object_key, require_option
+from cicerone.io.options import (
+    build_s3_client,
+    is_s3_not_found,
+    object_key,
+    read_parquet,
+    require_option,
+    validate_storage_options,
+)
 
 logger = logging.getLogger(__name__)
-
-
-def _validate_backend(options: dict[str, Any], backend: str) -> None:
-    if backend not in ("s3", "local"):
-        raise ValueError(f"Unknown storage_backend: {backend!r} (expected 's3' or 'local')")
-    if backend == "local":
-        require_option(options, "path", "local")
-    else:
-        require_option(options, "access_key_id", "s3")
-        require_option(options, "secret_access_key", "s3")
-        require_option(options, "bucket", "s3")
 
 
 class DatasetInputSource:
     def __init__(self, options: dict[str, Any]):
         self._options = options
-        self._backend = options.get("storage_backend", "local")
-        _validate_backend(options, self._backend)
+        self._backend = validate_storage_options(options)
 
     def _read(self, filename: str) -> pd.DataFrame:
-        if self._backend == "local":
-            path = Path(require_option(self._options, "path", "local")) / filename
-            logger.info("Reading %s", path)
-            return pd.read_parquet(path)
-
-        bucket = require_option(self._options, "bucket", "s3")
-        key = object_key(self._options, filename)
-        logger.info("Reading s3://%s/%s", bucket, key)
-        client = build_s3_client(self._options)
-        obj = client.get_object(Bucket=bucket, Key=key)
-        return pd.read_parquet(io.BytesIO(obj["Body"].read()))
+        return read_parquet(self._options, filename)
 
     def read_events(self) -> pd.DataFrame:
         return self._read("events.parquet")
@@ -79,8 +64,7 @@ class DatasetInputSource:
 class DatasetOutputSink:
     def __init__(self, options: dict[str, Any]):
         self._options = options
-        self._backend = options.get("storage_backend", "local")
-        _validate_backend(options, self._backend)
+        self._backend = validate_storage_options(options)
 
     def _write_bytes(self, filename: str, payload: bytes, content_type: str) -> None:
         if self._backend == "local":

@@ -5,6 +5,7 @@ import pytest
 from sqlalchemy import create_engine, text
 from support.postgres_defaults import resolve_test_database_url
 
+from cicerone.config import ConfigError
 from cicerone.io.db_store import DatabaseOutputSink
 from cicerone.io.recommendation_reader import DbRecommendationReader
 
@@ -151,5 +152,5 @@ def test_db_reader_refresh_is_a_noop():
 
 
 def test_db_reader_missing_database_url_raises():
-    with pytest.raises(RuntimeError, match="database_url"):
+    with pytest.raises(ConfigError, match="database_url"):
         DbRecommendationReader({})

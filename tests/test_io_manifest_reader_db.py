@@ -5,6 +5,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError
 from support.postgres_defaults import resolve_test_database_url
 
+from cicerone.config import ConfigError
 from cicerone.io.db_store import DatabaseOutputSink
 from cicerone.io.manifest_reader import DbManifestReader
 
@@ -99,5 +100,5 @@ def test_db_reader_nan_columns_from_a_pre_upgrade_row_become_none():
 
 
 def test_db_reader_missing_database_url_raises():
-    with pytest.raises(RuntimeError, match="database_url"):
+    with pytest.raises(ConfigError, match="database_url"):
         DbManifestReader({})

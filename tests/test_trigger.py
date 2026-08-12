@@ -62,6 +62,24 @@ def test_run_guard_records_retrain_trigger_metrics():
     assert debounced >= 1
 
 
+def test_run_guard_records_cron_retrain_source():
+    done = threading.Event()
+
+    def fake_run(triggered_by: str) -> None:
+        del triggered_by
+        done.set()
+
+    guard = RunGuard(debounce_seconds=0, run_fn=fake_run)
+    assert guard.trigger("cron") is True
+    assert done.wait(timeout=5)
+
+    from prometheus_client import generate_latest
+
+    body = generate_latest().decode()
+    accepted = _metric_value(body, "cicerone_retrain_trigger_total", {"source": "cron", "status": "accepted"})
+    assert accepted >= 1
+
+
 def test_run_guard_starts_a_run_when_idle():
     done = threading.Event()
     calls = []
@@ -225,6 +243,23 @@ def test_current_marker_local_backend_reflects_mtime(tmp_path):
 
     (tmp_path / "events.parquet").write_bytes(b"data")
     assert _current_marker(input_settings) is not None
+
+
+def test_current_marker_local_stat_error_returns_none(tmp_path, monkeypatch, caplog):
+    import logging
+
+    from cicerone.trigger import _current_marker
+
+    input_settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    (tmp_path / "events.parquet").write_bytes(b"data")
+
+    def boom(self):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr("pathlib.Path.stat", boom)
+    with caplog.at_level(logging.ERROR, logger="cicerone.trigger"):
+        assert _current_marker(input_settings) is None
+    assert any("Failed to check input source" in record.message for record in caplog.records)
 
 
 @pytest.fixture

@@ -8,6 +8,7 @@ import pytest
 from botocore.exceptions import ClientError
 from moto import mock_aws
 
+from cicerone.config import ConfigError
 from cicerone.io.dataset_store import DatasetInputSource, DatasetOutputSink
 
 # --- local backend -----------------------------------------------------------
@@ -52,16 +53,16 @@ def test_local_backend_optional_inputs_propagate_corrupt_file_errors(tmp_path):
 
 
 def test_unknown_storage_backend_raises():
-    with pytest.raises(ValueError, match="Unknown storage_backend"):
+    with pytest.raises(ConfigError, match="Unknown storage_backend"):
         DatasetInputSource({"storage_backend": "ftp"})
-    with pytest.raises(ValueError, match="Unknown storage_backend"):
+    with pytest.raises(ConfigError, match="Unknown storage_backend"):
         DatasetOutputSink({"storage_backend": "ftp"})
 
 
 def test_local_backend_missing_path_raises():
-    with pytest.raises(RuntimeError, match="path"):
+    with pytest.raises(ConfigError, match="path"):
         DatasetInputSource({"storage_backend": "local"})
-    with pytest.raises(RuntimeError, match="path"):
+    with pytest.raises(ConfigError, match="path"):
         DatasetOutputSink({"storage_backend": "local"})
 
 
@@ -75,9 +76,9 @@ def test_s3_backend_missing_required_option_raises(missing_key):
     }
     del options[missing_key]
 
-    with pytest.raises(RuntimeError, match=missing_key):
+    with pytest.raises(ConfigError, match=missing_key):
         DatasetInputSource(options)
-    with pytest.raises(RuntimeError, match=missing_key):
+    with pytest.raises(ConfigError, match=missing_key):
         DatasetOutputSink(options)
 
 

@@ -17,16 +17,19 @@ from __future__ import annotations
 import logging
 from collections.abc import Hashable, Iterable, Sequence
 
-import numpy as np
 import pandas as pd
 from rectools import Columns
 
 from cicerone.feature_config import BoostRule, EligibilityRule, FeatureConfig
 from cicerone.ids import items_id_column
+from cicerone.values import MISSING as _MISSING
+from cicerone.values import as_list as _as_list
+from cicerone.values import is_missing as _is_missing
+from cicerone.values import is_sequence_attr as _is_sequence_attr
+from cicerone.values import str_set as _str_set
 
 logger = logging.getLogger(__name__)
 
-_MISSING = object()
 _warned_missing_columns: set[tuple[str, str, str]] = set()
 _warned_boost_without_items = False
 
@@ -102,41 +105,6 @@ def is_user_scoped(rule: EligibilityRule) -> bool:
 
 def has_user_scoped_eligibility(rules: Sequence[EligibilityRule]) -> bool:
     return any(is_user_scoped(r) for r in rules)
-
-
-def _is_sequence_attr(value: object) -> bool:
-    if isinstance(value, (list, tuple, set, pd.Series)):
-        return True
-    return isinstance(value, np.ndarray) and value.ndim > 0
-
-
-def _is_missing(value: object) -> bool:
-    if value is None or value is _MISSING:
-        return True
-    if _is_sequence_attr(value):
-        return False
-    try:
-        return bool(pd.isna(value))
-    except (TypeError, ValueError):
-        return False
-
-
-def _as_list(value: object) -> list:
-    if _is_missing(value):
-        return []
-    if isinstance(value, np.ndarray):
-        if value.ndim == 0:
-            return _as_list(value.item())
-        values = value.tolist()
-    elif isinstance(value, (list, tuple, set, pd.Series)):
-        values = list(value) if not isinstance(value, pd.Series) else value.tolist()
-    else:
-        return [value]
-    return [v for v in values if not _is_missing(v)]
-
-
-def _str_set(values: Iterable) -> set[str]:
-    return {str(v) for v in values if not _is_missing(v)}
 
 
 def _user_attr(user_row: pd.Series | dict | None, column: str | None) -> object:
