@@ -34,6 +34,19 @@ category_column = "category"
 metrics_enabled = true
 metrics_token = ""   # empty = open endpoint; bind to a trusted network or reverse proxy
 
+# Optional incremental event ingest. See docs/incremental-events.md.
+# Webhook: POST /events. DB: watermark poll (no HTTP ingest route).
+# [events]
+# enabled = true
+# kind = "webhook"
+# [events.options]
+# # auth_token = "${EVENTS_AUTH_TOKEN}"
+# # max_pending = 10000  # ingest 429 when full; must be >=100 (default 10000)
+# [events.incremental]
+# batch_size = 100
+# batch_window_seconds = 60
+# poll_interval_seconds = 1
+
 # [input] is required by config.load_settings() even in serve mode (kept
 # generic/simple rather than special-casing it away) but is never read from
 # in this mode -- any valid, already-configured backend works as a placeholder.

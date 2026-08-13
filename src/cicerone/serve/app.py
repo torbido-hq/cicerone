@@ -6,6 +6,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable, Sequence
+from pathlib import Path
 
 import pandas as pd
 import uvicorn
@@ -15,11 +16,14 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from cicerone import __version__
 from cicerone.config import Settings, load_settings
+from cicerone.events.webhook import WebhookEventSource
 from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.io.base import ManifestReader, RecommendationReader
 from cicerone.io.recommendation_reader import ITEM_COLUMN, SOURCE_COLUMN, normalize_items_snapshot
+from cicerone.serve.bootstrap_events import start_events_runtime
 from cicerone.serve.code_samples import HEALTH_PATH, RECOMMENDATIONS_PATH, attach_code_samples
+from cicerone.serve.events_routes import attach_events_ingest_openapi, mount_events_routes
 from cicerone.serve.metrics import (
     METRICS_TOKEN_HEADER,
     REQUEST_LATENCY_SECONDS,
@@ -39,6 +43,10 @@ Read-only HTTP API over **precomputed** recommendations written by the batch job
 
 There is no live inference in the request path: `GET {RECOMMENDATIONS_PATH}`
 looks up rows already stored in the configured output (dataset parquet or DB).
+
+When `[events]` is enabled with `kind = "webhook"`, `POST /events` accepts
+interaction events for micro-batch incremental updates (write-through to the
+same output store). See `docs/incremental-events.md`.
 
 Interactive docs: `/docs` (Swagger UI) and `/redoc` (includes language
 code samples via ``x-codeSamples``). Machine-readable schema: `/openapi.json`.
@@ -224,6 +232,7 @@ def create_app(
     *,
     manifest_reader: ManifestReader | None = None,
     feature_config: FeatureConfig | None = None,
+    event_source: WebhookEventSource | None = None,
 ) -> FastAPI:
     app = FastAPI(
         title=SERVE_API_TITLE,
@@ -374,6 +383,8 @@ def create_app(
             response.headers["X-Generated-At"] = str(generated_at)
         return body
 
+    mount_events_routes(app, settings, event_source=event_source)
+
     def custom_openapi() -> dict:
         if app.openapi_schema is not None:
             return app.openapi_schema
@@ -396,6 +407,7 @@ def create_app(
                 "$ref": "#/components/headers/X-Generated-At",
             }
         attach_code_samples(schema)
+        attach_events_ingest_openapi(schema)
         app.openapi_schema = schema
         return app.openapi_schema
 
@@ -412,24 +424,37 @@ def main() -> None:
 
     reader = build_recommendation_reader(settings.output)
     manifest_reader = build_manifest_reader(settings.output)
-    feature_config = load_feature_config(settings.feature_config_path)
+    feature_path = Path(settings.feature_config_path)
+    if feature_path.is_file():
+        feature_config = load_feature_config(feature_path)
+    else:
+        logger.warning(
+            "feature config missing at %s; serve continuing without features.toml",
+            feature_path,
+        )
+        feature_config = None
 
-    availability_filters = list(feature_config.item_availability_filters)
+    availability_filters = list(feature_config.item_availability_filters) if feature_config else []
     _configure_reader_item_filters(
         reader,
         category_column=settings.serve.category_column,
         availability_filters=availability_filters,
     )
 
+    events_runtime = start_events_runtime(settings, feature_config=feature_config, reader=reader)
     app = create_app(
         settings,
         reader,
         manifest_reader=manifest_reader,
         feature_config=feature_config,
+        event_source=events_runtime.webhook_source,
     )
     _start_refresh_loop(
         reader,
         settings.serve.refresh_interval_seconds,
         generated_at_cache=app.state.generated_at_cache,
     )
-    uvicorn.run(app, host=settings.serve.host, port=settings.serve.port)
+    try:
+        uvicorn.run(app, host=settings.serve.host, port=settings.serve.port)
+    finally:
+        events_runtime.stop()

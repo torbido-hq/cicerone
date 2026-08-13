@@ -24,6 +24,7 @@ from cicerone.config.constants import (
     ConfigError,
     Mode,
 )
+from cicerone.config.events import coerce_events_settings, load_events_settings
 from cicerone.config.settings import (
     AutomlSettings,
     DashboardSettings,
@@ -140,6 +141,7 @@ def make_settings(**overrides: Any) -> Settings:
         DashboardSettings, overrides.pop("dashboard", None), _DASHBOARD_FLAT_KEYS, overrides
     )
     automl = _coerce_nested(AutomlSettings, overrides.pop("automl", None), _AUTOML_FLAT_KEYS, overrides)
+    events = coerce_events_settings(overrides.pop("events", None))
 
     base: dict[str, Any] = dict(
         input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": "/tmp/in"}),
@@ -163,6 +165,7 @@ def make_settings(**overrides: Any) -> Settings:
         serve=serve,
         trigger=trigger,
         dashboard=dashboard,
+        events=events,
     )
     base.update(overrides)
     if base.get("model_configs") is None:
@@ -279,6 +282,13 @@ def load_settings(config_path: str | None = None) -> Settings:
 
     dashboard_raw = raw.get("dashboard", {})
     dashboard_enabled = bool(dashboard_raw.get("enabled", False))
+
+    events = load_events_settings(
+        raw.get("events", {}) or {},
+        mode=mode,
+        serve_auth_token=serve_auth_token,
+        resolve_env=_resolve_env_placeholders,
+    )
 
     log_epoch_metrics = bool(job.get("log_epoch_metrics", False))
 
@@ -412,4 +422,5 @@ def load_settings(config_path: str | None = None) -> Settings:
                 int(dashboard_raw.get("history_limit", 20)), name="dashboard.history_limit"
             ),
         ),
+        events=events,
     )

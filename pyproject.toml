@@ -18,8 +18,10 @@ pythonpath = ["src", "tests"]
 source = ["cicerone"]
 omit = [
     "*/cicerone/io/base.py",
+    "*/cicerone/events/base.py",
     "*/cicerone/__init__.py",
     "*/cicerone/io/__init__.py",
+    "*/cicerone/events/__init__.py",
     "*/cicerone/model/__init__.py",
     "*/cicerone/config/__init__.py",
 ]

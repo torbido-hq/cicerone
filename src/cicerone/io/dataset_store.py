@@ -71,7 +71,9 @@ class DatasetOutputSink:
             path = Path(require_option(self._options, "path", "local")) / filename
             path.parent.mkdir(parents=True, exist_ok=True)
             logger.info("Writing %s", path)
-            path.write_bytes(payload)
+            tmp = path.with_name(f".{path.name}.tmp")
+            tmp.write_bytes(payload)
+            tmp.replace(path)
             return
 
         bucket = require_option(self._options, "bucket", "s3")

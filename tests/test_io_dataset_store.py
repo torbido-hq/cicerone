@@ -24,6 +24,7 @@ def test_local_backend_round_trip(tmp_path):
     sink.write_manifest({"n_events": 3})
     sink.write_model_artifact(b"fake-artifact-bytes")
 
+    assert not list(tmp_path.glob(".*.tmp"))
     source = DatasetInputSource(options)
     (tmp_path / "events.parquet").write_bytes((tmp_path / "recommendations.parquet").read_bytes())
     events = source.read_events()

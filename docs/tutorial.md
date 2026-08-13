@@ -663,6 +663,9 @@ docker compose up --build
 - Point input/output at S3-compatible object storage (R2, AWS S3, MinIO) —
   see the README's [Configuration](../README.md#configuration-config-cicerone-toml)
   section.
+- Optional: enable `[events]` webhook ingest on the serve process so new
+  interactions micro-batch into popular/latest top-K between full retrains —
+  see [incremental-events.md](incremental-events.md).
 - Run the test suite (`docker compose -f docker-compose.ci.yml up --build
   --abort-on-container-exit --exit-code-from test`) if you're contributing
   code — see [CONTRIBUTING.md](../CONTRIBUTING.md). That suite includes a

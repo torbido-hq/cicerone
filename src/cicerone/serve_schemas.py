@@ -36,3 +36,46 @@ class RecommendationsResponse(BaseModel):
 
 class ErrorDetail(BaseModel):
     detail: str
+
+
+class ValidationErrorItem(BaseModel):
+    """One Pydantic validation failure (matches ``ValidationError.errors()`` entries)."""
+
+    type: str
+    loc: list[str | int]
+    msg: str
+    input: object | None = None
+    ctx: dict[str, object] | None = None
+
+
+class ValidationErrorDetail(BaseModel):
+    """Structured 400 body when ingest fails Pydantic field validation."""
+
+    detail: list[ValidationErrorItem]
+
+
+class InteractionEvent(BaseModel):
+    user_id: str = Field(description="User identifier")
+    item_id: str = Field(description="Item identifier")
+    event_type: str = Field(
+        description="Must match a key in features.toml [event_weights] to affect weights",
+    )
+    quantity: int = Field(default=1, ge=1, description="Optional count; default 1")
+    occurred_at: str | int | float = Field(
+        description=(
+            "ISO-8601 timestamp with timezone (Z or explicit offset), or Unix epoch "
+            "seconds (UTC); converted to UTC"
+        ),
+        examples=["2026-08-13T12:00:00Z", 1724000000],
+    )
+    event_id: str | None = Field(default=None, description="Optional idempotency id")
+    idempotency_key: str | None = Field(default=None, description="Alias for event_id")
+
+
+class EventsIngestRequest(BaseModel):
+    events: list[InteractionEvent] = Field(description="Batch of interaction events")
+
+
+class EventsIngestResponse(BaseModel):
+    accepted: int = Field(description="Number of events accepted into the source queue")
+    event_ids: list[str] = Field(description="Assigned or provided event ids")

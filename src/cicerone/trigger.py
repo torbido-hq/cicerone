@@ -44,6 +44,11 @@ class RunGuard:
         self._running = False
         self._last_started_at: float | None = None
 
+    @property
+    def busy(self) -> bool:
+        with self._lock:
+            return self._running
+
     def trigger(self, triggered_by: str) -> bool:
         with self._lock:
             now = time.monotonic()

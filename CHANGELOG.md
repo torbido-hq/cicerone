@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Incremental events between full retrains: internal `EventSource` surface,
+  webhook `POST /events`, micro-batch buffer/worker, and write-through
+  updater for popular/latest slices (`[events]` config). Design:
+  `docs/incremental-events.md`. Webhook `occurred_at` requires an explicit
+  timezone (`Z` / offset) or Unix epoch seconds (UTC).
+- DB event source (`events.kind = "db"`): watermark poll over
+  `events_table` / `events_query`, durable optional `watermark_path`,
+  watermark advances only on successful flush ack.
+
 ### Changed
 
 - Bump GitHub Actions Pages deploy helpers: `actions/upload-pages-artifact`

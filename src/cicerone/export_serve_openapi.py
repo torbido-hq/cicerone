@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from cicerone.config import make_settings
+from cicerone.config import EventsSettings, make_settings
 from cicerone.io.base import BaseRecommendationReader
 from cicerone.io.recommendation_reader import RECOMMENDATION_COLUMNS
 from cicerone.serve import create_app
@@ -31,7 +31,12 @@ class _SchemaReader(BaseRecommendationReader):
 
 def build_openapi() -> dict:
     # Bearer token so the exported schema documents HTTP Bearer auth.
-    settings = make_settings(mode="serve", serve_auth_token="openapi-export")
+    # Enable webhook events so POST /events appears in the checked-in OpenAPI.
+    settings = make_settings(
+        mode="serve",
+        serve_auth_token="openapi-export",
+        events=EventsSettings(enabled=True, kind="webhook"),
+    )
     return create_app(settings, _SchemaReader()).openapi()
 
 

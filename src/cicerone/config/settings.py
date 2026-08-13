@@ -13,6 +13,9 @@ from cicerone.config.constants import (
     DEFAULT_EPOCH_METRICS_PLATEAU_EPS,
     DEFAULT_EPOCH_METRICS_PLATEAU_WINDOW,
     DEFAULT_EPOCH_METRICS_REGRESSION_DROP,
+    DEFAULT_EVENTS_BATCH_SIZE,
+    DEFAULT_EVENTS_BATCH_WINDOW_SECONDS,
+    DEFAULT_EVENTS_POLL_INTERVAL_SECONDS,
     DEFAULT_LOCK_KEY,
     DEFAULT_LOCK_TTL_SECONDS,
     Mode,
@@ -78,6 +81,21 @@ class AutomlSettings:
 
 
 @dataclass(frozen=True)
+class EventsIncrementalSettings:
+    batch_size: int = DEFAULT_EVENTS_BATCH_SIZE
+    batch_window_seconds: float = DEFAULT_EVENTS_BATCH_WINDOW_SECONDS
+    poll_interval_seconds: float = DEFAULT_EVENTS_POLL_INTERVAL_SECONDS
+
+
+@dataclass(frozen=True)
+class EventsSettings:
+    enabled: bool = False
+    kind: str = "webhook"
+    options: dict[str, Any] = field(default_factory=dict)
+    incremental: EventsIncrementalSettings = field(default_factory=EventsIncrementalSettings)
+
+
+@dataclass(frozen=True)
 class IOSettings:
     kind: str
     options: dict[str, Any] = field(default_factory=dict)
@@ -106,6 +124,7 @@ class Settings:
     serve: ServeSettings
     trigger: TriggerSettings
     dashboard: DashboardSettings
+    events: EventsSettings
 
     @property
     def serve_host(self) -> str:
@@ -230,3 +249,11 @@ class Settings:
     @property
     def automl_candidates(self) -> list[dict[str, Any]] | None:
         return self.automl.candidates
+
+    @property
+    def events_enabled(self) -> bool:
+        return self.events.enabled
+
+    @property
+    def events_kind(self) -> str:
+        return self.events.kind

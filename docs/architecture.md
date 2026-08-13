@@ -9,7 +9,7 @@ For configuration and usage, see the main [README](../README.md).
 
 | Path | Role |
 | --- | --- |
-| `config/` | Load & resolve `config/cicerone.toml` (structural config + `${ENV_VAR}` secrets); package: constants / settings / validation / load; nested Serve/Trigger/Dashboard/AutoML settings (+ flat property aliases); `ConfigError` for invalid knobs; `make_settings(**overrides)` for tests / OpenAPI export |
+| `config/` | Load & resolve `config/cicerone.toml` (structural config + `${ENV_VAR}` secrets); package: constants / settings / validation / load / `events` / lock_url; nested Serve/Trigger/Dashboard/AutoML/Events settings (+ flat property aliases); `ConfigError` for invalid knobs; `make_settings(**overrides)` for tests / OpenAPI export |
 | `feature_config.py` | Load `config/features.toml` (event weights, feature columns, eligibility/boost policy rules; `[[boost]]` / `[[boosts]]`) |
 | `policy.py` | Declarative eligibility masks (documented fail-open/fail-closed matrix), cohort grouping, score boosts |
 | `blending.py` | Per-user weighted mix of personalized/popular/latest (optional) |
@@ -36,10 +36,13 @@ For configuration and usage, see the main [README](../README.md).
 | `scheduler.py` | In-process cron loop that calls `job.run()`; when `[job.trigger]` is enabled, also hosts the retrain-trigger HTTP server (`trigger.py`) |
 | `serve/` | Serve mode package: FastAPI read API over precomputed recommendations |
 | `serve/app.py` | Routes, middleware, refresh loop (`python -m cicerone.serve`) |
+| `serve/events_routes.py` | Optional `POST /events` webhook mount when `[events]` webhook is enabled |
+| `serve/bootstrap_events.py` | Start/stop the serve-process event worker (micro-batch → write-through) |
 | `serve/metrics.py` | Prometheus metric objects + helpers (default in-process registry) |
 | `serve_schemas.py` | Pydantic models that drive the serve OpenAPI schema |
 | `serve_client.py` | Thin stdlib HTTP client for the serve read API |
 | `export_serve_openapi.py` | CLI to dump FastAPI's OpenAPI JSON (`docs/openapi/…`) |
+| `events/` | Incremental event ingest: `EventSource` protocol + registry, normalize, micro-batch buffer, write-through updater; webhook (`POST /events`) and DB watermark backends — see [incremental-events.md](incremental-events.md) |
 | `trigger.py` | Event-driven retrain trigger: webhook + optional input-bucket poll, debounce guard (`RunGuard`) shared with the cron loop; increments `cicerone_retrain_trigger_total` (per replica) |
 | `locks.py` | Optional `RunGuard` lock backends (postgres / redis; default is none) |
 | `config/lock_url.py` | Postgres lock URL resolution for config load + lock builder |
@@ -80,6 +83,10 @@ Test modules mirror the packages (same pattern as `tests/test_io_*.py`):
 | `tests/test_model_config.py` | RecTools `[model.*]` + save/load round trips |
 | `tests/support/model_events.py` | Shared synthetic events helper |
 | `tests/support/toml_config.py` | Shared `write_toml` helper |
+| `tests/support/events.py` | Shared event payload helper for `test_events_*` |
+| `tests/test_events_*.py` | EventSource registry / normalize / webhook / db / buffer / store / updater / worker |
+| `tests/test_config_events.py` | `[events]` coerce + TOML load |
+| `tests/test_serve_events_routes.py` / `test_serve_bootstrap_events.py` | Serve webhook mount + worker bootstrap |
 
 ## Data flow
 
@@ -366,6 +373,14 @@ keys a given backend requires. To add a new backend (e.g. a message queue):
 Nothing in `config/`, `job.py`, `dataset.py`, or `model/` needs to
 change — they only ever see the `InputSource`/`OutputSink` protocol and the
 generic `IOSettings`.
+
+## Incremental events
+
+Between full retrains, optional `[events]` sources normalize interactions
+into the same event contract and micro-batch them into a cheap write-through
+update of top-K rows (popular/latest slices; LightFM waits for the next full
+`job.run()`). Design, backend roadmap, delivery semantics, and broker
+guidance: [incremental-events.md](incremental-events.md).
 
 ## Cold-start behavior
 
