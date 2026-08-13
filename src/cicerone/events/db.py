@@ -23,6 +23,16 @@ from cicerone.io.options import require_option, sql_identifier
 logger = logging.getLogger(__name__)
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+# Columns consumed by _row_to_event / normalize_event (optional ones omitted if absent).
+_FETCH_COLUMNS = (
+    "user_id",
+    "item_id",
+    "event_type",
+    "quantity",
+    "occurred_at",
+    "event_id",
+    "idempotency_key",
+)
 _EVENTS_QUERY_FORBIDDEN = re.compile(
     r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|"
     r"COPY|CALL|EXEC|EXECUTE|MERGE|REPLACE|ATTACH|DETACH)\b",
@@ -105,6 +115,9 @@ class DbEventSource:
         self._in_flight: OrderedDict[str, NormalizedEvent] = OrderedDict()
         self._connected = False
         self._last_event_at: datetime | None = None
+        self._source_columns: frozenset[str] | None = None
+        self._select_clause: str | None = None
+        self._has_event_id_column: bool | None = None
 
     def connect(self) -> None:
         with self._lock:
@@ -118,6 +131,9 @@ class DbEventSource:
             engine = self._engine
             self._engine = None
             self._connected = False
+            self._source_columns = None
+            self._select_clause = None
+            self._has_event_id_column = None
         if engine is not None:
             engine.dispose()
 
@@ -195,9 +211,26 @@ class DbEventSource:
             return f"({self._events_query}) AS cicerone_events_src"
         return f'"{self._events_table}"'
 
+    def _ensure_source_schema(self, engine: Engine) -> None:
+        if self._select_clause is not None and self._has_event_id_column is not None:
+            return
+        with engine.connect() as conn:
+            result = conn.execute(text(f"SELECT * FROM {self._from_clause()} LIMIT 0"))
+            columns = frozenset(map(str, result.keys()))  # noqa: SIM118 — Result.keys(), not dict
+        by_lower = {name.lower(): name for name in columns}
+        selected = [by_lower[name] for name in _FETCH_COLUMNS if name in by_lower]
+        self._source_columns = columns
+        self._has_event_id_column = "event_id" in by_lower
+        if "occurred_at" not in by_lower or not selected:
+            self._select_clause = "*"
+        else:
+            self._select_clause = ", ".join(f'"{name}"' for name in selected)
+
     def _fetch_rows(self, engine: Engine, watermark_at: datetime, *, limit: int) -> list[dict[str, Any]]:
+        self._ensure_source_schema(engine)
+        select_clause = self._select_clause or "*"
         sql = text(
-            f"SELECT * FROM {self._from_clause()} "
+            f"SELECT {select_clause} FROM {self._from_clause()} "
             "WHERE occurred_at >= :watermark "
             "ORDER BY occurred_at ASC "
             "LIMIT :limit"
@@ -207,9 +240,10 @@ class DbEventSource:
             return [dict(row) for row in result.mappings()]
 
     def _count_after(self, engine: Engine, watermark_at: datetime, watermark_event_id: str) -> int:
-        # Prefer SQL COUNT when an event_id column exists. Otherwise scan rows and
-        # reuse _row_to_event so synthetic ids match poll.
-        if engine.dialect.name == "postgresql":
+        self._ensure_source_schema(engine)
+        # Prefer SQL COUNT when event_id exists. SQLite text/datetime binding makes
+        # equality unreliable, so scan rows there (still on the narrow projection).
+        if self._has_event_id_column and engine.dialect.name != "sqlite":
             try:
                 return self._count_after_sql(engine, watermark_at, watermark_event_id)
             except Exception:

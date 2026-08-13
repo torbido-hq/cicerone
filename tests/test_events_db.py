@@ -175,6 +175,7 @@ def test_db_events_query_and_stable_id_without_event_id(tmp_path):
                 "event_type": "purchase",
                 "quantity": 1,
                 "occurred_at": "2026-08-13T12:00:00+00:00",
+                "extra_unused": "ignore-me",
             },
             {
                 "user_id": "u1",
@@ -182,6 +183,7 @@ def test_db_events_query_and_stable_id_without_event_id(tmp_path):
                 "event_type": "view",
                 "quantity": 1,
                 "occurred_at": "2026-08-13T13:00:00+00:00",
+                "extra_unused": "ignore-me",
             },
         ]
     ).to_sql("raw_events", engine, if_exists="replace", index=False)
@@ -194,6 +196,10 @@ def test_db_events_query_and_stable_id_without_event_id(tmp_path):
     )
     source.connect()
     assert source.health().lag == 2
+    assert source._has_event_id_column is False
+    assert source._select_clause is not None
+    assert "extra_unused" not in source._select_clause
+    assert "occurred_at" in source._select_clause
     polled = list(source.poll(5))
     assert len(polled) == 2
     assert polled[0].occurred_at == datetime(2026, 8, 13, 12, 0, tzinfo=UTC)
