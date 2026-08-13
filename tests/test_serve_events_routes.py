@@ -69,6 +69,10 @@ def test_post_events_auth_and_validation():
         json={"user_id": "u1"},
     )
     assert bad.status_code == 400
+    detail = bad.json()["detail"]
+    assert isinstance(detail, list)
+    assert detail
+    assert all(isinstance(item, dict) and "loc" in item and "msg" in item for item in detail)
 
 
 def test_events_route_absent_when_disabled():
