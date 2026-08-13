@@ -234,7 +234,7 @@ prefix = "recommendations/latest"
 # [events.options]
 # database_url = "${EVENTS_DATABASE_URL}"
 # # events_table = "events"
-# # events_query = "SELECT user_id, item_id, event_type, quantity, occurred_at, event_id FROM ..."
+# # events_query = "SELECT ... FROM ..."  # trusted deploy-time SELECT only
 # # watermark_path = "/app/data/events_watermark.json"
 # # initial_watermark = "2026-01-01T00:00:00Z"
 

@@ -23,6 +23,7 @@ from cicerone.io.options import require_option, sql_identifier
 logger = logging.getLogger(__name__)
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+_EVENTS_QUERY_ALIAS = "cicerone_events_src"
 # Columns consumed by _row_to_event / normalize_event (optional ones omitted if absent).
 _FETCH_COLUMNS = (
     "user_id",
@@ -41,6 +42,7 @@ _EVENTS_QUERY_FORBIDDEN = re.compile(
 
 
 def _validate_events_query(query: str) -> str:
+    # Trusted deploy-time config only (same trust model as input.options.events_query).
     cleaned = query.strip().rstrip(";").strip()
     if not cleaned:
         raise ValueError("events.options.events_query must be a non-empty SELECT")
@@ -92,7 +94,11 @@ def _row_to_event(payload: dict[str, Any]) -> NormalizedEvent:
 
 
 class DbEventSource:
-    """Poll ``events`` (or ``events_query``) after a watermark; advance on ``ack``."""
+    """Poll ``events`` (or trusted ``events_query``) after a watermark; advance on ``ack``.
+
+    ``events_query`` is deploy-time config interpolated into SQL (read-only SELECT
+    validated at construction); do not pass untrusted client input.
+    """
 
     def __init__(self, options: dict[str, Any] | None = None):
         options = dict(options or {})
@@ -208,27 +214,34 @@ class DbEventSource:
 
     def _from_clause(self) -> str:
         if self._events_query:
-            return f"({self._events_query}) AS cicerone_events_src"
+            return f"({self._events_query}) AS {_EVENTS_QUERY_ALIAS}"
         return f'"{self._events_table}"'
 
-    def _ensure_source_schema(self, engine: Engine) -> None:
-        if self._select_clause is not None and self._has_event_id_column is not None:
-            return
+    def _ensure_source_schema(self, engine: Engine) -> tuple[str, bool]:
+        with self._lock:
+            if self._select_clause is not None and self._has_event_id_column is not None:
+                return self._select_clause, self._has_event_id_column
         with engine.connect() as conn:
             result = conn.execute(text(f"SELECT * FROM {self._from_clause()} LIMIT 0"))
             columns = frozenset(map(str, result.keys()))  # noqa: SIM118 — Result.keys(), not dict
         by_lower = {name.lower(): name for name in columns}
         selected = [by_lower[name] for name in _FETCH_COLUMNS if name in by_lower]
-        self._source_columns = columns
-        self._has_event_id_column = "event_id" in by_lower
+        has_event_id = "event_id" in by_lower
         if "occurred_at" not in by_lower or not selected:
-            self._select_clause = "*"
+            select_clause = "*"
         else:
-            self._select_clause = ", ".join(f'"{name}"' for name in selected)
+            select_clause = ", ".join(f'"{name}"' for name in selected)
+        with self._lock:
+            if self._select_clause is None or self._has_event_id_column is None:
+                self._source_columns = columns
+                self._select_clause = select_clause
+                self._has_event_id_column = has_event_id
+            cached_select = self._select_clause
+            cached_has_event_id = self._has_event_id_column
+        return cached_select, cached_has_event_id
 
     def _fetch_rows(self, engine: Engine, watermark_at: datetime, *, limit: int) -> list[dict[str, Any]]:
-        self._ensure_source_schema(engine)
-        select_clause = self._select_clause or "*"
+        select_clause, _has_event_id = self._ensure_source_schema(engine)
         sql = text(
             f"SELECT {select_clause} FROM {self._from_clause()} "
             "WHERE occurred_at >= :watermark "
@@ -240,10 +253,10 @@ class DbEventSource:
             return [dict(row) for row in result.mappings()]
 
     def _count_after(self, engine: Engine, watermark_at: datetime, watermark_event_id: str) -> int:
-        self._ensure_source_schema(engine)
+        _select_clause, has_event_id = self._ensure_source_schema(engine)
         # Prefer SQL COUNT when event_id exists. SQLite text/datetime binding makes
         # equality unreliable, so scan rows there (still on the narrow projection).
-        if self._has_event_id_column and engine.dialect.name != "sqlite":
+        if has_event_id and engine.dialect.name != "sqlite":
             try:
                 return self._count_after_sql(engine, watermark_at, watermark_event_id)
             except Exception:

@@ -240,5 +240,7 @@ SQLite, where timestamp binding is unreliable), otherwise a bounded row scan
 that synthesizes ids like poll. Poll selects only the columns used for
 normalization. Corrupt ``watermark_path`` files are logged and ignored so
 ``connect()`` can still succeed. ``events_query``, when set, must be a single
-read-only ``SELECT``. Naive SQL ``datetime`` values are treated as UTC;
-timezone-less *strings* (config / JSON watermark) are rejected.
+read-only ``SELECT`` from **trusted deploy-time config** (interpolated into
+SQL like ``input.options.events_query`` — not end-user input). Naive SQL
+``datetime`` values are treated as UTC; timezone-less *strings* (config /
+JSON watermark) are rejected.
