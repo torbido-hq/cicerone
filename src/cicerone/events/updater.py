@@ -204,7 +204,6 @@ class IncrementalUpdater:
             frame = frame[frame["event_type"].astype(str).map(self._known_event_type)]
             if frame.empty:
                 return pd.DataFrame(columns=[ITEM_COLUMN, SCORE_COLUMN, SOURCE_COLUMN])
-        frame["occurred_at"] = pd.to_datetime(frame["occurred_at"], utc=True)
         latest = (
             frame.sort_values("occurred_at", ascending=False)
             .drop_duplicates(subset=[ITEM_COLUMN], keep="first")

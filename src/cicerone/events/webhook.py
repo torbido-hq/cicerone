@@ -29,6 +29,7 @@ class WebhookEventSource:
             )
         self._lock = threading.Lock()
         self._pending: deque[NormalizedEvent] = deque()
+        self._pending_ids: set[str] = set()
         self._in_flight: OrderedDict[str, NormalizedEvent] = OrderedDict()
         self._connected = False
         self._last_event_at: datetime | None = None
@@ -46,12 +47,16 @@ class WebhookEventSource:
             events = [normalize_event(payloads)]
         with self._lock:
             self._connected = True
-            known = {event.event_id for event in self._pending} | set(self._in_flight)
             novel: list[NormalizedEvent] = []
+            seen_batch: set[str] = set()
             for event in events:
-                if event.event_id in known:
+                if (
+                    event.event_id in self._pending_ids
+                    or event.event_id in self._in_flight
+                    or event.event_id in seen_batch
+                ):
                     continue
-                known.add(event.event_id)
+                seen_batch.add(event.event_id)
                 novel.append(event)
             backlog = len(self._pending) + len(self._in_flight)
             if novel and backlog + len(novel) > self._max_pending:
@@ -60,6 +65,7 @@ class WebhookEventSource:
                 )
             for event in novel:
                 self._pending.append(event)
+                self._pending_ids.add(event.event_id)
                 self._last_event_at = event.occurred_at
         return novel
 
@@ -70,6 +76,7 @@ class WebhookEventSource:
         with self._lock:
             while self._pending and len(out) < max_events:
                 event = self._pending.popleft()
+                self._pending_ids.discard(event.event_id)
                 if event.event_id not in self._in_flight:
                     self._in_flight[event.event_id] = event
                 out.append(event)
@@ -81,6 +88,7 @@ class WebhookEventSource:
             for event in reversed(list(events)):
                 self._in_flight.pop(event.event_id, None)
                 self._pending.appendleft(event)
+                self._pending_ids.add(event.event_id)
 
     def ack(self, event_ids: Sequence[str]) -> None:
         with self._lock:

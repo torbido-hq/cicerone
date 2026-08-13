@@ -236,10 +236,11 @@ optional durable `watermark_path`). The watermark advances only on successful
 ``ack`` after a flush. Health lag uses the same `(occurred_at, event_id)`
 cursor as poll: SQL ``COUNT`` when an ``event_id`` column is present (except
 SQLite, where timestamp binding is unreliable), otherwise a bounded row scan
-that synthesizes ids like poll. Poll selects only the columns used for
-normalization. Corrupt ``watermark_path`` files are logged and ignored so
-``connect()`` can still succeed. ``events_query``, when set, must be a single
-read-only ``SELECT`` from **trusted deploy-time config** (interpolated into
-SQL like ``input.options.events_query`` — not end-user input). Naive SQL
-``datetime`` values are treated as UTC; timezone-less *strings* (config /
-JSON watermark) are rejected.
+that synthesizes ids like poll. If that scan hits its row cap, ``health().lag``
+is ``None`` (unknown / too large) rather than a truncated count. Poll selects
+only the columns used for normalization. Corrupt ``watermark_path`` files are
+logged and ignored so ``connect()`` can still succeed. ``events_query``, when
+set, must be a single read-only ``SELECT`` from **trusted deploy-time config**
+(interpolated into SQL like ``input.options.events_query`` — not end-user
+input). Naive SQL ``datetime`` values are treated as UTC; timezone-less
+*strings* (config / JSON watermark) are rejected.

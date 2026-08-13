@@ -100,7 +100,7 @@ def normalize_events(payloads: Sequence[Any]) -> list[NormalizedEvent]:
 def events_to_dataframe(events: Sequence[NormalizedEvent]) -> pd.DataFrame:
     if not events:
         return pd.DataFrame(columns=["user_id", "item_id", "event_type", "quantity", "occurred_at"])
-    return pd.DataFrame(
+    frame = pd.DataFrame(
         [
             {
                 "user_id": event.user_id,
@@ -112,3 +112,5 @@ def events_to_dataframe(events: Sequence[NormalizedEvent]) -> pd.DataFrame:
             for event in events
         ]
     )
+    frame["occurred_at"] = pd.to_datetime(frame["occurred_at"], utc=True)
+    return frame

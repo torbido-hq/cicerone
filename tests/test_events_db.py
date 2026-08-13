@@ -216,6 +216,30 @@ def test_db_events_query_and_stable_id_without_event_id(tmp_path):
     assert source.health().lag == 1
 
 
+def test_db_health_lag_none_when_scan_hits_cap(tmp_path, monkeypatch):
+    import cicerone.events.db as db_mod
+
+    monkeypatch.setattr(db_mod, "_LAG_SCAN_LIMIT", 2)
+    url = _sqlite_url(tmp_path)
+    _seed_events(
+        url,
+        [
+            {
+                "user_id": "u1",
+                "item_id": f"i{i}",
+                "event_type": "view",
+                "quantity": 1,
+                "occurred_at": f"2026-08-13T12:0{i}:00Z",
+                "event_id": f"e{i}",
+            }
+            for i in range(3)
+        ],
+    )
+    source = DbEventSource({"database_url": url, "initial_watermark": "2026-08-01T00:00:00Z"})
+    source.connect()
+    assert source.health().lag is None
+
+
 def test_db_corrupt_watermark_falls_back_to_initial(tmp_path, caplog):
     import logging
 

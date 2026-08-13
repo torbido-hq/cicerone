@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 _EVENTS_QUERY_ALIAS = "cicerone_events_src"
+# Bound for health lag when SQL COUNT is unavailable; None means unknown/too large.
+_LAG_SCAN_LIMIT = 10_000
 # Columns consumed by _row_to_event / normalize_event (optional ones omitted if absent).
 _FETCH_COLUMNS = (
     "user_id",
@@ -255,7 +257,7 @@ class DbEventSource:
             result = conn.execute(sql, {"watermark": watermark_at, "limit": max(limit, 1)})
             return [dict(row) for row in result.mappings()]
 
-    def _count_after(self, engine: Engine, watermark_at: datetime, watermark_event_id: str) -> int:
+    def _count_after(self, engine: Engine, watermark_at: datetime, watermark_event_id: str) -> int | None:
         _select_clause, has_event_id = self._ensure_source_schema(engine)
         # Prefer SQL COUNT when event_id exists. SQLite text/datetime binding makes
         # equality unreliable, so scan rows there (still on the narrow projection).
@@ -277,11 +279,16 @@ class DbEventSource:
         with engine.connect() as conn:
             return int(conn.execute(sql, params).scalar() or 0)
 
-    def _count_after_rows(self, engine: Engine, watermark_at: datetime, watermark_event_id: str) -> int:
-        # Same synthetic-id path as poll (no event_id column required). Bound for health.
+    def _count_after_rows(
+        self, engine: Engine, watermark_at: datetime, watermark_event_id: str
+    ) -> int | None:
+        # Same synthetic-id path as poll. Cap the scan; None = unknown / too large.
         cursor = (watermark_at, watermark_event_id)
-        rows = self._fetch_rows(engine, watermark_at, limit=10_000)
-        return sum(1 for payload in rows if _cursor_key(_row_to_event(payload)) > cursor)
+        rows = self._fetch_rows(engine, watermark_at, limit=_LAG_SCAN_LIMIT)
+        count = sum(1 for payload in rows if _cursor_key(_row_to_event(payload)) > cursor)
+        if len(rows) >= _LAG_SCAN_LIMIT:
+            return None
+        return count
 
     def _load_watermark_unlocked(self) -> None:
         if self._watermark_path is None or not self._watermark_path.is_file():

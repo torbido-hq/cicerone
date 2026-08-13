@@ -60,4 +60,7 @@ def test_normalize_more_edge_cases():
     assert bare.event_id == "idem-1"
     assert bare.quantity == 1
     assert events_to_dataframe([]).empty
+    frame = events_to_dataframe(normalize_events([event_payload(), event_payload(item_id="i2")]))
+    assert str(frame["occurred_at"].dtype).startswith("datetime64")
+    assert frame["occurred_at"].dt.tz is not None
     assert len(normalize_events([event_payload(event_id="z")])) == 1
