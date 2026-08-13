@@ -234,3 +234,18 @@ def test_db_rejects_timezone_less_initial_watermark(tmp_path):
                 "initial_watermark": "2026-08-01T00:00:00",
             }
         )
+
+
+@pytest.mark.parametrize(
+    "events_query",
+    [
+        "DELETE FROM events",
+        "SELECT 1; DROP TABLE events",
+        "INSERT INTO events SELECT * FROM events",
+        "",
+        "   ",
+    ],
+)
+def test_db_rejects_unsafe_events_query(tmp_path, events_query):
+    with pytest.raises(ValueError, match="events_query"):
+        DbEventSource({"database_url": _sqlite_url(tmp_path), "events_query": events_query})

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 from collections import OrderedDict
 from collections.abc import Sequence
@@ -22,6 +23,24 @@ from cicerone.io.options import require_option, sql_identifier
 logger = logging.getLogger(__name__)
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+_EVENTS_QUERY_FORBIDDEN = re.compile(
+    r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|"
+    r"COPY|CALL|EXEC|EXECUTE|MERGE|REPLACE|ATTACH|DETACH)\b",
+    re.IGNORECASE,
+)
+
+
+def _validate_events_query(query: str) -> str:
+    cleaned = query.strip().rstrip(";").strip()
+    if not cleaned:
+        raise ValueError("events.options.events_query must be a non-empty SELECT")
+    if ";" in cleaned:
+        raise ValueError("events.options.events_query must be a single statement")
+    if not re.match(r"(?is)\ASELECT\b", cleaned):
+        raise ValueError("events.options.events_query must be a SELECT statement")
+    if _EVENTS_QUERY_FORBIDDEN.search(cleaned):
+        raise ValueError("events.options.events_query must be a read-only SELECT")
+    return cleaned
 
 
 def _db_occurred_at(value: Any) -> datetime:
@@ -77,8 +96,10 @@ class DbEventSource:
             option="events_table",
         )
         self._events_query = options.get("events_query")
-        if self._events_query is not None and not isinstance(self._events_query, str):
-            raise ValueError("events.options.events_query must be a string")
+        if self._events_query is not None:
+            if not isinstance(self._events_query, str):
+                raise ValueError("events.options.events_query must be a string")
+            self._events_query = _validate_events_query(self._events_query)
         self._watermark_path = Path(options["watermark_path"]) if options.get("watermark_path") else None
         initial = options.get("initial_watermark")
         self._watermark_at = _db_occurred_at(initial) if initial not in (None, "") else _EPOCH
@@ -191,10 +212,40 @@ class DbEventSource:
         return frame.to_dict(orient="records")
 
     def _count_after(self, engine: Engine, watermark_at: datetime, watermark_event_id: str) -> int:
-        # Match poll's (occurred_at, event_id) cursor; SQL timestamp equality is backend-fragile.
-        rows = self._fetch_rows(engine, watermark_at, limit=10_000)
+        # Prefer SQL COUNT (no row materialization). SQLite text timestamps make
+        # bound datetime equality unreliable, so fall back to a key-only scan.
+        if engine.dialect.name == "postgresql":
+            return self._count_after_sql(engine, watermark_at, watermark_event_id)
+        return self._count_after_keys(engine, watermark_at, watermark_event_id)
+
+    def _count_after_sql(self, engine: Engine, watermark_at: datetime, watermark_event_id: str) -> int:
+        if watermark_event_id:
+            sql = text(
+                f"SELECT COUNT(*) AS n FROM {self._from_clause()} WHERE "
+                "occurred_at > :watermark_at OR "
+                "(occurred_at = :watermark_at AND event_id > :watermark_event_id)"
+            )
+            params: dict[str, Any] = {
+                "watermark_at": watermark_at,
+                "watermark_event_id": watermark_event_id,
+            }
+        else:
+            sql = text(f"SELECT COUNT(*) AS n FROM {self._from_clause()} WHERE occurred_at > :watermark_at")
+            params = {"watermark_at": watermark_at}
+        with engine.connect() as conn:
+            return int(conn.execute(sql, params).scalar() or 0)
+
+    def _count_after_keys(self, engine: Engine, watermark_at: datetime, watermark_event_id: str) -> int:
+        sql = text(f"SELECT occurred_at, event_id FROM {self._from_clause()} WHERE occurred_at >= :watermark")
         cursor = (watermark_at, watermark_event_id)
-        return sum(1 for payload in rows if _cursor_key(_row_to_event(payload)) > cursor)
+        n = 0
+        with engine.connect() as conn:
+            for occurred_at, event_id in conn.execute(sql, {"watermark": watermark_at}):
+                at = _db_occurred_at(occurred_at)
+                eid = "" if event_id in (None, "") else str(event_id)
+                if (at, eid) > cursor:
+                    n += 1
+        return n
 
     def _load_watermark_unlocked(self) -> None:
         if self._watermark_path is None or not self._watermark_path.is_file():
