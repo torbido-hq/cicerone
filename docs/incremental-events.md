@@ -159,6 +159,20 @@ and refreshes that cache after each successful write. A same-process
 User-scoped reads/writes (instead of full-frame merge + overwrite) remain a
 follow-up.
 
+## Follow-up PR sequence
+
+Keep each PR **atomic** and stacked on the incremental-events foundation
+(`feature/events-incremental` / its successors), not a grab-bag onto `main`:
+
+1. Webhook + micro-batch write-through (foundation)
+2. `kind=db` watermark source
+3. Metrics / dashboard wiring (lag, flush, errors)
+4. Further backends / write-path improvements as separate PRs (S3, user-scoped
+   I/O, Redis Streams, …)
+5. **Last:** full review of `docs/` **and** the `website/` sync (sidebar,
+   `sync-docs.mjs`, rendered pages, links, OpenAPI mentions) so the public
+   site matches the shipped incremental surface
+
 ## Backend roadmap
 
 Build order:
