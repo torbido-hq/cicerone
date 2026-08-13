@@ -194,6 +194,78 @@
         ],
         "title": "ValidationError",
         "type": "object"
+      },
+      "ValidationErrorDetail": {
+        "description": "Structured 400 body when ingest fails Pydantic field validation.",
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationErrorItem"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "ValidationErrorDetail",
+        "type": "object"
+      },
+      "ValidationErrorItem": {
+        "description": "One Pydantic validation failure (matches ``ValidationError.errors()`` entries).",
+        "properties": {
+          "ctx": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ctx"
+          },
+          "input": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Loc",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Msg",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "loc",
+          "msg"
+        ],
+        "title": "ValidationErrorItem",
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -228,11 +300,19 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorDetail"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ErrorDetail"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ValidationErrorDetail"
+                    }
+                  ],
+                  "title": "Response 400 Post Events Events Post"
                 }
               }
             },
-            "description": "Invalid event payload"
+            "description": "Invalid event payload: string ``ErrorDetail`` for malformed JSON / normalize errors, or ``ValidationErrorDetail`` (Pydantic ``errors()`` list)"
           },
           "401": {
             "content": {

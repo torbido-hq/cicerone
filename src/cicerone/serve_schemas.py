@@ -38,6 +38,22 @@ class ErrorDetail(BaseModel):
     detail: str
 
 
+class ValidationErrorItem(BaseModel):
+    """One Pydantic validation failure (matches ``ValidationError.errors()`` entries)."""
+
+    type: str
+    loc: list[str | int]
+    msg: str
+    input: object | None = None
+    ctx: dict[str, object] | None = None
+
+
+class ValidationErrorDetail(BaseModel):
+    """Structured 400 body when ingest fails Pydantic field validation."""
+
+    detail: list[ValidationErrorItem]
+
+
 class InteractionEvent(BaseModel):
     user_id: str = Field(description="User identifier")
     item_id: str = Field(description="Item identifier")

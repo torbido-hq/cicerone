@@ -6,6 +6,7 @@ from test_serve import _FakeReader, _recs_df
 from cicerone.config import EventsSettings, make_settings
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.serve import create_app
+from cicerone.serve_schemas import ValidationErrorDetail
 
 
 def _settings(**overrides):
@@ -73,6 +74,19 @@ def test_post_events_auth_and_validation():
     assert isinstance(detail, list)
     assert detail
     assert all(isinstance(item, dict) and "loc" in item and "msg" in item for item in detail)
+    ValidationErrorDetail.model_validate({"detail": detail})
+
+
+def test_events_openapi_documents_structured_validation_400():
+    app = create_app(_settings(), _FakeReader(_recs_df()), event_source=WebhookEventSource({}))
+    schema = TestClient(app).get("/openapi.json").json()
+    assert "ValidationErrorDetail" in schema["components"]["schemas"]
+    assert "ValidationErrorItem" in schema["components"]["schemas"]
+    events_400 = schema["paths"]["/events"]["post"]["responses"]["400"]
+    content_schema = events_400["content"]["application/json"]["schema"]
+    refs = {item.get("$ref") for item in content_schema.get("anyOf", [])}
+    assert "#/components/schemas/ErrorDetail" in refs
+    assert "#/components/schemas/ValidationErrorDetail" in refs
 
 
 def test_events_route_absent_when_disabled():

@@ -17,6 +17,7 @@ from cicerone.serve_schemas import (
     EventsIngestRequest,
     EventsIngestResponse,
     InteractionEvent,
+    ValidationErrorDetail,
 )
 
 logger = logging.getLogger(__name__)
@@ -68,7 +69,13 @@ def mount_events_routes(
         tags=["events"],
         summary="Ingest interaction events for incremental updates",
         responses={
-            400: {"model": ErrorDetail, "description": "Invalid event payload"},
+            400: {
+                "model": ErrorDetail | ValidationErrorDetail,
+                "description": (
+                    "Invalid event payload: string ``ErrorDetail`` for malformed JSON / "
+                    "normalize errors, or ``ValidationErrorDetail`` (Pydantic ``errors()`` list)"
+                ),
+            },
             401: {"model": ErrorDetail, "description": "Missing or invalid bearer token"},
             429: {"model": ErrorDetail, "description": "Event backlog full"},
         },
