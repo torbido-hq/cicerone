@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import threading
 from collections import OrderedDict
@@ -12,11 +13,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
 from sqlalchemy import Engine, create_engine, text
 
 from cicerone.events.base import EventSourceHealth, NormalizedEvent
-from cicerone.events.normalize import EventNormalizeError, normalize_event, parse_occurred_at
+from cicerone.events.normalize import normalize_event, parse_occurred_at
 from cicerone.io.db_store import DEFAULT_EVENTS_TABLE
 from cicerone.io.options import require_option, sql_identifier
 
@@ -44,10 +44,6 @@ def _validate_events_query(query: str) -> str:
 
 
 def _db_occurred_at(value: Any) -> datetime:
-    if isinstance(value, pd.Timestamp):
-        if pd.isna(value):
-            raise EventNormalizeError("occurred_at is invalid")
-        value = value.to_pydatetime()
     # SQLAlchemy/SQLite often yield naive datetimes that are UTC in practice.
     if isinstance(value, datetime) and value.tzinfo is None:
         return value.replace(tzinfo=UTC)
@@ -206,10 +202,9 @@ class DbEventSource:
             "ORDER BY occurred_at ASC "
             "LIMIT :limit"
         )
-        frame = pd.read_sql_query(sql, engine, params={"watermark": watermark_at, "limit": max(limit, 1)})
-        if frame.empty:
-            return []
-        return frame.to_dict(orient="records")
+        with engine.connect() as conn:
+            result = conn.execute(sql, {"watermark": watermark_at, "limit": max(limit, 1)})
+            return [dict(row) for row in result.mappings()]
 
     def _count_after(self, engine: Engine, watermark_at: datetime, watermark_event_id: str) -> int:
         # Prefer SQL COUNT (no row materialization). SQLite text timestamps make
@@ -219,23 +214,18 @@ class DbEventSource:
         return self._count_after_keys(engine, watermark_at, watermark_event_id)
 
     def _count_after_sql(self, engine: Engine, watermark_at: datetime, watermark_event_id: str) -> int:
-        if watermark_event_id:
-            sql = text(
-                f"SELECT COUNT(*) AS n FROM {self._from_clause()} WHERE "
-                "occurred_at > :watermark_at OR "
-                "(occurred_at = :watermark_at AND event_id > :watermark_event_id)"
-            )
-            params: dict[str, Any] = {
-                "watermark_at": watermark_at,
-                "watermark_event_id": watermark_event_id,
-            }
-        else:
-            sql = text(f"SELECT COUNT(*) AS n FROM {self._from_clause()} WHERE occurred_at > :watermark_at")
-            params = {"watermark_at": watermark_at}
+        # Match poll cursor (occurred_at, event_id), including empty event_id watermark.
+        sql = text(
+            f"SELECT COUNT(*) AS n FROM {self._from_clause()} WHERE "
+            "occurred_at > :watermark_at OR "
+            "(occurred_at = :watermark_at AND event_id > :watermark_event_id)"
+        )
+        params = {"watermark_at": watermark_at, "watermark_event_id": watermark_event_id}
         with engine.connect() as conn:
             return int(conn.execute(sql, params).scalar() or 0)
 
     def _count_after_keys(self, engine: Engine, watermark_at: datetime, watermark_event_id: str) -> int:
+        # Floor with >= then apply exact _cursor_key compare (SQLite timestamp binding).
         sql = text(f"SELECT occurred_at, event_id FROM {self._from_clause()} WHERE occurred_at >= :watermark")
         cursor = (watermark_at, watermark_event_id)
         n = 0
@@ -267,5 +257,17 @@ class DbEventSource:
             "event_id": self._watermark_event_id,
         }
         tmp = self._watermark_path.with_name(f".{self._watermark_path.name}.tmp")
-        tmp.write_text(json.dumps(payload, sort_keys=True) + "\n")
+        with tmp.open("w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, sort_keys=True) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            dir_fd = os.open(str(tmp.parent), os.O_RDONLY)
+        except OSError:
+            dir_fd = None
+        if dir_fd is not None:
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
         tmp.replace(self._watermark_path)

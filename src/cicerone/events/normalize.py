@@ -46,10 +46,6 @@ def parse_occurred_at(value: Any) -> datetime:
     return dt.astimezone(UTC)
 
 
-def _parse_occurred_at(value: Any) -> datetime:
-    return parse_occurred_at(value)
-
-
 def _parse_quantity(value: Any) -> int:
     if value is None:
         return 1
@@ -92,7 +88,7 @@ def normalize_event(payload: Any) -> NormalizedEvent:
         item_id=item_id,
         event_type=event_type,
         quantity=_parse_quantity(raw.get("quantity")),
-        occurred_at=_parse_occurred_at(raw["occurred_at"]),
+        occurred_at=parse_occurred_at(raw["occurred_at"]),
         event_id=str(event_id),
     )
 
