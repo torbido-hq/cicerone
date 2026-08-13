@@ -15,6 +15,7 @@ from cicerone.config.constants import (
     DEFAULT_EPOCH_METRICS_REGRESSION_DROP,
     DEFAULT_EVENTS_BATCH_SIZE,
     DEFAULT_EVENTS_BATCH_WINDOW_SECONDS,
+    DEFAULT_EVENTS_POLL_INTERVAL_SECONDS,
     DEFAULT_LOCK_KEY,
     DEFAULT_LOCK_TTL_SECONDS,
     Mode,
@@ -83,6 +84,7 @@ class AutomlSettings:
 class EventsIncrementalSettings:
     batch_size: int = DEFAULT_EVENTS_BATCH_SIZE
     batch_window_seconds: float = DEFAULT_EVENTS_BATCH_WINDOW_SECONDS
+    poll_interval_seconds: float = DEFAULT_EVENTS_POLL_INTERVAL_SECONDS
 
 
 @dataclass(frozen=True)

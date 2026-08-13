@@ -21,6 +21,16 @@ def test_normalize_event_and_errors():
         normalize_event(event_payload(quantity=0))
 
 
+def test_normalize_occurred_at_epoch_and_z():
+    from datetime import UTC, datetime
+
+    epoch = normalize_event(event_payload(occurred_at=1_724_000_000))
+    assert epoch.occurred_at == datetime.fromtimestamp(1_724_000_000, tz=UTC)
+    zulu = normalize_event(event_payload(occurred_at="2026-08-13T12:00:00Z"))
+    assert zulu.occurred_at.tzinfo is not None
+    assert zulu.occurred_at.hour == 12
+
+
 def test_normalize_more_edge_cases():
     with pytest.raises(EventNormalizeError, match="JSON object"):
         normalize_event("not-a-dict")

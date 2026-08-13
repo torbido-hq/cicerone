@@ -141,10 +141,13 @@ sequenceDiagram
 ```
 
 When a full `job.run()` holds `RunGuard` **in the same process**, pass
-`busy_check=guard.busy` into `IncrementalUpdater` so flushes skip. Serve and
-trainer are usually separate containers — then last writer wins and the next
-full retrain remains the consistency backstop. Do not treat cross-process
-exclusion as automatic.
+`busy_check=guard.busy` into `start_events_runtime` / `IncrementalUpdater`
+so flushes skip. Serve and trainer are usually separate containers — then
+last writer wins and the next full retrain remains the consistency backstop.
+Do not treat cross-process exclusion as automatic.
+
+Webhook options may set `max_pending` (default 10000) for ingest backpressure
+(HTTP 429 when full). Worker poll interval is `events.incremental.poll_interval_seconds`.
 
 ## Backend roadmap
 
@@ -199,6 +202,7 @@ lands in a follow-up PR after the webhook + updater path.)
 
 When `[events] enabled = true` and `kind = "webhook"`, the serve process
 exposes `POST /events` (Bearer auth: `events.options.auth_token` or
-`serve.auth_token`). Body: one event object or `{"events":[...]}`.
-Accepted events are normalized, queued on the webhook `EventSource`, and
-drained by the micro-batch worker.
+`serve.auth_token`). Body: one event object, a list, or `{"events":[...]}`.
+Accepted events are validated (OpenAPI models), normalized, queued on the
+webhook `EventSource`, and drained by the micro-batch worker. A full backlog
+(`max_pending`) returns **429**.

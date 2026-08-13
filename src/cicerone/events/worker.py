@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 
+from cicerone.config.constants import DEFAULT_EVENTS_POLL_INTERVAL_SECONDS
 from cicerone.events.base import EventSource
 from cicerone.events.buffer import MicroBatchBuffer
 from cicerone.events.updater import IncrementalUpdater
@@ -19,7 +20,7 @@ class EventWorker:
         buffer: MicroBatchBuffer,
         updater: IncrementalUpdater,
         *,
-        poll_interval_seconds: float = 1.0,
+        poll_interval_seconds: float = DEFAULT_EVENTS_POLL_INTERVAL_SECONDS,
         poll_max_events: int = 100,
     ):
         self._source = source

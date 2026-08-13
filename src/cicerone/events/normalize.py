@@ -25,13 +25,21 @@ def _as_mapping(payload: Any) -> Mapping[str, Any]:
 
 
 def _parse_occurred_at(value: Any) -> datetime:
-    try:
-        ts = pd.to_datetime(value, utc=True)
-    except Exception as exc:
-        raise EventNormalizeError("occurred_at is invalid") from exc
-    if pd.isna(ts):
+    # stdlib only — keep webhook ingest off the pandas path
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, (int, float)):
+        dt = datetime.fromtimestamp(float(value), tz=UTC)
+    elif isinstance(value, str):
+        text = value.strip()
+        if text.endswith(("Z", "z")):
+            text = text[:-1] + "+00:00"
+        try:
+            dt = datetime.fromisoformat(text)
+        except ValueError as exc:
+            raise EventNormalizeError("occurred_at is invalid") from exc
+    else:
         raise EventNormalizeError("occurred_at is invalid")
-    dt = ts.to_pydatetime()
     if dt.tzinfo is None:
         return dt.replace(tzinfo=UTC)
     return dt.astimezone(UTC)

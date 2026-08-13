@@ -12,6 +12,7 @@ def test_make_settings_events_defaults():
     assert settings.events.enabled is False
     assert settings.events.kind == "webhook"
     assert settings.events.incremental.batch_size == 100
+    assert settings.events.incremental.poll_interval_seconds == 1.0
     assert settings.events_enabled is False
     assert settings.events_kind == "webhook"
 
@@ -41,6 +42,7 @@ def test_load_events_section(tmp_path):
         [events.incremental]
         batch_size = 5
         batch_window_seconds = 12
+        poll_interval_seconds = 0.5
         [input]
         kind = "dataset"
         [input.options]
@@ -58,6 +60,7 @@ def test_load_events_section(tmp_path):
     assert settings.events.options["auth_token"] == "events-tok"
     assert settings.events.incremental.batch_size == 5
     assert settings.events.incremental.batch_window_seconds == 12.0
+    assert settings.events.incremental.poll_interval_seconds == 0.5
 
 
 def test_load_events_unknown_kind(tmp_path):

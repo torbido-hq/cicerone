@@ -8,6 +8,7 @@ from typing import Any
 from cicerone.config.constants import (
     DEFAULT_EVENTS_BATCH_SIZE,
     DEFAULT_EVENTS_BATCH_WINDOW_SECONDS,
+    DEFAULT_EVENTS_POLL_INTERVAL_SECONDS,
     EVENT_SOURCE_KINDS,
     ConfigError,
 )
@@ -21,14 +22,13 @@ def _incremental_settings(
     raw: dict[str, Any] | EventsIncrementalSettings | None,
 ) -> EventsIncrementalSettings:
     if isinstance(raw, EventsIncrementalSettings):
-        return EventsIncrementalSettings(
-            batch_size=require_positive_int(raw.batch_size, name="events.incremental.batch_size"),
-            batch_window_seconds=require_positive_float(
-                raw.batch_window_seconds, name="events.incremental.batch_window_seconds"
-            ),
-        )
-    if raw is None:
-        data: dict[str, Any] = {}
+        data = {
+            "batch_size": raw.batch_size,
+            "batch_window_seconds": raw.batch_window_seconds,
+            "poll_interval_seconds": raw.poll_interval_seconds,
+        }
+    elif raw is None:
+        data = {}
     elif isinstance(raw, dict):
         data = raw
     else:
@@ -41,6 +41,10 @@ def _incremental_settings(
         batch_window_seconds=require_positive_float(
             float(data.get("batch_window_seconds", DEFAULT_EVENTS_BATCH_WINDOW_SECONDS)),
             name="events.incremental.batch_window_seconds",
+        ),
+        poll_interval_seconds=require_positive_float(
+            float(data.get("poll_interval_seconds", DEFAULT_EVENTS_POLL_INTERVAL_SECONDS)),
+            name="events.incremental.poll_interval_seconds",
         ),
     )
 

@@ -40,7 +40,9 @@ def test_start_events_runtime_disabled_and_webhook(tmp_path, feature_config: Fea
             events=EventsSettings(
                 enabled=True,
                 kind="webhook",
-                incremental=EventsIncrementalSettings(batch_size=1, batch_window_seconds=60.0),
+                incremental=EventsIncrementalSettings(
+                    batch_size=1, batch_window_seconds=60.0, poll_interval_seconds=0.05
+                ),
             ),
         ),
         feature_config=feature_config,
@@ -49,6 +51,7 @@ def test_start_events_runtime_disabled_and_webhook(tmp_path, feature_config: Fea
     assert isinstance(enabled.webhook_source, WebhookEventSource)
     assert enabled.worker is not None
     assert enabled.worker._buffer._batch_size == 1
+    assert enabled.worker._poll_interval_seconds == 0.05
     enabled.webhook_source.ingest(
         {
             "user_id": "u1",

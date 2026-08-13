@@ -243,6 +243,16 @@
               }
             },
             "description": "Missing or invalid bearer token"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Event backlog full"
           }
         },
         "security": [

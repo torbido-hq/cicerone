@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from cicerone.config import Settings
@@ -33,6 +34,7 @@ def start_events_runtime(
     *,
     feature_config: FeatureConfig,
     reader: RecommendationReader,
+    busy_check: Callable[[], bool] | None = None,
 ) -> EventsRuntime:
     if not settings.events.enabled:
         return EventsRuntime(webhook_source=None, worker=None)
@@ -50,18 +52,25 @@ def start_events_runtime(
         output_settings=settings.output,
         feature_config=feature_config,
         top_k=settings.top_k,
+        busy_check=busy_check,
         on_success=reader.refresh,
     )
     buffer = MicroBatchBuffer(
         batch_size=settings.events.incremental.batch_size,
         batch_window_seconds=settings.events.incremental.batch_window_seconds,
     )
-    worker = EventWorker(source, buffer, updater)
+    worker = EventWorker(
+        source,
+        buffer,
+        updater,
+        poll_interval_seconds=settings.events.incremental.poll_interval_seconds,
+    )
     worker.start()
     logger.info(
-        "Event worker started (kind=%s, batch_size=%d, window=%ss)",
+        "Event worker started (kind=%s, batch_size=%d, window=%ss, poll=%ss)",
         settings.events.kind,
         settings.events.incremental.batch_size,
         settings.events.incremental.batch_window_seconds,
+        settings.events.incremental.poll_interval_seconds,
     )
     return EventsRuntime(webhook_source=webhook_source, worker=worker)

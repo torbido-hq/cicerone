@@ -153,3 +153,34 @@ def test_post_events_uses_events_auth_token():
         },
     )
     assert ok.status_code == 202
+
+
+def test_post_events_backpressure_429():
+    source = WebhookEventSource({"max_pending": 1})
+    app = create_app(_settings(), _FakeReader(_recs_df()), event_source=source)
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer secret"}
+    first = client.post(
+        "/events",
+        headers=headers,
+        json={
+            "user_id": "u1",
+            "item_id": "i1",
+            "event_type": "purchase",
+            "occurred_at": "2026-08-13T12:00:00Z",
+            "event_id": "e1",
+        },
+    )
+    assert first.status_code == 202
+    second = client.post(
+        "/events",
+        headers=headers,
+        json={
+            "user_id": "u1",
+            "item_id": "i2",
+            "event_type": "view",
+            "occurred_at": "2026-08-13T12:01:00Z",
+            "event_id": "e2",
+        },
+    )
+    assert second.status_code == 429

@@ -8,15 +8,19 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
 
+from cicerone.config.constants import DEFAULT_EVENTS_WEBHOOK_MAX_PENDING
 from cicerone.events.base import EventSourceHealth, NormalizedEvent
-from cicerone.events.normalize import normalize_event, normalize_events
+from cicerone.events.normalize import EventNormalizeError, normalize_event, normalize_events
 
 
 class WebhookEventSource:
     """Push sink for ``POST /events``; drained via ``poll`` / ``ack``."""
 
     def __init__(self, options: dict[str, Any] | None = None):
-        del options
+        options = dict(options or {})
+        self._max_pending = int(options.get("max_pending", DEFAULT_EVENTS_WEBHOOK_MAX_PENDING))
+        if self._max_pending < 1:
+            raise ValueError("events.options.max_pending must be >= 1")
         self._lock = threading.Lock()
         self._pending: deque[NormalizedEvent] = deque()
         self._in_flight: OrderedDict[str, NormalizedEvent] = OrderedDict()
@@ -36,6 +40,9 @@ class WebhookEventSource:
             events = [normalize_event(payloads)]
         with self._lock:
             self._connected = True
+            backlog = len(self._pending) + len(self._in_flight)
+            if backlog + len(events) > self._max_pending:
+                raise EventNormalizeError(f"event backlog full ({backlog}/{self._max_pending}); retry later")
             known = {event.event_id for event in self._pending} | set(self._in_flight)
             queued: list[NormalizedEvent] = []
             for event in events:
@@ -54,7 +61,6 @@ class WebhookEventSource:
         with self._lock:
             while self._pending and len(out) < max_events:
                 event = self._pending.popleft()
-                # Keep first in-flight row for a given id (retries already skipped at ingest).
                 if event.event_id not in self._in_flight:
                     self._in_flight[event.event_id] = event
                 out.append(event)

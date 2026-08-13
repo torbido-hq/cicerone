@@ -221,9 +221,11 @@ prefix = "recommendations/latest"
 # kind = "webhook"
 # [events.options]
 # # auth_token = "${EVENTS_AUTH_TOKEN}"  # optional; defaults to serve.auth_token
+# # max_pending = 10000  # ingest returns 429 when backlog is full
 # [events.incremental]
 # batch_size = 100
 # batch_window_seconds = 60
+# poll_interval_seconds = 1
 
 # Optional: a small, standalone read-only status page over job run history
 # (its own container/port, independent of [job].mode -- see the README's
