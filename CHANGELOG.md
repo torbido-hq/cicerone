@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Incremental events between full retrains: internal `EventSource` surface,
+  webhook `POST /events`, micro-batch buffer/worker, and write-through
+  updater for popular/latest slices (`[events]` config). Design:
+  `docs/incremental-events.md`.
+
 ### Changed
 
 - Bump GitHub Actions Pages deploy helpers: `actions/upload-pages-artifact`
