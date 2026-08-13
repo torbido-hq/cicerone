@@ -31,9 +31,7 @@ def test_db_from_clause_uses_sql_identifier_as_is(tmp_path):
     url = _sqlite_url(tmp_path)
     table_source = DbEventSource({"database_url": url, "events_table": "events"})
     assert table_source._from_clause() == "events"
-    query_source = DbEventSource(
-        {"database_url": url, "events_query": "SELECT * FROM events"}
-    )
+    query_source = DbEventSource({"database_url": url, "events_query": "SELECT * FROM events"})
     assert query_source._from_clause() == "(SELECT * FROM events) AS cicerone_events_src"
 
 
