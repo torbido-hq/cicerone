@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections import OrderedDict
 
 import pandas as pd
 from sqlalchemy import Engine, create_engine, text
@@ -16,7 +17,8 @@ from cicerone.io.recommendation_reader import RECOMMENDATION_COLUMNS
 
 logger = logging.getLogger(__name__)
 
-_engines: dict[str, Engine] = {}
+_MAX_CACHED_ENGINES = 8
+_engines: OrderedDict[str, Engine] = OrderedDict()
 _engines_lock = threading.Lock()
 
 
@@ -24,12 +26,26 @@ def empty_recommendations_frame() -> pd.DataFrame:
     return pd.DataFrame(columns=list(RECOMMENDATION_COLUMNS))
 
 
+def dispose_recommendation_engines() -> None:
+    """Dispose cached SQLAlchemy engines (tests / process shutdown)."""
+    with _engines_lock:
+        engines = list(_engines.values())
+        _engines.clear()
+    for engine in engines:
+        engine.dispose()
+
+
 def _engine_for(database_url: str) -> Engine:
     with _engines_lock:
         engine = _engines.get(database_url)
-        if engine is None:
-            engine = create_engine(database_url, pool_pre_ping=True)
-            _engines[database_url] = engine
+        if engine is not None:
+            _engines.move_to_end(database_url)
+            return engine
+        engine = create_engine(database_url, pool_pre_ping=True)
+        _engines[database_url] = engine
+        while len(_engines) > _MAX_CACHED_ENGINES:
+            _url, old = _engines.popitem(last=False)
+            old.dispose()
         return engine
 
 

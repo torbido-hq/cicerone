@@ -8,7 +8,17 @@ import pytest
 from sqlalchemy import create_engine, text
 
 from cicerone.config import IOSettings, make_settings
-from cicerone.events.store import empty_recommendations_frame, load_recommendations_frame
+from cicerone.events.store import (
+    dispose_recommendation_engines,
+    empty_recommendations_frame,
+    load_recommendations_frame,
+)
+
+
+@pytest.fixture(autouse=True)
+def _dispose_engines():
+    yield
+    dispose_recommendation_engines()
 
 
 def test_load_recommendations_missing_file(tmp_path):
@@ -60,3 +70,15 @@ def test_load_recommendations_db_schema_mismatch_treated_as_empty(tmp_path, capl
 def test_load_recommendations_unsupported_kind():
     with pytest.raises(ValueError, match="Unsupported output kind"):
         load_recommendations_frame(IOSettings(kind="other", options={}))
+
+
+def test_dispose_recommendation_engines_clears_cache(tmp_path):
+    db_path = tmp_path / "dispose.db"
+    sqlite3.connect(db_path).close()
+    url = f"sqlite+pysqlite:///{db_path}"
+    settings = make_settings(output=IOSettings(kind="db", options={"database_url": url}))
+    load_recommendations_frame(settings.output)
+    dispose_recommendation_engines()
+    dispose_recommendation_engines()  # idempotent
+    frame = load_recommendations_frame(settings.output)
+    assert frame.empty

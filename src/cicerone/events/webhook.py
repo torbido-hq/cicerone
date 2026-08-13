@@ -9,8 +9,8 @@ from datetime import datetime
 from typing import Any
 
 from cicerone.config.constants import DEFAULT_EVENTS_WEBHOOK_MAX_PENDING
-from cicerone.events.base import EventSourceHealth, NormalizedEvent
-from cicerone.events.normalize import EventNormalizeError, normalize_event, normalize_events
+from cicerone.events.base import EventBackpressureError, EventSourceHealth, NormalizedEvent
+from cicerone.events.normalize import normalize_event, normalize_events
 
 
 class WebhookEventSource:
@@ -49,7 +49,9 @@ class WebhookEventSource:
                 novel.append(event)
             backlog = len(self._pending) + len(self._in_flight)
             if novel and backlog + len(novel) > self._max_pending:
-                raise EventNormalizeError(f"event backlog full ({backlog}/{self._max_pending}); retry later")
+                raise EventBackpressureError(
+                    f"event backlog full ({backlog}/{self._max_pending}); retry later"
+                )
             for event in novel:
                 self._pending.append(event)
                 self._last_event_at = event.occurred_at

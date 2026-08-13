@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import ValidationError
 
 from cicerone.config import Settings
+from cicerone.events.base import EventBackpressureError
 from cicerone.events.normalize import EventNormalizeError
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.http_auth import optional_bearer_deps
@@ -88,10 +89,10 @@ def mount_events_routes(
             accepted = webhook_source.ingest(payloads)
         except ValidationError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except EventBackpressureError as exc:
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
         except EventNormalizeError as exc:
-            detail = str(exc)
-            status = 429 if "backlog full" in detail else 400
-            raise HTTPException(status_code=status, detail=detail) from exc
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return EventsIngestResponse(
             accepted=len(accepted),
             event_ids=[event.event_id for event in accepted],

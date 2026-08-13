@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 from support.events import event_payload
 
+from cicerone.events.base import EventBackpressureError
 from cicerone.events.normalize import EventNormalizeError
 from cicerone.events.webhook import WebhookEventSource
 
@@ -55,7 +56,7 @@ def test_webhook_ack_unknown_id_is_noop():
 def test_webhook_max_pending_rejects_when_full():
     source = WebhookEventSource({"max_pending": 1})
     source.ingest(event_payload(event_id="a"))
-    with pytest.raises(EventNormalizeError, match="backlog full"):
+    with pytest.raises(EventBackpressureError, match="backlog full"):
         source.ingest(event_payload(event_id="b"))
     with pytest.raises(ValueError, match="max_pending"):
         WebhookEventSource({"max_pending": 0})

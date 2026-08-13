@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from cicerone.config import Settings
 from cicerone.events.buffer import MicroBatchBuffer
 from cicerone.events.registry import build_event_source
+from cicerone.events.store import dispose_recommendation_engines
 from cicerone.events.updater import IncrementalUpdater
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
@@ -27,6 +28,7 @@ class EventsRuntime:
     def stop(self) -> None:
         if self.worker is not None:
             self.worker.stop()
+        dispose_recommendation_engines()
 
 
 def start_events_runtime(

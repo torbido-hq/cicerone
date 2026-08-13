@@ -26,6 +26,10 @@ class EventSourceHealth:
     detail: str | None = None
 
 
+class EventBackpressureError(Exception):
+    """Source queue is full; caller should retry later (HTTP 429)."""
+
+
 class EventSource(Protocol):
     def connect(self) -> None:
         """Establish connections / start accepting work."""
