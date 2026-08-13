@@ -73,6 +73,7 @@ class IncrementalUpdater:
         self._on_success = on_success
         self._last_success_at: datetime | None = None
         self._events_applied = 0
+        self._cached_recommendations: pd.DataFrame | None = None
 
     @property
     def last_success_at(self) -> datetime | None:
@@ -82,17 +83,20 @@ class IncrementalUpdater:
     def events_applied(self) -> int:
         return self._events_applied
 
+    def invalidate_cache(self) -> None:
+        self._cached_recommendations = None
+
     def apply(self, events: Sequence[NormalizedEvent]) -> int:
         if not events:
             return 0
         if self._busy_check is not None and self._busy_check():
+            # Retrain may rewrite output; drop cache so the next apply reloads.
+            self.invalidate_cache()
             logger.info("Skipping incremental update: full retrain in progress")
             return 0
 
         batch = events_to_dataframe(events)
-        existing = load_recommendations_frame(self._output_settings)
-        if existing.empty:
-            existing = empty_recommendations_frame()
+        existing = self._load_existing()
 
         if USER_COLUMN in existing.columns and not existing.empty:
             existing = existing.copy()
@@ -121,6 +125,7 @@ class IncrementalUpdater:
         merged = pd.concat(frames, ignore_index=True) if frames else empty_recommendations_frame()
         merged = merged[list(RECOMMENDATION_COLUMNS)]
         self._sink.write_recommendations(merged)
+        self._cached_recommendations = merged
 
         now = datetime.now(UTC)
         manifest = {
@@ -146,6 +151,15 @@ class IncrementalUpdater:
             len(events),
         )
         return len(events)
+
+    def _load_existing(self) -> pd.DataFrame:
+        if self._cached_recommendations is not None:
+            return self._cached_recommendations
+        existing = load_recommendations_frame(self._output_settings)
+        if existing.empty:
+            existing = empty_recommendations_frame()
+        self._cached_recommendations = existing
+        return existing
 
     def _event_weight(self, event_type: str, quantity: int) -> float:
         if self._feature_config is None:

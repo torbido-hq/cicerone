@@ -181,3 +181,68 @@ def test_incremental_updater_no_feature_config(tmp_path):
     assert updater.apply([normalize_event(event_payload(event_id="nfc"))]) == 1
     frame = load_recommendations_frame(settings.output)
     assert "i1" in set(frame["item_id"].astype(str))
+
+
+def test_incremental_updater_caches_frame_across_applies(tmp_path, feature_config, monkeypatch):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    loads = {"n": 0}
+    real_load = load_recommendations_frame
+
+    def counting_load(output):  # type: ignore[no-untyped-def]
+        loads["n"] += 1
+        return real_load(output)
+
+    monkeypatch.setattr("cicerone.events.updater.load_recommendations_frame", counting_load)
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=3,
+    )
+    assert updater.apply([normalize_event(event_payload(event_id="c1", item_id="a"))]) == 1
+    assert loads["n"] == 1
+    assert updater.apply([normalize_event(event_payload(event_id="c2", item_id="b"))]) == 1
+    assert loads["n"] == 1
+
+
+def test_incremental_updater_busy_invalidates_cache(tmp_path, feature_config, monkeypatch):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    loads = {"n": 0}
+    real_load = load_recommendations_frame
+
+    def counting_load(output):  # type: ignore[no-untyped-def]
+        loads["n"] += 1
+        return real_load(output)
+
+    monkeypatch.setattr("cicerone.events.updater.load_recommendations_frame", counting_load)
+    busy = {"v": False}
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=3,
+        busy_check=lambda: busy["v"],
+    )
+    assert updater.apply([normalize_event(event_payload(event_id="b1", item_id="a"))]) == 1
+    assert loads["n"] == 1
+    busy["v"] = True
+    assert updater.apply([normalize_event(event_payload(event_id="b2", item_id="b"))]) == 0
+    busy["v"] = False
+    assert updater.apply([normalize_event(event_payload(event_id="b3", item_id="c"))]) == 1
+    assert loads["n"] == 2
