@@ -85,6 +85,12 @@ def _cursor_key(event: NormalizedEvent) -> tuple[datetime, str]:
     return (event.occurred_at, event.event_id)
 
 
+def _cursor_key_from_payload(payload: dict[str, Any]) -> tuple[datetime, str]:
+    """Lag path: parse occurred_at + stable id without full normalize_event."""
+    occurred_at = _db_occurred_at(payload.get("occurred_at"))
+    return (occurred_at, _stable_event_id(payload, occurred_at))
+
+
 def _row_to_event(payload: dict[str, Any]) -> NormalizedEvent:
     occurred_at = _db_occurred_at(payload.get("occurred_at"))
     return normalize_event(
@@ -285,7 +291,7 @@ class DbEventSource:
         # Same synthetic-id path as poll. Cap the scan; None = unknown / too large.
         cursor = (watermark_at, watermark_event_id)
         rows = self._fetch_rows(engine, watermark_at, limit=_LAG_SCAN_LIMIT)
-        count = sum(1 for payload in rows if _cursor_key(_row_to_event(payload)) > cursor)
+        count = sum(1 for payload in rows if _cursor_key_from_payload(payload) > cursor)
         if len(rows) >= _LAG_SCAN_LIMIT:
             return None
         return count

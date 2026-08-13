@@ -69,9 +69,11 @@ class EventWorker:
 
     def tick(self) -> int:
         """One poll/flush cycle; returns events successfully applied."""
-        polled = list(self._source.poll(self._poll_max_events))
-        if polled:
-            self._buffer.extend(polled)
+        room = self._buffer.remaining_capacity
+        if room > 0:
+            polled = list(self._source.poll(min(self._poll_max_events, room)))
+            if polled:
+                self._buffer.extend(polled)
         ready = self._buffer.flush_if_ready()
         if not ready:
             return 0

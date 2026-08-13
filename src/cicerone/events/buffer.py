@@ -10,12 +10,24 @@ from cicerone.events.normalize import event_fingerprint
 
 
 class MicroBatchBuffer:
-    def __init__(self, *, batch_size: int, batch_window_seconds: float, dedupe: bool = True):
+    def __init__(
+        self,
+        *,
+        batch_size: int,
+        batch_window_seconds: float,
+        dedupe: bool = True,
+        max_events: int | None = None,
+    ):
         if batch_size < 1:
             raise ValueError("batch_size must be >= 1")
         if batch_window_seconds <= 0:
             raise ValueError("batch_window_seconds must be > 0")
+        # Cap in-flight buffer (+ dedupe sets) so long-running workers cannot grow without bound.
+        cap = batch_size if max_events is None else max_events
+        if cap < batch_size:
+            raise ValueError("max_events must be >= batch_size")
         self._batch_size = batch_size
+        self._max_events = cap
         self._batch_window_seconds = batch_window_seconds
         self._dedupe = dedupe
         self._events: list[NormalizedEvent] = []
@@ -26,11 +38,17 @@ class MicroBatchBuffer:
     def __len__(self) -> int:
         return len(self._events)
 
+    @property
+    def remaining_capacity(self) -> int:
+        return max(0, self._max_events - len(self._events))
+
     def extend(self, events: Sequence[NormalizedEvent]) -> int:
-        """Append events; return how many were kept (after optional dedupe)."""
+        """Append events; return how many were kept (after optional dedupe / capacity)."""
         kept = 0
         now = time.monotonic()
         for event in events:
+            if len(self._events) >= self._max_events:
+                break
             if self._dedupe:
                 if event.event_id in self._event_ids:
                     continue

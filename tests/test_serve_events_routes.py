@@ -77,6 +77,35 @@ def test_post_events_auth_and_validation():
     ValidationErrorDetail.model_validate({"detail": detail})
 
 
+def test_post_events_list_body_validation_error_returns_400():
+    source = WebhookEventSource({})
+    app = create_app(_settings(), _FakeReader(_recs_df()), event_source=source)
+    client = TestClient(app)
+    response = client.post(
+        "/events",
+        headers={"Authorization": "Bearer secret"},
+        json=[
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "event_type": "purchase",
+            },
+            {
+                "user_id": "u2",
+                "item_id": "i2",
+                "event_type": "purchase",
+                "occurred_at": "2026-08-13T12:00:00Z",
+            },
+        ],
+    )
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert isinstance(detail, list)
+    assert detail
+    assert all(isinstance(item, dict) and "loc" in item and "msg" in item for item in detail)
+    ValidationErrorDetail.model_validate({"detail": detail})
+
+
 def test_events_openapi_documents_structured_validation_400():
     app = create_app(_settings(), _FakeReader(_recs_df()), event_source=WebhookEventSource({}))
     schema = TestClient(app).get("/openapi.json").json()

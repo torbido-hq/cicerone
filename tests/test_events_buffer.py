@@ -46,3 +46,21 @@ def test_buffer_dedupes_by_event_id():
     first = normalize_event(event_payload(event_id="id-1", item_id="a"))
     second = normalize_event(event_payload(event_id="id-1", item_id="b"))
     assert buffer.extend([first, second]) == 1
+
+
+def test_buffer_caps_events_and_clears_dedupe_on_flush():
+    buffer = MicroBatchBuffer(batch_size=2, batch_window_seconds=60.0, max_events=2)
+    events = [normalize_event(event_payload(event_id=f"e{i}", item_id=f"i{i}")) for i in range(4)]
+    assert buffer.extend(events) == 2
+    assert buffer.remaining_capacity == 0
+    assert len(buffer._event_ids) == 2
+    flushed = buffer.flush()
+    assert len(flushed) == 2
+    assert buffer._event_ids == set()
+    assert buffer._fingerprints == set()
+    assert buffer.remaining_capacity == 2
+
+
+def test_buffer_rejects_max_events_below_batch_size():
+    with pytest.raises(ValueError, match="max_events"):
+        MicroBatchBuffer(batch_size=5, batch_window_seconds=1.0, max_events=2)
