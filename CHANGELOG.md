@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Bump `fastapi` 0.140.13 → 0.141.1 (Dependabot #69).
+- Dependabot: ignore `numpy` major bumps (Python 3.11 CI) and `boto3>=1.43.57`
+  (aiobotocore botocore pin).
 - Project docs site (not part of the runtime product): Starlight under
   `website/`, synced from `docs/`, published at [cicerone.dev](https://cicerone.dev).
 
