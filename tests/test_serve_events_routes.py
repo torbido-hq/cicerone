@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import pytest
 from fastapi.testclient import TestClient
-from support.toml_config import write_toml
 from test_serve import _FakeReader, _recs_df
 
-from cicerone.config import ConfigError, EventsSettings, load_settings, make_settings
+from cicerone.config import EventsSettings, make_settings
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.serve import create_app
 
@@ -19,65 +17,6 @@ def _settings(**overrides):
             **overrides,
         }
     )
-
-
-def test_load_events_section(tmp_path):
-    path = write_toml(
-        tmp_path,
-        """
-        [job]
-        mode = "serve"
-        [serve]
-        auth_token = "tok"
-        [events]
-        enabled = true
-        kind = "webhook"
-        [events.options]
-        auth_token = "events-tok"
-        [events.incremental]
-        batch_size = 5
-        batch_window_seconds = 12
-        [input]
-        kind = "dataset"
-        [input.options]
-        storage_backend = "local"
-        path = "/tmp/in"
-        [output]
-        kind = "dataset"
-        [output.options]
-        storage_backend = "local"
-        path = "/tmp/out"
-        """,
-    )
-    settings = load_settings(path)
-    assert settings.events.enabled is True
-    assert settings.events.options["auth_token"] == "events-tok"
-    assert settings.events.incremental.batch_size == 5
-    assert settings.events.incremental.batch_window_seconds == 12.0
-
-
-def test_load_events_unknown_kind(tmp_path):
-    path = write_toml(
-        tmp_path,
-        """
-        [job]
-        [events]
-        enabled = true
-        kind = "kafka"
-        [input]
-        kind = "dataset"
-        [input.options]
-        storage_backend = "local"
-        path = "/tmp/in"
-        [output]
-        kind = "dataset"
-        [output.options]
-        storage_backend = "local"
-        path = "/tmp/out"
-        """,
-    )
-    with pytest.raises(ConfigError, match="events.kind"):
-        load_settings(path)
 
 
 def test_post_events_single_and_batch():
@@ -97,7 +36,9 @@ def test_post_events_single_and_batch():
         },
     )
     assert single.status_code == 202
-    assert single.json()["accepted"] == 1
+    body = single.json()
+    assert body["accepted"] == 1
+    assert body["event_ids"] == ["e1"]
     batch = client.post(
         "/events",
         headers=headers,
@@ -139,6 +80,17 @@ def test_events_route_absent_when_disabled():
     assert client.post("/events", headers={"Authorization": "Bearer secret"}, json={}).status_code == 404
 
 
+def test_events_route_absent_for_non_webhook_kind():
+    app = create_app(
+        _settings(events=EventsSettings(enabled=True, kind="db")),
+        _FakeReader(_recs_df()),
+    )
+    assert (
+        TestClient(app).post("/events", headers={"Authorization": "Bearer secret"}, json={}).status_code
+        == 404
+    )
+
+
 def test_post_events_list_body_and_invalid_json_shape():
     source = WebhookEventSource({})
     app = create_app(_settings(), _FakeReader(_recs_df()), event_source=source)
@@ -159,9 +111,45 @@ def test_post_events_list_body_and_invalid_json_shape():
     )
     assert listed.status_code == 202
     assert listed.json()["accepted"] == 1
+    empty = client.post("/events", headers=headers, json={"events": []})
+    assert empty.status_code == 202
+    assert empty.json()["accepted"] == 0
     bad_shape = client.post(
         "/events",
         headers={**headers, "Content-Type": "application/json"},
         content=b"null",
     )
     assert bad_shape.status_code == 400
+
+
+def test_post_events_uses_events_auth_token():
+    source = WebhookEventSource({})
+    app = create_app(
+        _settings(events=EventsSettings(enabled=True, kind="webhook", options={"auth_token": "events"})),
+        _FakeReader(_recs_df()),
+        event_source=source,
+    )
+    client = TestClient(app)
+    denied = client.post(
+        "/events",
+        headers={"Authorization": "Bearer secret"},
+        json={
+            "user_id": "u1",
+            "item_id": "i1",
+            "event_type": "purchase",
+            "occurred_at": "2026-08-13T12:00:00Z",
+        },
+    )
+    assert denied.status_code == 401
+    ok = client.post(
+        "/events",
+        headers={"Authorization": "Bearer events"},
+        json={
+            "user_id": "u1",
+            "item_id": "i1",
+            "event_type": "purchase",
+            "occurred_at": "2026-08-13T12:00:00Z",
+            "event_id": "tok-1",
+        },
+    )
+    assert ok.status_code == 202

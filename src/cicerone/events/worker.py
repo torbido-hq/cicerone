@@ -38,8 +38,11 @@ class EventWorker:
         self._thread = threading.Thread(target=self._loop, name="cicerone-events", daemon=True)
         self._thread.start()
 
-    def stop(self) -> None:
+    def stop(self, *, join_timeout_seconds: float = 5.0) -> None:
         self._stop.set()
+        thread = self._thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=join_timeout_seconds)
 
     def _loop(self) -> None:
         while not self._stop.is_set():
@@ -57,10 +60,15 @@ class EventWorker:
         ready = self._buffer.flush_if_ready()
         if not ready:
             return 0
-        applied = self._updater.apply(ready)
+        try:
+            applied = self._updater.apply(ready)
+        except Exception:
+            logger.exception("Incremental apply failed; returning %d event(s) to source", len(ready))
+            self._source.nack(ready)
+            raise
         if applied:
             self._source.ack([event.event_id for event in ready])
             return applied
-        # Un-acked in-flight stays until a later successful apply.
-        self._buffer.extend(ready)
+        # Busy: return to source so lag stays accurate and another tick can retry.
+        self._source.nack(ready)
         return 0

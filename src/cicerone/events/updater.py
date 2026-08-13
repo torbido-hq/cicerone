@@ -6,11 +6,11 @@ import logging
 import math
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
-from typing import Any
 
 import pandas as pd
 
 from cicerone.blending import COLD_START_USER_ID, LATEST_SOURCE, POPULAR_SOURCE
+from cicerone.config import IOSettings
 from cicerone.events.base import NormalizedEvent
 from cicerone.events.normalize import events_to_dataframe
 from cicerone.events.store import empty_recommendations_frame, load_recommendations_frame
@@ -28,7 +28,7 @@ from cicerone.io.recommendation_reader import (
 logger = logging.getLogger(__name__)
 
 INCREMENTAL_SOURCE = "incremental"
-_PRESERVE_SOURCES = frozenset(
+_PRESERVE_LABELS = frozenset(
     {
         "personalized",
         "item_based",
@@ -36,13 +36,22 @@ _PRESERVE_SOURCES = frozenset(
         "blended",
     }
 )
+# Reserve slots so recent interactions can enter top-K even when preserved rows fill it.
+_BOOST_SLOT_FRACTION = 0.3
+
+
+def _is_preserved_source(source: str) -> bool:
+    if source in _PRESERVE_LABELS:
+        return True
+    # Priority/RRF compound labels, e.g. personalized+popular_fallback.
+    return any(part in _PRESERVE_LABELS for part in source.split("+"))
 
 
 class IncrementalUpdater:
     """Merge micro-batch events into existing top-K rows and write via OutputSink.
 
-    Does not import LightFM / RecTools. Personalized rows are preserved; popular
-    and latest slices for affected users (and ``__cold_start__``) are refreshed
+    Does not import LightFM / RecTools. Personalized / blended rows are preserved
+    (with reserved slots for incremental boosts); popular/latest slices refresh
     from the flushed batch. Full collaborative refits wait for ``job.run()``.
     """
 
@@ -50,7 +59,7 @@ class IncrementalUpdater:
         self,
         *,
         sink: OutputSink,
-        output_settings: Any,
+        output_settings: IOSettings,
         feature_config: FeatureConfig | None,
         top_k: int,
         busy_check: Callable[[], bool] | None = None,
@@ -85,15 +94,28 @@ class IncrementalUpdater:
         if existing.empty:
             existing = empty_recommendations_frame()
 
+        if USER_COLUMN in existing.columns and not existing.empty:
+            existing = existing.copy()
+            existing[USER_COLUMN] = existing[USER_COLUMN].astype(str)
+
         popular_ranking = self._popular_ranking(batch)
         latest_ranking = self._latest_ranking(batch)
         affected_users = sorted(set(batch[USER_COLUMN].astype(str)))
+        affected_set = set(affected_users) | {COLD_START_USER_ID}
 
-        frames = [existing[~existing[USER_COLUMN].astype(str).isin([*affected_users, COLD_START_USER_ID])]]
+        by_user = (
+            {user_id: group for user_id, group in existing.groupby(USER_COLUMN, sort=False)}
+            if not existing.empty
+            else {}
+        )
+        untouched = existing[~existing[USER_COLUMN].isin(affected_set)] if not existing.empty else existing
+
+        frames: list[pd.DataFrame] = [untouched]
         for user_id in affected_users:
-            prior = existing[existing[USER_COLUMN].astype(str) == user_id]
+            prior = by_user.get(user_id, empty_recommendations_frame())
             frames.append(self._merge_user_rows(user_id, prior, popular_ranking, latest_ranking, batch))
-        frames.append(self._cold_start_rows(popular_ranking, latest_ranking))
+        prior_cold = by_user.get(COLD_START_USER_ID, empty_recommendations_frame())
+        frames.append(self._cold_start_rows(prior_cold, popular_ranking, latest_ranking))
         frames = [frame for frame in frames if frame is not None and not frame.empty]
 
         merged = pd.concat(frames, ignore_index=True) if frames else empty_recommendations_frame()
@@ -136,6 +158,11 @@ class IncrementalUpdater:
             weight *= math.log1p(max(quantity, 0))
         return weight
 
+    def _known_event_type(self, event_type: str) -> bool:
+        if self._feature_config is None:
+            return True
+        return event_type in self._feature_config.event_weights
+
     def _popular_ranking(self, batch: pd.DataFrame) -> pd.DataFrame:
         scores: dict[str, float] = {}
         for row in batch.itertuples(index=False):
@@ -159,6 +186,10 @@ class IncrementalUpdater:
             return pd.DataFrame(columns=[ITEM_COLUMN, SCORE_COLUMN, SOURCE_COLUMN])
         frame = batch.copy()
         frame[ITEM_COLUMN] = frame[ITEM_COLUMN].astype(str)
+        if self._feature_config is not None:
+            frame = frame[frame["event_type"].astype(str).map(self._known_event_type)]
+            if frame.empty:
+                return pd.DataFrame(columns=[ITEM_COLUMN, SCORE_COLUMN, SOURCE_COLUMN])
         frame["occurred_at"] = pd.to_datetime(frame["occurred_at"], utc=True)
         latest = (
             frame.sort_values("occurred_at", ascending=False)
@@ -186,18 +217,24 @@ class IncrementalUpdater:
         latest: pd.DataFrame,
         batch: pd.DataFrame,
     ) -> pd.DataFrame:
-        preserved = (
-            prior[prior[SOURCE_COLUMN].astype(str).isin(_PRESERVE_SOURCES)].copy()
-            if not prior.empty
-            else prior
-        )
+        if not prior.empty and SOURCE_COLUMN in prior.columns:
+            mask = prior[SOURCE_COLUMN].astype(str).map(_is_preserved_source)
+            preserved = prior.loc[mask].copy()
+        else:
+            preserved = prior.iloc[0:0] if not prior.empty else prior
+
         user_batch = batch[batch[USER_COLUMN].astype(str) == user_id]
+        if self._feature_config is not None and not user_batch.empty:
+            user_batch = user_batch[user_batch["event_type"].astype(str).map(self._known_event_type)]
         boost_items = (
             user_batch.sort_values("occurred_at", ascending=False)[ITEM_COLUMN]
             .astype(str)
             .drop_duplicates()
             .tolist()
+            if not user_batch.empty
+            else []
         )
+        boost_slots = max(1, int(self._top_k * _BOOST_SLOT_FRACTION)) if boost_items else 0
         boost = pd.DataFrame(
             [
                 {
@@ -205,29 +242,39 @@ class IncrementalUpdater:
                     SCORE_COLUMN: float(len(boost_items) - index),
                     SOURCE_COLUMN: INCREMENTAL_SOURCE,
                 }
-                for index, item_id in enumerate(boost_items[: self._top_k])
+                for index, item_id in enumerate(boost_items[:boost_slots])
             ]
         )
+        preserve_cap = max(0, self._top_k - boost_slots)
+        if not preserved.empty:
+            preserved = preserved.head(preserve_cap)
 
-        parts = [frame for frame in (preserved, boost, popular, latest) if not frame.empty]
+        # Boost first so reserved slots win; then preserved; then popular/latest fill.
+        parts = [frame for frame in (boost, preserved, popular, latest) if not frame.empty]
         combined = pd.concat(parts, ignore_index=True) if parts else empty_recommendations_frame()
         if combined.empty:
             return empty_recommendations_frame()
         combined[USER_COLUMN] = user_id
         combined[ITEM_COLUMN] = combined[ITEM_COLUMN].astype(str)
-        # Earlier frames win on (user, item); fill top-K.
         combined = combined.drop_duplicates(subset=[ITEM_COLUMN], keep="first").head(self._top_k)
         combined[RANK_COLUMN] = range(1, len(combined) + 1)
         return combined[[USER_COLUMN, ITEM_COLUMN, RANK_COLUMN, SCORE_COLUMN, SOURCE_COLUMN]].reset_index(
             drop=True
         )
 
-    def _cold_start_rows(self, popular: pd.DataFrame, latest: pd.DataFrame) -> pd.DataFrame:
-        parts = [frame for frame in (popular, latest) if not frame.empty]
+    def _cold_start_rows(
+        self,
+        prior: pd.DataFrame,
+        popular: pd.DataFrame,
+        latest: pd.DataFrame,
+    ) -> pd.DataFrame:
+        # Prefers batch popular/latest, then keeps prior cold-start fill.
+        parts = [frame for frame in (popular, latest, prior) if not frame.empty]
         combined = pd.concat(parts, ignore_index=True) if parts else empty_recommendations_frame()
         if combined.empty:
             return empty_recommendations_frame()
-        combined = combined.drop_duplicates(subset=[ITEM_COLUMN], keep="first").head(self._top_k)
+        if ITEM_COLUMN in combined.columns:
+            combined = combined.drop_duplicates(subset=[ITEM_COLUMN], keep="first").head(self._top_k)
         combined[USER_COLUMN] = COLD_START_USER_ID
         combined[RANK_COLUMN] = range(1, len(combined) + 1)
         return combined[[USER_COLUMN, ITEM_COLUMN, RANK_COLUMN, SCORE_COLUMN, SOURCE_COLUMN]].reset_index(

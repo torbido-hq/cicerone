@@ -19,6 +19,7 @@ class MicroBatchBuffer:
         self._batch_window_seconds = batch_window_seconds
         self._dedupe = dedupe
         self._events: list[NormalizedEvent] = []
+        self._event_ids: set[str] = set()
         self._fingerprints: set[str] = set()
         self._window_started_at: float | None = None
 
@@ -31,9 +32,12 @@ class MicroBatchBuffer:
         now = time.monotonic()
         for event in events:
             if self._dedupe:
+                if event.event_id in self._event_ids:
+                    continue
                 fingerprint = event_fingerprint(event)
                 if fingerprint in self._fingerprints:
                     continue
+                self._event_ids.add(event.event_id)
                 self._fingerprints.add(fingerprint)
             if self._window_started_at is None:
                 self._window_started_at = now
@@ -60,6 +64,7 @@ class MicroBatchBuffer:
     def flush(self) -> list[NormalizedEvent]:
         events = self._events
         self._events = []
+        self._event_ids.clear()
         self._fingerprints.clear()
         self._window_started_at = None
         return events

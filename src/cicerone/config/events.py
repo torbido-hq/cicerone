@@ -17,25 +17,48 @@ from cicerone.config.validation import require_positive_float, require_positive_
 ResolveEnv = Callable[[Any, str], Any]
 
 
+def _incremental_settings(
+    raw: dict[str, Any] | EventsIncrementalSettings | None,
+) -> EventsIncrementalSettings:
+    if isinstance(raw, EventsIncrementalSettings):
+        return EventsIncrementalSettings(
+            batch_size=require_positive_int(raw.batch_size, name="events.incremental.batch_size"),
+            batch_window_seconds=require_positive_float(
+                raw.batch_window_seconds, name="events.incremental.batch_window_seconds"
+            ),
+        )
+    if raw is None:
+        data: dict[str, Any] = {}
+    elif isinstance(raw, dict):
+        data = raw
+    else:
+        raise TypeError(f"Expected EventsIncrementalSettings, dict, or None; got {type(raw).__name__}")
+    return EventsIncrementalSettings(
+        batch_size=require_positive_int(
+            int(data.get("batch_size", DEFAULT_EVENTS_BATCH_SIZE)),
+            name="events.incremental.batch_size",
+        ),
+        batch_window_seconds=require_positive_float(
+            float(data.get("batch_window_seconds", DEFAULT_EVENTS_BATCH_WINDOW_SECONDS)),
+            name="events.incremental.batch_window_seconds",
+        ),
+    )
+
+
 def coerce_events_settings(value: Any | None) -> EventsSettings:
     if isinstance(value, EventsSettings):
-        return value
+        return EventsSettings(
+            enabled=value.enabled,
+            kind=value.kind,
+            options=dict(value.options),
+            incremental=_incremental_settings(value.incremental),
+        )
     if value is None:
         return EventsSettings()
     if not isinstance(value, dict):
         raise TypeError(f"Expected EventsSettings, dict, or None; got {type(value).__name__}")
     raw = dict(value)
-    incremental_raw = raw.pop("incremental", None)
-    if isinstance(incremental_raw, EventsIncrementalSettings):
-        incremental = incremental_raw
-    elif isinstance(incremental_raw, dict):
-        incremental = EventsIncrementalSettings(**incremental_raw)
-    elif incremental_raw is None:
-        incremental = EventsIncrementalSettings()
-    else:
-        raise TypeError(
-            f"Expected EventsIncrementalSettings, dict, or None; got {type(incremental_raw).__name__}"
-        )
+    incremental = _incremental_settings(raw.pop("incremental", None))
     return EventsSettings(incremental=incremental, **raw)
 
 
@@ -62,14 +85,7 @@ def load_events_settings(
         options = {**options, "auth_token": auth_token}
 
     incremental_raw = events_raw.get("incremental", {}) or {}
-    batch_size = require_positive_int(
-        int(incremental_raw.get("batch_size", DEFAULT_EVENTS_BATCH_SIZE)),
-        name="events.incremental.batch_size",
-    )
-    batch_window_seconds = require_positive_float(
-        float(incremental_raw.get("batch_window_seconds", DEFAULT_EVENTS_BATCH_WINDOW_SECONDS)),
-        name="events.incremental.batch_window_seconds",
-    )
+    incremental = _incremental_settings(incremental_raw if isinstance(incremental_raw, dict) else {})
 
     if enabled and kind == "webhook" and mode == "serve":
         webhook_token = auth_token or serve_auth_token
@@ -83,8 +99,5 @@ def load_events_settings(
         enabled=enabled,
         kind=kind,
         options=options,
-        incremental=EventsIncrementalSettings(
-            batch_size=batch_size,
-            batch_window_seconds=batch_window_seconds,
-        ),
+        incremental=incremental,
     )

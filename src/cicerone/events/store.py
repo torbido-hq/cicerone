@@ -6,9 +6,10 @@ import logging
 
 import pandas as pd
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import ProgrammingError
 
 from cicerone.config import IOSettings
-from cicerone.io.db_store import DEFAULT_RECOMMENDATIONS_TABLE
+from cicerone.io.db_store import DEFAULT_RECOMMENDATIONS_TABLE, MISSING_TABLE_ERRORS
 from cicerone.io.options import is_s3_not_found, read_parquet, require_option, sql_identifier
 from cicerone.io.recommendation_reader import RECOMMENDATION_COLUMNS
 
@@ -41,9 +42,13 @@ def load_recommendations_frame(output: IOSettings) -> pd.DataFrame:
         engine = create_engine(require_option(output.options, "database_url", "db"), pool_pre_ping=True)
         try:
             frame = pd.read_sql_query(text(f"SELECT * FROM {table}"), engine)
-        except Exception:
-            logger.exception("Failed to load recommendations from %r; treating as empty", table)
-            return empty_recommendations_frame()
+        except MISSING_TABLE_ERRORS as exc:
+            # Undefined table / relation — treat as first write; re-raise other OperationalErrors.
+            message = str(getattr(exc, "orig", exc)).lower()
+            if isinstance(exc, ProgrammingError) or "does not exist" in message or "no such table" in message:
+                logger.warning("Recommendations table %r missing; treating as empty", table)
+                return empty_recommendations_frame()
+            raise
         if frame.empty:
             return empty_recommendations_frame()
         return frame

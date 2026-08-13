@@ -140,10 +140,11 @@ sequenceDiagram
   Full->>Out: full retrain overwrite
 ```
 
-When a full `job.run()` holds `RunGuard`, incremental flushes skip (events
-stay un-acked / buffered) so the batch write is not interleaving with a
-partial merge. If serve and trainer are separate processes, last writer
-wins; the next full retrain remains the consistency backstop.
+When a full `job.run()` holds `RunGuard` **in the same process**, pass
+`busy_check=guard.busy` into `IncrementalUpdater` so flushes skip. Serve and
+trainer are usually separate containers — then last writer wins and the next
+full retrain remains the consistency backstop. Do not treat cross-process
+exclusion as automatic.
 
 ## Backend roadmap
 

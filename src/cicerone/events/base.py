@@ -39,6 +39,10 @@ class EventSource(Protocol):
         """Confirm successful processing for the given event ids."""
         ...
 
+    def nack(self, events: Sequence[NormalizedEvent]) -> None:
+        """Return events to the pending queue after a failed flush."""
+        ...
+
     def health(self) -> EventSourceHealth:
         """Lag / connectivity for dashboard and metrics."""
         ...
