@@ -87,14 +87,25 @@ def test_load_events_unknown_kind(tmp_path):
         load_settings(path)
 
 
-def test_load_events_webhook_requires_auth_in_serve_mode():
-    with pytest.raises(ConfigError, match="auth_token"):
+def test_load_events_db_requires_database_url():
+    with pytest.raises(ConfigError, match="database_url"):
         load_events_settings(
-            {"enabled": True, "kind": "webhook", "options": {}},
+            {"enabled": True, "kind": "db", "options": {}},
             mode="serve",
-            serve_auth_token=None,
+            serve_auth_token="tok",
             resolve_env=lambda value, _path: value,
         )
+
+
+def test_load_events_db_ok():
+    settings = load_events_settings(
+        {"enabled": True, "kind": "db", "options": {"database_url": "sqlite+pysqlite:///:memory:"}},
+        mode="serve",
+        serve_auth_token="tok",
+        resolve_env=lambda value, _path: value,
+    )
+    assert settings.kind == "db"
+    assert settings.options["database_url"].startswith("sqlite")
 
 
 def test_load_events_incremental_must_be_table():

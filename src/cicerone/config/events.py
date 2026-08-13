@@ -104,6 +104,8 @@ def load_events_settings(
                 "events.options.auth_token or serve.auth_token is required when "
                 'events.enabled = true, events.kind = "webhook", and job.mode = "serve"'
             )
+    if enabled and kind == "db" and not options.get("database_url"):
+        raise ConfigError('events.options.database_url is required when events.kind = "db"')
 
     return EventsSettings(
         enabled=enabled,

@@ -24,7 +24,7 @@ def _as_mapping(payload: Any) -> Mapping[str, Any]:
     raise EventNormalizeError("event must be a JSON object")
 
 
-def _parse_occurred_at(value: Any) -> datetime:
+def parse_occurred_at(value: Any) -> datetime:
     # stdlib only — keep webhook ingest off the pandas path
     if isinstance(value, datetime):
         dt = value
@@ -88,7 +88,7 @@ def normalize_event(payload: Any) -> NormalizedEvent:
         item_id=item_id,
         event_type=event_type,
         quantity=_parse_quantity(raw.get("quantity")),
-        occurred_at=_parse_occurred_at(raw["occurred_at"]),
+        occurred_at=parse_occurred_at(raw["occurred_at"]),
         event_id=str(event_id),
     )
 

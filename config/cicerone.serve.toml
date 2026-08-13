@@ -34,7 +34,8 @@ category_column = "category"
 metrics_enabled = true
 metrics_token = ""   # empty = open endpoint; bind to a trusted network or reverse proxy
 
-# Optional incremental event ingest (POST /events). See docs/incremental-events.md.
+# Optional incremental event ingest. See docs/incremental-events.md.
+# Webhook: POST /events. DB: watermark poll (no HTTP ingest route).
 # [events]
 # enabled = true
 # kind = "webhook"

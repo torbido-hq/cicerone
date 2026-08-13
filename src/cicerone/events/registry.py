@@ -6,11 +6,13 @@ from collections.abc import Callable
 from typing import Any
 
 from cicerone.events.base import EventSource
+from cicerone.events.db import DbEventSource
 from cicerone.events.webhook import WebhookEventSource
 
 _EventSourceFactory = Callable[[dict[str, Any]], EventSource]
 
 _EVENT_SOURCES: dict[str, _EventSourceFactory] = {
+    "db": DbEventSource,
     "webhook": WebhookEventSource,
 }
 

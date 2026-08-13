@@ -51,6 +51,12 @@ class EventWorker:
                     join_timeout_seconds,
                 )
                 return False
+        close = getattr(self._source, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                logger.exception("Event source close() failed during worker stop")
         return True
 
     def _loop(self) -> None:

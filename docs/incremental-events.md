@@ -93,6 +93,8 @@ kind = "webhook"   # webhook | db | s3 | rabbitmq | kafka | (later redis_streams
 
 [events.options]
 # backend-specific; webhook may set auth_token (else serve.auth_token)
+# db: database_url (required), events_table / events_query, watermark_path,
+#     initial_watermark
 
 [events.incremental]
 batch_size = 100
@@ -157,14 +159,28 @@ and refreshes that cache after each successful write. A same-process
 User-scoped reads/writes (instead of full-frame merge + overwrite) remain a
 follow-up.
 
+## Follow-up PR sequence
+
+Keep each PR **atomic** and stacked on the incremental-events foundation
+(`feature/events-incremental` / its successors), not a grab-bag onto `main`:
+
+1. Webhook + micro-batch write-through (foundation)
+2. `kind=db` watermark source
+3. Metrics / dashboard wiring (lag, flush, errors)
+4. Further backends / write-path improvements as separate PRs (S3, user-scoped
+   I/O, Redis Streams, …)
+5. **Last:** full review of `docs/` **and** the `website/` sync (sidebar,
+   `sync-docs.mjs`, rendered pages, links, OpenAPI mentions) so the public
+   site matches the shipped incremental surface
+
 ## Backend roadmap
 
 Build order:
 
-1. **Webhook / HTTP push** (`POST /events` on the serve app) — no new
-   runtime dependency; mirrors the retrain-webhook pattern.
-2. **DB** — watermark poll (reuse `events_query`); optional LISTEN/NOTIFY or
-   logical replication under the **same** `kind=db` (not a separate kind).
+1. **Webhook / HTTP push** (`POST /events` on the serve app) — shipped.
+2. **DB** — watermark poll (reuse `events_query` / `events_table`); optional
+   `watermark_path` for durable cursor; LISTEN/NOTIFY or logical replication
+   under the **same** `kind=db` later (not a separate kind).
 3. **S3** — AWS: notifications → SQS; non-AWS (R2/MinIO): list/marker poll.
 4. **RabbitMQ** — queue/exchange consumer (optional dep).
 5. **Kafka** — topic / consumer group (optional dep).
@@ -214,3 +230,17 @@ exposes `POST /events` (Bearer auth: `events.options.auth_token` or
 Accepted events are validated (OpenAPI models), normalized, queued on the
 webhook `EventSource`, and drained by the micro-batch worker. A full backlog
 (`max_pending`) returns **429**.
+
+When `kind = "db"`, the same worker polls interaction rows after a watermark
+(`events.options.database_url`, optional `events_table` / `events_query`,
+optional durable `watermark_path`). The watermark advances only on successful
+``ack`` after a flush. Health lag uses the same `(occurred_at, event_id)`
+cursor as poll: SQL ``COUNT`` when an ``event_id`` column is present (except
+SQLite, where timestamp binding is unreliable), otherwise a bounded row scan
+that synthesizes ids like poll. Poll selects only the columns used for
+normalization. Corrupt ``watermark_path`` files are logged and ignored so
+``connect()`` can still succeed. ``events_query``, when set, must be a single
+read-only ``SELECT`` from **trusted deploy-time config** (interpolated into
+SQL like ``input.options.events_query`` — not end-user input). Naive SQL
+``datetime`` values are treated as UTC; timezone-less *strings* (config /
+JSON watermark) are rejected.
