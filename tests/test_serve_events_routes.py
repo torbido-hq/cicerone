@@ -147,6 +147,26 @@ def test_post_events_normalization_error_returns_400():
     assert "occurred_at" in str(detail)
 
 
+def test_post_events_unix_epoch_occurred_at_accepted():
+    source = WebhookEventSource({})
+    app = create_app(_settings(), _FakeReader(_recs_df()), event_source=source)
+    client = TestClient(app)
+    response = client.post(
+        "/events",
+        headers={"Authorization": "Bearer secret"},
+        json={
+            "user_id": "u1",
+            "item_id": "i1",
+            "event_type": "purchase",
+            "occurred_at": 1_724_000_000,
+            "event_id": "epoch-1",
+        },
+    )
+    assert response.status_code == 202
+    assert response.json()["accepted"] == 1
+    assert response.json()["event_ids"] == ["epoch-1"]
+
+
 def test_post_events_non_json_payload():
     source = WebhookEventSource({})
     app = create_app(_settings(), _FakeReader(_recs_df()), event_source=source)
