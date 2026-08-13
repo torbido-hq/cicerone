@@ -88,6 +88,11 @@ def load_events_settings(
     )
     if auth_token is not None:
         options = {**options, "auth_token": auth_token}
+    if "database_url" in options:
+        options = {
+            **options,
+            "database_url": resolve_env(options["database_url"], "events.options.database_url"),
+        }
 
     if "incremental" in events_raw:
         incremental_raw = events_raw["incremental"]
@@ -104,6 +109,8 @@ def load_events_settings(
                 "events.options.auth_token or serve.auth_token is required when "
                 'events.enabled = true, events.kind = "webhook", and job.mode = "serve"'
             )
+    if enabled and kind == "db" and not options.get("database_url"):
+        raise ConfigError('events.options.database_url is required when events.kind = "db"')
 
     return EventsSettings(
         enabled=enabled,

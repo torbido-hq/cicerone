@@ -13,6 +13,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   updater for popular/latest slices (`[events]` config). Design:
   `docs/incremental-events.md`. Webhook `occurred_at` requires an explicit
   timezone (`Z` / offset) or Unix epoch seconds (UTC).
+- DB event source (`events.kind = "db"`): watermark poll over
+  `events_table` / `events_query`, durable optional `watermark_path`,
+  watermark advances only on successful flush ack.
 
 ### Changed
 

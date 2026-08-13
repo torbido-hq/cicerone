@@ -227,6 +227,17 @@ prefix = "recommendations/latest"
 # batch_window_seconds = 60
 # poll_interval_seconds = 1
 
+# DB watermark source (no POST /events). Advances cursor only after a successful flush.
+# [events]
+# enabled = true
+# kind = "db"
+# [events.options]
+# database_url = "${EVENTS_DATABASE_URL}"
+# # events_table = "events"
+# # events_query = "SELECT user_id, item_id, event_type, quantity, occurred_at, event_id FROM ..."
+# # watermark_path = "/app/data/events_watermark.json"
+# # initial_watermark = "2026-01-01T00:00:00Z"
+
 # Optional: a small, standalone read-only status page over job run history
 # (its own container/port, independent of [job].mode -- see the README's
 # Dashboard section). Protected by HTTP Basic Auth (a handful of named
