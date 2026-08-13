@@ -15,7 +15,7 @@ import pandas as pd
 from sqlalchemy import Engine, create_engine, text
 
 from cicerone.events.base import EventSourceHealth, NormalizedEvent
-from cicerone.events.normalize import EventNormalizeError, normalize_event
+from cicerone.events.normalize import EventNormalizeError, normalize_event, parse_occurred_at
 from cicerone.io.db_store import DEFAULT_EVENTS_TABLE
 from cicerone.io.options import require_option, sql_identifier
 
@@ -24,17 +24,15 @@ logger = logging.getLogger(__name__)
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 
-def _as_utc(value: Any) -> datetime:
-    if isinstance(value, datetime):
-        dt = value
-    else:
-        ts = pd.to_datetime(value, utc=True)
-        if pd.isna(ts):
+def _db_occurred_at(value: Any) -> datetime:
+    if isinstance(value, pd.Timestamp):
+        if pd.isna(value):
             raise EventNormalizeError("occurred_at is invalid")
-        dt = ts.to_pydatetime()
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=UTC)
-    return dt.astimezone(UTC)
+        value = value.to_pydatetime()
+    # SQLAlchemy/SQLite often yield naive datetimes that are UTC in practice.
+    if isinstance(value, datetime) and value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return parse_occurred_at(value)
 
 
 def _stable_event_id(payload: dict[str, Any], occurred_at: datetime) -> str:
@@ -57,6 +55,17 @@ def _cursor_key(event: NormalizedEvent) -> tuple[datetime, str]:
     return (event.occurred_at, event.event_id)
 
 
+def _row_to_event(payload: dict[str, Any]) -> NormalizedEvent:
+    occurred_at = _db_occurred_at(payload.get("occurred_at"))
+    return normalize_event(
+        {
+            **payload,
+            "occurred_at": occurred_at.isoformat(),
+            "event_id": _stable_event_id(payload, occurred_at),
+        }
+    )
+
+
 class DbEventSource:
     """Poll ``events`` (or ``events_query``) after a watermark; advance on ``ack``."""
 
@@ -72,7 +81,7 @@ class DbEventSource:
             raise ValueError("events.options.events_query must be a string")
         self._watermark_path = Path(options["watermark_path"]) if options.get("watermark_path") else None
         initial = options.get("initial_watermark")
-        self._watermark_at = _as_utc(initial) if initial not in (None, "") else _EPOCH
+        self._watermark_at = _db_occurred_at(initial) if initial not in (None, "") else _EPOCH
         self._watermark_event_id = str(options.get("initial_watermark_event_id") or "")
         self._engine: Engine | None = None
         self._lock = threading.Lock()
@@ -87,6 +96,14 @@ class DbEventSource:
             self._load_watermark_unlocked()
             self._connected = True
 
+    def close(self) -> None:
+        with self._lock:
+            engine = self._engine
+            self._engine = None
+            self._connected = False
+        if engine is not None:
+            engine.dispose()
+
     def poll(self, max_events: int = 100) -> Sequence[NormalizedEvent]:
         if max_events < 1:
             return []
@@ -97,24 +114,15 @@ class DbEventSource:
             in_flight_ids = set(self._in_flight)
             engine = self._engine
         rows = self._fetch_rows(engine, watermark_at, limit=max_events + len(in_flight_ids) + 8)
+        candidates = sorted((_row_to_event(payload) for payload in rows), key=_cursor_key)
+
         out: list[NormalizedEvent] = []
         with self._lock:
-            for payload in rows:
+            cursor = (self._watermark_at, self._watermark_event_id)
+            for event in candidates:
                 if len(out) >= max_events:
                     break
-                try:
-                    occurred_at = _as_utc(payload.get("occurred_at"))
-                    payload = {
-                        **payload,
-                        "occurred_at": occurred_at.isoformat(),
-                        "event_id": _stable_event_id(payload, occurred_at),
-                    }
-                    event = normalize_event(payload)
-                except EventNormalizeError:
-                    logger.warning("Skipping invalid DB event row: %s", payload, exc_info=True)
-                    continue
-                key = _cursor_key(event)
-                if key <= (self._watermark_at, self._watermark_event_id):
+                if _cursor_key(event) <= cursor:
                     continue
                 if event.event_id in self._in_flight:
                     continue
@@ -144,15 +152,17 @@ class DbEventSource:
 
     def health(self) -> EventSourceHealth:
         with self._lock:
-            lag = len(self._in_flight)
             detail = f"db watermark={self._watermark_at.isoformat()}"
             connected = self._connected
             last_event_at = self._last_event_at
             engine = self._engine
             watermark_at = self._watermark_at
+            in_flight = len(self._in_flight)
+        # COUNT already includes unacked rows past the watermark — do not add in_flight.
+        lag: int | None = in_flight
         if engine is not None:
             try:
-                lag += self._count_after(engine, watermark_at)
+                lag = self._count_after(engine, watermark_at)
             except Exception:
                 logger.exception("Failed to estimate DB event lag")
         return EventSourceHealth(
@@ -162,14 +172,14 @@ class DbEventSource:
             detail=detail,
         )
 
-    def _base_from_sql(self) -> str:
+    def _from_clause(self) -> str:
         if self._events_query:
             return f"({self._events_query}) AS cicerone_events_src"
         return f'"{self._events_table}"'
 
     def _fetch_rows(self, engine: Engine, watermark_at: datetime, *, limit: int) -> list[dict[str, Any]]:
         sql = text(
-            f"SELECT * FROM {self._base_from_sql()} "
+            f"SELECT * FROM {self._from_clause()} "
             "WHERE occurred_at >= :watermark "
             "ORDER BY occurred_at ASC "
             "LIMIT :limit"
@@ -180,7 +190,7 @@ class DbEventSource:
         return frame.to_dict(orient="records")
 
     def _count_after(self, engine: Engine, watermark_at: datetime) -> int:
-        sql = text(f"SELECT COUNT(*) AS n FROM {self._base_from_sql()} WHERE occurred_at > :watermark")
+        sql = text(f"SELECT COUNT(*) AS n FROM {self._from_clause()} WHERE occurred_at > :watermark")
         frame = pd.read_sql_query(sql, engine, params={"watermark": watermark_at})
         return int(frame.iloc[0]["n"]) if not frame.empty else 0
 
@@ -192,7 +202,7 @@ class DbEventSource:
             raise ValueError(f"invalid watermark file {self._watermark_path}")
         occurred_at = raw.get("occurred_at")
         if occurred_at:
-            self._watermark_at = _as_utc(occurred_at)
+            self._watermark_at = _db_occurred_at(occurred_at)
         self._watermark_event_id = str(raw.get("event_id") or "")
 
     def _persist_watermark_unlocked(self) -> None:

@@ -24,7 +24,7 @@ def _as_mapping(payload: Any) -> Mapping[str, Any]:
     raise EventNormalizeError("event must be a JSON object")
 
 
-def _parse_occurred_at(value: Any) -> datetime:
+def parse_occurred_at(value: Any) -> datetime:
     # stdlib only — keep webhook ingest off the pandas path
     if isinstance(value, datetime):
         dt = value
@@ -44,6 +44,10 @@ def _parse_occurred_at(value: Any) -> datetime:
     if dt.tzinfo is None:
         raise EventNormalizeError("occurred_at timezone is required; use an explicit offset or 'Z'")
     return dt.astimezone(UTC)
+
+
+def _parse_occurred_at(value: Any) -> datetime:
+    return parse_occurred_at(value)
 
 
 def _parse_quantity(value: Any) -> int:

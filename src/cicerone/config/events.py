@@ -88,11 +88,6 @@ def load_events_settings(
     )
     if auth_token is not None:
         options = {**options, "auth_token": auth_token}
-    if "database_url" in options:
-        options = {
-            **options,
-            "database_url": resolve_env(options["database_url"], "events.options.database_url"),
-        }
 
     if "incremental" in events_raw:
         incremental_raw = events_raw["incremental"]

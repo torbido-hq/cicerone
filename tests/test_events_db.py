@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import create_engine
 
 from cicerone.events.db import DbEventSource
+from cicerone.events.normalize import EventNormalizeError
 from cicerone.events.registry import build_event_source, registered_event_source_kinds
 
 
@@ -159,3 +160,36 @@ def test_db_poll_before_connect_raises(tmp_path):
     source = DbEventSource({"database_url": _sqlite_url(tmp_path)})
     with pytest.raises(RuntimeError, match="connect"):
         source.poll(1)
+
+
+def test_db_close_disposes_engine(tmp_path):
+    url = _sqlite_url(tmp_path)
+    _seed_events(
+        url,
+        [
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": "2026-08-13T12:00:00Z",
+                "event_id": "e1",
+            }
+        ],
+    )
+    source = DbEventSource({"database_url": url})
+    source.connect()
+    assert list(source.poll(1))
+    source.close()
+    with pytest.raises(RuntimeError, match="connect"):
+        source.poll(1)
+
+
+def test_db_rejects_timezone_less_initial_watermark(tmp_path):
+    with pytest.raises(EventNormalizeError, match="timezone"):
+        DbEventSource(
+            {
+                "database_url": _sqlite_url(tmp_path),
+                "initial_watermark": "2026-08-01T00:00:00",
+            }
+        )

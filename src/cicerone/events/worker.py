@@ -51,6 +51,9 @@ class EventWorker:
                     join_timeout_seconds,
                 )
                 return False
+        close = getattr(self._source, "close", None)
+        if callable(close):
+            close()
         return True
 
     def _loop(self) -> None:
