@@ -63,6 +63,47 @@ def test_db_poll_ack_advances_watermark(tmp_path):
     assert list(source.poll(10)) == []
 
 
+def test_db_health_lag_uses_event_id_cursor(tmp_path):
+    url = _sqlite_url(tmp_path)
+    ts = "2026-08-13T12:00:00Z"
+    _seed_events(
+        url,
+        [
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": ts,
+                "event_id": "e1",
+            },
+            {
+                "user_id": "u1",
+                "item_id": "i2",
+                "event_type": "view",
+                "quantity": 1,
+                "occurred_at": ts,
+                "event_id": "e2",
+            },
+            {
+                "user_id": "u1",
+                "item_id": "i3",
+                "event_type": "view",
+                "quantity": 1,
+                "occurred_at": ts,
+                "event_id": "e3",
+            },
+        ],
+    )
+    source = DbEventSource({"database_url": url})
+    source.connect()
+    assert source.health().lag == 3
+    first = list(source.poll(1))
+    assert first[0].event_id == "e1"
+    source.ack([first[0].event_id])
+    assert source.health().lag == 2
+
+
 def test_db_nack_allows_repoll(tmp_path):
     url = _sqlite_url(tmp_path)
     _seed_events(

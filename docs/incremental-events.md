@@ -234,5 +234,7 @@ webhook `EventSource`, and drained by the micro-batch worker. A full backlog
 When `kind = "db"`, the same worker polls interaction rows after a watermark
 (`events.options.database_url`, optional `events_table` / `events_query`,
 optional durable `watermark_path`). The watermark advances only on successful
-``ack`` after a flush. Naive SQL ``datetime`` values are treated as UTC;
-timezone-less *strings* (config / JSON watermark) are rejected.
+``ack`` after a flush. Health lag uses the same `(occurred_at, event_id)`
+cursor as poll (estimated from a bounded scan past the watermark). Naive SQL
+``datetime`` values are treated as UTC; timezone-less *strings* (config /
+JSON watermark) are rejected.

@@ -111,9 +111,9 @@ class DbEventSource:
             if self._engine is None:
                 raise RuntimeError("DbEventSource.connect() required before poll")
             watermark_at = self._watermark_at
-            in_flight_ids = set(self._in_flight)
+            in_flight_count = len(self._in_flight)
             engine = self._engine
-        rows = self._fetch_rows(engine, watermark_at, limit=max_events + len(in_flight_ids) + 8)
+        rows = self._fetch_rows(engine, watermark_at, limit=max_events + in_flight_count + 8)
         candidates = sorted((_row_to_event(payload) for payload in rows), key=_cursor_key)
 
         out: list[NormalizedEvent] = []
@@ -157,12 +157,13 @@ class DbEventSource:
             last_event_at = self._last_event_at
             engine = self._engine
             watermark_at = self._watermark_at
+            watermark_event_id = self._watermark_event_id
             in_flight = len(self._in_flight)
         # COUNT already includes unacked rows past the watermark — do not add in_flight.
         lag: int | None = in_flight
         if engine is not None:
             try:
-                lag = self._count_after(engine, watermark_at)
+                lag = self._count_after(engine, watermark_at, watermark_event_id)
             except Exception:
                 logger.exception("Failed to estimate DB event lag")
         return EventSourceHealth(
@@ -189,10 +190,11 @@ class DbEventSource:
             return []
         return frame.to_dict(orient="records")
 
-    def _count_after(self, engine: Engine, watermark_at: datetime) -> int:
-        sql = text(f"SELECT COUNT(*) AS n FROM {self._from_clause()} WHERE occurred_at > :watermark")
-        frame = pd.read_sql_query(sql, engine, params={"watermark": watermark_at})
-        return int(frame.iloc[0]["n"]) if not frame.empty else 0
+    def _count_after(self, engine: Engine, watermark_at: datetime, watermark_event_id: str) -> int:
+        # Match poll's (occurred_at, event_id) cursor; SQL timestamp equality is backend-fragile.
+        rows = self._fetch_rows(engine, watermark_at, limit=10_000)
+        cursor = (watermark_at, watermark_event_id)
+        return sum(1 for payload in rows if _cursor_key(_row_to_event(payload)) > cursor)
 
     def _load_watermark_unlocked(self) -> None:
         if self._watermark_path is None or not self._watermark_path.is_file():
