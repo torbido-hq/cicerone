@@ -10,7 +10,8 @@ scikit-learn==1.9.0
 # database (input can be read straight from a Postgres source; output can
 # be written to a Postgres table).
 # Keep boto3 within aiobotocore's botocore pin (s3fs → aiobotocore 3.9 needs
-# botocore<1.43.57); boto3>=1.43.57 fails pip resolution with current s3fs.
+# botocore<1.43.57). Do not bump boto3 past 1.43.56 until aiobotocore allows
+# a matching botocore (Dependabot #71 blocked).
 boto3==1.43.56
 s3fs==2026.7.0
 pyarrow==25.0.0
@@ -21,7 +22,7 @@ psycopg[binary]==3.3.4
 croniter==6.2.4
 
 # Serve mode's read API + the event-driven retrain trigger's webhook
-fastapi==0.140.13
+fastapi==0.141.1
 uvicorn[standard]==0.52.1
 prometheus-client==0.26.0
 
