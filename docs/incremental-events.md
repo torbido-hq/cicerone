@@ -147,7 +147,9 @@ last writer wins and the next full retrain remains the consistency backstop.
 Do not treat cross-process exclusion as automatic.
 
 Webhook options may set `max_pending` (default 10000) for ingest backpressure
-(HTTP 429 when full). Worker poll interval is `events.incremental.poll_interval_seconds`.
+(HTTP 429 when full). Prefer ≥100 in production (default 10000); very small
+values are allowed but tend to 429 under normal load. Worker poll interval is
+`events.incremental.poll_interval_seconds`.
 
 The updater caches the recommendations frame in-process between micro-batches
 and refreshes that cache after each successful write. A same-process

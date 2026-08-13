@@ -95,6 +95,41 @@ def test_event_worker_apply_failure_nacks(tmp_path, feature_config: FeatureConfi
     assert source.health().lag == 1
 
 
+def test_event_worker_partial_apply_nacks(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="p1", item_id="i1"))
+    source.ingest(event_payload(event_id="p2", item_id="i2"))
+
+    class _Partial(IncrementalUpdater):
+        def apply(self, events):  # type: ignore[no-untyped-def]
+            return max(len(events) - 1, 0)
+
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=2, batch_window_seconds=60.0),
+        _Partial(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    try:
+        worker.tick()
+        raised = False
+    except RuntimeError as exc:
+        raised = True
+        assert "partial apply" in str(exc)
+    assert raised
+    assert source.health().lag == 2
+
+
 def test_event_worker_tick_noop_when_empty(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),

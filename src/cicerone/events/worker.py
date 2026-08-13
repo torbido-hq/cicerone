@@ -75,9 +75,20 @@ class EventWorker:
             logger.exception("Incremental apply failed; returning %d event(s) to source", len(ready))
             self._source.nack(ready)
             raise
-        if applied:
-            self._source.ack([event.event_id for event in ready])
-            return applied
-        # Busy: return to source so lag stays accurate and another tick can retry.
-        self._source.nack(ready)
-        return 0
+        if applied == 0:
+            # Busy: return to source so lag stays accurate and another tick can retry.
+            self._source.nack(ready)
+            return 0
+        if applied != len(ready):
+            logger.error(
+                "Incremental apply returned %d for %d ready event(s); nacking batch",
+                applied,
+                len(ready),
+            )
+            self._source.nack(ready)
+            raise RuntimeError(
+                f"IncrementalUpdater.apply returned {applied} for batch of {len(ready)}; "
+                "partial apply is not supported"
+            )
+        self._source.ack([event.event_id for event in ready])
+        return applied
