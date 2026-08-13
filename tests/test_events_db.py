@@ -27,6 +27,16 @@ def test_db_registered_and_build(tmp_path):
     assert isinstance(source, DbEventSource)
 
 
+def test_db_from_clause_uses_sql_identifier_as_is(tmp_path):
+    url = _sqlite_url(tmp_path)
+    table_source = DbEventSource({"database_url": url, "events_table": "events"})
+    assert table_source._from_clause() == "events"
+    query_source = DbEventSource(
+        {"database_url": url, "events_query": "SELECT * FROM events"}
+    )
+    assert query_source._from_clause() == "(SELECT * FROM events) AS cicerone_events_src"
+
+
 def test_db_poll_ack_advances_watermark(tmp_path):
     url = _sqlite_url(tmp_path)
     _seed_events(

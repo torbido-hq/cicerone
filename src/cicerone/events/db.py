@@ -216,7 +216,7 @@ class DbEventSource:
     def _from_clause(self) -> str:
         if self._events_query:
             return f"({self._events_query}) AS {_EVENTS_QUERY_ALIAS}"
-        return f'"{self._events_table}"'
+        return self._events_table
 
     def _ensure_source_schema(self, engine: Engine) -> tuple[str, bool]:
         with self._lock:
