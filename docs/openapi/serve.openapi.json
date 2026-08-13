@@ -23,6 +23,23 @@
         "title": "ErrorDetail",
         "type": "object"
       },
+      "EventsIngestRequest": {
+        "properties": {
+          "events": {
+            "description": "Batch of interaction events",
+            "items": {
+              "$ref": "#/components/schemas/InteractionEvent"
+            },
+            "title": "Events",
+            "type": "array"
+          }
+        },
+        "required": [
+          "events"
+        ],
+        "title": "EventsIngestRequest",
+        "type": "object"
+      },
       "EventsIngestResponse": {
         "properties": {
           "accepted": {
@@ -73,6 +90,85 @@
           "status"
         ],
         "title": "HealthResponse",
+        "type": "object"
+      },
+      "InteractionEvent": {
+        "properties": {
+          "event_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional idempotency id",
+            "title": "Event Id"
+          },
+          "event_type": {
+            "description": "Must match a key in features.toml [event_weights] to affect weights",
+            "title": "Event Type",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Alias for event_id",
+            "title": "Idempotency Key"
+          },
+          "item_id": {
+            "description": "Item identifier",
+            "title": "Item Id",
+            "type": "string"
+          },
+          "occurred_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "description": "ISO-8601 timestamp with timezone (Z or explicit offset), or Unix epoch seconds (UTC); converted to UTC",
+            "examples": [
+              "2026-08-13T12:00:00Z",
+              1724000000
+            ],
+            "title": "Occurred At"
+          },
+          "quantity": {
+            "default": 1,
+            "description": "Optional count; default 1",
+            "minimum": 1,
+            "title": "Quantity",
+            "type": "integer"
+          },
+          "user_id": {
+            "description": "User identifier",
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "item_id",
+          "event_type",
+          "occurred_at"
+        ],
+        "title": "InteractionEvent",
         "type": "object"
       },
       "RecommendationItem": {
@@ -285,6 +381,30 @@
     "/events": {
       "post": {
         "operationId": "post_events_events_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/InteractionEvent"
+                  },
+                  {
+                    "items": {
+                      "$ref": "#/components/schemas/InteractionEvent"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "$ref": "#/components/schemas/EventsIngestRequest"
+                  }
+                ],
+                "title": "EventsIngestBody"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "202": {
             "content": {

@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from cicerone.config import Settings
 from cicerone.events.base import EventBackpressureError
@@ -23,6 +24,52 @@ from cicerone.serve_schemas import (
 logger = logging.getLogger(__name__)
 
 EVENTS_PATH = "/events"
+
+
+def _rewrite_json_schema_defs(node: Any) -> Any:
+    if isinstance(node, dict):
+        ref = node.get("$ref")
+        if isinstance(ref, str) and ref.startswith("#/$defs/"):
+            return {"$ref": f"#/components/schemas/{ref.rsplit('/', 1)[-1]}"}
+        return {key: _rewrite_json_schema_defs(value) for key, value in node.items()}
+    if isinstance(node, list):
+        return [_rewrite_json_schema_defs(item) for item in node]
+    return node
+
+
+def _put_pydantic_schema(components: dict[str, Any], model: type[BaseModel]) -> None:
+    generated = model.model_json_schema(ref_template="#/components/schemas/{model}")
+    for name, subschema in (generated.pop("$defs", None) or {}).items():
+        components.setdefault(name, _rewrite_json_schema_defs(subschema))
+    components[model.__name__] = _rewrite_json_schema_defs(generated)
+
+
+def attach_events_ingest_openapi(schema: dict[str, Any]) -> None:
+    """Document flexible POST /events JSON bodies (handler parses ``Request``)."""
+    post = schema.get("paths", {}).get(EVENTS_PATH, {}).get("post")
+    if not isinstance(post, dict):
+        return
+    components = schema.setdefault("components", {}).setdefault("schemas", {})
+    _put_pydantic_schema(components, InteractionEvent)
+    _put_pydantic_schema(components, EventsIngestRequest)
+    post["requestBody"] = {
+        "required": True,
+        "content": {
+            "application/json": {
+                "schema": {
+                    "title": "EventsIngestBody",
+                    "oneOf": [
+                        {"$ref": "#/components/schemas/InteractionEvent"},
+                        {
+                            "type": "array",
+                            "items": {"$ref": "#/components/schemas/InteractionEvent"},
+                        },
+                        {"$ref": "#/components/schemas/EventsIngestRequest"},
+                    ],
+                }
+            }
+        },
+    }
 
 
 def _payloads_from_body(body: object) -> list[object]:

@@ -89,6 +89,20 @@ def test_events_openapi_documents_structured_validation_400():
     assert "#/components/schemas/ValidationErrorDetail" in refs
 
 
+def test_events_openapi_documents_occurred_at_union():
+    app = create_app(_settings(), _FakeReader(_recs_df()), event_source=WebhookEventSource({}))
+    schema = TestClient(app).get("/openapi.json").json()
+    assert "InteractionEvent" in schema["components"]["schemas"]
+    assert "EventsIngestRequest" in schema["components"]["schemas"]
+    request_body = schema["paths"]["/events"]["post"]["requestBody"]
+    assert request_body["required"] is True
+    body_schema = request_body["content"]["application/json"]["schema"]
+    assert {"$ref": "#/components/schemas/InteractionEvent"} in body_schema["oneOf"]
+    occurred_at = schema["components"]["schemas"]["InteractionEvent"]["properties"]["occurred_at"]
+    types = {item.get("type") for item in occurred_at.get("anyOf", [])}
+    assert types == {"string", "integer", "number"}
+
+
 def test_events_route_absent_when_disabled():
     app = create_app(
         make_settings(mode="serve", serve_auth_token="secret"),

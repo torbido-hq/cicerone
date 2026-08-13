@@ -23,7 +23,7 @@ from cicerone.io.base import ManifestReader, RecommendationReader
 from cicerone.io.recommendation_reader import ITEM_COLUMN, SOURCE_COLUMN, normalize_items_snapshot
 from cicerone.serve.bootstrap_events import start_events_runtime
 from cicerone.serve.code_samples import HEALTH_PATH, RECOMMENDATIONS_PATH, attach_code_samples
-from cicerone.serve.events_routes import mount_events_routes
+from cicerone.serve.events_routes import attach_events_ingest_openapi, mount_events_routes
 from cicerone.serve.metrics import (
     METRICS_TOKEN_HEADER,
     REQUEST_LATENCY_SECONDS,
@@ -407,6 +407,7 @@ def create_app(
                 "$ref": "#/components/headers/X-Generated-At",
             }
         attach_code_samples(schema)
+        attach_events_ingest_openapi(schema)
         app.openapi_schema = schema
         return app.openapi_schema
 
