@@ -11,7 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Incremental events between full retrains: internal `EventSource` surface,
   webhook `POST /events`, micro-batch buffer/worker, and write-through
   updater for popular/latest slices (`[events]` config). Design:
-  `docs/incremental-events.md`.
+  `docs/incremental-events.md`. Webhook `occurred_at` requires an explicit
+  timezone (`Z` / offset) or unix epoch seconds (UTC).
 
 ### Changed
 

@@ -45,7 +45,9 @@ class InteractionEvent(BaseModel):
         description="Must match a key in features.toml [event_weights] to affect weights",
     )
     quantity: int = Field(default=1, ge=1, description="Optional count; default 1")
-    occurred_at: str = Field(description="ISO-8601 timestamp (parsed as UTC)")
+    occurred_at: str = Field(
+        description="ISO-8601 timestamp with timezone (Z or explicit offset); converted to UTC",
+    )
     event_id: str | None = Field(default=None, description="Optional idempotency id")
     idempotency_key: str | None = Field(default=None, description="Alias for event_id")
 

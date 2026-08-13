@@ -29,7 +29,8 @@ def _parse_occurred_at(value: Any) -> datetime:
     if isinstance(value, datetime):
         dt = value
     elif isinstance(value, (int, float)):
-        dt = datetime.fromtimestamp(float(value), tz=UTC)
+        # Unix epoch seconds are always interpreted as UTC.
+        return datetime.fromtimestamp(float(value), tz=UTC)
     elif isinstance(value, str):
         text = value.strip()
         if text.endswith(("Z", "z")):
@@ -41,7 +42,7 @@ def _parse_occurred_at(value: Any) -> datetime:
     else:
         raise EventNormalizeError("occurred_at is invalid")
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=UTC)
+        raise EventNormalizeError("occurred_at timezone is required; use an explicit offset or 'Z'")
     return dt.astimezone(UTC)
 
 

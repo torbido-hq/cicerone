@@ -38,7 +38,7 @@ Same columns as batch input (`dataset.py` / README data contract):
 | `item_id` | yes | string |
 | `event_type` | yes | must appear in `features.toml` `[event_weights]` to affect weights |
 | `quantity` | no | default `1` |
-| `occurred_at` | yes | timezone-aware UTC datetime |
+| `occurred_at` | yes | timezone-aware datetime (ISO-8601 with `Z` or offset; unix epoch seconds OK) |
 
 Optional transport fields (not part of the training contract):
 

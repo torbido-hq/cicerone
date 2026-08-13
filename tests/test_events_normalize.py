@@ -29,9 +29,13 @@ def test_normalize_occurred_at_epoch_and_z():
     zulu = normalize_event(event_payload(occurred_at="2026-08-13T12:00:00Z"))
     assert zulu.occurred_at.tzinfo is not None
     assert zulu.occurred_at.hour == 12
+    offset = normalize_event(event_payload(occurred_at="2026-08-13T14:00:00+02:00"))
+    assert offset.occurred_at == zulu.occurred_at
 
 
 def test_normalize_more_edge_cases():
+    from datetime import datetime
+
     with pytest.raises(EventNormalizeError, match="JSON object"):
         normalize_event("not-a-dict")
     with pytest.raises(EventNormalizeError, match="quantity"):
@@ -40,12 +44,16 @@ def test_normalize_more_edge_cases():
         normalize_event(event_payload(user_id="  "))
     with pytest.raises(EventNormalizeError, match="occurred_at"):
         normalize_event(event_payload(occurred_at="not-a-date"))
+    with pytest.raises(EventNormalizeError, match="timezone"):
+        normalize_event(event_payload(occurred_at="2026-08-13T12:00:00"))
+    with pytest.raises(EventNormalizeError, match="timezone"):
+        normalize_event(event_payload(occurred_at=datetime(2026, 8, 13, 12, 0, 0)))
     bare = normalize_event(
         {
             "user_id": "u1",
             "item_id": "i1",
             "event_type": "view",
-            "occurred_at": "2026-08-13T12:00:00",
+            "occurred_at": "2026-08-13T12:00:00Z",
             "idempotency_key": "idem-1",
         }
     )
