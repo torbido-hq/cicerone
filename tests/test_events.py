@@ -350,3 +350,49 @@ def test_event_worker_tick_noop_when_empty(tmp_path, feature_config: FeatureConf
         ),
     )
     assert worker.tick() == 0
+
+
+def test_start_events_runtime_disabled_and_webhook(tmp_path, feature_config: FeatureConfig):
+    from cicerone.serve.bootstrap_events import start_events_runtime
+
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+
+    class _Reader:
+        def refresh(self) -> None:
+            return None
+
+    disabled = start_events_runtime(
+        make_settings(
+            output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)})
+        ),
+        feature_config=feature_config,
+        reader=_Reader(),  # type: ignore[arg-type]
+    )
+    assert disabled.webhook_source is None
+    assert disabled.worker is None
+    disabled.stop()
+
+    enabled = start_events_runtime(
+        make_settings(
+            output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+            events=EventsSettings(enabled=True, kind="webhook"),
+        ),
+        feature_config=feature_config,
+        reader=_Reader(),  # type: ignore[arg-type]
+    )
+    assert isinstance(enabled.webhook_source, WebhookEventSource)
+    assert enabled.worker is not None
+    enabled.stop()
+
+
+def test_coerce_events_settings_errors():
+    from cicerone.config.events import coerce_events_settings
+
+    with pytest.raises(TypeError):
+        coerce_events_settings("bad")
+    with pytest.raises(TypeError):
+        coerce_events_settings({"incremental": "bad"})

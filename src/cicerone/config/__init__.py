@@ -27,6 +27,7 @@ from cicerone.config.constants import (
     Mode,
     StrategyName,
 )
+from cicerone.config.events import coerce_events_settings, load_events_settings
 from cicerone.config.load import load_settings, make_settings
 from cicerone.config.lock_url import (
     POSTGRES_LOCK_URL_REQUIRED,
@@ -86,6 +87,8 @@ __all__ = [
     "Settings",
     "StrategyName",
     "TriggerSettings",
+    "coerce_events_settings",
+    "load_events_settings",
     "load_settings",
     "make_settings",
     "require_postgres_lock_url_parts",

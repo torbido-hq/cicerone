@@ -9,7 +9,7 @@ For configuration and usage, see the main [README](../README.md).
 
 | Path | Role |
 | --- | --- |
-| `config/` | Load & resolve `config/cicerone.toml` (structural config + `${ENV_VAR}` secrets); package: constants / settings / validation / load; nested Serve/Trigger/Dashboard/AutoML settings (+ flat property aliases); `ConfigError` for invalid knobs; `make_settings(**overrides)` for tests / OpenAPI export |
+| `config/` | Load & resolve `config/cicerone.toml` (structural config + `${ENV_VAR}` secrets); package: constants / settings / validation / load / `events` / lock_url; nested Serve/Trigger/Dashboard/AutoML/Events settings (+ flat property aliases); `ConfigError` for invalid knobs; `make_settings(**overrides)` for tests / OpenAPI export |
 | `feature_config.py` | Load `config/features.toml` (event weights, feature columns, eligibility/boost policy rules; `[[boost]]` / `[[boosts]]`) |
 | `policy.py` | Declarative eligibility masks (documented fail-open/fail-closed matrix), cohort grouping, score boosts |
 | `blending.py` | Per-user weighted mix of personalized/popular/latest (optional) |
@@ -35,7 +35,9 @@ For configuration and usage, see the main [README](../README.md).
 | `job.py` | Orchestrates one end-to-end run (source → dataset → model → sink) |
 | `scheduler.py` | In-process cron loop that calls `job.run()`; when `[job.trigger]` is enabled, also hosts the retrain-trigger HTTP server (`trigger.py`) |
 | `serve/` | Serve mode package: FastAPI read API over precomputed recommendations |
-| `serve/app.py` | Routes, middleware, refresh loop (`python -m cicerone.serve`); optional `POST /events` when `[events]` webhook is enabled |
+| `serve/app.py` | Routes, middleware, refresh loop (`python -m cicerone.serve`) |
+| `serve/events_routes.py` | Optional `POST /events` webhook mount when `[events]` webhook is enabled |
+| `serve/bootstrap_events.py` | Start/stop the serve-process event worker (micro-batch → write-through) |
 | `serve/metrics.py` | Prometheus metric objects + helpers (default in-process registry) |
 | `serve_schemas.py` | Pydantic models that drive the serve OpenAPI schema |
 | `serve_client.py` | Thin stdlib HTTP client for the serve read API |

@@ -57,6 +57,12 @@ src/cicerone/events/
   store.py       # load existing recommendation rows for merge
   webhook.py     # reference EventSource (HTTP push)
   worker.py      # background poll → buffer → flush → ack
+
+src/cicerone/serve/
+  events_routes.py      # POST /events mount
+  bootstrap_events.py   # start/stop EventWorker in the serve process
+
+src/cicerone/config/events.py  # [events] coerce + TOML load helpers
 ```
 
 Later backends (`db`, `s3`, `rabbitmq`, `kafka`, `redis_streams`) register

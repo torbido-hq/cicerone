@@ -14,24 +14,20 @@ from cicerone.config.constants import (
     AUTOML_DEFAULT_PRIMARY_METRIC,
     AUTOML_DEFAULT_TEST_DAYS,
     DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS,
-    DEFAULT_EVENTS_BATCH_SIZE,
-    DEFAULT_EVENTS_BATCH_WINDOW_SECONDS,
     DEFAULT_ITEM_BASED_K_NEIGHBORS,
     DEFAULT_LOCK_KEY,
     DEFAULT_LOCK_TTL_SECONDS,
     DEFAULT_MAX_WORKERS,
-    EVENT_SOURCE_KINDS,
     LOCK_BACKENDS,
     MODES,
     STRATEGY_NAMES,
     ConfigError,
     Mode,
 )
+from cicerone.config.events import coerce_events_settings, load_events_settings
 from cicerone.config.settings import (
     AutomlSettings,
     DashboardSettings,
-    EventsIncrementalSettings,
-    EventsSettings,
     IOSettings,
     ServeSettings,
     Settings,
@@ -137,28 +133,6 @@ def _coerce_nested(
     return replace(base, **updates) if updates else base
 
 
-def _coerce_events_settings(value: Any | None) -> EventsSettings:
-    if isinstance(value, EventsSettings):
-        return value
-    if value is None:
-        return EventsSettings()
-    if not isinstance(value, dict):
-        raise TypeError(f"Expected EventsSettings, dict, or None; got {type(value).__name__}")
-    raw = dict(value)
-    incremental_raw = raw.pop("incremental", None)
-    if isinstance(incremental_raw, EventsIncrementalSettings):
-        incremental = incremental_raw
-    elif isinstance(incremental_raw, dict):
-        incremental = EventsIncrementalSettings(**incremental_raw)
-    elif incremental_raw is None:
-        incremental = EventsIncrementalSettings()
-    else:
-        raise TypeError(
-            f"Expected EventsIncrementalSettings, dict, or None; got {type(incremental_raw).__name__}"
-        )
-    return EventsSettings(incremental=incremental, **raw)
-
-
 def make_settings(**overrides: Any) -> Settings:
     """``Settings`` with TOML-like defaults; overrides for tests / OpenAPI export."""
     serve = _coerce_nested(ServeSettings, overrides.pop("serve", None), _SERVE_FLAT_KEYS, overrides)
@@ -167,7 +141,7 @@ def make_settings(**overrides: Any) -> Settings:
         DashboardSettings, overrides.pop("dashboard", None), _DASHBOARD_FLAT_KEYS, overrides
     )
     automl = _coerce_nested(AutomlSettings, overrides.pop("automl", None), _AUTOML_FLAT_KEYS, overrides)
-    events = _coerce_events_settings(overrides.pop("events", None))
+    events = coerce_events_settings(overrides.pop("events", None))
 
     base: dict[str, Any] = dict(
         input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": "/tmp/in"}),
@@ -309,37 +283,12 @@ def load_settings(config_path: str | None = None) -> Settings:
     dashboard_raw = raw.get("dashboard", {})
     dashboard_enabled = bool(dashboard_raw.get("enabled", False))
 
-    events_raw = raw.get("events", {}) or {}
-    events_enabled = bool(events_raw.get("enabled", False))
-    events_kind = str(events_raw.get("kind", "webhook")).lower()
-    if events_enabled and events_kind not in EVENT_SOURCE_KINDS:
-        raise ConfigError(f"events.kind must be one of {list(EVENT_SOURCE_KINDS)}, got {events_kind!r}")
-    events_options = _resolve_env_placeholders(events_raw.get("options", {}), "events.options")
-    if not isinstance(events_options, dict):
-        raise ConfigError("events.options must be a table")
-    events_auth_token = (
-        _resolve_env_placeholders(events_options["auth_token"], "events.options.auth_token")
-        if "auth_token" in events_options
-        else None
+    events = load_events_settings(
+        raw.get("events", {}) or {},
+        mode=mode,
+        serve_auth_token=serve_auth_token,
+        resolve_env=_resolve_env_placeholders,
     )
-    if events_auth_token is not None:
-        events_options = {**events_options, "auth_token": events_auth_token}
-    incremental_raw = events_raw.get("incremental", {}) or {}
-    events_batch_size = require_positive_int(
-        int(incremental_raw.get("batch_size", DEFAULT_EVENTS_BATCH_SIZE)),
-        name="events.incremental.batch_size",
-    )
-    events_batch_window_seconds = require_positive_float(
-        float(incremental_raw.get("batch_window_seconds", DEFAULT_EVENTS_BATCH_WINDOW_SECONDS)),
-        name="events.incremental.batch_window_seconds",
-    )
-    if events_enabled and events_kind == "webhook" and mode == "serve":
-        webhook_token = events_auth_token or serve_auth_token
-        if not webhook_token:
-            raise ConfigError(
-                "events.options.auth_token or serve.auth_token is required when "
-                'events.enabled = true, events.kind = "webhook", and job.mode = "serve"'
-            )
 
     log_epoch_metrics = bool(job.get("log_epoch_metrics", False))
 
@@ -473,13 +422,5 @@ def load_settings(config_path: str | None = None) -> Settings:
                 int(dashboard_raw.get("history_limit", 20)), name="dashboard.history_limit"
             ),
         ),
-        events=EventsSettings(
-            enabled=events_enabled,
-            kind=events_kind,
-            options=events_options,
-            incremental=EventsIncrementalSettings(
-                batch_size=events_batch_size,
-                batch_window_seconds=events_batch_window_seconds,
-            ),
-        ),
+        events=events,
     )
