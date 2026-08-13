@@ -37,6 +37,50 @@ def test_event_worker_tick(tmp_path, feature_config: FeatureConfig):
     assert source.health().lag == 0
 
 
+def test_event_worker_records_flush_metrics(tmp_path, feature_config: FeatureConfig):
+    from prometheus_client import generate_latest
+    from prometheus_client.parser import text_string_to_metric_families
+
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="metrics-1", item_id="i9"))
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=3,
+    )
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        updater,
+    )
+
+    def _value(name: str, labels: dict[str, str] | None = None) -> float:
+        total = 0.0
+        for family in text_string_to_metric_families(generate_latest().decode()):
+            for sample in family.samples:
+                if sample.name != name:
+                    continue
+                if labels is not None and dict(sample.labels) != labels:
+                    continue
+                total += sample.value
+        return total
+
+    before = _value("cicerone_events_flush_total", {"status": "success"})
+    assert worker.tick() == 1
+    assert _value("cicerone_events_flush_total", {"status": "success"}) == before + 1
+    assert _value("cicerone_events_flush_events_total") >= 1
+
+
 def test_event_worker_busy_nacks(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()

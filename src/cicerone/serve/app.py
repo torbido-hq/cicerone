@@ -17,6 +17,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from cicerone import __version__
 from cicerone.config import Settings, load_settings
 from cicerone.events.webhook import WebhookEventSource
+from cicerone.events.worker import EventWorker
 from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.io.base import ManifestReader, RecommendationReader
@@ -30,6 +31,7 @@ from cicerone.serve.metrics import (
     REQUESTS_TOTAL,
     record_recommendations_served,
     update_cache_age_gauge,
+    update_events_source_health,
 )
 from cicerone.serve_schemas import ErrorDetail, HealthResponse, RecommendationItem, RecommendationsResponse
 
@@ -233,6 +235,7 @@ def create_app(
     manifest_reader: ManifestReader | None = None,
     feature_config: FeatureConfig | None = None,
     event_source: WebhookEventSource | None = None,
+    events_worker: EventWorker | None = None,
 ) -> FastAPI:
     app = FastAPI(
         title=SERVE_API_TITLE,
@@ -249,6 +252,7 @@ def create_app(
     )
     generated_at_cache = _GeneratedAtCache(manifest_reader)
     app.state.generated_at_cache = generated_at_cache
+    app.state.events_worker = events_worker
     missing_category_warned = False
 
     @app.middleware("http")
@@ -293,6 +297,11 @@ def create_app(
             if metrics_token and request.headers.get(METRICS_TOKEN_HEADER) != metrics_token:
                 raise HTTPException(status_code=401, detail="Invalid or missing metrics token")
             update_cache_age_gauge()
+            worker = getattr(request.app.state, "events_worker", None)
+            if worker is not None:
+                worker.refresh_source_health_metrics()
+            else:
+                update_events_source_health(connected=False, lag=None)
             return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
     @app.get(
@@ -448,6 +457,7 @@ def main() -> None:
         manifest_reader=manifest_reader,
         feature_config=feature_config,
         event_source=events_runtime.webhook_source,
+        events_worker=events_runtime.worker,
     )
     _start_refresh_loop(
         reader,

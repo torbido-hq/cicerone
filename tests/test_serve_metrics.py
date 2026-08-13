@@ -250,3 +250,57 @@ def test_cache_age_zero_before_successful_refresh(monkeypatch):
     monkeypatch.setattr(metrics_mod, "_last_successful_refresh_at", None)
     metrics_mod.update_cache_age_gauge()
     assert _metric_value(generate_latest().decode(), "cicerone_cache_age_seconds") == 0.0
+
+
+def test_events_metrics_defaults_and_flush_recording():
+    from prometheus_client import generate_latest
+
+    from cicerone.serve import metrics as metrics_mod
+
+    metrics_mod.update_events_source_health(connected=False, lag=None)
+    body = generate_latest().decode()
+    assert _metric_value(body, "cicerone_events_source_connected") == 0.0
+    assert _metric_value(body, "cicerone_events_source_lag") == -1.0
+
+    before_flush = _metric_value(body, "cicerone_events_flush_total", {"status": "success"})
+    before_events = _metric_value(body, "cicerone_events_flush_events_total")
+    metrics_mod.record_events_flush(status="success", events=3)
+    metrics_mod.update_events_source_health(connected=True, lag=7)
+    after = generate_latest().decode()
+    assert _metric_value(after, "cicerone_events_flush_total", {"status": "success"}) == before_flush + 1
+    assert _metric_value(after, "cicerone_events_flush_events_total") == before_events + 3
+    assert _metric_value(after, "cicerone_events_source_connected") == 1.0
+    assert _metric_value(after, "cicerone_events_source_lag") == 7.0
+    assert _metric_value(after, "cicerone_events_last_success_timestamp_seconds") > 0
+
+
+def test_metrics_endpoint_refreshes_events_source_health():
+    from support.events import event_payload
+
+    from cicerone.config import EventsSettings
+    from cicerone.events.buffer import MicroBatchBuffer
+    from cicerone.events.updater import IncrementalUpdater
+    from cicerone.events.webhook import WebhookEventSource
+    from cicerone.events.worker import EventWorker
+    from cicerone.io.factory import build_output_sink
+
+    source = WebhookEventSource({})
+    source.connect()
+    source.ingest(event_payload(event_id="m1"))
+    settings = _settings(events=EventsSettings(enabled=True, kind="webhook"))
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=None,
+        top_k=3,
+    )
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        updater,
+    )
+    app = create_app(settings, _FakeReader(_recs_df()), events_worker=worker)
+    body = TestClient(app).get("/metrics").text
+    assert "cicerone_events_source_lag" in body
+    assert _metric_value(body, "cicerone_events_source_connected") == 1.0
+    assert _metric_value(body, "cicerone_events_source_lag") == 1.0

@@ -163,9 +163,9 @@ follow-up.
 Keep each PR **atomic** and stacked on the incremental-events foundation
 (`feature/events-incremental` / its successors), not a grab-bag onto `main`:
 
-1. Webhook + micro-batch write-through (foundation)
-2. `kind=db` watermark source
-3. Metrics / dashboard wiring (lag, flush, errors)
+1. Webhook + micro-batch write-through (foundation) — shipped
+2. `kind=db` watermark source — shipped
+3. Metrics / dashboard wiring (lag, flush, errors) — shipped
 4. Further backends / write-path improvements as separate PRs (S3, user-scoped
    I/O, Redis Streams, …)
 5. **Last:** full review of `docs/` **and** the `website/` sync (sidebar,
@@ -217,9 +217,19 @@ belongs in the shared normalize/buffer path, not per backend.
 ## Ops
 
 Extend existing Prometheus metrics and the Basic-Auth dashboard (no separate
-ops surface): event-source lag/backlog, last incremental success time,
-flush/error counters — beside current job status. (Metrics/dashboard wiring
-lands in a follow-up PR after the webhook + updater path.)
+ops surface). Serve `/metrics` exposes:
+
+| Metric | Meaning |
+| --- | --- |
+| `cicerone_events_source_lag` | Source backlog (`-1` if unknown / events off) |
+| `cicerone_events_source_connected` | `1` when the source reports connected |
+| `cicerone_events_flush_total{status=}` | Flush outcomes: `success` / `busy` / `error` |
+| `cicerone_events_flush_events_total` | Events applied on successful flushes |
+| `cicerone_events_last_success_timestamp_seconds` | Last successful flush (Unix seconds) |
+| `cicerone_events_tick_errors_total` | Unhandled worker tick exceptions |
+
+The dashboard (when `[events] enabled`) shows the latest incremental
+manifest fields beside job status; live lag stays on serve `/metrics`.
 
 ## Serve webhook
 

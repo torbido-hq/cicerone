@@ -9,6 +9,11 @@ from cicerone.config.constants import DEFAULT_EVENTS_POLL_INTERVAL_SECONDS
 from cicerone.events.base import EventSource
 from cicerone.events.buffer import MicroBatchBuffer
 from cicerone.events.updater import IncrementalUpdater
+from cicerone.serve.metrics import (
+    record_events_flush,
+    record_events_tick_error,
+    update_events_source_health,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +35,10 @@ class EventWorker:
         self._poll_max_events = poll_max_events
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+
+    @property
+    def source(self) -> EventSource:
+        return self._source
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -59,11 +68,21 @@ class EventWorker:
                 logger.exception("Event source close() failed during worker stop")
         return True
 
+    def refresh_source_health_metrics(self) -> None:
+        try:
+            health = self._source.health()
+        except Exception:
+            logger.exception("Failed to read event source health for metrics")
+            update_events_source_health(connected=False, lag=None)
+            return
+        update_events_source_health(connected=health.connected, lag=health.lag)
+
     def _loop(self) -> None:
         while not self._stop.is_set():
             try:
                 self.tick()
             except Exception:
+                record_events_tick_error()
                 logger.exception("Event worker tick failed")
             self._stop.wait(self._poll_interval_seconds)
 
@@ -80,14 +99,17 @@ class EventWorker:
         try:
             applied = self._updater.apply(ready)
         except Exception:
+            record_events_flush(status="error")
             logger.exception("Incremental apply failed; returning %d event(s) to source", len(ready))
             self._source.nack(ready)
             raise
         if applied == 0:
             # Busy: return to source so lag stays accurate and another tick can retry.
+            record_events_flush(status="busy")
             self._source.nack(ready)
             return 0
         if applied != len(ready):
+            record_events_flush(status="error")
             logger.error(
                 "Incremental apply returned %d for %d ready event(s); nacking batch",
                 applied,
@@ -98,5 +120,6 @@ class EventWorker:
                 f"IncrementalUpdater.apply returned {applied} for batch of {len(ready)}; "
                 "partial apply is not supported"
             )
+        record_events_flush(status="success", events=applied)
         self._source.ack([event.event_id for event in ready])
         return applied
