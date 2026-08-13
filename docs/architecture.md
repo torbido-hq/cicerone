@@ -81,6 +81,7 @@ Test modules mirror the packages (same pattern as `tests/test_io_*.py`):
 | `tests/test_model_config.py` | RecTools `[model.*]` + save/load round trips |
 | `tests/support/model_events.py` | Shared synthetic events helper |
 | `tests/support/toml_config.py` | Shared `write_toml` helper |
+| `tests/test_events*.py` | EventSource registry / webhook / micro-batch updater |
 
 ## Data flow
 
