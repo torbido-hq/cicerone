@@ -122,6 +122,19 @@ def test_post_events_list_body_and_invalid_json_shape():
     assert bad_shape.status_code == 400
 
 
+def test_post_events_non_json_payload():
+    source = WebhookEventSource({})
+    app = create_app(_settings(), _FakeReader(_recs_df()), event_source=source)
+    client = TestClient(app)
+    resp = client.post(
+        "/events",
+        headers={"Authorization": "Bearer secret", "Content-Type": "text/plain"},
+        content="not json at all",
+    )
+    assert resp.status_code == 400
+    assert resp.json() == {"detail": "Request body must be JSON"}
+
+
 def test_post_events_uses_events_auth_token():
     source = WebhookEventSource({})
     app = create_app(
