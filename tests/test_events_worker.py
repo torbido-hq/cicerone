@@ -191,3 +191,31 @@ def test_event_worker_stop_returns_true_when_idle(tmp_path, feature_config: Feat
     )
     worker.start()
     assert worker.stop(join_timeout_seconds=2.0) is True
+
+
+def test_event_worker_stop_swallows_source_close_errors(tmp_path, feature_config, caplog):
+    import logging
+
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+
+    class _BoomClose(WebhookEventSource):
+        def close(self) -> None:
+            raise RuntimeError("close failed")
+
+    worker = EventWorker(
+        _BoomClose({}),
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+        poll_interval_seconds=0.01,
+    )
+    worker.start()
+    with caplog.at_level(logging.ERROR):
+        assert worker.stop(join_timeout_seconds=2.0) is True
+    assert any("close()" in record.getMessage() for record in caplog.records)

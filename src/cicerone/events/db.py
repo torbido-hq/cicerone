@@ -15,6 +15,7 @@ from typing import Any
 
 from sqlalchemy import Engine, create_engine, text
 
+from cicerone.config import ConfigError
 from cicerone.events.base import EventSourceHealth, NormalizedEvent
 from cicerone.events.normalize import normalize_event, parse_occurred_at
 from cicerone.io.db_store import DEFAULT_EVENTS_TABLE
@@ -225,12 +226,14 @@ class DbEventSource:
             result = conn.execute(text(f"SELECT * FROM {self._from_clause()} LIMIT 0"))
             columns = frozenset(map(str, result.keys()))  # noqa: SIM118 — Result.keys(), not dict
         by_lower = {name.lower(): name for name in columns}
+        if "occurred_at" not in by_lower:
+            raise ConfigError(
+                "events DB source must expose an occurred_at column for watermark polling "
+                f"(from {self._from_clause()})"
+            )
         selected = [by_lower[name] for name in _FETCH_COLUMNS if name in by_lower]
         has_event_id = "event_id" in by_lower
-        if "occurred_at" not in by_lower or not selected:
-            select_clause = "*"
-        else:
-            select_clause = ", ".join(f'"{name}"' for name in selected)
+        select_clause = ", ".join(f'"{name}"' for name in selected)
         with self._lock:
             if self._select_clause is None or self._has_event_id_column is None:
                 self._source_columns = columns

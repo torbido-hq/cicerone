@@ -297,3 +297,17 @@ def test_db_rejects_timezone_less_initial_watermark(tmp_path):
 def test_db_rejects_unsafe_events_query(tmp_path, events_query):
     with pytest.raises(ValueError, match="events_query"):
         DbEventSource({"database_url": _sqlite_url(tmp_path), "events_query": events_query})
+
+
+def test_db_missing_occurred_at_raises_config_error(tmp_path):
+    from cicerone.config import ConfigError
+
+    url = _sqlite_url(tmp_path)
+    engine = create_engine(url)
+    pd.DataFrame([{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1}]).to_sql(
+        "events", engine, if_exists="replace", index=False
+    )
+    source = DbEventSource({"database_url": url})
+    source.connect()
+    with pytest.raises(ConfigError, match="occurred_at"):
+        source.poll(1)
