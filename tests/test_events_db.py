@@ -175,7 +175,14 @@ def test_db_events_query_and_stable_id_without_event_id(tmp_path):
                 "event_type": "purchase",
                 "quantity": 1,
                 "occurred_at": "2026-08-13T12:00:00+00:00",
-            }
+            },
+            {
+                "user_id": "u1",
+                "item_id": "i2",
+                "event_type": "view",
+                "quantity": 1,
+                "occurred_at": "2026-08-13T13:00:00+00:00",
+            },
         ]
     ).to_sql("raw_events", engine, if_exists="replace", index=False)
     source = DbEventSource(
@@ -186,10 +193,45 @@ def test_db_events_query_and_stable_id_without_event_id(tmp_path):
         }
     )
     source.connect()
+    assert source.health().lag == 2
     polled = list(source.poll(5))
-    assert len(polled) == 1
+    assert len(polled) == 2
     assert polled[0].occurred_at == datetime(2026, 8, 13, 12, 0, tzinfo=UTC)
     assert "|" in polled[0].event_id
+    source.ack([polled[0].event_id])
+    assert source.health().lag == 1
+
+
+def test_db_corrupt_watermark_falls_back_to_initial(tmp_path, caplog):
+    import logging
+
+    url = _sqlite_url(tmp_path)
+    watermark = tmp_path / "wm.json"
+    watermark.write_text("not-json\n")
+    _seed_events(
+        url,
+        [
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": "2026-08-13T12:00:00Z",
+                "event_id": "e1",
+            }
+        ],
+    )
+    source = DbEventSource(
+        {
+            "database_url": url,
+            "watermark_path": str(watermark),
+            "initial_watermark": "2026-08-01T00:00:00Z",
+        }
+    )
+    with caplog.at_level(logging.ERROR):
+        source.connect()
+    assert any("corrupt watermark" in record.getMessage().lower() for record in caplog.records)
+    assert [event.event_id for event in source.poll(10)] == ["e1"]
 
 
 def test_db_requires_database_url():

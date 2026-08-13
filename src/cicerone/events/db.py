@@ -207,11 +207,14 @@ class DbEventSource:
             return [dict(row) for row in result.mappings()]
 
     def _count_after(self, engine: Engine, watermark_at: datetime, watermark_event_id: str) -> int:
-        # Prefer SQL COUNT (no row materialization). SQLite text timestamps make
-        # bound datetime equality unreliable, so fall back to a key-only scan.
+        # Prefer SQL COUNT when an event_id column exists. Otherwise scan rows and
+        # reuse _row_to_event so synthetic ids match poll.
         if engine.dialect.name == "postgresql":
-            return self._count_after_sql(engine, watermark_at, watermark_event_id)
-        return self._count_after_keys(engine, watermark_at, watermark_event_id)
+            try:
+                return self._count_after_sql(engine, watermark_at, watermark_event_id)
+            except Exception:
+                logger.debug("SQL lag COUNT unavailable; scanning event rows", exc_info=True)
+        return self._count_after_rows(engine, watermark_at, watermark_event_id)
 
     def _count_after_sql(self, engine: Engine, watermark_at: datetime, watermark_event_id: str) -> int:
         # Match poll cursor (occurred_at, event_id), including empty event_id watermark.
@@ -224,29 +227,33 @@ class DbEventSource:
         with engine.connect() as conn:
             return int(conn.execute(sql, params).scalar() or 0)
 
-    def _count_after_keys(self, engine: Engine, watermark_at: datetime, watermark_event_id: str) -> int:
-        # Floor with >= then apply exact _cursor_key compare (SQLite timestamp binding).
-        sql = text(f"SELECT occurred_at, event_id FROM {self._from_clause()} WHERE occurred_at >= :watermark")
+    def _count_after_rows(self, engine: Engine, watermark_at: datetime, watermark_event_id: str) -> int:
+        # Same synthetic-id path as poll (no event_id column required). Bound for health.
         cursor = (watermark_at, watermark_event_id)
-        n = 0
-        with engine.connect() as conn:
-            for occurred_at, event_id in conn.execute(sql, {"watermark": watermark_at}):
-                at = _db_occurred_at(occurred_at)
-                eid = "" if event_id in (None, "") else str(event_id)
-                if (at, eid) > cursor:
-                    n += 1
-        return n
+        rows = self._fetch_rows(engine, watermark_at, limit=10_000)
+        return sum(1 for payload in rows if _cursor_key(_row_to_event(payload)) > cursor)
 
     def _load_watermark_unlocked(self) -> None:
         if self._watermark_path is None or not self._watermark_path.is_file():
             return
-        raw = json.loads(self._watermark_path.read_text())
-        if not isinstance(raw, dict):
-            raise ValueError(f"invalid watermark file {self._watermark_path}")
-        occurred_at = raw.get("occurred_at")
-        if occurred_at:
-            self._watermark_at = _db_occurred_at(occurred_at)
-        self._watermark_event_id = str(raw.get("event_id") or "")
+        try:
+            raw = json.loads(self._watermark_path.read_text())
+            if not isinstance(raw, dict):
+                raise ValueError("watermark root must be an object")
+            watermark_at = self._watermark_at
+            occurred_at = raw.get("occurred_at")
+            if occurred_at:
+                watermark_at = _db_occurred_at(occurred_at)
+            watermark_event_id = str(raw.get("event_id") or "")
+        except Exception:
+            logger.exception(
+                "Ignoring corrupt watermark file %s; keeping watermark %s",
+                self._watermark_path,
+                self._watermark_at.isoformat(),
+            )
+            return
+        self._watermark_at = watermark_at
+        self._watermark_event_id = watermark_event_id
 
     def _persist_watermark_unlocked(self) -> None:
         if self._watermark_path is None:

@@ -235,7 +235,9 @@ When `kind = "db"`, the same worker polls interaction rows after a watermark
 (`events.options.database_url`, optional `events_table` / `events_query`,
 optional durable `watermark_path`). The watermark advances only on successful
 ``ack`` after a flush. Health lag uses the same `(occurred_at, event_id)`
-cursor as poll via SQL ``COUNT`` (Postgres) or a key-only scan that applies
-the same cursor compare (other backends). ``events_query``, when set, must
-be a single read-only ``SELECT``. Naive SQL ``datetime`` values are treated
-as UTC; timezone-less *strings* (config / JSON watermark) are rejected.
+cursor as poll (SQL ``COUNT`` when ``event_id`` exists; otherwise a bounded
+row scan that synthesizes ids like poll). Corrupt ``watermark_path`` files
+are logged and ignored so ``connect()`` can still succeed. ``events_query``,
+when set, must be a single read-only ``SELECT``. Naive SQL ``datetime``
+values are treated as UTC; timezone-less *strings* (config / JSON watermark)
+are rejected.
