@@ -79,11 +79,17 @@ def load_recommendations_frame(output: IOSettings) -> pd.DataFrame:
             output.options.get("recommendations_table", DEFAULT_RECOMMENDATIONS_TABLE),
             option="recommendations_table",
         )
+        columns = ", ".join(
+            sql_identifier(column, option="recommendations_column") for column in RECOMMENDATION_COLUMNS
+        )
         engine = _engine_for(require_option(output.options, "database_url", "db"))
         try:
-            frame = pd.read_sql_query(text(f"SELECT * FROM {table}"), engine)
+            frame = pd.read_sql_query(text(f"SELECT {columns} FROM {table}"), engine)
         except MISSING_TABLE_ERRORS as exc:
             message = str(getattr(exc, "orig", exc)).lower()
+            if "no such column" in message or ("column" in message and "does not exist" in message):
+                logger.warning("Recommendations schema mismatch; treating as empty: %s", exc)
+                return empty_recommendations_frame()
             if isinstance(exc, ProgrammingError) or "does not exist" in message or "no such table" in message:
                 logger.warning("Recommendations table %r missing; treating as empty", table)
                 return empty_recommendations_frame()
