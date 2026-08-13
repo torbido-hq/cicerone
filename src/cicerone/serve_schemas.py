@@ -36,3 +36,24 @@ class RecommendationsResponse(BaseModel):
 
 class ErrorDetail(BaseModel):
     detail: str
+
+
+class InteractionEvent(BaseModel):
+    user_id: str = Field(description="User identifier")
+    item_id: str = Field(description="Item identifier")
+    event_type: str = Field(
+        description="Must match a key in features.toml [event_weights] to affect weights",
+    )
+    quantity: int = Field(default=1, ge=1, description="Optional count; default 1")
+    occurred_at: str = Field(description="ISO-8601 timestamp (parsed as UTC)")
+    event_id: str | None = Field(default=None, description="Optional idempotency id")
+    idempotency_key: str | None = Field(default=None, description="Alias for event_id")
+
+
+class EventsIngestRequest(BaseModel):
+    events: list[InteractionEvent] = Field(description="Batch of interaction events")
+
+
+class EventsIngestResponse(BaseModel):
+    accepted: int = Field(description="Number of events accepted into the source queue")
+    event_ids: list[str] = Field(description="Assigned or provided event ids")

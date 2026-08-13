@@ -35,11 +35,12 @@ For configuration and usage, see the main [README](../README.md).
 | `job.py` | Orchestrates one end-to-end run (source → dataset → model → sink) |
 | `scheduler.py` | In-process cron loop that calls `job.run()`; when `[job.trigger]` is enabled, also hosts the retrain-trigger HTTP server (`trigger.py`) |
 | `serve/` | Serve mode package: FastAPI read API over precomputed recommendations |
-| `serve/app.py` | Routes, middleware, refresh loop (`python -m cicerone.serve`) |
+| `serve/app.py` | Routes, middleware, refresh loop (`python -m cicerone.serve`); optional `POST /events` when `[events]` webhook is enabled |
 | `serve/metrics.py` | Prometheus metric objects + helpers (default in-process registry) |
 | `serve_schemas.py` | Pydantic models that drive the serve OpenAPI schema |
 | `serve_client.py` | Thin stdlib HTTP client for the serve read API |
 | `export_serve_openapi.py` | CLI to dump FastAPI's OpenAPI JSON (`docs/openapi/…`) |
+| `events/` | Incremental event ingest: `EventSource` protocol + registry, normalize, micro-batch buffer, write-through updater; webhook reference backend (`POST /events`) — see [incremental-events.md](incremental-events.md) |
 | `trigger.py` | Event-driven retrain trigger: webhook + optional input-bucket poll, debounce guard (`RunGuard`) shared with the cron loop; increments `cicerone_retrain_trigger_total` (per replica) |
 | `locks.py` | Optional `RunGuard` lock backends (postgres / redis; default is none) |
 | `config/lock_url.py` | Postgres lock URL resolution for config load + lock builder |
@@ -366,6 +367,14 @@ keys a given backend requires. To add a new backend (e.g. a message queue):
 Nothing in `config/`, `job.py`, `dataset.py`, or `model/` needs to
 change — they only ever see the `InputSource`/`OutputSink` protocol and the
 generic `IOSettings`.
+
+## Incremental events
+
+Between full retrains, optional `[events]` sources normalize interactions
+into the same event contract and micro-batch them into a cheap write-through
+update of top-K rows (popular/latest slices; LightFM waits for the next full
+`job.run()`). Design, backend roadmap, delivery semantics, and broker
+guidance: [incremental-events.md](incremental-events.md).
 
 ## Cold-start behavior
 

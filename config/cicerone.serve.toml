@@ -34,6 +34,16 @@ category_column = "category"
 metrics_enabled = true
 metrics_token = ""   # empty = open endpoint; bind to a trusted network or reverse proxy
 
+# Optional incremental event ingest (POST /events). See docs/incremental-events.md.
+# [events]
+# enabled = true
+# kind = "webhook"
+# [events.options]
+# # auth_token = "${EVENTS_AUTH_TOKEN}"
+# [events.incremental]
+# batch_size = 100
+# batch_window_seconds = 60
+
 # [input] is required by config.load_settings() even in serve mode (kept
 # generic/simple rather than special-casing it away) but is never read from
 # in this mode -- any valid, already-configured backend works as a placeholder.

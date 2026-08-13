@@ -29,6 +29,13 @@ const PAGES = [
     description:
       "How Cicerone packages fit together: I/O, model strategies, job loop, serve, and dashboard.",
   },
+  {
+    source: "incremental-events.md",
+    out: "incremental-events.md",
+    title: "Incremental events",
+    description:
+      "EventSource backends, micro-batch incremental updates, and write-through to serve.",
+  },
 ];
 
 function rewrite(source) {

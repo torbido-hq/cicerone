@@ -80,6 +80,28 @@ def test_run_guard_records_cron_retrain_source():
     assert accepted >= 1
 
 
+def test_run_guard_busy_property():
+    started = threading.Event()
+    release = threading.Event()
+
+    def fake_run(triggered_by: str) -> None:
+        del triggered_by
+        started.set()
+        release.wait(timeout=2)
+
+    guard = RunGuard(debounce_seconds=0, run_fn=fake_run)
+    assert guard.busy is False
+    assert guard.trigger("webhook") is True
+    assert started.wait(timeout=2)
+    assert guard.busy is True
+    release.set()
+    for _ in range(50):
+        if not guard.busy:
+            break
+        time.sleep(0.01)
+    assert guard.busy is False
+
+
 def test_run_guard_starts_a_run_when_idle():
     done = threading.Event()
     calls = []

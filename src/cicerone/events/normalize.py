@@ -1,0 +1,105 @@
+"""Normalize backend payloads into NormalizedEvent."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
+from typing import Any
+from uuid import uuid4
+
+import pandas as pd
+
+from cicerone.events.base import NormalizedEvent
+
+_REQUIRED = ("user_id", "item_id", "event_type", "occurred_at")
+
+
+class EventNormalizeError(ValueError):
+    """Invalid event payload."""
+
+
+def _as_mapping(payload: Any) -> Mapping[str, Any]:
+    if isinstance(payload, Mapping):
+        return payload
+    raise EventNormalizeError("event must be a JSON object")
+
+
+def _parse_occurred_at(value: Any) -> datetime:
+    try:
+        ts = pd.to_datetime(value, utc=True)
+    except Exception as exc:
+        raise EventNormalizeError("occurred_at is invalid") from exc
+    if pd.isna(ts):
+        raise EventNormalizeError("occurred_at is invalid")
+    dt = ts.to_pydatetime()
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
+
+
+def _parse_quantity(value: Any) -> int:
+    if value is None:
+        return 1
+    try:
+        quantity = int(value)
+    except (TypeError, ValueError) as exc:
+        raise EventNormalizeError("quantity must be an integer") from exc
+    if quantity < 1:
+        raise EventNormalizeError("quantity must be >= 1")
+    return quantity
+
+
+def event_fingerprint(event: NormalizedEvent) -> str:
+    return "|".join(
+        (
+            event.user_id,
+            event.item_id,
+            event.event_type,
+            str(event.quantity),
+            event.occurred_at.isoformat(),
+        )
+    )
+
+
+def normalize_event(payload: Any) -> NormalizedEvent:
+    raw = _as_mapping(payload)
+    missing = [key for key in _REQUIRED if raw.get(key) in (None, "")]
+    if missing:
+        raise EventNormalizeError(f"missing required field(s): {', '.join(missing)}")
+
+    user_id = str(raw["user_id"]).strip()
+    item_id = str(raw["item_id"]).strip()
+    event_type = str(raw["event_type"]).strip()
+    if not user_id or not item_id or not event_type:
+        raise EventNormalizeError("user_id, item_id, and event_type must be non-empty")
+
+    event_id = raw.get("event_id") or raw.get("idempotency_key") or str(uuid4())
+    return NormalizedEvent(
+        user_id=user_id,
+        item_id=item_id,
+        event_type=event_type,
+        quantity=_parse_quantity(raw.get("quantity")),
+        occurred_at=_parse_occurred_at(raw["occurred_at"]),
+        event_id=str(event_id),
+    )
+
+
+def normalize_events(payloads: Sequence[Any]) -> list[NormalizedEvent]:
+    return [normalize_event(item) for item in payloads]
+
+
+def events_to_dataframe(events: Sequence[NormalizedEvent]) -> pd.DataFrame:
+    if not events:
+        return pd.DataFrame(columns=["user_id", "item_id", "event_type", "quantity", "occurred_at"])
+    return pd.DataFrame(
+        [
+            {
+                "user_id": event.user_id,
+                "item_id": event.item_id,
+                "event_type": event.event_type,
+                "quantity": event.quantity,
+                "occurred_at": event.occurred_at,
+            }
+            for event in events
+        ]
+    )

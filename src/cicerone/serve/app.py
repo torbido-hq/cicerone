@@ -15,6 +15,8 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from cicerone import __version__
 from cicerone.config import Settings, load_settings
+from cicerone.events.normalize import EventNormalizeError
+from cicerone.events.webhook import WebhookEventSource
 from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.io.base import ManifestReader, RecommendationReader
@@ -27,7 +29,14 @@ from cicerone.serve.metrics import (
     record_recommendations_served,
     update_cache_age_gauge,
 )
-from cicerone.serve_schemas import ErrorDetail, HealthResponse, RecommendationItem, RecommendationsResponse
+from cicerone.serve_schemas import (
+    ErrorDetail,
+    EventsIngestRequest,
+    EventsIngestResponse,
+    HealthResponse,
+    RecommendationItem,
+    RecommendationsResponse,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -40,11 +49,17 @@ Read-only HTTP API over **precomputed** recommendations written by the batch job
 There is no live inference in the request path: `GET {RECOMMENDATIONS_PATH}`
 looks up rows already stored in the configured output (dataset parquet or DB).
 
+When `[events]` is enabled with `kind = "webhook"`, `POST /events` accepts
+interaction events for micro-batch incremental updates (write-through to the
+same output store). See `docs/incremental-events.md`.
+
 Interactive docs: `/docs` (Swagger UI) and `/redoc` (includes language
 code samples via ``x-codeSamples``). Machine-readable schema: `/openapi.json`.
 A checked-in copy lives at `docs/openapi/serve.openapi.json` (regenerate with
 `python -m cicerone.export_serve_openapi`).
 """.strip()
+
+EVENTS_PATH = "/events"
 
 
 def _start_refresh_loop(
@@ -224,6 +239,7 @@ def create_app(
     *,
     manifest_reader: ManifestReader | None = None,
     feature_config: FeatureConfig | None = None,
+    event_source: WebhookEventSource | None = None,
 ) -> FastAPI:
     app = FastAPI(
         title=SERVE_API_TITLE,
@@ -231,6 +247,8 @@ def create_app(
         description=SERVE_API_DESCRIPTION,
     )
     dependencies = optional_bearer_deps(settings.serve.auth_token)
+    events_token = settings.events.options.get("auth_token") or settings.serve.auth_token
+    events_dependencies = optional_bearer_deps(str(events_token) if events_token else None)
     availability_filters = list(feature_config.item_availability_filters) if feature_config else []
     category_column = settings.serve.category_column
     items_cache = _ItemsFilterCache(
@@ -374,6 +392,50 @@ def create_app(
             response.headers["X-Generated-At"] = str(generated_at)
         return body
 
+    if settings.events.enabled and settings.events.kind == "webhook":
+        webhook_source = event_source or WebhookEventSource(settings.events.options)
+        app.state.event_source = webhook_source
+
+        @app.post(
+            EVENTS_PATH,
+            response_model=EventsIngestResponse,
+            dependencies=events_dependencies,
+            status_code=202,
+            tags=["events"],
+            summary="Ingest interaction events for incremental updates",
+            responses={
+                400: {"model": ErrorDetail, "description": "Invalid event payload"},
+                401: {"model": ErrorDetail, "description": "Missing or invalid bearer token"},
+            },
+        )
+        async def post_events(request: Request) -> EventsIngestResponse:
+            try:
+                body = await request.json()
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail="Request body must be JSON") from exc
+            if isinstance(body, list):
+                payloads = body
+            elif isinstance(body, dict) and isinstance(body.get("events"), list):
+                payloads = body["events"]
+            elif isinstance(body, dict):
+                payloads = [body]
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail='Body must be an event object, a list of events, or {"events": [...]}',
+                )
+            try:
+                accepted = webhook_source.ingest(payloads)
+            except EventNormalizeError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return EventsIngestResponse(
+                accepted=len(accepted),
+                event_ids=[event.event_id for event in accepted],
+            )
+
+        # Keep EventsIngestRequest referenced so OpenAPI documents the batch shape.
+        _ = EventsIngestRequest
+
     def custom_openapi() -> dict:
         if app.openapi_schema is not None:
             return app.openapi_schema
@@ -404,7 +466,12 @@ def create_app(
 
 
 def main() -> None:
-    from cicerone.io.factory import build_manifest_reader, build_recommendation_reader
+    from cicerone.events.buffer import MicroBatchBuffer
+    from cicerone.events.registry import build_event_source
+    from cicerone.events.updater import IncrementalUpdater
+    from cicerone.events.webhook import WebhookEventSource
+    from cicerone.events.worker import EventWorker
+    from cicerone.io.factory import build_manifest_reader, build_output_sink, build_recommendation_reader
 
     settings = load_settings()
     if settings.mode != "serve":
@@ -421,15 +488,49 @@ def main() -> None:
         availability_filters=availability_filters,
     )
 
+    webhook_source: WebhookEventSource | None = None
+    worker: EventWorker | None = None
+    if settings.events.enabled:
+        source = build_event_source(settings.events.kind, settings.events.options)
+        if settings.events.kind == "webhook":
+            if not isinstance(source, WebhookEventSource):
+                raise TypeError(f"expected WebhookEventSource, got {type(source).__name__}")
+            webhook_source = source
+        sink = build_output_sink(settings.output)
+        updater = IncrementalUpdater(
+            sink=sink,
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=settings.top_k,
+            on_success=reader.refresh,
+        )
+        buffer = MicroBatchBuffer(
+            batch_size=settings.events.incremental.batch_size,
+            batch_window_seconds=settings.events.incremental.batch_window_seconds,
+        )
+        worker = EventWorker(source, buffer, updater)
+        worker.start()
+        logger.info(
+            "Event worker started (kind=%s, batch_size=%d, window=%ss)",
+            settings.events.kind,
+            settings.events.incremental.batch_size,
+            settings.events.incremental.batch_window_seconds,
+        )
+
     app = create_app(
         settings,
         reader,
         manifest_reader=manifest_reader,
         feature_config=feature_config,
+        event_source=webhook_source,
     )
     _start_refresh_loop(
         reader,
         settings.serve.refresh_interval_seconds,
         generated_at_cache=app.state.generated_at_cache,
     )
-    uvicorn.run(app, host=settings.serve.host, port=settings.serve.port)
+    try:
+        uvicorn.run(app, host=settings.serve.host, port=settings.serve.port)
+    finally:
+        if worker is not None:
+            worker.stop()

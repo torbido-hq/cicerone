@@ -35,6 +35,7 @@ export default defineConfig({
 					items: [
 						{ label: 'Tutorial', slug: 'tutorial' },
 						{ label: 'Architecture', slug: 'architecture' },
+						{ label: 'Incremental events', slug: 'incremental-events' },
 					],
 				},
 				{

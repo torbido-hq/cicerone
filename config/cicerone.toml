@@ -213,6 +213,18 @@ prefix = "recommendations/latest"
 # refresh_interval_seconds = 60
 # category_column = "category" # items column used by ?category= filter
 
+# Optional: ingest interaction events on the serve process for micro-batch
+# incremental updates between full retrains (write-through to [output]).
+# See docs/incremental-events.md. Webhook kind adds POST /events.
+# [events]
+# enabled = true
+# kind = "webhook"
+# [events.options]
+# # auth_token = "${EVENTS_AUTH_TOKEN}"  # optional; defaults to serve.auth_token
+# [events.incremental]
+# batch_size = 100
+# batch_window_seconds = 60
+
 # Optional: a small, standalone read-only status page over job run history
 # (its own container/port, independent of [job].mode -- see the README's
 # Dashboard section). Protected by HTTP Basic Auth (a handful of named
