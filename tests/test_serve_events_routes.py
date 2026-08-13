@@ -122,6 +122,27 @@ def test_post_events_list_body_and_invalid_json_shape():
     assert bad_shape.status_code == 400
 
 
+def test_post_events_normalization_error_returns_400():
+    source = WebhookEventSource({})
+    app = create_app(_settings(), _FakeReader(_recs_df()), event_source=source)
+    client = TestClient(app)
+    response = client.post(
+        "/events",
+        headers={"Authorization": "Bearer secret"},
+        json=[
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "event_type": "purchase",
+                "occurred_at": "2026-08-13T12:00:00",
+            }
+        ],
+    )
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert "occurred_at" in str(detail)
+
+
 def test_post_events_non_json_payload():
     source = WebhookEventSource({})
     app = create_app(_settings(), _FakeReader(_recs_df()), event_source=source)
