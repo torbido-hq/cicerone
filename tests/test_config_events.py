@@ -97,6 +97,16 @@ def test_load_events_webhook_requires_auth_in_serve_mode():
         )
 
 
+def test_load_events_incremental_must_be_table():
+    with pytest.raises(ConfigError, match="events.incremental must be a table"):
+        load_events_settings(
+            {"enabled": False, "incremental": "nope"},
+            mode="batch",
+            serve_auth_token=None,
+            resolve_env=lambda value, _path: value,
+        )
+
+
 def test_load_events_disabled_allows_unknown_kind():
     settings = load_events_settings(
         {"enabled": False, "kind": "kafka"},

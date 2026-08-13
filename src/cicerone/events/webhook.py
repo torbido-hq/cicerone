@@ -40,19 +40,20 @@ class WebhookEventSource:
             events = [normalize_event(payloads)]
         with self._lock:
             self._connected = True
-            backlog = len(self._pending) + len(self._in_flight)
-            if backlog + len(events) > self._max_pending:
-                raise EventNormalizeError(f"event backlog full ({backlog}/{self._max_pending}); retry later")
             known = {event.event_id for event in self._pending} | set(self._in_flight)
-            queued: list[NormalizedEvent] = []
+            novel: list[NormalizedEvent] = []
             for event in events:
                 if event.event_id in known:
                     continue
                 known.add(event.event_id)
+                novel.append(event)
+            backlog = len(self._pending) + len(self._in_flight)
+            if novel and backlog + len(novel) > self._max_pending:
+                raise EventNormalizeError(f"event backlog full ({backlog}/{self._max_pending}); retry later")
+            for event in novel:
                 self._pending.append(event)
                 self._last_event_at = event.occurred_at
-                queued.append(event)
-        return queued
+        return novel
 
     def poll(self, max_events: int = 100) -> Sequence[NormalizedEvent]:
         if max_events < 1:

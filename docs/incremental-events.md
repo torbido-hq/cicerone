@@ -163,7 +163,7 @@ Build order:
 
 ### Broker recommendation
 
-For greenfield self-host at this project size, prefer **Redis Streams** as
+For greenfield self-hosted deployments at this project size, prefer **Redis Streams** as
 the default *broker-based* backend once implemented: consumer groups,
 lag introspection, and a small ops footprint — especially if Redis already
 sits near the stack (optional distributed lock). **NATS/JetStream** is the

@@ -59,3 +59,10 @@ def test_webhook_max_pending_rejects_when_full():
         source.ingest(event_payload(event_id="b"))
     with pytest.raises(ValueError, match="max_pending"):
         WebhookEventSource({"max_pending": 0})
+
+
+def test_webhook_max_pending_ignores_duplicates():
+    source = WebhookEventSource({"max_pending": 1})
+    source.ingest(event_payload(event_id="a"))
+    assert source.ingest(event_payload(event_id="a", item_id="other")) == []
+    assert source.health().lag == 1

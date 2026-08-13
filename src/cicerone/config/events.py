@@ -88,8 +88,13 @@ def load_events_settings(
     if auth_token is not None:
         options = {**options, "auth_token": auth_token}
 
-    incremental_raw = events_raw.get("incremental", {}) or {}
-    incremental = _incremental_settings(incremental_raw if isinstance(incremental_raw, dict) else {})
+    if "incremental" in events_raw:
+        incremental_raw = events_raw["incremental"]
+        if not isinstance(incremental_raw, dict):
+            raise ConfigError("events.incremental must be a table")
+    else:
+        incremental_raw = {}
+    incremental = _incremental_settings(incremental_raw)
 
     if enabled and kind == "webhook" and mode == "serve":
         webhook_token = auth_token or serve_auth_token
