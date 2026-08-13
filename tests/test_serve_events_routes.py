@@ -257,3 +257,7 @@ def test_post_events_backpressure_429():
         },
     )
     assert overflow.status_code == 429
+    body = overflow.json()
+    assert set(body) == {"detail"}
+    assert isinstance(body["detail"], str)
+    assert "backlog full" in body["detail"]
