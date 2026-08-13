@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import threading
 from collections import OrderedDict, deque
 from collections.abc import Mapping, Sequence
@@ -13,10 +12,8 @@ from cicerone.config.constants import DEFAULT_EVENTS_WEBHOOK_MAX_PENDING
 from cicerone.events.base import EventBackpressureError, EventSourceHealth, NormalizedEvent
 from cicerone.events.normalize import normalize_event, normalize_events
 
-logger = logging.getLogger(__name__)
-
-# Values below this remain valid for tests / tiny installs but tend to 429 under load.
-_MAX_PENDING_WARN_BELOW = 100
+# Floor for production-usable backpressure; lower values 429 under normal load.
+_MIN_MAX_PENDING = 100
 
 
 class WebhookEventSource:
@@ -25,15 +22,10 @@ class WebhookEventSource:
     def __init__(self, options: dict[str, Any] | None = None):
         options = dict(options or {})
         self._max_pending = int(options.get("max_pending", DEFAULT_EVENTS_WEBHOOK_MAX_PENDING))
-        if self._max_pending < 1:
-            raise ValueError("events.options.max_pending must be >= 1")
-        if self._max_pending < _MAX_PENDING_WARN_BELOW:
-            logger.warning(
-                "events.options.max_pending=%d is low (recommend >= %d, default %d); "
-                "ingest may return 429 under normal load",
-                self._max_pending,
-                _MAX_PENDING_WARN_BELOW,
-                DEFAULT_EVENTS_WEBHOOK_MAX_PENDING,
+        if self._max_pending < _MIN_MAX_PENDING:
+            raise ValueError(
+                f"events.options.max_pending must be >= {_MIN_MAX_PENDING} "
+                f"(got {self._max_pending}; default {DEFAULT_EVENTS_WEBHOOK_MAX_PENDING})"
             )
         self._lock = threading.Lock()
         self._pending: deque[NormalizedEvent] = deque()

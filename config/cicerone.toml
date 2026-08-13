@@ -221,7 +221,7 @@ prefix = "recommendations/latest"
 # kind = "webhook"
 # [events.options]
 # # auth_token = "${EVENTS_AUTH_TOKEN}"  # optional; defaults to serve.auth_token
-# # max_pending = 10000  # ingest 429 when full; prefer >=100 (default 10000)
+# # max_pending = 10000  # ingest 429 when full; must be >=100 (default 10000)
 # [events.incremental]
 # batch_size = 100
 # batch_window_seconds = 60

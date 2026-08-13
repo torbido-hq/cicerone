@@ -606,3 +606,49 @@ def test_main_fails_closed_on_invalid_feature_config(tmp_path, monkeypatch):
 
     with pytest.raises(ValueError, match="steepness"):
         main()
+
+
+def test_main_allows_missing_feature_config(tmp_path, monkeypatch):
+    config_path = tmp_path / "cicerone.toml"
+    missing_features = tmp_path / "missing-features.toml"
+    config_path.write_text(
+        f"""
+        [job]
+        mode = "serve"
+        feature_config_path = "{missing_features}"
+
+        [serve]
+        auth_token = "secret"
+
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "{tmp_path}"
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "{tmp_path}"
+        """
+    )
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", str(config_path))
+
+    uvicorn_calls = {}
+    import cicerone.serve.app as serve_module
+
+    def fake_start_refresh_loop(reader, interval, **kwargs):
+        return None
+
+    def fake_uvicorn_run(app, host, port):
+        uvicorn_calls.update(host=host, port=port)
+
+    monkeypatch.setattr(serve_module, "_start_refresh_loop", fake_start_refresh_loop)
+    monkeypatch.setattr(serve_module, "uvicorn", type("_U", (), {"run": staticmethod(fake_uvicorn_run)}))
+
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"}]
+    ).to_parquet(tmp_path / "recommendations.parquet", index=False)
+
+    main()
+    assert uvicorn_calls == {"host": "0.0.0.0", "port": 8000}

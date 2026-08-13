@@ -62,16 +62,17 @@ def test_webhook_ack_unknown_id_is_noop():
 
 
 def test_webhook_max_pending_rejects_when_full():
-    source = WebhookEventSource({"max_pending": 1})
-    source.ingest(event_payload(event_id="a"))
+    source = WebhookEventSource({"max_pending": 100})
+    for i in range(100):
+        source.ingest(event_payload(event_id=f"a{i}"))
     with pytest.raises(EventBackpressureError, match="backlog full"):
-        source.ingest(event_payload(event_id="b"))
+        source.ingest(event_payload(event_id="overflow"))
     with pytest.raises(ValueError, match="max_pending"):
-        WebhookEventSource({"max_pending": 0})
+        WebhookEventSource({"max_pending": 99})
 
 
 def test_webhook_max_pending_ignores_duplicates():
-    source = WebhookEventSource({"max_pending": 1})
+    source = WebhookEventSource({"max_pending": 100})
     source.ingest(event_payload(event_id="a"))
     assert source.ingest(event_payload(event_id="a", item_id="other")) == []
     assert source.health().lag == 1

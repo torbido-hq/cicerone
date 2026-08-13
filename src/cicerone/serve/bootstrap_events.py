@@ -39,7 +39,7 @@ class EventsRuntime:
 def start_events_runtime(
     settings: Settings,
     *,
-    feature_config: FeatureConfig,
+    feature_config: FeatureConfig | None,
     reader: RecommendationReader,
     busy_check: Callable[[], bool] | None = None,
 ) -> EventsRuntime:

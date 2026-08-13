@@ -228,31 +228,32 @@ def test_post_events_uses_events_auth_token():
 
 
 def test_post_events_backpressure_429():
-    source = WebhookEventSource({"max_pending": 1})
+    source = WebhookEventSource({"max_pending": 100})
     app = create_app(_settings(), _FakeReader(_recs_df()), event_source=source)
     client = TestClient(app)
     headers = {"Authorization": "Bearer secret"}
-    first = client.post(
+    for i in range(100):
+        response = client.post(
+            "/events",
+            headers=headers,
+            json={
+                "user_id": "u1",
+                "item_id": f"i{i}",
+                "event_type": "purchase",
+                "occurred_at": "2026-08-13T12:00:00Z",
+                "event_id": f"e{i}",
+            },
+        )
+        assert response.status_code == 202
+    overflow = client.post(
         "/events",
         headers=headers,
         json={
             "user_id": "u1",
-            "item_id": "i1",
-            "event_type": "purchase",
-            "occurred_at": "2026-08-13T12:00:00Z",
-            "event_id": "e1",
-        },
-    )
-    assert first.status_code == 202
-    second = client.post(
-        "/events",
-        headers=headers,
-        json={
-            "user_id": "u1",
-            "item_id": "i2",
+            "item_id": "i-overflow",
             "event_type": "view",
             "occurred_at": "2026-08-13T12:01:00Z",
-            "event_id": "e2",
+            "event_id": "e-overflow",
         },
     )
-    assert second.status_code == 429
+    assert overflow.status_code == 429

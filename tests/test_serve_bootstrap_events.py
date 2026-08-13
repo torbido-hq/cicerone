@@ -65,3 +65,32 @@ def test_start_events_runtime_disabled_and_webhook(tmp_path, feature_config: Fea
     assert reader.refreshed == 1
     enabled.stop()
     assert enabled.worker._thread is None or not enabled.worker._thread.is_alive()
+
+
+def test_start_events_runtime_without_feature_config(tmp_path):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+
+    class _Reader:
+        def refresh(self) -> None:
+            return None
+
+    runtime = start_events_runtime(
+        make_settings(
+            output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+            events=EventsSettings(
+                enabled=True,
+                kind="webhook",
+                incremental=EventsIncrementalSettings(
+                    batch_size=1, batch_window_seconds=60.0, poll_interval_seconds=0.05
+                ),
+            ),
+        ),
+        feature_config=None,
+        reader=_Reader(),  # type: ignore[arg-type]
+    )
+    assert runtime.worker is not None
+    runtime.stop()

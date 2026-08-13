@@ -6,6 +6,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable, Sequence
+from pathlib import Path
 
 import pandas as pd
 import uvicorn
@@ -422,9 +423,17 @@ def main() -> None:
 
     reader = build_recommendation_reader(settings.output)
     manifest_reader = build_manifest_reader(settings.output)
-    feature_config = load_feature_config(settings.feature_config_path)
+    feature_path = Path(settings.feature_config_path)
+    if feature_path.is_file():
+        feature_config = load_feature_config(feature_path)
+    else:
+        logger.warning(
+            "feature config missing at %s; serve continuing without features.toml",
+            feature_path,
+        )
+        feature_config = None
 
-    availability_filters = list(feature_config.item_availability_filters)
+    availability_filters = list(feature_config.item_availability_filters) if feature_config else []
     _configure_reader_item_filters(
         reader,
         category_column=settings.serve.category_column,
