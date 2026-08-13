@@ -39,11 +39,19 @@ class EventWorker:
         self._thread = threading.Thread(target=self._loop, name="cicerone-events", daemon=True)
         self._thread.start()
 
-    def stop(self, *, join_timeout_seconds: float = 5.0) -> None:
+    def stop(self, *, join_timeout_seconds: float = 5.0) -> bool:
         self._stop.set()
         thread = self._thread
         if thread is not None and thread.is_alive():
             thread.join(timeout=join_timeout_seconds)
+            if thread.is_alive():
+                logger.warning(
+                    "Event worker thread %s still alive after %.2fs join timeout",
+                    thread.name,
+                    join_timeout_seconds,
+                )
+                return False
+        return True
 
     def _loop(self) -> None:
         while not self._stop.is_set():

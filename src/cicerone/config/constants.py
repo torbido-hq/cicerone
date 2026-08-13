@@ -35,7 +35,6 @@ StrategyName = str
 
 MODES: tuple[Mode, ...] = ("batch", "serve")
 LOCK_BACKENDS: tuple[str, ...] = ("in_process", "postgres", "redis")
-EVENT_SOURCE_KINDS: tuple[str, ...] = ("webhook",)
 DEFAULT_LOCK_KEY = "cicerone:scheduler:run_guard"
 DEFAULT_LOCK_TTL_SECONDS = 24 * 60 * 60
 DEFAULT_EVENTS_BATCH_SIZE = 100

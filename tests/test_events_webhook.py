@@ -11,12 +11,20 @@ from cicerone.events.webhook import WebhookEventSource
 def test_webhook_ingest_poll_ack_health():
     source = WebhookEventSource({})
     source.connect()
-    source.ingest(event_payload(event_id="a"))
-    source.ingest([event_payload(event_id="b", item_id="i2")])
+    assert source.health().last_event_at is None
+
+    first = event_payload(event_id="a", occurred_at="2026-08-13T12:00:00Z")
+    source.ingest(first)
+    after_first = source.health().last_event_at
+    assert after_first is not None
+
+    source.ingest([event_payload(event_id="b", item_id="i2", occurred_at="2026-08-13T12:01:00Z")])
     health = source.health()
     assert health.connected is True
     assert health.lag == 2
     assert health.detail == "webhook"
+    assert health.last_event_at is not None
+    assert health.last_event_at >= after_first
     polled = list(source.poll(1))
     assert len(polled) == 1
     assert source.health().lag == 2

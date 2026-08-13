@@ -9,11 +9,11 @@ from cicerone.config.constants import (
     DEFAULT_EVENTS_BATCH_SIZE,
     DEFAULT_EVENTS_BATCH_WINDOW_SECONDS,
     DEFAULT_EVENTS_POLL_INTERVAL_SECONDS,
-    EVENT_SOURCE_KINDS,
     ConfigError,
 )
 from cicerone.config.settings import EventsIncrementalSettings, EventsSettings
 from cicerone.config.validation import require_positive_float, require_positive_int
+from cicerone.events.registry import registered_event_source_kinds
 
 ResolveEnv = Callable[[Any, str], Any]
 
@@ -76,8 +76,9 @@ def load_events_settings(
     """Parse ``[events]`` from TOML; ``resolve_env`` is ``load._resolve_env_placeholders``."""
     enabled = bool(events_raw.get("enabled", False))
     kind = str(events_raw.get("kind", "webhook")).lower()
-    if enabled and kind not in EVENT_SOURCE_KINDS:
-        raise ConfigError(f"events.kind must be one of {list(EVENT_SOURCE_KINDS)}, got {kind!r}")
+    allowed_kinds = registered_event_source_kinds()
+    if enabled and kind not in allowed_kinds:
+        raise ConfigError(f"events.kind must be one of {list(allowed_kinds)}, got {kind!r}")
 
     options = resolve_env(events_raw.get("options", {}), "events.options")
     if not isinstance(options, dict):

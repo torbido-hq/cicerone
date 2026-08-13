@@ -25,10 +25,15 @@ class EventsRuntime:
     webhook_source: WebhookEventSource | None
     worker: EventWorker | None
 
-    def stop(self) -> None:
+    def stop(self) -> bool:
+        stopped = True
         if self.worker is not None:
-            self.worker.stop()
+            stopped = self.worker.stop()
+            if not stopped:
+                logger.warning("Event worker did not stop in time; skipping engine dispose")
+                return False
         dispose_recommendation_engines()
+        return True
 
 
 def start_events_runtime(
