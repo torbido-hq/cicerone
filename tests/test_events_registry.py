@@ -9,6 +9,7 @@ from cicerone.events.webhook import WebhookEventSource
 def test_register_and_build_webhook():
     assert "webhook" in registered_event_source_kinds()
     assert "db" in registered_event_source_kinds()
+    assert "s3" in registered_event_source_kinds()
     source = build_event_source("webhook", {})
     assert isinstance(source, WebhookEventSource)
 

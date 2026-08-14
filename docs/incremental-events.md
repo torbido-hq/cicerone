@@ -55,7 +55,9 @@ src/cicerone/events/
   buffer.py      # micro-batch by count or time window
   updater.py     # cheap incremental path → OutputSink (write-through)
   store.py       # load existing recommendation rows for merge
-  webhook.py     # reference EventSource (HTTP push)
+  webhook.py     # HTTP push EventSource
+  db.py          # watermark poll EventSource
+  s3.py          # S3 list/marker or SQS notification EventSource
   worker.py      # background poll → buffer → flush → ack
 
 src/cicerone/serve/
@@ -65,8 +67,8 @@ src/cicerone/serve/
 src/cicerone/config/events.py  # [events] coerce + TOML load helpers
 ```
 
-Later backends (`db`, `s3`, `rabbitmq`, `kafka`, `redis_streams`) register
-beside `webhook` without changing the config shape.
+Built-in backends (`webhook`, `db`, `s3`; later `rabbitmq` / `kafka` /
+`redis_streams`) register beside each other without changing the config shape.
 
 ## EventSource surface
 
@@ -95,6 +97,9 @@ kind = "webhook"   # webhook | db | s3 | rabbitmq | kafka | (later redis_streams
 # backend-specific; webhook may set auth_token (else serve.auth_token)
 # db: database_url (required), events_table / events_query, watermark_path,
 #     initial_watermark
+# s3: access_key_id, secret_access_key, bucket (required); endpoint_url,
+#     region_name, prefix; mode = "list" | "sqs" (default: sqs if queue_url
+#     else list); queue_url (sqs); marker_path / initial_marker (list)
 
 [events.incremental]
 batch_size = 100
@@ -166,8 +171,8 @@ Keep each PR **atomic** and stacked on the incremental-events foundation
 1. Webhook + micro-batch write-through (foundation) — shipped
 2. `kind=db` watermark source — shipped
 3. Metrics / dashboard wiring (lag, flush, errors) — shipped
-4. Further backends / write-path improvements as separate PRs (S3, user-scoped
-   I/O, Redis Streams, …)
+4. Further backends / write-path improvements as separate PRs (`kind=s3`
+   shipped; user-scoped I/O, Redis Streams, …)
 5. **Last:** full review of `docs/` **and** the `website/` sync (sidebar,
    `sync-docs.mjs`, rendered pages, links, OpenAPI mentions) so the public
    site matches the shipped incremental surface
@@ -180,7 +185,9 @@ Build order:
 2. **DB** — watermark poll (reuse `events_query` / `events_table`); optional
    `watermark_path` for durable cursor; LISTEN/NOTIFY or logical replication
    under the **same** `kind=db` later (not a separate kind).
-3. **S3** — AWS: notifications → SQS; non-AWS (R2/MinIO): list/marker poll.
+3. **S3** — shipped: AWS notifications → SQS (`mode=sqs`); non-AWS
+   (R2/MinIO) list/marker poll (`mode=list`). Objects are JSON event objects
+   or arrays; missing `event_id` uses `bucket/key|etag|index`.
 4. **RabbitMQ** — queue/exchange consumer (optional dep).
 5. **Kafka** — topic / consumer group (optional dep).
 

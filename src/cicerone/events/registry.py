@@ -7,12 +7,14 @@ from typing import Any
 
 from cicerone.events.base import EventSource
 from cicerone.events.db import DbEventSource
+from cicerone.events.s3 import S3EventSource
 from cicerone.events.webhook import WebhookEventSource
 
 _EventSourceFactory = Callable[[dict[str, Any]], EventSource]
 
 _EVENT_SOURCES: dict[str, _EventSourceFactory] = {
     "db": DbEventSource,
+    "s3": S3EventSource,
     "webhook": WebhookEventSource,
 }
 

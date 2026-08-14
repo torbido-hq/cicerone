@@ -106,6 +106,19 @@ def load_events_settings(
             )
     if enabled and kind == "db" and not options.get("database_url"):
         raise ConfigError('events.options.database_url is required when events.kind = "db"')
+    if enabled and kind == "s3":
+        for key in ("access_key_id", "secret_access_key", "bucket"):
+            if not options.get(key):
+                raise ConfigError(f'events.options.{key} is required when events.kind = "s3"')
+        mode = options.get("mode")
+        if mode is not None and str(mode).lower() not in {"sqs", "list"}:
+            raise ConfigError(f'events.options.mode must be "sqs" or "list", got {mode!r}')
+        if mode is not None:
+            resolved_mode = str(mode).lower()
+        else:
+            resolved_mode = "sqs" if options.get("queue_url") else "list"
+        if resolved_mode == "sqs" and not options.get("queue_url"):
+            raise ConfigError('events.options.queue_url is required when events.options.mode = "sqs"')
 
     return EventsSettings(
         enabled=enabled,
