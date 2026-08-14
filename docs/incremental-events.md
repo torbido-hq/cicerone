@@ -191,6 +191,8 @@ Build order:
    I/O (Cloudflare R2 / MinIO). Optional AWS-only `mode=sqs` (S3→SQS
    notifications; rejected when `endpoint_url` is set). Objects are JSON
    event objects or arrays; missing `event_id` uses `bucket/key|etag|index`.
+   List mode assumes a **single consumer** per bucket/prefix (local
+   `event_id` dedupe + marker); multi-writer/shared markers are out of scope.
 4. **RabbitMQ** — queue/exchange consumer (optional dep).
 5. **Kafka** — topic / consumer group (optional dep).
 
@@ -218,7 +220,7 @@ already run them; do not steer greenfield users there first.
 | --- | --- | --- |
 | Webhook | At-least-once (client retries) | `event_id` / `idempotency_key`; short dedupe window |
 | DB watermark | Near exactly-once | Advance watermark only after successful flush |
-| S3 list (R2) / SQS | At-least-once | Object key + etag dedupe |
+| S3 list (R2) / SQS | At-least-once | Object key + ETag dedupe |
 | RabbitMQ / Kafka | At-least-once | Ack/commit after successful flush; shared dedupe key |
 
 Duplicate delivery can inflate weights for `quantity_scaled_events`. Dedupe

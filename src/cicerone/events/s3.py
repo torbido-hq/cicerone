@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import threading
+import time
 from collections import OrderedDict, deque
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -20,13 +21,15 @@ from botocore.exceptions import ClientError
 
 from cicerone.config import ConfigError
 from cicerone.events.base import EventSource, EventSourceHealth, NormalizedEvent
-from cicerone.events.normalize import normalize_event
+from cicerone.events.normalize import EventNormalizeError, normalize_event
 from cicerone.io.options import build_s3_client, require_option
 
 logger = logging.getLogger(__name__)
 
 _MODES = frozenset({"sqs", "list"})
 _LIST_PAGE_SIZE = 100
+_SQS_LAG_CACHE_TTL_SECONDS = 5.0
+_SQS_CLIENT_TIMEOUT_SECONDS = 2.0
 
 
 def validate_s3_event_options(options: dict[str, Any]) -> str:
@@ -96,9 +99,24 @@ def _events_from_body(body: bytes, *, bucket: str, key: str, etag: str) -> list[
     events: list[NormalizedEvent] = []
     for index, payload in enumerate(payloads):
         if not isinstance(payload, dict):
-            raise ValueError(f"s3://{bucket}/{key} event {index} must be a JSON object")
-        event_id = _stable_event_id(payload, bucket=bucket, key=key, etag=etag, index=index)
-        events.append(normalize_event({**payload, "event_id": event_id}))
+            logger.warning(
+                "Skipping non-object event %d in s3://%s/%s",
+                index,
+                bucket,
+                key,
+            )
+            continue
+        try:
+            event_id = _stable_event_id(payload, bucket=bucket, key=key, etag=etag, index=index)
+            events.append(normalize_event({**payload, "event_id": event_id}))
+        except EventNormalizeError:
+            logger.warning(
+                "Skipping invalid event %d in s3://%s/%s",
+                index,
+                bucket,
+                key,
+                exc_info=True,
+            )
     return events
 
 
@@ -153,6 +171,8 @@ class S3EventSource(EventSource):
         self._event_batch: dict[str, _Batch] = {}
         self._batches: OrderedDict[str, _Batch] = OrderedDict()
         self._batch_seq = 0
+        self._sqs_visible_lag: int | None = None
+        self._sqs_visible_lag_at: float = 0.0
 
     def connect(self) -> None:
         with self._lock:
@@ -162,7 +182,11 @@ class S3EventSource(EventSource):
                 sqs_kwargs: dict[str, Any] = {
                     "aws_access_key_id": require_option(self._options, "access_key_id", "s3"),
                     "aws_secret_access_key": require_option(self._options, "secret_access_key", "s3"),
-                    "config": Config(retries={"max_attempts": 3, "mode": "standard"}),
+                    "config": Config(
+                        retries={"max_attempts": 3, "mode": "standard"},
+                        connect_timeout=_SQS_CLIENT_TIMEOUT_SECONDS,
+                        read_timeout=_SQS_CLIENT_TIMEOUT_SECONDS,
+                    ),
                 }
                 region_name = _optional_aws_region(self._options)
                 if region_name is not None:
@@ -220,9 +244,13 @@ class S3EventSource(EventSource):
             if self._mode == "sqs":
                 sqs = self._sqs
                 queue_url = self._queue_url
+                cached_visible = self._sqs_visible_lag
+                cached_at = self._sqs_visible_lag_at
             else:
                 sqs = None
                 queue_url = None
+                cached_visible = None
+                cached_at = 0.0
             connected = self._connected
             last_event_at = self._last_event_at
             detail = f"s3 mode={self._mode} bucket={self._bucket}"
@@ -230,16 +258,27 @@ class S3EventSource(EventSource):
                 detail = f"{detail} prefix={self._prefix}"
         lag = held
         if sqs is not None and queue_url:
-            try:
-                attrs = sqs.get_queue_attributes(
-                    QueueUrl=queue_url,
-                    AttributeNames=["ApproximateNumberOfMessages"],
-                ).get("Attributes", {})
+            now = time.monotonic()
+            visible: int | None = None
+            if cached_visible is not None and (now - cached_at) < _SQS_LAG_CACHE_TTL_SECONDS:
+                visible = cached_visible
+            else:
+                try:
+                    attrs = sqs.get_queue_attributes(
+                        QueueUrl=queue_url,
+                        AttributeNames=["ApproximateNumberOfMessages"],
+                    ).get("Attributes", {})
+                    visible = int(attrs.get("ApproximateNumberOfMessages", 0))
+                    with self._lock:
+                        self._sqs_visible_lag = visible
+                        self._sqs_visible_lag_at = now
+                except Exception:
+                    logger.exception("Failed to estimate SQS event lag")
+                    visible = cached_visible
+            if visible is not None:
                 # Visible queue depth + local held work (not_visible is already in held
                 # once received/parsed; avoid double-counting it).
-                lag = held + int(attrs.get("ApproximateNumberOfMessages", 0))
-            except Exception:
-                logger.exception("Failed to estimate SQS event lag")
+                lag = held + visible
         return EventSourceHealth(
             connected=connected,
             lag=lag,

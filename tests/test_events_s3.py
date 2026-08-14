@@ -181,6 +181,28 @@ def test_optional_aws_region():
     assert _optional_aws_region({"region_name": "eu-west-1"}) == "eu-west-1"
 
 
+@mock_aws
+def test_s3_sqs_health_caches_visible_lag(monkeypatch):
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-lag-cache")["QueueUrl"]
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+    calls = {"n": 0}
+    real = source._sqs.get_queue_attributes
+
+    def counting_attrs(**kwargs):
+        calls["n"] += 1
+        return real(**kwargs)
+
+    assert source._sqs is not None
+    monkeypatch.setattr(source._sqs, "get_queue_attributes", counting_attrs)
+    source.health()
+    source.health()
+    assert calls["n"] == 1
+
+
 def test_s3_rejects_sqs_with_endpoint_url():
     with pytest.raises(ConfigError, match="AWS-only"):
         S3EventSource(
@@ -198,8 +220,27 @@ def test_events_from_body_validation():
         _events_from_body(b"{", bucket="b", key="k", etag="e")
     with pytest.raises(ValueError, match="object or array"):
         _events_from_body(b"1", bucket="b", key="k", etag="e")
-    with pytest.raises(ValueError, match="must be a JSON object"):
-        _events_from_body(b"[1]", bucket="b", key="k", etag="e")
+    # Non-dict / invalid elements are skipped; valid siblings are kept.
+    kept = _events_from_body(
+        json.dumps(
+            [
+                1,
+                {
+                    "user_id": "u1",
+                    "item_id": "i1",
+                    "event_type": "view",
+                    "quantity": 1,
+                    "occurred_at": "2026-08-14T12:00:00Z",
+                    "event_id": "ok",
+                },
+                {"user_id": "u1"},  # missing required fields
+            ]
+        ).encode(),
+        bucket="b",
+        key="k",
+        etag="e",
+    )
+    assert [event.event_id for event in kept] == ["ok"]
     with pytest.raises(ValueError, match="JSON object"):
         _s3_records_from_sqs_body("[]")
     with pytest.raises(ValueError, match="Records"):
