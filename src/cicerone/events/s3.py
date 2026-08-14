@@ -6,7 +6,7 @@ import json
 import logging
 import os
 import threading
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -20,13 +20,13 @@ from botocore.exceptions import ClientError
 
 from cicerone.config import ConfigError
 from cicerone.events.base import EventSourceHealth, NormalizedEvent
-from cicerone.events.normalize import EventNormalizeError, normalize_event
+from cicerone.events.normalize import normalize_event
 from cicerone.io.options import build_s3_client, require_option
 
 logger = logging.getLogger(__name__)
 
-_LAG_LIST_LIMIT = 1_000
 _MODES = frozenset({"sqs", "list"})
+_LIST_PAGE_SIZE = 100
 
 
 @dataclass
@@ -39,10 +39,14 @@ class _Batch:
 
 
 def _aws_region_name(options: dict[str, Any]) -> str:
-    """Region for AWS SQS only. S3 clients use ``build_s3_client`` (R2 ``auto``)."""
     if options.get("region_name"):
         return str(options["region_name"])
     return "us-east-1"
+
+
+def _normalize_prefix(raw: Any) -> str:
+    prefix = str(raw or "").strip("/")
+    return f"{prefix}/" if prefix else ""
 
 
 def _stable_event_id(payload: dict[str, Any], *, bucket: str, key: str, etag: str, index: int) -> str:
@@ -103,18 +107,13 @@ def _s3_records_from_sqs_body(body: str) -> list[tuple[str, str]]:
 
 
 class S3EventSource:
-    """Poll JSON event objects from S3-compatible storage (R2-first list/marker).
-
-    Primary path for Torbido/R2: ``mode=list`` with ``endpoint_url`` (same
-    credential shape as ``[input]`` / ``[output]`` dataset S3 options).
-    ``mode=sqs`` is AWS-only (no R2 equivalent).
-    """
+    """R2/MinIO list+marker poll, or AWS SQS notifications (no endpoint_url)."""
 
     def __init__(self, options: dict[str, Any] | None = None):
         options = dict(options or {})
         self._options = options
         self._bucket = str(require_option(options, "bucket", "s3"))
-        self._prefix = str(options.get("prefix") or "").lstrip("/")
+        self._prefix = _normalize_prefix(options.get("prefix"))
         mode = options.get("mode")
         if mode is None:
             mode = "sqs" if options.get("queue_url") else "list"
@@ -141,6 +140,7 @@ class S3EventSource:
         self._lock = threading.Lock()
         self._connected = False
         self._last_event_at: datetime | None = None
+        self._pending: deque[NormalizedEvent] = deque()
         self._in_flight: OrderedDict[str, NormalizedEvent] = OrderedDict()
         self._event_batch: dict[str, _Batch] = {}
         self._batches: OrderedDict[str, _Batch] = OrderedDict()
@@ -148,7 +148,6 @@ class S3EventSource:
 
     def connect(self) -> None:
         with self._lock:
-            # Same client as dataset I/O (region_name="auto" for R2).
             if self._s3 is None:
                 self._s3 = build_s3_client(self._options)
             if self._mode == "sqs" and self._sqs is None:
@@ -178,15 +177,20 @@ class S3EventSource:
         with self._lock:
             if self._s3 is None:
                 raise RuntimeError("S3EventSource.connect() required before poll")
-            mode = self._mode
-        if mode == "sqs":
-            return self._poll_sqs(max_events)
-        return self._poll_list(max_events)
+        out = self._drain_pending(max_events)
+        if len(out) >= max_events:
+            return out
+        if self._mode == "sqs":
+            self._fetch_sqs(max_events - len(out))
+        else:
+            self._fetch_list(max_events - len(out))
+        out.extend(self._drain_pending(max_events - len(out)))
+        return out
 
     def nack(self, events: Sequence[NormalizedEvent]) -> None:
         with self._lock:
             for event in events:
-                self._drop_in_flight_unlocked(event.event_id)
+                self._drop_batch_for_event_unlocked(event.event_id)
 
     def ack(self, event_ids: Sequence[str]) -> None:
         completed: list[_Batch] = []
@@ -198,41 +202,29 @@ class S3EventSource:
                 if batch is None:
                     continue
                 batch.remaining.discard(eid)
-            while self._batches:
-                _key, batch = next(iter(self._batches.items()))
-                if batch.remaining:
-                    break
-                self._batches.popitem(last=False)
-                completed.append(batch)
-                if batch.object_key is not None:
-                    self._marker_key = batch.object_key
-            if completed and self._mode == "list":
-                self._persist_marker_unlocked()
+            completed.extend(self._pop_completed_batches_unlocked())
             sqs = self._sqs
             queue_url = self._queue_url
-        for batch in completed:
-            if batch.receipt_handle and sqs is not None and queue_url:
-                try:
-                    sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=batch.receipt_handle)
-                except ClientError:
-                    logger.exception("Failed to delete SQS message after ack")
+        self._finish_completed(completed, sqs=sqs, queue_url=queue_url)
 
     def health(self) -> EventSourceHealth:
         with self._lock:
+            # Local held work only — full-bucket list scans are too costly on R2
+            # for every worker tick (webhook uses the same pending+in_flight model).
+            lag = len(self._pending) + len(self._in_flight)
+            if self._mode == "sqs":
+                sqs = self._sqs
+                queue_url = self._queue_url
+            else:
+                sqs = None
+                queue_url = None
             connected = self._connected
             last_event_at = self._last_event_at
             detail = f"s3 mode={self._mode} bucket={self._bucket}"
-            in_flight = len(self._in_flight)
-            mode = self._mode
-            marker = self._marker_key
-            s3 = self._s3
-            sqs = self._sqs
-            queue_url = self._queue_url
-            prefix = self._prefix
-            bucket = self._bucket
-        lag: int | None = in_flight
-        try:
-            if mode == "sqs" and sqs is not None and queue_url:
+            if self._prefix:
+                detail = f"{detail} prefix={self._prefix}"
+        if sqs is not None and queue_url:
+            try:
                 attrs = sqs.get_queue_attributes(
                     QueueUrl=queue_url,
                     AttributeNames=[
@@ -240,13 +232,11 @@ class S3EventSource:
                         "ApproximateNumberOfMessagesNotVisible",
                     ],
                 ).get("Attributes", {})
-                visible = int(attrs.get("ApproximateNumberOfMessages", 0))
-                not_visible = int(attrs.get("ApproximateNumberOfMessagesNotVisible", 0))
-                lag = visible + not_visible
-            elif mode == "list" and s3 is not None:
-                lag = self._count_list_lag(s3, bucket, prefix, marker, in_flight)
-        except Exception:
-            logger.exception("Failed to estimate S3 event lag")
+                lag = int(attrs.get("ApproximateNumberOfMessages", 0)) + int(
+                    attrs.get("ApproximateNumberOfMessagesNotVisible", 0)
+                )
+            except Exception:
+                logger.exception("Failed to estimate SQS event lag")
         return EventSourceHealth(
             connected=connected,
             lag=lag,
@@ -254,44 +244,81 @@ class S3EventSource:
             detail=detail,
         )
 
-    def _count_list_lag(self, s3, bucket: str, prefix: str, marker: str, in_flight: int) -> int | None:
-        kwargs: dict[str, Any] = {"Bucket": bucket, "MaxKeys": _LAG_LIST_LIMIT}
+    def _drain_pending(self, limit: int) -> list[NormalizedEvent]:
+        out: list[NormalizedEvent] = []
+        with self._lock:
+            while self._pending and len(out) < limit:
+                event = self._pending.popleft()
+                self._in_flight[event.event_id] = event
+                out.append(event)
+        return out
+
+    def _fetch_list(self, need: int) -> None:
+        if need < 1:
+            return
+        with self._lock:
+            s3 = self._s3
+            bucket = self._bucket
+            prefix = self._prefix
+            marker = self._marker_key
+            held_ids = set(self._in_flight) | {event.event_id for event in self._pending}
+            held_keys = {batch.object_key for batch in self._batches.values() if batch.object_key}
+        assert s3 is not None
+        kwargs: dict[str, Any] = {
+            "Bucket": bucket,
+            "MaxKeys": min(_LIST_PAGE_SIZE, max(need, 1)),
+        }
         if prefix:
             kwargs["Prefix"] = prefix
         if marker:
             kwargs["StartAfter"] = marker
-        listed = 0
-        while listed < _LAG_LIST_LIMIT:
-            page = s3.list_objects_v2(**kwargs)
-            contents = page.get("Contents") or []
-            listed += len(contents)
-            if not page.get("IsTruncated"):
-                return listed + in_flight
-            kwargs["StartAfter"] = contents[-1]["Key"]
-            if listed >= _LAG_LIST_LIMIT:
+        page = s3.list_objects_v2(**kwargs)
+        loaded = 0
+        for obj in page.get("Contents") or []:
+            if loaded >= need:
                 break
-        return None
+            key = str(obj["Key"])
+            if key in held_keys:
+                continue
+            etag = str(obj.get("ETag") or "")
+            try:
+                events = self._load_object_events(s3, bucket, key, etag=etag)
+            except Exception:
+                logger.exception("Skipping unreadable s3://%s/%s", bucket, key)
+                self._register_batch([], object_key=key, object_etag=etag)
+                continue
+            novel = [event for event in events if event.event_id not in held_ids]
+            if not novel:
+                self._register_batch([], object_key=key, object_etag=etag)
+                continue
+            self._register_batch(novel, object_key=key, object_etag=etag)
+            held_ids.update(event.event_id for event in novel)
+            held_keys.add(key)
+            loaded += len(novel)
 
-    def _poll_sqs(self, max_events: int) -> list[NormalizedEvent]:
+    def _fetch_sqs(self, need: int) -> None:
+        if need < 1:
+            return
         with self._lock:
             sqs = self._sqs
             s3 = self._s3
             queue_url = self._queue_url
-            in_flight_ids = set(self._in_flight)
+            held_ids = set(self._in_flight) | {event.event_id for event in self._pending}
         assert sqs is not None and s3 is not None and queue_url is not None
-        out: list[NormalizedEvent] = []
-        while len(out) < max_events:
-            remaining = max_events - len(out)
+        loaded = 0
+        while loaded < need:
             response = sqs.receive_message(
                 QueueUrl=queue_url,
-                MaxNumberOfMessages=min(self._max_messages, max(1, remaining)),
-                WaitTimeSeconds=self._wait_time_seconds if not out else 0,
+                MaxNumberOfMessages=min(self._max_messages, 10),
+                WaitTimeSeconds=self._wait_time_seconds if loaded == 0 else 0,
                 MessageAttributeNames=["All"],
             )
             messages = response.get("Messages") or []
             if not messages:
                 break
             for message in messages:
+                if loaded >= need:
+                    break
                 receipt = message["ReceiptHandle"]
                 try:
                     pairs = _s3_records_from_sqs_body(message["Body"])
@@ -299,76 +326,41 @@ class S3EventSource:
                     logger.exception("Invalid S3 notification on SQS; deleting poison message")
                     sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt)
                     continue
+                if not pairs:
+                    sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt)
+                    continue
                 batch_events: list[NormalizedEvent] = []
+                failed = False
                 for bucket, key in pairs:
                     try:
                         batch_events.extend(self._load_object_events(s3, bucket, key))
                     except Exception:
-                        logger.exception("Failed to load s3://%s/%s from SQS notification", bucket, key)
-                novel = [event for event in batch_events if event.event_id not in in_flight_ids]
+                        logger.exception(
+                            "Failed to load s3://%s/%s from SQS notification; leaving message for retry",
+                            bucket,
+                            key,
+                        )
+                        failed = True
+                        break
+                if failed:
+                    continue
+                novel = [event for event in batch_events if event.event_id not in held_ids]
                 if not novel:
                     sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt)
                     continue
                 self._register_batch(novel, receipt_handle=receipt)
-                in_flight_ids.update(event.event_id for event in novel)
-                out.extend(novel)
-                if len(out) >= max_events:
-                    break
-        return out
-
-    def _poll_list(self, max_events: int) -> list[NormalizedEvent]:
-        with self._lock:
-            s3 = self._s3
-            bucket = self._bucket
-            prefix = self._prefix
-            marker = self._marker_key
-            in_flight_ids = set(self._in_flight)
-            in_flight_keys = {batch.object_key for batch in self._batches.values() if batch.object_key}
-        assert s3 is not None
-        kwargs: dict[str, Any] = {"Bucket": bucket, "MaxKeys": max(1, max_events)}
-        if prefix:
-            kwargs["Prefix"] = prefix
-        if marker:
-            kwargs["StartAfter"] = marker
-        page = s3.list_objects_v2(**kwargs)
-        out: list[NormalizedEvent] = []
-        for obj in page.get("Contents") or []:
-            if len(out) >= max_events:
-                break
-            key = str(obj["Key"])
-            if key in in_flight_keys:
-                continue
-            try:
-                events = self._load_object_events(s3, bucket, key, etag=str(obj.get("ETag") or ""))
-            except Exception:
-                logger.exception("Skipping unreadable s3://%s/%s", bucket, key)
-                self._register_batch([], object_key=key, object_etag=str(obj.get("ETag") or ""))
-                continue
-            novel = [event for event in events if event.event_id not in in_flight_ids]
-            if not novel:
-                self._register_batch([], object_key=key, object_etag=str(obj.get("ETag") or ""))
-                continue
-            self._register_batch(
-                novel,
-                object_key=key,
-                object_etag=str(obj.get("ETag") or ""),
-            )
-            in_flight_ids.update(event.event_id for event in novel)
-            out.extend(novel)
-        if not out:
-            # Advance marker past empty/skipped leading objects already registered.
-            self.ack([])
-        return out
+                held_ids.update(event.event_id for event in novel)
+                loaded += len(novel)
 
     def _load_object_events(self, s3, bucket: str, key: str, etag: str = "") -> list[NormalizedEvent]:
         obj = s3.get_object(Bucket=bucket, Key=key)
         resolved_etag = etag or str(obj.get("ETag") or "")
-        body = obj["Body"].read()
-        try:
-            return _events_from_body(body, bucket=bucket, key=key, etag=resolved_etag)
-        except (EventNormalizeError, ValueError):
-            logger.exception("Invalid event payload in s3://%s/%s", bucket, key)
-            raise
+        return _events_from_body(
+            obj["Body"].read(),
+            bucket=bucket,
+            key=key,
+            etag=resolved_etag,
+        )
 
     def _register_batch(
         self,
@@ -384,33 +376,67 @@ class S3EventSource:
             receipt_handle=receipt_handle,
             object_key=object_key,
             object_etag=object_etag,
-            event_ids=event_ids,
+            event_ids=set(event_ids),
         )
+        completed: list[_Batch] = []
         with self._lock:
             self._batch_seq += 1
             batch_key = f"{self._batch_seq}:{object_key or receipt_handle or self._batch_seq}"
             self._batches[batch_key] = batch
             for event in events:
-                self._in_flight[event.event_id] = event
                 self._event_batch[event.event_id] = batch
+                self._pending.append(event)
                 self._last_event_at = event.occurred_at
+            # Empty / skip batches complete immediately when they lead the queue.
+            completed.extend(self._pop_completed_batches_unlocked())
+            sqs = self._sqs
+            queue_url = self._queue_url
+        self._finish_completed(completed, sqs=sqs, queue_url=queue_url)
 
-    def _drop_in_flight_unlocked(self, event_id: str) -> None:
+    def _pop_completed_batches_unlocked(self) -> list[_Batch]:
+        completed: list[_Batch] = []
+        while self._batches:
+            _key, batch = next(iter(self._batches.items()))
+            if batch.remaining:
+                break
+            self._batches.popitem(last=False)
+            completed.append(batch)
+            if batch.object_key is not None:
+                self._marker_key = batch.object_key
+        if completed and self._mode == "list":
+            self._persist_marker_unlocked()
+        return completed
+
+    def _finish_completed(
+        self,
+        completed: list[_Batch],
+        *,
+        sqs: Any,
+        queue_url: str | None,
+    ) -> None:
+        for batch in completed:
+            if batch.receipt_handle and sqs is not None and queue_url:
+                try:
+                    sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=batch.receipt_handle)
+                except ClientError:
+                    logger.exception("Failed to delete SQS message after ack")
+
+    def _drop_batch_for_event_unlocked(self, event_id: str) -> None:
         eid = str(event_id)
         self._in_flight.pop(eid, None)
         batch = self._event_batch.pop(eid, None)
         if batch is None:
             return
-        batch.remaining.discard(eid)
-        batch.event_ids.discard(eid)
-        # Drop the whole SQS/list batch so visibility timeout / re-list can retry.
+        drop_ids = set(batch.event_ids)
         for key, candidate in list(self._batches.items()):
             if candidate is batch:
                 self._batches.pop(key, None)
                 break
-        for other_id in list(batch.event_ids):
+        for other_id in drop_ids:
             self._in_flight.pop(other_id, None)
             self._event_batch.pop(other_id, None)
+        if drop_ids:
+            self._pending = deque(event for event in self._pending if event.event_id not in drop_ids)
 
     def _load_marker_unlocked(self) -> None:
         if self._marker_path is None or not self._marker_path.is_file():

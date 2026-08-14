@@ -231,7 +231,7 @@ ops surface). Serve `/metrics` exposes:
 
 | Metric | Meaning |
 | --- | --- |
-| `cicerone_events_source_lag` | Source backlog (`-1` if unknown / events off) |
+| `cicerone_events_source_lag` | Source backlog (`-1` if unknown / events off). Webhook/S3-list: pending + in-flight. S3-SQS: approximate queue depth. DB: rows after watermark. |
 | `cicerone_events_source_connected` | `1` when the source reports connected |
 | `cicerone_events_flush_total{status=}` | Flush outcomes: `success` / `busy` / `error` |
 | `cicerone_events_flush_events_total` | Events applied on successful flushes |

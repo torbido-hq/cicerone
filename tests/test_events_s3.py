@@ -301,23 +301,59 @@ def test_s3_list_duplicate_object_advances_marker(tmp_path):
 
 
 @mock_aws
-def test_count_list_lag_truncated(monkeypatch):
-    import cicerone.events.s3 as s3_mod
-
+def test_s3_list_respects_max_events_with_pending():
+    """Large object payloads must not over-deliver past max_events (buffer safety)."""
     client = boto3.client("s3", region_name="us-east-1")
     client.create_bucket(Bucket="events-bucket")
+    client.put_object(
+        Bucket="events-bucket",
+        Key="events/big.json",
+        Body=json.dumps(
+            [
+                {
+                    "user_id": "u1",
+                    "item_id": f"i{i}",
+                    "event_type": "view",
+                    "quantity": 1,
+                    "occurred_at": "2026-08-14T12:00:00Z",
+                    "event_id": f"e{i}",
+                }
+                for i in range(5)
+            ]
+        ),
+    )
+    source = S3EventSource(_creds(mode="list", prefix="events/"))
+    source.connect()
+    first = list(source.poll(2))
+    assert [event.event_id for event in first] == ["e0", "e1"]
+    assert source.health().lag == 5  # 2 in_flight delivered + 3 still pending
+    second = list(source.poll(10))
+    assert [event.event_id for event in second] == ["e2", "e3", "e4"]
+    source.ack([event.event_id for event in first + second])
+    assert list(source.poll(10)) == []
+
+
+@mock_aws
+def test_s3_list_prefix_is_directory_scoped():
+    client = boto3.client("s3", region_name="us-east-1")
+    client.create_bucket(Bucket="events-bucket")
+    _put_event(client, "events/a.json", event_payload(event_id="keep"))
+    _put_event(client, "events_other/b.json", event_payload(event_id="skip"))
+    source = S3EventSource(_creds(mode="list", prefix="events"))  # no trailing slash
+    source.connect()
+    events = list(source.poll(10))
+    assert [event.event_id for event in events] == ["keep"]
+
+
+@mock_aws
+def test_count_list_lag_truncated(monkeypatch):
+    # retained name for history; list lag is local pending+in_flight (no R2 scan)
+    client = boto3.client("s3", region_name="us-east-1")
+    client.create_bucket(Bucket="events-bucket")
+    _put_event(client, "a.json", event_payload(event_id="x"))
     source = S3EventSource(_creds(mode="list"))
     source.connect()
-    calls = {"n": 0}
-
-    def fake_list(**_kwargs):
-        calls["n"] += 1
-        return {
-            "Contents": [{"Key": f"k{i}"} for i in range(1000)],
-            "IsTruncated": True,
-        }
-
-    assert source._s3 is not None
-    monkeypatch.setattr(source._s3, "list_objects_v2", fake_list)
-    monkeypatch.setattr(s3_mod, "_LAG_LIST_LIMIT", 1000)
-    assert source._count_list_lag(source._s3, "events-bucket", "p/", "m", 0) is None
+    events = list(source.poll(1))
+    assert source.health().lag == 1
+    source.ack([events[0].event_id])
+    assert source.health().lag == 0
