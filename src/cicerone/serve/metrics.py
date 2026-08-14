@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 import time
 
 from prometheus_client import Counter, Gauge, Histogram
+
+logger = logging.getLogger(__name__)
 
 REQUESTS_TOTAL = Counter(
     "cicerone_requests_total",
@@ -136,7 +139,11 @@ def record_recommendations_served(stored_sources: set[str]) -> None:
 
 
 def record_events_flush(*, status: str, events: int = 0) -> None:
-    label = status if status in _EVENTS_FLUSH_STATUSES else "error"
+    if status in _EVENTS_FLUSH_STATUSES:
+        label = status
+    else:
+        logger.warning("Unknown events flush status %r; recording as error", status)
+        label = "error"
     EVENTS_FLUSH_TOTAL.labels(status=label).inc()
     if label == "success" and events > 0:
         EVENTS_FLUSH_EVENTS_TOTAL.inc(events)

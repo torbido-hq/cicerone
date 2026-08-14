@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 from support.events import event_payload
+from support.prometheus_metrics import registry_metric_value
 
 from cicerone.config import EventsSettings, IOSettings, make_settings
 from cicerone.events.buffer import MicroBatchBuffer
@@ -38,9 +39,6 @@ def test_event_worker_tick(tmp_path, feature_config: FeatureConfig):
 
 
 def test_event_worker_records_flush_metrics(tmp_path, feature_config: FeatureConfig):
-    from prometheus_client import generate_latest
-    from prometheus_client.parser import text_string_to_metric_families
-
     out = tmp_path / "out"
     out.mkdir()
     pd.DataFrame(
@@ -64,21 +62,10 @@ def test_event_worker_records_flush_metrics(tmp_path, feature_config: FeatureCon
         updater,
     )
 
-    def _value(name: str, labels: dict[str, str] | None = None) -> float:
-        total = 0.0
-        for family in text_string_to_metric_families(generate_latest().decode()):
-            for sample in family.samples:
-                if sample.name != name:
-                    continue
-                if labels is not None and dict(sample.labels) != labels:
-                    continue
-                total += sample.value
-        return total
-
-    before = _value("cicerone_events_flush_total", {"status": "success"})
+    before = registry_metric_value("cicerone_events_flush_total", {"status": "success"})
     assert worker.tick() == 1
-    assert _value("cicerone_events_flush_total", {"status": "success"}) == before + 1
-    assert _value("cicerone_events_flush_events_total") >= 1
+    assert registry_metric_value("cicerone_events_flush_total", {"status": "success"}) == before + 1
+    assert registry_metric_value("cicerone_events_flush_events_total") >= 1
 
 
 def test_event_worker_busy_nacks(tmp_path, feature_config: FeatureConfig):
@@ -102,21 +89,10 @@ def test_event_worker_busy_nacks(tmp_path, feature_config: FeatureConfig):
     )
     buffer = MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0)
     worker = EventWorker(source, buffer, updater, poll_interval_seconds=0.01)
-    from prometheus_client import generate_latest
-    from prometheus_client.parser import text_string_to_metric_families
-
-    def _flush(status: str) -> float:
-        total = 0.0
-        for family in text_string_to_metric_families(generate_latest().decode()):
-            for sample in family.samples:
-                if sample.name == "cicerone_events_flush_total" and dict(sample.labels) == {"status": status}:
-                    total += sample.value
-        return total
-
-    before_busy = _flush("busy")
+    before_busy = registry_metric_value("cicerone_events_flush_total", {"status": "busy"})
     assert worker.tick() == 0
     assert source.health().lag == 1
-    assert _flush("busy") == before_busy + 1
+    assert registry_metric_value("cicerone_events_flush_total", {"status": "busy"}) == before_busy + 1
 
 
 def test_event_worker_apply_failure_nacks(tmp_path, feature_config: FeatureConfig):
@@ -143,26 +119,12 @@ def test_event_worker_apply_failure_nacks(tmp_path, feature_config: FeatureConfi
             top_k=3,
         ),
     )
-    from prometheus_client import generate_latest
-    from prometheus_client.parser import text_string_to_metric_families
-
-    def _metric(name: str, labels: dict[str, str] | None = None) -> float:
-        total = 0.0
-        for family in text_string_to_metric_families(generate_latest().decode()):
-            for sample in family.samples:
-                if sample.name != name:
-                    continue
-                if labels is not None and dict(sample.labels) != labels:
-                    continue
-                total += sample.value
-        return total
-
-    before_error = _metric("cicerone_events_flush_total", {"status": "error"})
-    before_tick = _metric("cicerone_events_tick_errors_total")
+    before_error = registry_metric_value("cicerone_events_flush_total", {"status": "error"})
+    before_tick = registry_metric_value("cicerone_events_tick_errors_total")
     assert worker.tick() == 0
     assert source.health().lag == 1
-    assert _metric("cicerone_events_flush_total", {"status": "error"}) == before_error + 1
-    assert _metric("cicerone_events_tick_errors_total") == before_tick
+    assert registry_metric_value("cicerone_events_flush_total", {"status": "error"}) == before_error + 1
+    assert registry_metric_value("cicerone_events_tick_errors_total") == before_tick
 
 
 def test_event_worker_partial_apply_nacks(tmp_path, feature_config: FeatureConfig):
@@ -190,23 +152,10 @@ def test_event_worker_partial_apply_nacks(tmp_path, feature_config: FeatureConfi
             top_k=3,
         ),
     )
-    from prometheus_client import generate_latest
-    from prometheus_client.parser import text_string_to_metric_families
-
-    def _flush_error() -> float:
-        total = 0.0
-        for family in text_string_to_metric_families(generate_latest().decode()):
-            for sample in family.samples:
-                if sample.name == "cicerone_events_flush_total" and dict(sample.labels) == {
-                    "status": "error"
-                }:
-                    total += sample.value
-        return total
-
-    before = _flush_error()
+    before = registry_metric_value("cicerone_events_flush_total", {"status": "error"})
     assert worker.tick() == 0
     assert source.health().lag == 2
-    assert _flush_error() == before + 1
+    assert registry_metric_value("cicerone_events_flush_total", {"status": "error"}) == before + 1
 
 
 def test_event_worker_tick_noop_when_empty(tmp_path, feature_config: FeatureConfig):
