@@ -299,8 +299,30 @@ def test_metrics_endpoint_refreshes_events_source_health():
         MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
         updater,
     )
+    worker.refresh_source_health_metrics()
     app = create_app(settings, _FakeReader(_recs_df()), events_worker=worker)
     body = TestClient(app).get("/metrics").text
     assert "cicerone_events_source_lag" in body
     assert _metric_value(body, "cicerone_events_source_connected") == 1.0
     assert _metric_value(body, "cicerone_events_source_lag") == 1.0
+
+
+def test_metrics_endpoint_resets_events_gauges_without_worker():
+    app = create_app(_settings(), _FakeReader(_recs_df()), events_worker=None)
+    from cicerone.serve import metrics as metrics_mod
+
+    metrics_mod.update_events_source_health(connected=True, lag=9)
+    body = TestClient(app).get("/metrics").text
+    assert _metric_value(body, "cicerone_events_source_connected") == 0.0
+    assert _metric_value(body, "cicerone_events_source_lag") == -1.0
+
+
+def test_record_events_flush_clamps_unknown_status():
+    from prometheus_client import generate_latest
+
+    from cicerone.serve import metrics as metrics_mod
+
+    before = _metric_value(generate_latest().decode(), "cicerone_events_flush_total", {"status": "error"})
+    metrics_mod.record_events_flush(status="weird")
+    after = generate_latest().decode()
+    assert _metric_value(after, "cicerone_events_flush_total", {"status": "error"}) == before + 1

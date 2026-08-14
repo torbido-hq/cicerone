@@ -78,6 +78,7 @@ UP.set(1)
 METRICS_TOKEN_HEADER = "X-Metrics-Token"
 
 _RETRAIN_SOURCES = frozenset({"webhook", "poll", "cron", "s3-poll", "manual"})
+_EVENTS_FLUSH_STATUSES = frozenset({"success", "busy", "error"})
 
 _SOURCE_TO_METRIC: dict[str, str] = {
     "personalized": "collaborative",
@@ -89,7 +90,7 @@ _SOURCE_TO_METRIC: dict[str, str] = {
 
 _last_successful_refresh_at: float | None = None
 
-# Default gauges when events are off / not yet scraped.
+# Default gauges when events are off / not yet refreshed by the worker.
 EVENTS_SOURCE_CONNECTED.set(0)
 EVENTS_SOURCE_LAG.set(-1)
 EVENTS_LAST_SUCCESS_TIMESTAMP_SECONDS.set(0)
@@ -135,8 +136,9 @@ def record_recommendations_served(stored_sources: set[str]) -> None:
 
 
 def record_events_flush(*, status: str, events: int = 0) -> None:
-    EVENTS_FLUSH_TOTAL.labels(status=status).inc()
-    if status == "success" and events > 0:
+    label = status if status in _EVENTS_FLUSH_STATUSES else "error"
+    EVENTS_FLUSH_TOTAL.labels(status=label).inc()
+    if label == "success" and events > 0:
         EVENTS_FLUSH_EVENTS_TOTAL.inc(events)
         EVENTS_LAST_SUCCESS_TIMESTAMP_SECONDS.set(time.time())
 

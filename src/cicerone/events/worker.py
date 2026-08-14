@@ -36,14 +36,11 @@ class EventWorker:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
-    @property
-    def source(self) -> EventSource:
-        return self._source
-
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
             return
         self._source.connect()
+        self.refresh_source_health_metrics()
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, name="cicerone-events", daemon=True)
         self._thread.start()
@@ -84,6 +81,8 @@ class EventWorker:
             except Exception:
                 record_events_tick_error()
                 logger.exception("Event worker tick failed")
+            finally:
+                self.refresh_source_health_metrics()
             self._stop.wait(self._poll_interval_seconds)
 
     def tick(self) -> int:
@@ -102,7 +101,7 @@ class EventWorker:
             record_events_flush(status="error")
             logger.exception("Incremental apply failed; returning %d event(s) to source", len(ready))
             self._source.nack(ready)
-            raise
+            return 0
         if applied == 0:
             # Busy: return to source so lag stays accurate and another tick can retry.
             record_events_flush(status="busy")
@@ -116,10 +115,13 @@ class EventWorker:
                 len(ready),
             )
             self._source.nack(ready)
-            raise RuntimeError(
-                f"IncrementalUpdater.apply returned {applied} for batch of {len(ready)}; "
-                "partial apply is not supported"
-            )
+            return 0
+        try:
+            self._source.ack([event.event_id for event in ready])
+        except Exception:
+            record_events_flush(status="error")
+            logger.exception("Event source ack failed after successful apply; nacking batch")
+            self._source.nack(ready)
+            raise
         record_events_flush(status="success", events=applied)
-        self._source.ack([event.event_id for event in ready])
         return applied

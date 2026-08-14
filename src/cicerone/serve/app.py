@@ -297,10 +297,8 @@ def create_app(
             if metrics_token and request.headers.get(METRICS_TOKEN_HEADER) != metrics_token:
                 raise HTTPException(status_code=401, detail="Invalid or missing metrics token")
             update_cache_age_gauge()
-            worker = getattr(request.app.state, "events_worker", None)
-            if worker is not None:
-                worker.refresh_source_health_metrics()
-            else:
+            # Event source lag/connected are refreshed by the worker loop (not on scrape).
+            if request.app.state.events_worker is None:
                 update_events_source_health(connected=False, lag=None)
             return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 

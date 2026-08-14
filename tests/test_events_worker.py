@@ -102,8 +102,21 @@ def test_event_worker_busy_nacks(tmp_path, feature_config: FeatureConfig):
     )
     buffer = MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0)
     worker = EventWorker(source, buffer, updater, poll_interval_seconds=0.01)
+    from prometheus_client import generate_latest
+    from prometheus_client.parser import text_string_to_metric_families
+
+    def _flush(status: str) -> float:
+        total = 0.0
+        for family in text_string_to_metric_families(generate_latest().decode()):
+            for sample in family.samples:
+                if sample.name == "cicerone_events_flush_total" and dict(sample.labels) == {"status": status}:
+                    total += sample.value
+        return total
+
+    before_busy = _flush("busy")
     assert worker.tick() == 0
     assert source.health().lag == 1
+    assert _flush("busy") == before_busy + 1
 
 
 def test_event_worker_apply_failure_nacks(tmp_path, feature_config: FeatureConfig):
@@ -130,13 +143,26 @@ def test_event_worker_apply_failure_nacks(tmp_path, feature_config: FeatureConfi
             top_k=3,
         ),
     )
-    try:
-        worker.tick()
-        raised = False
-    except RuntimeError:
-        raised = True
-    assert raised
+    from prometheus_client import generate_latest
+    from prometheus_client.parser import text_string_to_metric_families
+
+    def _metric(name: str, labels: dict[str, str] | None = None) -> float:
+        total = 0.0
+        for family in text_string_to_metric_families(generate_latest().decode()):
+            for sample in family.samples:
+                if sample.name != name:
+                    continue
+                if labels is not None and dict(sample.labels) != labels:
+                    continue
+                total += sample.value
+        return total
+
+    before_error = _metric("cicerone_events_flush_total", {"status": "error"})
+    before_tick = _metric("cicerone_events_tick_errors_total")
+    assert worker.tick() == 0
     assert source.health().lag == 1
+    assert _metric("cicerone_events_flush_total", {"status": "error"}) == before_error + 1
+    assert _metric("cicerone_events_tick_errors_total") == before_tick
 
 
 def test_event_worker_partial_apply_nacks(tmp_path, feature_config: FeatureConfig):
@@ -164,14 +190,23 @@ def test_event_worker_partial_apply_nacks(tmp_path, feature_config: FeatureConfi
             top_k=3,
         ),
     )
-    try:
-        worker.tick()
-        raised = False
-    except RuntimeError as exc:
-        raised = True
-        assert "partial apply" in str(exc)
-    assert raised
+    from prometheus_client import generate_latest
+    from prometheus_client.parser import text_string_to_metric_families
+
+    def _flush_error() -> float:
+        total = 0.0
+        for family in text_string_to_metric_families(generate_latest().decode()):
+            for sample in family.samples:
+                if sample.name == "cicerone_events_flush_total" and dict(sample.labels) == {
+                    "status": "error"
+                }:
+                    total += sample.value
+        return total
+
+    before = _flush_error()
+    assert worker.tick() == 0
     assert source.health().lag == 2
+    assert _flush_error() == before + 1
 
 
 def test_event_worker_tick_noop_when_empty(tmp_path, feature_config: FeatureConfig):

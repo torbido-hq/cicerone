@@ -226,10 +226,18 @@ ops surface). Serve `/metrics` exposes:
 | `cicerone_events_flush_total{status=}` | Flush outcomes: `success` / `busy` / `error` |
 | `cicerone_events_flush_events_total` | Events applied on successful flushes |
 | `cicerone_events_last_success_timestamp_seconds` | Last successful flush (Unix seconds) |
-| `cicerone_events_tick_errors_total` | Unhandled worker tick exceptions |
+| `cicerone_events_tick_errors_total` | Unexpected exceptions outside handled flush paths |
+
+The worker refreshes lag/connected each poll cycle (not on `/metrics` scrape),
+so DB `health()` work stays off the Prometheus path. Flush apply/partial
+failures increment `flush_total{status="error"}` only (they do not also bump
+tick errors).
 
 The dashboard (when `[events] enabled`) shows the latest incremental
-manifest fields beside job status; live lag stays on serve `/metrics`.
+**success** from recent manifests beside job status; live lag stays on serve
+`/metrics`. With a dataset output, a later full retrain overwrites
+`manifest.json`, so the panel may go empty until the next incremental flush
+(prefer a DB output for history).
 
 ## Serve webhook
 
