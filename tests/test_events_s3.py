@@ -279,8 +279,45 @@ def test_s3_sqs_poison_and_missing_object_and_health():
     source.connect()
     events = list(source.poll(10))
     assert [event.event_id for event in events] == ["ok-sqs"]
-    assert source.health().lag is not None
+    assert source.health().lag is not None and source.health().lag >= 1
     source.ack(["unknown-id", events[0].event_id])
+
+
+@mock_aws
+def test_s3_sqs_filters_bucket_and_prefix():
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    s3.create_bucket(Bucket="other-bucket")
+    queue_url = sqs.create_queue(QueueName="events-filter")["QueueUrl"]
+    _put_event(s3, "events/keep.json", event_payload(event_id="keep"))
+    _put_event(s3, "other/skip.json", event_payload(event_id="skip-prefix"))
+    s3.put_object(
+        Bucket="other-bucket",
+        Key="events/foreign.json",
+        Body=json.dumps(event_payload(event_id="skip-bucket")).encode(),
+    )
+    sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification("other/skip.json"))
+    sqs.send_message(
+        QueueUrl=queue_url,
+        MessageBody=_s3_notification("events/foreign.json", bucket="other-bucket"),
+    )
+    sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification("events/keep.json"))
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url, prefix="events/"))
+    source.connect()
+    events = list(source.poll(10))
+    assert [event.event_id for event in events] == ["keep"]
+
+
+def test_matching_sqs_records_helper():
+    source = S3EventSource(_creds(mode="list", prefix="events/"))
+    assert source._matching_sqs_records(
+        [
+            ("events-bucket", "events/a.json"),
+            ("events-bucket", "other/b.json"),
+            ("nope", "events/c.json"),
+        ]
+    ) == [("events-bucket", "events/a.json")]
 
 
 @mock_aws

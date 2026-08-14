@@ -107,24 +107,9 @@ def load_events_settings(
     if enabled and kind == "db" and not options.get("database_url"):
         raise ConfigError('events.options.database_url is required when events.kind = "db"')
     if enabled and kind == "s3":
-        for key in ("access_key_id", "secret_access_key", "bucket"):
-            if not options.get(key):
-                raise ConfigError(f'events.options.{key} is required when events.kind = "s3"')
-        s3_mode = options.get("mode")
-        if s3_mode is not None and str(s3_mode).lower() not in {"sqs", "list"}:
-            raise ConfigError(f'events.options.mode must be "sqs" or "list", got {s3_mode!r}')
-        if s3_mode is not None:
-            resolved_mode = str(s3_mode).lower()
-        else:
-            resolved_mode = "sqs" if options.get("queue_url") else "list"
-        if resolved_mode == "sqs":
-            if options.get("endpoint_url"):
-                raise ConfigError(
-                    'events.options.mode = "sqs" is AWS-only; '
-                    'S3-compatible endpoints (R2/MinIO) must use mode = "list"'
-                )
-            if not options.get("queue_url"):
-                raise ConfigError('events.options.queue_url is required when events.options.mode = "sqs"')
+        from cicerone.events.s3 import validate_s3_event_options
+
+        validate_s3_event_options(options)
 
     return EventsSettings(
         enabled=enabled,

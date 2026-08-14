@@ -29,6 +29,29 @@ _MODES = frozenset({"sqs", "list"})
 _LIST_PAGE_SIZE = 100
 
 
+def validate_s3_event_options(options: dict[str, Any]) -> str:
+    """Validate ``events.options`` for ``kind=s3``; return resolved mode."""
+    for key in ("access_key_id", "secret_access_key", "bucket"):
+        if not options.get(key):
+            raise ConfigError(f'events.options.{key} is required when events.kind = "s3"')
+    mode = options.get("mode")
+    if mode is None:
+        resolved = "sqs" if options.get("queue_url") else "list"
+    else:
+        resolved = str(mode).lower()
+        if resolved not in _MODES:
+            raise ConfigError(f"events.options.mode must be one of {sorted(_MODES)}, got {mode!r}")
+    if resolved == "sqs":
+        if options.get("endpoint_url"):
+            raise ConfigError(
+                'events.options.mode = "sqs" is AWS-only; '
+                'S3-compatible endpoints (R2/MinIO) must use mode = "list"'
+            )
+        if not options.get("queue_url"):
+            raise ConfigError('events.options.queue_url is required when events.options.mode = "sqs"')
+    return resolved
+
+
 @dataclass
 class _Batch:
     remaining: set[str]
@@ -112,25 +135,10 @@ class S3EventSource:
     def __init__(self, options: dict[str, Any] | None = None):
         options = dict(options or {})
         self._options = options
-        self._bucket = str(require_option(options, "bucket", "s3"))
+        self._mode = validate_s3_event_options(options)
+        self._bucket = str(options["bucket"])
         self._prefix = _normalize_prefix(options.get("prefix"))
-        mode = options.get("mode")
-        if mode is None:
-            mode = "sqs" if options.get("queue_url") else "list"
-        mode = str(mode).lower()
-        if mode not in _MODES:
-            raise ConfigError(f"events.options.mode must be one of {sorted(_MODES)}, got {mode!r}")
-        self._mode = mode
-        self._queue_url = options.get("queue_url")
-        if self._mode == "sqs":
-            if options.get("endpoint_url"):
-                raise ConfigError(
-                    'events.options.mode = "sqs" is AWS-only; '
-                    'S3-compatible endpoints (R2/MinIO) must use mode = "list"'
-                )
-            if not self._queue_url:
-                raise ConfigError('events.options.queue_url is required when events.options.mode = "sqs"')
-            self._queue_url = str(self._queue_url)
+        self._queue_url = str(options["queue_url"]) if self._mode == "sqs" else None
         self._marker_path = Path(options["marker_path"]) if options.get("marker_path") else None
         self._marker_key = str(options.get("initial_marker") or "")
         self._wait_time_seconds = max(0, int(options.get("wait_time_seconds", 0)))
@@ -209,9 +217,7 @@ class S3EventSource:
 
     def health(self) -> EventSourceHealth:
         with self._lock:
-            # Local held work only — full-bucket list scans are too costly on R2
-            # for every worker tick (webhook uses the same pending+in_flight model).
-            lag = len(self._pending) + len(self._in_flight)
+            held = len(self._pending) + len(self._in_flight)
             if self._mode == "sqs":
                 sqs = self._sqs
                 queue_url = self._queue_url
@@ -223,18 +229,16 @@ class S3EventSource:
             detail = f"s3 mode={self._mode} bucket={self._bucket}"
             if self._prefix:
                 detail = f"{detail} prefix={self._prefix}"
+        lag = held
         if sqs is not None and queue_url:
             try:
                 attrs = sqs.get_queue_attributes(
                     QueueUrl=queue_url,
-                    AttributeNames=[
-                        "ApproximateNumberOfMessages",
-                        "ApproximateNumberOfMessagesNotVisible",
-                    ],
+                    AttributeNames=["ApproximateNumberOfMessages"],
                 ).get("Attributes", {})
-                lag = int(attrs.get("ApproximateNumberOfMessages", 0)) + int(
-                    attrs.get("ApproximateNumberOfMessagesNotVisible", 0)
-                )
+                # Visible queue depth + local held work (not_visible is already in held
+                # once received/parsed; avoid double-counting it).
+                lag = held + int(attrs.get("ApproximateNumberOfMessages", 0))
             except Exception:
                 logger.exception("Failed to estimate SQS event lag")
         return EventSourceHealth(
@@ -296,6 +300,16 @@ class S3EventSource:
             held_keys.add(key)
             loaded += len(novel)
 
+    def _matching_sqs_records(self, pairs: Sequence[tuple[str, str]]) -> list[tuple[str, str]]:
+        matched: list[tuple[str, str]] = []
+        for bucket, key in pairs:
+            if bucket != self._bucket:
+                continue
+            if self._prefix and not key.startswith(self._prefix):
+                continue
+            matched.append((bucket, key))
+        return matched
+
     def _fetch_sqs(self, need: int) -> None:
         if need < 1:
             return
@@ -316,6 +330,7 @@ class S3EventSource:
             messages = response.get("Messages") or []
             if not messages:
                 break
+            made_progress = False
             for message in messages:
                 if loaded >= need:
                     break
@@ -325,13 +340,24 @@ class S3EventSource:
                 except Exception:
                     logger.exception("Invalid S3 notification on SQS; deleting poison message")
                     sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt)
+                    made_progress = True
                     continue
                 if not pairs:
                     sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt)
+                    made_progress = True
+                    continue
+                matched = self._matching_sqs_records(pairs)
+                if not matched:
+                    # Shared queue / miswired notification — leave message for others.
+                    logger.warning(
+                        "Ignoring SQS S3 notification with no keys under bucket=%s prefix=%r",
+                        self._bucket,
+                        self._prefix,
+                    )
                     continue
                 batch_events: list[NormalizedEvent] = []
                 failed = False
-                for bucket, key in pairs:
+                for bucket, key in matched:
                     try:
                         batch_events.extend(self._load_object_events(s3, bucket, key))
                     except Exception:
@@ -347,10 +373,14 @@ class S3EventSource:
                 novel = [event for event in batch_events if event.event_id not in held_ids]
                 if not novel:
                     sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt)
+                    made_progress = True
                     continue
                 self._register_batch(novel, receipt_handle=receipt)
                 held_ids.update(event.event_id for event in novel)
                 loaded += len(novel)
+                made_progress = True
+            if not made_progress:
+                break
 
     def _load_object_events(self, s3, bucket: str, key: str, etag: str = "") -> list[NormalizedEvent]:
         obj = s3.get_object(Bucket=bucket, Key=key)
