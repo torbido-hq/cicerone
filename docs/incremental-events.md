@@ -99,7 +99,7 @@ kind = "webhook"   # webhook | db | s3 | rabbitmq | kafka | (later redis_streams
 #     initial_watermark
 # s3 (R2-first): access_key_id, secret_access_key, bucket (required);
 #     endpoint_url (R2/MinIO); prefix; mode = "list" | "sqs" (default: list
-#     unless queue_url set); marker_path / initial_marker (list).
+#     unless queue_url is set); marker_path / initial_marker (list).
 #     AWS-only: queue_url + mode = "sqs" (rejected when endpoint_url is set)
 
 [events.incremental]

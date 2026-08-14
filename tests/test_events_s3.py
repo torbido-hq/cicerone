@@ -11,8 +11,8 @@ from cicerone.config import ConfigError
 from cicerone.events.registry import build_event_source, registered_event_source_kinds
 from cicerone.events.s3 import (
     S3EventSource,
-    _aws_region_name,
     _events_from_body,
+    _optional_aws_region,
     _s3_records_from_sqs_body,
 )
 
@@ -176,9 +176,9 @@ def test_s3_rejects_unknown_mode():
         S3EventSource(_creds(mode="kafka"))
 
 
-def test_aws_region_name_defaults():
-    assert _aws_region_name({}) == "us-east-1"
-    assert _aws_region_name({"region_name": "eu-west-1"}) == "eu-west-1"
+def test_optional_aws_region():
+    assert _optional_aws_region({}) is None
+    assert _optional_aws_region({"region_name": "eu-west-1"}) == "eu-west-1"
 
 
 def test_s3_rejects_sqs_with_endpoint_url():

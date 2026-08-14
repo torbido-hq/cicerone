@@ -16,7 +16,7 @@ from typing import Any
 from sqlalchemy import Engine, create_engine, text
 
 from cicerone.config import ConfigError
-from cicerone.events.base import EventSourceHealth, NormalizedEvent
+from cicerone.events.base import EventSource, EventSourceHealth, NormalizedEvent
 from cicerone.events.normalize import normalize_event, parse_occurred_at
 from cicerone.io.db_store import DEFAULT_EVENTS_TABLE
 from cicerone.io.options import require_option, sql_identifier
@@ -102,7 +102,7 @@ def _row_to_event(payload: dict[str, Any]) -> NormalizedEvent:
     )
 
 
-class DbEventSource:
+class DbEventSource(EventSource):
     """Poll ``events`` (or trusted ``events_query``) after a watermark; advance on ``ack``.
 
     ``events_query`` is deploy-time config interpolated into SQL (read-only SELECT

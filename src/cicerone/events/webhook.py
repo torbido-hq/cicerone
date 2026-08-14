@@ -9,14 +9,14 @@ from datetime import datetime
 from typing import Any
 
 from cicerone.config.constants import DEFAULT_EVENTS_WEBHOOK_MAX_PENDING
-from cicerone.events.base import EventBackpressureError, EventSourceHealth, NormalizedEvent
+from cicerone.events.base import EventBackpressureError, EventSource, EventSourceHealth, NormalizedEvent
 from cicerone.events.normalize import normalize_event, normalize_events
 
 # Floor for production-usable backpressure; lower values 429 under normal load.
 _MIN_MAX_PENDING = 100
 
 
-class WebhookEventSource:
+class WebhookEventSource(EventSource):
     """Push sink for ``POST /events``; drained via ``poll`` / ``ack``."""
 
     def __init__(self, options: dict[str, Any] | None = None):

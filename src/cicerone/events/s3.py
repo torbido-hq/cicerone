@@ -19,7 +19,7 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from cicerone.config import ConfigError
-from cicerone.events.base import EventSourceHealth, NormalizedEvent
+from cicerone.events.base import EventSource, EventSourceHealth, NormalizedEvent
 from cicerone.events.normalize import normalize_event
 from cicerone.io.options import build_s3_client, require_option
 
@@ -61,10 +61,10 @@ class _Batch:
     event_ids: set[str] = field(default_factory=set)
 
 
-def _aws_region_name(options: dict[str, Any]) -> str:
+def _optional_aws_region(options: dict[str, Any]) -> str | None:
     if options.get("region_name"):
         return str(options["region_name"])
-    return "us-east-1"
+    return None
 
 
 def _normalize_prefix(raw: Any) -> str:
@@ -129,7 +129,7 @@ def _s3_records_from_sqs_body(body: str) -> list[tuple[str, str]]:
     return out
 
 
-class S3EventSource:
+class S3EventSource(EventSource):
     """R2/MinIO list+marker poll, or AWS SQS notifications (no endpoint_url)."""
 
     def __init__(self, options: dict[str, Any] | None = None):
@@ -159,16 +159,15 @@ class S3EventSource:
             if self._s3 is None:
                 self._s3 = build_s3_client(self._options)
             if self._mode == "sqs" and self._sqs is None:
-                self._sqs = boto3.client(
-                    "sqs",
-                    aws_access_key_id=require_option(self._options, "access_key_id", "s3"),
-                    aws_secret_access_key=require_option(self._options, "secret_access_key", "s3"),
-                    region_name=_aws_region_name(self._options),
-                    config=Config(
-                        signature_version="s3v4",
-                        retries={"max_attempts": 3, "mode": "standard"},
-                    ),
-                )
+                sqs_kwargs: dict[str, Any] = {
+                    "aws_access_key_id": require_option(self._options, "access_key_id", "s3"),
+                    "aws_secret_access_key": require_option(self._options, "secret_access_key", "s3"),
+                    "config": Config(retries={"max_attempts": 3, "mode": "standard"}),
+                }
+                region_name = _optional_aws_region(self._options)
+                if region_name is not None:
+                    sqs_kwargs["region_name"] = region_name
+                self._sqs = boto3.client("sqs", **sqs_kwargs)
             if self._mode == "list":
                 self._load_marker_unlocked()
             self._connected = True
@@ -325,7 +324,6 @@ class S3EventSource:
                 QueueUrl=queue_url,
                 MaxNumberOfMessages=min(self._max_messages, 10),
                 WaitTimeSeconds=self._wait_time_seconds if loaded == 0 else 0,
-                MessageAttributeNames=["All"],
             )
             messages = response.get("Messages") or []
             if not messages:
