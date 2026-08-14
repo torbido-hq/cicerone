@@ -8,19 +8,10 @@ import pytest
 from conftest import make_settings
 from fastapi.testclient import TestClient
 from moto import mock_aws
+from support.prometheus_metrics import metric_value
 
 from cicerone.config import IOSettings, Settings
 from cicerone.trigger import RunGuard, create_app, poll_input_forever
-
-
-def _metric_value(body: str, name: str, labels: dict[str, str]) -> float:
-    from prometheus_client.parser import text_string_to_metric_families
-
-    for family in text_string_to_metric_families(body):
-        for sample in family.samples:
-            if sample.name == name and dict(sample.labels) == labels:
-                return sample.value
-    return 0.0
 
 
 def _settings(**overrides) -> Settings:
@@ -52,10 +43,10 @@ def test_run_guard_records_retrain_trigger_metrics():
     from prometheus_client import generate_latest
 
     body = generate_latest().decode()
-    accepted = _metric_value(
+    accepted = metric_value(
         body, "cicerone_retrain_trigger_total", {"source": "webhook", "status": "accepted"}
     )
-    debounced = _metric_value(
+    debounced = metric_value(
         body, "cicerone_retrain_trigger_total", {"source": "webhook", "status": "debounced"}
     )
     assert accepted >= 1
@@ -76,7 +67,7 @@ def test_run_guard_records_cron_retrain_source():
     from prometheus_client import generate_latest
 
     body = generate_latest().decode()
-    accepted = _metric_value(body, "cicerone_retrain_trigger_total", {"source": "cron", "status": "accepted"})
+    accepted = metric_value(body, "cicerone_retrain_trigger_total", {"source": "cron", "status": "accepted"})
     assert accepted >= 1
 
 

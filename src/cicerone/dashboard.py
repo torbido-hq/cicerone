@@ -66,6 +66,21 @@ def _compute_staleness(manifest: dict[str, Any] | None, cron_schedule: str, now:
     return {"is_stale": is_stale, "expected_next_run": expected_next_run.isoformat(), "error": None}
 
 
+def _incremental_status(history: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Most recent incremental write-through run from manifest history (newest first)."""
+    for run in history:
+        if run.get("triggered_by") != "incremental":
+            continue
+        return {
+            "status": run.get("status"),
+            "generated_at": run.get("generated_at"),
+            "last_incremental_at": run.get("last_incremental_at") or run.get("generated_at"),
+            "events": run.get("incremental_events_applied", run.get("n_events")),
+            "error": run.get("error"),
+        }
+    return None
+
+
 def create_app(settings: Settings, reader: ManifestReader, users: dict[str, str]) -> FastAPI:
     app = FastAPI(title="cicerone-dashboard")
     app.mount("/static", StaticFiles(directory=str(_PACKAGE_DIR / "static")), name="static")
@@ -79,7 +94,14 @@ def create_app(settings: Settings, reader: ManifestReader, users: dict[str, str]
         manifest = reader.read_latest()
         history = reader.read_recent(settings.dashboard.history_limit)
         staleness = _compute_staleness(manifest, settings.cron_schedule, datetime.now(UTC))
-        return {"manifest": manifest, "history": history, "staleness": staleness}
+        return {
+            "manifest": manifest,
+            "history": history,
+            "staleness": staleness,
+            "events_enabled": settings.events.enabled,
+            "events_kind": settings.events.kind if settings.events.enabled else None,
+            "incremental": _incremental_status(history),
+        }
 
     @app.get("/partials/status", dependencies=[Depends(auth)])
     def status_partial(request: Request):

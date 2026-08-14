@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 from support.events import event_payload
+from support.prometheus_metrics import registry_metric_value
 
 from cicerone.config import EventsSettings, IOSettings, make_settings
 from cicerone.events.buffer import MicroBatchBuffer
@@ -37,6 +38,36 @@ def test_event_worker_tick(tmp_path, feature_config: FeatureConfig):
     assert source.health().lag == 0
 
 
+def test_event_worker_records_flush_metrics(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="metrics-1", item_id="i9"))
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=3,
+    )
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        updater,
+    )
+
+    before = registry_metric_value("cicerone_events_flush_total", {"status": "success"})
+    assert worker.tick() == 1
+    assert registry_metric_value("cicerone_events_flush_total", {"status": "success"}) == before + 1
+    assert registry_metric_value("cicerone_events_flush_events_total") >= 1
+
+
 def test_event_worker_busy_nacks(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()
@@ -58,8 +89,10 @@ def test_event_worker_busy_nacks(tmp_path, feature_config: FeatureConfig):
     )
     buffer = MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0)
     worker = EventWorker(source, buffer, updater, poll_interval_seconds=0.01)
+    before_busy = registry_metric_value("cicerone_events_flush_total", {"status": "busy"})
     assert worker.tick() == 0
     assert source.health().lag == 1
+    assert registry_metric_value("cicerone_events_flush_total", {"status": "busy"}) == before_busy + 1
 
 
 def test_event_worker_apply_failure_nacks(tmp_path, feature_config: FeatureConfig):
@@ -86,13 +119,12 @@ def test_event_worker_apply_failure_nacks(tmp_path, feature_config: FeatureConfi
             top_k=3,
         ),
     )
-    try:
-        worker.tick()
-        raised = False
-    except RuntimeError:
-        raised = True
-    assert raised
+    before_error = registry_metric_value("cicerone_events_flush_total", {"status": "error"})
+    before_tick = registry_metric_value("cicerone_events_tick_errors_total")
+    assert worker.tick() == 0
     assert source.health().lag == 1
+    assert registry_metric_value("cicerone_events_flush_total", {"status": "error"}) == before_error + 1
+    assert registry_metric_value("cicerone_events_tick_errors_total") == before_tick
 
 
 def test_event_worker_partial_apply_nacks(tmp_path, feature_config: FeatureConfig):
@@ -120,14 +152,10 @@ def test_event_worker_partial_apply_nacks(tmp_path, feature_config: FeatureConfi
             top_k=3,
         ),
     )
-    try:
-        worker.tick()
-        raised = False
-    except RuntimeError as exc:
-        raised = True
-        assert "partial apply" in str(exc)
-    assert raised
+    before = registry_metric_value("cicerone_events_flush_total", {"status": "error"})
+    assert worker.tick() == 0
     assert source.health().lag == 2
+    assert registry_metric_value("cicerone_events_flush_total", {"status": "error"}) == before + 1
 
 
 def test_event_worker_tick_noop_when_empty(tmp_path, feature_config: FeatureConfig):

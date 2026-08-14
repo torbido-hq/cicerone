@@ -100,6 +100,59 @@ def test_status_partial_renders_latest_manifest():
     assert "42" in response.text
 
 
+def test_status_partial_shows_incremental_panel_when_events_enabled():
+    from cicerone.config import EventsSettings
+
+    history = [
+        {
+            "status": "success",
+            "generated_at": "2026-08-13T15:00:00+00:00",
+            "triggered_by": "incremental",
+            "last_incremental_at": "2026-08-13T15:00:00+00:00",
+            "incremental_events_applied": 3,
+            "n_events": 3,
+            "error": None,
+        },
+        {
+            "status": "success",
+            "generated_at": "2026-08-13T03:00:00+00:00",
+            "triggered_by": "cron",
+            "n_events": 100,
+            "error": None,
+        },
+    ]
+    app = create_app(
+        _settings(events=EventsSettings(enabled=True, kind="webhook")),
+        _FakeReader(history[1], history=history),
+        _users_with("alice", "s3cret"),
+    )
+    response = TestClient(app).get("/partials/status", auth=("alice", "s3cret"))
+    assert response.status_code == 200
+    assert "Incremental events" in response.text
+    assert "kind=webhook" in response.text
+    assert "3" in response.text
+    assert "cicerone_events_source_lag" in response.text
+
+
+def test_status_partial_hides_incremental_panel_when_events_disabled():
+    history = [
+        {
+            "status": "success",
+            "generated_at": "2026-08-13T15:00:00+00:00",
+            "triggered_by": "incremental",
+            "incremental_events_applied": 3,
+            "error": None,
+        }
+    ]
+    app = create_app(
+        _settings(),
+        _FakeReader(history[0], history=history),
+        _users_with("alice", "s3cret"),
+    )
+    response = TestClient(app).get("/partials/status", auth=("alice", "s3cret"))
+    assert "Incremental events" not in response.text
+
+
 def test_status_partial_renders_failed_run_with_error():
     manifest = {
         "status": "failed",

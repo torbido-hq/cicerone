@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 import time
 
 from prometheus_client import Counter, Gauge, Histogram
+
+logger = logging.getLogger(__name__)
 
 REQUESTS_TOTAL = Counter(
     "cicerone_requests_total",
@@ -47,12 +50,38 @@ RECOMMENDATIONS_SERVED_TOTAL = Counter(
     "Recommendation source tiers used to satisfy a request",
     ["source"],
 )
+EVENTS_SOURCE_CONNECTED = Gauge(
+    "cicerone_events_source_connected",
+    "Event source connectivity (1 connected, 0 otherwise); 0 when events disabled",
+)
+EVENTS_SOURCE_LAG = Gauge(
+    "cicerone_events_source_lag",
+    "Event source backlog behind the consume cursor; -1 when unknown or events disabled",
+)
+EVENTS_FLUSH_TOTAL = Counter(
+    "cicerone_events_flush_total",
+    "Incremental micro-batch flush outcomes",
+    ["status"],
+)
+EVENTS_FLUSH_EVENTS_TOTAL = Counter(
+    "cicerone_events_flush_events_total",
+    "Events successfully applied by incremental flushes",
+)
+EVENTS_LAST_SUCCESS_TIMESTAMP_SECONDS = Gauge(
+    "cicerone_events_last_success_timestamp_seconds",
+    "Unix time of the last successful incremental flush (0 if never)",
+)
+EVENTS_TICK_ERRORS_TOTAL = Counter(
+    "cicerone_events_tick_errors_total",
+    "Unhandled exceptions in the event worker tick loop",
+)
 UP = Gauge("cicerone_up", "Serve process liveness (always 1 while running)")
 UP.set(1)
 
 METRICS_TOKEN_HEADER = "X-Metrics-Token"
 
 _RETRAIN_SOURCES = frozenset({"webhook", "poll", "cron", "s3-poll", "manual"})
+_EVENTS_FLUSH_STATUSES = frozenset({"success", "busy", "error"})
 
 _SOURCE_TO_METRIC: dict[str, str] = {
     "personalized": "collaborative",
@@ -63,6 +92,11 @@ _SOURCE_TO_METRIC: dict[str, str] = {
 }
 
 _last_successful_refresh_at: float | None = None
+
+# Default gauges when events are off / not yet refreshed by the worker.
+EVENTS_SOURCE_CONNECTED.set(0)
+EVENTS_SOURCE_LAG.set(-1)
+EVENTS_LAST_SUCCESS_TIMESTAMP_SECONDS.set(0)
 
 
 def record_cache_hit() -> None:
@@ -102,3 +136,24 @@ def record_recommendations_served(stored_sources: set[str]) -> None:
             continue
         seen.add(metric_source)
         RECOMMENDATIONS_SERVED_TOTAL.labels(source=metric_source).inc()
+
+
+def record_events_flush(*, status: str, events: int = 0) -> None:
+    if status in _EVENTS_FLUSH_STATUSES:
+        label = status
+    else:
+        logger.warning("Unknown events flush status %r; recording as error", status)
+        label = "error"
+    EVENTS_FLUSH_TOTAL.labels(status=label).inc()
+    if label == "success" and events > 0:
+        EVENTS_FLUSH_EVENTS_TOTAL.inc(events)
+        EVENTS_LAST_SUCCESS_TIMESTAMP_SECONDS.set(time.time())
+
+
+def record_events_tick_error() -> None:
+    EVENTS_TICK_ERRORS_TOTAL.inc()
+
+
+def update_events_source_health(*, connected: bool, lag: int | None) -> None:
+    EVENTS_SOURCE_CONNECTED.set(1 if connected else 0)
+    EVENTS_SOURCE_LAG.set(-1 if lag is None else max(0, int(lag)))
