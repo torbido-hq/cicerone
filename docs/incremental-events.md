@@ -57,7 +57,7 @@ src/cicerone/events/
   store.py       # load existing recommendation rows for merge
   webhook.py     # HTTP push EventSource
   db.py          # watermark poll EventSource
-  s3.py          # S3 list/marker or SQS notification EventSource
+  s3.py          # S3-compatible EventSource (R2 list/marker; optional AWS SQS)
   worker.py      # background poll → buffer → flush → ack
 
 src/cicerone/serve/
@@ -97,9 +97,10 @@ kind = "webhook"   # webhook | db | s3 | rabbitmq | kafka | (later redis_streams
 # backend-specific; webhook may set auth_token (else serve.auth_token)
 # db: database_url (required), events_table / events_query, watermark_path,
 #     initial_watermark
-# s3: access_key_id, secret_access_key, bucket (required); endpoint_url,
-#     region_name, prefix; mode = "list" | "sqs" (default: sqs if queue_url
-#     else list); queue_url (sqs); marker_path / initial_marker (list)
+# s3 (R2-first): access_key_id, secret_access_key, bucket (required);
+#     endpoint_url (R2/MinIO); prefix; mode = "list" | "sqs" (default: list
+#     unless queue_url set); marker_path / initial_marker (list).
+#     AWS-only: queue_url + mode = "sqs" (rejected when endpoint_url is set)
 
 [events.incremental]
 batch_size = 100
@@ -185,9 +186,11 @@ Build order:
 2. **DB** — watermark poll (reuse `events_query` / `events_table`); optional
    `watermark_path` for durable cursor; LISTEN/NOTIFY or logical replication
    under the **same** `kind=db` later (not a separate kind).
-3. **S3** — shipped: AWS notifications → SQS (`mode=sqs`); non-AWS
-   (R2/MinIO) list/marker poll (`mode=list`). Objects are JSON event objects
-   or arrays; missing `event_id` uses `bucket/key|etag|index`.
+3. **S3-compatible (R2-first)** — shipped: primary path is list/marker poll
+   (`mode=list`) with the same `endpoint_url` + credentials shape as dataset
+   I/O (Cloudflare R2 / MinIO). Optional AWS-only `mode=sqs` (S3→SQS
+   notifications; rejected when `endpoint_url` is set). Objects are JSON
+   event objects or arrays; missing `event_id` uses `bucket/key|etag|index`.
 4. **RabbitMQ** — queue/exchange consumer (optional dep).
 5. **Kafka** — topic / consumer group (optional dep).
 
@@ -204,7 +207,7 @@ already run them; do not steer greenfield users there first.
 | --- | --- |
 | Webhook + micro-batch | None (FastAPI already present) |
 | DB poll | None beyond SQLAlchemy |
-| S3 + SQS / poll | boto3 already present |
+| S3-compatible list / AWS SQS | boto3 already present |
 | RabbitMQ | optional `requirements-rabbitmq.txt` |
 | Kafka | optional `confluent-kafka` extra |
 | Redis Streams | `redis` (already optional for locks) |
@@ -215,7 +218,7 @@ already run them; do not steer greenfield users there first.
 | --- | --- | --- |
 | Webhook | At-least-once (client retries) | `event_id` / `idempotency_key`; short dedupe window |
 | DB watermark | Near exactly-once | Advance watermark only after successful flush |
-| S3→SQS / poll | At-least-once | Object key + etag dedupe |
+| S3 list (R2) / SQS | At-least-once | Object key + etag dedupe |
 | RabbitMQ / Kafka | At-least-once | Ack/commit after successful flush; shared dedupe key |
 
 Duplicate delivery can inflate weights for `quantity_scaled_events`. Dedupe

@@ -117,8 +117,14 @@ def load_events_settings(
             resolved_mode = str(s3_mode).lower()
         else:
             resolved_mode = "sqs" if options.get("queue_url") else "list"
-        if resolved_mode == "sqs" and not options.get("queue_url"):
-            raise ConfigError('events.options.queue_url is required when events.options.mode = "sqs"')
+        if resolved_mode == "sqs":
+            if options.get("endpoint_url"):
+                raise ConfigError(
+                    'events.options.mode = "sqs" is AWS-only; '
+                    'S3-compatible endpoints (R2/MinIO) must use mode = "list"'
+                )
+            if not options.get("queue_url"):
+                raise ConfigError('events.options.queue_url is required when events.options.mode = "sqs"')
 
     return EventsSettings(
         enabled=enabled,

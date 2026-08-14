@@ -35,7 +35,7 @@ metrics_enabled = true
 metrics_token = ""   # empty = open endpoint; bind to a trusted network or reverse proxy
 
 # Optional incremental event ingest. See docs/incremental-events.md.
-# Webhook: POST /events. DB: watermark poll. S3: list/marker or SQS.
+# Webhook: POST /events. DB: watermark poll. S3/R2: list/marker (or AWS SQS).
 # [events]
 # enabled = true
 # kind = "webhook"

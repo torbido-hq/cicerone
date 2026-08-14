@@ -42,7 +42,7 @@ For configuration and usage, see the main [README](../README.md).
 | `serve_schemas.py` | Pydantic models that drive the serve OpenAPI schema |
 | `serve_client.py` | Thin stdlib HTTP client for the serve read API |
 | `export_serve_openapi.py` | CLI to dump FastAPI's OpenAPI JSON (`docs/openapi/…`) |
-| `events/` | Incremental event ingest: `EventSource` protocol + registry, normalize, micro-batch buffer, write-through updater; webhook (`POST /events`), DB watermark, and S3 list/SQS backends — see [incremental-events.md](incremental-events.md) |
+| `events/` | Incremental event ingest: `EventSource` protocol + registry, normalize, micro-batch buffer, write-through updater; webhook (`POST /events`), DB watermark, and S3-compatible (R2 list/marker; optional AWS SQS) backends — see [incremental-events.md](incremental-events.md) |
 | `trigger.py` | Event-driven retrain trigger: webhook + optional input-bucket poll, debounce guard (`RunGuard`) shared with the cron loop; increments `cicerone_retrain_trigger_total` (per replica) |
 | `locks.py` | Optional `RunGuard` lock backends (postgres / redis; default is none) |
 | `config/lock_url.py` | Postgres lock URL resolution for config load + lock builder |

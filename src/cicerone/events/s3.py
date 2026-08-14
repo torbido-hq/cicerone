@@ -1,4 +1,4 @@
-"""S3 EventSource: SQS notifications (AWS) or list/marker poll (R2/MinIO)."""
+"""S3-compatible EventSource: R2/MinIO list+marker (primary); AWS SQS optional."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from botocore.exceptions import ClientError
 from cicerone.config import ConfigError
 from cicerone.events.base import EventSourceHealth, NormalizedEvent
 from cicerone.events.normalize import EventNormalizeError, normalize_event
-from cicerone.io.options import require_option
+from cicerone.io.options import build_s3_client, require_option
 
 logger = logging.getLogger(__name__)
 
@@ -38,21 +38,11 @@ class _Batch:
     event_ids: set[str] = field(default_factory=set)
 
 
-def _region_name(options: dict[str, Any]) -> str:
+def _aws_region_name(options: dict[str, Any]) -> str:
+    """Region for AWS SQS only. S3 clients use ``build_s3_client`` (R2 ``auto``)."""
     if options.get("region_name"):
         return str(options["region_name"])
-    # R2/MinIO-style endpoints expect "auto"; AWS SQS/S3 need a real region.
-    return "auto" if options.get("endpoint_url") else "us-east-1"
-
-
-def _boto_kwargs(options: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "endpoint_url": options.get("endpoint_url"),
-        "aws_access_key_id": require_option(options, "access_key_id", "s3"),
-        "aws_secret_access_key": require_option(options, "secret_access_key", "s3"),
-        "region_name": _region_name(options),
-        "config": Config(signature_version="s3v4", retries={"max_attempts": 3, "mode": "standard"}),
-    }
+    return "us-east-1"
 
 
 def _stable_event_id(payload: dict[str, Any], *, bucket: str, key: str, etag: str, index: int) -> str:
@@ -113,7 +103,12 @@ def _s3_records_from_sqs_body(body: str) -> list[tuple[str, str]]:
 
 
 class S3EventSource:
-    """Poll interaction JSON objects from S3 via SQS notifications or list/marker."""
+    """Poll JSON event objects from S3-compatible storage (R2-first list/marker).
+
+    Primary path for Torbido/R2: ``mode=list`` with ``endpoint_url`` (same
+    credential shape as ``[input]`` / ``[output]`` dataset S3 options).
+    ``mode=sqs`` is AWS-only (no R2 equivalent).
+    """
 
     def __init__(self, options: dict[str, Any] | None = None):
         options = dict(options or {})
@@ -129,6 +124,11 @@ class S3EventSource:
         self._mode = mode
         self._queue_url = options.get("queue_url")
         if self._mode == "sqs":
+            if options.get("endpoint_url"):
+                raise ConfigError(
+                    'events.options.mode = "sqs" is AWS-only; '
+                    'S3-compatible endpoints (R2/MinIO) must use mode = "list"'
+                )
             if not self._queue_url:
                 raise ConfigError('events.options.queue_url is required when events.options.mode = "sqs"')
             self._queue_url = str(self._queue_url)
@@ -148,11 +148,20 @@ class S3EventSource:
 
     def connect(self) -> None:
         with self._lock:
-            kwargs = _boto_kwargs(self._options)
+            # Same client as dataset I/O (region_name="auto" for R2).
             if self._s3 is None:
-                self._s3 = boto3.client("s3", **kwargs)
+                self._s3 = build_s3_client(self._options)
             if self._mode == "sqs" and self._sqs is None:
-                self._sqs = boto3.client("sqs", **kwargs)
+                self._sqs = boto3.client(
+                    "sqs",
+                    aws_access_key_id=require_option(self._options, "access_key_id", "s3"),
+                    aws_secret_access_key=require_option(self._options, "secret_access_key", "s3"),
+                    region_name=_aws_region_name(self._options),
+                    config=Config(
+                        signature_version="s3v4",
+                        retries={"max_attempts": 3, "mode": "standard"},
+                    ),
+                )
             if self._mode == "list":
                 self._load_marker_unlocked()
             self._connected = True

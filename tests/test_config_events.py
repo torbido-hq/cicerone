@@ -151,6 +151,7 @@ def test_load_events_s3_list_ok():
                 "secret_access_key": "b",
                 "bucket": "events",
                 "mode": "list",
+                "endpoint_url": "https://abc.r2.cloudflarestorage.com",
             },
         },
         mode="serve",
@@ -158,6 +159,27 @@ def test_load_events_s3_list_ok():
         resolve_env=lambda value, _path: value,
     )
     assert settings.kind == "s3"
+
+
+def test_load_events_s3_sqs_rejects_endpoint_url():
+    with pytest.raises(ConfigError, match="AWS-only"):
+        load_events_settings(
+            {
+                "enabled": True,
+                "kind": "s3",
+                "options": {
+                    "access_key_id": "a",
+                    "secret_access_key": "b",
+                    "bucket": "events",
+                    "mode": "sqs",
+                    "queue_url": "https://sqs.example/q",
+                    "endpoint_url": "https://abc.r2.cloudflarestorage.com",
+                },
+            },
+            mode="serve",
+            serve_auth_token="tok",
+            resolve_env=lambda value, _path: value,
+        )
 
 
 def test_load_events_incremental_must_be_table():

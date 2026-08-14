@@ -19,9 +19,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - DB event source (`events.kind = "db"`): watermark poll over
   `events_table` / `events_query`, durable optional `watermark_path`,
   watermark advances only on successful flush ack.
-- S3 event source (`events.kind = "s3"`): list/marker poll (R2/MinIO) or
-  S3→SQS notifications (AWS); JSON object/array payloads; ack advances
-  marker or deletes the SQS message.
+- S3-compatible event source (`events.kind = "s3"`), R2-first: list/marker
+  poll via the same `build_s3_client` / `endpoint_url` options as dataset
+  I/O; optional AWS-only SQS mode (rejected with `endpoint_url`). JSON
+  object/array payloads; ack advances marker or deletes the SQS message.
 
 ### Changed
 

@@ -11,8 +11,8 @@ from cicerone.config import ConfigError
 from cicerone.events.registry import build_event_source, registered_event_source_kinds
 from cicerone.events.s3 import (
     S3EventSource,
+    _aws_region_name,
     _events_from_body,
-    _region_name,
     _s3_records_from_sqs_body,
 )
 
@@ -176,10 +176,20 @@ def test_s3_rejects_unknown_mode():
         S3EventSource(_creds(mode="kafka"))
 
 
-def test_region_name_defaults():
-    assert _region_name({}) == "us-east-1"
-    assert _region_name({"endpoint_url": "http://localhost:9000"}) == "auto"
-    assert _region_name({"region_name": "eu-west-1"}) == "eu-west-1"
+def test_aws_region_name_defaults():
+    assert _aws_region_name({}) == "us-east-1"
+    assert _aws_region_name({"region_name": "eu-west-1"}) == "eu-west-1"
+
+
+def test_s3_rejects_sqs_with_endpoint_url():
+    with pytest.raises(ConfigError, match="AWS-only"):
+        S3EventSource(
+            _creds(
+                mode="sqs",
+                queue_url="https://sqs.us-east-1.amazonaws.com/123/q",
+                endpoint_url="https://abc.r2.cloudflarestorage.com",
+            )
+        )
 
 
 def test_events_from_body_validation():
