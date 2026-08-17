@@ -9,9 +9,9 @@ from collections.abc import Collection
 
 import pandas as pd
 from sqlalchemy import Engine, bindparam, create_engine, text
-from sqlalchemy.exc import ProgrammingError
 
 from cicerone.config import IOSettings
+from cicerone.io.db_errors import is_missing_column_error, is_missing_table_error
 from cicerone.io.db_store import DEFAULT_RECOMMENDATIONS_TABLE, MISSING_TABLE_ERRORS
 from cicerone.io.options import is_s3_not_found, read_parquet, require_option
 from cicerone.io.recommendation_schema import RECOMMENDATION_COLUMNS, USER_COLUMN, recommendations_sql_names
@@ -69,26 +69,12 @@ def _db_table_and_columns(output: IOSettings) -> tuple[str, str, str]:
     return recommendations_sql_names(output.options, default_table=DEFAULT_RECOMMENDATIONS_TABLE)
 
 
-def _db_error_message(exc: BaseException) -> str:
-    return str(getattr(exc, "orig", exc)).lower()
-
-
-def _is_missing_recommendation_column_error(exc: BaseException) -> bool:
-    message = _db_error_message(exc)
-    return "no such column" in message or ("column" in message and "does not exist" in message)
-
-
-def _is_missing_recommendation_table_error(exc: BaseException) -> bool:
-    message = _db_error_message(exc)
-    return isinstance(exc, ProgrammingError) or "does not exist" in message or "no such table" in message
-
-
 def _empty_frame_from_db_error(exc: BaseException, *, table: str) -> pd.DataFrame | None:
     """Map missing-table/column DB errors to an empty frame; ``None`` means re-raise."""
-    if _is_missing_recommendation_column_error(exc):
+    if is_missing_column_error(exc):
         logger.warning("Recommendations schema mismatch; treating as empty: %s", exc)
         return empty_recommendations_frame()
-    if _is_missing_recommendation_table_error(exc):
+    if is_missing_table_error(exc):
         logger.warning("Recommendations table %r missing; treating as empty", table)
         return empty_recommendations_frame()
     return None
@@ -96,10 +82,10 @@ def _empty_frame_from_db_error(exc: BaseException, *, table: str) -> pd.DataFram
 
 def _zero_from_db_error(exc: BaseException, *, table: str) -> int | None:
     """Map missing-table/column DB errors to ``0`` users; ``None`` means re-raise."""
-    if _is_missing_recommendation_column_error(exc):
+    if is_missing_column_error(exc):
         logger.warning("Recommendations schema mismatch while counting users; treating as empty: %s", exc)
         return 0
-    if _is_missing_recommendation_table_error(exc):
+    if is_missing_table_error(exc):
         logger.warning("Recommendations table %r missing while counting users; treating as empty", table)
         return 0
     return None

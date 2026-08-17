@@ -308,12 +308,12 @@ def test_incremental_updater_user_cache_lru_evicts(tmp_path, feature_config):
     assert updater.apply([normalize_event(event_payload(user_id="u1", item_id="a", event_id="e1"))]) == 1
     assert updater.apply([normalize_event(event_payload(user_id="u2", item_id="b", event_id="e2"))]) == 1
     # Cap is 2; each apply also caches __cold_start__, so older users are evicted.
-    assert len(updater._cached_by_user) <= 2
-    assert COLD_START_USER_ID in updater._cached_by_user
+    assert len(updater.cached_user_ids) <= 2
+    assert COLD_START_USER_ID in updater.cached_user_ids
     assert updater.apply([normalize_event(event_payload(user_id="u3", item_id="c", event_id="e3"))]) == 1
-    assert len(updater._cached_by_user) <= 2
-    assert COLD_START_USER_ID in updater._cached_by_user
-    assert "u3" in updater._cached_by_user
+    assert len(updater.cached_user_ids) <= 2
+    assert COLD_START_USER_ID in updater.cached_user_ids
+    assert "u3" in updater.cached_user_ids
 
 
 def test_incremental_updater_rejects_non_positive_cache_size(tmp_path, feature_config):

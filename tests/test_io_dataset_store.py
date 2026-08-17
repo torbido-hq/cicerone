@@ -49,22 +49,33 @@ def test_local_replace_recommendations_for_users_preserves_others(tmp_path):
             ]
         )
     )
-    sink.replace_recommendations_for_users(
-        pd.DataFrame([{"user_id": "u1", "item_id": "new", "rank": 1, "score": 2.0, "source": "incremental"}]),
-        user_ids=["u1"],
+    assert (
+        sink.replace_recommendations_for_users(
+            pd.DataFrame(
+                [{"user_id": "u1", "item_id": "new", "rank": 1, "score": 2.0, "source": "incremental"}]
+            ),
+            user_ids=["u1"],
+        )
+        == 2
     )
     stored = pd.read_parquet(tmp_path / "recommendations.parquet")
     assert set(stored[stored["user_id"] == "u1"]["item_id"]) == {"new"}
     assert list(stored[stored["user_id"] == "u2"]["item_id"]) == ["keep"]
-    sink.replace_recommendations_for_users(pd.DataFrame(), user_ids=["u1"])
+    assert sink.replace_recommendations_for_users(pd.DataFrame(), user_ids=["u1"]) == 1
     stored = pd.read_parquet(tmp_path / "recommendations.parquet")
     assert "u1" not in set(stored["user_id"].astype(str))
     assert list(stored["user_id"]) == ["u2"]
-    sink.replace_recommendations_for_users(
-        pd.DataFrame([{"user_id": "u3", "item_id": "i3", "rank": 1, "score": 1.0, "source": "incremental"}]),
-        user_ids=["u3"],
+    assert (
+        sink.replace_recommendations_for_users(
+            pd.DataFrame(
+                [{"user_id": "u3", "item_id": "i3", "rank": 1, "score": 1.0, "source": "incremental"}]
+            ),
+            user_ids=["u3"],
+        )
+        == 2
     )
     before = pd.read_parquet(tmp_path / "recommendations.parquet")
+    assert set(before["user_id"].astype(str)) == {"u2", "u3"}
     assert sink.replace_recommendations_for_users(pd.DataFrame(), user_ids=[]) == 0
     after = pd.read_parquet(tmp_path / "recommendations.parquet")
     assert len(after) == len(before)

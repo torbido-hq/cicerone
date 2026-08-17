@@ -27,6 +27,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
+from cicerone.io.db_errors import is_missing_column_error
 from cicerone.io.options import require_option, sql_identifier
 from cicerone.io.recommendation_schema import recommendations_sql_names
 from cicerone.io.replace_users import normalize_replace_user_ids
@@ -37,15 +38,6 @@ _MISSING_TABLE_ERRORS = (ProgrammingError, OperationalError)
 
 # Prefer the public alias used by readers and writers.
 MISSING_TABLE_ERRORS = _MISSING_TABLE_ERRORS
-
-
-def _db_error_message(exc: BaseException) -> str:
-    return str(getattr(exc, "orig", exc)).lower()
-
-
-def _is_missing_column_error(exc: BaseException) -> bool:
-    message = _db_error_message(exc)
-    return "no such column" in message or ("column" in message and "does not exist" in message)
 
 
 DEFAULT_EVENTS_TABLE = "events"
@@ -184,7 +176,7 @@ class DatabaseOutputSink:
                     exc,
                 )
                 # Schema drift (e.g. missing user_id): do not append into a broken table.
-                if _is_missing_column_error(exc):
+                if is_missing_column_error(exc):
                     return 0
             if not df.empty:
                 df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)

@@ -96,6 +96,11 @@ class IncrementalUpdater:
     def events_applied(self) -> int:
         return self._events_applied
 
+    @property
+    def cached_user_ids(self) -> frozenset[str]:
+        """User ids currently held in the in-process LRU recommendation cache."""
+        return frozenset(self._cached_by_user)
+
     def invalidate_cache(self) -> None:
         self._cached_by_user.clear()
 
