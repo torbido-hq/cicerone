@@ -166,16 +166,26 @@ class DatabaseOutputSink:
             try:
                 conn.execute(delete_sql, {"user_ids": ids})
                 savepoint.commit()
-            except _MISSING_TABLE_ERRORS:
+            except _MISSING_TABLE_ERRORS as exc:
                 savepoint.rollback()
+                logger.warning(
+                    "Recommendations delete skipped for table %r (missing table or schema issue): %s",
+                    table,
+                    exc,
+                )
             if not df.empty:
                 df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
             count_savepoint = conn.begin_nested()
             try:
                 value = conn.execute(count_sql).scalar()
                 count_savepoint.commit()
-            except _MISSING_TABLE_ERRORS:
+            except _MISSING_TABLE_ERRORS as exc:
                 count_savepoint.rollback()
+                logger.warning(
+                    "Recommendations count skipped for table %r (missing table or schema issue): %s",
+                    table,
+                    exc,
+                )
                 return 0
         return int(value or 0)
 

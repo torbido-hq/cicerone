@@ -57,17 +57,7 @@ def _normalize_recommendation_columns(frame: pd.DataFrame) -> pd.DataFrame:
     return frame.loc[:, list(RECOMMENDATION_COLUMNS)]
 
 
-def _load_dataset_recommendations(output: IOSettings) -> pd.DataFrame:
-    try:
-        frame = read_parquet(output.options, "recommendations.parquet")
-    except FileNotFoundError:
-        return empty_recommendations_frame()
-    except Exception as exc:
-        if is_s3_not_found(exc):
-            return empty_recommendations_frame()
-        raise
-    if frame.empty:
-        return empty_recommendations_frame()
+def _empty_on_schema_mismatch(frame: pd.DataFrame) -> pd.DataFrame:
     try:
         return _normalize_recommendation_columns(frame)
     except ValueError as exc:
@@ -88,6 +78,47 @@ def _is_missing_recommendation_column_error(exc: BaseException) -> bool:
     return "no such column" in message or ("column" in message and "does not exist" in message)
 
 
+def _is_missing_recommendation_table_error(exc: BaseException) -> bool:
+    message = _db_error_message(exc)
+    return isinstance(exc, ProgrammingError) or "does not exist" in message or "no such table" in message
+
+
+def _empty_frame_from_db_error(exc: BaseException, *, table: str) -> pd.DataFrame | None:
+    """Map missing-table/column DB errors to an empty frame; ``None`` means re-raise."""
+    if _is_missing_recommendation_column_error(exc):
+        logger.warning("Recommendations schema mismatch; treating as empty: %s", exc)
+        return empty_recommendations_frame()
+    if _is_missing_recommendation_table_error(exc):
+        logger.warning("Recommendations table %r missing; treating as empty", table)
+        return empty_recommendations_frame()
+    return None
+
+
+def _zero_from_db_error(exc: BaseException, *, table: str) -> int | None:
+    """Map missing-table/column DB errors to ``0`` users; ``None`` means re-raise."""
+    if _is_missing_recommendation_column_error(exc):
+        logger.warning("Recommendations schema mismatch while counting users; treating as empty: %s", exc)
+        return 0
+    if _is_missing_recommendation_table_error(exc):
+        logger.warning("Recommendations table %r missing while counting users; treating as empty", table)
+        return 0
+    return None
+
+
+def _load_dataset_recommendations(output: IOSettings) -> pd.DataFrame:
+    try:
+        frame = read_parquet(output.options, "recommendations.parquet")
+    except FileNotFoundError:
+        return empty_recommendations_frame()
+    except Exception as exc:
+        if is_s3_not_found(exc):
+            return empty_recommendations_frame()
+        raise
+    if frame.empty:
+        return empty_recommendations_frame()
+    return _empty_on_schema_mismatch(frame)
+
+
 def _load_db_recommendations(output: IOSettings, *, user_ids: Collection[str] | None = None) -> pd.DataFrame:
     table, columns, user_col = _db_table_and_columns(output)
     engine = _engine_for(require_option(output.options, "database_url", "db"))
@@ -103,21 +134,13 @@ def _load_db_recommendations(output: IOSettings, *, user_ids: Collection[str] | 
             )
             frame = pd.read_sql_query(stmt, engine, params={"user_ids": ids})
     except MISSING_TABLE_ERRORS as exc:
-        if _is_missing_recommendation_column_error(exc):
-            logger.warning("Recommendations schema mismatch; treating as empty: %s", exc)
-            return empty_recommendations_frame()
-        message = _db_error_message(exc)
-        if isinstance(exc, ProgrammingError) or "does not exist" in message or "no such table" in message:
-            logger.warning("Recommendations table %r missing; treating as empty", table)
-            return empty_recommendations_frame()
+        empty = _empty_frame_from_db_error(exc, table=table)
+        if empty is not None:
+            return empty
         raise
     if frame.empty:
         return empty_recommendations_frame()
-    try:
-        return _normalize_recommendation_columns(frame)
-    except ValueError as exc:
-        logger.warning("Recommendations schema mismatch; treating as empty: %s", exc)
-        return empty_recommendations_frame()
+    return _empty_on_schema_mismatch(frame)
 
 
 def load_recommendations_frame(output: IOSettings) -> pd.DataFrame:
@@ -175,14 +198,9 @@ def count_recommendation_users(output: IOSettings) -> int:
             with engine.connect() as conn:
                 value = conn.execute(text(f"SELECT COUNT(DISTINCT {user_col}) FROM {table}")).scalar()
         except MISSING_TABLE_ERRORS as exc:
-            if _is_missing_recommendation_column_error(exc):
-                logger.warning(
-                    "Recommendations schema mismatch while counting users; treating as empty: %s", exc
-                )
-                return 0
-            message = _db_error_message(exc)
-            if isinstance(exc, ProgrammingError) or "does not exist" in message or "no such table" in message:
-                return 0
+            zero = _zero_from_db_error(exc, table=table)
+            if zero is not None:
+                return zero
             raise
         return int(value or 0)
 

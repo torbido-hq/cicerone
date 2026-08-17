@@ -7,6 +7,8 @@ does not depend on ``TEST_DATABASE_URL`` for the new cold-start SQL.
 
 from __future__ import annotations
 
+import logging
+
 import pandas as pd
 from sqlalchemy import create_engine, text
 
@@ -121,13 +123,17 @@ def test_sqlite_replace_recommendations_for_users(tmp_path):
     assert sink.replace_recommendations_for_users(pd.DataFrame(), user_ids=[]) == 0
 
 
-def test_sqlite_replace_recommendations_creates_table_when_missing(tmp_path):
+def test_sqlite_replace_recommendations_creates_table_when_missing(tmp_path, caplog):
     url = _sqlite_url(tmp_path)
     sink = DatabaseOutputSink({"database_url": url})
-    sink.replace_recommendations_for_users(
-        pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "incremental"}]),
-        user_ids=["u1"],
-    )
+    with caplog.at_level(logging.WARNING):
+        sink.replace_recommendations_for_users(
+            pd.DataFrame(
+                [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "incremental"}]
+            ),
+            user_ids=["u1"],
+        )
+    assert any("delete skipped" in record.getMessage().lower() for record in caplog.records)
     engine = create_engine(url)
     stored = pd.read_sql(text('SELECT user_id, item_id FROM "recommendations"'), engine)
     assert list(zip(stored["user_id"], stored["item_id"], strict=True)) == [("u1", "i1")]

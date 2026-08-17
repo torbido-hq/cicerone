@@ -133,6 +133,41 @@ def test_load_recommendations_for_users_db_missing_table(tmp_path, caplog):
     assert any("missing" in record.getMessage().lower() for record in caplog.records)
 
 
+def test_load_recommendations_for_users_db_schema_mismatch(tmp_path, caplog):
+    db_path = tmp_path / "mismatched_scoped.db"
+    url = f"sqlite+pysqlite:///{db_path}"
+    engine = create_engine(url)
+    pd.DataFrame(
+        [
+            {"item_id": "i1", "rank": 1, "score": 0.8, "source": "personalized"},
+            {"item_id": "i2", "rank": 2, "score": 0.5, "source": "personalized"},
+        ]
+    ).to_sql("recommendations", engine, index=False)
+    settings = make_settings(output=IOSettings(kind="db", options={"database_url": url}))
+    with caplog.at_level(logging.WARNING):
+        frame = load_recommendations_for_users(settings.output, ["u1"])
+    assert frame.empty
+    assert list(frame.columns) == list(empty_recommendations_frame().columns)
+    assert any("schema mismatch" in record.getMessage().lower() for record in caplog.records)
+
+
+def test_load_recommendations_for_users_dataset_schema_mismatch(tmp_path, caplog):
+    pd.DataFrame(
+        [
+            {"item_id": "i1", "rank": 1, "score": 0.8, "source": "personalized"},
+            {"item_id": "i2", "rank": 2, "score": 0.5, "source": "personalized"},
+        ]
+    ).to_parquet(tmp_path / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    )
+    with caplog.at_level(logging.WARNING):
+        frame = load_recommendations_for_users(settings.output, ["u1"])
+    assert frame.empty
+    assert list(frame.columns) == list(empty_recommendations_frame().columns)
+    assert any("schema mismatch" in record.getMessage().lower() for record in caplog.records)
+
+
 def test_count_recommendation_users_db_missing_table(tmp_path):
     db_path = tmp_path / "missing_count.db"
     sqlite3.connect(db_path).close()

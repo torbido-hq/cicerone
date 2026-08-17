@@ -179,18 +179,20 @@ class IncrementalUpdater:
                 return
             self._cached_by_user.pop(victim)
 
+    def _frames_by_user(self, frame: pd.DataFrame) -> dict[str, pd.DataFrame]:
+        if frame.empty or USER_COLUMN not in frame.columns:
+            return {}
+        # One assign for str user ids; reset_index materializes each group (no extra .copy()).
+        keyed = frame.assign(**{USER_COLUMN: frame[USER_COLUMN].astype(str)})
+        return {
+            user_id: group.reset_index(drop=True) for user_id, group in keyed.groupby(USER_COLUMN, sort=False)
+        }
+
     def _load_users(self, user_ids: set[str]) -> pd.DataFrame:
         missing = sorted(user_id for user_id in user_ids if user_id not in self._cached_by_user)
         if missing:
             loaded = load_recommendations_for_users(self._output_settings, missing)
-            if USER_COLUMN in loaded.columns and not loaded.empty:
-                loaded = loaded.copy()
-                loaded[USER_COLUMN] = loaded[USER_COLUMN].astype(str)
-                by_user = {
-                    user_id: group.copy() for user_id, group in loaded.groupby(USER_COLUMN, sort=False)
-                }
-            else:
-                by_user = {}
+            by_user = self._frames_by_user(loaded)
             for user_id in missing:
                 self._cache_put(
                     user_id,
@@ -212,12 +214,7 @@ class IncrementalUpdater:
     def _store_users_in_cache(self, user_ids: set[str], merged: pd.DataFrame) -> None:
         # After a successful replace, every id in user_ids was written. Missing from
         # merged means cleared rows — store empty frames (key present = loaded).
-        if merged.empty or USER_COLUMN not in merged.columns:
-            by_user: dict[str, pd.DataFrame] = {}
-        else:
-            frame = merged.copy()
-            frame[USER_COLUMN] = frame[USER_COLUMN].astype(str)
-            by_user = {user_id: group.copy() for user_id, group in frame.groupby(USER_COLUMN, sort=False)}
+        by_user = self._frames_by_user(merged)
         for user_id in user_ids:
             self._cache_put(
                 user_id,
