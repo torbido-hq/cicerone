@@ -13,8 +13,8 @@ from sqlalchemy.exc import ProgrammingError
 
 from cicerone.config import IOSettings
 from cicerone.io.db_store import DEFAULT_RECOMMENDATIONS_TABLE, MISSING_TABLE_ERRORS
-from cicerone.io.options import is_s3_not_found, read_parquet, require_option, sql_identifier
-from cicerone.io.recommendation_reader import RECOMMENDATION_COLUMNS, USER_COLUMN
+from cicerone.io.options import is_s3_not_found, read_parquet, require_option
+from cicerone.io.recommendation_schema import RECOMMENDATION_COLUMNS, USER_COLUMN, recommendations_sql_names
 
 logger = logging.getLogger(__name__)
 
@@ -76,15 +76,7 @@ def _load_dataset_recommendations(output: IOSettings) -> pd.DataFrame:
 
 
 def _db_table_and_columns(output: IOSettings) -> tuple[str, str, str]:
-    table = sql_identifier(
-        output.options.get("recommendations_table", DEFAULT_RECOMMENDATIONS_TABLE),
-        option="recommendations_table",
-    )
-    columns = ", ".join(
-        sql_identifier(column, option="recommendations_column") for column in RECOMMENDATION_COLUMNS
-    )
-    user_col = sql_identifier(USER_COLUMN, option="recommendations_column")
-    return table, columns, user_col
+    return recommendations_sql_names(output.options, default_table=DEFAULT_RECOMMENDATIONS_TABLE)
 
 
 def _load_db_recommendations(output: IOSettings, *, user_ids: Collection[str] | None = None) -> pd.DataFrame:

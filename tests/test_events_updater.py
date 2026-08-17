@@ -281,6 +281,7 @@ def test_incremental_updater_preserves_untouched_via_scoped_write(tmp_path, feat
     assert len(replace_calls) == 1
     user_ids, written_users = replace_calls[0]
     assert "u1" in user_ids
+    assert COLD_START_USER_ID in user_ids
     assert "u2" not in user_ids
     assert "u2" not in written_users
     frame = load_recommendations_frame(settings.output)

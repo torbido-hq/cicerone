@@ -13,6 +13,7 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 
 from cicerone.blending import COLD_START_USER_ID, LATEST_SOURCE, POPULAR_SOURCE
+from cicerone.io import recommendation_schema as _rec
 from cicerone.io.base import BaseRecommendationReader
 from cicerone.io.db_store import (
     DEFAULT_RECOMMENDATION_ITEMS_TABLE,
@@ -31,18 +32,12 @@ from cicerone.serve.metrics import observe_cache_refresh, record_cache_hit, reco
 
 logger = logging.getLogger(__name__)
 
-USER_COLUMN = "user_id"
-RANK_COLUMN = "rank"
-SOURCE_COLUMN = "source"
-ITEM_COLUMN = "item_id"
-SCORE_COLUMN = "score"
-RECOMMENDATION_COLUMNS: tuple[str, ...] = (
-    USER_COLUMN,
-    ITEM_COLUMN,
-    RANK_COLUMN,
-    SCORE_COLUMN,
-    SOURCE_COLUMN,
-)
+USER_COLUMN = _rec.USER_COLUMN
+ITEM_COLUMN = _rec.ITEM_COLUMN
+RANK_COLUMN = _rec.RANK_COLUMN
+SCORE_COLUMN = _rec.SCORE_COLUMN
+SOURCE_COLUMN = _rec.SOURCE_COLUMN
+RECOMMENDATION_COLUMNS = _rec.RECOMMENDATION_COLUMNS
 ITEMS_SNAPSHOT_FILENAME = "items_snapshot.parquet"
 
 # Cold-start without __cold_start__: popular/latest only (never warm "blended"),

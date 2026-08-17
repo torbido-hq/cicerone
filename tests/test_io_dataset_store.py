@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 
 import boto3
 import pandas as pd
@@ -80,6 +81,28 @@ def test_local_replace_recommendations_when_file_missing(tmp_path):
     )
     stored = pd.read_parquet(tmp_path / "recommendations.parquet")
     assert list(stored["user_id"]) == ["u1"]
+
+
+def test_local_replace_recommendations_logs_schema_mismatch(tmp_path, caplog):
+    options = {"storage_backend": "local", "path": str(tmp_path)}
+    sink = DatasetOutputSink(options)
+    pd.DataFrame([{"item_id": "orphan", "rank": 1}]).to_parquet(
+        tmp_path / "recommendations.parquet", index=False
+    )
+    with caplog.at_level(logging.WARNING):
+        assert (
+            sink.replace_recommendations_for_users(
+                pd.DataFrame(
+                    [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "incremental"}]
+                ),
+                user_ids=["u1"],
+            )
+            == 1
+        )
+    assert any("schema mismatch" in record.getMessage().lower() for record in caplog.records)
+    stored = pd.read_parquet(tmp_path / "recommendations.parquet")
+    assert list(stored["user_id"]) == ["u1"]
+    assert "orphan" not in set(stored["item_id"].astype(str))
 
 
 def test_local_replace_recommendations_rejects_extra_users(tmp_path):

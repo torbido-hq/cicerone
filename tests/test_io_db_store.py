@@ -110,15 +110,20 @@ def test_database_output_replace_recommendations_for_users():
             ]
         )
     )
-    sink.replace_recommendations_for_users(
-        pd.DataFrame([{"user_id": "u1", "item_id": "new", "rank": 1, "score": 1.0, "source": "incremental"}]),
-        user_ids=["u1"],
+    assert (
+        sink.replace_recommendations_for_users(
+            pd.DataFrame(
+                [{"user_id": "u1", "item_id": "new", "rank": 1, "score": 1.0, "source": "incremental"}]
+            ),
+            user_ids=["u1"],
+        )
+        == 2
     )
     engine = create_engine(TEST_DATABASE_URL)
     stored = pd.read_sql('SELECT * FROM "recommendations" ORDER BY user_id, item_id', engine)
     assert list(stored[stored["user_id"] == "u2"]["item_id"]) == ["keep"]
     assert list(stored[stored["user_id"] == "u1"]["item_id"]) == ["new"]
-    sink.replace_recommendations_for_users(pd.DataFrame(), user_ids=["u1"])
+    assert sink.replace_recommendations_for_users(pd.DataFrame(), user_ids=["u1"]) == 1
     stored = pd.read_sql('SELECT * FROM "recommendations"', engine)
     assert list(stored["user_id"]) == ["u2"]
 

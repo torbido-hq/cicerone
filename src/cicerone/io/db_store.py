@@ -28,6 +28,7 @@ from sqlalchemy import (
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from cicerone.io.options import require_option, sql_identifier
+from cicerone.io.recommendation_schema import recommendations_sql_names
 from cicerone.io.replace_users import normalize_replace_user_ids
 
 logger = logging.getLogger(__name__)
@@ -134,9 +135,8 @@ class DatabaseOutputSink:
         self._engine = create_engine(require_option(options, "database_url", "db"), pool_pre_ping=True)
 
     def write_recommendations(self, df: pd.DataFrame) -> None:
-        table = sql_identifier(
-            self._options.get("recommendations_table", DEFAULT_RECOMMENDATIONS_TABLE),
-            option="recommendations_table",
+        table, _columns, _user_col = recommendations_sql_names(
+            self._options, default_table=DEFAULT_RECOMMENDATIONS_TABLE
         )
         logger.info("Writing %d rows to database table %r", len(df), table)
         with self._engine.begin() as conn:
@@ -147,21 +147,20 @@ class DatabaseOutputSink:
         ids = normalize_replace_user_ids(df, user_ids)
         if not ids:
             return 0
-        table = sql_identifier(
-            self._options.get("recommendations_table", DEFAULT_RECOMMENDATIONS_TABLE),
-            option="recommendations_table",
+        table, _columns, user_col = recommendations_sql_names(
+            self._options, default_table=DEFAULT_RECOMMENDATIONS_TABLE
         )
-        user_col = sql_identifier("user_id", option="recommendations_column")
         logger.info(
             "Replacing recommendations for %d user(s) (%d row(s)) in %r",
             len(ids),
             len(df),
             table,
         )
-        delete_sql = text(f'DELETE FROM "{table}" WHERE "{user_col}" IN :user_ids').bindparams(
+        # Identifiers are sql_identifier-validated; match events.store SELECT quoting.
+        delete_sql = text(f"DELETE FROM {table} WHERE {user_col} IN :user_ids").bindparams(
             bindparam("user_ids", expanding=True)
         )
-        count_sql = text(f'SELECT COUNT(DISTINCT "{user_col}") FROM "{table}"')
+        count_sql = text(f"SELECT COUNT(DISTINCT {user_col}) FROM {table}")
         with self._engine.begin() as conn:
             savepoint = conn.begin_nested()
             try:

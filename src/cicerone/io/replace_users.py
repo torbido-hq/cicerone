@@ -6,7 +6,7 @@ from collections.abc import Sequence
 
 import pandas as pd
 
-_USER_COLUMN = "user_id"
+from cicerone.io.recommendation_schema import USER_COLUMN
 
 
 def normalize_replace_user_ids(df: pd.DataFrame, user_ids: Sequence[str]) -> list[str]:
@@ -22,9 +22,9 @@ def normalize_replace_user_ids(df: pd.DataFrame, user_ids: Sequence[str]) -> lis
         return []
     if df.empty:
         return ids
-    if _USER_COLUMN not in df.columns:
-        raise ValueError("replace_recommendations_for_users df is missing user_id column")
-    extras = set(df[_USER_COLUMN].astype(str)) - set(ids)
+    if USER_COLUMN not in df.columns:
+        raise ValueError(f"replace_recommendations_for_users df is missing {USER_COLUMN} column")
+    extras = set(df[USER_COLUMN].astype(str)) - set(ids)
     if extras:
         raise ValueError(
             f"replace_recommendations_for_users got rows for users outside user_ids: {sorted(extras)}"

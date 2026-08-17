@@ -14,6 +14,7 @@ For configuration and usage, see the main [README](../README.md).
 | `policy.py` | Declarative eligibility masks (documented fail-open/fail-closed matrix), cohort grouping, score boosts |
 | `blending.py` | Per-user weighted mix of personalized/popular/latest (optional) |
 | `io/base.py` | `InputSource` / `OutputSink` / `RecommendationReader` protocols (including `configure_item_filters` and `replace_recommendations_for_users`); `BaseRecommendationReader` with empty defaults for custom readers |
+| `io/recommendation_schema.py` | Shared recommendation column constants + SQL identifier helper for read/write paths |
 | `io/factory.py` | kind→backend registry (`"dataset"` or `"db"`) |
 | `io/dataset_store.py` | Backend: parquet files (S3-compatible or local disk) |
 | `io/db_store.py` | Backend: SQLAlchemy-backed database tables/queries |

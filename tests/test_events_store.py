@@ -120,6 +120,19 @@ def test_load_recommendations_for_users_db(tmp_path):
     assert count_recommendation_users(settings.output) == 2
 
 
+def test_load_recommendations_for_users_db_missing_table(tmp_path, caplog):
+    db_path = tmp_path / "missing_scoped.db"
+    sqlite3.connect(db_path).close()
+    settings = make_settings(
+        output=IOSettings(kind="db", options={"database_url": f"sqlite+pysqlite:///{db_path}"})
+    )
+    with caplog.at_level(logging.WARNING):
+        frame = load_recommendations_for_users(settings.output, ["u1"])
+    assert frame.empty
+    assert list(frame.columns) == list(empty_recommendations_frame().columns)
+    assert any("missing" in record.getMessage().lower() for record in caplog.records)
+
+
 def test_count_recommendation_users_db_missing_table(tmp_path):
     db_path = tmp_path / "missing_count.db"
     sqlite3.connect(db_path).close()

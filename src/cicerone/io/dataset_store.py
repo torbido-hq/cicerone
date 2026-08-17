@@ -26,6 +26,7 @@ from cicerone.io.options import (
     require_option,
     validate_storage_options,
 )
+from cicerone.io.recommendation_schema import USER_COLUMN
 from cicerone.io.replace_users import normalize_replace_user_ids
 
 logger = logging.getLogger(__name__)
@@ -104,16 +105,20 @@ class DatasetOutputSink:
                 raise
         if existing.empty:
             remaining = existing
-        elif "user_id" not in existing.columns:
+        elif USER_COLUMN not in existing.columns:
+            logger.warning(
+                "Recommendations schema mismatch (missing %s); treating existing rows as empty",
+                USER_COLUMN,
+            )
             remaining = pd.DataFrame()
         else:
-            remaining = existing[~existing["user_id"].astype(str).isin(ids)]
+            remaining = existing[~existing[USER_COLUMN].astype(str).isin(ids)]
         parts = [frame for frame in (remaining, df) if not frame.empty]
         merged = pd.concat(parts, ignore_index=True) if parts else df
         self.write_recommendations(merged)
-        if merged.empty or "user_id" not in merged.columns:
+        if merged.empty or USER_COLUMN not in merged.columns:
             return 0
-        return int(merged["user_id"].astype(str).nunique())
+        return int(merged[USER_COLUMN].astype(str).nunique())
 
     def write_items_snapshot(self, df: pd.DataFrame) -> None:
         buffer = io.BytesIO()

@@ -182,6 +182,8 @@ class IncrementalUpdater:
         return pd.concat(parts, ignore_index=True)
 
     def _store_users_in_cache(self, user_ids: set[str], merged: pd.DataFrame) -> None:
+        # After a successful replace, every id in user_ids was written. Missing from
+        # merged means cleared rows — store empty frames (key present = loaded).
         if merged.empty or USER_COLUMN not in merged.columns:
             by_user: dict[str, pd.DataFrame] = {}
         else:
