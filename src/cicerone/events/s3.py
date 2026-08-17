@@ -54,14 +54,18 @@ def validate_s3_event_options(options: dict[str, Any]) -> str:
     return resolved
 
 
-def _positive_int(options: dict[str, Any], key: str, default: int) -> int:
+def _as_int(options: dict[str, Any], key: str, default: int) -> int:
     raw = options.get(key, default)
     try:
-        value = int(raw)
+        return int(raw)
     except (TypeError, ValueError) as exc:
-        raise ConfigError(f"events.options.{key} must be an integer >= 1, got {raw!r}") from exc
+        raise ConfigError(f"events.options.{key} must be an integer, got {raw!r}") from exc
+
+
+def _positive_int(options: dict[str, Any], key: str, default: int) -> int:
+    value = _as_int(options, key, default)
     if value < 1:
-        raise ConfigError(f"events.options.{key} must be >= 1, got {value}")
+        raise ConfigError(f"events.options.{key} must be an integer >= 1, got {value}")
     return value
 
 
@@ -182,8 +186,8 @@ class S3EventSource(EventSource):
         self._queue_url = str(options["queue_url"]) if self._mode == "sqs" else None
         self._marker_path = Path(options["marker_path"]) if options.get("marker_path") else None
         self._marker_key = str(options.get("initial_marker") or "")
-        self._wait_time_seconds = max(0, int(options.get("wait_time_seconds", 0)))
-        self._max_messages = max(1, min(10, int(options.get("max_messages", 10))))
+        self._wait_time_seconds = max(0, _as_int(options, "wait_time_seconds", 0))
+        self._max_messages = max(1, min(10, _as_int(options, "max_messages", 10)))
         self._list_page_size = _positive_int(options, "list_page_size", _DEFAULT_LIST_PAGE_SIZE)
         self._sqs_lag_cache_ttl_seconds = _positive_float(
             options, "sqs_lag_cache_ttl_seconds", _DEFAULT_SQS_LAG_CACHE_TTL_SECONDS

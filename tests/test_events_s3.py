@@ -205,6 +205,10 @@ def test_s3_tuning_options_and_rejects_non_positive():
         S3EventSource(_creds(mode="list", list_page_size="abc"))
     with pytest.raises(ConfigError, match="sqs_lag_cache_ttl_seconds"):
         S3EventSource(_creds(mode="list", sqs_lag_cache_ttl_seconds="nope"))
+    with pytest.raises(ConfigError, match="wait_time_seconds"):
+        S3EventSource(_creds(mode="list", wait_time_seconds="slow"))
+    with pytest.raises(ConfigError, match="max_messages"):
+        S3EventSource(_creds(mode="list", max_messages="many"))
 
 
 @mock_aws
