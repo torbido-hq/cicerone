@@ -201,6 +201,10 @@ def test_s3_tuning_options_and_rejects_non_positive():
     assert source._sqs_client_timeout_seconds == 3.0
     with pytest.raises(ConfigError, match="list_page_size"):
         S3EventSource(_creds(mode="list", list_page_size=0))
+    with pytest.raises(ConfigError, match="list_page_size"):
+        S3EventSource(_creds(mode="list", list_page_size="abc"))
+    with pytest.raises(ConfigError, match="sqs_lag_cache_ttl_seconds"):
+        S3EventSource(_creds(mode="list", sqs_lag_cache_ttl_seconds="nope"))
 
 
 @mock_aws

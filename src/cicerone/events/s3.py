@@ -17,7 +17,6 @@ from urllib.parse import unquote_plus
 
 import boto3
 from botocore.config import Config
-from botocore.exceptions import ClientError
 
 from cicerone.config import ConfigError
 from cicerone.events.base import EventSource, EventSourceHealth, NormalizedEvent
@@ -57,7 +56,10 @@ def validate_s3_event_options(options: dict[str, Any]) -> str:
 
 def _positive_int(options: dict[str, Any], key: str, default: int) -> int:
     raw = options.get(key, default)
-    value = int(raw)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"events.options.{key} must be an integer >= 1, got {raw!r}") from exc
     if value < 1:
         raise ConfigError(f"events.options.{key} must be >= 1, got {value}")
     return value
@@ -65,7 +67,10 @@ def _positive_int(options: dict[str, Any], key: str, default: int) -> int:
 
 def _positive_float(options: dict[str, Any], key: str, default: float) -> float:
     raw = options.get(key, default)
-    value = float(raw)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"events.options.{key} must be a float > 0, got {raw!r}") from exc
     if value <= 0:
         raise ConfigError(f"events.options.{key} must be > 0, got {value}")
     return value
@@ -516,7 +521,7 @@ class S3EventSource(EventSource):
             if batch.receipt_handle and sqs is not None and queue_url:
                 try:
                     sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=batch.receipt_handle)
-                except ClientError:
+                except Exception:
                     logger.exception("Failed to delete SQS message after ack")
 
     def _drop_batch_for_event_unlocked(self, event_id: str) -> None:
