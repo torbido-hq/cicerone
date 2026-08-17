@@ -86,7 +86,7 @@ def test_dispose_recommendation_engines_clears_cache(tmp_path):
     assert frame.empty
 
 
-def test_load_recommendations_for_users_dataset_filters(tmp_path):
+def test_load_recommendations_for_users_dataset_filters(tmp_path, monkeypatch):
     path = tmp_path / "recommendations.parquet"
     pd.DataFrame(
         [
@@ -97,10 +97,42 @@ def test_load_recommendations_for_users_dataset_filters(tmp_path):
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     )
+    calls: list[object] = []
+    real_read = __import__("cicerone.io.options", fromlist=["read_parquet"]).read_parquet
+
+    def tracking_read(options, filename, *, s3_client=None, columns=None, filters=None):  # type: ignore[no-untyped-def]
+        calls.append({"columns": columns, "filters": filters})
+        return real_read(options, filename, s3_client=s3_client, columns=columns, filters=filters)
+
+    monkeypatch.setattr("cicerone.events.store.read_parquet", tracking_read)
     frame = load_recommendations_for_users(settings.output, ["u2"])
     assert list(frame["user_id"]) == ["u2"]
     assert count_recommendation_users(settings.output) == 2
     assert load_recommendations_for_users(settings.output, []).empty
+    assert any(call["filters"] == [("user_id", "in", ["u2"])] for call in calls)
+
+
+def test_load_recommendations_for_users_dataset_filter_fallback(tmp_path, monkeypatch):
+    path = tmp_path / "recommendations.parquet"
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"},
+            {"user_id": "u2", "item_id": "i2", "rank": 1, "score": 0.5, "source": "personalized"},
+        ]
+    ).to_parquet(path, index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    )
+    real_read = __import__("cicerone.io.options", fromlist=["read_parquet"]).read_parquet
+
+    def failing_filtered_read(options, filename, *, s3_client=None, columns=None, filters=None):  # type: ignore[no-untyped-def]
+        if filters is not None:
+            raise ValueError("Unsupported filter on user_id column")
+        return real_read(options, filename, s3_client=s3_client, columns=columns, filters=filters)
+
+    monkeypatch.setattr("cicerone.events.store.read_parquet", failing_filtered_read)
+    frame = load_recommendations_for_users(settings.output, ["u2"])
+    assert list(frame["user_id"]) == ["u2"]
 
 
 def test_load_recommendations_for_users_db(tmp_path):
@@ -230,9 +262,9 @@ def test_count_recommendation_users_dataset_projects_user_id(tmp_path, monkeypat
     calls: list[object] = []
     real_read = __import__("cicerone.io.options", fromlist=["read_parquet"]).read_parquet
 
-    def tracking_read(options, filename, *, s3_client=None, columns=None):  # type: ignore[no-untyped-def]
+    def tracking_read(options, filename, *, s3_client=None, columns=None, filters=None):  # type: ignore[no-untyped-def]
         calls.append(columns)
-        return real_read(options, filename, s3_client=s3_client, columns=columns)
+        return real_read(options, filename, s3_client=s3_client, columns=columns, filters=filters)
 
     monkeypatch.setattr("cicerone.events.store.read_parquet", tracking_read)
     assert count_recommendation_users(settings.output) == 2

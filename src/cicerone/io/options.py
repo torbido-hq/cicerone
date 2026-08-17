@@ -95,16 +95,20 @@ def read_parquet(
     *,
     s3_client: Any | None = None,
     columns: Sequence[str] | None = None,
+    filters: Sequence[Any] | None = None,
 ) -> pd.DataFrame:
     """Read a parquet object from local path or S3 using ``storage_backend`` options.
 
     When ``columns`` is set, only those columns are loaded (projection pushdown
-    where the parquet engine supports it).
+    where the parquet engine supports it). ``filters`` are passed through to
+    pandas/pyarrow for row-group predicate pushdown when available.
     """
     backend = validate_storage_options(options)
     read_kwargs: dict[str, Any] = {}
     if columns is not None:
         read_kwargs["columns"] = list(columns)
+    if filters is not None:
+        read_kwargs["filters"] = list(filters)
     if backend == "local":
         path = Path(require_option(options, "path", "local")) / filename
         logger.info("Reading %s", path)

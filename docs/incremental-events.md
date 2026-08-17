@@ -168,7 +168,9 @@ Loads and writes are **user-scoped** (affected users + `__cold_start__` only):
 `OutputSink.replace_recommendations_for_users` updates those users without a
 full-table overwrite (`db` deletes/inserts by `user_id` in one transaction;
 `dataset` read-merges the parquet object) and returns the distinct user count
-for the incremental manifest.
+for the incremental manifest. Dataset user loads pass pyarrow `filters` on
+`user_id` when possible (row-group predicate pushdown); S3 still downloads the
+object bytes today.
 
 ## Follow-up PR sequence
 

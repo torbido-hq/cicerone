@@ -105,6 +105,36 @@ def _load_dataset_recommendations(output: IOSettings) -> pd.DataFrame:
     return _empty_on_schema_mismatch(frame)
 
 
+def _load_dataset_recommendations_for_users(output: IOSettings, user_ids: list[str]) -> pd.DataFrame:
+    """Load only rows for ``user_ids`` when the parquet engine can push down filters."""
+    try:
+        frame = read_parquet(
+            output.options,
+            "recommendations.parquet",
+            filters=[(USER_COLUMN, "in", user_ids)],
+        )
+    except FileNotFoundError:
+        return empty_recommendations_frame()
+    except Exception as exc:
+        if is_s3_not_found(exc):
+            return empty_recommendations_frame()
+        message = str(exc).lower()
+        if USER_COLUMN in message or "fieldref" in message or "filter" in message:
+            logger.warning("Filtered recommendations read failed; falling back to full-file load: %s", exc)
+            frame = _load_dataset_recommendations(output)
+            if frame.empty:
+                return frame
+            return frame.loc[frame[USER_COLUMN].astype(str).isin(user_ids)].reset_index(drop=True)
+        raise
+    if frame.empty:
+        return empty_recommendations_frame()
+    normalized = _empty_on_schema_mismatch(frame)
+    if normalized.empty:
+        return normalized
+    # Defensive: keep only requested ids if the engine ignored/partial-applied filters.
+    return normalized.loc[normalized[USER_COLUMN].astype(str).isin(user_ids)].reset_index(drop=True)
+
+
 def _load_db_recommendations(output: IOSettings, *, user_ids: Collection[str] | None = None) -> pd.DataFrame:
     table, columns, user_col = _db_table_and_columns(output)
     engine = _engine_for(require_option(output.options, "database_url", "db"))
@@ -145,10 +175,7 @@ def load_recommendations_for_users(output: IOSettings, user_ids: Collection[str]
         return empty_recommendations_frame()
 
     if output.kind == "dataset":
-        frame = _load_dataset_recommendations(output)
-        if frame.empty:
-            return frame
-        return frame.loc[frame[USER_COLUMN].astype(str).isin(ids)].reset_index(drop=True)
+        return _load_dataset_recommendations_for_users(output, ids)
 
     if output.kind == "db":
         return _load_db_recommendations(output, user_ids=ids)
