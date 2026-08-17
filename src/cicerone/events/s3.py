@@ -27,9 +27,9 @@ from cicerone.io.options import build_s3_client, require_option
 logger = logging.getLogger(__name__)
 
 _MODES = frozenset({"sqs", "list"})
-_LIST_PAGE_SIZE = 100
-_SQS_LAG_CACHE_TTL_SECONDS = 5.0
-_SQS_CLIENT_TIMEOUT_SECONDS = 2.0
+_DEFAULT_LIST_PAGE_SIZE = 100
+_DEFAULT_SQS_LAG_CACHE_TTL_SECONDS = 5.0
+_DEFAULT_SQS_CLIENT_TIMEOUT_SECONDS = 2.0
 
 
 def validate_s3_event_options(options: dict[str, Any]) -> str:
@@ -55,6 +55,24 @@ def validate_s3_event_options(options: dict[str, Any]) -> str:
     return resolved
 
 
+def _positive_int(options: dict[str, Any], key: str, default: int) -> int:
+    raw = options.get(key, default)
+    value = int(raw)
+    if value < 1:
+        raise ConfigError(f"events.options.{key} must be >= 1, got {value}")
+    return value
+
+
+def _positive_float(options: dict[str, Any], key: str, default: float) -> float:
+    raw = options.get(key, default)
+    value = float(raw)
+    if value <= 0:
+        raise ConfigError(f"events.options.{key} must be > 0, got {value}")
+    return value
+
+
+# One SQS message / S3 object → _Batch. Events go pending → (on poll) in_flight;
+# ack clears remaining; marker/SQS delete only for leading fully-acked batches.
 @dataclass
 class _Batch:
     remaining: set[str]
@@ -161,6 +179,13 @@ class S3EventSource(EventSource):
         self._marker_key = str(options.get("initial_marker") or "")
         self._wait_time_seconds = max(0, int(options.get("wait_time_seconds", 0)))
         self._max_messages = max(1, min(10, int(options.get("max_messages", 10))))
+        self._list_page_size = _positive_int(options, "list_page_size", _DEFAULT_LIST_PAGE_SIZE)
+        self._sqs_lag_cache_ttl_seconds = _positive_float(
+            options, "sqs_lag_cache_ttl_seconds", _DEFAULT_SQS_LAG_CACHE_TTL_SECONDS
+        )
+        self._sqs_client_timeout_seconds = _positive_float(
+            options, "sqs_client_timeout_seconds", _DEFAULT_SQS_CLIENT_TIMEOUT_SECONDS
+        )
         self._s3 = None
         self._sqs = None
         self._lock = threading.Lock()
@@ -184,8 +209,8 @@ class S3EventSource(EventSource):
                     "aws_secret_access_key": require_option(self._options, "secret_access_key", "s3"),
                     "config": Config(
                         retries={"max_attempts": 3, "mode": "standard"},
-                        connect_timeout=_SQS_CLIENT_TIMEOUT_SECONDS,
-                        read_timeout=_SQS_CLIENT_TIMEOUT_SECONDS,
+                        connect_timeout=self._sqs_client_timeout_seconds,
+                        read_timeout=self._sqs_client_timeout_seconds,
                     ),
                 }
                 region_name = _optional_aws_region(self._options)
@@ -260,7 +285,7 @@ class S3EventSource(EventSource):
         if sqs is not None and queue_url:
             now = time.monotonic()
             visible: int | None = None
-            if cached_visible is not None and (now - cached_at) < _SQS_LAG_CACHE_TTL_SECONDS:
+            if cached_visible is not None and (now - cached_at) < self._sqs_lag_cache_ttl_seconds:
                 visible = cached_visible
             else:
                 try:
@@ -303,12 +328,14 @@ class S3EventSource(EventSource):
             bucket = self._bucket
             prefix = self._prefix
             marker = self._marker_key
+            page_size = self._list_page_size
             held_ids = set(self._in_flight) | {event.event_id for event in self._pending}
             held_keys = {batch.object_key for batch in self._batches.values() if batch.object_key}
-        assert s3 is not None
+            if s3 is None:
+                raise RuntimeError("S3EventSource.connect() required before poll")
         kwargs: dict[str, Any] = {
             "Bucket": bucket,
-            "MaxKeys": min(_LIST_PAGE_SIZE, max(need, 1)),
+            "MaxKeys": min(page_size, max(need, 1)),
         }
         if prefix:
             kwargs["Prefix"] = prefix
@@ -356,7 +383,8 @@ class S3EventSource(EventSource):
             s3 = self._s3
             queue_url = self._queue_url
             held_ids = set(self._in_flight) | {event.event_id for event in self._pending}
-        assert sqs is not None and s3 is not None and queue_url is not None
+            if s3 is None or sqs is None or queue_url is None:
+                raise RuntimeError("S3EventSource.connect() required before poll")
         loaded = 0
         while loaded < need:
             response = sqs.receive_message(
@@ -437,6 +465,9 @@ class S3EventSource(EventSource):
         object_key: str | None = None,
         object_etag: str | None = None,
     ) -> None:
+        # pending holds undelivered events; poll moves them to in_flight.
+        # _batches stays ordered: marker/SQS delete only for a leading batch
+        # whose remaining is empty (empty skip batches complete immediately).
         event_ids = {event.event_id for event in events}
         batch = _Batch(
             remaining=set(event_ids),
@@ -532,13 +563,12 @@ class S3EventSource(EventSource):
             handle.write(json.dumps(payload, sort_keys=True) + "\n")
             handle.flush()
             os.fsync(handle.fileno())
-        try:
-            dir_fd = os.open(str(tmp.parent), os.O_RDONLY)
-        except OSError:
-            dir_fd = None
-        if dir_fd is not None:
-            try:
-                os.fsync(dir_fd)
-            finally:
-                os.close(dir_fd)
         tmp.replace(self._marker_path)
+        try:
+            dir_fd = os.open(str(self._marker_path.parent), os.O_RDONLY)
+        except OSError:
+            return
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)

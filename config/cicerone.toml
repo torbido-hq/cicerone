@@ -252,6 +252,9 @@ prefix = "recommendations/latest"
 # prefix = "events/"
 # mode = "list"
 # marker_path = "/app/data/events_s3_marker.json"
+# # list_page_size = 100
+# # sqs_lag_cache_ttl_seconds = 5
+# # sqs_client_timeout_seconds = 2
 # # AWS-only alternative (no endpoint_url): mode = "sqs", queue_url = "..."
 
 # Optional: a small, standalone read-only status page over job run history

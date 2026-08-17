@@ -12,7 +12,6 @@ from cicerone.events.registry import build_event_source, registered_event_source
 from cicerone.events.s3 import (
     S3EventSource,
     _events_from_body,
-    _optional_aws_region,
     _s3_records_from_sqs_body,
 )
 
@@ -176,9 +175,32 @@ def test_s3_rejects_unknown_mode():
         S3EventSource(_creds(mode="kafka"))
 
 
-def test_optional_aws_region():
-    assert _optional_aws_region({}) is None
-    assert _optional_aws_region({"region_name": "eu-west-1"}) == "eu-west-1"
+@mock_aws
+def test_s3_poll_after_close_raises_controlled_error():
+    client = boto3.client("s3", region_name="us-east-1")
+    client.create_bucket(Bucket="events-bucket")
+    _put_event(client, "events/a.json", event_payload(event_id="e1"))
+    source = S3EventSource(_creds(mode="list", prefix="events/"))
+    source.connect()
+    source.close()
+    with pytest.raises(RuntimeError, match="connect"):
+        source.poll(10)
+
+
+def test_s3_tuning_options_and_rejects_non_positive():
+    source = S3EventSource(
+        _creds(
+            mode="list",
+            list_page_size=50,
+            sqs_lag_cache_ttl_seconds=1.5,
+            sqs_client_timeout_seconds=3,
+        )
+    )
+    assert source._list_page_size == 50
+    assert source._sqs_lag_cache_ttl_seconds == 1.5
+    assert source._sqs_client_timeout_seconds == 3.0
+    with pytest.raises(ConfigError, match="list_page_size"):
+        S3EventSource(_creds(mode="list", list_page_size=0))
 
 
 @mock_aws
