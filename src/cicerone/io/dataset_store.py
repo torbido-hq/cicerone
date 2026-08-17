@@ -12,6 +12,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -86,6 +87,33 @@ class DatasetOutputSink:
         buffer = io.BytesIO()
         df.to_parquet(buffer, index=False)
         self._write_bytes("recommendations.parquet", buffer.getvalue(), "application/octet-stream")
+
+    def replace_recommendations_for_users(self, df: pd.DataFrame, *, user_ids: Sequence[str]) -> None:
+        ids = sorted({str(user_id) for user_id in user_ids})
+        if not ids:
+            return
+        if not df.empty and "user_id" in df.columns:
+            extras = set(df["user_id"].astype(str)) - set(ids)
+            if extras:
+                raise ValueError(
+                    f"replace_recommendations_for_users got rows for users outside user_ids: {sorted(extras)}"
+                )
+        try:
+            existing = read_parquet(self._options, "recommendations.parquet")
+        except FileNotFoundError:
+            existing = pd.DataFrame()
+        except Exception as exc:
+            if is_s3_not_found(exc):
+                existing = pd.DataFrame()
+            else:
+                raise
+        if existing.empty or "user_id" not in existing.columns:
+            remaining = existing.iloc[0:0] if not existing.empty else existing
+        else:
+            remaining = existing[~existing["user_id"].astype(str).isin(ids)]
+        parts = [frame for frame in (remaining, df) if frame is not None and not frame.empty]
+        merged = pd.concat(parts, ignore_index=True) if parts else df.iloc[0:0] if not df.empty else df
+        self.write_recommendations(merged)
 
     def write_items_snapshot(self, df: pd.DataFrame) -> None:
         buffer = io.BytesIO()

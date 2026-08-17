@@ -9,8 +9,10 @@ from sqlalchemy import create_engine, text
 
 from cicerone.config import IOSettings, make_settings
 from cicerone.events.store import (
+    count_recommendation_users,
     dispose_recommendation_engines,
     empty_recommendations_frame,
+    load_recommendations_for_users,
     load_recommendations_frame,
 )
 
@@ -82,3 +84,53 @@ def test_dispose_recommendation_engines_clears_cache(tmp_path):
     dispose_recommendation_engines()  # idempotent
     frame = load_recommendations_frame(settings.output)
     assert frame.empty
+
+
+def test_load_recommendations_for_users_dataset_filters(tmp_path):
+    path = tmp_path / "recommendations.parquet"
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"},
+            {"user_id": "u2", "item_id": "i2", "rank": 1, "score": 0.5, "source": "personalized"},
+        ]
+    ).to_parquet(path, index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    )
+    frame = load_recommendations_for_users(settings.output, ["u2"])
+    assert list(frame["user_id"]) == ["u2"]
+    assert count_recommendation_users(settings.output) == 2
+    assert load_recommendations_for_users(settings.output, []).empty
+
+
+def test_load_recommendations_for_users_db(tmp_path):
+    db_path = tmp_path / "scoped.db"
+    url = f"sqlite+pysqlite:///{db_path}"
+    engine = create_engine(url)
+    rows = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"},
+            {"user_id": "u2", "item_id": "i2", "rank": 1, "score": 0.5, "source": "personalized"},
+        ]
+    )
+    rows.to_sql("recommendations", engine, index=False)
+    settings = make_settings(output=IOSettings(kind="db", options={"database_url": url}))
+    frame = load_recommendations_for_users(settings.output, ["u1"])
+    assert list(frame["user_id"]) == ["u1"]
+    assert count_recommendation_users(settings.output) == 2
+
+
+def test_count_recommendation_users_db_missing_table(tmp_path):
+    db_path = tmp_path / "missing_count.db"
+    sqlite3.connect(db_path).close()
+    settings = make_settings(
+        output=IOSettings(kind="db", options={"database_url": f"sqlite+pysqlite:///{db_path}"})
+    )
+    assert count_recommendation_users(settings.output) == 0
+
+
+def test_load_recommendations_for_users_unsupported_kind():
+    with pytest.raises(ValueError, match="Unsupported output kind"):
+        load_recommendations_for_users(IOSettings(kind="other", options={}), ["u1"])
+    with pytest.raises(ValueError, match="Unsupported output kind"):
+        count_recommendation_users(IOSettings(kind="other", options={}))

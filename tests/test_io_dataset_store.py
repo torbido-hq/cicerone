@@ -37,6 +37,62 @@ def test_local_backend_round_trip(tmp_path):
     assert list(items_snap["item_id"]) == ["i1"]
 
 
+def test_local_replace_recommendations_for_users_preserves_others(tmp_path):
+    options = {"storage_backend": "local", "path": str(tmp_path)}
+    sink = DatasetOutputSink(options)
+    sink.write_recommendations(
+        pd.DataFrame(
+            [
+                {"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"},
+                {"user_id": "u2", "item_id": "keep", "rank": 1, "score": 0.5, "source": "personalized"},
+            ]
+        )
+    )
+    sink.replace_recommendations_for_users(
+        pd.DataFrame([{"user_id": "u1", "item_id": "new", "rank": 1, "score": 2.0, "source": "incremental"}]),
+        user_ids=["u1"],
+    )
+    stored = pd.read_parquet(tmp_path / "recommendations.parquet")
+    assert set(stored[stored["user_id"] == "u1"]["item_id"]) == {"new"}
+    assert list(stored[stored["user_id"] == "u2"]["item_id"]) == ["keep"]
+    sink.replace_recommendations_for_users(pd.DataFrame(), user_ids=["u1"])
+    stored = pd.read_parquet(tmp_path / "recommendations.parquet")
+    assert "u1" not in set(stored["user_id"].astype(str))
+    assert list(stored["user_id"]) == ["u2"]
+    sink.replace_recommendations_for_users(
+        pd.DataFrame([{"user_id": "u3", "item_id": "i3", "rank": 1, "score": 1.0, "source": "incremental"}]),
+        user_ids=["u3"],
+    )
+    # empty user_ids is a no-op
+    before = pd.read_parquet(tmp_path / "recommendations.parquet")
+    sink.replace_recommendations_for_users(before, user_ids=[])
+    after = pd.read_parquet(tmp_path / "recommendations.parquet")
+    assert len(after) == len(before)
+
+
+def test_local_replace_recommendations_when_file_missing(tmp_path):
+    options = {"storage_backend": "local", "path": str(tmp_path)}
+    sink = DatasetOutputSink(options)
+    sink.replace_recommendations_for_users(
+        pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "incremental"}]),
+        user_ids=["u1"],
+    )
+    stored = pd.read_parquet(tmp_path / "recommendations.parquet")
+    assert list(stored["user_id"]) == ["u1"]
+
+
+def test_local_replace_recommendations_rejects_extra_users(tmp_path):
+    options = {"storage_backend": "local", "path": str(tmp_path)}
+    sink = DatasetOutputSink(options)
+    with pytest.raises(ValueError, match="outside user_ids"):
+        sink.replace_recommendations_for_users(
+            pd.DataFrame(
+                [{"user_id": "u9", "item_id": "i1", "rank": 1, "score": 1.0, "source": "incremental"}]
+            ),
+            user_ids=["u1"],
+        )
+
+
 def test_local_backend_optional_inputs_missing_return_none(tmp_path):
     options = {"storage_backend": "local", "path": str(tmp_path)}
     source = DatasetInputSource(options)

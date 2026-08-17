@@ -5,15 +5,16 @@ from __future__ import annotations
 import logging
 import threading
 from collections import OrderedDict
+from collections.abc import Collection
 
 import pandas as pd
-from sqlalchemy import Engine, create_engine, text
+from sqlalchemy import Engine, bindparam, create_engine, text
 from sqlalchemy.exc import ProgrammingError
 
 from cicerone.config import IOSettings
 from cicerone.io.db_store import DEFAULT_RECOMMENDATIONS_TABLE, MISSING_TABLE_ERRORS
 from cicerone.io.options import is_s3_not_found, read_parquet, require_option, sql_identifier
-from cicerone.io.recommendation_reader import RECOMMENDATION_COLUMNS
+from cicerone.io.recommendation_reader import RECOMMENDATION_COLUMNS, USER_COLUMN
 
 logger = logging.getLogger(__name__)
 
@@ -56,50 +57,113 @@ def _normalize_recommendation_columns(frame: pd.DataFrame) -> pd.DataFrame:
     return frame.loc[:, list(RECOMMENDATION_COLUMNS)]
 
 
+def _load_dataset_recommendations(output: IOSettings) -> pd.DataFrame:
+    try:
+        frame = read_parquet(output.options, "recommendations.parquet")
+    except FileNotFoundError:
+        return empty_recommendations_frame()
+    except Exception as exc:
+        if is_s3_not_found(exc):
+            return empty_recommendations_frame()
+        raise
+    if frame.empty:
+        return empty_recommendations_frame()
+    try:
+        return _normalize_recommendation_columns(frame)
+    except ValueError as exc:
+        logger.warning("Recommendations schema mismatch; treating as empty: %s", exc)
+        return empty_recommendations_frame()
+
+
+def _db_table_and_columns(output: IOSettings) -> tuple[str, str, str]:
+    table = sql_identifier(
+        output.options.get("recommendations_table", DEFAULT_RECOMMENDATIONS_TABLE),
+        option="recommendations_table",
+    )
+    columns = ", ".join(
+        sql_identifier(column, option="recommendations_column") for column in RECOMMENDATION_COLUMNS
+    )
+    user_col = sql_identifier(USER_COLUMN, option="recommendations_column")
+    return table, columns, user_col
+
+
+def _load_db_recommendations(output: IOSettings, *, user_ids: Collection[str] | None = None) -> pd.DataFrame:
+    table, columns, user_col = _db_table_and_columns(output)
+    engine = _engine_for(require_option(output.options, "database_url", "db"))
+    try:
+        if user_ids is None:
+            frame = pd.read_sql_query(text(f"SELECT {columns} FROM {table}"), engine)
+        else:
+            ids = sorted({str(user_id) for user_id in user_ids})
+            if not ids:
+                return empty_recommendations_frame()
+            stmt = text(f"SELECT {columns} FROM {table} WHERE {user_col} IN :user_ids").bindparams(
+                bindparam("user_ids", expanding=True)
+            )
+            frame = pd.read_sql_query(stmt, engine, params={"user_ids": ids})
+    except MISSING_TABLE_ERRORS as exc:
+        message = str(getattr(exc, "orig", exc)).lower()
+        if "no such column" in message or ("column" in message and "does not exist" in message):
+            logger.warning("Recommendations schema mismatch; treating as empty: %s", exc)
+            return empty_recommendations_frame()
+        if isinstance(exc, ProgrammingError) or "does not exist" in message or "no such table" in message:
+            logger.warning("Recommendations table %r missing; treating as empty", table)
+            return empty_recommendations_frame()
+        raise
+    if frame.empty:
+        return empty_recommendations_frame()
+    try:
+        return _normalize_recommendation_columns(frame)
+    except ValueError as exc:
+        logger.warning("Recommendations schema mismatch; treating as empty: %s", exc)
+        return empty_recommendations_frame()
+
+
 def load_recommendations_frame(output: IOSettings) -> pd.DataFrame:
     if output.kind == "dataset":
-        try:
-            frame = read_parquet(output.options, "recommendations.parquet")
-        except FileNotFoundError:
-            return empty_recommendations_frame()
-        except Exception as exc:
-            if is_s3_not_found(exc):
-                return empty_recommendations_frame()
-            raise
-        if frame.empty:
-            return empty_recommendations_frame()
-        try:
-            return _normalize_recommendation_columns(frame)
-        except ValueError as exc:
-            logger.warning("Recommendations schema mismatch; treating as empty: %s", exc)
-            return empty_recommendations_frame()
+        return _load_dataset_recommendations(output)
 
     if output.kind == "db":
-        table = sql_identifier(
-            output.options.get("recommendations_table", DEFAULT_RECOMMENDATIONS_TABLE),
-            option="recommendations_table",
-        )
-        columns = ", ".join(
-            sql_identifier(column, option="recommendations_column") for column in RECOMMENDATION_COLUMNS
-        )
+        return _load_db_recommendations(output)
+
+    raise ValueError(f"Unsupported output kind for incremental load: {output.kind!r}")
+
+
+def load_recommendations_for_users(output: IOSettings, user_ids: Collection[str]) -> pd.DataFrame:
+    ids = sorted({str(user_id) for user_id in user_ids})
+    if not ids:
+        return empty_recommendations_frame()
+
+    if output.kind == "dataset":
+        frame = _load_dataset_recommendations(output)
+        if frame.empty:
+            return frame
+        return frame.loc[frame[USER_COLUMN].astype(str).isin(ids)].reset_index(drop=True)
+
+    if output.kind == "db":
+        return _load_db_recommendations(output, user_ids=ids)
+
+    raise ValueError(f"Unsupported output kind for incremental load: {output.kind!r}")
+
+
+def count_recommendation_users(output: IOSettings) -> int:
+    if output.kind == "dataset":
+        frame = _load_dataset_recommendations(output)
+        if frame.empty:
+            return 0
+        return int(frame[USER_COLUMN].astype(str).nunique())
+
+    if output.kind == "db":
+        table, _columns, user_col = _db_table_and_columns(output)
         engine = _engine_for(require_option(output.options, "database_url", "db"))
         try:
-            frame = pd.read_sql_query(text(f"SELECT {columns} FROM {table}"), engine)
+            with engine.connect() as conn:
+                value = conn.execute(text(f"SELECT COUNT(DISTINCT {user_col}) FROM {table}")).scalar()
         except MISSING_TABLE_ERRORS as exc:
             message = str(getattr(exc, "orig", exc)).lower()
-            if "no such column" in message or ("column" in message and "does not exist" in message):
-                logger.warning("Recommendations schema mismatch; treating as empty: %s", exc)
-                return empty_recommendations_frame()
             if isinstance(exc, ProgrammingError) or "does not exist" in message or "no such table" in message:
-                logger.warning("Recommendations table %r missing; treating as empty", table)
-                return empty_recommendations_frame()
+                return 0
             raise
-        if frame.empty:
-            return empty_recommendations_frame()
-        try:
-            return _normalize_recommendation_columns(frame)
-        except ValueError as exc:
-            logger.warning("Recommendations schema mismatch; treating as empty: %s", exc)
-            return empty_recommendations_frame()
+        return int(value or 0)
 
     raise ValueError(f"Unsupported output kind for incremental load: {output.kind!r}")

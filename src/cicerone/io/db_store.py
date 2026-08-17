@@ -8,11 +8,23 @@ deploy-time config only.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import Column, DateTime, LargeBinary, MetaData, Table, create_engine, insert, inspect, text
+from sqlalchemy import (
+    Column,
+    DateTime,
+    LargeBinary,
+    MetaData,
+    Table,
+    bindparam,
+    create_engine,
+    insert,
+    inspect,
+    text,
+)
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from cicerone.io.options import require_option, sql_identifier
@@ -129,6 +141,40 @@ class DatabaseOutputSink:
         with self._engine.begin() as conn:
             _clear_table_for_replace(conn, table)
             df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
+
+    def replace_recommendations_for_users(self, df: pd.DataFrame, *, user_ids: Sequence[str]) -> None:
+        ids = sorted({str(user_id) for user_id in user_ids})
+        if not ids:
+            return
+        if not df.empty and "user_id" in df.columns:
+            extras = set(df["user_id"].astype(str)) - set(ids)
+            if extras:
+                raise ValueError(
+                    f"replace_recommendations_for_users got rows for users outside user_ids: {sorted(extras)}"
+                )
+        table = sql_identifier(
+            self._options.get("recommendations_table", DEFAULT_RECOMMENDATIONS_TABLE),
+            option="recommendations_table",
+        )
+        user_col = sql_identifier("user_id", option="recommendations_column")
+        logger.info(
+            "Replacing recommendations for %d user(s) (%d row(s)) in %r",
+            len(ids),
+            len(df),
+            table,
+        )
+        delete_sql = text(f'DELETE FROM "{table}" WHERE "{user_col}" IN :user_ids').bindparams(
+            bindparam("user_ids", expanding=True)
+        )
+        with self._engine.begin() as conn:
+            savepoint = conn.begin_nested()
+            try:
+                conn.execute(delete_sql, {"user_ids": ids})
+                savepoint.commit()
+            except _MISSING_TABLE_ERRORS:
+                savepoint.rollback()
+            if not df.empty:
+                df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
 
     def write_manifest(self, manifest: dict) -> None:
         table = sql_identifier(
