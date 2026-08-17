@@ -10,7 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - User-scoped incremental write-through: load/replace only affected users
   (plus `__cold_start__`) via `OutputSink.replace_recommendations_for_users`
-  instead of full-frame overwrite.
+  (returns post-write distinct user count) instead of full-frame overwrite.
 - Incremental events Prometheus metrics on serve `/metrics` (source lag /
   connected, flush counters, last success timestamp, tick errors) and an
   incremental-events panel on the Basic-Auth dashboard (from manifests).

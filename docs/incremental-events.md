@@ -165,8 +165,9 @@ micro-batches and refreshes that cache after each successful write. A same-proce
 `busy_check` hit invalidates the cache so the next apply reloads after retrain.
 Loads and writes are **user-scoped** (affected users + `__cold_start__` only):
 `OutputSink.replace_recommendations_for_users` updates those users without a
-full-table overwrite (`db` deletes/inserts by `user_id`; `dataset` read-merges
-the parquet object).
+full-table overwrite (`db` deletes/inserts by `user_id` in one transaction;
+`dataset` read-merges the parquet object) and returns the distinct user count
+for the incremental manifest.
 
 ## Follow-up PR sequence
 

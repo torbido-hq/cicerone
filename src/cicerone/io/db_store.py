@@ -28,6 +28,7 @@ from sqlalchemy import (
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from cicerone.io.options import require_option, sql_identifier
+from cicerone.io.replace_users import normalize_replace_user_ids
 
 logger = logging.getLogger(__name__)
 
@@ -142,16 +143,10 @@ class DatabaseOutputSink:
             _clear_table_for_replace(conn, table)
             df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
 
-    def replace_recommendations_for_users(self, df: pd.DataFrame, *, user_ids: Sequence[str]) -> None:
-        ids = sorted({str(user_id) for user_id in user_ids})
+    def replace_recommendations_for_users(self, df: pd.DataFrame, *, user_ids: Sequence[str]) -> int:
+        ids = normalize_replace_user_ids(df, user_ids)
         if not ids:
-            return
-        if not df.empty and "user_id" in df.columns:
-            extras = set(df["user_id"].astype(str)) - set(ids)
-            if extras:
-                raise ValueError(
-                    f"replace_recommendations_for_users got rows for users outside user_ids: {sorted(extras)}"
-                )
+            return 0
         table = sql_identifier(
             self._options.get("recommendations_table", DEFAULT_RECOMMENDATIONS_TABLE),
             option="recommendations_table",
@@ -166,6 +161,7 @@ class DatabaseOutputSink:
         delete_sql = text(f'DELETE FROM "{table}" WHERE "{user_col}" IN :user_ids').bindparams(
             bindparam("user_ids", expanding=True)
         )
+        count_sql = text(f'SELECT COUNT(DISTINCT "{user_col}") FROM "{table}"')
         with self._engine.begin() as conn:
             savepoint = conn.begin_nested()
             try:
@@ -175,6 +171,14 @@ class DatabaseOutputSink:
                 savepoint.rollback()
             if not df.empty:
                 df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
+            count_savepoint = conn.begin_nested()
+            try:
+                value = conn.execute(count_sql).scalar()
+                count_savepoint.commit()
+            except _MISSING_TABLE_ERRORS:
+                count_savepoint.rollback()
+                return 0
+        return int(value or 0)
 
     def write_manifest(self, manifest: dict) -> None:
         table = sql_identifier(

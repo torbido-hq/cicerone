@@ -20,8 +20,8 @@ class InputSource(Protocol):
 class OutputSink(Protocol):
     def write_recommendations(self, df: pd.DataFrame) -> None: ...
 
-    def replace_recommendations_for_users(self, df: pd.DataFrame, *, user_ids: Sequence[str]) -> None:
-        """Replace all recommendation rows for ``user_ids`` with ``df`` (may be empty)."""
+    def replace_recommendations_for_users(self, df: pd.DataFrame, *, user_ids: Sequence[str]) -> int:
+        """Replace all rows for ``user_ids`` with ``df``; return distinct user count after write."""
         ...
 
     def write_manifest(self, manifest: dict) -> None: ...

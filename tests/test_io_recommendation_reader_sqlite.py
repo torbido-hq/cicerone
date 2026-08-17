@@ -115,10 +115,10 @@ def test_sqlite_replace_recommendations_for_users(tmp_path):
     engine = create_engine(url)
     stored = pd.read_sql(text('SELECT user_id, item_id FROM "recommendations" ORDER BY user_id'), engine)
     assert list(zip(stored["user_id"], stored["item_id"], strict=True)) == [("u1", "new"), ("u2", "keep")]
-    sink.replace_recommendations_for_users(pd.DataFrame(), user_ids=["u1"])
+    assert sink.replace_recommendations_for_users(pd.DataFrame(), user_ids=["u1"]) == 1
     stored = pd.read_sql(text('SELECT user_id FROM "recommendations"'), engine)
     assert list(stored["user_id"]) == ["u2"]
-    sink.replace_recommendations_for_users(pd.DataFrame(), user_ids=[])  # no-op
+    assert sink.replace_recommendations_for_users(pd.DataFrame(), user_ids=[]) == 0
 
 
 def test_sqlite_replace_recommendations_creates_table_when_missing(tmp_path):

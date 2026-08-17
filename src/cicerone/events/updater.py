@@ -14,7 +14,6 @@ from cicerone.config import IOSettings
 from cicerone.events.base import NormalizedEvent
 from cicerone.events.normalize import events_to_dataframe
 from cicerone.events.store import (
-    count_recommendation_users,
     empty_recommendations_frame,
     load_recommendations_for_users,
 )
@@ -131,7 +130,7 @@ class IncrementalUpdater:
         merged = pd.concat(frames, ignore_index=True) if frames else empty_recommendations_frame()
         if not merged.empty:
             merged = merged[list(RECOMMENDATION_COLUMNS)]
-        self._sink.replace_recommendations_for_users(merged, user_ids=sorted(affected_set))
+        n_users = self._sink.replace_recommendations_for_users(merged, user_ids=sorted(affected_set))
         self._store_users_in_cache(affected_set, merged)
 
         now = datetime.now(UTC)
@@ -143,7 +142,7 @@ class IncrementalUpdater:
             "n_events": len(events),
             "incremental_events_applied": len(events),
             "last_incremental_at": now.isoformat(),
-            "n_users_with_recommendations": count_recommendation_users(self._output_settings),
+            "n_users_with_recommendations": n_users,
             "top_k": self._top_k,
             "partial_outputs": True,
         }

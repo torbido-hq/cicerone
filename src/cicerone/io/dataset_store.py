@@ -26,6 +26,7 @@ from cicerone.io.options import (
     require_option,
     validate_storage_options,
 )
+from cicerone.io.replace_users import normalize_replace_user_ids
 
 logger = logging.getLogger(__name__)
 
@@ -88,16 +89,10 @@ class DatasetOutputSink:
         df.to_parquet(buffer, index=False)
         self._write_bytes("recommendations.parquet", buffer.getvalue(), "application/octet-stream")
 
-    def replace_recommendations_for_users(self, df: pd.DataFrame, *, user_ids: Sequence[str]) -> None:
-        ids = sorted({str(user_id) for user_id in user_ids})
+    def replace_recommendations_for_users(self, df: pd.DataFrame, *, user_ids: Sequence[str]) -> int:
+        ids = normalize_replace_user_ids(df, user_ids)
         if not ids:
-            return
-        if not df.empty and "user_id" in df.columns:
-            extras = set(df["user_id"].astype(str)) - set(ids)
-            if extras:
-                raise ValueError(
-                    f"replace_recommendations_for_users got rows for users outside user_ids: {sorted(extras)}"
-                )
+            return 0
         try:
             existing = read_parquet(self._options, "recommendations.parquet")
         except FileNotFoundError:
@@ -107,13 +102,18 @@ class DatasetOutputSink:
                 existing = pd.DataFrame()
             else:
                 raise
-        if existing.empty or "user_id" not in existing.columns:
-            remaining = existing.iloc[0:0] if not existing.empty else existing
+        if existing.empty:
+            remaining = existing
+        elif "user_id" not in existing.columns:
+            remaining = pd.DataFrame()
         else:
             remaining = existing[~existing["user_id"].astype(str).isin(ids)]
-        parts = [frame for frame in (remaining, df) if frame is not None and not frame.empty]
-        merged = pd.concat(parts, ignore_index=True) if parts else df.iloc[0:0] if not df.empty else df
+        parts = [frame for frame in (remaining, df) if not frame.empty]
+        merged = pd.concat(parts, ignore_index=True) if parts else df
         self.write_recommendations(merged)
+        if merged.empty or "user_id" not in merged.columns:
+            return 0
+        return int(merged["user_id"].astype(str).nunique())
 
     def write_items_snapshot(self, df: pd.DataFrame) -> None:
         buffer = io.BytesIO()

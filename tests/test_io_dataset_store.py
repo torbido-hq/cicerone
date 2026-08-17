@@ -63,11 +63,12 @@ def test_local_replace_recommendations_for_users_preserves_others(tmp_path):
         pd.DataFrame([{"user_id": "u3", "item_id": "i3", "rank": 1, "score": 1.0, "source": "incremental"}]),
         user_ids=["u3"],
     )
-    # empty user_ids is a no-op
     before = pd.read_parquet(tmp_path / "recommendations.parquet")
-    sink.replace_recommendations_for_users(before, user_ids=[])
+    assert sink.replace_recommendations_for_users(pd.DataFrame(), user_ids=[]) == 0
     after = pd.read_parquet(tmp_path / "recommendations.parquet")
     assert len(after) == len(before)
+    with pytest.raises(ValueError, match="requires user_ids"):
+        sink.replace_recommendations_for_users(before, user_ids=[])
 
 
 def test_local_replace_recommendations_when_file_missing(tmp_path):
@@ -89,6 +90,11 @@ def test_local_replace_recommendations_rejects_extra_users(tmp_path):
             pd.DataFrame(
                 [{"user_id": "u9", "item_id": "i1", "rank": 1, "score": 1.0, "source": "incremental"}]
             ),
+            user_ids=["u1"],
+        )
+    with pytest.raises(ValueError, match="missing user_id"):
+        sink.replace_recommendations_for_users(
+            pd.DataFrame([{"item_id": "i1", "rank": 1, "score": 1.0, "source": "incremental"}]),
             user_ids=["u1"],
         )
 
