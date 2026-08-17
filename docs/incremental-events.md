@@ -161,8 +161,9 @@ backpressure (HTTP 429 when full). Worker poll interval is
 `events.incremental.poll_interval_seconds`.
 
 The updater caches affected users' recommendation rows in-process between
-micro-batches and refreshes that cache after each successful write. A same-process
-`busy_check` hit invalidates the cache so the next apply reloads after retrain.
+micro-batches (LRU-bounded; default 2048 users) and refreshes that cache after
+each successful write. A same-process `busy_check` hit invalidates the cache so
+the next apply reloads after retrain.
 Loads and writes are **user-scoped** (affected users + `__cold_start__` only):
 `OutputSink.replace_recommendations_for_users` updates those users without a
 full-table overwrite (`db` deletes/inserts by `user_id` in one transaction;

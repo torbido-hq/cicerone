@@ -142,6 +142,40 @@ def test_count_recommendation_users_db_missing_table(tmp_path):
     assert count_recommendation_users(settings.output) == 0
 
 
+def test_count_recommendation_users_dataset_projects_user_id(tmp_path, monkeypatch):
+    path = tmp_path / "recommendations.parquet"
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"},
+            {"user_id": "u2", "item_id": "i2", "rank": 1, "score": 0.5, "source": "personalized"},
+        ]
+    ).to_parquet(path, index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    )
+    calls: list[object] = []
+    real_read = __import__("cicerone.io.options", fromlist=["read_parquet"]).read_parquet
+
+    def tracking_read(options, filename, *, s3_client=None, columns=None):  # type: ignore[no-untyped-def]
+        calls.append(columns)
+        return real_read(options, filename, s3_client=s3_client, columns=columns)
+
+    monkeypatch.setattr("cicerone.events.store.read_parquet", tracking_read)
+    assert count_recommendation_users(settings.output) == 2
+    assert calls == [["user_id"]]
+
+
+def test_count_recommendation_users_dataset_schema_mismatch(tmp_path, caplog):
+    path = tmp_path / "recommendations.parquet"
+    pd.DataFrame([{"item_id": "i1", "rank": 1}]).to_parquet(path, index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    )
+    with caplog.at_level(logging.WARNING):
+        assert count_recommendation_users(settings.output) == 0
+    assert any("schema mismatch" in record.getMessage().lower() for record in caplog.records)
+
+
 def test_load_recommendations_for_users_unsupported_kind():
     with pytest.raises(ValueError, match="Unsupported output kind"):
         load_recommendations_for_users(IOSettings(kind="other", options={}), ["u1"])

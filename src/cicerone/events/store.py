@@ -140,7 +140,21 @@ def load_recommendations_for_users(output: IOSettings, user_ids: Collection[str]
 
 def count_recommendation_users(output: IOSettings) -> int:
     if output.kind == "dataset":
-        frame = _load_dataset_recommendations(output)
+        try:
+            # Project only user_id — avoids materializing the full recommendations frame.
+            frame = read_parquet(output.options, "recommendations.parquet", columns=[USER_COLUMN])
+        except FileNotFoundError:
+            return 0
+        except Exception as exc:
+            if is_s3_not_found(exc):
+                return 0
+            message = str(exc).lower()
+            if USER_COLUMN in message or "fieldref" in message:
+                logger.warning(
+                    "Recommendations schema mismatch while counting users; treating as empty: %s", exc
+                )
+                return 0
+            raise
         if frame.empty:
             return 0
         return int(frame[USER_COLUMN].astype(str).nunique())

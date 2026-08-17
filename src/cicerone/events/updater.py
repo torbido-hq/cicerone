@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import logging
 import math
-from collections.abc import Callable, Sequence
+from collections import OrderedDict
+from collections.abc import Callable, Collection, Sequence
 from datetime import UTC, datetime
 
 import pandas as pd
@@ -41,6 +42,8 @@ _PRESERVE_LABELS = frozenset(
 )
 # Reserve slots so recent interactions can enter top-K even when preserved rows fill it.
 _BOOST_SLOT_FRACTION = 0.3
+# Bound in-process per-user frames for long-lived serve workers.
+DEFAULT_USER_CACHE_MAX_SIZE = 2048
 
 
 def _is_preserved_source(source: str) -> bool:
@@ -58,7 +61,7 @@ class IncrementalUpdater:
     from the flushed batch. Full collaborative refits wait for ``job.run()``.
 
     Reads and writes only affected users (plus ``__cold_start__``), not the
-    full recommendations table/file.
+    full recommendations table/file. Per-user frames are cached with LRU eviction.
     """
 
     def __init__(
@@ -70,7 +73,10 @@ class IncrementalUpdater:
         top_k: int,
         busy_check: Callable[[], bool] | None = None,
         on_success: Callable[[], None] | None = None,
+        user_cache_max_size: int = DEFAULT_USER_CACHE_MAX_SIZE,
     ):
+        if user_cache_max_size < 1:
+            raise ValueError("user_cache_max_size must be >= 1")
         self._sink = sink
         self._output_settings = output_settings
         self._feature_config = feature_config
@@ -79,7 +85,8 @@ class IncrementalUpdater:
         self._on_success = on_success
         self._last_success_at: datetime | None = None
         self._events_applied = 0
-        self._cached_by_user: dict[str, pd.DataFrame] = {}
+        self._user_cache_max_size = user_cache_max_size
+        self._cached_by_user: OrderedDict[str, pd.DataFrame] = OrderedDict()
 
     @property
     def last_success_at(self) -> datetime | None:
@@ -158,6 +165,20 @@ class IncrementalUpdater:
         )
         return len(events)
 
+    def _cache_put(self, user_id: str, frame: pd.DataFrame, *, protect: Collection[str]) -> None:
+        self._cached_by_user[user_id] = frame
+        self._cached_by_user.move_to_end(user_id)
+        self._trim_user_cache(protect=protect)
+
+    def _trim_user_cache(self, *, protect: Collection[str]) -> None:
+        protect_set = set(protect)
+        while len(self._cached_by_user) > self._user_cache_max_size:
+            victim = next((key for key in self._cached_by_user if key not in protect_set), None)
+            if victim is None:
+                # Active batch larger than the cap; allow temporary oversize.
+                return
+            self._cached_by_user.pop(victim)
+
     def _load_users(self, user_ids: set[str]) -> pd.DataFrame:
         missing = sorted(user_id for user_id in user_ids if user_id not in self._cached_by_user)
         if missing:
@@ -171,7 +192,14 @@ class IncrementalUpdater:
             else:
                 by_user = {}
             for user_id in missing:
-                self._cached_by_user[user_id] = by_user.get(user_id, empty_recommendations_frame())
+                self._cache_put(
+                    user_id,
+                    by_user.get(user_id, empty_recommendations_frame()),
+                    protect=user_ids,
+                )
+        for user_id in user_ids:
+            if user_id in self._cached_by_user:
+                self._cached_by_user.move_to_end(user_id)
         parts = [
             self._cached_by_user[user_id]
             for user_id in sorted(user_ids)
@@ -191,7 +219,11 @@ class IncrementalUpdater:
             frame[USER_COLUMN] = frame[USER_COLUMN].astype(str)
             by_user = {user_id: group.copy() for user_id, group in frame.groupby(USER_COLUMN, sort=False)}
         for user_id in user_ids:
-            self._cached_by_user[user_id] = by_user.get(user_id, empty_recommendations_frame())
+            self._cache_put(
+                user_id,
+                by_user.get(user_id, empty_recommendations_frame()),
+                protect=user_ids,
+            )
 
     def _event_weight(self, event_type: str, quantity: int) -> float:
         if self._feature_config is None:

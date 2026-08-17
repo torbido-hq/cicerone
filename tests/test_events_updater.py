@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 from support.events import event_payload
 
 from cicerone.blending import COLD_START_USER_ID
@@ -288,3 +289,44 @@ def test_incremental_updater_preserves_untouched_via_scoped_write(tmp_path, feat
     assert list(frame[frame["user_id"] == "u2"]["item_id"]) == ["keep"]
     assert frame[frame["user_id"] == "u1"]["item_id"].astype(str).tolist()  # non-empty updated
     assert "i9" in set(frame[frame["user_id"] == "u1"]["item_id"].astype(str))
+
+
+def test_incremental_updater_user_cache_lru_evicts(tmp_path, feature_config):
+    out = tmp_path / "out"
+    out.mkdir()
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=3,
+        user_cache_max_size=2,
+    )
+    assert updater.apply([normalize_event(event_payload(user_id="u1", item_id="a", event_id="e1"))]) == 1
+    assert updater.apply([normalize_event(event_payload(user_id="u2", item_id="b", event_id="e2"))]) == 1
+    # Cap is 2; each apply also caches __cold_start__, so older users are evicted.
+    assert len(updater._cached_by_user) <= 2
+    assert COLD_START_USER_ID in updater._cached_by_user
+    assert updater.apply([normalize_event(event_payload(user_id="u3", item_id="c", event_id="e3"))]) == 1
+    assert len(updater._cached_by_user) <= 2
+    assert COLD_START_USER_ID in updater._cached_by_user
+    assert "u3" in updater._cached_by_user
+
+
+def test_incremental_updater_rejects_non_positive_cache_size(tmp_path, feature_config):
+    out = tmp_path / "out"
+    out.mkdir()
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+    )
+    with pytest.raises(ValueError, match="user_cache_max_size"):
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+            user_cache_max_size=0,
+        )
