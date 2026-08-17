@@ -142,6 +142,19 @@ def test_count_recommendation_users_db_missing_table(tmp_path):
     assert count_recommendation_users(settings.output) == 0
 
 
+def test_count_recommendation_users_db_schema_mismatch(tmp_path, caplog):
+    db_path = tmp_path / "count_schema.db"
+    url = f"sqlite+pysqlite:///{db_path}"
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE recommendations (item_id TEXT, rank INTEGER)"))
+        conn.execute(text("INSERT INTO recommendations (item_id, rank) VALUES ('i1', 1)"))
+    settings = make_settings(output=IOSettings(kind="db", options={"database_url": url}))
+    with caplog.at_level(logging.WARNING):
+        assert count_recommendation_users(settings.output) == 0
+    assert any("schema mismatch" in record.getMessage().lower() for record in caplog.records)
+
+
 def test_count_recommendation_users_dataset_projects_user_id(tmp_path, monkeypatch):
     path = tmp_path / "recommendations.parquet"
     pd.DataFrame(

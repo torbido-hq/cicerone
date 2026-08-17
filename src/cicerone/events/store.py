@@ -79,6 +79,15 @@ def _db_table_and_columns(output: IOSettings) -> tuple[str, str, str]:
     return recommendations_sql_names(output.options, default_table=DEFAULT_RECOMMENDATIONS_TABLE)
 
 
+def _db_error_message(exc: BaseException) -> str:
+    return str(getattr(exc, "orig", exc)).lower()
+
+
+def _is_missing_recommendation_column_error(exc: BaseException) -> bool:
+    message = _db_error_message(exc)
+    return "no such column" in message or ("column" in message and "does not exist" in message)
+
+
 def _load_db_recommendations(output: IOSettings, *, user_ids: Collection[str] | None = None) -> pd.DataFrame:
     table, columns, user_col = _db_table_and_columns(output)
     engine = _engine_for(require_option(output.options, "database_url", "db"))
@@ -94,10 +103,10 @@ def _load_db_recommendations(output: IOSettings, *, user_ids: Collection[str] | 
             )
             frame = pd.read_sql_query(stmt, engine, params={"user_ids": ids})
     except MISSING_TABLE_ERRORS as exc:
-        message = str(getattr(exc, "orig", exc)).lower()
-        if "no such column" in message or ("column" in message and "does not exist" in message):
+        if _is_missing_recommendation_column_error(exc):
             logger.warning("Recommendations schema mismatch; treating as empty: %s", exc)
             return empty_recommendations_frame()
+        message = _db_error_message(exc)
         if isinstance(exc, ProgrammingError) or "does not exist" in message or "no such table" in message:
             logger.warning("Recommendations table %r missing; treating as empty", table)
             return empty_recommendations_frame()
@@ -166,7 +175,12 @@ def count_recommendation_users(output: IOSettings) -> int:
             with engine.connect() as conn:
                 value = conn.execute(text(f"SELECT COUNT(DISTINCT {user_col}) FROM {table}")).scalar()
         except MISSING_TABLE_ERRORS as exc:
-            message = str(getattr(exc, "orig", exc)).lower()
+            if _is_missing_recommendation_column_error(exc):
+                logger.warning(
+                    "Recommendations schema mismatch while counting users; treating as empty: %s", exc
+                )
+                return 0
+            message = _db_error_message(exc)
             if isinstance(exc, ProgrammingError) or "does not exist" in message or "no such table" in message:
                 return 0
             raise
