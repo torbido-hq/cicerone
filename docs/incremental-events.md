@@ -55,7 +55,9 @@ src/cicerone/events/
   buffer.py      # micro-batch by count or time window
   updater.py     # cheap incremental path → OutputSink (write-through)
   store.py       # load existing recommendation rows for merge
-  webhook.py     # reference EventSource (HTTP push)
+  webhook.py     # HTTP push EventSource
+  db.py          # watermark poll EventSource
+  s3.py          # S3-compatible EventSource (R2 list/marker; optional AWS SQS)
   worker.py      # background poll → buffer → flush → ack
 
 src/cicerone/serve/
@@ -65,8 +67,8 @@ src/cicerone/serve/
 src/cicerone/config/events.py  # [events] coerce + TOML load helpers
 ```
 
-Later backends (`db`, `s3`, `rabbitmq`, `kafka`, `redis_streams`) register
-beside `webhook` without changing the config shape.
+Built-in backends (`webhook`, `db`, `s3`; later `rabbitmq` / `kafka` /
+`redis_streams`) register beside each other without changing the config shape.
 
 ## EventSource surface
 
@@ -95,6 +97,12 @@ kind = "webhook"   # webhook | db | s3 | rabbitmq | kafka | (later redis_streams
 # backend-specific; webhook may set auth_token (else serve.auth_token)
 # db: database_url (required), events_table / events_query, watermark_path,
 #     initial_watermark
+# s3 (R2-first): access_key_id, secret_access_key, bucket (required);
+#     endpoint_url (R2/MinIO); prefix; mode = "list" | "sqs" (default: list
+#     unless queue_url is set); marker_path / initial_marker (list).
+#     AWS-only: queue_url + mode = "sqs" (rejected when endpoint_url is set).
+#     Optional tuning: list_page_size, sqs_lag_cache_ttl_seconds,
+#     sqs_client_timeout_seconds
 
 [events.incremental]
 batch_size = 100
@@ -166,8 +174,8 @@ Keep each PR **atomic** and stacked on the incremental-events foundation
 1. Webhook + micro-batch write-through (foundation) — shipped
 2. `kind=db` watermark source — shipped
 3. Metrics / dashboard wiring (lag, flush, errors) — shipped
-4. Further backends / write-path improvements as separate PRs (S3, user-scoped
-   I/O, Redis Streams, …)
+4. Further backends / write-path improvements as separate PRs (`kind=s3`
+   shipped; user-scoped I/O, Redis Streams, …)
 5. **Last:** full review of `docs/` **and** the `website/` sync (sidebar,
    `sync-docs.mjs`, rendered pages, links, OpenAPI mentions) so the public
    site matches the shipped incremental surface
@@ -180,7 +188,13 @@ Build order:
 2. **DB** — watermark poll (reuse `events_query` / `events_table`); optional
    `watermark_path` for durable cursor; LISTEN/NOTIFY or logical replication
    under the **same** `kind=db` later (not a separate kind).
-3. **S3** — AWS: notifications → SQS; non-AWS (R2/MinIO): list/marker poll.
+3. **S3-compatible (R2-first)** — shipped: primary path is list/marker poll
+   (`mode=list`) with the same `endpoint_url` + credentials shape as dataset
+   I/O (Cloudflare R2 / MinIO). Optional AWS-only `mode=sqs` (S3→SQS
+   notifications; rejected when `endpoint_url` is set). Objects are JSON
+   event objects or arrays; missing `event_id` uses `bucket/key|etag|index`.
+   List mode assumes a **single consumer** per bucket/prefix (local
+   `event_id` dedupe + marker); multi-writer/shared markers are out of scope.
 4. **RabbitMQ** — queue/exchange consumer (optional dep).
 5. **Kafka** — topic / consumer group (optional dep).
 
@@ -197,7 +211,7 @@ already run them; do not steer greenfield users there first.
 | --- | --- |
 | Webhook + micro-batch | None (FastAPI already present) |
 | DB poll | None beyond SQLAlchemy |
-| S3 + SQS / poll | boto3 already present |
+| S3-compatible list / AWS SQS | boto3 already present |
 | RabbitMQ | optional `requirements-rabbitmq.txt` |
 | Kafka | optional `confluent-kafka` extra |
 | Redis Streams | `redis` (already optional for locks) |
@@ -208,7 +222,7 @@ already run them; do not steer greenfield users there first.
 | --- | --- | --- |
 | Webhook | At-least-once (client retries) | `event_id` / `idempotency_key`; short dedupe window |
 | DB watermark | Near exactly-once | Advance watermark only after successful flush |
-| S3→SQS / poll | At-least-once | Object key + etag dedupe |
+| S3 list (R2) / SQS | At-least-once | Object key + ETag dedupe |
 | RabbitMQ / Kafka | At-least-once | Ack/commit after successful flush; shared dedupe key |
 
 Duplicate delivery can inflate weights for `quantity_scaled_events`. Dedupe
@@ -221,7 +235,7 @@ ops surface). Serve `/metrics` exposes:
 
 | Metric | Meaning |
 | --- | --- |
-| `cicerone_events_source_lag` | Source backlog (`-1` if unknown / events off) |
+| `cicerone_events_source_lag` | Source backlog (`-1` if unknown / events off). Webhook/S3-list: pending + in-flight. S3-SQS: that held count plus approximate *visible* queue depth. DB: rows after watermark. |
 | `cicerone_events_source_connected` | `1` when the source reports connected |
 | `cicerone_events_flush_total{status=}` | Flush outcomes: `success` / `busy` / `error` |
 | `cicerone_events_flush_events_total` | Events applied on successful flushes |

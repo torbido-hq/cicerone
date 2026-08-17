@@ -9,6 +9,7 @@ from cicerone.events.registry import (
     register_event_source,
     registered_event_source_kinds,
 )
+from cicerone.events.s3 import S3EventSource
 from cicerone.events.webhook import WebhookEventSource
 
 __all__ = [
@@ -17,6 +18,7 @@ __all__ = [
     "EventSource",
     "EventSourceHealth",
     "NormalizedEvent",
+    "S3EventSource",
     "WebhookEventSource",
     "build_event_source",
     "register_event_source",

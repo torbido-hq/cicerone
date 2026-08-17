@@ -106,6 +106,10 @@ def load_events_settings(
             )
     if enabled and kind == "db" and not options.get("database_url"):
         raise ConfigError('events.options.database_url is required when events.kind = "db"')
+    if enabled and kind == "s3":
+        from cicerone.events.s3 import validate_s3_event_options
+
+        validate_s3_event_options(options)
 
     return EventsSettings(
         enabled=enabled,

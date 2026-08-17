@@ -238,6 +238,25 @@ prefix = "recommendations/latest"
 # # watermark_path = "/app/data/events_watermark.json"
 # # initial_watermark = "2026-01-01T00:00:00Z"
 
+# S3-compatible event source (R2-first). Same credential shape as [input]/
+# list/marker under prefix; durable marker_path. Objects are JSON event
+# objects or arrays. AWS SQS mode is optional and incompatible with endpoint_url.
+# [events]
+# enabled = true
+# kind = "s3"
+# [events.options]
+# endpoint_url = "${EVENTS_S3_ENDPOINT_URL}"  # R2: https://<accountid>.r2.cloudflarestorage.com
+# access_key_id = "${EVENTS_S3_ACCESS_KEY_ID}"
+# secret_access_key = "${EVENTS_S3_SECRET_ACCESS_KEY}"
+# bucket = "${EVENTS_S3_BUCKET}"
+# prefix = "events/"
+# mode = "list"
+# marker_path = "/app/data/events_s3_marker.json"
+# # list_page_size = 100
+# # sqs_lag_cache_ttl_seconds = 5
+# # sqs_client_timeout_seconds = 2
+# # AWS-only alternative (no endpoint_url): mode = "sqs", queue_url = "..."
+
 # Optional: a small, standalone read-only status page over job run history
 # (its own container/port, independent of [job].mode -- see the README's
 # Dashboard section). Protected by HTTP Basic Auth (a handful of named
