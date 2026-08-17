@@ -120,6 +120,32 @@ def test_load_recommendations_for_users_db(tmp_path):
     assert count_recommendation_users(settings.output) == 2
 
 
+def test_load_recommendations_for_users_db_empty_user_ids(tmp_path, monkeypatch):
+    db_path = tmp_path / "scoped_empty_ids.db"
+    url = f"sqlite+pysqlite:///{db_path}"
+    engine = create_engine(url)
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"},
+            {"user_id": "u2", "item_id": "i2", "rank": 1, "score": 0.5, "source": "personalized"},
+        ]
+    ).to_sql("recommendations", engine, index=False)
+    settings = make_settings(output=IOSettings(kind="db", options={"database_url": url}))
+
+    calls = {"n": 0}
+    real_read = pd.read_sql_query
+
+    def spy_read_sql_query(*args, **kwargs):  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        return real_read(*args, **kwargs)
+
+    monkeypatch.setattr(pd, "read_sql_query", spy_read_sql_query)
+    frame = load_recommendations_for_users(settings.output, [])
+    assert frame.empty
+    assert list(frame.columns) == list(empty_recommendations_frame().columns)
+    assert calls["n"] == 0
+
+
 def test_load_recommendations_for_users_db_missing_table(tmp_path, caplog):
     db_path = tmp_path / "missing_scoped.db"
     sqlite3.connect(db_path).close()
