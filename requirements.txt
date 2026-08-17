@@ -15,7 +15,7 @@ scikit-learn==1.9.0
 boto3==1.43.56
 s3fs==2026.7.0
 pyarrow==25.0.0
-SQLAlchemy==2.0.51
+SQLAlchemy==2.0.52
 psycopg[binary]==3.3.4
 
 # Cron-in-container scheduler (no system cron daemon needed)
