@@ -25,7 +25,7 @@ def validate_redis_stream_options(options: dict[str, Any]) -> None:
     """Validate ``events.options`` for ``kind=redis_streams``."""
     for key in ("redis_url", "stream", "consumer_group"):
         value = options.get(key)
-        if value in (None, ""):
+        if value in (None, "") or (isinstance(value, str) and not value.strip()):
             raise ConfigError(f'events.options.{key} is required when events.kind = "redis_streams"')
     if "consumer_name" in options and str(options["consumer_name"]).strip() == "":
         raise ConfigError("events.options.consumer_name must be non-empty when set")
@@ -75,7 +75,10 @@ class RedisStreamsEventSource(EventSource):
         self._connected = False
         self._lock = threading.Lock()
         self._pending: deque[NormalizedEvent] = deque()
-        self._in_flight: dict[str, str] = {}  # event_id → stream entry id
+        self._pending_ids: set[str] = set()
+        self._in_flight: set[str] = set()
+        self._entry_ids: dict[str, str] = {}  # event_id → stream entry id (until XACK)
+        self._held_entries: set[str] = set()  # stream entry ids we already track
         self._last_event_at: datetime | None = None
         self._claim_cursor = "0-0"
 
@@ -106,9 +109,15 @@ class RedisStreamsEventSource(EventSource):
                 raise
 
         with self._lock:
+            previous = self._client
             self._client = client
             self._connected = True
             self._claim_cursor = "0-0"
+        if previous is not None and previous is not client:
+            try:
+                previous.close()
+            except Exception:
+                logger.exception("Failed to close previous Redis Streams client")
 
     def close(self) -> None:
         with self._lock:
@@ -116,7 +125,10 @@ class RedisStreamsEventSource(EventSource):
             self._client = None
             self._connected = False
             self._pending.clear()
+            self._pending_ids.clear()
             self._in_flight.clear()
+            self._entry_ids.clear()
+            self._held_entries.clear()
         if client is not None:
             try:
                 client.close()
@@ -131,7 +143,10 @@ class RedisStreamsEventSource(EventSource):
 
         with self._lock:
             while self._pending and len(out) < max_events:
-                out.append(self._pending.popleft())
+                event = self._pending.popleft()
+                self._pending_ids.discard(event.event_id)
+                self._in_flight.add(event.event_id)
+                out.append(event)
 
         remaining = max_events - len(out)
         if remaining > 0:
@@ -141,37 +156,51 @@ class RedisStreamsEventSource(EventSource):
             out.extend(self._read_new(client, remaining))
 
         if out:
-            self._last_event_at = max(event.occurred_at for event in out)
+            newest = max(event.occurred_at for event in out)
+            with self._lock:
+                self._last_event_at = newest
         return out
 
     def ack(self, event_ids: Sequence[str]) -> None:
         if not event_ids:
             return
         client = self._require_client()
-        entry_ids: list[str] = []
         with self._lock:
+            resolved: list[tuple[str, str]] = []
             for event_id in event_ids:
-                entry_id = self._in_flight.pop(str(event_id), None)
+                eid = str(event_id)
+                entry_id = self._entry_ids.get(eid)
                 if entry_id is not None:
-                    entry_ids.append(entry_id)
-        if not entry_ids:
+                    resolved.append((eid, entry_id))
+        if not resolved:
             return
-        client.xack(self._stream, self._group, *entry_ids)
+        # XACK before dropping local maps so a failed ack can still nack/retry.
+        client.xack(self._stream, self._group, *(entry_id for _, entry_id in resolved))
+        with self._lock:
+            for eid, entry_id in resolved:
+                self._entry_ids.pop(eid, None)
+                self._held_entries.discard(entry_id)
+                self._in_flight.discard(eid)
+                self._pending_ids.discard(eid)
 
     def nack(self, events: Sequence[NormalizedEvent]) -> None:
         if not events:
             return
         with self._lock:
-            for event in events:
-                if event.event_id not in self._in_flight:
+            for event in reversed(list(events)):
+                if event.event_id not in self._entry_ids:
                     continue
-                self._pending.append(event)
+                self._in_flight.discard(event.event_id)
+                if event.event_id in self._pending_ids:
+                    continue
+                self._pending.appendleft(event)
+                self._pending_ids.add(event.event_id)
 
     def health(self) -> EventSourceHealth:
         with self._lock:
             connected = self._connected
             client = self._client
-            local_held = len(self._pending) + len(self._in_flight)
+            local_held = len(self._pending_ids) + len(self._in_flight)
             last_event_at = self._last_event_at
         if not connected or client is None:
             return EventSourceHealth(connected=False, lag=None, last_event_at=last_event_at)
@@ -235,9 +264,9 @@ class RedisStreamsEventSource(EventSource):
             return []
 
         next_id, entries = self._parse_autoclaim(result)
-        if next_id:
+        if next_id is not None:
             self._claim_cursor = next_id
-        return self._entries_to_events(entries)
+        return self._entries_to_events(client, entries)
 
     def _read_new(self, client: Any, max_events: int) -> list[NormalizedEvent]:
         try:
@@ -255,7 +284,7 @@ class RedisStreamsEventSource(EventSource):
         for _stream_name, messages in raw or []:
             for entry_id, fields in messages:
                 entries.append((str(entry_id), dict(fields)))
-        return self._entries_to_events(entries)
+        return self._entries_to_events(client, entries)
 
     def _parse_autoclaim(self, result: Any) -> tuple[str | None, list[tuple[str, dict[str, Any]]]]:
         if not result:
@@ -265,12 +294,16 @@ class RedisStreamsEventSource(EventSource):
         entries = [(str(entry_id), dict(fields)) for entry_id, fields in messages or []]
         return next_id, entries
 
-    def _entries_to_events(self, entries: Sequence[tuple[str, dict[str, Any]]]) -> list[NormalizedEvent]:
+    def _entries_to_events(
+        self,
+        client: Any,
+        entries: Sequence[tuple[str, dict[str, Any]]],
+    ) -> list[NormalizedEvent]:
         events: list[NormalizedEvent] = []
-        poison_ids: list[str] = []
+        drop_ids: list[str] = []
         for entry_id, fields in entries:
             with self._lock:
-                if entry_id in self._in_flight.values():
+                if entry_id in self._held_entries:
                     continue
             payload = {str(key): value for key, value in fields.items()}
             if payload.get("event_id") in (None, "") and payload.get("idempotency_key") in (None, ""):
@@ -279,14 +312,27 @@ class RedisStreamsEventSource(EventSource):
                 event = normalize_event(payload)
             except EventNormalizeError as exc:
                 logger.warning("Skipping invalid Redis Streams entry %s: %s", entry_id, exc)
-                poison_ids.append(entry_id)
+                drop_ids.append(entry_id)
                 continue
             with self._lock:
-                self._in_flight[event.event_id] = entry_id
+                existing_entry = self._entry_ids.get(event.event_id)
+                if existing_entry is not None:
+                    # Same logical event_id already held — drop the duplicate Redis entry.
+                    logger.warning(
+                        "Duplicate event_id %r on Redis entry %s (held %s); XACK duplicate",
+                        event.event_id,
+                        entry_id,
+                        existing_entry,
+                    )
+                    drop_ids.append(entry_id)
+                    continue
+                self._entry_ids[event.event_id] = entry_id
+                self._held_entries.add(entry_id)
+                self._in_flight.add(event.event_id)
             events.append(event)
-        if poison_ids and self._client is not None:
+        if drop_ids:
             try:
-                self._client.xack(self._stream, self._group, *poison_ids)
+                client.xack(self._stream, self._group, *drop_ids)
             except Exception:
-                logger.exception("Failed to XACK poison Redis Streams entries")
+                logger.exception("Failed to XACK discarded Redis Streams entries")
         return events

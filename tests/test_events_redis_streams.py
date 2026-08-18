@@ -361,3 +361,42 @@ def test_read_failures_return_empty(monkeypatch):
     client.xreadgroup = boom  # type: ignore[method-assign]
     client.xautoclaim = boom  # type: ignore[method-assign]
     assert list(source.poll(10)) == []
+
+
+def test_failed_ack_still_allows_nack(monkeypatch):
+    client = _install_fake_redis(monkeypatch, FakeRedis())
+    source = RedisStreamsEventSource(_options())
+    source.connect()
+    client.xadd("cicerone:events", event_payload(event_id="e1"))
+    events = list(source.poll(10))
+    assert len(events) == 1
+
+    def boom(*_a, **_k):
+        raise RuntimeError("xack down")
+
+    client.xack = boom  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="xack down"):
+        source.ack([events[0].event_id])
+    source.nack(events)
+    client.xack = FakeRedis.xack.__get__(client, FakeRedis)  # type: ignore[method-assign]
+    again = list(source.poll(10))
+    assert [event.event_id for event in again] == ["e1"]
+    source.ack([again[0].event_id])
+    assert client.xpending("cicerone:events", "cicerone")["pending"] == 0
+
+
+def test_repeated_nack_does_not_duplicate(monkeypatch):
+    client = _install_fake_redis(monkeypatch, FakeRedis())
+    source = RedisStreamsEventSource(_options())
+    source.connect()
+    client.xadd("cicerone:events", event_payload(event_id="e1"))
+    events = list(source.poll(10))
+    source.nack(events)
+    source.nack(events)
+    again = list(source.poll(10))
+    assert [event.event_id for event in again] == ["e1"]
+
+
+def test_whitespace_required_options_rejected():
+    with pytest.raises(ConfigError, match="redis_url"):
+        validate_redis_stream_options({"redis_url": "  ", "stream": "s", "consumer_group": "g"})
