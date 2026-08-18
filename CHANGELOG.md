@@ -8,7 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- Incremental events horizontal HA: leader-only apply lease
+- Optional **sequential** strategy (`SASRecModel` / `BERT4RecModel`) via
+  `[model.sequential]` (`architecture = "sasrec"` or `"bert4rec"`). Requires
+  `pip install -r requirements-sequential.txt` (`rectools[torch]`); serve
+  mode never imports torch. AutoML drops it from the candidate pool when
+  the extra is missing or median distinct items/user is below
+  `[job.sequential].min_median_interactions` (default 5), and logs the skip.
   (`{lock_key}:events:apply`) when `events.ha = true` with
   `job.trigger.lock_backend` postgres/redis. Fan-out sources acquire the
   lease only when a micro-batch is ready. Metrics:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 from copy import deepcopy
 from typing import Any
 
@@ -10,9 +11,20 @@ from cicerone.config.constants import DEFAULT_ITEM_BASED_K_NEIGHBORS
 # Single source for latest PopularModel period; re-exported via model.constants.
 LATEST_WINDOW_DAYS = 14
 
+SEQUENTIAL_STRATEGY = "sequential"
+SEQUENTIAL_ARCHITECTURES: dict[str, str] = {
+    "sasrec": "SASRecModel",
+    "bert4rec": "BERT4RecModel",
+}
+_SEQUENTIAL_CLS_TO_ARCHITECTURE = {cls: name for name, cls in SEQUENTIAL_ARCHITECTURES.items()}
+# Cicerone-only keys; strip before RecTools model_from_config.
+_CICERONE_MODEL_KEYS = frozenset({"architecture"})
+SEQUENTIAL_EXTRA_HINT = "install with: pip install -r requirements-sequential.txt"
+
 RECTOOLS_STRATEGY_NAMES: tuple[str, ...] = (
     "collaborative",
     "item_based",
+    "sequential",
     "popular",
     "latest",
 )
@@ -49,12 +61,88 @@ DEFAULT_LATEST_CONFIG: dict[str, Any] = {
     "period": {"days": LATEST_WINDOW_DAYS},
 }
 
+DEFAULT_SEQUENTIAL_CONFIG: dict[str, Any] = {
+    "cls": "SASRecModel",
+    "architecture": "sasrec",
+    "n_factors": 64,
+    "n_blocks": 2,
+    "n_heads": 4,
+    "epochs": 3,
+    "loss": "softmax",
+    "session_max_len": 50,
+    "train_min_user_interactions": 2,
+    "batch_size": 128,
+    "lr": 0.001,
+    "deterministic": True,
+    "verbose": 0,
+}
+
+
+def sequential_extra_available() -> bool:
+    """True when torch + pytorch-lightning are importable (rectools[torch])."""
+    return (
+        importlib.util.find_spec("torch") is not None
+        and importlib.util.find_spec("pytorch_lightning") is not None
+    )
+
+
+def rectools_model_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Copy a strategy config with Cicerone-only keys removed."""
+    result = deepcopy(config)
+    for key in _CICERONE_MODEL_KEYS:
+        result.pop(key, None)
+    return result
+
+
+def apply_sequential_architecture(
+    config: dict[str, Any],
+    *,
+    architecture_explicit: bool = False,
+    cls_explicit: bool = False,
+) -> dict[str, Any]:
+    """Map ``architecture`` ↔ RecTools ``cls`` for the sequential strategy."""
+    from cicerone.config import ConfigError
+
+    result = deepcopy(config)
+    architecture = result.get("architecture")
+    cls = result.get("cls")
+    if architecture is not None:
+        if not isinstance(architecture, str):
+            raise ConfigError(
+                f"model.sequential.architecture must be a string, got {type(architecture).__name__}"
+            )
+        key = architecture.lower()
+        if key not in SEQUENTIAL_ARCHITECTURES:
+            raise ConfigError(
+                f"model.sequential.architecture must be one of {list(SEQUENTIAL_ARCHITECTURES)}, "
+                f"got {architecture!r}"
+            )
+        expected_cls = SEQUENTIAL_ARCHITECTURES[key]
+        if architecture_explicit and cls_explicit and cls is not None and cls != expected_cls:
+            raise ConfigError(
+                f"Conflicting sequential settings: architecture={architecture!r} vs cls={cls!r}. "
+                'Use only one (prefer architecture = "sasrec" or "bert4rec").'
+            )
+        if architecture_explicit or not cls_explicit:
+            result["architecture"] = key
+            result["cls"] = expected_cls
+            return result
+    if isinstance(cls, str) and cls in _SEQUENTIAL_CLS_TO_ARCHITECTURE:
+        result["architecture"] = _SEQUENTIAL_CLS_TO_ARCHITECTURE[cls]
+        return result
+    if cls is None:
+        result["architecture"] = "sasrec"
+        result["cls"] = SEQUENTIAL_ARCHITECTURES["sasrec"]
+        return result
+    raise ConfigError(f"model.sequential.cls must be SASRecModel or BERT4RecModel, got {cls!r}")
+
 
 def default_model_configs() -> dict[str, dict[str, Any]]:
     """Fresh copy of built-in RecTools configs per strategy."""
     return {
         "collaborative": deepcopy(DEFAULT_COLLABORATIVE_CONFIG),
         "item_based": deepcopy(DEFAULT_ITEM_BASED_CONFIG),
+        "sequential": deepcopy(DEFAULT_SEQUENTIAL_CONFIG),
         "popular": deepcopy(DEFAULT_POPULAR_CONFIG),
         "latest": deepcopy(DEFAULT_LATEST_CONFIG),
     }
@@ -146,10 +234,13 @@ def resolve_model_configs(
             "content_fallback is configured under [job.content_fallback], not [model]."
         )
 
+    sequential_override: dict[str, Any] = {}
     for name, override in raw.items():
         if not isinstance(override, dict):
             raise ConfigError(f"[model.{name}] must be a table, got {type(override).__name__}")
         override_copy = dict(override)
+        if name == SEQUENTIAL_STRATEGY:
+            sequential_override = override_copy
         if item_based_k_from_config(override_copy) is not None and name == "item_based":
             override_copy["_native_k_explicit"] = True
         configs[name] = deep_merge(configs[name], override_copy)
@@ -159,6 +250,12 @@ def resolve_model_configs(
         k_neighbors=legacy_k_neighbors if legacy_k_neighbors is not None else DEFAULT_ITEM_BASED_K_NEIGHBORS,
         k_neighbors_explicit=legacy_k_neighbors_explicit,
     )
+    if SEQUENTIAL_STRATEGY in configs:
+        configs[SEQUENTIAL_STRATEGY] = apply_sequential_architecture(
+            configs[SEQUENTIAL_STRATEGY],
+            architecture_explicit="architecture" in sequential_override,
+            cls_explicit="cls" in sequential_override,
+        )
 
     for name, cfg in configs.items():
         if "cls" not in cfg:

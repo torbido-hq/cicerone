@@ -1,0 +1,4 @@
+# Optional: SASRec / BERT4Rec sequential strategy (job.models includes "sequential").
+# Install: pip install -r requirements-sequential.txt
+# Pins the same RecTools version as requirements.txt, with the torch extra.
+rectools[torch]==0.13.0

@@ -24,6 +24,7 @@ from cicerone.config import (
     AUTOML_DEFAULT_N_SPLITS,
     AUTOML_DEFAULT_PRIMARY_METRIC,
     AUTOML_DEFAULT_TEST_DAYS,
+    DEFAULT_SEQUENTIAL_MIN_MEDIAN_INTERACTIONS,
     validate_model_weights,
     validate_rrf_k,
 )
@@ -35,12 +36,60 @@ from cicerone.model import (
     RecommenderModel,
     train_and_recommend,
 )
+from cicerone.model_config import SEQUENTIAL_STRATEGY, sequential_extra_available
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_N_SPLITS = AUTOML_DEFAULT_N_SPLITS
 DEFAULT_TEST_DAYS = AUTOML_DEFAULT_TEST_DAYS
 DEFAULT_PRIMARY_METRIC = AUTOML_DEFAULT_PRIMARY_METRIC
+
+
+def median_distinct_items_per_user(events: pd.DataFrame) -> float:
+    """Median number of distinct items per user in ``events`` (0 if empty)."""
+    if events.empty or "user_id" not in events.columns or "item_id" not in events.columns:
+        return 0.0
+    counts = events.groupby("user_id")["item_id"].nunique()
+    if counts.empty:
+        return 0.0
+    return float(counts.median())
+
+
+def sequential_automl_skip_reason(
+    events: pd.DataFrame,
+    *,
+    min_median_interactions: int,
+) -> str | None:
+    """Why sequential should be dropped from AutoML, or ``None`` to keep it."""
+    if not sequential_extra_available():
+        return "optional sequential extra is not installed (pip install -r requirements-sequential.txt)"
+    median = median_distinct_items_per_user(events)
+    if median < min_median_interactions:
+        return (
+            f"median distinct items per user is {median:.1f}, "
+            f"below job.sequential.min_median_interactions={min_median_interactions}"
+        )
+    return None
+
+
+def exclude_sequential_from_candidates(candidates: list[Candidate]) -> list[Candidate]:
+    """Drop sequential from each candidate; omit candidates that become empty."""
+    result: list[Candidate] = []
+    for candidate in candidates:
+        if SEQUENTIAL_STRATEGY not in candidate.models:
+            result.append(candidate)
+            continue
+        models = [name for name in candidate.models if name != SEQUENTIAL_STRATEGY]
+        if not models:
+            continue
+        weights = None
+        if candidate.weights is not None:
+            weights = {
+                name: weight for name, weight in candidate.weights.items() if name != SEQUENTIAL_STRATEGY
+            }
+        result.append(Candidate(models=models, weights=weights, rrf_k=candidate.rrf_k))
+    return result
+
 
 # From STRATEGIES: each alone, DEFAULT_MODELS priority, and one weighted fusion of all.
 DEFAULT_CANDIDATES: list[dict[str, Any]] = [
@@ -208,9 +257,19 @@ def evaluate_candidates(
     test_days: int = DEFAULT_TEST_DAYS,
     max_workers: int = 1,
     model_configs: dict[str, dict[str, Any]] | None = None,
+    sequential_min_median_interactions: int = DEFAULT_SEQUENTIAL_MIN_MEDIAN_INTERACTIONS,
 ) -> list[CandidateResult]:
     """Backtest candidates over time folds. ``max_workers > 1`` evaluates folds in parallel."""
     parsed_candidates = _parse_candidates(candidates)
+    if any(SEQUENTIAL_STRATEGY in candidate.models for candidate in parsed_candidates):
+        skip_reason = sequential_automl_skip_reason(
+            events, min_median_interactions=sequential_min_median_interactions
+        )
+        if skip_reason is not None:
+            logger.info("Excluding sequential from AutoML candidate pool: %s", skip_reason)
+            parsed_candidates = exclude_sequential_from_candidates(parsed_candidates)
+            if not parsed_candidates:
+                raise ValueError("AutoML has no candidates left after excluding sequential; " + skip_reason)
     folds = _time_based_folds(events, n_splits=n_splits, test_days=test_days)
     if not folds:
         raise ValueError(

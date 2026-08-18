@@ -30,7 +30,7 @@ For configuration and usage, see the main [README](../README.md).
 | `model/combine.py` | Priority + weighted RRF combiners |
 | `model/epoch_metrics.py` | Optional LightFM per-epoch Precision/Recall logging |
 | `model/constants.py` | `RRF_K`, `DEFAULT_MODELS`, source column names |
-| `model_config.py` | Default + TOML `[model.*]` RecTools `model_from_config` configs; legacy `job.item_based.k_neighbors` → `model.K` (no ML imports — safe for serve) |
+| `model_config.py` | Default + TOML `[model.*]` RecTools `model_from_config` configs; sequential `architecture` → `cls`; legacy `job.item_based.k_neighbors` → `model.K` (no ML imports — safe for serve) |
 | `content_fallback.py` | Optional content-based cold-item strategy (one-hot item features + cosine vs user history) |
 | `artifact.py` | Optional versioned fitted-model bundle (schema **v3**: RecTools `save`/`load_model` for library models + pickle envelope; `content_fallback` still pickle) |
 | `automl.py` | Optional: backtests candidate models/weights/`rrf_k` configs over time-based folds of event history and picks the best one |
@@ -49,7 +49,7 @@ For configuration and usage, see the main [README](../README.md).
 | `locks.py` | Optional lock backends (postgres / redis) for `RunGuard` and the events apply lease; Redis `owned()` checks the fencing token, Postgres `owned()` checks `pg_locks` for this backend pid |
 | `config/lock_url.py` | Postgres lock URL resolution for config load + lock builder |
 | `http_auth.py` | Shared bearer-token (serve/trigger) and HTTP Basic Auth (dashboard) dependencies |
-| `dashboard.py` | Standalone FastAPI dashboard: job status/history, own container/port |
+| `dashboard.py` | Standalone FastAPI dashboard: job status/history plus user-id lookup, own container/port |
 | `dashboard_users.py` | Load/save the dashboard's Basic Auth users file (TOML, username → bcrypt hash) |
 | `manage_dashboard_users.py` | CLI to add/remove/list dashboard users |
 | `templates/`, `static/` | Jinja2 templates + vendored htmx/Stimulus/Tailwind assets for the dashboard |
@@ -83,6 +83,7 @@ Test modules mirror the packages (same pattern as `tests/test_io_*.py`):
 | `tests/test_model_combine.py` | Priority combiner unit tests |
 | `tests/test_model_epoch_metrics.py` | LightFM per-epoch metric helpers |
 | `tests/test_model_config.py` | RecTools `[model.*]` + save/load round trips |
+| `tests/test_model_sequential.py` | SASRec/BERT4Rec TOML mapping, AutoML skip, serve no-torch |
 | `tests/support/model_events.py` | Shared synthetic events helper |
 | `tests/support/toml_config.py` | Shared `write_toml` helper |
 | `tests/support/events.py` | Shared event payload helper for `test_events_*` |
@@ -130,7 +131,7 @@ flowchart LR
    produces top-K recommendations. When `[job.content_fallback].enabled` is true,
    `content_fallback` is inserted before the first non-personalized
    strategy if not already listed. Personalized strategies
-   (`collaborative`, `item_based`, `content_fallback`) only run for "warm"
+   (`collaborative`, `item_based`, `sequential`, `content_fallback`) only run for "warm"
    users (any user present in the dataset, with or without interactions — see
    the cold-start note below); non-personalized strategies (`popular`,
    `latest`) run for every target user and backfill any warm user who didn't
@@ -197,8 +198,11 @@ flowchart LR
    `evaluate_candidates()` passes a `strategy_cache` dict (reset per fold,
    shared across every candidate scored against that fold) to
    `train_and_recommend()` so candidates sharing a strategy reuse its fitted
-   model instead of retraining it per candidate. `select_best_candidate()`
-   then picks the highest scorer by `Settings.automl_primary_metric`
+   model instead of retraining it per candidate. `sequential` is dropped from
+   the pool (INFO log) when `rectools[torch]` is missing or median distinct
+   items/user is below `Settings.sequential_min_median_interactions`.
+   `select_best_candidate()` then picks the highest scorer by
+   `Settings.automl_primary_metric`
    (matched by prefix, e.g. `"MAP"` matches `"MAP@10"`), and its
    `models`/`weights`/`rrf_k` replace the static config for that run's call
    to `model.train_and_recommend()`.
@@ -228,7 +232,7 @@ flowchart LR
 Selected via `[job].mode = "serve"`, `cicerone.serve` is a separate entrypoint
 (`python -m cicerone.serve`) from the batch scheduler — a serve-only
 deployment never imports `cicerone.model`/`dataset`/`automl` (no
-rectools/lightfm/implicit needed in that process or its request path):
+rectools/lightfm/implicit/torch needed in that process or its request path):
 
 - `io.factory.build_recommendation_reader(settings.output)` builds a
   `RecommendationReader` (`io/recommendation_reader.py`) matching the

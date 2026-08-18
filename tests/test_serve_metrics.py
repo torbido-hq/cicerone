@@ -220,6 +220,19 @@ def test_unknown_stored_source_is_ignored():
     # content_fallback ignored; personalized+blended collapse to one collaborative inc
     assert after == before + 1
 
+    before_seq = metric_value(
+        generate_latest().decode(),
+        "cicerone_recommendations_served_total",
+        {"source": "sequential"},
+    )
+    record_recommendations_served({"sequential"})
+    after_seq = metric_value(
+        generate_latest().decode(),
+        "cicerone_recommendations_served_total",
+        {"source": "sequential"},
+    )
+    assert after_seq == before_seq + 1
+
 
 def test_cache_age_zero_before_successful_refresh(monkeypatch):
 

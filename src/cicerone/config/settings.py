@@ -120,6 +120,7 @@ class Settings:
     model_configs: dict[str, dict[str, Any]]  # RecTools configs; no content_fallback
     content_fallback_enabled: bool
     content_fallback_max_neighbors: int
+    sequential_min_median_interactions: int
     automl: AutomlSettings
     mode: Mode
     serve: ServeSettings

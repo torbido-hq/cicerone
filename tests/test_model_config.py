@@ -269,11 +269,11 @@ def test_unknown_model_table_raises(tmp_path):
 
 
 def test_model_config_module_does_not_import_ml_stack():
-    """Serve-safe: parsing model TOML must not pull rectools/lightfm/implicit."""
+    """Serve-safe: parsing model TOML must not pull rectools/lightfm/implicit/torch."""
     import cicerone.model_config as mc
 
     source = Path(mc.__file__).read_text()
-    for name in ("rectools", "lightfm", "implicit"):
+    for name in ("rectools", "lightfm", "implicit", "torch", "pytorch_lightning"):
         assert f"import {name}" not in source
         assert f"from {name}" not in source
 
