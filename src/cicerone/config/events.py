@@ -110,6 +110,10 @@ def load_events_settings(
         from cicerone.events.s3 import validate_s3_event_options
 
         validate_s3_event_options(options)
+    if enabled and kind == "redis_streams":
+        from cicerone.events.redis_streams import validate_redis_stream_options
+
+        validate_redis_stream_options(options)
 
     return EventsSettings(
         enabled=enabled,

@@ -58,6 +58,7 @@ src/cicerone/events/
   webhook.py     # HTTP push EventSource
   db.py          # watermark poll EventSource
   s3.py          # S3-compatible EventSource (R2 list/marker; optional AWS SQS)
+  redis_streams.py  # Redis Streams consumer-group EventSource
   worker.py      # background poll → buffer → flush → ack
 
 src/cicerone/serve/
@@ -67,8 +68,8 @@ src/cicerone/serve/
 src/cicerone/config/events.py  # [events] coerce + TOML load helpers
 ```
 
-Built-in backends (`webhook`, `db`, `s3`; later `rabbitmq` / `kafka` /
-`redis_streams`) register beside each other without changing the config shape.
+Built-in backends (`webhook`, `db`, `s3`, `redis_streams`; later `rabbitmq` /
+`kafka`) register beside each other without changing the config shape.
 
 ## EventSource surface
 
@@ -91,7 +92,7 @@ kinds raise `ValueError` — no growing if/elif in the config loader.
 ```toml
 [events]
 enabled = false
-kind = "webhook"   # webhook | db | s3 | rabbitmq | kafka | (later redis_streams)
+kind = "webhook"   # webhook | db | s3 | redis_streams | rabbitmq | kafka
 
 [events.options]
 # backend-specific; webhook may set auth_token (else serve.auth_token)
@@ -103,6 +104,11 @@ kind = "webhook"   # webhook | db | s3 | rabbitmq | kafka | (later redis_streams
 #     AWS-only: queue_url + mode = "sqs" (rejected when endpoint_url is set).
 #     Optional tuning: list_page_size, sqs_lag_cache_ttl_seconds,
 #     sqs_client_timeout_seconds
+# redis_streams: redis_url, stream, consumer_group (required); optional
+#     consumer_name (default: hostname), group_start_id (default: 0-0),
+#     block_ms (default: 0), claim_idle_ms (default: 300000). Flat hash
+#     fields match the event contract; missing event_id uses the stream
+#     entry id. Requires: pip install -r requirements-redis.txt
 
 [events.incremental]
 batch_size = 100
@@ -180,8 +186,8 @@ Keep each PR **atomic** and stacked on the incremental-events foundation
 1. Webhook + micro-batch write-through (foundation) — shipped
 2. `kind=db` watermark source — shipped
 3. Metrics / dashboard wiring (lag, flush, errors) — shipped
-4. Further backends / write-path improvements as separate PRs (`kind=s3` and
-   user-scoped I/O shipped; Redis Streams, …)
+4. Further backends / write-path improvements as separate PRs (`kind=s3`,
+   user-scoped I/O, and `kind=redis_streams` shipped; RabbitMQ / Kafka, …)
 5. **Last:** full review of `docs/` **and** the `website/` sync (sidebar,
    `sync-docs.mjs`, rendered pages, links, OpenAPI mentions) so the public
    site matches the shipped incremental surface
@@ -201,17 +207,21 @@ Build order:
    event objects or arrays; missing `event_id` uses `bucket/key|etag|index`.
    List mode assumes a **single consumer** per bucket/prefix (local
    `event_id` dedupe + marker); multi-writer/shared markers are out of scope.
-4. **RabbitMQ** — queue/exchange consumer (optional dep).
-5. **Kafka** — topic / consumer group (optional dep).
+4. **Redis Streams** — shipped: `kind=redis_streams` consumer group
+   (`XREADGROUP` / `XACK` / `XAUTOCLAIM` for idle PEL recovery). Flat stream
+   hash fields; missing `event_id` uses the Redis entry id. Optional
+   `redis` package (`requirements-redis.txt`), same as the Redis lock backend.
+5. **RabbitMQ** — queue/exchange consumer (optional dep).
+6. **Kafka** — topic / consumer group (optional dep).
 
 ### Broker recommendation
 
 For greenfield self-hosted deployments at this project size, prefer **Redis Streams** as
-the default *broker-based* backend once implemented: consumer groups,
-lag introspection, and a small ops footprint — especially if Redis already
-sits near the stack (optional distributed lock). **NATS/JetStream** is the
-next-best lightweight alternative. Keep Kafka/RabbitMQ for shops that
-already run them; do not steer greenfield users there first.
+the default *broker-based* backend: consumer groups, lag introspection, and a
+small ops footprint — especially if Redis already sits near the stack
+(optional distributed lock). **NATS/JetStream** is the next-best lightweight
+alternative. Keep Kafka/RabbitMQ for shops that already run them; do not steer
+greenfield users there first.
 
 | Path | New host/image deps? |
 | --- | --- |
@@ -229,6 +239,7 @@ already run them; do not steer greenfield users there first.
 | Webhook | At-least-once (client retries) | `event_id` / `idempotency_key`; short dedupe window |
 | DB watermark | Near exactly-once | Advance watermark only after successful flush |
 | S3 list (R2) / SQS | At-least-once | Object key + ETag dedupe |
+| Redis Streams | At-least-once | `XACK` after successful flush; stream entry id fallback |
 | RabbitMQ / Kafka | At-least-once | Ack/commit after successful flush; shared dedupe key |
 
 Duplicate delivery can inflate weights for `quantity_scaled_events`. Dedupe
@@ -241,7 +252,7 @@ ops surface). Serve `/metrics` exposes:
 
 | Metric | Meaning |
 | --- | --- |
-| `cicerone_events_source_lag` | Source backlog (`-1` if unknown / events off). Webhook/S3-list: pending + in-flight. S3-SQS: that held count plus approximate *visible* queue depth. DB: rows after watermark. |
+| `cicerone_events_source_lag` | Source backlog (`-1` if unknown / events off). Webhook/S3-list: pending + in-flight. S3-SQS: that held count plus approximate *visible* queue depth. Redis Streams: `XPENDING` + group `lag`. DB: rows after watermark. |
 | `cicerone_events_source_connected` | `1` when the source reports connected |
 | `cicerone_events_flush_total{status=}` | Flush outcomes: `success` / `busy` / `error` |
 | `cicerone_events_flush_events_total` | Events applied on successful flushes |

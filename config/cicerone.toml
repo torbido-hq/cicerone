@@ -257,6 +257,19 @@ prefix = "recommendations/latest"
 # # sqs_client_timeout_seconds = 2
 # # AWS-only alternative (no endpoint_url): mode = "sqs", queue_url = "..."
 
+# Redis Streams (consumer group). Requires: pip install -r requirements-redis.txt
+# [events]
+# enabled = true
+# kind = "redis_streams"
+# [events.options]
+# redis_url = "${REDIS_URL}"
+# stream = "cicerone:events"
+# consumer_group = "cicerone"
+# # consumer_name = "serve-1"       # default: hostname
+# # group_start_id = "0-0"
+# # block_ms = 0
+# # claim_idle_ms = 300000
+
 # Optional: a small, standalone read-only status page over job run history
 # (its own container/port, independent of [job].mode -- see the README's
 # Dashboard section). Protected by HTTP Basic Auth (a handful of named

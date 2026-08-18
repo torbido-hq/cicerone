@@ -36,6 +36,7 @@ metrics_token = ""   # empty = open endpoint; bind to a trusted network or rever
 
 # Optional incremental event ingest. See docs/incremental-events.md.
 # Webhook: POST /events. DB: watermark poll. S3/R2: list/marker (or AWS SQS).
+# Redis Streams: kind = "redis_streams" (requires requirements-redis.txt).
 # [events]
 # enabled = true
 # kind = "webhook"

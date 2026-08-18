@@ -44,7 +44,7 @@ For configuration and usage, see the main [README](../README.md).
 | `serve_schemas.py` | Pydantic models that drive the serve OpenAPI schema |
 | `serve_client.py` | Thin stdlib HTTP client for the serve read API |
 | `export_serve_openapi.py` | CLI to dump FastAPI's OpenAPI JSON (`docs/openapi/…`) |
-| `events/` | Incremental event ingest: `EventSource` protocol + registry, normalize, micro-batch buffer, user-scoped write-through updater; webhook (`POST /events`), DB watermark, and S3-compatible (R2 list/marker; optional AWS SQS) backends — see [incremental-events.md](incremental-events.md) |
+| `events/` | Incremental event ingest: `EventSource` protocol + registry, normalize, micro-batch buffer, user-scoped write-through updater; webhook (`POST /events`), DB watermark, S3-compatible (R2 list/marker; optional AWS SQS), and Redis Streams backends — see [incremental-events.md](incremental-events.md) |
 | `trigger.py` | Event-driven retrain trigger: webhook + optional input-bucket poll, debounce guard (`RunGuard`) shared with the cron loop; increments `cicerone_retrain_trigger_total` (per replica) |
 | `locks.py` | Optional `RunGuard` lock backends (postgres / redis; default is none) |
 | `config/lock_url.py` | Postgres lock URL resolution for config load + lock builder |
@@ -86,7 +86,7 @@ Test modules mirror the packages (same pattern as `tests/test_io_*.py`):
 | `tests/support/model_events.py` | Shared synthetic events helper |
 | `tests/support/toml_config.py` | Shared `write_toml` helper |
 | `tests/support/events.py` | Shared event payload helper for `test_events_*` |
-| `tests/test_events_*.py` | EventSource registry / normalize / webhook / db / buffer / store / updater / worker |
+| `tests/test_events_*.py` | EventSource registry / normalize / webhook / db / s3 / redis_streams / buffer / store / updater / worker |
 | `tests/test_config_events.py` | `[events]` coerce + TOML load |
 | `tests/test_serve_events_routes.py` / `test_serve_bootstrap_events.py` | Serve webhook mount + worker bootstrap |
 
