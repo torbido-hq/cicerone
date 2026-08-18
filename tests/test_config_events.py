@@ -240,3 +240,6 @@ def test_coerce_pass_through_events_settings():
     coerced = coerce_events_settings(original)
     assert coerced.enabled is True
     assert coerced.incremental.batch_size == 100
+    assert coerced.ha is False
+    ha = coerce_events_settings(EventsSettings(enabled=True, kind="webhook", ha=True))
+    assert ha.ha is True

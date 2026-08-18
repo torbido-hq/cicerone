@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Incremental events horizontal HA: leader-only apply lease
+  (`{lock_key}:events:apply`) on the same postgres/redis backend as the
+  0.5.0 retrain lock; cross-process retrain `busy` probe; Redis/Postgres
+  fencing before write; `events.ha = true` fail-fast without a distributed
+  lock. Metrics: `cicerone_events_lock_total`, `cicerone_events_leader`,
+  `cicerone_events_apply_busy_total`.
+
 - Redis Streams EventSource (`events.kind = "redis_streams"`): consumer-group
   poll via `XREADGROUP` / `XACK`, idle PEL recovery with `XAUTOCLAIM`, and
   stream entry id fallback when `event_id` is omitted. Requires

@@ -333,6 +333,12 @@ def load_settings(config_path: str | None = None) -> Settings:
         name="job.trigger.lock_ttl_seconds",
     )
 
+    if events.enabled and events.ha and lock_backend == "in_process":
+        raise ConfigError(
+            'events.ha = true requires job.trigger.lock_backend "postgres" or "redis" '
+            "(leader-only incremental apply)"
+        )
+
     return Settings(
         input=input_settings,
         output=output_settings,

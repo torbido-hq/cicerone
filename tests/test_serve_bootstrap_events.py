@@ -94,3 +94,15 @@ def test_start_events_runtime_without_feature_config(tmp_path):
     )
     assert runtime.worker is not None
     runtime.stop()
+
+
+def test_combine_busy_checks():
+    from cicerone.serve.bootstrap_events import _combine_busy_checks
+
+    assert _combine_busy_checks(None, None) is None
+    single = _combine_busy_checks(lambda: True)
+    assert single is not None
+    assert single() is True
+    both = _combine_busy_checks(lambda: False, lambda: True)
+    assert both is not None
+    assert both() is True

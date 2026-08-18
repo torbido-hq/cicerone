@@ -250,6 +250,18 @@ def test_events_metrics_defaults_and_flush_recording():
     assert metric_value(after, "cicerone_events_source_lag") == 7.0
     assert metric_value(after, "cicerone_events_last_success_timestamp_seconds") > 0
 
+    before_lock = metric_value(after, "cicerone_events_lock_total", {"status": "acquired"})
+    metrics_mod.record_events_lock(status="acquired")
+    metrics_mod.record_events_lock(status="skip")
+    metrics_mod.record_events_lock(status="nope")
+    metrics_mod.record_events_apply_busy(reason="retrain")
+    metrics_mod.record_events_apply_busy(reason="weird")
+    labeled = generate_latest().decode()
+    assert metric_value(labeled, "cicerone_events_lock_total", {"status": "acquired"}) == before_lock + 1
+    assert metric_value(labeled, "cicerone_events_leader") == 0.0
+    assert metric_value(labeled, "cicerone_events_apply_busy_total", {"reason": "retrain"}) >= 1
+    assert metric_value(labeled, "cicerone_events_apply_busy_total", {"reason": "lock"}) >= 1
+
 
 def test_metrics_endpoint_refreshes_events_source_health():
     from support.events import event_payload

@@ -75,6 +75,20 @@ EVENTS_TICK_ERRORS_TOTAL = Counter(
     "cicerone_events_tick_errors_total",
     "Unhandled exceptions in the event worker tick loop",
 )
+EVENTS_LOCK_TOTAL = Counter(
+    "cicerone_events_lock_total",
+    "Incremental apply-lease acquire attempts",
+    ["status"],
+)
+EVENTS_LEADER = Gauge(
+    "cicerone_events_leader",
+    "1 when this replica holds the incremental apply lease (0 otherwise)",
+)
+EVENTS_APPLY_BUSY_TOTAL = Counter(
+    "cicerone_events_apply_busy_total",
+    "Incremental flushes skipped because a lock was busy",
+    ["reason"],
+)
 UP = Gauge("cicerone_up", "Serve process liveness (always 1 while running)")
 UP.set(1)
 
@@ -82,6 +96,8 @@ METRICS_TOKEN_HEADER = "X-Metrics-Token"
 
 _RETRAIN_SOURCES = frozenset({"webhook", "poll", "cron", "s3-poll", "manual"})
 _EVENTS_FLUSH_STATUSES = frozenset({"success", "busy", "error"})
+_EVENTS_LOCK_STATUSES = frozenset({"acquired", "skip"})
+_EVENTS_APPLY_BUSY_REASONS = frozenset({"lock", "retrain"})
 
 _SOURCE_TO_METRIC: dict[str, str] = {
     "personalized": "collaborative",
@@ -97,6 +113,7 @@ _last_successful_refresh_at: float | None = None
 EVENTS_SOURCE_CONNECTED.set(0)
 EVENTS_SOURCE_LAG.set(-1)
 EVENTS_LAST_SUCCESS_TIMESTAMP_SECONDS.set(0)
+EVENTS_LEADER.set(0)
 
 
 def record_cache_hit() -> None:
@@ -152,6 +169,25 @@ def record_events_flush(*, status: str, events: int = 0) -> None:
 
 def record_events_tick_error() -> None:
     EVENTS_TICK_ERRORS_TOTAL.inc()
+
+
+def record_events_lock(*, status: str) -> None:
+    if status not in _EVENTS_LOCK_STATUSES:
+        logger.warning("Unknown events lock status %r; recording as skip", status)
+        status = "skip"
+    EVENTS_LOCK_TOTAL.labels(status=status).inc()
+    EVENTS_LEADER.set(1 if status == "acquired" else 0)
+
+
+def update_events_leader(is_leader: bool) -> None:
+    EVENTS_LEADER.set(1 if is_leader else 0)
+
+
+def record_events_apply_busy(*, reason: str) -> None:
+    if reason not in _EVENTS_APPLY_BUSY_REASONS:
+        logger.warning("Unknown events apply busy reason %r; recording as lock", reason)
+        reason = "lock"
+    EVENTS_APPLY_BUSY_TOTAL.labels(reason=reason).inc()
 
 
 def update_events_source_health(*, connected: bool, lag: int | None) -> None:

@@ -92,6 +92,7 @@ kinds raise `ValueError` — no growing if/elif in the config loader.
 ```toml
 [events]
 enabled = false
+ha = false         # true: require job.trigger.lock_backend postgres|redis
 kind = "webhook"   # webhook | db | s3 | redis_streams | rabbitmq | kafka
 
 [events.options]
@@ -158,9 +159,24 @@ sequenceDiagram
 
 When a full `job.run()` holds `RunGuard` **in the same process**, pass
 `busy_check=guard.busy` into `start_events_runtime` / `IncrementalUpdater`
-so flushes skip. Serve and trainer are usually separate containers — then
-last writer wins and the next full retrain remains the consistency backstop.
-Do not treat cross-process exclusion as automatic.
+so flushes skip. With `job.trigger.lock_backend` postgres/redis, serve also
+probes that retrain lock cross-process and takes a **separate** apply lease
+(`{lock_key}:events:apply`) around incremental write-through. On lock busy
+the flush nacks (lag stays honest). Redis `owned()` fences writes if the
+lease expires mid-apply.
+
+`events.ha = true` fails fast unless that distributed lock backend is set.
+Without it, incremental events assume **one writer process**. Dataset output
+is whole-object RMW — leader-only apply is what makes multi-replica serve
+safe. Sharded-by-user writers are a follow-up.
+
+| Source | Multi-replica |
+| --- | --- |
+| webhook | Single-ingress or sticky session; do not claim multi-replica ingest |
+| db | Single poller (non-leader skips poll when the apply lease is configured) |
+| s3 list | Single consumer; non-leader skips poll |
+| s3 sqs | Delivery fan-out OK; apply still under the lease |
+| redis_streams | Consumer groups + unique `consumer_name`; apply is leader-only |
 
 Webhook options may set `max_pending` (default 10000, minimum 100) for ingest
 backpressure (HTTP 429 when full). Worker poll interval is
@@ -258,6 +274,9 @@ ops surface). Serve `/metrics` exposes:
 | `cicerone_events_flush_events_total` | Events applied on successful flushes |
 | `cicerone_events_last_success_timestamp_seconds` | Last successful flush (Unix seconds) |
 | `cicerone_events_tick_errors_total` | Unexpected exceptions outside handled flush paths |
+| `cicerone_events_lock_total{status=}` | Apply-lease `acquired` / `skip` |
+| `cicerone_events_leader` | `1` while this replica holds the apply lease |
+| `cicerone_events_apply_busy_total{reason=}` | Skip due to `lock` (apply lease) or `retrain` |
 
 The worker refreshes lag/connected each poll cycle (not on `/metrics` scrape),
 so DB `health()` work stays off the Prometheus path. Flush apply/partial

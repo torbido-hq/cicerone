@@ -46,7 +46,7 @@ For configuration and usage, see the main [README](../README.md).
 | `export_serve_openapi.py` | CLI to dump FastAPI's OpenAPI JSON (`docs/openapi/…`) |
 | `events/` | Incremental event ingest: `EventSource` protocol + registry, normalize, micro-batch buffer, user-scoped write-through updater; webhook (`POST /events`), DB watermark, S3-compatible (R2 list/marker; optional AWS SQS), and Redis Streams backends — see [incremental-events.md](incremental-events.md) |
 | `trigger.py` | Event-driven retrain trigger: webhook + optional input-bucket poll, debounce guard (`RunGuard`) shared with the cron loop; increments `cicerone_retrain_trigger_total` (per replica) |
-| `locks.py` | Optional `RunGuard` lock backends (postgres / redis; default is none) |
+| `locks.py` | Optional lock backends (postgres / redis) for `RunGuard` and the events apply lease; Redis `owned()` fences expired TTLs before write |
 | `config/lock_url.py` | Postgres lock URL resolution for config load + lock builder |
 | `http_auth.py` | Shared bearer-token (serve/trigger) and HTTP Basic Auth (dashboard) dependencies |
 | `dashboard.py` | Standalone FastAPI dashboard: job status/history, own container/port |
@@ -282,7 +282,14 @@ rectools/lightfm/implicit needed in that process or its request path):
   `redis` backends (see `cicerone.locks`) coordinate across scheduler
   replicas; clients are imported only when selected. Prefer `postgres`
   when a DB URL is available; use `redis` (optional
-  `requirements-redis.txt`) for dataset/S3-only HA.
+  `requirements-redis.txt`) for dataset/S3-only HA. Redis `owned()` checks the
+  fencing token before commit so an expired TTL cannot split-brain a long
+  apply/retrain; Postgres advisory locks are session-scoped (disconnect
+  releases; `owned()` pings the held connection).
+
+Serve replicas scale on the read path. Incremental `[events]` apply is
+single-writer unless `events.ha = true` with `lock_backend` postgres/redis
+(leader-only lease, separate key from the retrain lock).
 
 ## Dashboard
 

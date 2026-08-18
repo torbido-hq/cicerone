@@ -15,10 +15,12 @@ from cicerone.config import (
     resolve_postgres_lock_url,
 )
 from cicerone.locks import (
+    REDIS_LOCK_TTL_MS,
     PostgresAdvisoryLock,
     RedisLock,
     advisory_keys_from_lock_key,
     build_lock_backend,
+    events_apply_lock_key,
 )
 from cicerone.trigger import RunGuard
 
@@ -520,3 +522,64 @@ def test_cron_run_with_lock_runs_and_releases(monkeypatch):
     monkeypatch.setattr(scheduler.job, "run", lambda **kwargs: events.append(f"run:{kwargs['triggered_by']}"))
     scheduler._cron_run_with_lock(Ok())
     assert events == ["acquire", "run:cron", "release"]
+
+
+def test_redis_owned_and_is_locked(monkeypatch):
+    client = _mock_redis_module(monkeypatch)
+    client.set.return_value = True
+    client.exists.return_value = 0
+    client.get.return_value = None
+
+    lock = RedisLock("redis://localhost:6379/0")
+    assert lock.owned() is False
+    assert lock.is_locked() is False
+    token = lock._token
+    client.get.return_value = token
+    client.exists.return_value = 1
+    assert lock.acquire() is True
+    assert lock.owned() is True
+    assert lock.is_locked() is True
+    client.get.return_value = b"stolen"
+    assert lock.owned() is False
+    lock.release()
+
+
+def test_events_apply_lock_key_and_build_override(monkeypatch):
+    assert events_apply_lock_key("job-a") == "job-a:events:apply"
+    client = _mock_redis_module(monkeypatch)
+    client.set.return_value = True
+    settings = make_settings(
+        trigger_lock_backend="redis",
+        trigger_redis_url="redis://localhost:6379/0",
+        trigger_lock_key="job-a",
+    )
+    lock = build_lock_backend(settings, lock_key=events_apply_lock_key("job-a"))
+    assert isinstance(lock, RedisLock)
+    assert lock.acquire() is True
+    client.set.assert_called_with("job-a:events:apply", lock._token, nx=True, px=REDIS_LOCK_TTL_MS)
+    lock.release()
+
+
+def test_postgres_owned_and_is_locked(monkeypatch):
+    held_conn = MagicMock()
+    held_conn.execute.return_value.scalar.return_value = True
+    probe_conn = MagicMock()
+    probe_conn.execute.return_value.scalar.return_value = True
+    probe_cm = MagicMock()
+    probe_cm.__enter__.return_value = probe_conn
+    probe_cm.__exit__.return_value = None
+    engine = MagicMock()
+    engine.connect.return_value = probe_cm
+    monkeypatch.setattr("sqlalchemy.create_engine", lambda *a, **k: engine)
+
+    lock = PostgresAdvisoryLock("postgresql+psycopg://u:p@h/db")
+    assert lock.owned() is False
+    assert lock.is_locked() is True
+
+    engine.connect.return_value = held_conn
+    assert lock.acquire() is True
+    assert lock.owned() is True
+    assert lock.is_locked() is True
+    held_conn.execute.side_effect = RuntimeError("session dead")
+    assert lock.owned() is False
+    lock.release()

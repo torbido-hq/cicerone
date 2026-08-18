@@ -56,6 +56,7 @@ def coerce_events_settings(value: Any | None) -> EventsSettings:
             kind=value.kind,
             options=dict(value.options),
             incremental=_incremental_settings(value.incremental),
+            ha=value.ha,
         )
     if value is None:
         return EventsSettings()
@@ -96,6 +97,7 @@ def load_events_settings(
     else:
         incremental_raw = {}
     incremental = _incremental_settings(incremental_raw)
+    ha = bool(events_raw.get("ha", False))
 
     if enabled and kind == "webhook" and mode == "serve":
         webhook_token = auth_token or serve_auth_token
@@ -120,4 +122,5 @@ def load_events_settings(
         kind=kind,
         options=options,
         incremental=incremental,
+        ha=ha,
     )
