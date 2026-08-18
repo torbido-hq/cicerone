@@ -160,11 +160,17 @@ Webhook options may set `max_pending` (default 10000, minimum 100) for ingest
 backpressure (HTTP 429 when full). Worker poll interval is
 `events.incremental.poll_interval_seconds`.
 
-The updater caches the recommendations frame in-process between micro-batches
-and refreshes that cache after each successful write. A same-process
-`busy_check` hit invalidates the cache so the next apply reloads after retrain.
-User-scoped reads/writes (instead of full-frame merge + overwrite) remain a
-follow-up.
+The updater caches affected users' recommendation rows in-process between
+micro-batches (LRU-bounded; default 2048 users) and refreshes that cache after
+each successful write. A same-process `busy_check` hit invalidates the cache so
+the next apply reloads after retrain.
+Loads and writes are **user-scoped** (affected users + `__cold_start__` only):
+`OutputSink.replace_recommendations_for_users` updates those users without a
+full-table overwrite (`db` deletes/inserts by `user_id` in one transaction;
+`dataset` read-merges the parquet object) and returns the distinct user count
+for the incremental manifest. Dataset user loads pass pyarrow `filters` on
+`user_id` when possible (row-group predicate pushdown); S3 still downloads the
+object bytes today.
 
 ## Follow-up PR sequence
 
@@ -174,8 +180,8 @@ Keep each PR **atomic** and stacked on the incremental-events foundation
 1. Webhook + micro-batch write-through (foundation) — shipped
 2. `kind=db` watermark source — shipped
 3. Metrics / dashboard wiring (lag, flush, errors) — shipped
-4. Further backends / write-path improvements as separate PRs (`kind=s3`
-   shipped; user-scoped I/O, Redis Streams, …)
+4. Further backends / write-path improvements as separate PRs (`kind=s3` and
+   user-scoped I/O shipped; Redis Streams, …)
 5. **Last:** full review of `docs/` **and** the `website/` sync (sidebar,
    `sync-docs.mjs`, rendered pages, links, OpenAPI mentions) so the public
    site matches the shipped incremental surface

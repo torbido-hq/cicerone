@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
@@ -98,6 +100,82 @@ def test_database_output_writes_and_replaces_recommendations():
 
     # Clear-before-write means only the latest snapshot remains.
     assert list(stored["user_id"]) == ["u2"]
+
+
+def test_database_output_replace_recommendations_for_users():
+    sink = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})
+    sink.write_recommendations(
+        pd.DataFrame(
+            [
+                {"user_id": "u1", "item_id": "old", "rank": 1, "score": 0.9, "source": "personalized"},
+                {"user_id": "u2", "item_id": "keep", "rank": 1, "score": 0.8, "source": "personalized"},
+            ]
+        )
+    )
+    assert (
+        sink.replace_recommendations_for_users(
+            pd.DataFrame(
+                [{"user_id": "u1", "item_id": "new", "rank": 1, "score": 1.0, "source": "incremental"}]
+            ),
+            user_ids=["u1"],
+        )
+        == 2
+    )
+    engine = create_engine(TEST_DATABASE_URL)
+    stored = pd.read_sql('SELECT * FROM "recommendations" ORDER BY user_id, item_id', engine)
+    assert list(stored[stored["user_id"] == "u2"]["item_id"]) == ["keep"]
+    assert list(stored[stored["user_id"] == "u1"]["item_id"]) == ["new"]
+    assert sink.replace_recommendations_for_users(pd.DataFrame(), user_ids=["u1"]) == 1
+    stored = pd.read_sql('SELECT * FROM "recommendations"', engine)
+    assert list(stored["user_id"]) == ["u2"]
+
+
+def test_database_output_replace_recommendations_rejects_extra_users():
+    sink = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})
+    with pytest.raises(ValueError, match="outside user_ids"):
+        sink.replace_recommendations_for_users(
+            pd.DataFrame(
+                [{"user_id": "u9", "item_id": "i1", "rank": 1, "score": 1.0, "source": "incremental"}]
+            ),
+            user_ids=["u1"],
+        )
+
+
+def test_database_output_replace_recommendations_for_users_schema_mismatch(caplog):
+    engine = create_engine(TEST_DATABASE_URL)
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS recommendations"))
+        conn.execute(
+            text(
+                """
+                CREATE TABLE recommendations (
+                    item_id TEXT,
+                    rank INTEGER,
+                    score DOUBLE PRECISION,
+                    source TEXT
+                )
+                """
+            )
+        )
+        conn.execute(
+            text("INSERT INTO recommendations (item_id, rank, score, source) VALUES ('old', 1, 0.1, 'x')")
+        )
+
+    sink = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})
+    with caplog.at_level(logging.WARNING):
+        updated = sink.replace_recommendations_for_users(
+            pd.DataFrame(
+                [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"}]
+            ),
+            user_ids=["u1"],
+        )
+    assert updated == 0
+    assert any(
+        "delete skipped" in record.getMessage().lower() and "schema" in record.getMessage().lower()
+        for record in caplog.records
+    )
+    stored = pd.read_sql('SELECT item_id FROM "recommendations"', engine)
+    assert list(stored["item_id"]) == ["old"]
 
 
 def test_database_output_writes_and_replaces_items_snapshot():

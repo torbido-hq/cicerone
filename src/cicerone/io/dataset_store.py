@@ -12,6 +12,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,8 @@ from cicerone.io.options import (
     require_option,
     validate_storage_options,
 )
+from cicerone.io.recommendation_schema import USER_COLUMN
+from cicerone.io.replace_users import normalize_replace_user_ids
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +89,36 @@ class DatasetOutputSink:
         buffer = io.BytesIO()
         df.to_parquet(buffer, index=False)
         self._write_bytes("recommendations.parquet", buffer.getvalue(), "application/octet-stream")
+
+    def replace_recommendations_for_users(self, df: pd.DataFrame, *, user_ids: Sequence[str]) -> int:
+        ids = normalize_replace_user_ids(df, user_ids)
+        if not ids:
+            return 0
+        try:
+            existing = read_parquet(self._options, "recommendations.parquet")
+        except FileNotFoundError:
+            existing = pd.DataFrame()
+        except Exception as exc:
+            if is_s3_not_found(exc):
+                existing = pd.DataFrame()
+            else:
+                raise
+        if existing.empty:
+            remaining = existing
+        elif USER_COLUMN not in existing.columns:
+            logger.warning(
+                "Recommendations schema mismatch (missing %s); treating existing rows as empty",
+                USER_COLUMN,
+            )
+            remaining = pd.DataFrame()
+        else:
+            remaining = existing[~existing[USER_COLUMN].astype(str).isin(ids)]
+        parts = [frame for frame in (remaining, df) if not frame.empty]
+        merged = pd.concat(parts, ignore_index=True) if parts else df
+        self.write_recommendations(merged)
+        if merged.empty or USER_COLUMN not in merged.columns:
+            return 0
+        return int(merged[USER_COLUMN].astype(str).nunique())
 
     def write_items_snapshot(self, df: pd.DataFrame) -> None:
         buffer = io.BytesIO()

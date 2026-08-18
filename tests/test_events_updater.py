@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 from support.events import event_payload
 
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import IOSettings, make_settings
 from cicerone.events.normalize import normalize_event
-from cicerone.events.store import load_recommendations_frame
+from cicerone.events.store import load_recommendations_for_users, load_recommendations_frame
 from cicerone.events.updater import INCREMENTAL_SOURCE, IncrementalUpdater
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.factory import build_output_sink
@@ -194,13 +195,13 @@ def test_incremental_updater_caches_frame_across_applies(tmp_path, feature_confi
         top_k=3,
     )
     loads = {"n": 0}
-    real_load = load_recommendations_frame
+    real_load = load_recommendations_for_users
 
-    def counting_load(output):  # type: ignore[no-untyped-def]
+    def counting_load(output, user_ids):  # type: ignore[no-untyped-def]
         loads["n"] += 1
-        return real_load(output)
+        return real_load(output, user_ids)
 
-    monkeypatch.setattr("cicerone.events.updater.load_recommendations_frame", counting_load)
+    monkeypatch.setattr("cicerone.events.updater.load_recommendations_for_users", counting_load)
     updater = IncrementalUpdater(
         sink=build_output_sink(settings.output),
         output_settings=settings.output,
@@ -224,13 +225,13 @@ def test_incremental_updater_busy_invalidates_cache(tmp_path, feature_config, mo
         top_k=3,
     )
     loads = {"n": 0}
-    real_load = load_recommendations_frame
+    real_load = load_recommendations_for_users
 
-    def counting_load(output):  # type: ignore[no-untyped-def]
+    def counting_load(output, user_ids):  # type: ignore[no-untyped-def]
         loads["n"] += 1
-        return real_load(output)
+        return real_load(output, user_ids)
 
-    monkeypatch.setattr("cicerone.events.updater.load_recommendations_frame", counting_load)
+    monkeypatch.setattr("cicerone.events.updater.load_recommendations_for_users", counting_load)
     busy = {"v": False}
     updater = IncrementalUpdater(
         sink=build_output_sink(settings.output),
@@ -246,3 +247,86 @@ def test_incremental_updater_busy_invalidates_cache(tmp_path, feature_config, mo
     busy["v"] = False
     assert updater.apply([normalize_event(event_payload(event_id="b3", item_id="c"))]) == 1
     assert loads["n"] == 2
+
+
+def test_incremental_updater_preserves_untouched_via_scoped_write(tmp_path, feature_config, monkeypatch):
+    out = tmp_path / "out"
+    out.mkdir()
+    existing = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"},
+            {"user_id": "u2", "item_id": "keep", "rank": 1, "score": 0.5, "source": "personalized"},
+        ]
+    )
+    existing.to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    sink = build_output_sink(settings.output)
+    replace_calls: list[tuple[list[str], set[str]]] = []
+    real_replace = sink.replace_recommendations_for_users
+
+    def tracking_replace(df, *, user_ids):  # type: ignore[no-untyped-def]
+        replace_calls.append((sorted(user_ids), set(df["user_id"].astype(str)) if not df.empty else set()))
+        return real_replace(df, user_ids=user_ids)
+
+    monkeypatch.setattr(sink, "replace_recommendations_for_users", tracking_replace)
+    updater = IncrementalUpdater(
+        sink=sink,
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+    )
+    assert updater.apply([normalize_event(event_payload(user_id="u1", item_id="i9", event_id="s1"))]) == 1
+    assert len(replace_calls) == 1
+    user_ids, written_users = replace_calls[0]
+    assert "u1" in user_ids
+    assert COLD_START_USER_ID in user_ids
+    assert "u2" not in user_ids
+    assert "u2" not in written_users
+    frame = load_recommendations_frame(settings.output)
+    assert list(frame[frame["user_id"] == "u2"]["item_id"]) == ["keep"]
+    assert frame[frame["user_id"] == "u1"]["item_id"].astype(str).tolist()  # non-empty updated
+    assert "i9" in set(frame[frame["user_id"] == "u1"]["item_id"].astype(str))
+
+
+def test_incremental_updater_user_cache_lru_evicts(tmp_path, feature_config):
+    out = tmp_path / "out"
+    out.mkdir()
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=3,
+        user_cache_max_size=2,
+    )
+    assert updater.apply([normalize_event(event_payload(user_id="u1", item_id="a", event_id="e1"))]) == 1
+    assert updater.apply([normalize_event(event_payload(user_id="u2", item_id="b", event_id="e2"))]) == 1
+    # Cap is 2; each apply also caches __cold_start__, so older users are evicted.
+    assert len(updater.cached_user_ids) <= 2
+    assert COLD_START_USER_ID in updater.cached_user_ids
+    assert updater.apply([normalize_event(event_payload(user_id="u3", item_id="c", event_id="e3"))]) == 1
+    assert len(updater.cached_user_ids) <= 2
+    assert COLD_START_USER_ID in updater.cached_user_ids
+    assert "u3" in updater.cached_user_ids
+
+
+def test_incremental_updater_rejects_non_positive_cache_size(tmp_path, feature_config):
+    out = tmp_path / "out"
+    out.mkdir()
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+    )
+    with pytest.raises(ValueError, match="user_cache_max_size"):
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+            user_cache_max_size=0,
+        )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 
 import boto3
 import pandas as pd
@@ -35,6 +36,101 @@ def test_local_backend_round_trip(tmp_path):
     assert (tmp_path / "model.artifact").read_bytes() == b"fake-artifact-bytes"
     items_snap = pd.read_parquet(tmp_path / "items_snapshot.parquet")
     assert list(items_snap["item_id"]) == ["i1"]
+
+
+def test_local_replace_recommendations_for_users_preserves_others(tmp_path):
+    options = {"storage_backend": "local", "path": str(tmp_path)}
+    sink = DatasetOutputSink(options)
+    sink.write_recommendations(
+        pd.DataFrame(
+            [
+                {"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"},
+                {"user_id": "u2", "item_id": "keep", "rank": 1, "score": 0.5, "source": "personalized"},
+            ]
+        )
+    )
+    assert (
+        sink.replace_recommendations_for_users(
+            pd.DataFrame(
+                [{"user_id": "u1", "item_id": "new", "rank": 1, "score": 2.0, "source": "incremental"}]
+            ),
+            user_ids=["u1"],
+        )
+        == 2
+    )
+    stored = pd.read_parquet(tmp_path / "recommendations.parquet")
+    assert set(stored[stored["user_id"] == "u1"]["item_id"]) == {"new"}
+    assert list(stored[stored["user_id"] == "u2"]["item_id"]) == ["keep"]
+    assert sink.replace_recommendations_for_users(pd.DataFrame(), user_ids=["u1"]) == 1
+    stored = pd.read_parquet(tmp_path / "recommendations.parquet")
+    assert "u1" not in set(stored["user_id"].astype(str))
+    assert list(stored["user_id"]) == ["u2"]
+    assert (
+        sink.replace_recommendations_for_users(
+            pd.DataFrame(
+                [{"user_id": "u3", "item_id": "i3", "rank": 1, "score": 1.0, "source": "incremental"}]
+            ),
+            user_ids=["u3"],
+        )
+        == 2
+    )
+    before = pd.read_parquet(tmp_path / "recommendations.parquet")
+    assert set(before["user_id"].astype(str)) == {"u2", "u3"}
+    assert sink.replace_recommendations_for_users(pd.DataFrame(), user_ids=[]) == 0
+    after = pd.read_parquet(tmp_path / "recommendations.parquet")
+    assert len(after) == len(before)
+    with pytest.raises(ValueError, match="requires user_ids"):
+        sink.replace_recommendations_for_users(before, user_ids=[])
+
+
+def test_local_replace_recommendations_when_file_missing(tmp_path):
+    options = {"storage_backend": "local", "path": str(tmp_path)}
+    sink = DatasetOutputSink(options)
+    sink.replace_recommendations_for_users(
+        pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "incremental"}]),
+        user_ids=["u1"],
+    )
+    stored = pd.read_parquet(tmp_path / "recommendations.parquet")
+    assert list(stored["user_id"]) == ["u1"]
+
+
+def test_local_replace_recommendations_logs_schema_mismatch(tmp_path, caplog):
+    options = {"storage_backend": "local", "path": str(tmp_path)}
+    sink = DatasetOutputSink(options)
+    pd.DataFrame([{"item_id": "orphan", "rank": 1}]).to_parquet(
+        tmp_path / "recommendations.parquet", index=False
+    )
+    with caplog.at_level(logging.WARNING):
+        assert (
+            sink.replace_recommendations_for_users(
+                pd.DataFrame(
+                    [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "incremental"}]
+                ),
+                user_ids=["u1"],
+            )
+            == 1
+        )
+    assert any("schema mismatch" in record.getMessage().lower() for record in caplog.records)
+    stored = pd.read_parquet(tmp_path / "recommendations.parquet")
+    assert list(stored["user_id"]) == ["u1"]
+    assert "orphan" not in set(stored["item_id"].astype(str))
+
+
+def test_local_replace_recommendations_rejects_extra_users(tmp_path):
+    options = {"storage_backend": "local", "path": str(tmp_path)}
+    sink = DatasetOutputSink(options)
+    with pytest.raises(ValueError, match="outside user_ids"):
+        sink.replace_recommendations_for_users(
+            pd.DataFrame(
+                [{"user_id": "u9", "item_id": "i1", "rank": 1, "score": 1.0, "source": "incremental"}]
+            ),
+            user_ids=["u1"],
+        )
+    with pytest.raises(ValueError, match="missing user_id"):
+        sink.replace_recommendations_for_users(
+            pd.DataFrame([{"item_id": "i1", "rank": 1, "score": 1.0, "source": "incremental"}]),
+            user_ids=["u1"],
+        )
 
 
 def test_local_backend_optional_inputs_missing_return_none(tmp_path):

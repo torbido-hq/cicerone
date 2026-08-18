@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import logging
 import math
-from collections.abc import Callable, Sequence
+from collections import OrderedDict
+from collections.abc import Callable, Collection, Sequence
 from datetime import UTC, datetime
 
 import pandas as pd
@@ -13,7 +14,10 @@ from cicerone.blending import COLD_START_USER_ID, LATEST_SOURCE, POPULAR_SOURCE
 from cicerone.config import IOSettings
 from cicerone.events.base import NormalizedEvent
 from cicerone.events.normalize import events_to_dataframe
-from cicerone.events.store import empty_recommendations_frame, load_recommendations_frame
+from cicerone.events.store import (
+    empty_recommendations_frame,
+    load_recommendations_for_users,
+)
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.base import OutputSink
 from cicerone.io.recommendation_reader import (
@@ -38,6 +42,8 @@ _PRESERVE_LABELS = frozenset(
 )
 # Reserve slots so recent interactions can enter top-K even when preserved rows fill it.
 _BOOST_SLOT_FRACTION = 0.3
+# Bound in-process per-user frames for long-lived serve workers.
+DEFAULT_USER_CACHE_MAX_SIZE = 2048
 
 
 def _is_preserved_source(source: str) -> bool:
@@ -53,6 +59,9 @@ class IncrementalUpdater:
     Does not import LightFM / RecTools. Personalized / blended rows are preserved
     (with reserved slots for incremental boosts); popular/latest slices refresh
     from the flushed batch. Full collaborative refits wait for ``job.run()``.
+
+    Reads and writes only affected users (plus ``__cold_start__``), not the
+    full recommendations table/file. Per-user frames are cached with LRU eviction.
     """
 
     def __init__(
@@ -64,7 +73,10 @@ class IncrementalUpdater:
         top_k: int,
         busy_check: Callable[[], bool] | None = None,
         on_success: Callable[[], None] | None = None,
+        user_cache_max_size: int = DEFAULT_USER_CACHE_MAX_SIZE,
     ):
+        if user_cache_max_size < 1:
+            raise ValueError("user_cache_max_size must be >= 1")
         self._sink = sink
         self._output_settings = output_settings
         self._feature_config = feature_config
@@ -73,7 +85,8 @@ class IncrementalUpdater:
         self._on_success = on_success
         self._last_success_at: datetime | None = None
         self._events_applied = 0
-        self._cached_recommendations: pd.DataFrame | None = None
+        self._user_cache_max_size = user_cache_max_size
+        self._cached_by_user: OrderedDict[str, pd.DataFrame] = OrderedDict()
 
     @property
     def last_success_at(self) -> datetime | None:
@@ -83,8 +96,13 @@ class IncrementalUpdater:
     def events_applied(self) -> int:
         return self._events_applied
 
+    @property
+    def cached_user_ids(self) -> frozenset[str]:
+        """User ids currently held in the in-process LRU recommendation cache."""
+        return frozenset(self._cached_by_user)
+
     def invalidate_cache(self) -> None:
-        self._cached_recommendations = None
+        self._cached_by_user.clear()
 
     def apply(self, events: Sequence[NormalizedEvent]) -> int:
         if not events:
@@ -96,7 +114,9 @@ class IncrementalUpdater:
             return 0
 
         batch = events_to_dataframe(events)
-        existing = self._load_existing()
+        affected_users = sorted(set(batch[USER_COLUMN].astype(str)))
+        affected_set = set(affected_users) | {COLD_START_USER_ID}
+        existing = self._load_users(affected_set)
 
         if USER_COLUMN in existing.columns and not existing.empty:
             existing = existing.copy()
@@ -104,17 +124,14 @@ class IncrementalUpdater:
 
         popular_ranking = self._popular_ranking(batch)
         latest_ranking = self._latest_ranking(batch)
-        affected_users = sorted(set(batch[USER_COLUMN].astype(str)))
-        affected_set = set(affected_users) | {COLD_START_USER_ID}
 
         by_user = (
             {user_id: group for user_id, group in existing.groupby(USER_COLUMN, sort=False)}
             if not existing.empty
             else {}
         )
-        untouched = existing[~existing[USER_COLUMN].isin(affected_set)] if not existing.empty else existing
 
-        frames: list[pd.DataFrame] = [untouched]
+        frames: list[pd.DataFrame] = []
         for user_id in affected_users:
             prior = by_user.get(user_id, empty_recommendations_frame())
             frames.append(self._merge_user_rows(user_id, prior, popular_ranking, latest_ranking, batch))
@@ -123,9 +140,10 @@ class IncrementalUpdater:
         frames = [frame for frame in frames if frame is not None and not frame.empty]
 
         merged = pd.concat(frames, ignore_index=True) if frames else empty_recommendations_frame()
-        merged = merged[list(RECOMMENDATION_COLUMNS)]
-        self._sink.write_recommendations(merged)
-        self._cached_recommendations = merged
+        if not merged.empty:
+            merged = merged[list(RECOMMENDATION_COLUMNS)]
+        n_users = self._sink.replace_recommendations_for_users(merged, user_ids=sorted(affected_set))
+        self._store_users_in_cache(affected_set, merged)
 
         now = datetime.now(UTC)
         manifest = {
@@ -136,7 +154,7 @@ class IncrementalUpdater:
             "n_events": len(events),
             "incremental_events_applied": len(events),
             "last_incremental_at": now.isoformat(),
-            "n_users_with_recommendations": int(merged[USER_COLUMN].nunique()) if not merged.empty else 0,
+            "n_users_with_recommendations": n_users,
             "top_k": self._top_k,
             "partial_outputs": True,
         }
@@ -152,14 +170,62 @@ class IncrementalUpdater:
         )
         return len(events)
 
-    def _load_existing(self) -> pd.DataFrame:
-        if self._cached_recommendations is not None:
-            return self._cached_recommendations
-        existing = load_recommendations_frame(self._output_settings)
-        if existing.empty:
-            existing = empty_recommendations_frame()
-        self._cached_recommendations = existing
-        return existing
+    def _cache_put(self, user_id: str, frame: pd.DataFrame, *, protect: Collection[str]) -> None:
+        self._cached_by_user[user_id] = frame
+        self._cached_by_user.move_to_end(user_id)
+        self._trim_user_cache(protect=protect)
+
+    def _trim_user_cache(self, *, protect: Collection[str]) -> None:
+        protect_set = set(protect)
+        while len(self._cached_by_user) > self._user_cache_max_size:
+            victim = next((key for key in self._cached_by_user if key not in protect_set), None)
+            if victim is None:
+                # Active batch larger than the cap; allow temporary oversize.
+                return
+            self._cached_by_user.pop(victim)
+
+    def _frames_by_user(self, frame: pd.DataFrame) -> dict[str, pd.DataFrame]:
+        if frame.empty or USER_COLUMN not in frame.columns:
+            return {}
+        # One assign for str user ids; reset_index materializes each group (no extra .copy()).
+        keyed = frame.assign(**{USER_COLUMN: frame[USER_COLUMN].astype(str)})
+        return {
+            user_id: group.reset_index(drop=True) for user_id, group in keyed.groupby(USER_COLUMN, sort=False)
+        }
+
+    def _load_users(self, user_ids: set[str]) -> pd.DataFrame:
+        missing = sorted(user_id for user_id in user_ids if user_id not in self._cached_by_user)
+        if missing:
+            loaded = load_recommendations_for_users(self._output_settings, missing)
+            by_user = self._frames_by_user(loaded)
+            for user_id in missing:
+                self._cache_put(
+                    user_id,
+                    by_user.get(user_id, empty_recommendations_frame()),
+                    protect=user_ids,
+                )
+        for user_id in user_ids:
+            if user_id in self._cached_by_user:
+                self._cached_by_user.move_to_end(user_id)
+        parts = [
+            self._cached_by_user[user_id]
+            for user_id in sorted(user_ids)
+            if not self._cached_by_user[user_id].empty
+        ]
+        if not parts:
+            return empty_recommendations_frame()
+        return pd.concat(parts, ignore_index=True)
+
+    def _store_users_in_cache(self, user_ids: set[str], merged: pd.DataFrame) -> None:
+        # After a successful replace, every id in user_ids was written. Missing from
+        # merged means cleared rows — store empty frames (key present = loaded).
+        by_user = self._frames_by_user(merged)
+        for user_id in user_ids:
+            self._cache_put(
+                user_id,
+                by_user.get(user_id, empty_recommendations_frame()),
+                protect=user_ids,
+            )
 
     def _event_weight(self, event_type: str, quantity: int) -> float:
         if self._feature_config is None:

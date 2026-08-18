@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import logging
 import re
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -88,17 +89,34 @@ def validate_storage_options(options: dict[str, Any], backend: str | None = None
     return resolved
 
 
-def read_parquet(options: dict[str, Any], filename: str, *, s3_client: Any | None = None) -> pd.DataFrame:
-    """Read a parquet object from local path or S3 using ``storage_backend`` options."""
+def read_parquet(
+    options: dict[str, Any],
+    filename: str,
+    *,
+    s3_client: Any | None = None,
+    columns: Sequence[str] | None = None,
+    filters: Sequence[Any] | None = None,
+) -> pd.DataFrame:
+    """Read a parquet object from local path or S3 using ``storage_backend`` options.
+
+    When ``columns`` is set, only those columns are loaded (projection pushdown
+    where the parquet engine supports it). ``filters`` are passed through to
+    pandas/pyarrow for row-group predicate pushdown when available.
+    """
     backend = validate_storage_options(options)
+    read_kwargs: dict[str, Any] = {}
+    if columns is not None:
+        read_kwargs["columns"] = list(columns)
+    if filters is not None:
+        read_kwargs["filters"] = list(filters)
     if backend == "local":
         path = Path(require_option(options, "path", "local")) / filename
         logger.info("Reading %s", path)
-        return pd.read_parquet(path)
+        return pd.read_parquet(path, **read_kwargs)
 
     bucket = require_option(options, "bucket", "s3")
     key = object_key(options, filename)
     logger.info("Reading s3://%s/%s", bucket, key)
     client = s3_client if s3_client is not None else build_s3_client(options)
     obj = client.get_object(Bucket=bucket, Key=key)
-    return pd.read_parquet(io.BytesIO(obj["Body"].read()))
+    return pd.read_parquet(io.BytesIO(obj["Body"].read()), **read_kwargs)

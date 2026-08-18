@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- User-scoped incremental write-through: load/replace only affected users
+  (plus `__cold_start__`) via `OutputSink.replace_recommendations_for_users`
+  (returns post-write distinct user count) instead of full-frame overwrite.
+  Updater keeps an LRU-bounded per-user cache (default 2048); dataset
+  `count_recommendation_users` projects only `user_id` from parquet, and
+  `load_recommendations_for_users` uses parquet `filters` for `user_id` when
+  the engine supports predicate pushdown.
 - Incremental events Prometheus metrics on serve `/metrics` (source lag /
   connected, flush counters, last success timestamp, tick errors) and an
   incremental-events panel on the Basic-Auth dashboard (from manifests).

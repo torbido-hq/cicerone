@@ -8,14 +8,29 @@ deploy-time config only.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import Column, DateTime, LargeBinary, MetaData, Table, create_engine, insert, inspect, text
+from sqlalchemy import (
+    Column,
+    DateTime,
+    LargeBinary,
+    MetaData,
+    Table,
+    bindparam,
+    create_engine,
+    insert,
+    inspect,
+    text,
+)
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
+from cicerone.io.db_errors import is_missing_column_error
 from cicerone.io.options import require_option, sql_identifier
+from cicerone.io.recommendation_schema import recommendations_sql_names
+from cicerone.io.replace_users import normalize_replace_user_ids
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +38,7 @@ _MISSING_TABLE_ERRORS = (ProgrammingError, OperationalError)
 
 # Prefer the public alias used by readers and writers.
 MISSING_TABLE_ERRORS = _MISSING_TABLE_ERRORS
+
 
 DEFAULT_EVENTS_TABLE = "events"
 DEFAULT_USERS_TABLE = "users"
@@ -121,14 +137,62 @@ class DatabaseOutputSink:
         self._engine = create_engine(require_option(options, "database_url", "db"), pool_pre_ping=True)
 
     def write_recommendations(self, df: pd.DataFrame) -> None:
-        table = sql_identifier(
-            self._options.get("recommendations_table", DEFAULT_RECOMMENDATIONS_TABLE),
-            option="recommendations_table",
+        table, _columns, _user_col = recommendations_sql_names(
+            self._options, default_table=DEFAULT_RECOMMENDATIONS_TABLE
         )
         logger.info("Writing %d rows to database table %r", len(df), table)
         with self._engine.begin() as conn:
             _clear_table_for_replace(conn, table)
             df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
+
+    def replace_recommendations_for_users(self, df: pd.DataFrame, *, user_ids: Sequence[str]) -> int:
+        ids = normalize_replace_user_ids(df, user_ids)
+        if not ids:
+            return 0
+        table, _columns, user_col = recommendations_sql_names(
+            self._options, default_table=DEFAULT_RECOMMENDATIONS_TABLE
+        )
+        logger.info(
+            "Replacing recommendations for %d user(s) (%d row(s)) in %r",
+            len(ids),
+            len(df),
+            table,
+        )
+        # Identifiers are sql_identifier-validated; match events.store SELECT quoting.
+        delete_sql = text(f"DELETE FROM {table} WHERE {user_col} IN :user_ids").bindparams(
+            bindparam("user_ids", expanding=True)
+        )
+        count_sql = text(f"SELECT COUNT(DISTINCT {user_col}) FROM {table}")
+        with self._engine.begin() as conn:
+            savepoint = conn.begin_nested()
+            try:
+                conn.execute(delete_sql, {"user_ids": ids})
+                savepoint.commit()
+            except _MISSING_TABLE_ERRORS as exc:
+                savepoint.rollback()
+                logger.warning(
+                    "Recommendations delete skipped for table %r (missing table or schema issue): %s",
+                    table,
+                    exc,
+                )
+                # Schema drift (e.g. missing user_id): do not append into a broken table.
+                if is_missing_column_error(exc):
+                    return 0
+            if not df.empty:
+                df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
+            count_savepoint = conn.begin_nested()
+            try:
+                value = conn.execute(count_sql).scalar()
+                count_savepoint.commit()
+            except _MISSING_TABLE_ERRORS as exc:
+                count_savepoint.rollback()
+                logger.warning(
+                    "Recommendations count skipped for table %r (missing table or schema issue): %s",
+                    table,
+                    exc,
+                )
+                return 0
+        return int(value or 0)
 
     def write_manifest(self, manifest: dict) -> None:
         table = sql_identifier(

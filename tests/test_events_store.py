@@ -9,8 +9,10 @@ from sqlalchemy import create_engine, text
 
 from cicerone.config import IOSettings, make_settings
 from cicerone.events.store import (
+    count_recommendation_users,
     dispose_recommendation_engines,
     empty_recommendations_frame,
+    load_recommendations_for_users,
     load_recommendations_frame,
 )
 
@@ -82,3 +84,206 @@ def test_dispose_recommendation_engines_clears_cache(tmp_path):
     dispose_recommendation_engines()  # idempotent
     frame = load_recommendations_frame(settings.output)
     assert frame.empty
+
+
+def test_load_recommendations_for_users_dataset_filters(tmp_path, monkeypatch):
+    path = tmp_path / "recommendations.parquet"
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"},
+            {"user_id": "u2", "item_id": "i2", "rank": 1, "score": 0.5, "source": "personalized"},
+        ]
+    ).to_parquet(path, index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    )
+    calls: list[object] = []
+    real_read = __import__("cicerone.io.options", fromlist=["read_parquet"]).read_parquet
+
+    def tracking_read(options, filename, *, s3_client=None, columns=None, filters=None):  # type: ignore[no-untyped-def]
+        calls.append({"columns": columns, "filters": filters})
+        return real_read(options, filename, s3_client=s3_client, columns=columns, filters=filters)
+
+    monkeypatch.setattr("cicerone.events.store.read_parquet", tracking_read)
+    frame = load_recommendations_for_users(settings.output, ["u2"])
+    assert list(frame["user_id"]) == ["u2"]
+    assert count_recommendation_users(settings.output) == 2
+    assert load_recommendations_for_users(settings.output, []).empty
+    assert any(call["filters"] == [("user_id", "in", ["u2"])] for call in calls)
+
+
+def test_load_recommendations_for_users_dataset_filter_fallback(tmp_path, monkeypatch):
+    path = tmp_path / "recommendations.parquet"
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"},
+            {"user_id": "u2", "item_id": "i2", "rank": 1, "score": 0.5, "source": "personalized"},
+        ]
+    ).to_parquet(path, index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    )
+    real_read = __import__("cicerone.io.options", fromlist=["read_parquet"]).read_parquet
+
+    def failing_filtered_read(options, filename, *, s3_client=None, columns=None, filters=None):  # type: ignore[no-untyped-def]
+        if filters is not None:
+            raise ValueError("Unsupported filter on user_id column")
+        return real_read(options, filename, s3_client=s3_client, columns=columns, filters=filters)
+
+    monkeypatch.setattr("cicerone.events.store.read_parquet", failing_filtered_read)
+    frame = load_recommendations_for_users(settings.output, ["u2"])
+    assert list(frame["user_id"]) == ["u2"]
+
+
+def test_load_recommendations_for_users_db(tmp_path):
+    db_path = tmp_path / "scoped.db"
+    url = f"sqlite+pysqlite:///{db_path}"
+    engine = create_engine(url)
+    rows = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"},
+            {"user_id": "u2", "item_id": "i2", "rank": 1, "score": 0.5, "source": "personalized"},
+        ]
+    )
+    rows.to_sql("recommendations", engine, index=False)
+    settings = make_settings(output=IOSettings(kind="db", options={"database_url": url}))
+    frame = load_recommendations_for_users(settings.output, ["u1"])
+    assert list(frame["user_id"]) == ["u1"]
+    assert count_recommendation_users(settings.output) == 2
+
+
+def test_load_recommendations_for_users_db_empty_user_ids(tmp_path, monkeypatch):
+    db_path = tmp_path / "scoped_empty_ids.db"
+    url = f"sqlite+pysqlite:///{db_path}"
+    engine = create_engine(url)
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"},
+            {"user_id": "u2", "item_id": "i2", "rank": 1, "score": 0.5, "source": "personalized"},
+        ]
+    ).to_sql("recommendations", engine, index=False)
+    settings = make_settings(output=IOSettings(kind="db", options={"database_url": url}))
+
+    calls = {"n": 0}
+    real_read = pd.read_sql_query
+
+    def spy_read_sql_query(*args, **kwargs):  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        return real_read(*args, **kwargs)
+
+    monkeypatch.setattr(pd, "read_sql_query", spy_read_sql_query)
+    frame = load_recommendations_for_users(settings.output, [])
+    assert frame.empty
+    assert list(frame.columns) == list(empty_recommendations_frame().columns)
+    assert calls["n"] == 0
+
+
+def test_load_recommendations_for_users_db_missing_table(tmp_path, caplog):
+    db_path = tmp_path / "missing_scoped.db"
+    sqlite3.connect(db_path).close()
+    settings = make_settings(
+        output=IOSettings(kind="db", options={"database_url": f"sqlite+pysqlite:///{db_path}"})
+    )
+    with caplog.at_level(logging.WARNING):
+        frame = load_recommendations_for_users(settings.output, ["u1"])
+    assert frame.empty
+    assert list(frame.columns) == list(empty_recommendations_frame().columns)
+    assert any("missing" in record.getMessage().lower() for record in caplog.records)
+
+
+def test_load_recommendations_for_users_db_schema_mismatch(tmp_path, caplog):
+    db_path = tmp_path / "mismatched_scoped.db"
+    url = f"sqlite+pysqlite:///{db_path}"
+    engine = create_engine(url)
+    pd.DataFrame(
+        [
+            {"item_id": "i1", "rank": 1, "score": 0.8, "source": "personalized"},
+            {"item_id": "i2", "rank": 2, "score": 0.5, "source": "personalized"},
+        ]
+    ).to_sql("recommendations", engine, index=False)
+    settings = make_settings(output=IOSettings(kind="db", options={"database_url": url}))
+    with caplog.at_level(logging.WARNING):
+        frame = load_recommendations_for_users(settings.output, ["u1"])
+    assert frame.empty
+    assert list(frame.columns) == list(empty_recommendations_frame().columns)
+    assert any("schema mismatch" in record.getMessage().lower() for record in caplog.records)
+
+
+def test_load_recommendations_for_users_dataset_schema_mismatch(tmp_path, caplog):
+    pd.DataFrame(
+        [
+            {"item_id": "i1", "rank": 1, "score": 0.8, "source": "personalized"},
+            {"item_id": "i2", "rank": 2, "score": 0.5, "source": "personalized"},
+        ]
+    ).to_parquet(tmp_path / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    )
+    with caplog.at_level(logging.WARNING):
+        frame = load_recommendations_for_users(settings.output, ["u1"])
+    assert frame.empty
+    assert list(frame.columns) == list(empty_recommendations_frame().columns)
+    assert any("schema mismatch" in record.getMessage().lower() for record in caplog.records)
+
+
+def test_count_recommendation_users_db_missing_table(tmp_path):
+    db_path = tmp_path / "missing_count.db"
+    sqlite3.connect(db_path).close()
+    settings = make_settings(
+        output=IOSettings(kind="db", options={"database_url": f"sqlite+pysqlite:///{db_path}"})
+    )
+    assert count_recommendation_users(settings.output) == 0
+
+
+def test_count_recommendation_users_db_schema_mismatch(tmp_path, caplog):
+    db_path = tmp_path / "count_schema.db"
+    url = f"sqlite+pysqlite:///{db_path}"
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE recommendations (item_id TEXT, rank INTEGER)"))
+        conn.execute(text("INSERT INTO recommendations (item_id, rank) VALUES ('i1', 1)"))
+    settings = make_settings(output=IOSettings(kind="db", options={"database_url": url}))
+    with caplog.at_level(logging.WARNING):
+        assert count_recommendation_users(settings.output) == 0
+    assert any("schema mismatch" in record.getMessage().lower() for record in caplog.records)
+
+
+def test_count_recommendation_users_dataset_projects_user_id(tmp_path, monkeypatch):
+    path = tmp_path / "recommendations.parquet"
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"},
+            {"user_id": "u2", "item_id": "i2", "rank": 1, "score": 0.5, "source": "personalized"},
+        ]
+    ).to_parquet(path, index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    )
+    calls: list[object] = []
+    real_read = __import__("cicerone.io.options", fromlist=["read_parquet"]).read_parquet
+
+    def tracking_read(options, filename, *, s3_client=None, columns=None, filters=None):  # type: ignore[no-untyped-def]
+        calls.append(columns)
+        return real_read(options, filename, s3_client=s3_client, columns=columns, filters=filters)
+
+    monkeypatch.setattr("cicerone.events.store.read_parquet", tracking_read)
+    assert count_recommendation_users(settings.output) == 2
+    assert calls == [["user_id"]]
+
+
+def test_count_recommendation_users_dataset_schema_mismatch(tmp_path, caplog):
+    path = tmp_path / "recommendations.parquet"
+    pd.DataFrame([{"item_id": "i1", "rank": 1}]).to_parquet(path, index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    )
+    with caplog.at_level(logging.WARNING):
+        assert count_recommendation_users(settings.output) == 0
+    assert any("schema mismatch" in record.getMessage().lower() for record in caplog.records)
+
+
+def test_load_recommendations_for_users_unsupported_kind():
+    with pytest.raises(ValueError, match="Unsupported output kind"):
+        load_recommendations_for_users(IOSettings(kind="other", options={}), ["u1"])
+    with pytest.raises(ValueError, match="Unsupported output kind"):
+        count_recommendation_users(IOSettings(kind="other", options={}))
