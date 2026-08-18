@@ -1,0 +1,46 @@
+{% if error %}
+  <div class="rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800">
+    {{ error }}
+  </div>
+{% elif not queried %}
+  <p class="text-sm text-slate-500">Enter a user id to inspect their current top-K.</p>
+{% elif not items %}
+  <p class="text-sm text-slate-600">No recommendations for user_id={{ user_id }}.</p>
+{% else %}
+  <div class="flex items-center justify-between mb-2">
+    <p class="text-sm text-slate-700">user_id=<span class="font-medium">{{ user_id }}</span></p>
+    {% if fallback %}
+      <span class="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
+        cold-start fallback
+      </span>
+    {% endif %}
+  </div>
+  <table class="w-full text-sm border-collapse">
+    <thead>
+      <tr class="text-left text-slate-500 border-b border-slate-200">
+        <th class="py-2 px-2">Rank</th>
+        <th class="py-2 px-2">Item</th>
+        {% if show_category %}
+        <th class="py-2 px-2">Category</th>
+        {% endif %}
+        <th class="py-2 px-2">Score</th>
+        <th class="py-2 px-2">Source</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in items %}
+      <tr class="border-b border-slate-100">
+        <td class="py-2 px-2 text-slate-600">{{ item.rank if item.rank is not none else "—" }}</td>
+        <td class="py-2 px-2 text-slate-700">{{ item.item_id }}</td>
+        {% if show_category %}
+        <td class="py-2 px-2 text-slate-600">{{ item.category or "—" }}</td>
+        {% endif %}
+        <td class="py-2 px-2 text-slate-600">
+          {% if item.score is not none %}{{ "%.4f"|format(item.score) }}{% else %}—{% endif %}
+        </td>
+        <td class="py-2 px-2 text-slate-600">{{ item.source }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endif %}

@@ -18,6 +18,30 @@
     </div>
   </header>
   <main class="mx-auto max-w-4xl px-4 py-6">
+    <section class="rounded-lg border border-slate-200 bg-white p-4 mb-4">
+      <h2 class="text-sm font-medium text-slate-800 mb-3">Look up recommendations</h2>
+      <form
+        class="flex gap-2"
+        hx-get="/partials/recommendations"
+        hx-target="#recommendation-results"
+        hx-swap="innerHTML"
+      >
+        <input
+          type="search"
+          name="user_id"
+          placeholder="user_id"
+          required
+          autocomplete="off"
+          class="flex-1 rounded border border-slate-300 px-3 py-1.5 text-sm"
+        >
+        <button type="submit" class="rounded bg-slate-800 px-3 py-1.5 text-sm text-white">
+          Look up
+        </button>
+      </form>
+      <div id="recommendation-results" class="mt-3">
+        {% include "_recommendations.html" %}
+      </div>
+    </section>
     <div
       id="status"
       hx-get="/partials/status"

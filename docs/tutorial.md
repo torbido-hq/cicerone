@@ -617,7 +617,9 @@ docker run --rm -it \
 ```
 
 Then start the dashboard and open `http://localhost:8090/dashboard` in a
-browser (log in with the user just created):
+browser (log in with the user just created). The **Look up recommendations**
+form inspects a `user_id`'s current top-K from the same output store
+(including cold-start fallback):
 
 ```sh
 docker run --rm -d --name cicerone-tutorial-dashboard -p 8090:8090 \

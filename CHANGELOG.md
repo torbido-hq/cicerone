@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Dashboard user lookup: inspect a `user_id`'s current precomputed top-K
+  (rank, item, score, source, optional category) from the job output store,
+  with cold-start fallback, on the Basic-Auth status page.
+
 - Incremental events horizontal HA: leader-only apply lease
   (`{lock_key}:events:apply`) when `events.ha = true` with
   `job.trigger.lock_backend` postgres/redis. Fan-out sources acquire the

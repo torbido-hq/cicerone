@@ -49,7 +49,7 @@ For configuration and usage, see the main [README](../README.md).
 | `locks.py` | Optional lock backends (postgres / redis) for `RunGuard` and the events apply lease; Redis `owned()` checks the fencing token, Postgres `owned()` checks `pg_locks` for this backend pid |
 | `config/lock_url.py` | Postgres lock URL resolution for config load + lock builder |
 | `http_auth.py` | Shared bearer-token (serve/trigger) and HTTP Basic Auth (dashboard) dependencies |
-| `dashboard.py` | Standalone FastAPI dashboard: job status/history, own container/port |
+| `dashboard.py` | Standalone FastAPI dashboard: job status/history plus user-id lookup, own container/port |
 | `dashboard_users.py` | Load/save the dashboard's Basic Auth users file (TOML, username → bcrypt hash) |
 | `manage_dashboard_users.py` | CLI to add/remove/list dashboard users |
 | `templates/`, `static/` | Jinja2 templates + vendored htmx/Stimulus/Tailwind assets for the dashboard |
@@ -295,10 +295,10 @@ single-writer unless `events.ha = true` with `lock_backend` postgres/redis
 
 `cicerone.dashboard` is a standalone entrypoint (`python -m cicerone.dashboard`,
 its own container/port `8090` in `docker-compose.yml`) for checking whether
-the last job run succeeded — it is **not** gated by `[job].mode` like
-serve/batch, so it's available even in plain batch-only deployments with no
-other HTTP surface. Like serve mode, it never imports
-`cicerone.model`/`dataset`/`automl`.
+the last job run succeeded and inspecting a user's current top-K — it is
+**not** gated by `[job].mode` like serve/batch, so it's available even in
+plain batch-only deployments with no other HTTP surface. Like serve mode, it
+never imports `cicerone.model`/`dataset`/`automl`.
 
 - `io.factory.build_manifest_reader(settings.output)` builds a
   `ManifestReader` (`io/manifest_reader.py`) matching the configured output
@@ -306,6 +306,11 @@ other HTTP surface. Like serve mode, it never imports
   output's `manifest.json` is overwritten every run, not appended — no
   history for that backend), while `DbManifestReader` queries the
   `recommendation_runs` table for real history (`read_recent(limit)`).
+- `io.factory.build_recommendation_reader(settings.output)` builds a
+  `RecommendationReader` for the user-id inspector. Lookup reads the output
+  store directly (no serve hop). `k` is `min(job.top_k, 20)`. Missing users
+  fall back to `__cold_start__` / popular-latest rows with a badge; `category`
+  is joined from the items snapshot when that column exists.
 - `job.run()` writes exactly one manifest per run via a `try`/`finally`,
   with a consistent key set (`status: "success"|"failed"`, `error`) on both
   the success and failure paths, so a failed run is no longer silently
@@ -320,10 +325,13 @@ other HTTP surface. Like serve mode, it never imports
   subcommand, since it's a global `argparse` option).
 - `dashboard.create_app()` exposes `GET /health` (no auth), `GET
   /partials/status` (Basic Auth, an htmx-polled fragment — see
-  `templates/_status.html`), and `GET /dashboard` (Basic Auth, the full
-  page). The page polls `/partials/status` via `hx-trigger="load, every Ns"`
+  `templates/_status.html`), `GET /partials/recommendations` (Basic Auth,
+  user-id lookup fragment — see `templates/_recommendations.html`), and
+  `GET /dashboard` (Basic Auth, the full page). The page polls
+  `/partials/status` via `hx-trigger="load, every Ns"`
   (`Settings.dashboard_refresh_interval_seconds`) instead of a websocket or
-  client-side JS framework.
+  client-side JS framework. The lookup form is outside that poll target so
+  a status refresh does not wipe results.
 - Frontend stack: server-rendered Jinja2 templates + htmx (polling) +
   Stimulus (a small `time-ago` controller for relative timestamps) +
   Tailwind CSS, all vendored under `src/cicerone/static/` — no CDN at

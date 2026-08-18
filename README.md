@@ -40,7 +40,7 @@ up to your own data doesn't require touching any code.
   (`limit` / `category` / `exclude_unavailable`, cold-start fallback;
   OpenAPI at `/docs` + thin `ServeClient`)
 - **Retrain trigger** — webhook (+ optional input poll) alongside cron
-- **Dashboard** — Basic-Auth status page for run success/failure and history
+- **Dashboard** — Basic-Auth status page for run success/failure, history, and user-id lookup
 - **Model artifacts** — optional versioned fitted-model bundle for offline reload
 
 > **Why "Cicerone"?** In the world of beer, a [Cicerone](https://www.cicerone.org)
@@ -205,16 +205,18 @@ process:
 ## Dashboard
 
 A lightweight, standalone web dashboard for checking whether the last job
-run succeeded — it's always available as its own container/port (`8090`),
-regardless of `[job].mode` (batch or serve). Like serve mode, it never loads
-lightfm/rectools/implicit.
+run succeeded and inspecting a user's current top-K — it's always available
+as its own container/port (`8090`), regardless of `[job].mode` (batch or
+serve). Like serve mode, it never loads lightfm/rectools/implicit.
 
 ![Cicerone dashboard showing job run history, including a failed run](docs/images/dashboard.png)
 
 - `GET /dashboard` shows the latest run's status (success/failed), counts,
   effective models, and (for a `db` output only — a `dataset` output's
   `manifest.json` is overwritten every run, so it only ever has the latest)
-  a short run history. The page auto-refreshes itself via
+  a short run history. Enter a `user_id` to inspect that user's current
+  precomputed top-K from the same output store (cold-start fallback when
+  they have no personal rows). The status block auto-refreshes via
   [htmx](https://htmx.org) polling, so no page reload is needed.
 - Protected by HTTP Basic Auth rather than a bearer token, since it's meant
   to be opened directly in a browser (a login prompt, not a header a human

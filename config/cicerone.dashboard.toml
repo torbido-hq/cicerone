@@ -8,7 +8,8 @@
 # needed here), same as serve mode.
 #
 # [output] here MUST point at the exact same store the batch job writes to
-# -- everything else in this file is independent of the batch config.
+# (status history and the user-id inspector both read from it) -- everything
+# else in this file is independent of the batch config.
 
 [output]
 kind = "dataset"
