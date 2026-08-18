@@ -47,6 +47,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Project docs site (not part of the runtime product): Starlight under
   `website/`, synced from `docs/`, published at [cicerone.dev](https://cicerone.dev).
 
+### Fixed
+
+- Event worker ack/nack bookkeeping: buffer duplicates are acked (not left
+  in-flight), capacity overflow is nacked for redelivery, and stop drains
+  the buffer once before closing the source.
+- DB event source poll uses `(occurred_at, event_id)` cursor/order when an
+  `event_id` column exists so same-timestamp pages cannot skip rows.
+
 ## [0.5.1] - 2026-08-12
 
 ### Added

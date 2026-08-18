@@ -247,3 +247,88 @@ def test_event_worker_stop_swallows_source_close_errors(tmp_path, feature_config
     with caplog.at_level(logging.ERROR):
         assert worker.stop(join_timeout_seconds=2.0) is True
     assert any("close()" in record.getMessage() for record in caplog.records)
+
+
+def test_event_worker_acks_buffer_duplicates(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="dup-a", item_id="i1"))
+    source.ingest(event_payload(event_id="dup-b", item_id="i1"))  # same fingerprint
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    assert worker.tick() == 0  # window fills buffer; not ready until size/window
+    assert source.health().lag == 1  # duplicate acked; one remains buffered/in-flight
+
+
+def test_event_worker_nacks_overflow(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    source = WebhookEventSource({})
+    for i in range(3):
+        source.ingest(event_payload(event_id=f"ov-{i}", item_id=f"i{i}"))
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0, max_events=1),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    assert worker.tick() == 1  # flushes the one kept event
+    # Overflow was nacked back; still pending on the webhook source.
+    assert source.health().lag >= 1
+
+
+def test_event_worker_stop_drains_buffer(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="drain-1", item_id="idrain"))
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+        poll_interval_seconds=60.0,
+    )
+    worker.start()
+    assert worker.tick() == 0  # buffered, not flushed
+    assert worker.stop(join_timeout_seconds=2.0) is True
+    frame = pd.read_parquet(out / "recommendations.parquet")
+    assert "idrain" in set(frame["item_id"].astype(str))

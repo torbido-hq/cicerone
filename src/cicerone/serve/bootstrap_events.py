@@ -80,4 +80,11 @@ def start_events_runtime(
         settings.events.incremental.batch_window_seconds,
         settings.events.incremental.poll_interval_seconds,
     )
+    if settings.events.kind in {"webhook", "db", "s3"} or settings.output.kind == "dataset":
+        logger.warning(
+            "Incremental events assume a single writer process "
+            "(kind=%s, output=%s); do not run multiple events-enabled serve replicas",
+            settings.events.kind,
+            settings.output.kind,
+        )
     return EventsRuntime(webhook_source=webhook_source, worker=worker)

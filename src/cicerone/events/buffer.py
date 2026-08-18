@@ -4,9 +4,23 @@ from __future__ import annotations
 
 import time
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from cicerone.events.base import NormalizedEvent
 from cicerone.events.normalize import event_fingerprint
+
+
+@dataclass(frozen=True)
+class BufferExtendResult:
+    """Outcome of ``MicroBatchBuffer.extend`` for source ack/nack bookkeeping."""
+
+    kept: tuple[NormalizedEvent, ...]
+    duplicates: tuple[NormalizedEvent, ...]
+    overflow: tuple[NormalizedEvent, ...]
+
+    @property
+    def kept_count(self) -> int:
+        return len(self.kept)
 
 
 class MicroBatchBuffer:
@@ -42,26 +56,35 @@ class MicroBatchBuffer:
     def remaining_capacity(self) -> int:
         return max(0, self._max_events - len(self._events))
 
-    def extend(self, events: Sequence[NormalizedEvent]) -> int:
-        """Append events; return how many were kept (after optional dedupe / capacity)."""
-        kept = 0
+    def extend(self, events: Sequence[NormalizedEvent]) -> BufferExtendResult:
+        """Append events; classify kept vs duplicate vs capacity overflow for ack/nack."""
+        kept: list[NormalizedEvent] = []
+        duplicates: list[NormalizedEvent] = []
+        overflow: list[NormalizedEvent] = []
         now = time.monotonic()
         for event in events:
             if len(self._events) >= self._max_events:
-                break
+                overflow.append(event)
+                continue
             if self._dedupe:
                 if event.event_id in self._event_ids:
+                    duplicates.append(event)
                     continue
                 fingerprint = event_fingerprint(event)
                 if fingerprint in self._fingerprints:
+                    duplicates.append(event)
                     continue
                 self._event_ids.add(event.event_id)
                 self._fingerprints.add(fingerprint)
             if self._window_started_at is None:
                 self._window_started_at = now
             self._events.append(event)
-            kept += 1
-        return kept
+            kept.append(event)
+        return BufferExtendResult(
+            kept=tuple(kept),
+            duplicates=tuple(duplicates),
+            overflow=tuple(overflow),
+        )
 
     def ready(self, *, now: float | None = None) -> bool:
         if not self._events:

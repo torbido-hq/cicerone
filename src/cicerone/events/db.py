@@ -159,9 +159,15 @@ class DbEventSource(EventSource):
             if self._engine is None:
                 raise RuntimeError("DbEventSource.connect() required before poll")
             watermark_at = self._watermark_at
+            watermark_event_id = self._watermark_event_id
             in_flight_count = len(self._in_flight)
             engine = self._engine
-        rows = self._fetch_rows(engine, watermark_at, limit=max_events + in_flight_count + 8)
+        rows = self._fetch_rows(
+            engine,
+            watermark_at,
+            watermark_event_id,
+            limit=max_events + in_flight_count + 8,
+        )
         candidates = sorted((_row_to_event(payload) for payload in rows), key=_cursor_key)
 
         out: list[NormalizedEvent] = []
@@ -251,16 +257,39 @@ class DbEventSource(EventSource):
             cached_has_event_id = self._has_event_id_column
         return cached_select, cached_has_event_id
 
-    def _fetch_rows(self, engine: Engine, watermark_at: datetime, *, limit: int) -> list[dict[str, Any]]:
-        select_clause, _has_event_id = self._ensure_source_schema(engine)
-        sql = text(
-            f"SELECT {select_clause} FROM {self._from_clause()} "
-            "WHERE occurred_at >= :watermark "
-            "ORDER BY occurred_at ASC "
-            "LIMIT :limit"
-        )
+    def _fetch_rows(
+        self,
+        engine: Engine,
+        watermark_at: datetime,
+        watermark_event_id: str,
+        *,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        select_clause, has_event_id = self._ensure_source_schema(engine)
+        if has_event_id:
+            # Match ack cursor (occurred_at, event_id) so same-timestamp pages cannot skip rows.
+            sql = text(
+                f"SELECT {select_clause} FROM {self._from_clause()} WHERE "
+                "occurred_at > :watermark_at OR "
+                "(occurred_at = :watermark_at AND event_id > :watermark_event_id) "
+                "ORDER BY occurred_at ASC, event_id ASC "
+                "LIMIT :limit"
+            )
+            params: dict[str, Any] = {
+                "watermark_at": watermark_at,
+                "watermark_event_id": watermark_event_id,
+                "limit": max(limit, 1),
+            }
+        else:
+            sql = text(
+                f"SELECT {select_clause} FROM {self._from_clause()} "
+                "WHERE occurred_at >= :watermark "
+                "ORDER BY occurred_at ASC "
+                "LIMIT :limit"
+            )
+            params = {"watermark": watermark_at, "limit": max(limit, 1)}
         with engine.connect() as conn:
-            result = conn.execute(sql, {"watermark": watermark_at, "limit": max(limit, 1)})
+            result = conn.execute(sql, params)
             return [dict(row) for row in result.mappings()]
 
     def _count_after(self, engine: Engine, watermark_at: datetime, watermark_event_id: str) -> int | None:
@@ -290,7 +319,7 @@ class DbEventSource(EventSource):
     ) -> int | None:
         # Same synthetic-id path as poll. Cap the scan; None = unknown / too large.
         cursor = (watermark_at, watermark_event_id)
-        rows = self._fetch_rows(engine, watermark_at, limit=_LAG_SCAN_LIMIT)
+        rows = self._fetch_rows(engine, watermark_at, watermark_event_id, limit=_LAG_SCAN_LIMIT)
         count = sum(1 for payload in rows if _cursor_key_from_payload(payload) > cursor)
         if len(rows) >= _LAG_SCAN_LIMIT:
             return None

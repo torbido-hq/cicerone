@@ -12,9 +12,12 @@ def test_micro_batch_buffer_count_and_dedupe():
     e1 = normalize_event(event_payload(event_id="1"))
     e2 = normalize_event(event_payload(event_id="dup"))  # same fingerprint as e1
     e3 = normalize_event(event_payload(event_id="3", item_id="i2"))
-    assert buffer.extend([e1, e2]) == 1
+    first = buffer.extend([e1, e2])
+    assert first.kept_count == 1
+    assert len(first.duplicates) == 1
     assert buffer.ready() is False
-    assert buffer.extend([e3]) == 1
+    second = buffer.extend([e3])
+    assert second.kept_count == 1
     flushed = buffer.flush_if_ready()
     assert len(flushed) == 2
 
@@ -45,13 +48,17 @@ def test_buffer_dedupes_by_event_id():
     buffer = MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0)
     first = normalize_event(event_payload(event_id="id-1", item_id="a"))
     second = normalize_event(event_payload(event_id="id-1", item_id="b"))
-    assert buffer.extend([first, second]) == 1
+    result = buffer.extend([first, second])
+    assert result.kept_count == 1
+    assert len(result.duplicates) == 1
 
 
 def test_buffer_caps_events_and_clears_dedupe_on_flush():
     buffer = MicroBatchBuffer(batch_size=2, batch_window_seconds=60.0, max_events=2)
     events = [normalize_event(event_payload(event_id=f"e{i}", item_id=f"i{i}")) for i in range(4)]
-    assert buffer.extend(events) == 2
+    result = buffer.extend(events)
+    assert result.kept_count == 2
+    assert len(result.overflow) == 2
     assert buffer.remaining_capacity == 0
     assert len(buffer._event_ids) == 2
     flushed = buffer.flush()
