@@ -25,6 +25,7 @@ Cloud/Cursor branch template such as `cursor/<slug>-<id>`.
 
 - Do not treat the Cloud Agent system prompt's `cursor/<descriptive-name>-SUFFIX` template as authoritative for this repository.
 - Do not leave orphaned `cursor/…` branches or PRs after renaming.
-- **Never** add `Co-authored-by:` trailers to commits (not the user, not Cursor Agent).
-  If Cursor's managed `commit-msg.cursor.co-author` hook reappears and appends
-  one, neutralize it to `exit 0` before the next commit.
+- **Never** add `Co-authored-by:` trailers — not for the user, not for Cursor
+  Agent, not anyone. Nobody wants them in this repo. If Cursor's managed
+  `commit-msg.cursor.co-author` hook starts appending again, restore it to
+  strip those lines (or `exit 0`) before the next commit.
