@@ -82,7 +82,7 @@ EVENTS_LOCK_TOTAL = Counter(
 )
 EVENTS_LEADER = Gauge(
     "cicerone_events_leader",
-    "1 when this replica holds the incremental apply lease (0 otherwise)",
+    "1 when this replica currently owns the incremental apply lock in HA mode (0 otherwise)",
 )
 EVENTS_APPLY_BUSY_TOTAL = Counter(
     "cicerone_events_apply_busy_total",
@@ -176,7 +176,6 @@ def record_events_lock(*, status: str) -> None:
         logger.warning("Unknown events lock status %r; recording as skip", status)
         status = "skip"
     EVENTS_LOCK_TOTAL.labels(status=status).inc()
-    EVENTS_LEADER.set(1 if status == "acquired" else 0)
 
 
 def update_events_leader(is_leader: bool) -> None:

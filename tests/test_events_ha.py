@@ -88,6 +88,8 @@ def _worker(
     busy_check=None,
     fence_check=None,
 ) -> EventWorker:
+    if fence_check is None and apply_lock is not None:
+        fence_check = apply_lock.owned
     updater = IncrementalUpdater(
         sink=build_output_sink(settings.output),
         output_settings=settings.output,
@@ -361,9 +363,18 @@ def test_start_events_runtime_wires_apply_lock(tmp_path, feature_config: Feature
     retrain_fake = HeldLock()
     retrain_fake.is_locked = lambda: False  # type: ignore[method-assign]
 
-    def _build(_settings: Any, lock_key: str | None = None) -> SharedLock | HeldLock:
+    seen_ttl: dict[str, float | None] = {}
+
+    def _build(
+        _settings: Any,
+        *,
+        lock_key: str | None = None,
+        ttl_seconds: float | None = None,
+    ) -> SharedLock | HeldLock:
         if lock_key is not None and lock_key.endswith(":events:apply"):
+            seen_ttl["apply"] = ttl_seconds
             return apply_fake
+        seen_ttl["retrain"] = ttl_seconds
         return retrain_fake
 
     monkeypatch.setattr("cicerone.serve.bootstrap_events.build_lock_backend", _build)
@@ -385,7 +396,89 @@ def test_start_events_runtime_wires_apply_lock(tmp_path, feature_config: Feature
     assert runtime.apply_lock is apply_fake
     assert runtime.worker is not None
     assert runtime.worker._apply_lock is apply_fake
+    assert seen_ttl["apply"] == 60.0
+    assert seen_ttl["retrain"] is None
     runtime.stop()
+
+
+def test_start_events_runtime_skips_apply_lock_without_ha(
+    tmp_path, feature_config: FeatureConfig, monkeypatch
+):
+    out, _settings = _seed_out(tmp_path)
+
+    def _boom(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("build_lock_backend must not run when events.ha is false")
+
+    monkeypatch.setattr("cicerone.serve.bootstrap_events.build_lock_backend", _boom)
+
+    class _Reader:
+        def refresh(self) -> None:
+            return None
+
+    runtime = start_events_runtime(
+        make_settings(
+            output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+            trigger_lock_backend="redis",
+            trigger_redis_url="redis://localhost:6379/0",
+            events=EventsSettings(enabled=True, kind="webhook", ha=False),
+        ),
+        feature_config=feature_config,
+        reader=_Reader(),  # type: ignore[arg-type]
+    )
+    assert runtime.apply_lock is None
+    assert runtime.worker is not None
+    assert runtime.worker._apply_lock is None
+    runtime.stop()
+
+
+def test_leader_gauge_cleared_after_release(tmp_path, feature_config: FeatureConfig):
+    _out, settings = _seed_out(tmp_path)
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="g1", user_id="u1", item_id="ig"))
+    worker = _worker(settings, source, feature_config, apply_lock=SharedLock())
+    assert worker.tick() == 1
+    assert registry_metric_value("cicerone_events_leader") == 0
+
+
+def test_idle_fanout_tick_does_not_acquire_apply_lock(tmp_path, feature_config: FeatureConfig):
+    _out, settings = _seed_out(tmp_path)
+    lock = SharedLock()
+    worker = _worker(
+        settings,
+        WebhookEventSource({}),
+        feature_config,
+        apply_lock=lock,
+        poll_without_lock=True,
+    )
+    assert worker.tick() == 0
+    assert lock.acquires == 0
+
+
+def test_exclusive_poll_acquires_lock_when_idle(tmp_path, feature_config: FeatureConfig):
+    _out, settings = _seed_out(tmp_path)
+    lock = SharedLock()
+
+    class _CountingSource(WebhookEventSource):
+        def __init__(self) -> None:
+            super().__init__({})
+            self.polls = 0
+
+        def poll(self, max_events: int = 100):
+            self.polls += 1
+            return super().poll(max_events)
+
+    source = _CountingSource()
+    worker = _worker(
+        settings,
+        source,
+        feature_config,
+        apply_lock=lock,
+        poll_without_lock=False,
+    )
+    assert worker.tick() == 0
+    assert lock.acquires == 1
+    assert source.polls == 1
+    assert lock.is_locked() is False
 
 
 def test_stop_drain_nacks_when_apply_lock_busy(tmp_path, feature_config: FeatureConfig):
@@ -397,3 +490,40 @@ def test_stop_drain_nacks_when_apply_lock_busy(tmp_path, feature_config: Feature
     worker._buffer.extend(polled)
     worker._drain_buffer_on_stop()
     assert source.health().lag >= 1
+
+
+def test_stop_drain_nacks_when_retrain_busy(tmp_path, feature_config: FeatureConfig):
+    _out, settings = _seed_out(tmp_path)
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="d2", user_id="u1"))
+    worker = _worker(settings, source, feature_config, busy_check=lambda: True)
+    polled = list(source.poll(10))
+    worker._buffer.extend(polled)
+    worker._drain_buffer_on_stop()
+    assert source.health().lag >= 1
+
+
+def test_stop_drain_nacks_on_fence_loss(tmp_path, feature_config: FeatureConfig):
+    out, settings = _seed_out(tmp_path, users=["u1"])
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="d3", user_id="u1", item_id="lost"))
+    worker = _worker(settings, source, feature_config, fence_check=lambda: False)
+    polled = list(source.poll(10))
+    worker._buffer.extend(polled)
+    worker._drain_buffer_on_stop()
+    recs = pd.read_parquet(out / "recommendations.parquet")
+    assert "lost" not in set(recs["item_id"].astype(str))
+    assert source.health().lag >= 1
+
+
+def test_stop_drain_applies_when_lease_acquired(tmp_path, feature_config: FeatureConfig):
+    out, settings = _seed_out(tmp_path)
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="d4", user_id="u1", item_id="idrain"))
+    worker = _worker(settings, source, feature_config, apply_lock=SharedLock())
+    polled = list(source.poll(10))
+    worker._buffer.extend(polled)
+    worker._drain_buffer_on_stop()
+    assert source.health().lag == 0
+    recs = pd.read_parquet(out / "recommendations.parquet")
+    assert "idrain" in set(recs["item_id"].astype(str))

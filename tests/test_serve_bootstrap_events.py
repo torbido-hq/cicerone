@@ -106,3 +106,27 @@ def test_combine_busy_checks():
     both = _combine_busy_checks(lambda: False, lambda: True)
     assert both is not None
     assert both() is True
+
+
+def test_throttled_busy_check():
+    from cicerone.serve.bootstrap_events import _throttled_busy_check
+
+    assert _throttled_busy_check(None, ttl_seconds=1.0) is None
+    calls = {"n": 0}
+
+    def probe() -> bool:
+        calls["n"] += 1
+        return False
+
+    live = _throttled_busy_check(probe, ttl_seconds=0)
+    assert live is not None
+    assert live() is False
+    assert live() is False
+    assert calls["n"] == 2
+
+    calls["n"] = 0
+    cached = _throttled_busy_check(probe, ttl_seconds=60.0)
+    assert cached is not None
+    assert cached() is False
+    assert cached() is False
+    assert calls["n"] == 1

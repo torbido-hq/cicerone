@@ -259,6 +259,10 @@ def test_events_metrics_defaults_and_flush_recording():
     labeled = generate_latest().decode()
     assert metric_value(labeled, "cicerone_events_lock_total", {"status": "acquired"}) == before_lock + 1
     assert metric_value(labeled, "cicerone_events_leader") == 0.0
+    metrics_mod.update_events_leader(True)
+    assert metric_value(generate_latest().decode(), "cicerone_events_leader") == 1.0
+    metrics_mod.update_events_leader(False)
+    assert metric_value(generate_latest().decode(), "cicerone_events_leader") == 0.0
     assert metric_value(labeled, "cicerone_events_apply_busy_total", {"reason": "retrain"}) >= 1
     assert metric_value(labeled, "cicerone_events_apply_busy_total", {"reason": "lock"}) >= 1
 

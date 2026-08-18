@@ -73,6 +73,7 @@ class IncrementalUpdater:
         feature_config: FeatureConfig | None,
         top_k: int,
         busy_check: Callable[[], bool] | None = None,
+        write_busy_check: Callable[[], bool] | None = None,
         on_success: Callable[[], None] | None = None,
         fence_check: Callable[[], bool] | None = None,
         user_cache_max_size: int = DEFAULT_USER_CACHE_MAX_SIZE,
@@ -84,6 +85,7 @@ class IncrementalUpdater:
         self._feature_config = feature_config
         self._top_k = top_k
         self._busy_check = busy_check
+        self._write_busy_check = busy_check if write_busy_check is None else write_busy_check
         self._on_success = on_success
         self._fence_check = fence_check
         self._last_success_at: datetime | None = None
@@ -148,7 +150,8 @@ class IncrementalUpdater:
         merged = pd.concat(frames, ignore_index=True) if frames else empty_recommendations_frame()
         if not merged.empty:
             merged = merged[list(RECOMMENDATION_COLUMNS)]
-        self._ensure_fence()
+        if not self._ensure_write_allowed():
+            return 0
         n_users = self._sink.replace_recommendations_for_users(merged, user_ids=sorted(affected_set))
 
         now = datetime.now(UTC)
@@ -177,6 +180,14 @@ class IncrementalUpdater:
             len(events),
         )
         return len(events)
+
+    def _ensure_write_allowed(self) -> bool:
+        if self._write_busy_check is not None and self._write_busy_check():
+            self.invalidate_cache()
+            logger.info("Skipping incremental write: full retrain in progress")
+            return False
+        self._ensure_fence()
+        return True
 
     def _ensure_fence(self) -> None:
         if self._fence_check is not None and not self._fence_check():

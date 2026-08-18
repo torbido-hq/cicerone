@@ -99,86 +99,94 @@ class EventWorker:
 
     def tick(self) -> int:
         """One poll/flush cycle; returns events successfully applied."""
-        got_lock = True
-        if self._apply_lock is not None:
-            got_lock = self._apply_lock.acquire()
-            if got_lock:
-                record_events_lock(status="acquired")
-            else:
-                record_events_lock(status="skip")
-                if not self._poll_without_lock:
-                    return 0
-        else:
-            update_events_leader(True)
+        if self._apply_lock is None:
+            self._poll_into_buffer()
+            ready = self._buffer.flush_if_ready()
+            return self._flush_ready(ready) if ready else 0
 
-        try:
-            return self._tick_with_lease(got_lock)
-        finally:
-            if self._apply_lock is not None and got_lock:
-                self._apply_lock.release()
+        if self._poll_without_lock:
+            self._poll_into_buffer()
+            ready = self._buffer.flush_if_ready()
+            if not ready:
+                return 0
+            return self._with_apply_lock(ready)
 
-    def _tick_with_lease(self, got_lock: bool) -> int:
-        if got_lock or self._poll_without_lock:
-            room = self._buffer.remaining_capacity
-            if room > 0:
-                # May receive more than ``room``; overflow is nacked for later redelivery.
-                polled = list(self._source.poll(self._poll_max_events))
-                if polled:
-                    result = self._buffer.extend(polled)
-                    # Duplicates are already represented in the buffer — ack so sources
-                    # do not leave them stuck in-flight / PEL.
-                    if result.duplicates:
-                        self._source.ack([event.event_id for event in result.duplicates])
-                    # Capacity rejects must be redelivered when there is room again.
-                    if result.overflow:
-                        self._source.nack(result.overflow)
-        ready = self._buffer.flush_if_ready()
-        if not ready:
+        if not self._acquire_apply_lock():
             return 0
-        if self._apply_lock is not None and not got_lock:
+        try:
+            self._poll_into_buffer()
+            ready = self._buffer.flush_if_ready()
+            return self._flush_ready(ready) if ready else 0
+        finally:
+            self._release_apply_lock()
+
+    def _poll_into_buffer(self) -> None:
+        room = self._buffer.remaining_capacity
+        if room <= 0:
+            return
+        # May receive more than ``room``; overflow is nacked for later redelivery.
+        polled = list(self._source.poll(self._poll_max_events))
+        if not polled:
+            return
+        result = self._buffer.extend(polled)
+        # Duplicates are already represented in the buffer — ack so sources
+        # do not leave them stuck in-flight / PEL.
+        if result.duplicates:
+            self._source.ack([event.event_id for event in result.duplicates])
+        # Capacity rejects must be redelivered when there is room again.
+        if result.overflow:
+            self._source.nack(result.overflow)
+
+    def _acquire_apply_lock(self) -> bool:
+        lock = self._apply_lock
+        if lock is None:
+            return True
+        if not lock.acquire():
+            record_events_lock(status="skip")
+            update_events_leader(False)
+            return False
+        record_events_lock(status="acquired")
+        update_events_leader(lock.owned())
+        return True
+
+    def _release_apply_lock(self) -> None:
+        lock = self._apply_lock
+        if lock is None:
+            return
+        lock.release()
+        update_events_leader(False)
+
+    def _with_apply_lock(self, ready: list[NormalizedEvent]) -> int:
+        if not self._acquire_apply_lock():
             record_events_flush(status="busy")
             record_events_apply_busy(reason="lock")
             self._source.nack(ready)
             return 0
-        return self._flush_ready(ready)
+        try:
+            return self._flush_ready(ready)
+        finally:
+            self._release_apply_lock()
 
     def _drain_buffer_on_stop(self) -> None:
         leftover = self._buffer.flush()
         if not leftover:
             return
         logger.info("Draining %d buffered event(s) on worker stop", len(leftover))
-        if self._apply_lock is not None and not self._apply_lock.acquire():
+        if not self._acquire_apply_lock():
             logger.info("Stop drain skipped: apply lease held by another replica")
             self._source.nack(leftover)
             return
         try:
-            applied = self._updater.apply(leftover)
-        except Exception:
-            logger.exception("Stop drain apply failed; nacking %d event(s)", len(leftover))
-            self._source.nack(leftover)
-            return
+            self._flush_ready(leftover)
         finally:
-            if self._apply_lock is not None:
-                self._apply_lock.release()
-        if applied == len(leftover):
-            try:
-                self._source.ack([event.event_id for event in leftover])
-            except Exception:
-                logger.exception("Stop drain ack failed; nacking %d event(s)", len(leftover))
-                self._source.nack(leftover)
-            return
-        logger.warning(
-            "Stop drain applied %d/%d event(s); nacking batch for redelivery",
-            applied,
-            len(leftover),
-        )
-        self._source.nack(leftover)
+            self._release_apply_lock()
 
     def _flush_ready(self, ready: list[NormalizedEvent]) -> int:
         try:
             applied = self._updater.apply(ready)
         except LockLostError:
             record_events_flush(status="error")
+            update_events_leader(False)
             logger.error(
                 "Apply lease lost before write; nacking %d event(s)",
                 len(ready),

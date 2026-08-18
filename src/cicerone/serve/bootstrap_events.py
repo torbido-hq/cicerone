@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
 from cicerone.config import Settings
+from cicerone.config.constants import (
+    DEFAULT_EVENTS_APPLY_LOCK_TTL_SECONDS,
+    DEFAULT_EVENTS_RETRAIN_PROBE_TTL_SECONDS,
+)
 from cicerone.events.buffer import MicroBatchBuffer
 from cicerone.events.ha import poll_without_apply_lock
 from cicerone.events.registry import build_event_source
@@ -18,7 +23,6 @@ from cicerone.feature_config import FeatureConfig
 from cicerone.io.base import RecommendationReader
 from cicerone.io.factory import build_output_sink
 from cicerone.locks import LockBackend, build_lock_backend, events_apply_lock_key
-from cicerone.serve.metrics import update_events_leader
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +53,30 @@ def _combine_busy_checks(*checks: Callable[[], bool] | None) -> Callable[[], boo
     return lambda: any(check() for check in active)
 
 
+def _throttled_busy_check(
+    check: Callable[[], bool] | None,
+    *,
+    ttl_seconds: float,
+) -> Callable[[], bool] | None:
+    if check is None:
+        return None
+    if ttl_seconds <= 0:
+        return check
+    cached_until = 0.0
+    cached_value = False
+
+    def _wrapped() -> bool:
+        nonlocal cached_until, cached_value
+        now = time.monotonic()
+        if now < cached_until:
+            return cached_value
+        cached_value = check()
+        cached_until = now + ttl_seconds
+        return cached_value
+
+    return _wrapped
+
+
 def start_events_runtime(
     settings: Settings,
     *,
@@ -68,10 +96,14 @@ def start_events_runtime(
 
     apply_lock: LockBackend | None = None
     retrain_probe: LockBackend | None = None
-    if settings.trigger.lock_backend != "in_process":
+    if settings.events.ha:
         apply_lock = build_lock_backend(
             settings,
             lock_key=events_apply_lock_key(settings.trigger.lock_key),
+            ttl_seconds=min(
+                settings.trigger.lock_ttl_seconds,
+                DEFAULT_EVENTS_APPLY_LOCK_TTL_SECONDS,
+            ),
         )
         retrain_probe = build_lock_backend(settings)
         logger.info(
@@ -79,8 +111,6 @@ def start_events_runtime(
             settings.trigger.lock_backend,
             events_apply_lock_key(settings.trigger.lock_key),
         )
-    else:
-        update_events_leader(True)
 
     combined_busy = _combine_busy_checks(
         busy_check,
@@ -93,7 +123,11 @@ def start_events_runtime(
         output_settings=settings.output,
         feature_config=feature_config,
         top_k=settings.top_k,
-        busy_check=combined_busy,
+        busy_check=_throttled_busy_check(
+            combined_busy,
+            ttl_seconds=DEFAULT_EVENTS_RETRAIN_PROBE_TTL_SECONDS,
+        ),
+        write_busy_check=combined_busy,
         fence_check=(apply_lock.owned if apply_lock is not None else None),
         on_success=reader.refresh,
     )

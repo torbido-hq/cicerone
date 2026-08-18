@@ -14,6 +14,7 @@ from cicerone.config import (
     make_settings,
     resolve_postgres_lock_url,
 )
+from cicerone.config.constants import DEFAULT_EVENTS_APPLY_LOCK_TTL_SECONDS
 from cicerone.locks import (
     REDIS_LOCK_TTL_MS,
     PostgresAdvisoryLock,
@@ -539,7 +540,11 @@ def test_redis_owned_and_is_locked(monkeypatch):
     assert lock.acquire() is True
     assert lock.owned() is True
     assert lock.is_locked() is True
+    client.get.return_value = token.encode("utf-8")
+    assert lock.owned() is True
     client.get.return_value = b"stolen"
+    assert lock.owned() is False
+    client.get.side_effect = RuntimeError("redis down")
     assert lock.owned() is False
     lock.release()
 
@@ -557,6 +562,29 @@ def test_events_apply_lock_key_and_build_override(monkeypatch):
     assert isinstance(lock, RedisLock)
     assert lock.acquire() is True
     client.set.assert_called_with("job-a:events:apply", lock._token, nx=True, px=REDIS_LOCK_TTL_MS)
+    lock.release()
+
+
+def test_build_lock_backend_ttl_seconds_override(monkeypatch):
+    client = _mock_redis_module(monkeypatch)
+    client.set.return_value = True
+    settings = make_settings(
+        trigger_lock_backend="redis",
+        trigger_redis_url="redis://localhost:6379/0",
+        trigger_lock_key="job-a",
+    )
+    lock = build_lock_backend(
+        settings,
+        lock_key=events_apply_lock_key("job-a"),
+        ttl_seconds=DEFAULT_EVENTS_APPLY_LOCK_TTL_SECONDS,
+    )
+    assert lock.acquire() is True
+    client.set.assert_called_with(
+        "job-a:events:apply",
+        lock._token,
+        nx=True,
+        px=int(DEFAULT_EVENTS_APPLY_LOCK_TTL_SECONDS * 1000),
+    )
     lock.release()
 
 
@@ -580,6 +608,10 @@ def test_postgres_owned_and_is_locked(monkeypatch):
     assert lock.acquire() is True
     assert lock.owned() is True
     assert lock.is_locked() is True
+    sqls = [getattr(call.args[0], "text", str(call.args[0])) for call in held_conn.execute.call_args_list]
+    assert any("pg_locks" in sql and "pg_backend_pid()" in sql for sql in sqls)
+    assert any("pg_try_advisory_lock" in sql for sql in sqls)
     held_conn.execute.side_effect = RuntimeError("session dead")
     assert lock.owned() is False
+    assert lock.is_locked() is False
     lock.release()

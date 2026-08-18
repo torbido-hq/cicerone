@@ -37,6 +37,10 @@ MODES: tuple[Mode, ...] = ("batch", "serve")
 LOCK_BACKENDS: tuple[str, ...] = ("in_process", "postgres", "redis")
 DEFAULT_LOCK_KEY = "cicerone:scheduler:run_guard"
 DEFAULT_LOCK_TTL_SECONDS = 24 * 60 * 60
+# Apply flushes are short; a 24h retrain TTL would block events for a day after a crash.
+DEFAULT_EVENTS_APPLY_LOCK_TTL_SECONDS = 60.0
+# Cache the early retrain probe; the pre-write check is always live.
+DEFAULT_EVENTS_RETRAIN_PROBE_TTL_SECONDS = 1.0
 DEFAULT_EVENTS_BATCH_SIZE = 100
 DEFAULT_EVENTS_BATCH_WINDOW_SECONDS = 60.0
 DEFAULT_EVENTS_POLL_INTERVAL_SECONDS = 1.0

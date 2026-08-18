@@ -29,6 +29,8 @@ _MODES = frozenset({"sqs", "list"})
 _DEFAULT_LIST_PAGE_SIZE = 100
 _DEFAULT_SQS_LAG_CACHE_TTL_SECONDS = 5.0
 _DEFAULT_SQS_CLIENT_TIMEOUT_SECONDS = 2.0
+# Cover lock-busy nack retries so the message is not stolen mid-lease wait.
+_SQS_NACK_VISIBILITY_TIMEOUT_SECONDS = 60
 
 
 def validate_s3_event_options(options: dict[str, Any]) -> str:
@@ -253,9 +255,25 @@ class S3EventSource(EventSource):
         return out
 
     def nack(self, events: Sequence[NormalizedEvent]) -> None:
+        receipts: list[str] = []
         with self._lock:
-            for event in events:
-                self._drop_batch_for_event_unlocked(event.event_id)
+            pending_ids = {item.event_id for item in self._pending}
+            seen_batches: set[int] = set()
+            for event in reversed(list(events)):
+                eid = event.event_id
+                self._in_flight.pop(eid, None)
+                batch = self._event_batch.get(eid)
+                if batch is None:
+                    continue
+                if eid not in pending_ids:
+                    self._pending.appendleft(event)
+                    pending_ids.add(eid)
+                if batch.receipt_handle and id(batch) not in seen_batches:
+                    seen_batches.add(id(batch))
+                    receipts.append(batch.receipt_handle)
+            sqs = self._sqs
+            queue_url = self._queue_url
+        self._extend_sqs_visibility(receipts, sqs=sqs, queue_url=queue_url)
 
     def ack(self, event_ids: Sequence[str]) -> None:
         completed: list[_Batch] = []
@@ -446,7 +464,9 @@ class S3EventSource(EventSource):
                     continue
                 novel = [event for event in batch_events if event.event_id not in held_ids]
                 if not novel:
-                    sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt)
+                    # Already holding these events (local nack retry). Keep the
+                    # latest receipt so ack can still delete after visibility refresh.
+                    self._adopt_sqs_receipt(receipt, {event.event_id for event in batch_events})
                     made_progress = True
                     continue
                 self._register_batch(novel, receipt_handle=receipt)
@@ -528,22 +548,32 @@ class S3EventSource(EventSource):
                 except Exception:
                     logger.exception("Failed to delete SQS message after ack")
 
-    def _drop_batch_for_event_unlocked(self, event_id: str) -> None:
-        eid = str(event_id)
-        self._in_flight.pop(eid, None)
-        batch = self._event_batch.pop(eid, None)
-        if batch is None:
+    def _extend_sqs_visibility(
+        self,
+        receipts: Sequence[str],
+        *,
+        sqs: Any,
+        queue_url: str | None,
+    ) -> None:
+        if not receipts or sqs is None or queue_url is None:
             return
-        drop_ids = set(batch.event_ids)
-        for key, candidate in list(self._batches.items()):
-            if candidate is batch:
-                self._batches.pop(key, None)
-                break
-        for other_id in drop_ids:
-            self._in_flight.pop(other_id, None)
-            self._event_batch.pop(other_id, None)
-        if drop_ids:
-            self._pending = deque(event for event in self._pending if event.event_id not in drop_ids)
+        for receipt in receipts:
+            try:
+                sqs.change_message_visibility(
+                    QueueUrl=queue_url,
+                    ReceiptHandle=receipt,
+                    VisibilityTimeout=_SQS_NACK_VISIBILITY_TIMEOUT_SECONDS,
+                )
+            except Exception:
+                logger.exception("Failed to extend SQS visibility after nack")
+
+    def _adopt_sqs_receipt(self, receipt: str, event_ids: set[str]) -> None:
+        with self._lock:
+            for eid in event_ids:
+                batch = self._event_batch.get(eid)
+                if batch is not None:
+                    batch.receipt_handle = receipt
+                    return
 
     def _load_marker_unlocked(self) -> None:
         if self._marker_path is None or not self._marker_path.is_file():

@@ -46,6 +46,21 @@ end
 """
 
 
+# Two-key advisory: classid/objid = key1/key2, objsubid = 2 (not the 64-bit form).
+_PG_ADVISORY_HELD_ANY = (
+    "SELECT EXISTS ("
+    "SELECT 1 FROM pg_locks "
+    "WHERE locktype = 'advisory' AND classid = :k1 AND objid = :k2 "
+    "AND objsubid = 2 AND granted)"
+)
+_PG_ADVISORY_HELD_SELF = (
+    "SELECT EXISTS ("
+    "SELECT 1 FROM pg_locks "
+    "WHERE locktype = 'advisory' AND classid = :k1 AND objid = :k2 "
+    "AND objsubid = 2 AND granted AND pid = pg_backend_pid())"
+)
+
+
 class LockLostError(RuntimeError):
     """Lease expired or was stolen before a fenced write."""
 
@@ -118,27 +133,36 @@ class PostgresAdvisoryLock:
         with self._mutex:
             if self._conn is None:
                 return False
+            conn = self._conn
             try:
-                self._conn.execute(text("SELECT 1"))
+                return bool(
+                    conn.execute(
+                        text(_PG_ADVISORY_HELD_SELF),
+                        {"k1": self._key1, "k2": self._key2},
+                    ).scalar()
+                )
             except Exception:
                 return False
-            return True
 
     def is_locked(self) -> bool:
         from sqlalchemy import text
 
         with self._mutex:
-            if self._conn is not None:
-                return True
-        with self._engine.connect() as conn:
+            conn = self._conn
+            if conn is not None:
+                try:
+                    return bool(
+                        conn.execute(
+                            text(_PG_ADVISORY_HELD_ANY),
+                            {"k1": self._key1, "k2": self._key2},
+                        ).scalar()
+                    )
+                except Exception:
+                    return False
+        with self._engine.connect() as probe:
             return bool(
-                conn.execute(
-                    text(
-                        "SELECT EXISTS ("
-                        "SELECT 1 FROM pg_locks "
-                        "WHERE locktype = 'advisory' AND classid = :k1 "
-                        "AND objid = :k2 AND granted)"
-                    ),
+                probe.execute(
+                    text(_PG_ADVISORY_HELD_ANY),
                     {"k1": self._key1, "k2": self._key2},
                 ).scalar()
             )
@@ -262,9 +286,12 @@ class RedisLock:
             if not self._held:
                 return False
             token = self._token
-        value = self._client.get(self._key)
+        try:
+            value = self._client.get(self._key)
+        except Exception:
+            return False
         if isinstance(value, bytes):
-            value = value.decode()
+            value = value.decode("utf-8")
         return value == token
 
     def is_locked(self) -> bool:
@@ -284,12 +311,18 @@ class RedisLock:
             logger.exception("Failed to release Redis lock")
 
 
-def build_lock_backend(settings: Settings, *, lock_key: str | None = None) -> LockBackend:
+def build_lock_backend(
+    settings: Settings,
+    *,
+    lock_key: str | None = None,
+    ttl_seconds: float | None = None,
+) -> LockBackend:
     """Build a distributed lock backend (``postgres`` / ``redis`` only).
 
     ``lock_backend`` and required URLs must already be validated at config load.
     Callers must not invoke this for ``in_process``.
     ``lock_key`` overrides ``settings.trigger.lock_key`` (events apply lease).
+    ``ttl_seconds`` overrides Redis TTL (Postgres advisory locks have none).
     """
     backend = settings.trigger.lock_backend
     key = settings.trigger.lock_key if lock_key is None else lock_key
@@ -300,9 +333,10 @@ def build_lock_backend(settings: Settings, *, lock_key: str | None = None) -> Lo
     if backend == "redis":
         redis_url = settings.trigger.redis_url
         assert redis_url is not None, "redis_url should be validated at config load"
+        ttl = settings.trigger.lock_ttl_seconds if ttl_seconds is None else ttl_seconds
         return RedisLock(
             redis_url,
             key=key,
-            ttl_ms=int(settings.trigger.lock_ttl_seconds * 1000),
+            ttl_ms=int(ttl * 1000),
         )
     raise AssertionError(f"build_lock_backend is only for distributed backends, got {backend!r}")
