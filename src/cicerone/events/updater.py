@@ -28,6 +28,7 @@ from cicerone.io.recommendation_reader import (
     SOURCE_COLUMN,
     USER_COLUMN,
 )
+from cicerone.locks import LockLostError
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +73,9 @@ class IncrementalUpdater:
         feature_config: FeatureConfig | None,
         top_k: int,
         busy_check: Callable[[], bool] | None = None,
+        write_busy_check: Callable[[], bool] | None = None,
         on_success: Callable[[], None] | None = None,
+        fence_check: Callable[[], bool] | None = None,
         user_cache_max_size: int = DEFAULT_USER_CACHE_MAX_SIZE,
     ):
         if user_cache_max_size < 1:
@@ -82,7 +85,9 @@ class IncrementalUpdater:
         self._feature_config = feature_config
         self._top_k = top_k
         self._busy_check = busy_check
+        self._write_busy_check = busy_check if write_busy_check is None else write_busy_check
         self._on_success = on_success
+        self._fence_check = fence_check
         self._last_success_at: datetime | None = None
         self._events_applied = 0
         self._user_cache_max_size = user_cache_max_size
@@ -104,10 +109,13 @@ class IncrementalUpdater:
     def invalidate_cache(self) -> None:
         self._cached_by_user.clear()
 
+    def retrain_busy(self) -> bool:
+        return self._busy_check is not None and self._busy_check()
+
     def apply(self, events: Sequence[NormalizedEvent]) -> int:
         if not events:
             return 0
-        if self._busy_check is not None and self._busy_check():
+        if self.retrain_busy():
             # Retrain may rewrite output; drop cache so the next apply reloads.
             self.invalidate_cache()
             logger.info("Skipping incremental update: full retrain in progress")
@@ -142,8 +150,9 @@ class IncrementalUpdater:
         merged = pd.concat(frames, ignore_index=True) if frames else empty_recommendations_frame()
         if not merged.empty:
             merged = merged[list(RECOMMENDATION_COLUMNS)]
+        if not self._ensure_write_allowed():
+            return 0
         n_users = self._sink.replace_recommendations_for_users(merged, user_ids=sorted(affected_set))
-        self._store_users_in_cache(affected_set, merged)
 
         now = datetime.now(UTC)
         manifest = {
@@ -158,7 +167,9 @@ class IncrementalUpdater:
             "top_k": self._top_k,
             "partial_outputs": True,
         }
+        self._ensure_fence()
         self._sink.write_manifest(manifest)
+        self._store_users_in_cache(affected_set, merged)
         self._last_success_at = now
         self._events_applied += len(events)
         if self._on_success is not None:
@@ -169,6 +180,18 @@ class IncrementalUpdater:
             len(events),
         )
         return len(events)
+
+    def _ensure_write_allowed(self) -> bool:
+        if self._write_busy_check is not None and self._write_busy_check():
+            self.invalidate_cache()
+            logger.info("Skipping incremental write: full retrain in progress")
+            return False
+        self._ensure_fence()
+        return True
+
+    def _ensure_fence(self) -> None:
+        if self._fence_check is not None and not self._fence_check():
+            raise LockLostError("events apply lock lost before write")
 
     def _cache_put(self, user_id: str, frame: pd.DataFrame, *, protect: Collection[str]) -> None:
         self._cached_by_user[user_id] = frame

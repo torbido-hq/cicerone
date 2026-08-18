@@ -46,10 +46,42 @@ end
 """
 
 
+# Two-key advisory: classid/objid = key1/key2, objsubid = 2 (not the 64-bit form).
+_PG_ADVISORY_HELD_ANY = (
+    "SELECT EXISTS ("
+    "SELECT 1 FROM pg_locks "
+    "WHERE locktype = 'advisory' AND classid = :k1 AND objid = :k2 "
+    "AND objsubid = 2 AND granted)"
+)
+_PG_ADVISORY_HELD_SELF = (
+    "SELECT EXISTS ("
+    "SELECT 1 FROM pg_locks "
+    "WHERE locktype = 'advisory' AND classid = :k1 AND objid = :k2 "
+    "AND objsubid = 2 AND granted AND pid = pg_backend_pid())"
+)
+
+
+class LockLostError(RuntimeError):
+    """Lease expired or was stolen before a fenced write."""
+
+
 class LockBackend(Protocol):
     def acquire(self) -> bool: ...
 
     def release(self) -> None: ...
+
+    def owned(self) -> bool:
+        """True when this instance still holds the lease (fencing)."""
+        ...
+
+    def is_locked(self) -> bool:
+        """True when any process holds this key (probe; does not acquire)."""
+        ...
+
+
+def events_apply_lock_key(run_guard_key: str) -> str:
+    """Lease key for incremental apply; distinct from the full-retrain lock."""
+    return f"{run_guard_key}:events:apply"
 
 
 def advisory_keys_from_lock_key(lock_key: str) -> tuple[int, int]:
@@ -94,6 +126,58 @@ class PostgresAdvisoryLock:
                 return False
             self._conn = conn
             return True
+
+    def owned(self) -> bool:
+        from sqlalchemy import text
+
+        with self._mutex:
+            if self._conn is None:
+                return False
+            conn = self._conn
+            try:
+                return bool(
+                    conn.execute(
+                        text(_PG_ADVISORY_HELD_SELF),
+                        {"k1": self._key1, "k2": self._key2},
+                    ).scalar()
+                )
+            except Exception:
+                logger.warning(
+                    "Postgres advisory lock owned() probe failed; treating as lost",
+                    exc_info=True,
+                )
+                return False
+
+    def is_locked(self) -> bool:
+        from sqlalchemy import text
+
+        with self._mutex:
+            conn = self._conn
+            if conn is not None:
+                try:
+                    return bool(
+                        conn.execute(
+                            text(_PG_ADVISORY_HELD_ANY),
+                            {"k1": self._key1, "k2": self._key2},
+                        ).scalar()
+                    )
+                except Exception:
+                    logger.warning(
+                        "Postgres advisory lock is_locked() on held connection failed; "
+                        "retrying with a new session",
+                        exc_info=True,
+                    )
+        try:
+            with self._engine.connect() as probe:
+                return bool(
+                    probe.execute(
+                        text(_PG_ADVISORY_HELD_ANY),
+                        {"k1": self._key1, "k2": self._key2},
+                    ).scalar()
+                )
+        except Exception:
+            logger.exception("Postgres advisory lock is_locked() probe failed")
+            raise
 
     def release(self) -> None:
         from sqlalchemy import text
@@ -209,6 +293,23 @@ class RedisLock:
         self._start_refresh()
         return True
 
+    def owned(self) -> bool:
+        with self._mutex:
+            if not self._held:
+                return False
+            token = self._token
+        try:
+            value = self._client.get(self._key)
+        except Exception:
+            logger.warning("Redis lock owned() probe failed; treating as lost", exc_info=True)
+            return False
+        if isinstance(value, bytes):
+            value = value.decode("utf-8")
+        return value == token
+
+    def is_locked(self) -> bool:
+        return bool(self._client.exists(self._key))
+
     def release(self) -> None:
         self._stop_refresh_thread()
         with self._mutex:
@@ -223,24 +324,32 @@ class RedisLock:
             logger.exception("Failed to release Redis lock")
 
 
-def build_lock_backend(settings: Settings) -> LockBackend:
+def build_lock_backend(
+    settings: Settings,
+    *,
+    lock_key: str | None = None,
+    ttl_seconds: float | None = None,
+) -> LockBackend:
     """Build a distributed lock backend (``postgres`` / ``redis`` only).
 
     ``lock_backend`` and required URLs must already be validated at config load.
     Callers must not invoke this for ``in_process``.
+    ``lock_key`` overrides ``settings.trigger.lock_key`` (events apply lease).
+    ``ttl_seconds`` overrides Redis TTL (Postgres advisory locks have none).
     """
     backend = settings.trigger.lock_backend
-    lock_key = settings.trigger.lock_key
+    key = settings.trigger.lock_key if lock_key is None else lock_key
     if backend == "postgres":
         url = resolve_postgres_lock_url(settings)
         assert url is not None, "postgres lock URL should be validated at config load"
-        return PostgresAdvisoryLock(url, lock_key=lock_key)
+        return PostgresAdvisoryLock(url, lock_key=key)
     if backend == "redis":
         redis_url = settings.trigger.redis_url
         assert redis_url is not None, "redis_url should be validated at config load"
+        ttl = settings.trigger.lock_ttl_seconds if ttl_seconds is None else ttl_seconds
         return RedisLock(
             redis_url,
-            key=lock_key,
-            ttl_ms=int(settings.trigger.lock_ttl_seconds * 1000),
+            key=key,
+            ttl_ms=int(ttl * 1000),
         )
     raise AssertionError(f"build_lock_backend is only for distributed backends, got {backend!r}")

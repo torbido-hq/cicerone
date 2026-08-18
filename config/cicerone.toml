@@ -216,8 +216,11 @@ prefix = "recommendations/latest"
 # Optional: ingest interaction events on the serve process for micro-batch
 # incremental updates between full retrains (write-through to [output]).
 # See docs/incremental-events.md. Webhook kind adds POST /events.
+# Default is a single writer. Multi-replica apply: ha = true plus
+# job.trigger.lock_backend = postgres|redis (leader-only writes).
 # [events]
 # enabled = true
+# ha = false
 # kind = "webhook"
 # [events.options]
 # # auth_token = "${EVENTS_AUTH_TOKEN}"  # optional; defaults to serve.auth_token

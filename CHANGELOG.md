@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Incremental events horizontal HA: leader-only apply lease
+  (`{lock_key}:events:apply`) when `events.ha = true` with
+  `job.trigger.lock_backend` postgres/redis. Fan-out sources acquire the
+  lease only when a micro-batch is ready. Metrics:
+  `cicerone_events_lock_total`, `cicerone_events_leader`,
+  `cicerone_events_apply_busy_total`.
+
 - Redis Streams EventSource (`events.kind = "redis_streams"`): consumer-group
   poll via `XREADGROUP` / `XACK`, idle PEL recovery with `XAUTOCLAIM`, and
   stream entry id fallback when `event_id` is omitted. Requires
@@ -49,6 +56,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Postgres `is_locked()` logs and re-raises probe failures instead of
+  treating a dead database as “lock free”; `owned()` logs before fail-closed.
+- S3 EventSource `nack` returns events to the local pending queue (and
+  extends SQS visibility) instead of dropping the batch. SQS HA lock-busy
+  nacks can retry immediately; list-mode array payloads no longer lose
+  sibling events when one id is nacked.
 - Event worker ack/nack bookkeeping: buffer duplicates are acked (not left
   in-flight), capacity overflow is nacked for redelivery, and stop drains
   the buffer once before closing the source.

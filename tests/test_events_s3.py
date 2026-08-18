@@ -10,6 +10,7 @@ from support.events import event_payload
 from cicerone.config import ConfigError
 from cicerone.events.registry import build_event_source, registered_event_source_kinds
 from cicerone.events.s3 import (
+    _SQS_NACK_VISIBILITY_TIMEOUT_SECONDS,
     S3EventSource,
     _events_from_body,
     _s3_records_from_sqs_body,
@@ -142,6 +143,107 @@ def test_s3_sqs_poll_ack_deletes_message():
         "Attributes"
     ]
     assert int(attrs["ApproximateNumberOfMessages"]) == 0
+
+
+@mock_aws
+def test_s3_sqs_nack_requeues_and_ack_still_deletes():
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-nack")["QueueUrl"]
+    _put_event(s3, "events/e1.json", event_payload(event_id="sqs-nack", item_id="i9"))
+    sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification("events/e1.json"))
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+    first = list(source.poll(10))
+    assert [event.event_id for event in first] == ["sqs-nack"]
+    source.nack(first)
+    source.nack(first)
+    again = list(source.poll(10))
+    assert [event.event_id for event in again] == ["sqs-nack"]
+    source.ack([again[0].event_id])
+    assert list(source.poll(10)) == []
+    attrs = sqs.get_queue_attributes(QueueUrl=queue_url, AttributeNames=["ApproximateNumberOfMessages"])[
+        "Attributes"
+    ]
+    assert int(attrs["ApproximateNumberOfMessages"]) == 0
+
+
+@mock_aws
+def test_s3_sqs_nack_extends_visibility(monkeypatch):
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-vis")["QueueUrl"]
+    _put_event(s3, "events/e1.json", event_payload(event_id="sqs-vis"))
+    sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification("events/e1.json"))
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+    assert source._sqs is not None
+    calls = {"n": 0}
+    real = source._sqs.change_message_visibility
+
+    def counting(**kwargs):  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        assert kwargs["VisibilityTimeout"] == _SQS_NACK_VISIBILITY_TIMEOUT_SECONDS
+        return real(**kwargs)
+
+    monkeypatch.setattr(source._sqs, "change_message_visibility", counting)
+    first = list(source.poll(10))
+    source.nack(first)
+    assert calls["n"] == 1
+    source._adopt_sqs_receipt("adopted-receipt", {first[0].event_id})
+    assert source._event_batch[first[0].event_id].receipt_handle == "adopted-receipt"
+
+
+@mock_aws
+def test_s3_sqs_redelivery_adopts_receipt_instead_of_deleting():
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-adopt")["QueueUrl"]
+    _put_event(s3, "events/e1.json", event_payload(event_id="sqs-adopt"))
+    sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification("events/e1.json"))
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+    first = list(source.poll(10))
+    old_receipt = source._event_batch[first[0].event_id].receipt_handle
+    assert old_receipt is not None
+    sqs.change_message_visibility(QueueUrl=queue_url, ReceiptHandle=old_receipt, VisibilityTimeout=0)
+    source._fetch_sqs(10)
+    assert list(source._pending) == []
+    new_receipt = source._event_batch[first[0].event_id].receipt_handle
+    assert new_receipt is not None
+    assert new_receipt != old_receipt
+    source.ack([first[0].event_id])
+    assert list(source.poll(10)) == []
+
+
+@mock_aws
+def test_s3_list_partial_nack_keeps_sibling_events():
+    client = boto3.client("s3", region_name="us-east-1")
+    client.create_bucket(Bucket="events-bucket")
+    client.put_object(
+        Bucket="events-bucket",
+        Key="batch.json",
+        Body=json.dumps(
+            [
+                event_payload(event_id="keep", item_id="i1"),
+                event_payload(event_id="retry", item_id="i2"),
+            ]
+        ),
+    )
+    source = S3EventSource(_creds(mode="list"))
+    source.connect()
+    events = list(source.poll(10))
+    assert {event.event_id for event in events} == {"keep", "retry"}
+    retry = [event for event in events if event.event_id == "retry"]
+    source.nack(retry)
+    source.ack(["keep"])
+    again = list(source.poll(10))
+    assert [event.event_id for event in again] == ["retry"]
+    source.ack(["retry"])
+    assert list(source.poll(10)) == []
 
 
 @mock_aws

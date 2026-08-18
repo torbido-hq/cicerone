@@ -9,9 +9,13 @@ from cicerone.config.constants import DEFAULT_EVENTS_POLL_INTERVAL_SECONDS
 from cicerone.events.base import EventSource, NormalizedEvent
 from cicerone.events.buffer import MicroBatchBuffer
 from cicerone.events.updater import IncrementalUpdater
+from cicerone.locks import LockBackend, LockLostError
 from cicerone.serve.metrics import (
+    record_events_apply_busy,
     record_events_flush,
+    record_events_lock,
     record_events_tick_error,
+    update_events_leader,
     update_events_source_health,
 )
 
@@ -27,12 +31,16 @@ class EventWorker:
         *,
         poll_interval_seconds: float = DEFAULT_EVENTS_POLL_INTERVAL_SECONDS,
         poll_max_events: int = 100,
+        apply_lock: LockBackend | None = None,
+        poll_without_lock: bool = False,
     ):
         self._source = source
         self._buffer = buffer
         self._updater = updater
         self._poll_interval_seconds = poll_interval_seconds
         self._poll_max_events = poll_max_events
+        self._apply_lock = apply_lock
+        self._poll_without_lock = poll_without_lock
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -91,52 +99,100 @@ class EventWorker:
 
     def tick(self) -> int:
         """One poll/flush cycle; returns events successfully applied."""
-        room = self._buffer.remaining_capacity
-        if room > 0:
-            # May receive more than ``room``; overflow is nacked for later redelivery.
-            polled = list(self._source.poll(self._poll_max_events))
-            if polled:
-                result = self._buffer.extend(polled)
-                # Duplicates are already represented in the buffer — ack so sources
-                # do not leave them stuck in-flight / PEL.
-                if result.duplicates:
-                    self._source.ack([event.event_id for event in result.duplicates])
-                # Capacity rejects must be redelivered when there is room again.
-                if result.overflow:
-                    self._source.nack(result.overflow)
-        ready = self._buffer.flush_if_ready()
-        if not ready:
+        if self._apply_lock is None:
+            self._poll_into_buffer()
+            ready = self._buffer.flush_if_ready()
+            return self._flush_ready(ready) if ready else 0
+
+        if self._poll_without_lock:
+            self._poll_into_buffer()
+            ready = self._buffer.flush_if_ready()
+            if not ready:
+                return 0
+            return self._with_apply_lock(ready)
+
+        if not self._acquire_apply_lock():
             return 0
-        return self._flush_ready(ready)
+        try:
+            self._poll_into_buffer()
+            ready = self._buffer.flush_if_ready()
+            return self._flush_ready(ready) if ready else 0
+        finally:
+            self._release_apply_lock()
+
+    def _poll_into_buffer(self) -> None:
+        room = self._buffer.remaining_capacity
+        if room <= 0:
+            return
+        # May receive more than ``room``; overflow is nacked for later redelivery.
+        polled = list(self._source.poll(self._poll_max_events))
+        if not polled:
+            return
+        result = self._buffer.extend(polled)
+        # Duplicates are already represented in the buffer — ack so sources
+        # do not leave them stuck in-flight / PEL.
+        if result.duplicates:
+            self._source.ack([event.event_id for event in result.duplicates])
+        # Capacity rejects must be redelivered when there is room again.
+        if result.overflow:
+            self._source.nack(result.overflow)
+
+    def _acquire_apply_lock(self) -> bool:
+        lock = self._apply_lock
+        if lock is None:
+            return True
+        if not lock.acquire():
+            record_events_lock(status="skip")
+            update_events_leader(False)
+            return False
+        record_events_lock(status="acquired")
+        update_events_leader(lock.owned())
+        return True
+
+    def _release_apply_lock(self) -> None:
+        lock = self._apply_lock
+        if lock is None:
+            return
+        lock.release()
+        update_events_leader(False)
+
+    def _with_apply_lock(self, ready: list[NormalizedEvent]) -> int:
+        if not self._acquire_apply_lock():
+            record_events_flush(status="busy")
+            record_events_apply_busy(reason="lock")
+            self._source.nack(ready)
+            return 0
+        try:
+            return self._flush_ready(ready)
+        finally:
+            self._release_apply_lock()
 
     def _drain_buffer_on_stop(self) -> None:
         leftover = self._buffer.flush()
         if not leftover:
             return
         logger.info("Draining %d buffered event(s) on worker stop", len(leftover))
-        try:
-            applied = self._updater.apply(leftover)
-        except Exception:
-            logger.exception("Stop drain apply failed; nacking %d event(s)", len(leftover))
+        if not self._acquire_apply_lock():
+            logger.info("Stop drain skipped: apply lease held by another replica")
             self._source.nack(leftover)
             return
-        if applied == len(leftover):
-            try:
-                self._source.ack([event.event_id for event in leftover])
-            except Exception:
-                logger.exception("Stop drain ack failed; nacking %d event(s)", len(leftover))
-                self._source.nack(leftover)
-            return
-        logger.warning(
-            "Stop drain applied %d/%d event(s); nacking batch for redelivery",
-            applied,
-            len(leftover),
-        )
-        self._source.nack(leftover)
+        try:
+            self._flush_ready(leftover)
+        finally:
+            self._release_apply_lock()
 
     def _flush_ready(self, ready: list[NormalizedEvent]) -> int:
         try:
             applied = self._updater.apply(ready)
+        except LockLostError:
+            record_events_flush(status="error")
+            update_events_leader(False)
+            logger.error(
+                "Apply lease lost before write; nacking %d event(s)",
+                len(ready),
+            )
+            self._source.nack(ready)
+            return 0
         except Exception:
             record_events_flush(status="error")
             logger.exception("Incremental apply failed; returning %d event(s) to source", len(ready))
@@ -144,6 +200,7 @@ class EventWorker:
             return 0
         if applied == 0:
             record_events_flush(status="busy")
+            record_events_apply_busy(reason="retrain")
             self._source.nack(ready)
             return 0
         if applied != len(ready):

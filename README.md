@@ -194,8 +194,10 @@ process:
   and need HA (`pip install -r requirements-redis.txt`). Optional `lock_key`
   (and Redis-only `lock_ttl_seconds`) that namespace the lock when several
   schedulers share one Postgres/Redis; Redis refreshes TTL while the lock is
-  held so long jobs stay exclusive. This is a lock, not a job queue;
-  `serve` mode is already safe to scale horizontally as-is.
+  held so long jobs stay exclusive. This is a lock, not a job queue.
+  Serve replicas scale on the **read** path. Incremental `[events]` writes are
+  single-writer by default; set `events.ha = true` with the same
+  `lock_backend` for leader-only apply (see `docs/incremental-events.md`).
 - The run manifest records `triggered_by` (`"cron"`, `"webhook"`, or
   `"s3-poll"`) and `lock_backend` alongside its existing counts/timestamp
   fields.
@@ -562,8 +564,9 @@ code is structured. See [CHANGELOG.md](CHANGELOG.md) for release notes.
   the dashboard — see their respective sections above.
 - The scheduler defaults to a single-instance in-process debounce lock.
   Multi-replica deployments must opt into `[job.trigger].lock_backend`
-  (`postgres` or `redis`); see Event-driven retrain trigger above. `serve`
-  remains independently scalable.
+  (`postgres` or `redis`); see Event-driven retrain trigger above. Serve
+  remains independently scalable on the read path; incremental events HA is
+  opt-in (`events.ha = true` plus that lock backend).
 - Credentials only ever live in environment variables (`.env`, not
   committed), referenced from `config/cicerone.toml` via `${...}`
   placeholders — never written into the config file itself.

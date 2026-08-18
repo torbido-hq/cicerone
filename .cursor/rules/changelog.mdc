@@ -1,0 +1,21 @@
+---
+alwaysApply: true
+description: Never edit changelog entries after a version is released
+---
+
+# Changelog (released versions are frozen)
+
+[CHANGELOG.md](CHANGELOG.md) follows Keep a Changelog. Dated `## [x.y.z]`
+sections are **immutable**.
+
+## Do
+
+- Put new notes only under `## [Unreleased]`.
+- Short bullets for **this** change. Do not re-tell older releases.
+
+## Do not
+
+- Edit, rewrite, move, or “clarify” any `## [x.y.z] - YYYY-MM-DD` section.
+- Expand Unreleased bullets so they re-document a shipped version
+  (e.g. do not narrate 0.5.0 lock behavior inside a later HA note).
+- Backport Unreleased items into an already-tagged release section.

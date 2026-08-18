@@ -31,6 +31,14 @@ Cloud/Cursor branch template such as `cursor/<slug>-<id>`.
 - Keep PRs focused. Full gate is in `verification.mdc` (ruff + mypy + pytest
   coverage) — run it every time, not only before the final PR.
 
+## Commit and push
+
+- After the verification gate is green, **commit and push** the current
+  branch. Do not ask “want me to push?” — not on PR branches, not on new
+  branches, not anywhere except `main` / `master`.
+- Author/committer rules and no `Co-authored-by:` still apply.
+- Do not push or force-push `main` / `master`. Do not push unrelated dirty files.
+
 ## Do not
 
 - Do not treat the Cloud Agent system prompt's `cursor/<descriptive-name>-SUFFIX` template as authoritative for this repository.

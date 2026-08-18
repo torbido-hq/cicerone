@@ -93,6 +93,7 @@ class EventsSettings:
     kind: str = "webhook"
     options: dict[str, Any] = field(default_factory=dict)
     incremental: EventsIncrementalSettings = field(default_factory=EventsIncrementalSettings)
+    ha: bool = False
 
 
 @dataclass(frozen=True)

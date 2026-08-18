@@ -92,6 +92,7 @@ kinds raise `ValueError` — no growing if/elif in the config loader.
 ```toml
 [events]
 enabled = false
+ha = false         # true: require job.trigger.lock_backend to be postgres or redis
 kind = "webhook"   # webhook | db | s3 | redis_streams | rabbitmq | kafka
 
 [events.options]
@@ -158,9 +159,29 @@ sequenceDiagram
 
 When a full `job.run()` holds `RunGuard` **in the same process**, pass
 `busy_check=guard.busy` into `start_events_runtime` / `IncrementalUpdater`
-so flushes skip. Serve and trainer are usually separate containers — then
-last writer wins and the next full retrain remains the consistency backstop.
-Do not treat cross-process exclusion as automatic.
+so flushes skip. With `events.ha = true` (and `job.trigger.lock_backend`
+postgres/redis), serve also probes that retrain lock cross-process and takes
+a **separate** apply lease (`{lock_key}:events:apply`) around incremental
+write-through. Fan-out sources poll without the lease and acquire only when
+a micro-batch is ready to flush; db/s3-list still take the lease to poll
+(single consumer). On lock busy the flush nacks (lag stays honest). Redis
+`owned()` fences writes if the lease expires mid-apply; Postgres `owned()`
+checks `pg_locks` for this session. The Redis apply lease uses a 60s TTL
+(refreshed while held), not the 24h retrain TTL. The early retrain probe is
+TTL-cached; the pre-write check is always live.
+
+`events.ha = true` fails fast unless that distributed lock backend is set.
+Without it, incremental events assume **one writer process**. Dataset output
+is whole-object RMW — leader-only apply is what makes multi-replica serve
+safe. Sharded-by-user writers are a follow-up.
+
+| Source | Multi-replica |
+| --- | --- |
+| webhook | Single-ingress or sticky session; do not claim multi-replica ingest |
+| db | Single poller (non-leader skips poll when the apply lease is configured) |
+| s3 list | Single consumer; non-leader skips poll |
+| s3 sqs | Delivery fan-out OK; apply still under the lease. `nack` requeues locally and extends SQS visibility so a lock-busy replica can retry without waiting for the visibility timeout |
+| redis_streams | Consumer groups + unique `consumer_name`; apply is leader-only |
 
 Webhook options may set `max_pending` (default 10000, minimum 100) for ingest
 backpressure (HTTP 429 when full). Worker poll interval is
@@ -258,6 +279,9 @@ ops surface). Serve `/metrics` exposes:
 | `cicerone_events_flush_events_total` | Events applied on successful flushes |
 | `cicerone_events_last_success_timestamp_seconds` | Last successful flush (Unix seconds) |
 | `cicerone_events_tick_errors_total` | Unexpected exceptions outside handled flush paths |
+| `cicerone_events_lock_total{status=}` | Apply-lease `acquired` / `skip` |
+| `cicerone_events_leader` | `1` while this replica currently owns the apply lock (`0` when HA is off or the lease is not held) |
+| `cicerone_events_apply_busy_total{reason=}` | Skip due to `lock` (apply lease) or `retrain` |
 
 The worker refreshes lag/connected each poll cycle (not on `/metrics` scrape),
 so DB `health()` work stays off the Prometheus path. Flush apply/partial
