@@ -23,6 +23,7 @@ from cicerone.dataset import build_dataset
 from cicerone.model_config import (
     DEFAULT_SEQUENTIAL_CONFIG,
     SEQUENTIAL_ARCHITECTURES,
+    SEQUENTIAL_EXTRA_HINT,
     apply_sequential_architecture,
     default_model_configs,
     rectools_model_config,
@@ -203,7 +204,7 @@ def test_sequential_automl_skip_reason_missing_extra(monkeypatch):
     monkeypatch.setattr("cicerone.automl.sequential_extra_available", lambda: False)
     reason = sequential_automl_skip_reason(_sequence_events(), min_median_interactions=5)
     assert reason is not None
-    assert "requirements-sequential" in reason
+    assert SEQUENTIAL_EXTRA_HINT in reason
 
 
 def test_sequential_automl_skip_reason_sparse_history(monkeypatch):

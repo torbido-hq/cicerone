@@ -36,7 +36,7 @@ from cicerone.model import (
     RecommenderModel,
     train_and_recommend,
 )
-from cicerone.model_config import SEQUENTIAL_STRATEGY, sequential_extra_available
+from cicerone.model_config import SEQUENTIAL_EXTRA_HINT, SEQUENTIAL_STRATEGY, sequential_extra_available
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +62,7 @@ def sequential_automl_skip_reason(
 ) -> str | None:
     """Why sequential should be dropped from AutoML, or ``None`` to keep it."""
     if not sequential_extra_available():
-        return "optional sequential extra is not installed (pip install -r requirements-sequential.txt)"
+        return f"optional sequential extra is not installed ({SEQUENTIAL_EXTRA_HINT})"
     median = median_distinct_items_per_user(events)
     if median < min_median_interactions:
         return (

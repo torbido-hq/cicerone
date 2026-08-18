@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 from copy import deepcopy
+from functools import cache
 from typing import Any
 
 from cicerone.config.constants import DEFAULT_ITEM_BASED_K_NEIGHBORS
@@ -78,6 +79,7 @@ DEFAULT_SEQUENTIAL_CONFIG: dict[str, Any] = {
 }
 
 
+@cache
 def sequential_extra_available() -> bool:
     """True when torch + pytorch-lightning are importable (rectools[torch])."""
     return (
