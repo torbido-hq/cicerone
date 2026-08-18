@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Redis Streams EventSource (`events.kind = "redis_streams"`): consumer-group
+  poll via `XREADGROUP` / `XACK`, idle PEL recovery with `XAUTOCLAIM`, and
+  stream entry id fallback when `event_id` is omitted. Requires
+  `requirements-redis.txt` (same optional `redis` pin as the lock backend).
 - User-scoped incremental write-through: load/replace only affected users
   (plus `__cold_start__`) via `OutputSink.replace_recommendations_for_users`
   (returns post-write distinct user count) instead of full-frame overwrite.

@@ -182,6 +182,38 @@ def test_load_events_s3_sqs_rejects_endpoint_url():
         )
 
 
+def test_load_events_redis_streams_requires_stream():
+    with pytest.raises(ConfigError, match="stream"):
+        load_events_settings(
+            {
+                "enabled": True,
+                "kind": "redis_streams",
+                "options": {"redis_url": "redis://localhost:6379/0", "consumer_group": "cicerone"},
+            },
+            mode="serve",
+            serve_auth_token="tok",
+            resolve_env=lambda value, _path: value,
+        )
+
+
+def test_load_events_redis_streams_ok():
+    settings = load_events_settings(
+        {
+            "enabled": True,
+            "kind": "redis_streams",
+            "options": {
+                "redis_url": "redis://localhost:6379/0",
+                "stream": "cicerone:events",
+                "consumer_group": "cicerone",
+            },
+        },
+        mode="serve",
+        serve_auth_token="tok",
+        resolve_env=lambda value, _path: value,
+    )
+    assert settings.kind == "redis_streams"
+
+
 def test_load_events_incremental_must_be_table():
     with pytest.raises(ConfigError, match="events.incremental must be a table"):
         load_events_settings(

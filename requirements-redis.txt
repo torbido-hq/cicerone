@@ -1,4 +1,3 @@
-# Optional: only needed when [job.trigger].lock_backend = "redis"
-# (multi-replica scheduler without a Postgres lock URL).
+# Optional: only needed for Redis lock_backend and/or events.kind = "redis_streams".
 # Install: pip install -r requirements-redis.txt
 redis==8.1.0
