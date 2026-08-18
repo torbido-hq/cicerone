@@ -6,7 +6,7 @@ import logging
 import threading
 
 from cicerone.config.constants import DEFAULT_EVENTS_POLL_INTERVAL_SECONDS
-from cicerone.events.base import EventSource
+from cicerone.events.base import EventSource, NormalizedEvent
 from cicerone.events.buffer import MicroBatchBuffer
 from cicerone.events.updater import IncrementalUpdater
 from cicerone.serve.metrics import (
@@ -57,6 +57,10 @@ class EventWorker:
                     join_timeout_seconds,
                 )
                 return False
+        try:
+            self._drain_buffer_on_stop()
+        except Exception:
+            logger.exception("Event worker drain on stop failed")
         close = getattr(self._source, "close", None)
         if callable(close):
             try:
@@ -89,12 +93,48 @@ class EventWorker:
         """One poll/flush cycle; returns events successfully applied."""
         room = self._buffer.remaining_capacity
         if room > 0:
-            polled = list(self._source.poll(min(self._poll_max_events, room)))
+            # May receive more than ``room``; overflow is nacked for later redelivery.
+            polled = list(self._source.poll(self._poll_max_events))
             if polled:
-                self._buffer.extend(polled)
+                result = self._buffer.extend(polled)
+                # Duplicates are already represented in the buffer — ack so sources
+                # do not leave them stuck in-flight / PEL.
+                if result.duplicates:
+                    self._source.ack([event.event_id for event in result.duplicates])
+                # Capacity rejects must be redelivered when there is room again.
+                if result.overflow:
+                    self._source.nack(result.overflow)
         ready = self._buffer.flush_if_ready()
         if not ready:
             return 0
+        return self._flush_ready(ready)
+
+    def _drain_buffer_on_stop(self) -> None:
+        leftover = self._buffer.flush()
+        if not leftover:
+            return
+        logger.info("Draining %d buffered event(s) on worker stop", len(leftover))
+        try:
+            applied = self._updater.apply(leftover)
+        except Exception:
+            logger.exception("Stop drain apply failed; nacking %d event(s)", len(leftover))
+            self._source.nack(leftover)
+            return
+        if applied == len(leftover):
+            try:
+                self._source.ack([event.event_id for event in leftover])
+            except Exception:
+                logger.exception("Stop drain ack failed; nacking %d event(s)", len(leftover))
+                self._source.nack(leftover)
+            return
+        logger.warning(
+            "Stop drain applied %d/%d event(s); nacking batch for redelivery",
+            applied,
+            len(leftover),
+        )
+        self._source.nack(leftover)
+
+    def _flush_ready(self, ready: list[NormalizedEvent]) -> int:
         try:
             applied = self._updater.apply(ready)
         except Exception:
@@ -103,7 +143,6 @@ class EventWorker:
             self._source.nack(ready)
             return 0
         if applied == 0:
-            # Busy: return to source so lag stays accurate and another tick can retry.
             record_events_flush(status="busy")
             self._source.nack(ready)
             return 0

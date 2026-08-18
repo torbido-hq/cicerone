@@ -71,6 +71,35 @@ def test_db_poll_ack_advances_watermark(tmp_path):
     assert list(source.poll(10)) == []
 
 
+def test_db_same_timestamp_pages_by_event_id(tmp_path):
+    url = _sqlite_url(tmp_path)
+    ts = "2026-08-13T12:00:00Z"
+    _seed_events(
+        url,
+        [
+            {
+                "user_id": "u1",
+                "item_id": f"i{i}",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": ts,
+                "event_id": f"e{i}",
+            }
+            for i in range(1, 6)
+        ],
+    )
+    source = DbEventSource({"database_url": url})
+    source.connect()
+    seen: list[str] = []
+    for _ in range(5):
+        batch = list(source.poll(1))
+        assert len(batch) == 1
+        seen.append(batch[0].event_id)
+        source.ack([batch[0].event_id])
+    assert seen == ["e1", "e2", "e3", "e4", "e5"]
+    assert list(source.poll(10)) == []
+
+
 def test_db_health_lag_uses_event_id_cursor(tmp_path):
     url = _sqlite_url(tmp_path)
     ts = "2026-08-13T12:00:00Z"
