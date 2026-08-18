@@ -142,6 +142,10 @@ class PostgresAdvisoryLock:
                     ).scalar()
                 )
             except Exception:
+                logger.warning(
+                    "Postgres advisory lock owned() probe failed; treating as lost",
+                    exc_info=True,
+                )
                 return False
 
     def is_locked(self) -> bool:
@@ -158,14 +162,22 @@ class PostgresAdvisoryLock:
                         ).scalar()
                     )
                 except Exception:
-                    return False
-        with self._engine.connect() as probe:
-            return bool(
-                probe.execute(
-                    text(_PG_ADVISORY_HELD_ANY),
-                    {"k1": self._key1, "k2": self._key2},
-                ).scalar()
-            )
+                    logger.warning(
+                        "Postgres advisory lock is_locked() on held connection failed; "
+                        "retrying with a new session",
+                        exc_info=True,
+                    )
+        try:
+            with self._engine.connect() as probe:
+                return bool(
+                    probe.execute(
+                        text(_PG_ADVISORY_HELD_ANY),
+                        {"k1": self._key1, "k2": self._key2},
+                    ).scalar()
+                )
+        except Exception:
+            logger.exception("Postgres advisory lock is_locked() probe failed")
+            raise
 
     def release(self) -> None:
         from sqlalchemy import text
@@ -289,6 +301,7 @@ class RedisLock:
         try:
             value = self._client.get(self._key)
         except Exception:
+            logger.warning("Redis lock owned() probe failed; treating as lost", exc_info=True)
             return False
         if isinstance(value, bytes):
             value = value.decode("utf-8")

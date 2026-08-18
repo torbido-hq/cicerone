@@ -56,6 +56,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Postgres `is_locked()` logs and re-raises probe failures instead of
+  treating a dead database as “lock free”; `owned()` logs before fail-closed.
 - S3 EventSource `nack` returns events to the local pending queue (and
   extends SQS visibility) instead of dropping the batch. SQS HA lock-busy
   nacks can retry immediately; list-mode array payloads no longer lose

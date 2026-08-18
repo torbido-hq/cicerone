@@ -613,5 +613,16 @@ def test_postgres_owned_and_is_locked(monkeypatch):
     assert any("pg_try_advisory_lock" in sql for sql in sqls)
     held_conn.execute.side_effect = RuntimeError("session dead")
     assert lock.owned() is False
+    engine.connect.return_value = probe_cm
+    probe_conn.execute.return_value.scalar.return_value = False
     assert lock.is_locked() is False
     lock.release()
+
+
+def test_postgres_is_locked_raises_on_probe_failure(monkeypatch):
+    engine = MagicMock()
+    engine.connect.side_effect = RuntimeError("db down")
+    monkeypatch.setattr("sqlalchemy.create_engine", lambda *a, **k: engine)
+    lock = PostgresAdvisoryLock("postgresql+psycopg://u:p@h/db")
+    with pytest.raises(RuntimeError, match="db down"):
+        lock.is_locked()
