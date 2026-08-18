@@ -14,8 +14,8 @@ scikit-learn==1.9.0
 # a matching botocore (Dependabot #71 blocked).
 boto3==1.43.56
 s3fs==2026.7.0
-pyarrow==25.0.0
-SQLAlchemy==2.0.51
+pyarrow==25.0.1
+SQLAlchemy==2.0.52
 psycopg[binary]==3.3.4
 
 # Cron-in-container scheduler (no system cron daemon needed)
@@ -23,7 +23,7 @@ croniter==6.2.4
 
 # Serve mode's read API + the event-driven retrain trigger's webhook
 fastapi==0.141.1
-uvicorn[standard]==0.52.1
+uvicorn[standard]==0.52.3
 prometheus-client==0.26.0
 
 # Dashboard: server-rendered status page (Jinja2 templates) + HTTP Basic
