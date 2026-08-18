@@ -250,13 +250,15 @@ class RedisStreamsEventSource(EventSource):
         return None
 
     def _claim_idle(self, client: Any, max_events: int) -> list[NormalizedEvent]:
+        with self._lock:
+            start_id = self._claim_cursor
         try:
             result = client.xautoclaim(
                 self._stream,
                 self._group,
                 self._consumer,
                 min_idle_time=self._claim_idle_ms,
-                start_id=self._claim_cursor,
+                start_id=start_id,
                 count=max_events,
             )
         except Exception:
@@ -265,7 +267,8 @@ class RedisStreamsEventSource(EventSource):
 
         next_id, entries = self._parse_autoclaim(result)
         if next_id is not None:
-            self._claim_cursor = next_id
+            with self._lock:
+                self._claim_cursor = next_id
         return self._entries_to_events(client, entries)
 
     def _read_new(self, client: Any, max_events: int) -> list[NormalizedEvent]:
