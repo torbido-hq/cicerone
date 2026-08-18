@@ -33,6 +33,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Bump `pyarrow` 25.0.0 → 25.0.1 (#85), `SQLAlchemy` 2.0.51 → 2.0.52 (#86),
+  `uvicorn` 0.52.1 → 0.52.3 (#87), `ruff` 0.16.2 → 0.16.3 (#88).
 - Bump GitHub Actions Pages deploy helpers: `actions/upload-pages-artifact`
   v3 → v5 (Dependabot #79), `actions/deploy-pages` v4 → v5 (#80).
 - Bump `fastapi` 0.140.13 → 0.141.1 (Dependabot #69).
