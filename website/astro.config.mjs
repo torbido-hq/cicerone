@@ -1,37 +1,15 @@
 // @ts-check
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import starlightBlog from 'starlight-blog';
+import { hasPublishedArticles } from './src/lib/articles.mjs';
 
 const websiteRoot = dirname(fileURLToPath(import.meta.url));
 const articlesDir = join(websiteRoot, 'src/content/docs/articles');
 
-/** YAML 1.1 truthy `draft` (quoted or bare), optional trailing comment. */
-const DRAFT_TRUE =
-	/^[ \t]*draft:[ \t]*(?:true|True|TRUE|yes|Yes|YES|on|On|ON|"true"|'true')[ \t]*(?:#.*)?\r?$/m;
-
-function isDraftFrontmatter(fm) {
-	return DRAFT_TRUE.test(fm);
-}
-
-function hasPublishedArticles() {
-	if (!existsSync(articlesDir)) return false;
-	const skipDrafts = process.env.NODE_ENV === 'production';
-	for (const name of readdirSync(articlesDir)) {
-		if (name.startsWith('_') || name.startsWith('.')) continue;
-		if (!/\.(mdx?|markdown)$/i.test(name)) continue;
-		const text = readFileSync(join(articlesDir, name), 'utf8').replace(/^\uFEFF/, '');
-		const fm = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---/.exec(text);
-		if (skipDrafts && fm && isDraftFrontmatter(fm[1])) continue;
-		return true;
-	}
-	return false;
-}
-
-const articlesPlugin = hasPublishedArticles()
+const articlesPlugin = hasPublishedArticles(articlesDir)
 	? [
 			starlightBlog({
 				title: 'Articles',
@@ -70,6 +48,9 @@ export default defineConfig({
 					href: 'https://github.com/torbido-hq/cicerone',
 				},
 			],
+			components: {
+				PageFrame: './src/components/PageFrame.astro',
+			},
 			customCss: ['./src/styles/custom.css'],
 			sidebar: [
 				{ label: 'Home', link: '/' },
