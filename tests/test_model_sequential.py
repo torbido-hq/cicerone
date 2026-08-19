@@ -232,9 +232,14 @@ def test_exclude_sequential_from_candidates_drops_solo_and_strips_fusion():
         weights={"collaborative": 1.0, "sequential": 1.0, "popular": 0.3},
     )
     popular = Candidate(models=["popular"])
-    result = exclude_sequential_from_candidates([solo, fusion, popular])
-    assert [c.models for c in result] == [["collaborative", "popular"], ["popular"]]
+    sequential_only_weights = Candidate(
+        models=["sequential", "popular"],
+        weights={"sequential": 1.0},
+    )
+    result = exclude_sequential_from_candidates([solo, fusion, popular, sequential_only_weights])
+    assert [c.models for c in result] == [["collaborative", "popular"], ["popular"], ["popular"]]
     assert result[0].weights == {"collaborative": 1.0, "popular": 0.3}
+    assert result[2].weights is None
 
 
 def test_evaluate_candidates_skips_sequential_when_extra_missing(

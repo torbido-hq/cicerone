@@ -86,7 +86,7 @@ def exclude_sequential_from_candidates(candidates: list[Candidate]) -> list[Cand
         if candidate.weights is not None:
             weights = {
                 name: weight for name, weight in candidate.weights.items() if name != SEQUENTIAL_STRATEGY
-            }
+            } or None
         result.append(Candidate(models=models, weights=weights, rrf_k=candidate.rrf_k))
     return result
 
