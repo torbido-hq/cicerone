@@ -54,7 +54,8 @@ Body…
 ```
 
 Drafts (`draft: true`) are omitted from production builds. RSS is
-`/articles/rss.xml` once a post is published.
+`/articles/rss.xml` once a post is published. Article pages use IBM Plex
+Serif at ~65ch; chrome stays IBM Plex Sans, dates IBM Plex Mono.
 
 ## Publishing
 
