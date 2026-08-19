@@ -3,6 +3,7 @@
 :root {
 	--sl-font: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
 	--sl-font-mono: "IBM Plex Mono", ui-monospace, monospace;
+	--article-font: "IBM Plex Serif", "IBM Plex Sans", ui-serif, Georgia, serif;
 	--sl-color-accent-low: #123a4a;
 	--sl-color-accent: #3db4d8;
 	--sl-color-accent-high: #b6e4f4;
@@ -41,68 +42,66 @@
 	overflow-wrap: anywhere;
 }
 
-/* Articles: serif prose, ~65ch measure, docs chrome stays sans. */
-body:has(.sl-blog-posts),
-body:has(.sl-blog-post-footer) {
+/* Articles: serif prose in the main pane only; nav/sidebar stay --sl-font. */
+.main-pane:has(.sl-blog-posts),
+.main-pane:has(.sl-blog-post-footer) {
 	--sl-content-width: 38rem;
 	--sl-text-body: 1.125rem;
 	--sl-line-height: 1.6;
 	--sl-text-h1: 2.25rem;
 	--sl-text-h2: 1.5rem;
-	--sl-font: "IBM Plex Serif", "IBM Plex Sans", ui-serif, Georgia, serif;
-	font-family: var(--sl-font);
 }
 
 @media (min-width: 50rem) {
-	body:has(.sl-blog-posts),
-	body:has(.sl-blog-post-footer) {
+	.main-pane:has(.sl-blog-posts),
+	.main-pane:has(.sl-blog-post-footer) {
 		--sl-text-h1: 2.75rem;
 	}
 }
 
-body:has(.sl-blog-posts) .right-sidebar-container,
-body:has(.sl-blog-post-footer) .right-sidebar-container {
+.lg\:sl-flex:has(.sl-blog-posts) > .right-sidebar-container,
+.lg\:sl-flex:has(.sl-blog-post-footer) > .right-sidebar-container {
 	display: none;
 }
 
-body:has(.sl-blog-posts) .main-pane,
-body:has(.sl-blog-post-footer) .main-pane {
+.lg\:sl-flex:has(.sl-blog-posts) > .main-pane,
+.lg\:sl-flex:has(.sl-blog-post-footer) > .main-pane {
 	width: 100% !important;
 	--sl-content-margin-inline: auto;
 }
 
 /* Plugin hides the listing h1; keep it for heading order and document title. */
-body:has(.sl-blog-posts) .content-panel:first-of-type {
+.main-pane:has(.sl-blog-posts) .content-panel:first-of-type {
 	display: block;
 	padding-bottom: 0.25rem;
 }
 
-body:has(.sl-blog-posts) .content-panel:first-of-type h1 {
+.main-pane:has(.sl-blog-posts) .content-panel:first-of-type h1 {
 	margin-top: 0;
-	font-family: "IBM Plex Serif", "IBM Plex Sans", ui-serif, Georgia, serif;
+	font-family: var(--article-font);
 	font-weight: 600;
 	letter-spacing: -0.03em;
 	line-height: 1.15;
 }
 
-body:has(.sl-blog-posts) .content-panel + .content-panel {
+.main-pane:has(.sl-blog-posts) .content-panel + .content-panel {
 	border-top: none;
 }
 
-body:has(.sl-blog-post-footer) .content-panel:first-of-type {
+.main-pane:has(.sl-blog-post-footer) .content-panel:first-of-type {
 	padding-bottom: 0;
 }
 
-body:has(.sl-blog-post-footer) .content-panel:first-of-type h1 {
+.main-pane:has(.sl-blog-post-footer) .content-panel:first-of-type h1 {
 	margin-top: 0;
-	font-family: "IBM Plex Serif", "IBM Plex Sans", ui-serif, Georgia, serif;
+	font-family: var(--article-font);
 	font-weight: 600;
 	letter-spacing: -0.03em;
 	line-height: 1.15;
 	text-wrap: balance;
 }
 
-body:has(.sl-blog-post-footer) .content-panel + .content-panel {
+.main-pane:has(.sl-blog-post-footer) .content-panel + .content-panel {
 	border-top: none;
 	padding-top: 0.75rem;
 }
@@ -136,7 +135,7 @@ body:has(.sl-blog-post-footer) .content-panel + .content-panel {
 }
 
 h2.sl-blog-preview-title {
-	font-family: "IBM Plex Serif", "IBM Plex Sans", ui-serif, Georgia, serif;
+	font-family: var(--article-font);
 	font-size: var(--sl-text-2xl);
 	font-weight: 600;
 	letter-spacing: -0.02em;
@@ -174,36 +173,37 @@ h2.sl-blog-preview-title {
 	gap: 2.25rem !important;
 }
 
-body:has(.sl-blog-post-footer) .sl-markdown-content {
-	font-family: "IBM Plex Serif", "IBM Plex Sans", ui-serif, Georgia, serif;
+.main-pane:has(.sl-blog-posts) .sl-markdown-content,
+.main-pane:has(.sl-blog-post-footer) .sl-markdown-content {
+	font-family: var(--article-font);
 }
 
-body:has(.sl-blog-post-footer) .sl-markdown-content p,
-body:has(.sl-blog-post-footer) .sl-markdown-content li {
+.main-pane:has(.sl-blog-post-footer) .sl-markdown-content p,
+.main-pane:has(.sl-blog-post-footer) .sl-markdown-content li {
 	text-wrap: pretty;
 }
 
-body:has(.sl-blog-post-footer) .sl-markdown-content :is(h2, h3) {
-	font-family: "IBM Plex Serif", "IBM Plex Sans", ui-serif, Georgia, serif;
+.main-pane:has(.sl-blog-post-footer) .sl-markdown-content :is(h2, h3) {
+	font-family: var(--article-font);
 	letter-spacing: -0.02em;
 	text-wrap: balance;
 }
 
-body:has(.sl-blog-post-footer) .sl-markdown-content .sl-anchor-link {
+.main-pane:has(.sl-blog-post-footer) .sl-markdown-content .sl-anchor-link {
 	display: none;
 }
 
-body:has(.sl-blog-post-footer) .sl-markdown-content .sl-heading-wrapper > :first-child {
+.main-pane:has(.sl-blog-post-footer) .sl-markdown-content .sl-heading-wrapper > :first-child {
 	padding-inline-end: 0;
 }
 
-body:has(.sl-blog-post-footer) .sl-markdown-content blockquote {
+.main-pane:has(.sl-blog-post-footer) .sl-markdown-content blockquote {
 	border-inline-start-width: 2px;
 	font-style: italic;
 	color: var(--sl-color-gray-1);
 }
 
-body:has(.sl-blog-post-footer) .sl-markdown-content :is(code, pre) {
-	font-family: "IBM Plex Mono", ui-monospace, monospace;
+.main-pane:has(.sl-blog-post-footer) .sl-markdown-content :is(code, pre) {
+	font-family: var(--sl-font-mono);
 	font-style: normal;
 }

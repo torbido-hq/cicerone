@@ -9,19 +9,23 @@ import starlightBlog from 'starlight-blog';
 const websiteRoot = dirname(fileURLToPath(import.meta.url));
 const articlesDir = join(websiteRoot, 'src/content/docs/articles');
 
+/** YAML 1.1 truthy `draft` (quoted or bare), optional trailing comment. */
+const DRAFT_TRUE =
+	/^[ \t]*draft:[ \t]*(?:true|True|TRUE|yes|Yes|YES|on|On|ON|"true"|'true')[ \t]*(?:#.*)?\r?$/m;
+
+function isDraftFrontmatter(fm) {
+	return DRAFT_TRUE.test(fm);
+}
+
 function hasPublishedArticles() {
 	if (!existsSync(articlesDir)) return false;
+	const skipDrafts = process.env.NODE_ENV === 'production';
 	for (const name of readdirSync(articlesDir)) {
-		if (name.startsWith('_') || !/\.(md|mdx)$/i.test(name)) continue;
-		const text = readFileSync(join(articlesDir, name), 'utf8');
-		const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
-		if (
-			fm &&
-			/^draft:\s*true\s*$/m.test(fm[1]) &&
-			process.env.NODE_ENV === 'production'
-		) {
-			continue;
-		}
+		if (name.startsWith('_') || name.startsWith('.')) continue;
+		if (!/\.(mdx?|markdown)$/i.test(name)) continue;
+		const text = readFileSync(join(articlesDir, name), 'utf8').replace(/^\uFEFF/, '');
+		const fm = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---/.exec(text);
+		if (skipDrafts && fm && isDraftFrontmatter(fm[1])) continue;
 		return true;
 	}
 	return false;
