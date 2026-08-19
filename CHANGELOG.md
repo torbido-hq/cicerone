@@ -62,6 +62,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Drop the Starlight “Edit page” footer; site content is edited in git.
 - README and docs-site dashboard screenshot include the user recommendation lookup.
 - Docs site copies `docs/images/` into `website/public/images/docs/` at build time.
 - Dashboard lookup form is labeled, results are announced, and job-run
