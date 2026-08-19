@@ -216,7 +216,9 @@ serve). Like serve mode, it never loads lightfm/rectools/implicit.
   `manifest.json` is overwritten every run, so it only ever has the latest)
   a short run history. Enter a `user_id` to inspect that user's current
   precomputed top-K from the same output store (cold-start fallback when
-  they have no personal rows). The status block auto-refreshes via
+  they have no personal rows). The inspector shows
+  `min(job.top_k, dashboard.lookup_k)` rows (default 20). The status block
+  auto-refreshes via
   [htmx](https://htmx.org) polling, so no page reload is needed.
 - Protected by HTTP Basic Auth rather than a bearer token, since it's meant
   to be opened directly in a browser (a login prompt, not a header a human

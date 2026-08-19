@@ -13,7 +13,7 @@ from cicerone.io.recommendation_schema import ITEM_COLUMN, RANK_COLUMN, SCORE_CO
 
 logger = logging.getLogger(__name__)
 
-LOOKUP_K_CAP = 20
+LOOKUP_FAILED = "Could not load recommendations."
 MISSING = "—"
 
 
@@ -33,8 +33,8 @@ def empty_recommendations_context(
     }
 
 
-def lookup_k(top_k: int) -> int:
-    return min(top_k, LOOKUP_K_CAP)
+def lookup_k(top_k: int, cap: int) -> int:
+    return min(top_k, cap)
 
 
 def lookup_recommendations(
@@ -57,7 +57,7 @@ def lookup_recommendations(
     except Exception:
         logger.exception("Failed to refresh recommendation reader for dashboard lookup")
 
-    k = lookup_k(settings.top_k)
+    k = lookup_k(settings.top_k, settings.dashboard.lookup_k)
     try:
         recs, used_fallback = _load_rows(recommendation_reader, user_id, k)
         category_column = settings.serve.category_column
@@ -74,9 +74,9 @@ def lookup_recommendations(
             "show_category": show_category,
             "error": None,
         }
-    except Exception as exc:
+    except Exception:
         logger.exception("Failed to look up recommendations for user_id=%r", user_id)
-        return empty_recommendations_context(user_id=user_id, queried=True, error=str(exc))
+        return empty_recommendations_context(user_id=user_id, queried=True, error=LOOKUP_FAILED)
 
 
 def format_recommendation_rows(recs: pd.DataFrame, *, category_column: str | None) -> list[dict[str, str]]:

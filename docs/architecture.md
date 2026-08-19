@@ -314,9 +314,9 @@ never imports `cicerone.model`/`dataset`/`automl`.
 - `io.factory.build_recommendation_reader(settings.output)` builds a
   `RecommendationReader` for the user-id inspector (`dashboard_lookup.py`).
   Lookup reads the output store directly (no serve hop). `k` is
-  `min(job.top_k, 20)`. Missing users fall back to `__cold_start__` /
-  popular-latest rows with a badge; `category` is joined from the items
-  snapshot when that column exists.
+  `min(job.top_k, dashboard.lookup_k)` (default 20). Missing users fall
+  back to `__cold_start__` / popular-latest rows with a badge; `category`
+  is joined from the items snapshot when that column exists.
 - `job.run()` writes exactly one manifest per run via a `try`/`finally`,
   with a consistent key set (`status: "success"|"failed"`, `error`) on both
   the success and failure paths, so a failed run is no longer silently

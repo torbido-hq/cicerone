@@ -34,6 +34,7 @@ port = 8090
 users_path = "/app/config/dashboard_users.toml"
 refresh_interval_seconds = 30 # how often the page polls /partials/status
 history_limit = 20 # recent runs shown (only meaningful for [output].kind = "db")
+lookup_k = 20 # inspector rows (capped at job.top_k)
 
 # [job] is required by config.load_settings() even though the dashboard
 # never trains anything -- kept generic/simple rather than special-casing

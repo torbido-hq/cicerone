@@ -60,6 +60,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Docs site copies `docs/images/dashboard.png` at build time (one file for README and cicerone.dev).
 - Dashboard lookup form is labeled, results are announced, and job-run
   tables expose captions / column headers; helper text contrast is higher.
+- Dashboard inspector k is `min(job.top_k, dashboard.lookup_k)` (default 20).
 
 - Bump `pyarrow` 25.0.0 → 25.0.1 (#85), `SQLAlchemy` 2.0.51 → 2.0.52 (#86),
   `uvicorn` 0.52.1 → 0.52.3 (#87), `ruff` 0.16.2 → 0.16.3 (#88).
@@ -73,6 +74,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Dashboard lookup errors show a generic message; details stay in the logs.
 - Dashboard lookup URL updates keep the hash fragment.
 - Dashboard lookup disables the Look up button during the htmx request.
 - Postgres `is_locked()` logs and re-raises probe failures instead of

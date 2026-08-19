@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from cicerone.config import Settings
 from cicerone.dashboard import create_app, main
-from cicerone.dashboard_lookup import MISSING
+from cicerone.dashboard_lookup import LOOKUP_FAILED, MISSING
 from cicerone.http_auth import require_basic_auth
 
 
@@ -547,6 +547,29 @@ def test_recommendations_partial_caps_k_at_20():
     assert ">i21<" not in response.text
 
 
+def test_recommendations_partial_respects_dashboard_lookup_k():
+    recs = pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": f"i{i}",
+                "rank": i,
+                "score": 1.0,
+                "source": "personalized",
+            }
+            for i in range(1, 26)
+        ]
+    )
+    response = _recs_client(_FakeRecReader(recs), top_k=50, dashboard_lookup_k=5).get(
+        "/partials/recommendations",
+        params={"user_id": "u1"},
+        auth=("alice", "s3cret"),
+    )
+
+    assert ">i5<" in response.text
+    assert ">i6<" not in response.text
+
+
 def test_recommendations_partial_without_reader_shows_error():
     response = _recs_client(None).get(
         "/partials/recommendations",
@@ -577,7 +600,8 @@ def test_recommendations_partial_lookup_error_shows_message():
         auth=("alice", "s3cret"),
     )
 
-    assert "store boom" in response.text
+    assert LOOKUP_FAILED in response.text
+    assert "store boom" not in response.text
     assert ">i1<" not in response.text
 
 

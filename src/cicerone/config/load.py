@@ -76,6 +76,7 @@ _DASHBOARD_FLAT_KEYS = (
     ("dashboard_users_path", "users_path"),
     ("dashboard_refresh_interval_seconds", "refresh_interval_seconds"),
     ("dashboard_history_limit", "history_limit"),
+    ("dashboard_lookup_k", "lookup_k"),
 )
 _AUTOML_FLAT_KEYS = (
     ("automl_enabled", "enabled"),
@@ -434,6 +435,7 @@ def load_settings(config_path: str | None = None) -> Settings:
             history_limit=require_positive_int(
                 int(dashboard_raw.get("history_limit", 20)), name="dashboard.history_limit"
             ),
+            lookup_k=require_positive_int(int(dashboard_raw.get("lookup_k", 20)), name="dashboard.lookup_k"),
         ),
         events=events,
     )
