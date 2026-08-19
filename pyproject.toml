@@ -9,7 +9,7 @@ readme = "README.md"
 license = "LicenseRef-Beerware"
 license-files = ["LICENSE"]
 requires-python = ">=3.11,<3.12"
-authors = [{ name = "Nicholas Wieland", email = "ngw@torbido.co" }]
+authors = [{ name = "Nicholas Wieland", email = "ngw@nofeed.org" }]
 keywords = ["recommender", "recsys", "lightfm", "batch", "fastapi"]
 classifiers = [
     "Development Status :: 4 - Beta",
