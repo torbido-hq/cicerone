@@ -16,8 +16,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Optional project-site articles at `/articles/` (static Markdown under
   `website/src/content/docs/articles/`). No nav, RSS, or index until a
   published post exists. Article pages use IBM Plex Serif and a ~65ch
-  measure. Brand accents invert for dark theme. Website-only PRs skip
-  Docker lint/pytest.
+  measure. Brand accents invert for dark theme. Listing keeps an h1;
+  posts use `description` for meta. Website-only PRs skip Docker lint/test
+  jobs; the `ci` job still succeeds.
 
 - Optional **sequential** strategy (`SASRecModel` / `BERT4RecModel`) via
   `[model.sequential]` (`architecture = "sasrec"` or `"bert4rec"`). Requires
