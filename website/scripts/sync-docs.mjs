@@ -98,8 +98,9 @@ const imagesSrc = join(docsSrc, "images");
 const imagesDst = join(websiteRoot, "public/images");
 if (existsSync(imagesSrc)) {
   mkdirSync(imagesDst, { recursive: true });
-  for (const name of readdirSync(imagesSrc)) {
-    copyFileSync(join(imagesSrc, name), join(imagesDst, name));
-    console.log(`synced docs/images/${name} → public/images/${name}`);
+  for (const entry of readdirSync(imagesSrc, { withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    copyFileSync(join(imagesSrc, entry.name), join(imagesDst, entry.name));
+    console.log(`synced docs/images/${entry.name} → public/images/${entry.name}`);
   }
 }

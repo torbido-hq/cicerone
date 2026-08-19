@@ -59,6 +59,6 @@
     } else {
       url.searchParams.delete("user_id");
     }
-    window.history.replaceState(null, "", `${url.pathname}${url.search}`);
+    window.history.replaceState(null, "", url.toString());
   });
 })();
