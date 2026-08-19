@@ -72,7 +72,7 @@ jobs:
   # leaving a required check pending. Require this job name, not lint/test.
   ci:
     needs: [scope, lint, test]
-    if: always()
+    if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:
       - name: Python CI
