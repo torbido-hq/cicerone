@@ -146,7 +146,11 @@ def main() -> None:
         )
 
     reader = build_manifest_reader(settings.output)
-    rec_reader = build_recommendation_reader(settings.output)
+    try:
+        rec_reader = build_recommendation_reader(settings.output)
+    except Exception:
+        logger.exception("Recommendation store is not available; dashboard lookup will be disabled")
+        rec_reader = None
     app = create_app(settings, reader, users, rec_reader)
     uvicorn.run(app, host=settings.dashboard.host, port=settings.dashboard.port)
 

@@ -232,6 +232,31 @@ def test_main_raises_when_no_users_configured(tmp_path, monkeypatch):
         main()
 
 
+def test_main_starts_when_recommendation_reader_fails(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_create_app(settings, reader, users, rec_reader=None):
+        captured["rec_reader"] = rec_reader
+        return object()
+
+    def boom(_output):
+        raise RuntimeError("bad store")
+
+    monkeypatch.setattr("cicerone.dashboard.load_settings", lambda: _settings())
+    monkeypatch.setattr("cicerone.dashboard.load_users", lambda _path: {"alice": "hash"})
+    monkeypatch.setattr("cicerone.dashboard.build_manifest_reader", lambda _output: _FakeReader(None))
+    monkeypatch.setattr("cicerone.dashboard.build_recommendation_reader", boom)
+    monkeypatch.setattr("cicerone.dashboard.create_app", fake_create_app)
+    monkeypatch.setattr(
+        "cicerone.dashboard.uvicorn",
+        type("_Uvicorn", (), {"run": staticmethod(lambda *_a, **_k: None)}),
+    )
+
+    main()
+
+    assert captured["rec_reader"] is None
+
+
 def test_require_basic_auth_used_directly_rejects_unknown_user():
     # Call dependency directly for the timing-safe unknown-username branch.
     from fastapi import HTTPException
@@ -615,3 +640,5 @@ def test_recommendations_partial_missing_rank_score_source_render_dashes():
 
     assert ">i1<" in response.text
     assert response.text.count(f">{MISSING}<") == 3
+    assert "None" not in response.text
+    assert "nan" not in response.text

@@ -74,6 +74,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Dashboard still starts if the recommendation store cannot be opened (lookup disabled).
 - Dashboard lookup errors show a generic message; details stay in the logs.
 - Dashboard lookup URL updates keep the hash fragment.
 - Dashboard lookup disables the Look up button during the htmx request.
