@@ -12,8 +12,9 @@ import {
 
 const websiteRoot = dirname(fileURLToPath(import.meta.url));
 const articlesDir = articlesContentDir(websiteRoot);
+const production = process.env.NODE_ENV === 'production';
 
-const articlesPlugin = hasPublishedArticles(articlesDir)
+const articlesPlugin = hasPublishedArticles(articlesDir, { production })
 	? [
 			starlightBlog({
 				title: 'Articles',
