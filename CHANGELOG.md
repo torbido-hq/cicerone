@@ -57,7 +57,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - README and docs-site dashboard screenshot include the user recommendation lookup.
-- Docs site copies `docs/images/` at build time and removes stale copies (keeps site-owned `flow.svg`).
+- Docs site copies `docs/images/` into `website/public/images/docs/` at build time.
 - Dashboard lookup form is labeled, results are announced, and job-run
   tables expose captions / column headers; helper text contrast is higher.
 - Dashboard inspector k is `min(job.top_k, dashboard.lookup_k)` (default 20).

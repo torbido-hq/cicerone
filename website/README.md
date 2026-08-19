@@ -22,10 +22,12 @@ npm run preview  # serve dist/
 | `scripts/sync-docs.mjs` | Copies `../docs/*.md` → `src/content/docs/` with frontmatter |
 | `astro.config.mjs` | Site URL, sidebar, logo, social |
 | `public/CNAME` | Custom domain (`cicerone.dev`) |
-| `public/images/` | Site diagrams (`flow.svg`); files from `docs/images/` are copied at build time and stale copies are removed |
+| `public/images/` | Site diagrams (`flow.svg`) |
+| `public/images/docs/` | Copied from `../docs/images/` at build time (gitignored) |
 
-Generated `src/content/docs/tutorial.md` and `architecture.md` are gitignored;
-CI and local builds always sync from `docs/`.
+Generated `src/content/docs/tutorial.md`, `architecture.md`, and
+`public/images/docs/` are gitignored; CI and local builds always sync from
+`docs/`.
 
 ## Publishing
 

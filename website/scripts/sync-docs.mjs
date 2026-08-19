@@ -66,8 +66,8 @@ function rewrite(source) {
   });
 
   text = text.replace(/\.\.\/src\/cicerone\/static\//g, "/");
-  text = text.replace(/\]\(images\//g, "](/images/");
-  text = text.replace(/src="images\//g, 'src="/images/');
+  text = text.replace(/\]\(images\//g, "](/images/docs/");
+  text = text.replace(/src="images\//g, 'src="/images/docs/');
 
   return text.trim() + "\n";
 }
@@ -96,8 +96,7 @@ if (existsSync(openapiSrc)) {
 }
 
 const imagesSrc = join(docsSrc, "images");
-const imagesDst = join(websiteRoot, "public/images");
-const siteOwnedImages = new Set(["flow.svg"]);
+const imagesDst = join(websiteRoot, "public/images/docs");
 if (existsSync(imagesSrc)) {
   mkdirSync(imagesDst, { recursive: true });
   const syncedImages = new Set();
@@ -105,13 +104,11 @@ if (existsSync(imagesSrc)) {
     if (!entry.isFile()) continue;
     copyFileSync(join(imagesSrc, entry.name), join(imagesDst, entry.name));
     syncedImages.add(entry.name);
-    console.log(`synced docs/images/${entry.name} → public/images/${entry.name}`);
+    console.log(`synced docs/images/${entry.name} → public/images/docs/${entry.name}`);
   }
   for (const entry of readdirSync(imagesDst, { withFileTypes: true })) {
-    if (!entry.isFile() || syncedImages.has(entry.name) || siteOwnedImages.has(entry.name)) {
-      continue;
-    }
+    if (!entry.isFile() || syncedImages.has(entry.name)) continue;
     unlinkSync(join(imagesDst, entry.name));
-    console.log(`removed stale public/images/${entry.name}`);
+    console.log(`removed stale public/images/docs/${entry.name}`);
   }
 }

@@ -68,7 +68,7 @@ export default defineConfig({
 					tag: 'meta',
 					attrs: {
 						property: 'og:image',
-						content: 'https://cicerone.dev/images/dashboard.png',
+						content: 'https://cicerone.dev/images/docs/dashboard.png',
 					},
 				},
 				{
@@ -86,7 +86,7 @@ export default defineConfig({
 					tag: 'meta',
 					attrs: {
 						name: 'twitter:image',
-						content: 'https://cicerone.dev/images/dashboard.png',
+						content: 'https://cicerone.dev/images/docs/dashboard.png',
 					},
 				},
 				{
