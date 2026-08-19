@@ -63,10 +63,15 @@ test('hasPublishedArticles skips drafts, dotfiles, and non-markdown', () => {
 test('articlesLayoutKind classifies listing vs post from the route id', () => {
 	assert.equal(articlesLayoutKind(ARTICLES_PREFIX), 'index');
 	assert.equal(articlesLayoutKind(`${ARTICLES_PREFIX}/2`), 'index');
+	assert.equal(articlesLayoutKind(`${ARTICLES_PREFIX}/2/`), 'index');
 	assert.equal(articlesLayoutKind(`${ARTICLES_PREFIX}/tags/foo`), 'index');
-	assert.equal(articlesLayoutKind(`${ARTICLES_PREFIX}/authors/nicholas`), 'index');
+	assert.equal(articlesLayoutKind(`${ARTICLES_PREFIX}/tags/foo/`), 'index');
+	assert.equal(articlesLayoutKind(`${ARTICLES_PREFIX}/authors/nicholas-wieland`), 'index');
 	assert.equal(articlesLayoutKind(`${ARTICLES_PREFIX}/hello-world`), 'post');
+	assert.equal(articlesLayoutKind(`${ARTICLES_PREFIX}/hello-world/`), 'post');
 	assert.equal(articlesLayoutKind('tutorial'), undefined);
+	assert.equal(articlesLayoutKind(undefined), undefined);
+	assert.equal(articlesLayoutKind(''), undefined);
 });
 
 test('articlesContentDir nests under the shared prefix', () => {

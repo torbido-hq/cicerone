@@ -55,7 +55,8 @@ Body…
 ```
 
 Drafts (`draft: true`, or YAML 1.1 `yes` / `on`) are omitted from
-production builds; frontmatter is parsed as YAML. RSS is
+production builds; `astro dev` still loads them so `/articles/` can be
+previewed. Frontmatter is parsed as YAML. RSS is
 `/articles/rss.xml` once a post is published. Article pages use IBM Plex
 Serif at ~65ch; chrome stays IBM Plex Sans, dates IBM Plex Mono.
 

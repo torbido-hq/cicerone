@@ -46,11 +46,14 @@ export function hasPublishedArticles(articlesDir, { production = process.env.NOD
 	return false;
 }
 
-/** `index` = listing / tags / authors; `post` = an article body. */
+/** Listing vs post; shapes from starlight-blog `libs/page.ts` route helpers. */
 export function articlesLayoutKind(id) {
-	if (id === ARTICLES_PREFIX) return 'index';
-	if (!id.startsWith(`${ARTICLES_PREFIX}/`)) return undefined;
-	const rest = id.slice(ARTICLES_PREFIX.length + 1);
-	if (/^\d+$/.test(rest) || rest.startsWith('tags/') || rest.startsWith('authors/')) return 'index';
-	return 'post';
+	if (typeof id !== 'string' || !id) return undefined;
+	const slug = id.replace(/\/+$/, '');
+	if (!slug) return undefined;
+	if (slug === ARTICLES_PREFIX) return 'index';
+	const listing = new RegExp(`^${ARTICLES_PREFIX}/(?:\\d+|tags/.+|authors/.+)$`);
+	if (listing.test(slug)) return 'index';
+	if (slug.startsWith(`${ARTICLES_PREFIX}/`)) return 'post';
+	return undefined;
 }
