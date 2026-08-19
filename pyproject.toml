@@ -1,3 +1,51 @@
+[build-system]
+requires = ["setuptools>=77.0.0", "wheel==0.44.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cicerone-recommender"
+description = "Self-hosted batch recommender: hybrid models, policies, optional serve API and dashboard."
+readme = "README.md"
+license = "LicenseRef-Beerware"
+license-files = ["LICENSE"]
+requires-python = ">=3.11,<3.12"
+authors = [{ name = "Nicholas Wieland", email = "ngw@torbido.co" }]
+keywords = ["recommender", "recsys", "lightfm", "batch", "fastapi"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Environment :: Console",
+    "Operating System :: OS Independent",
+]
+dynamic = ["version", "dependencies", "optional-dependencies"]
+
+[project.urls]
+Homepage = "https://cicerone.dev"
+Documentation = "https://cicerone.dev"
+Repository = "https://github.com/torbido-hq/cicerone"
+Changelog = "https://github.com/torbido-hq/cicerone/blob/main/CHANGELOG.md"
+Issues = "https://github.com/torbido-hq/cicerone/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.package-data]
+cicerone = ["static/**/*", "templates/**/*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "cicerone.__version__" }
+dependencies = { file = ["requirements.txt"] }
+
+[tool.setuptools.dynamic.optional-dependencies]
+redis = { file = ["requirements-redis.txt"] }
+sequential = { file = ["requirements-sequential.txt"] }
+
 [tool.ruff]
 line-length = 110
 target-version = "py311"

@@ -12,6 +12,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (rank, item, score, source, optional category) from the job output store,
   with cold-start fallback, on the Basic-Auth status page.
   `GET /dashboard?user_id=` fills the lookup on load.
+- PyPI distribution `cicerone-recommender` (`import cicerone`; the name
+  `cicerone` is taken). Wheel includes compiled dashboard CSS. A GitHub
+  Release publishes via trusted publishing (`.github/workflows/publish.yml`).
 
 - Optional project-site articles at `/articles/` (static Markdown under
   `website/src/content/docs/articles/`). No nav, RSS, or index until a

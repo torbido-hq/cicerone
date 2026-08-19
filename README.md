@@ -1,4 +1,4 @@
-<img src="src/cicerone/static/cicerone-logo.svg" alt="Cicerone" width="200">
+<img src="https://raw.githubusercontent.com/torbido-hq/cicerone/main/src/cicerone/static/cicerone-logo.svg" alt="Cicerone" width="200">
 
 # Cicerone
 
@@ -7,6 +7,7 @@
 [![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/release/python-3110/)
 [![License: Beerware](https://img.shields.io/badge/license-Beerware%20🍺-f28e1c.svg)](LICENSE)
 [![GitHub Pages](https://img.shields.io/badge/docs-cicerone.dev-004B75.svg)](https://cicerone.dev)
+[![PyPI](https://img.shields.io/pypi/v/cicerone-recommender.svg)](https://pypi.org/project/cicerone-recommender/)
 
 **Site:** [cicerone.dev](https://cicerone.dev)
 ([Starlight](https://starlight.astro.build/) docs site; source in [`website/`](website/),
@@ -20,9 +21,9 @@ lightweight "serve" mode can then expose those precomputed recommendations
 over a small read-only HTTP API — there's still no live inference, no
 model loaded in the request path. Optionally (`[job].save_model_artifact`),
 the batch job can also write a versioned fitted-model artifact for offline
-reload / future thin inference without redesigning training. Everything
-runs in Docker (Python 3.11 only lives inside the image, nothing to install
-on the host).
+reload / future thin inference without redesigning training. The supported
+deploy path is Docker (Python 3.11 lives inside the image). A PyPI package
+is also published for Python 3.11 hosts — see Installation.
 
 Cicerone isn't tied to any particular product, shop, or domain — it works
 for any catalog of "users" and "items" with interaction events (purchases,
@@ -519,6 +520,25 @@ by `popular_share`. An item is labeled `source = "blended"` only when more
 than one source contributed it. Without blending, users without enough
 interactions still get a fallback list from `PopularModel` (rectools),
 still honoring availability and any configured eligibility/boost policies.
+
+## Installation
+
+**Docker** is the supported deploy path (see Usage below). Python 3.11 and
+the LightFM build live inside the image.
+
+**pip** (Python 3.11 only). The distribution name is `cicerone-recommender`
+because [`cicerone`](https://pypi.org/project/cicerone/) is a different
+project; the import remains `cicerone`. LightFM may need a C compiler
+(`gcc`/`g++`) and OpenMP (`libgomp1`) on the host.
+
+```sh
+pip install cicerone-recommender
+pip install 'cicerone-recommender[redis]'        # lock backend / Redis Streams
+pip install 'cicerone-recommender[sequential]'   # SASRec / BERT4Rec
+```
+
+Then `python -m cicerone.job` (or `.scheduler`, `.serve`, `.dashboard`) with
+the same TOML config as Docker. Prefer the image for production.
 
 ## Usage
 

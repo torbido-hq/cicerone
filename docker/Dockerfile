@@ -91,7 +91,8 @@ FROM runtime AS test
 USER root
 COPY requirements-dev.txt ./
 RUN pip install --no-cache-dir -r requirements-dev.txt
-COPY pyproject.toml ./
+COPY pyproject.toml MANIFEST.in ./
+COPY requirements-redis.txt requirements-sequential.txt ./
 COPY tests/ ./tests/
 # Checked-in serve OpenAPI schema — asserted against create_app().openapi() in tests.
 COPY docs/openapi/ ./docs/openapi/
@@ -101,3 +102,20 @@ RUN chown -R cicerone:cicerone /app
 USER cicerone
 ENTRYPOINT []
 CMD ["pytest", "--cov=cicerone", "--cov-report=term-missing", "--cov-report=xml"]
+
+# --- package ---------------------------------------------------------------
+# sdist + wheel for PyPI. Reuses the frontend CSS artifact; does not install
+# the ML stack. Not deployed.
+FROM python:3.11-slim-bookworm AS package
+
+WORKDIR /app
+RUN pip install --no-cache-dir build==1.5.0 twine==7.0.0
+
+COPY pyproject.toml MANIFEST.in LICENSE README.md CHANGELOG.md ./
+COPY requirements.txt requirements-redis.txt requirements-sequential.txt ./
+COPY src/ ./src/
+COPY --from=frontend /build/tailwind.css ./src/cicerone/static/tailwind.css
+
+RUN python -m build \
+    && python -m twine check dist/* \
+    && python -c "import glob, zipfile; names=zipfile.ZipFile(glob.glob('dist/*.whl')[0]).namelist(); assert any(n.endswith('cicerone/static/tailwind.css') for n in names); assert any(n.endswith('cicerone/templates/dashboard.html') for n in names)"
