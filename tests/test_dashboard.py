@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from cicerone.config import Settings
 from cicerone.dashboard import create_app, main
+from cicerone.dashboard_lookup import MISSING
 from cicerone.http_auth import require_basic_auth
 
 
@@ -83,6 +84,7 @@ def test_dashboard_page_renders_with_valid_credentials():
     assert 'for="user-id"' in response.text
     assert 'aria-live="polite"' in response.text
     assert 'href="#main"' in response.text
+    assert "hx-disabled-elt=\"button[type='submit']\"" in response.text
 
 
 def test_status_partial_renders_latest_manifest():
@@ -588,4 +590,4 @@ def test_recommendations_partial_missing_rank_score_source_render_dashes():
     )
 
     assert ">i1<" in response.text
-    assert "—" in response.text
+    assert response.text.count(f">{MISSING}<") == 3
