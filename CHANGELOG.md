@@ -13,6 +13,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   with cold-start fallback, on the Basic-Auth status page.
   `GET /dashboard?user_id=` fills the lookup on load.
 
+- Project site blog at `/blog/` (static Markdown under `website/src/content/docs/blog/`).
+  Website-only PRs skip Docker lint/pytest.
+
 - Optional **sequential** strategy (`SASRecModel` / `BERT4RecModel`) via
   `[model.sequential]` (`architecture = "sasrec"` or `"bert4rec"`). Requires
   `pip install -r requirements-sequential.txt` (`rectools[torch]`); serve

@@ -157,6 +157,9 @@ and/or `examples/serve/` when request/response fields change.
 - Add/update tests for any behavior change — the coverage gate is enforced
   in CI, not just locally.
 - Make sure both the lint job and the test job pass before requesting review.
+  PRs that only touch `website/**` still report those checks as success;
+  Docker lint/pytest is skipped. The Pages workflow builds the Starlight
+  site instead (`cd website && npm ci && npm run build`).
 
 ## Releasing
 

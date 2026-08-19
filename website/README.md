@@ -2,7 +2,8 @@
 
 Docs site for [cicerone.dev](https://cicerone.dev). Built with
 [Starlight](https://starlight.astro.build/); markdown under repo `docs/` is
-synced into the Starlight content collection at build time.
+synced into the Starlight content collection at build time. The blog is the
+same static build (no CMS): posts live under `src/content/docs/blog/`.
 
 ## Commands
 
@@ -19,20 +20,45 @@ npm run preview  # serve dist/
 | Path | Role |
 | --- | --- |
 | `src/content/docs/index.mdx` | Landing (Starlight splash) |
+| `src/content/docs/blog/` | Blog posts (`title` + `date` frontmatter) → `/blog/` |
 | `scripts/sync-docs.mjs` | Copies `../docs/*.md` → `src/content/docs/` with frontmatter |
-| `astro.config.mjs` | Site URL, sidebar, logo, social |
+| `astro.config.mjs` | Site URL, sidebar, logo, social, blog plugin |
 | `public/CNAME` | Custom domain (`cicerone.dev`) |
 | `public/images/` | Site diagrams (`flow.svg`) |
 | `public/images/docs/` | Copied from `../docs/images/` at build time (gitignored) |
 
 Generated `src/content/docs/tutorial.md`, `architecture.md`, and
-`public/images/docs/` are gitignored; CI and local builds always sync from
-`docs/`.
+`incremental-events.md` are gitignored; `public/images/docs/` is copied from
+`docs/images/` at build time. CI and local builds always sync from `docs/`.
+Blog posts are **not** synced from `docs/` — add Markdown under
+`src/content/docs/blog/` (see below).
+
+## Blog
+
+Jekyll-style: a `.md` file with YAML frontmatter, HTML at build time, nothing
+dynamic. Author globally is `nicholas` (`astro.config.mjs`).
+
+```md
+---
+title: Post title
+date: 2026-08-19
+excerpt: One-line summary
+authors:
+  - nicholas
+---
+
+Body…
+```
+
+Drafts (`draft: true`) are omitted from production builds. RSS is
+`/blog/rss.xml`.
 
 ## Publishing
 
 [`.github/workflows/pages.yml`](../.github/workflows/pages.yml) builds
-`website/` on pushes to `main` that touch `website/**` or `docs/**`.
+`website/` on PRs and on pushes to `main` that touch `website/**` or
+`docs/**`. Only `main` deploys. Website-only PRs skip Docker lint/pytest
+(the `lint` / `test` jobs still succeed so required checks are not stuck).
 
 **One-time:** Settings → Pages → Source = **GitHub Actions**, custom domain
 `cicerone.dev`. DNS notes for Gandi apex records are below.

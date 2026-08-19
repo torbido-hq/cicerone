@@ -1,6 +1,7 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
+import starlightBlog from 'starlight-blog';
 
 // https://astro.build/config
 export default defineConfig({
@@ -17,6 +18,17 @@ export default defineConfig({
 				alt: 'Cicerone',
 				replacesTitle: true,
 			},
+			plugins: [
+				starlightBlog({
+					title: 'Blog',
+					authors: {
+						nicholas: {
+							name: 'Nicholas Wieland',
+							url: 'https://github.com/ngw',
+						},
+					},
+				}),
+			],
 			social: [
 				{
 					icon: 'github',
@@ -25,7 +37,7 @@ export default defineConfig({
 				},
 			],
 			editLink: {
-				baseUrl: 'https://github.com/torbido-hq/cicerone/edit/main/',
+				baseUrl: 'https://github.com/torbido-hq/cicerone/edit/main/website/',
 			},
 			customCss: ['./src/styles/custom.css'],
 			sidebar: [
