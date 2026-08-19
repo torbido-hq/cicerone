@@ -2,8 +2,10 @@
 
 Docs site for [cicerone.dev](https://cicerone.dev). Built with
 [Starlight](https://starlight.astro.build/); markdown under repo `docs/` is
-synced into the Starlight content collection at build time. The blog is the
-same static build (no CMS): posts live under `src/content/docs/blog/`.
+synced into the Starlight content collection at build time. Articles are the
+same static build (no CMS): posts live under `src/content/docs/articles/`.
+With no published post, the articles plugin is off — no header link, RSS, or
+`/articles/` route.
 
 ## Commands
 
@@ -20,9 +22,9 @@ npm run preview  # serve dist/
 | Path | Role |
 | --- | --- |
 | `src/content/docs/index.mdx` | Landing (Starlight splash) |
-| `src/content/docs/blog/` | Blog posts (`title` + `date` frontmatter) → `/blog/` |
+| `src/content/docs/articles/` | Articles (`title` + `date` frontmatter) → `/articles/` |
 | `scripts/sync-docs.mjs` | Copies `../docs/*.md` → `src/content/docs/` with frontmatter |
-| `astro.config.mjs` | Site URL, sidebar, logo, social, blog plugin |
+| `astro.config.mjs` | Site URL, sidebar, logo, social, articles plugin |
 | `public/CNAME` | Custom domain (`cicerone.dev`) |
 | `public/images/` | Site diagrams (`flow.svg`) |
 | `public/images/docs/` | Copied from `../docs/images/` at build time (gitignored) |
@@ -30,13 +32,14 @@ npm run preview  # serve dist/
 Generated `src/content/docs/tutorial.md`, `architecture.md`, and
 `incremental-events.md` are gitignored; `public/images/docs/` is copied from
 `docs/images/` at build time. CI and local builds always sync from `docs/`.
-Blog posts are **not** synced from `docs/` — add Markdown under
-`src/content/docs/blog/` (see below).
+Articles are **not** synced from `docs/` — add Markdown under
+`src/content/docs/articles/` (see below).
 
-## Blog
+## Articles
 
 Jekyll-style: a `.md` file with YAML frontmatter, HTML at build time, nothing
-dynamic. Author globally is `nicholas` (`astro.config.mjs`).
+dynamic. Author globally is `nicholas` (`astro.config.mjs`). Until a
+non-draft post exists, Articles is omitted from the build.
 
 ```md
 ---
@@ -51,7 +54,7 @@ Body…
 ```
 
 Drafts (`draft: true`) are omitted from production builds. RSS is
-`/blog/rss.xml`.
+`/articles/rss.xml` once a post is published.
 
 ## Publishing
 

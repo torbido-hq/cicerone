@@ -1,7 +1,40 @@
 // @ts-check
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import starlightBlog from 'starlight-blog';
+
+const websiteRoot = dirname(fileURLToPath(import.meta.url));
+const articlesDir = join(websiteRoot, 'src/content/docs/articles');
+
+function hasPublishedArticles() {
+	if (!existsSync(articlesDir)) return false;
+	for (const name of readdirSync(articlesDir)) {
+		if (name.startsWith('_') || !/\.(md|mdx)$/i.test(name)) continue;
+		const text = readFileSync(join(articlesDir, name), 'utf8');
+		const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
+		if (fm && /^draft:\s*true\s*$/m.test(fm[1])) continue;
+		return true;
+	}
+	return false;
+}
+
+const articlesPlugin = hasPublishedArticles()
+	? [
+			starlightBlog({
+				title: 'Articles',
+				prefix: 'articles',
+				authors: {
+					nicholas: {
+						name: 'Nicholas Wieland',
+						url: 'https://github.com/ngw',
+					},
+				},
+			}),
+		]
+	: [];
 
 // https://astro.build/config
 export default defineConfig({
@@ -18,17 +51,7 @@ export default defineConfig({
 				alt: 'Cicerone',
 				replacesTitle: true,
 			},
-			plugins: [
-				starlightBlog({
-					title: 'Blog',
-					authors: {
-						nicholas: {
-							name: 'Nicholas Wieland',
-							url: 'https://github.com/ngw',
-						},
-					},
-				}),
-			],
+			plugins: articlesPlugin,
 			social: [
 				{
 					icon: 'github',
