@@ -66,9 +66,6 @@ export default defineConfig({
 					href: 'https://github.com/torbido-hq/cicerone',
 				},
 			],
-			editLink: {
-				baseUrl: 'https://github.com/torbido-hq/cicerone/edit/main/website/',
-			},
 			customCss: ['./src/styles/custom.css'],
 			sidebar: [
 				{ label: 'Home', link: '/' },
