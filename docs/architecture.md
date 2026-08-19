@@ -50,6 +50,7 @@ For configuration and usage, see the main [README](../README.md).
 | `config/lock_url.py` | Postgres lock URL resolution for config load + lock builder |
 | `http_auth.py` | Shared bearer-token (serve/trigger) and HTTP Basic Auth (dashboard) dependencies |
 | `dashboard.py` | Standalone FastAPI dashboard: job status/history plus user-id lookup, own container/port |
+| `dashboard_lookup.py` | Output-store user lookup for the dashboard (fallback, category join, display formatting) |
 | `dashboard_users.py` | Load/save the dashboard's Basic Auth users file (TOML, username → bcrypt hash) |
 | `manage_dashboard_users.py` | CLI to add/remove/list dashboard users |
 | `templates/`, `static/` | Jinja2 templates + vendored htmx/Stimulus/Tailwind assets for the dashboard |
@@ -307,10 +308,11 @@ never imports `cicerone.model`/`dataset`/`automl`.
   history for that backend), while `DbManifestReader` queries the
   `recommendation_runs` table for real history (`read_recent(limit)`).
 - `io.factory.build_recommendation_reader(settings.output)` builds a
-  `RecommendationReader` for the user-id inspector. Lookup reads the output
-  store directly (no serve hop). `k` is `min(job.top_k, 20)`. Missing users
-  fall back to `__cold_start__` / popular-latest rows with a badge; `category`
-  is joined from the items snapshot when that column exists.
+  `RecommendationReader` for the user-id inspector (`dashboard_lookup.py`).
+  Lookup reads the output store directly (no serve hop). `k` is
+  `min(job.top_k, 20)`. Missing users fall back to `__cold_start__` /
+  popular-latest rows with a badge; `category` is joined from the items
+  snapshot when that column exists.
 - `job.run()` writes exactly one manifest per run via a `try`/`finally`,
   with a consistent key set (`status: "success"|"failed"`, `error`) on both
   the success and failure paths, so a failed run is no longer silently
