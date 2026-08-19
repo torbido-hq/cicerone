@@ -229,10 +229,10 @@ def create_app(
         )
 
     @app.get("/dashboard", dependencies=[Depends(auth)])
-    def dashboard(request: Request):
+    def dashboard(request: Request, user_id: str = Query(default="")):
         context = _status_context()
         context["refresh_interval_seconds"] = settings.dashboard.refresh_interval_seconds
-        context.update(_empty_recommendations_context())
+        context.update(_recommendations_context(settings, recommendation_reader, user_id))
         return _TEMPLATES.TemplateResponse(request, "dashboard.html", context)
 
     return app

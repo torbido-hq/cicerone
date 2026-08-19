@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Dashboard user lookup: inspect a `user_id`'s current precomputed top-K
   (rank, item, score, source, optional category) from the job output store,
   with cold-start fallback, on the Basic-Auth status page.
+  `GET /dashboard?user_id=` fills the lookup on load.
 
 - Incremental events horizontal HA: leader-only apply lease
   (`{lock_key}:events:apply`) when `events.ha = true` with
@@ -47,6 +48,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   object/array payloads; ack advances marker or deletes the SQS message.
 
 ### Changed
+
+- README and docs-site dashboard screenshot includes the user recommendation lookup.
 
 - Bump `pyarrow` 25.0.0 → 25.0.1 (#85), `SQLAlchemy` 2.0.51 → 2.0.52 (#86),
   `uvicorn` 0.52.1 → 0.52.3 (#87), `ruff` 0.16.2 → 0.16.3 (#88).

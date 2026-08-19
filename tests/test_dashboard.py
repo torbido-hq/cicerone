@@ -408,6 +408,20 @@ def test_recommendations_partial_renders_known_user():
     assert "cold-start fallback" not in response.text
 
 
+def test_dashboard_page_user_id_query_renders_lookup_results():
+    rec_reader = _FakeRecReader(_recs_df())
+    response = _recs_client(rec_reader).get(
+        "/dashboard",
+        params={"user_id": "u1"},
+        auth=("alice", "s3cret"),
+    )
+
+    assert response.status_code == 200
+    assert 'value="u1"' in response.text
+    assert ">i1<" in response.text
+    assert "Look up recommendations" in response.text
+
+
 def test_recommendations_partial_unknown_user_uses_fallback():
     fallback = pd.DataFrame(
         [
