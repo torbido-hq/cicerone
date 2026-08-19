@@ -34,7 +34,8 @@ For configuration and usage, see the main [README](../README.md).
 | `content_fallback.py` | Optional content-based cold-item strategy (one-hot item features + cosine vs user history) |
 | `artifact.py` | Optional versioned fitted-model bundle (schema **v3**: RecTools `save`/`load_model` for library models + pickle envelope; `content_fallback` still pickle) |
 | `automl.py` | Optional: backtests candidate models/weights/`rrf_k` configs over time-based folds of event history and picks the best one |
-| `cli.py` | `cicerone` console script (`start` / `job` / `serve` / `dashboard` / `scheduler` / `users`; `--config`) |
+| `cli.py` | `cicerone` console script (`start` / `job` / `serve` / `dashboard` / `scheduler` / `users`; `--config`, `--log-level`) |
+| `packaging.py` | Wheel checks for the Docker `package` stage (`python -m cicerone.packaging`) |
 | `job.py` | Orchestrates one end-to-end run (source → dataset → model → sink) |
 | `scheduler.py` | In-process cron loop that calls `job.run()`; when `[job.trigger]` is enabled, also hosts the retrain-trigger HTTP server (`trigger.py`) |
 | `serve/` | Serve mode package: FastAPI read API over precomputed recommendations |

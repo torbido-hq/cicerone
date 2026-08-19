@@ -11,6 +11,22 @@ from cicerone import __version__
 logger = logging.getLogger(__name__)
 
 _FORWARDING_COMMANDS = frozenset({"users", "export-openapi"})
+_DEFAULT_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+_USERS_CONFIG_ERROR = (
+    "cicerone users: loaded config has no enabled dashboard.users_path; "
+    "set [dashboard] enabled = true and users_path, or pass --users-path"
+)
+_PEELABLE = {
+    "-c": "config",
+    "--config": "config",
+    "--log-level": "log_level",
+    "--log-format": "log_format",
+}
+_PEELABLE_EQ = (
+    ("--config=", "config"),
+    ("--log-level=", "log_level"),
+    ("--log-format=", "log_format"),
+)
 
 
 def _apply_config(path: str | None) -> None:
@@ -23,25 +39,44 @@ def _has_flag(argv: list[str], name: str) -> bool:
     return any(arg == name or arg.startswith(prefix) for arg in argv)
 
 
-def _peel_config(parser: argparse.ArgumentParser, args: argparse.Namespace, rest: list[str]) -> list[str]:
-    """Allow ``cicerone start --config PATH`` as well as ``cicerone --config PATH start``."""
+def _peel_globals(parser: argparse.ArgumentParser, args: argparse.Namespace, rest: list[str]) -> list[str]:
+    """Allow global flags after the command (``cicerone start --config PATH``)."""
     kept: list[str] = []
     i = 0
     while i < len(rest):
         token = rest[i]
-        if token in {"-c", "--config"}:
+        dest = _PEELABLE.get(token)
+        if dest is not None:
             if i + 1 >= len(rest):
                 parser.error(f"argument {token}: expected one argument")
-            args.config = rest[i + 1]
+            setattr(args, dest, rest[i + 1])
             i += 2
             continue
-        if token.startswith("--config="):
-            args.config = token.split("=", 1)[1]
+        matched = False
+        for prefix, eq_dest in _PEELABLE_EQ:
+            if token.startswith(prefix):
+                setattr(args, eq_dest, token.split("=", 1)[1])
+                matched = True
+                break
+        if matched:
             i += 1
             continue
         kept.append(token)
         i += 1
     return kept
+
+
+def _resolve_log_level(name: str) -> int:
+    try:
+        return logging.getLevelNamesMapping()[name.upper()]
+    except KeyError:
+        raise SystemExit(f"invalid log level {name!r}") from None
+
+
+def _configure_logging(level_name: str | None, log_format: str | None) -> None:
+    name = level_name or os.environ.get("CICERONE_LOG_LEVEL") or "INFO"
+    fmt = log_format or os.environ.get("CICERONE_LOG_FORMAT") or _DEFAULT_LOG_FORMAT
+    logging.basicConfig(level=_resolve_log_level(name), format=fmt)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -54,6 +89,16 @@ def _parser() -> argparse.ArgumentParser:
         "--config",
         metavar="PATH",
         help="TOML config path (sets CICERONE_CONFIG_PATH for this process)",
+    )
+    parser.add_argument(
+        "--log-level",
+        metavar="LEVEL",
+        help="Logging level (default INFO; or CICERONE_LOG_LEVEL)",
+    )
+    parser.add_argument(
+        "--log-format",
+        metavar="FORMAT",
+        help="logging.basicConfig format (default timestamp/level/name; or CICERONE_LOG_FORMAT)",
     )
     parser.add_argument("-V", "--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -118,13 +163,22 @@ def _cmd_scheduler() -> int:
     return 0
 
 
+def dashboard_users_path(settings: object) -> str:
+    dashboard = getattr(settings, "dashboard", None)
+    users_path = getattr(dashboard, "users_path", None)
+    enabled = bool(getattr(dashboard, "enabled", False))
+    if dashboard is None or not enabled or not users_path:
+        raise SystemExit(_USERS_CONFIG_ERROR)
+    return str(users_path)
+
+
 def _cmd_users(argv: list[str]) -> int:
     from cicerone.manage_dashboard_users import main as users_main
 
     if os.environ.get("CICERONE_CONFIG_PATH") and not _has_flag(argv, "--users-path"):
         from cicerone.config import load_settings
 
-        argv = ["--users-path", load_settings().dashboard.users_path, *argv]
+        argv = ["--users-path", dashboard_users_path(load_settings()), *argv]
     users_main(argv)
     return 0
 
@@ -138,11 +192,11 @@ def _cmd_export_openapi(argv: list[str]) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = _parser()
     args, rest = parser.parse_known_args(argv)
-    rest = _peel_config(parser, args, rest)
+    rest = _peel_globals(parser, args, rest)
     if args.command not in _FORWARDING_COMMANDS and rest:
         parser.error(f"unrecognized arguments: {' '.join(rest)}")
     _apply_config(args.config)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    _configure_logging(args.log_level, args.log_format)
 
     command = args.command
     if command in {"start", "run"}:

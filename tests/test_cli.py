@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 
 import pytest
@@ -149,6 +150,80 @@ def test_serve_dashboard_scheduler_dispatch(tmp_path, monkeypatch):
     assert main(["--config", config, "dashboard"]) == 0
     assert main(["--config", config, "scheduler"]) == 0
     assert calls == ["serve", "dashboard", "scheduler"]
+
+
+def test_users_requires_enabled_dashboard_users_path(tmp_path, monkeypatch):
+    config = _write_config(tmp_path)
+    monkeypatch.setattr(
+        "cicerone.manage_dashboard_users.main",
+        lambda argv: pytest.fail("users must not run"),
+    )
+    with pytest.raises(SystemExit, match="enabled dashboard.users_path"):
+        main(["--config", config, "users", "list"])
+
+
+def test_users_disabled_dashboard_still_accepts_users_path_flag(tmp_path, monkeypatch):
+    config = _write_config(tmp_path)
+    seen: list[list[str]] = []
+    monkeypatch.setattr("cicerone.manage_dashboard_users.main", lambda argv: seen.append(list(argv)))
+    assert main(["--config", config, "users", "--users-path=/explicit", "list"]) == 0
+    assert seen == [["--users-path=/explicit", "list"]]
+
+
+def test_dashboard_users_path_rejects_missing_settings():
+    from types import SimpleNamespace
+
+    from cicerone.cli import dashboard_users_path
+
+    with pytest.raises(SystemExit, match="enabled dashboard.users_path"):
+        dashboard_users_path(SimpleNamespace())
+    with pytest.raises(SystemExit, match="enabled dashboard.users_path"):
+        dashboard_users_path(SimpleNamespace(dashboard=SimpleNamespace(enabled=True, users_path="")))
+    with pytest.raises(SystemExit, match="enabled dashboard.users_path"):
+        dashboard_users_path(SimpleNamespace(dashboard=SimpleNamespace(enabled=False, users_path="/x")))
+    enabled = SimpleNamespace(dashboard=SimpleNamespace(enabled=True, users_path="/x"))
+    assert dashboard_users_path(enabled) == "/x"
+
+
+def test_log_level_and_format_from_flags_and_env(monkeypatch):
+    seen: dict[str, object] = {}
+    monkeypatch.setattr("cicerone.cli.logging.basicConfig", lambda **kwargs: seen.update(kwargs))
+    monkeypatch.setattr("cicerone.export_serve_openapi.main", lambda argv: 0)
+    monkeypatch.delenv("CICERONE_LOG_LEVEL", raising=False)
+    monkeypatch.delenv("CICERONE_LOG_FORMAT", raising=False)
+
+    assert main(["export-openapi"]) == 0
+    assert seen["level"] == logging.INFO
+    assert seen["format"] == "%(asctime)s %(levelname)s %(name)s: %(message)s"
+
+    monkeypatch.setenv("CICERONE_LOG_LEVEL", "WARNING")
+    monkeypatch.setenv("CICERONE_LOG_FORMAT", "%(message)s")
+    seen.clear()
+    assert main(["export-openapi"]) == 0
+    assert seen["level"] == logging.WARNING
+    assert seen["format"] == "%(message)s"
+
+    seen.clear()
+    assert main(["--log-level", "DEBUG", "--log-format", "%(levelname)s", "export-openapi"]) == 0
+    assert seen["level"] == logging.DEBUG
+    assert seen["format"] == "%(levelname)s"
+
+    seen.clear()
+    assert main(["export-openapi", "--log-level=ERROR", "--log-format=%(name)s"]) == 0
+    assert seen["level"] == logging.ERROR
+    assert seen["format"] == "%(name)s"
+
+
+def test_invalid_log_level_errors(monkeypatch):
+    monkeypatch.setattr("cicerone.export_serve_openapi.main", lambda argv: pytest.fail("must not run"))
+    with pytest.raises(SystemExit, match="invalid log level"):
+        main(["--log-level", "nope", "export-openapi"])
+
+
+def test_log_level_flag_without_value_errors():
+    with pytest.raises(SystemExit) as exc_info:
+        main(["job", "--log-level"])
+    assert exc_info.value.code == 2
 
 
 def test_users_injects_users_path_from_config(tmp_path, monkeypatch):

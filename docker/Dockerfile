@@ -55,7 +55,7 @@ COPY --from=frontend /build/tailwind.css ./src/cicerone/static/tailwind.css
 
 RUN python -m build \
     && python -m twine check dist/* \
-    && python -c "import glob, zipfile; z=zipfile.ZipFile(glob.glob('dist/*.whl')[0]); names=z.namelist(); ep=z.read([n for n in names if n.endswith('entry_points.txt')][0]).decode(); assert 'cicerone.cli:main' in ep; assert any(n.endswith('cicerone/static/tailwind.css') for n in names); assert any(n.endswith('cicerone/templates/dashboard.html') for n in names)"
+    && PYTHONPATH=src python -m cicerone.packaging
 
 # --- runtime -----------------------------------------------------------------
 FROM python:3.11-slim-bookworm AS runtime
