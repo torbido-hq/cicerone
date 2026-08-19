@@ -80,6 +80,9 @@ def test_dashboard_page_renders_with_valid_credentials():
     assert "No job runs recorded yet." in response.text
     assert "Look up recommendations" in response.text
     assert "Enter a user id to inspect their current top-K." in response.text
+    assert 'for="user-id"' in response.text
+    assert 'aria-live="polite"' in response.text
+    assert 'href="#main"' in response.text
 
 
 def test_status_partial_renders_latest_manifest():
@@ -191,6 +194,7 @@ def test_status_partial_history_limited_to_a_single_run_shows_dataset_backend_no
     response = client.get("/partials/status", auth=("alice", "s3cret"))
 
     assert "Only the latest run is available" in response.text
+    assert "Recent job runs" in response.text
 
 
 def test_status_partial_multiple_history_rows_no_dataset_backend_note():
@@ -420,6 +424,8 @@ def test_dashboard_page_user_id_query_renders_lookup_results():
     assert 'value="u1"' in response.text
     assert ">i1<" in response.text
     assert "Look up recommendations" in response.text
+    assert "Current top-K recommendations for u1" in response.text
+    assert 'scope="col"' in response.text
 
 
 def test_recommendations_partial_unknown_user_uses_fallback():

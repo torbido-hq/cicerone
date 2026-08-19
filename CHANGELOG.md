@@ -57,6 +57,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - README and docs-site dashboard screenshot include the user recommendation lookup.
+- Dashboard lookup form is labeled, results are announced, and job-run
+  tables expose captions / column headers; helper text contrast is higher.
 
 - Bump `pyarrow` 25.0.0 → 25.0.1 (#85), `SQLAlchemy` 2.0.51 → 2.0.52 (#86),
   `uvicorn` 0.52.1 → 0.52.3 (#87), `ruff` 0.16.2 → 0.16.3 (#88).
