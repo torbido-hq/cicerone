@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 
 import pytest
 
@@ -158,7 +159,7 @@ def test_users_requires_enabled_dashboard_users_path(tmp_path, monkeypatch):
         "cicerone.manage_dashboard_users.main",
         lambda argv: pytest.fail("users must not run"),
     )
-    with pytest.raises(SystemExit, match="enabled dashboard.users_path"):
+    with pytest.raises(SystemExit, match=rf"from {re.escape(config)}.*dashboard.enabled = false"):
         main(["--config", config, "users", "list"])
 
 
@@ -175,11 +176,11 @@ def test_dashboard_users_path_rejects_missing_settings():
 
     from cicerone.cli import dashboard_users_path
 
-    with pytest.raises(SystemExit, match="enabled dashboard.users_path"):
-        dashboard_users_path(SimpleNamespace())
-    with pytest.raises(SystemExit, match="enabled dashboard.users_path"):
+    with pytest.raises(SystemExit, match=r"from /cfg.toml: no \[dashboard\] section"):
+        dashboard_users_path(SimpleNamespace(), config_path="/cfg.toml")
+    with pytest.raises(SystemExit, match=r"users_path is missing or empty"):
         dashboard_users_path(SimpleNamespace(dashboard=SimpleNamespace(enabled=True, users_path="")))
-    with pytest.raises(SystemExit, match="enabled dashboard.users_path"):
+    with pytest.raises(SystemExit, match=r"dashboard.enabled = false \(users_path = '/x'\)"):
         dashboard_users_path(SimpleNamespace(dashboard=SimpleNamespace(enabled=False, users_path="/x")))
     enabled = SimpleNamespace(dashboard=SimpleNamespace(enabled=True, users_path="/x"))
     assert dashboard_users_path(enabled) == "/x"

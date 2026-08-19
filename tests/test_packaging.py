@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import tomllib
 from pathlib import Path
 
@@ -51,59 +52,78 @@ def test_console_script_entry_point():
 def test_validate_wheel_requires_entry_point_and_static_files(tmp_path):
     import zipfile
 
-    from cicerone.packaging import main, validate_dist, validate_wheel
+    from cicerone.packaging import (
+        REQUIRED_SUFFIXES,
+        WHEEL_NAME,
+        main,
+        select_wheel,
+        validate_dist,
+        validate_wheel,
+    )
 
-    wheel = tmp_path / "cicerone_recommender-0.0.0-py3-none-any.whl"
-    with zipfile.ZipFile(wheel, "w") as zf:
-        zf.writestr(
-            "cicerone_recommender-0.0.0.dist-info/entry_points.txt",
-            "[console_scripts]\ncicerone = cicerone.cli:main\n",
-        )
-        zf.writestr("cicerone/static/tailwind.css", "/* css */")
-        zf.writestr("cicerone/templates/dashboard.html", "<html></html>")
+    version = __version__
+    dist_info = f"{WHEEL_NAME}-{version}.dist-info"
+
+    def _write_wheel(path, *, files: dict[str, str]) -> None:
+        with zipfile.ZipFile(path, "w") as zf:
+            for name, content in files.items():
+                zf.writestr(name, content)
+
+    def _valid_files() -> dict[str, str]:
+        files = {f"{dist_info}/entry_points.txt": "[console_scripts]\ncicerone = cicerone.cli:main\n"}
+        for suffix in REQUIRED_SUFFIXES:
+            files[suffix] = "ok"
+        return files
+
+    wheel = tmp_path / f"{WHEEL_NAME}-{version}-py3-none-any.whl"
+    decoy = tmp_path / "other_pkg-1.0.0-py3-none-any.whl"
+    _write_wheel(wheel, files=_valid_files())
+    _write_wheel(decoy, files={"other_pkg-1.0.0.dist-info/METADATA": "Name: other"})
 
     validate_wheel(wheel)
+    assert select_wheel(tmp_path) == wheel
     assert validate_dist(tmp_path) == wheel
     assert main([str(tmp_path)]) == 0
 
     empty = tmp_path / "empty"
     empty.mkdir()
-    with pytest.raises(ValueError, match="no wheel"):
+    with pytest.raises(ValueError, match="no wheel matching"):
         validate_dist(empty)
 
+    wrong_version = tmp_path / "wrong"
+    wrong_version.mkdir()
+    _write_wheel(
+        wrong_version / f"{WHEEL_NAME}-0.0.0-py3-none-any.whl",
+        files=_valid_files(),
+    )
+    with pytest.raises(ValueError, match="no wheel matching"):
+        select_wheel(wrong_version)
+
+    dupes = tmp_path / "dupes"
+    dupes.mkdir()
+    _write_wheel(dupes / f"{WHEEL_NAME}-{version}-py3-none-any.whl", files=_valid_files())
+    _write_wheel(dupes / f"{WHEEL_NAME}-{version}-cp311-none-any.whl", files=_valid_files())
+    with pytest.raises(ValueError, match="multiple wheels matching"):
+        select_wheel(dupes)
+
     bad = tmp_path / "bad.whl"
-    with zipfile.ZipFile(bad, "w") as zf:
-        zf.writestr("cicerone/static/tailwind.css", "x")
+    _write_wheel(bad, files={"cicerone/static/tailwind.css": "x"})
     with pytest.raises(ValueError, match="entry_points.txt"):
         validate_wheel(bad)
 
     missing_script = tmp_path / "noscript.whl"
-    with zipfile.ZipFile(missing_script, "w") as zf:
-        zf.writestr("cicerone_recommender-0.0.0.dist-info/entry_points.txt", "[console_scripts]\n")
-        zf.writestr("cicerone/static/tailwind.css", "x")
-        zf.writestr("cicerone/templates/dashboard.html", "x")
+    files = _valid_files()
+    files[f"{dist_info}/entry_points.txt"] = "[console_scripts]\n"
+    _write_wheel(missing_script, files=files)
     with pytest.raises(ValueError, match="console script"):
         validate_wheel(missing_script)
 
-    missing_css = tmp_path / "nocss.whl"
-    with zipfile.ZipFile(missing_css, "w") as zf:
-        zf.writestr(
-            "cicerone_recommender-0.0.0.dist-info/entry_points.txt",
-            "cicerone.cli:main",
-        )
-        zf.writestr("cicerone/templates/dashboard.html", "x")
-    with pytest.raises(ValueError, match="tailwind.css"):
-        validate_wheel(missing_css)
-
-    missing_html = tmp_path / "nohtml.whl"
-    with zipfile.ZipFile(missing_html, "w") as zf:
-        zf.writestr(
-            "cicerone_recommender-0.0.0.dist-info/entry_points.txt",
-            "cicerone.cli:main",
-        )
-        zf.writestr("cicerone/static/tailwind.css", "x")
-    with pytest.raises(ValueError, match="dashboard.html"):
-        validate_wheel(missing_html)
+    for suffix in REQUIRED_SUFFIXES:
+        missing = tmp_path / f"missing-{suffix.replace('/', '_')}.whl"
+        files = {k: v for k, v in _valid_files().items() if k != suffix}
+        _write_wheel(missing, files=files)
+        with pytest.raises(ValueError, match=re.escape(suffix)):
+            validate_wheel(missing)
 
 
 def test_packaging_main_defaults_to_dist(monkeypatch, tmp_path):

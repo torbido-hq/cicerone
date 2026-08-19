@@ -77,7 +77,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Article plugin gating passes `{ production }` explicitly; layout kind
   matches starlight-blog listing routes and ignores a missing route id.
 - Drop the Starlight “Edit page” footer; site content is edited in git.
-- Docker `package` stage validates the wheel via `python -m cicerone.packaging`.
+- Docker `package` stage validates the wheel via `python -m cicerone.packaging`
+  (selects `cicerone_recommender-<version>-*.whl`).
 
 - README and docs-site dashboard screenshot include the user recommendation lookup.
 - Docs site copies `docs/images/` into `website/public/images/docs/` at build time.
@@ -98,7 +99,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - `cicerone users` with a config path requires enabled `dashboard.users_path`
-  (or an explicit `--users-path`); it no longer assumes the default file.
+  (or an explicit `--users-path`); the error names the loaded config and the
+  dashboard settings that were resolved.
 
 - Dashboard still starts if the recommendation store cannot be opened (lookup disabled).
 - Dashboard lookup errors show a generic message; details stay in the logs.
