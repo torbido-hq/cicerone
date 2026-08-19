@@ -23,6 +23,9 @@
       const then = new Date(iso);
       if (Number.isNaN(then.getTime())) return;
 
+      if (this.element.tagName === "TIME") {
+        this.element.dateTime = iso;
+      }
       const seconds = Math.max(0, Math.round((Date.now() - then.getTime()) / 1000));
       this.element.textContent = `${this._relative(seconds)} (${iso})`;
     }
@@ -43,4 +46,19 @@
 
   const application = Stimulus.Application.start();
   application.register("time-ago", TimeAgoController);
+
+  document.body.addEventListener("htmx:afterRequest", function (event) {
+    const detail = event.detail || {};
+    const form = detail.elt || event.target;
+    if (!(form instanceof HTMLFormElement) || !form.hasAttribute("data-lookup-form")) return;
+    if (!detail.successful) return;
+    const userId = new FormData(form).get("user_id");
+    const url = new URL(window.location.href);
+    if (typeof userId === "string" && userId.trim() !== "") {
+      url.searchParams.set("user_id", userId.trim());
+    } else {
+      url.searchParams.delete("user_id");
+    }
+    window.history.replaceState(null, "", url.toString());
+  });
 })();

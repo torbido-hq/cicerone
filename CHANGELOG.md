@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Dashboard user lookup: inspect a `user_id`'s current precomputed top-K
+  (rank, item, score, source, optional category) from the job output store,
+  with cold-start fallback, on the Basic-Auth status page.
+  `GET /dashboard?user_id=` fills the lookup on load.
+
 - Optional **sequential** strategy (`SASRecModel` / `BERT4RecModel`) via
   `[model.sequential]` (`architecture = "sasrec"` or `"bert4rec"`). Requires
   `pip install -r requirements-sequential.txt` (`rectools[torch]`); serve
@@ -51,6 +56,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- README and docs-site dashboard screenshot include the user recommendation lookup.
+- Docs site copies `docs/images/` into `website/public/images/docs/` at build time.
+- Dashboard lookup form is labeled, results are announced, and job-run
+  tables expose captions / column headers; helper text contrast is higher.
+- Dashboard inspector k is `min(job.top_k, dashboard.lookup_k)` (default 20).
+
 - Bump `pyarrow` 25.0.0 → 25.0.1 (#85), `SQLAlchemy` 2.0.51 → 2.0.52 (#86),
   `uvicorn` 0.52.1 → 0.52.3 (#87), `ruff` 0.16.2 → 0.16.3 (#88).
 - Bump GitHub Actions Pages deploy helpers: `actions/upload-pages-artifact`
@@ -63,6 +74,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Dashboard still starts if the recommendation store cannot be opened (lookup disabled).
+- Dashboard lookup errors show a generic message; details stay in the logs.
+- Dashboard lookup URL updates keep the hash fragment.
+- Dashboard lookup disables the Look up button during the htmx request.
 - Postgres `is_locked()` logs and re-raises probe failures instead of
   treating a dead database as “lock free”; `owned()` logs before fail-closed.
 - S3 EventSource `nack` returns events to the local pending queue (and

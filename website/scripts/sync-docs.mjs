@@ -3,7 +3,15 @@
  * Sync repo docs/*.md into Starlight content with frontmatter.
  * docs/ remains the source of truth; run before `astro build` / `astro dev`.
  */
-import { mkdirSync, readFileSync, writeFileSync, copyFileSync, existsSync } from "node:fs";
+import {
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  copyFileSync,
+  existsSync,
+  readdirSync,
+  unlinkSync,
+} from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -58,8 +66,8 @@ function rewrite(source) {
   });
 
   text = text.replace(/\.\.\/src\/cicerone\/static\//g, "/");
-  text = text.replace(/\]\(images\//g, "](/images/");
-  text = text.replace(/src="images\//g, 'src="/images/');
+  text = text.replace(/\]\(images\//g, "](/images/docs/");
+  text = text.replace(/src="images\//g, 'src="/images/docs/');
 
   return text.trim() + "\n";
 }
@@ -85,4 +93,22 @@ const openapiDst = join(websiteRoot, "public/openapi/serve.openapi.json");
 if (existsSync(openapiSrc)) {
   mkdirSync(dirname(openapiDst), { recursive: true });
   copyFileSync(openapiSrc, openapiDst);
+}
+
+const imagesSrc = join(docsSrc, "images");
+const imagesDst = join(websiteRoot, "public/images/docs");
+if (existsSync(imagesSrc)) {
+  mkdirSync(imagesDst, { recursive: true });
+  const syncedImages = new Set();
+  for (const entry of readdirSync(imagesSrc, { withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    copyFileSync(join(imagesSrc, entry.name), join(imagesDst, entry.name));
+    syncedImages.add(entry.name);
+    console.log(`synced docs/images/${entry.name} → public/images/docs/${entry.name}`);
+  }
+  for (const entry of readdirSync(imagesDst, { withFileTypes: true })) {
+    if (!entry.isFile() || syncedImages.has(entry.name)) continue;
+    unlinkSync(join(imagesDst, entry.name));
+    console.log(`removed stale public/images/docs/${entry.name}`);
+  }
 }

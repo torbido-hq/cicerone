@@ -1,7 +1,9 @@
 """Dashboard: a small read-only status page over the run manifest data
 job.run() writes on every run, success or failure (see
-cicerone.io.manifest_reader). Runs as its own process/entrypoint
-(`python -m cicerone.dashboard`), independent of [job].mode.
+cicerone.io.manifest_reader), plus a user_id lookup of precomputed
+recommendations from the same output store. Runs as its own
+process/entrypoint (`python -m cicerone.dashboard`), independent of
+[job].mode.
 
 Rendered server-side (FastAPI + Jinja2 + htmx for polling, a small Stimulus
 controller for relative timestamps) rather than a JSON API + JS framework.
@@ -20,15 +22,16 @@ from typing import Any
 
 import uvicorn
 from croniter import CroniterError, croniter
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, Query, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from cicerone.config import Settings, load_settings
+from cicerone.dashboard_lookup import lookup_recommendations
 from cicerone.dashboard_users import load_users
 from cicerone.http_auth import require_basic_auth
-from cicerone.io.base import ManifestReader
-from cicerone.io.factory import build_manifest_reader
+from cicerone.io.base import ManifestReader, RecommendationReader
+from cicerone.io.factory import build_manifest_reader, build_recommendation_reader
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -81,7 +84,12 @@ def _incremental_status(history: list[dict[str, Any]]) -> dict[str, Any] | None:
     return None
 
 
-def create_app(settings: Settings, reader: ManifestReader, users: dict[str, str]) -> FastAPI:
+def create_app(
+    settings: Settings,
+    reader: ManifestReader,
+    users: dict[str, str],
+    recommendation_reader: RecommendationReader | None = None,
+) -> FastAPI:
     app = FastAPI(title="cicerone-dashboard")
     app.mount("/static", StaticFiles(directory=str(_PACKAGE_DIR / "static")), name="static")
     auth = require_basic_auth(users)
@@ -107,10 +115,19 @@ def create_app(settings: Settings, reader: ManifestReader, users: dict[str, str]
     def status_partial(request: Request):
         return _TEMPLATES.TemplateResponse(request, "_status.html", _status_context())
 
+    @app.get("/partials/recommendations", dependencies=[Depends(auth)])
+    def recommendations_partial(request: Request, user_id: str = Query(default="")):
+        return _TEMPLATES.TemplateResponse(
+            request,
+            "_recommendations.html",
+            lookup_recommendations(settings, recommendation_reader, user_id),
+        )
+
     @app.get("/dashboard", dependencies=[Depends(auth)])
-    def dashboard(request: Request):
+    def dashboard(request: Request, user_id: str = Query(default="")):
         context = _status_context()
         context["refresh_interval_seconds"] = settings.dashboard.refresh_interval_seconds
+        context.update(lookup_recommendations(settings, recommendation_reader, user_id))
         return _TEMPLATES.TemplateResponse(request, "dashboard.html", context)
 
     return app
@@ -129,7 +146,12 @@ def main() -> None:
         )
 
     reader = build_manifest_reader(settings.output)
-    app = create_app(settings, reader, users)
+    try:
+        rec_reader = build_recommendation_reader(settings.output)
+    except Exception:
+        logger.exception("Recommendation store is not available; dashboard lookup will be disabled")
+        rec_reader = None
+    app = create_app(settings, reader, users, rec_reader)
     uvicorn.run(app, host=settings.dashboard.host, port=settings.dashboard.port)
 
 

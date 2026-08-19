@@ -69,6 +69,7 @@ class DashboardSettings:
     users_path: str = "/app/config/dashboard_users.toml"
     refresh_interval_seconds: float = 30.0
     history_limit: int = 20
+    lookup_k: int = 20
 
 
 @dataclass(frozen=True)
@@ -231,6 +232,10 @@ class Settings:
     @property
     def dashboard_history_limit(self) -> int:
         return self.dashboard.history_limit
+
+    @property
+    def dashboard_lookup_k(self) -> int:
+        return self.dashboard.lookup_k
 
     @property
     def automl_enabled(self) -> bool:
