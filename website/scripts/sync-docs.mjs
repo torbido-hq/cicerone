@@ -10,6 +10,7 @@ import {
   copyFileSync,
   existsSync,
   readdirSync,
+  unlinkSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -96,11 +97,21 @@ if (existsSync(openapiSrc)) {
 
 const imagesSrc = join(docsSrc, "images");
 const imagesDst = join(websiteRoot, "public/images");
+const siteOwnedImages = new Set(["flow.svg"]);
 if (existsSync(imagesSrc)) {
   mkdirSync(imagesDst, { recursive: true });
+  const syncedImages = new Set();
   for (const entry of readdirSync(imagesSrc, { withFileTypes: true })) {
     if (!entry.isFile()) continue;
     copyFileSync(join(imagesSrc, entry.name), join(imagesDst, entry.name));
+    syncedImages.add(entry.name);
     console.log(`synced docs/images/${entry.name} → public/images/${entry.name}`);
+  }
+  for (const entry of readdirSync(imagesDst, { withFileTypes: true })) {
+    if (!entry.isFile() || syncedImages.has(entry.name) || siteOwnedImages.has(entry.name)) {
+      continue;
+    }
+    unlinkSync(join(imagesDst, entry.name));
+    console.log(`removed stale public/images/${entry.name}`);
   }
 }
