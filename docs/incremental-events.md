@@ -2,318 +2,197 @@
 
 # Incremental events
 
-Cicerone can fold new interaction events into recommendations between full
-batch retrains. This document is the design source of truth; runtime code
-lives under `src/cicerone/events/`.
+Cicerone can fold new interaction events into recommendations **between**
+full batch retrains. Enable `[events]` on the **serve** process: sources
+normalize to the same event contract, micro-batch, then write-through to
+the same `[output]` store serve already reads.
 
-For the batch I/O and serve overview, see [architecture.md](architecture.md).
+This is not live ranking. LightFM, item-KNN, sequential, and content
+fallback wait for the next `job.run()` (cron or `POST /trigger/retrain`).
+The incremental path refreshes **popular / latest slices** (and recency
+boosts) for affected users plus `__cold_start__`. Why those models are
+offline-only: [how-it-works.md](how-it-works.md).
 
-## Goals
+Batch I/O and serve packages: [architecture.md](architecture.md).
 
-- React to interaction events from multiple sources without waiting for the
-  next cron / retrain-webhook full `job.run()`.
-- Keep update logic **backend-agnostic**: every source normalizes to the
-  existing event contract before anything hits the incremental path.
-- Preserve today’s trainer vs serve split: serve stays a read API over
-  precomputed rows (no live LightFM inference on the request path).
+## What it does not do
 
-## Non-goals (for now)
-
-- Dynamic loading of third-party / external plugin packages.
-- `importlib.metadata` entry-point discovery for outside authors.
-- A plugin marketplace. Cicerone holds DB/S3/broker credentials; untrusted
-  external code is out of scope.
-
-The `EventSource` surface is an **internal** interface so built-in backends
-stay consistent — the same spirit as `io/` `kind` + `options`, not a public
-extension API.
+- Request-path LightFM / SASRec inference
+- Updating personalized / `item_based` / `sequential` rows between retrains
+- A public plugin API (`EventSource` is internal, same spirit as `io/` kinds)
 
 ## Event contract
 
-Same columns as batch input (`dataset.py` / README data contract):
+Same columns as batch input:
 
 | Column | Required | Notes |
 | --- | --- | --- |
 | `user_id` | yes | string |
 | `item_id` | yes | string |
-| `event_type` | yes | must appear in `features.toml` `[event_weights]` to affect weights |
+| `event_type` | yes | must appear in `features.toml` `[event_weights]` |
 | `quantity` | no | default `1` |
-| `occurred_at` | yes | timezone-aware datetime (ISO-8601 with `Z` or offset; Unix epoch seconds (UTC) OK) |
+| `occurred_at` | yes | timezone-aware: ISO-8601 with `Z` or offset, or Unix epoch seconds (UTC) |
 
-Optional transport fields (not part of the training contract):
+Optional transport fields:
 
 - `event_id` — idempotency / ack key (generated if omitted)
 - `idempotency_key` — alias accepted by the webhook JSON body
 
-## Package layout
+## Enable the webhook
 
-```
-src/cicerone/events/
-  base.py        # EventSource protocol, NormalizedEvent, EventSourceHealth
-  registry.py    # kind → factory (import-time; no external entry-points)
-  normalize.py   # coerce payloads → NormalizedEvent (+ light dedupe helpers)
-  buffer.py      # micro-batch by count or time window
-  updater.py     # cheap incremental path → OutputSink (write-through)
-  store.py       # load existing recommendation rows for merge
-  webhook.py     # HTTP push EventSource
-  db.py          # watermark poll EventSource
-  s3.py          # S3-compatible EventSource (R2 list/marker; optional AWS SQS)
-  redis_streams.py  # Redis Streams consumer-group EventSource
-  worker.py      # background poll → buffer → flush → ack
-
-src/cicerone/serve/
-  events_routes.py      # POST /events mount
-  bootstrap_events.py   # start/stop EventWorker in the serve process
-
-src/cicerone/config/events.py  # [events] coerce + TOML load helpers
-```
-
-Built-in backends (`webhook`, `db`, `s3`, `redis_streams`; later `rabbitmq` /
-`kafka`) register beside each other without changing the config shape.
-
-## EventSource surface
-
-```text
-connect() -> None
-poll(max_events) -> Sequence[NormalizedEvent]
-ack(event_ids) -> None
-health() -> EventSourceHealth  # connected, lag/backlog, last_event_at
-```
-
-Push backends (webhook) also expose `ingest(...)` for the HTTP handler;
-`poll`/`ack` still drive the shared worker so pull backends share one loop.
-
-Registry: `register_event_source(kind, factory)` at import time;
-`build_event_source(settings)` looks up `settings.events.kind`. Unknown
-kinds raise `ValueError` — no growing if/elif in the config loader.
-
-## Config
+On the serve config (`config/cicerone.serve.toml` or your local copy):
 
 ```toml
 [events]
-enabled = false
-ha = false         # true: require job.trigger.lock_backend to be postgres or redis
-kind = "webhook"   # webhook | db | s3 | redis_streams | rabbitmq | kafka
+enabled = true
+ha = false
+kind = "webhook"
 
 [events.options]
-# backend-specific; webhook may set auth_token (else serve.auth_token)
-# db: database_url (required), events_table / events_query, watermark_path,
-#     initial_watermark
-# s3 (R2-first): access_key_id, secret_access_key, bucket (required);
-#     endpoint_url (R2/MinIO); prefix; mode = "list" | "sqs" (default: list
-#     unless queue_url is set); marker_path / initial_marker (list).
-#     AWS-only: queue_url + mode = "sqs" (rejected when endpoint_url is set).
-#     Optional tuning: list_page_size, sqs_lag_cache_ttl_seconds,
-#     sqs_client_timeout_seconds
-# redis_streams: redis_url, stream, consumer_group (required); optional
-#     consumer_name (default: hostname), group_start_id (default: 0-0),
-#     block_ms (default: 0), claim_idle_ms (default: 300000). Flat hash
-#     fields match the event contract; missing event_id uses the stream
-#     entry id. Requires: pip install -r requirements-redis.txt
+# auth_token = "${EVENTS_AUTH_TOKEN}"  # optional; defaults to serve.auth_token
+# max_pending = 10000                  # HTTP 429 when full; minimum 100
 
 [events.incremental]
 batch_size = 100
 batch_window_seconds = 60
+poll_interval_seconds = 1
 ```
 
-Full retrain remains `[job]` cron + `[job.trigger]` (`POST /trigger/retrain`
-and optional input-bucket poll). That path is the drift backstop; incremental
-updates are a separate cheap path between full runs.
+`POST /events` uses Bearer auth (`events.options.auth_token` or
+`serve.auth_token`). Body: one event object, a JSON array, or
+`{"events":[...]}`. Accepted events return **202** with `accepted` and
+`event_ids`. Invalid JSON / contract → **400**. Full backlog
+(`max_pending`) → **429**.
 
-## Incremental strategy
-
-**Micro-batch** (count *or* time window), then a lightweight update:
-
-| Strategy | Incremental behavior |
-| --- | --- |
-| Popular / latest | Cheap count / recency updates from the flushed batch |
-| Item KNN / content | Future: co-occurrence / feature touch-ups; v1 leaves existing rows |
-| LightFM (`collaborative`) | No clean `partial_fit` — **not** updated online; waits for full retrain |
-
-v1 updater: merge flushed events into existing top-K rows for **affected
-users** and `__cold_start__` by refreshing `popular_fallback` / `latest`
-slices (and boosting recently interacted items), then **write-through** via
-the same `OutputSink` the batch job uses. Personalized / `item_based` rows
-are preserved until the next full retrain.
-
-Serve keeps its refresh loop — no in-process model swap. That preserves
-separate trainer/serve containers and “serve request path never loads
-LightFM.”
-
-```mermaid
-sequenceDiagram
-  participant Src as EventSource
-  participant Buf as MicroBatchBuffer
-  participant Inc as IncrementalUpdater
-  participant Out as OutputSink
-  participant Serve as ServeAPI
-  participant Full as JobRunGuard
-
-  Src->>Buf: normalized events
-  Buf->>Inc: flush on N or T
-  Inc->>Out: write updated top-K rows
-  Serve->>Out: refresh loop reads
-  Note over Full: cron or POST /trigger/retrain
-  Full->>Out: full retrain overwrite
+```sh
+curl -sS -X POST \
+  -H "Authorization: Bearer $SERVE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":"alice","item_id":"ipa-001","event_type":"purchase","quantity":1,"occurred_at":"2026-08-19T12:00:00Z"}' \
+  http://localhost:8000/events
 ```
 
-When a full `job.run()` holds `RunGuard` **in the same process**, pass
-`busy_check=guard.busy` into `start_events_runtime` / `IncrementalUpdater`
-so flushes skip. With `events.ha = true` (and `job.trigger.lock_backend`
-postgres/redis), serve also probes that retrain lock cross-process and takes
-a **separate** apply lease (`{lock_key}:events:apply`) around incremental
-write-through. Fan-out sources poll without the lease and acquire only when
-a micro-batch is ready to flush; db/s3-list still take the lease to poll
-(single consumer). On lock busy the flush nacks (lag stays honest). Redis
-`owned()` fences writes if the lease expires mid-apply; Postgres `owned()`
-checks `pg_locks` for this session. The Redis apply lease uses a 60s TTL
-(refreshed while held), not the 24h retrain TTL. The early retrain probe is
-TTL-cached; the pre-write check is always live.
+Flushes run when the buffer hits `batch_size` **or**
+`batch_window_seconds` elapses. Then serve’s refresh loop (dataset output)
+or the next DB read picks up the new rows. OpenAPI documents the route when
+webhook events are enabled (`/docs`, `/redoc`, checked-in
+`docs/openapi/serve.openapi.json`).
 
-`events.ha = true` fails fast unless that distributed lock backend is set.
-Without it, incremental events assume **one writer process**. Dataset output
-is whole-object RMW — leader-only apply is what makes multi-replica serve
-safe. Sharded-by-user writers are a follow-up.
+Full retrain remains `[job]` cron + `[job.trigger]`. Incremental updates
+are a separate cheap path between those runs.
+
+## Other sources
+
+`kind` is one of the **shipped** backends: `webhook`, `db`, `s3`,
+`redis_streams`. Annotated examples: `config/cicerone.toml`.
+
+### `db`
+
+Watermark poll over `events_table` / `events_query`. No `POST /events`.
+Required: `events.options.database_url`. Optional durable `watermark_path`
+and `initial_watermark`. The watermark advances only after a successful
+flush `ack`. When an `event_id` column exists, poll orders by
+`(occurred_at, event_id)` so same-timestamp pages cannot skip rows.
+`events_query`, when set, must be a single read-only `SELECT` from
+**trusted deploy-time config** (same rule as `input.options.events_query`).
+
+### `s3`
+
+S3-compatible (R2-first): same `endpoint_url` + credentials shape as
+dataset I/O. Default `mode = "list"` (list/marker under `prefix`; durable
+`marker_path`). Objects are JSON event objects or arrays; missing
+`event_id` uses `bucket/key|etag|index`. List mode is a **single consumer**
+per bucket/prefix.
+
+AWS-only `mode = "sqs"` (`queue_url`) is rejected when `endpoint_url` is
+set. `nack` requeues locally and extends SQS visibility so a lock-busy
+replica can retry without waiting out the visibility timeout.
+
+### `redis_streams`
+
+Consumer group (`XREADGROUP` / `XACK` / `XAUTOCLAIM` for idle PEL
+recovery). Required: `redis_url`, `stream`, `consumer_group`. Optional
+`consumer_name` (default hostname), `group_start_id` (`0-0`), `block_ms`,
+`claim_idle_ms`. Flat hash fields match the event contract; missing
+`event_id` uses the stream entry id. Requires
+`pip install -r requirements-redis.txt` (same extra as the Redis lock).
+
+## High availability
+
+Default is **one writer process**. Dataset output is whole-object
+read-modify-write — multi-replica serve is only safe with a leader.
+
+Set `events.ha = true` **and** `job.trigger.lock_backend` to `postgres` or
+`redis`. Config fails fast otherwise. Serve takes a **separate** apply
+lease (`{lock_key}:events:apply`) around write-through (not the 24h
+retrain TTL; Redis apply lease is 60s, refreshed while held). Fan-out
+sources poll without the lease and acquire it when a micro-batch is ready
+to flush; db / s3-list still take the lease to poll (single consumer). On
+lock busy the flush nacks so lag stays honest. Redis `owned()` fences
+writes if the lease expires mid-apply; Postgres `owned()` checks `pg_locks`
+for this session. A dead Postgres lock probe **fails closed** (logged and
+re-raised), not “lock free”.
 
 | Source | Multi-replica |
 | --- | --- |
 | webhook | Single-ingress or sticky session; do not claim multi-replica ingest |
 | db | Single poller (non-leader skips poll when the apply lease is configured) |
 | s3 list | Single consumer; non-leader skips poll |
-| s3 sqs | Delivery fan-out OK; apply still under the lease. `nack` requeues locally and extends SQS visibility so a lock-busy replica can retry without waiting for the visibility timeout |
+| s3 sqs | Delivery fan-out OK; apply still under the lease |
 | redis_streams | Consumer groups + unique `consumer_name`; apply is leader-only |
 
-Webhook options may set `max_pending` (default 10000, minimum 100) for ingest
-backpressure (HTTP 429 when full). Worker poll interval is
-`events.incremental.poll_interval_seconds`.
+Same-process full `job.run()` passes `busy_check` so incremental flushes
+skip while a retrain holds `RunGuard`.
 
-The updater caches affected users' recommendation rows in-process between
-micro-batches (LRU-bounded; default 2048 users) and refreshes that cache after
-each successful write. A same-process `busy_check` hit invalidates the cache so
-the next apply reloads after retrain.
-Loads and writes are **user-scoped** (affected users + `__cold_start__` only):
-`OutputSink.replace_recommendations_for_users` updates those users without a
-full-table overwrite (`db` deletes/inserts by `user_id` in one transaction;
-`dataset` read-merges the parquet object) and returns the distinct user count
-for the incremental manifest. Dataset user loads pass pyarrow `filters` on
-`user_id` when possible (row-group predicate pushdown); S3 still downloads the
-object bytes today.
+## Ops
 
-## Follow-up PR sequence
+Loads and writes are **user-scoped** (affected users + `__cold_start__`):
+`OutputSink.replace_recommendations_for_users` updates those users without
+a full-table overwrite. The updater keeps an LRU cache of those rows
+(default 2048 users) between micro-batches.
 
-Keep each PR **atomic** and stacked on the incremental-events foundation
-(`feature/events-incremental` / its successors), not a grab-bag onto `main`:
+Serve `/metrics` (when events are enabled):
 
-1. Webhook + micro-batch write-through (foundation) — shipped
-2. `kind=db` watermark source — shipped
-3. Metrics / dashboard wiring (lag, flush, errors) — shipped
-4. Further backends / write-path improvements as separate PRs (`kind=s3`,
-   user-scoped I/O, and `kind=redis_streams` shipped; RabbitMQ / Kafka, …)
-5. **Last:** full review of `docs/` **and** the `website/` sync (sidebar,
-   `sync-docs.mjs`, rendered pages, links, OpenAPI mentions) so the public
-   site matches the shipped incremental surface
-
-## Backend roadmap
-
-Build order:
-
-1. **Webhook / HTTP push** (`POST /events` on the serve app) — shipped.
-2. **DB** — watermark poll (reuse `events_query` / `events_table`); optional
-   `watermark_path` for durable cursor; LISTEN/NOTIFY or logical replication
-   under the **same** `kind=db` later (not a separate kind).
-3. **S3-compatible (R2-first)** — shipped: primary path is list/marker poll
-   (`mode=list`) with the same `endpoint_url` + credentials shape as dataset
-   I/O (Cloudflare R2 / MinIO). Optional AWS-only `mode=sqs` (S3→SQS
-   notifications; rejected when `endpoint_url` is set). Objects are JSON
-   event objects or arrays; missing `event_id` uses `bucket/key|etag|index`.
-   List mode assumes a **single consumer** per bucket/prefix (local
-   `event_id` dedupe + marker); multi-writer/shared markers are out of scope.
-4. **Redis Streams** — shipped: `kind=redis_streams` consumer group
-   (`XREADGROUP` / `XACK` / `XAUTOCLAIM` for idle PEL recovery). Flat stream
-   hash fields; missing `event_id` uses the Redis entry id. Optional
-   `redis` package (`requirements-redis.txt`), same as the Redis lock backend.
-5. **RabbitMQ** — queue/exchange consumer (optional dep).
-6. **Kafka** — topic / consumer group (optional dep).
-
-### Broker recommendation
-
-For greenfield self-hosted deployments at this project size, prefer **Redis Streams** as
-the default *broker-based* backend: consumer groups, lag introspection, and a
-small ops footprint — especially if Redis already sits near the stack
-(optional distributed lock). **NATS/JetStream** is the next-best lightweight
-alternative. Keep Kafka/RabbitMQ for shops that already run them; do not steer
-greenfield users there first.
-
-| Path | New host/image deps? |
+| Metric | Meaning |
 | --- | --- |
-| Webhook + micro-batch | None (FastAPI already present) |
-| DB poll | None beyond SQLAlchemy |
-| S3-compatible list / AWS SQS | boto3 already present |
-| RabbitMQ | optional `requirements-rabbitmq.txt` |
-| Kafka | optional `confluent-kafka` extra |
-| Redis Streams | `redis` (already optional for locks) |
+| `cicerone_events_source_lag` | Source backlog (`-1` if unknown / events off). Webhook/S3-list: pending + in-flight. S3-SQS: that plus approximate visible queue depth. Redis Streams: `XPENDING` + group `lag`. DB: rows after watermark. |
+| `cicerone_events_source_connected` | `1` when the source reports connected |
+| `cicerone_events_flush_total{status=}` | `success` / `busy` / `error` |
+| `cicerone_events_flush_events_total` | Events applied on successful flushes |
+| `cicerone_events_last_success_timestamp_seconds` | Last successful flush (Unix seconds) |
+| `cicerone_events_tick_errors_total` | Unexpected exceptions outside handled flush paths |
+| `cicerone_events_lock_total{status=}` | Apply-lease `acquired` / `skip` |
+| `cicerone_events_leader` | `1` while this replica owns the apply lock |
+| `cicerone_events_apply_busy_total{reason=}` | Skip due to `lock` or `retrain` |
+
+Lag/connected refresh each poll cycle (not on `/metrics` scrape). The
+dashboard (when `[events]` is enabled) shows the latest incremental
+**success** from recent manifests. With a dataset output, a later full
+retrain overwrites `manifest.json`, so the panel may go empty until the
+next flush (prefer a DB output for history).
 
 ## Delivery semantics
 
-| Source | Typical delivery | Idempotency approach |
+| Source | Typical delivery | Idempotency |
 | --- | --- | --- |
 | Webhook | At-least-once (client retries) | `event_id` / `idempotency_key`; short dedupe window |
 | DB watermark | Near exactly-once | Advance watermark only after successful flush |
 | S3 list (R2) / SQS | At-least-once | Object key + ETag dedupe |
 | Redis Streams | At-least-once | `XACK` after successful flush; stream entry id fallback |
-| RabbitMQ / Kafka | At-least-once | Ack/commit after successful flush; shared dedupe key |
 
-Duplicate delivery can inflate weights for `quantity_scaled_events`. Dedupe
-belongs in the shared normalize/buffer path, not per backend.
+Duplicate delivery can inflate weights for `quantity_scaled_events`.
 
-## Ops
+## Internals
 
-Extend existing Prometheus metrics and the Basic-Auth dashboard (no separate
-ops surface). Serve `/metrics` exposes:
+`EventSource` (`connect` / `poll` / `ack` / `health`) is an internal
+interface. Built-in backends register by `kind` at import time; unknown
+kinds raise `ValueError`. Package layout:
+[architecture.md](architecture.md) (`events/`, `serve/events_routes.py`,
+`serve/bootstrap_events.py`).
 
-| Metric | Meaning |
-| --- | --- |
-| `cicerone_events_source_lag` | Source backlog (`-1` if unknown / events off). Webhook/S3-list: pending + in-flight. S3-SQS: that held count plus approximate *visible* queue depth. Redis Streams: `XPENDING` + group `lag`. DB: rows after watermark. |
-| `cicerone_events_source_connected` | `1` when the source reports connected |
-| `cicerone_events_flush_total{status=}` | Flush outcomes: `success` / `busy` / `error` |
-| `cicerone_events_flush_events_total` | Events applied on successful flushes |
-| `cicerone_events_last_success_timestamp_seconds` | Last successful flush (Unix seconds) |
-| `cicerone_events_tick_errors_total` | Unexpected exceptions outside handled flush paths |
-| `cicerone_events_lock_total{status=}` | Apply-lease `acquired` / `skip` |
-| `cicerone_events_leader` | `1` while this replica currently owns the apply lock (`0` when HA is off or the lease is not held) |
-| `cicerone_events_apply_busy_total{reason=}` | Skip due to `lock` (apply lease) or `retrain` |
+## Roadmap
 
-The worker refreshes lag/connected each poll cycle (not on `/metrics` scrape),
-so DB `health()` work stays off the Prometheus path. Flush apply/partial
-failures increment `flush_total{status="error"}` only (they do not also bump
-tick errors).
-
-The dashboard (when `[events] enabled`) shows the latest incremental
-**success** from recent manifests beside job status; live lag stays on serve
-`/metrics`. With a dataset output, a later full retrain overwrites
-`manifest.json`, so the panel may go empty until the next incremental flush
-(prefer a DB output for history).
-
-## Serve webhook
-
-When `[events] enabled = true` and `kind = "webhook"`, the serve process
-exposes `POST /events` (Bearer auth: `events.options.auth_token` or
-`serve.auth_token`). Body: one event object, a list, or `{"events":[...]}`.
-Accepted events are validated (OpenAPI models), normalized, queued on the
-webhook `EventSource`, and drained by the micro-batch worker. A full backlog
-(`max_pending`) returns **429**.
-
-When `kind = "db"`, the same worker polls interaction rows after a watermark
-(`events.options.database_url`, optional `events_table` / `events_query`,
-optional durable `watermark_path`). The watermark advances only on successful
-``ack`` after a flush. Health lag uses the same `(occurred_at, event_id)`
-cursor as poll: SQL ``COUNT`` when an ``event_id`` column is present (except
-SQLite, where timestamp binding is unreliable), otherwise a bounded row scan
-that synthesizes ids like poll. If that scan hits its row cap, ``health().lag``
-is ``None`` (unknown / too large) rather than a truncated count. Poll selects
-only the columns used for normalization. Corrupt ``watermark_path`` files are
-logged and ignored so ``connect()`` can still succeed. ``events_query``, when
-set, must be a single read-only ``SELECT`` from **trusted deploy-time config**
-(interpolated into SQL like ``input.options.events_query`` — not end-user
-input). Naive SQL ``datetime`` values are treated as UTC; timezone-less
-*strings* (config / JSON watermark) are rejected.
+Shipped: webhook, db watermark, S3 list / AWS SQS, Redis Streams.
+Possible later backends (not configured today): RabbitMQ, Kafka. Prefer
+Redis Streams when you already run Redis for the lock; do not add Kafka
+only for this feature.

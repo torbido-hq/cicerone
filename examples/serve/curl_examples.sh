@@ -38,3 +38,12 @@ doc = json.load(sys.stdin)
 print("title:", doc.get("info", {}).get("title"))
 print("paths:", ", ".join(sorted(doc.get("paths", {}))))
 '
+
+if [[ "${CICERONE_POST_EVENTS:-}" == "1" ]]; then
+  echo
+  echo "## POST /events (set CICERONE_POST_EVENTS=1; webhook ingest must be enabled)"
+  curl -sS "${auth_header[@]}" -X POST \
+    -H "Content-Type: application/json" \
+    -d "{\"user_id\":\"${USER_ID}\",\"item_id\":\"ipa-001\",\"event_type\":\"purchase\",\"quantity\":1,\"occurred_at\":\"2026-08-19T12:00:00Z\"}" \
+    "${BASE_URL}/events" | python -m json.tool
+fi

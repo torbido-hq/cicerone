@@ -57,7 +57,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   incremental-events panel on the Basic-Auth dashboard (from manifests).
 - Incremental events between full retrains: internal `EventSource` surface,
   webhook `POST /events`, micro-batch buffer/worker, and write-through
-  updater for popular/latest slices (`[events]` config). Design:
+  updater for popular/latest slices (`[events]` config). Operator guide:
   `docs/incremental-events.md`. Webhook `occurred_at` requires an explicit
   timezone (`Z` / offset) or Unix epoch seconds (UTC).
 - DB event source (`events.kind = "db"`): watermark poll over
@@ -70,6 +70,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Docs: `docs/how-it-works.md` (pipeline, strategies, papers); incremental
+  events operator guide; tutorial webhook step; site sidebar/homepage
+  cards; OpenAPI `x-codeSamples` for `POST /events`.
 - Parse article `draft` from YAML frontmatter; article layout CSS keys off
   `data-cicerone-articles` rather than starlight-blog class names.
 - Share the articles URL prefix between the Starlight plugin and layout

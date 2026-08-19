@@ -5,8 +5,9 @@ serve container (see the README Serve section and
 [docs/tutorial.md](../../docs/tutorial.md) step 12).
 
 OpenAPI / ReDoc also embed language samples (`x-codeSamples`, including
-Ruby) on `/health` and `/recommendations/{user_id}` — open
-`http://localhost:8000/redoc` or the checked-in
+Ruby) on `/health`, `/recommendations/{user_id}`, and `POST /events`
+(when webhook events are enabled) — open `http://localhost:8000/redoc` or
+the checked-in
 [`docs/openapi/serve.openapi.json`](../../docs/openapi/serve.openapi.json).
 
 ```sh
@@ -25,3 +26,7 @@ and `http://localhost:8000/redoc` (code samples).
 Prometheus process metrics (no bearer token): `GET /metrics`. Optional
 `[serve].metrics_token` → send `X-Metrics-Token`. See the README Serve
 section.
+
+`POST /events` is present only when `[events]` webhook ingest is enabled
+on that serve process. Tutorial step 13 walks through a local webhook;
+see [docs/incremental-events.md](../../docs/incremental-events.md).

@@ -16,6 +16,7 @@ guides synced from [`docs/`](docs/). Articles are static Markdown in
 
 A generic, self-hosted batch recommender system. It reads your interaction
 data, trains a hybrid [rectools](https://github.com/MobileTeleSystems/RecTools)
+<<<<<<< HEAD
 + LightFM model, and writes out top-K recommendations per user. An optional
 lightweight "serve" mode can then expose those precomputed recommendations
 over a small read-only HTTP API — there's still no live inference, no
@@ -24,6 +25,20 @@ the batch job can also write a versioned fitted-model artifact for offline
 reload / future thin inference without redesigning training. The supported
 deploy path is Docker (Python 3.11 lives inside the image). A PyPI package
 is also published for Python 3.11 hosts — see Installation.
+=======
++ LightFM model (optional item-KNN, SASRec/BERT4Rec, popular/latest), and
+writes out top-K recommendations per user. An optional lightweight "serve"
+mode can then expose those precomputed recommendations over a small
+read-only HTTP API — there's still no live inference, no model loaded in the
+request path. Optional `[events]` ingest can refresh popular/latest rows
+between full retrains; that is still write-through, not request-path
+ranking. How the strategies differ, with paper links:
+[docs/how-it-works.md](docs/how-it-works.md). Optionally
+(`[job].save_model_artifact`), the batch job can also write a versioned
+fitted-model artifact for offline reload / future thin inference without
+redesigning training. Everything runs in Docker (Python 3.11 only lives
+inside the image, nothing to install on the host).
+>>>>>>> e41bf3a (docs: cover post-0.5.1 features and how Cicerone works)
 
 Cicerone isn't tied to any particular product, shop, or domain — it works
 for any catalog of "users" and "items" with interaction events (purchases,
@@ -34,13 +49,15 @@ up to your own data doesn't require touching any code.
 ## Features
 
 - **Batch recommender** — cron-scheduled train + top-K write (dataset or DB I/O)
-- **Hybrid strategies** — collaborative (LightFM), item-based KNN, optional content cold-item fallback, popular, latest
-- **Priority or RRF fusion** — combine strategies by order or weighted ranks
+- **Hybrid strategies** — collaborative (LightFM), item-based KNN, optional SASRec/BERT4Rec, optional content cold-item fallback, popular, latest
+- **Priority, RRF, or blending** — combine strategies by order, weighted ranks, or per-user mix
 - **AutoML** — time-fold backtest to pick models/weights per run
 - **Business policies** — TOML eligibility filters and score boosts
 - **Serve mode** — read-only HTTP API over precomputed recommendations
   (`limit` / `category` / `exclude_unavailable`, cold-start fallback;
   OpenAPI at `/docs` + thin `ServeClient`)
+- **Incremental events** — webhook / DB / S3 / Redis Streams write-through
+  of popular/latest slices between full retrains
 - **Retrain trigger** — webhook (+ optional input poll) alongside cron
 - **Dashboard** — Basic-Auth status page for run success/failure, history, and user-id lookup
 - **Model artifacts** — optional versioned fitted-model bundle for offline reload
@@ -64,7 +81,7 @@ input source (S3-compatible/local dataset, or a database)
                                  2. weighs interactions (see below,
                                     config/features.toml)
                                  3. trains the configured model strategies
-                                    (collaborative/item-based/popular/latest)
+                                    (collaborative/item-based/sequential/popular/latest)
                                  4. combines them into top-K recs per user
                                         |
                                         v
@@ -87,6 +104,8 @@ lightfm/rectools/implicit/torch, never trains or imports):
 | --- | --- | --- |
 | `GET` | `/health` | Liveness probe (no auth) |
 | `GET` | `/recommendations/{user_id}` | Precomputed top-K for that user |
+| `GET` | `/metrics` | Prometheus text format (no bearer token; optional `X-Metrics-Token`) |
+| `POST` | `/events` | Incremental ingest when `[events]` `kind = "webhook"` |
 | `GET` | `/docs` / `/redoc` | Interactive OpenAPI docs (Swagger / ReDoc) |
 | `GET` | `/openapi.json` | Machine-readable OpenAPI schema |
 
@@ -199,10 +218,24 @@ process:
   held so long jobs stay exclusive. This is a lock, not a job queue.
   Serve replicas scale on the **read** path. Incremental `[events]` writes are
   single-writer by default; set `events.ha = true` with the same
-  `lock_backend` for leader-only apply (see `docs/incremental-events.md`).
+  `lock_backend` for leader-only apply (see Incremental events below).
 - The run manifest records `triggered_by` (`"cron"`, `"webhook"`, or
   `"s3-poll"`) and `lock_backend` alongside its existing counts/timestamp
   fields.
+
+### Incremental events
+
+Optional `[events]` on the **serve** process accepts new interactions
+between full retrains and write-through **popular / latest** top-K for
+affected users (plus `__cold_start__`). LightFM / item-KNN / sequential
+rows wait for the next `job.run()`. Shipped sources: `webhook`
+(`POST /events`), `db` watermark, `s3` (R2 list or AWS SQS),
+`redis_streams`. Default is one writer; multi-replica apply needs
+`events.ha = true` plus `job.trigger.lock_backend` postgres or redis.
+
+Operator guide (TOML, curl, HA, metrics):
+[docs/incremental-events.md](docs/incremental-events.md). Why those models
+are offline-only: [docs/how-it-works.md](docs/how-it-works.md).
 
 ## Dashboard
 
@@ -216,10 +249,13 @@ serve). Like serve mode, it never loads lightfm/rectools/implicit.
 - `GET /dashboard` shows the latest run's status (success/failed), counts,
   effective models, and (for a `db` output only — a `dataset` output's
   `manifest.json` is overwritten every run, so it only ever has the latest)
-  a short run history. Enter a `user_id` to inspect that user's current
+  a short run history. `GET /dashboard?user_id=` fills the inspector on
+  load. Enter a `user_id` to inspect that user's current
   precomputed top-K from the same output store (cold-start fallback when
   they have no personal rows). The inspector shows
-  `min(job.top_k, dashboard.lookup_k)` rows (default 20). The status block
+  `min(job.top_k, dashboard.lookup_k)` rows (default 20). When `[events]` is
+  enabled, a panel shows the latest incremental flush from recent manifests
+  (dataset outputs may clear it on the next full retrain). The status block
   auto-refreshes via
   [htmx](https://htmx.org) polling, so no page reload is needed.
 - Protected by HTTP Basic Auth rather than a bearer token, since it's meant
@@ -285,7 +321,7 @@ variant, commented out).
 | item_id     | str       | any stable item/product identifier                                |
 | event_type  | str       | see `config/features.toml` → `event_weights`                       |
 | quantity    | int       | optional, used for the types listed in `quantity_scaled_events`   |
-| occurred_at | datetime  | UTC                                                                |
+| occurred_at | datetime  | timezone-aware; webhook JSON needs `Z` / offset or Unix epoch seconds (UTC). Batch parquet may be UTC-naive and is treated as UTC. |
 
 `event_type` is entirely up to you — map your own events to whatever names
 you list in `config/features.toml` → `event_weights`. A typical e-commerce
@@ -384,7 +420,9 @@ if omitted:
   `popular`. Optional `[model.latest]` (`period = { days = 14 }`).
 
 Strategy construction and hyperparameters live in `cicerone.model_config`
-+ `cicerone.model` (`strategies` / `fit` / `recommend` / `combine`); see
++ `cicerone.model` (`strategies` / `fit` / `recommend` / `combine`). What
+each algorithm is and how they differ (with paper links):
+[docs/how-it-works.md](docs/how-it-works.md). Package map:
 [docs/architecture.md](docs/architecture.md).
 
 By default, strategies are combined in priority order: earlier strategies
@@ -597,6 +635,8 @@ layout (`tests/test_model_*.py`, `tests/test_config_*.py`). See
 [CONTRIBUTING.md](CONTRIBUTING.md) for how to run tests/lint locally,
 the [project site](https://cicerone.dev) (`website/`, Starlight; syncs `docs/*.md`) for
 screenshots and documentation,
+[docs/how-it-works.md](docs/how-it-works.md) for the pipeline and
+algorithms,
 [docs/tutorial.md](docs/tutorial.md) for a hands-on walkthrough with local
 sample data, and [docs/architecture.md](docs/architecture.md) for how the
 code is structured. See [CHANGELOG.md](CHANGELOG.md) for release notes.

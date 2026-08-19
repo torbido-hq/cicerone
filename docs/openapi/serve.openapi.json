@@ -463,6 +463,28 @@
         "summary": "Ingest interaction events for incremental updates",
         "tags": [
           "events"
+        ],
+        "x-codeSamples": [
+          {
+            "label": "Net::HTTP",
+            "lang": "Ruby",
+            "source": "require \"json\"\nrequire \"net/http\"\nrequire \"uri\"\n\nbase = ENV.fetch(\"CICERONE_SERVE_URL\", \"http://localhost:8000\").sub(%r{/\\z}, \"\")\ntoken = ENV.fetch(\"CICERONE_SERVE_TOKEN\")\nuri = URI(\"#{base}/events\")\nbody = {\n  \"user_id\" => ENV.fetch(\"CICERONE_USER_ID\", \"alice\"),\n  \"item_id\" => \"ipa-001\",\n  \"event_type\" => \"purchase\",\n  \"quantity\" => 1,\n  \"occurred_at\" => \"2026-08-19T12:00:00Z\",\n}.to_json\nreq = Net::HTTP::Post.new(uri)\nreq[\"Authorization\"] = \"Bearer #{token}\"\nreq[\"Content-Type\"] = \"application/json\"\nreq[\"Accept\"] = \"application/json\"\nreq.body = body\nres = Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == \"https\") do |http|\n  http.request(req)\nend\nabort(\"HTTP #{res.code}: #{res.body}\") unless res.is_a?(Net::HTTPSuccess)\nputs JSON.parse(res.body)\n"
+          },
+          {
+            "label": "urllib",
+            "lang": "Python",
+            "source": "import json\nimport os\nfrom urllib.request import Request, urlopen\n\nbase = os.environ.get(\"CICERONE_SERVE_URL\", \"http://localhost:8000\").rstrip(\"/\")\ntoken = os.environ[\"CICERONE_SERVE_TOKEN\"]\npayload = {\n    \"user_id\": os.environ.get(\"CICERONE_USER_ID\", \"alice\"),\n    \"item_id\": \"ipa-001\",\n    \"event_type\": \"purchase\",\n    \"quantity\": 1,\n    \"occurred_at\": \"2026-08-19T12:00:00Z\",\n}\nrequest = Request(\n    f\"{base}/events\",\n    data=json.dumps(payload).encode(),\n    headers={\n        \"Authorization\": f\"Bearer {token}\",\n        \"Content-Type\": \"application/json\",\n        \"Accept\": \"application/json\",\n    },\n    method=\"POST\",\n)\nprint(json.load(urlopen(request)))\n"
+          },
+          {
+            "label": "fetch",
+            "lang": "JavaScript",
+            "source": "const baseUrl = (process.env.CICERONE_SERVE_URL || \"http://localhost:8000\").replace(/\\/$/, \"\");\nconst token = process.env.CICERONE_SERVE_TOKEN;\nif (!token) {\n  console.error(\"Set CICERONE_SERVE_TOKEN to a bearer token\");\n  process.exit(1);\n}\nconst userId = process.env.CICERONE_USER_ID || \"alice\";\n\nasync function main() {\n  const response = await fetch(`${baseUrl}/events`, {\n    method: \"POST\",\n    headers: {\n      Accept: \"application/json\",\n      Authorization: `Bearer ${token}`,\n      \"Content-Type\": \"application/json\",\n    },\n    body: JSON.stringify({\n      user_id: userId,\n      item_id: \"ipa-001\",\n      event_type: \"purchase\",\n      quantity: 1,\n      occurred_at: \"2026-08-19T12:00:00Z\",\n    }),\n  });\n  if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);\n  console.log(await response.json());\n}\n\nmain().catch((err) => {\n  console.error(err);\n  process.exitCode = 1;\n});\n"
+          },
+          {
+            "label": "curl",
+            "lang": "Shell",
+            "source": "BASE_URL=\"${CICERONE_SERVE_URL:-http://localhost:8000}\"\nBASE_URL=\"${BASE_URL%/}\"\nTOKEN=\"${CICERONE_SERVE_TOKEN:?set CICERONE_SERVE_TOKEN}\"\nUSER_ID=\"${CICERONE_USER_ID:-alice}\"\nBODY='{\"user_id\":\"'\"$USER_ID\"'\",\"item_id\":\"ipa-001\",\"event_type\":\"purchase\",\"quantity\":1,\"occurred_at\":\"2026-08-19T12:00:00Z\"}'\ncurl -fsS -X POST \\\n  -H \"Authorization: Bearer $TOKEN\" \\\n  -H \"Content-Type: application/json\" \\\n  -d \"$BODY\" \\\n  \"$BASE_URL/events\" || exit 1\n"
+          }
         ]
       }
     },

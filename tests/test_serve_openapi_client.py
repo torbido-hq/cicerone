@@ -17,6 +17,8 @@ from cicerone.serve import SERVE_API_TITLE, SERVE_API_VERSION, create_app
 from cicerone.serve.code_samples import (
     ENV_SERVE_TOKEN,
     ENV_SERVE_URL,
+    EVENTS_CODE_SAMPLES,
+    EVENTS_PATH,
     HEALTH_CODE_SAMPLES,
     HEALTH_PATH,
     RECOMMENDATIONS_CODE_SAMPLES,
@@ -77,6 +79,13 @@ def test_openapi_json_lists_serve_paths_and_schemas():
     ruby_rec = next(sample for sample in rec_samples if sample["lang"] == "Ruby")
     assert ENV_SERVE_URL in ruby_rec["source"]
     assert ENV_SERVE_TOKEN in ruby_rec["source"]
+
+
+def test_exported_openapi_includes_events_code_samples():
+    schema = build_openapi()
+    samples = schema["paths"][EVENTS_PATH]["post"]["x-codeSamples"]
+    assert {s["lang"] for s in samples} >= {s["lang"] for s in EVENTS_CODE_SAMPLES}
+    assert all("occurred_at" in sample["source"] for sample in samples)
 
 
 def test_docs_ui_is_available():

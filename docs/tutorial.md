@@ -8,7 +8,8 @@ or database required until the optional "database backend" section.
 Everything runs in Docker (nothing gets installed on the host).
 `docker-compose.yml` is for local developer convenience only — do not run
 it as a production deployment. For the full configuration reference, see
-the [README](../README.md); for how the code is structured, see
+the [README](../README.md); for algorithms and how strategies differ, see
+[how-it-works.md](how-it-works.md); for how the code is structured, see
 [architecture.md](architecture.md).
 
 1. [Create a sample dataset](#1-create-a-sample-dataset)
@@ -23,10 +24,11 @@ the [README](../README.md); for how the code is structured, see
 10. [Save a fitted model artifact](#10-save-a-fitted-model-artifact)
 11. [Try the database backend](#11-try-the-database-backend-optional)
 12. [Serve recommendations over an HTTP API](#12-serve-recommendations-over-an-http-api)
-13. [Trigger a retrain on demand](#13-trigger-a-retrain-on-demand)
-14. [Check job status with the dashboard](#14-check-job-status-with-the-dashboard)
-15. [Run continuously, on a schedule](#15-run-continuously-on-a-schedule)
-16. [Next steps](#16-next-steps)
+13. [Ingest incremental events](#13-ingest-incremental-events-optional)
+14. [Trigger a retrain on demand](#14-trigger-a-retrain-on-demand)
+15. [Check job status with the dashboard](#15-check-job-status-with-the-dashboard)
+16. [Run continuously, on a schedule](#16-run-continuously-on-a-schedule)
+17. [Next steps](#17-next-steps)
 
 ## 1. Create a sample dataset
 
@@ -132,9 +134,10 @@ item counts, the models/weights actually used, timestamps).
 
 ## 5. Try different model strategies
 
-`[job].models` picks which of the four built-in strategies to fit and
-combine, in priority order (earlier entries win ties for the same
-user/item pair). Add this to `config/cicerone.local.toml`'s `[job]` section:
+`[job].models` picks which strategies to fit and combine, in priority order
+(earlier entries win ties for the same user/item pair). What each algorithm
+actually is, and how they differ: [how-it-works.md](how-it-works.md). Add
+this to `config/cicerone.local.toml`'s `[job]` section:
 
 ```toml
 [job]
@@ -157,8 +160,10 @@ Available strategies:
   with interactions only (feature-only warm users stay on
   collaborative/popular).
 - `sequential`: RecTools `SASRecModel` (default) or `BERT4RecModel`. Opt-in;
-  requires `pip install -r requirements-sequential.txt`. Sequences are unique
-  items by last-touch time. AutoML skips it on sparse data or a missing extra.
+  not in the default Docker image (`pip install -r
+  requirements-sequential.txt`). Sequences are unique items by last-touch
+  time. AutoML skips it on sparse data or a missing extra. Skip it in this
+  tutorial.
 - `content_fallback`: zero-interaction items via categorical feature
   similarity (opt-in: `[job.content_fallback].enabled = true`).
 - `popular`: `PopularModel` — global popularity. Non-personalized, backfills
@@ -515,11 +520,13 @@ does not require the recommendation bearer token. Set `[serve].metrics_token`
 and send `X-Metrics-Token: …` if you want a separate scrape secret; when
 empty, treat the endpoint as network-boundary protected.
 
-OpenAPI (Swagger UI) is at `http://localhost:8000/docs`; ReDoc (with
-language `x-codeSamples`, including Ruby) is at
-`http://localhost:8000/redoc`. The JSON schema is `/openapi.json`
-(`/metrics` is omitted from the schema). For a runnable client, use the thin
-package helper or the snippets under [`examples/serve/`](../examples/serve/):
+Optional `POST /events` (webhook incremental ingest) is off until you set
+`[events]` — the next step walks through that. OpenAPI (Swagger UI) is at
+`http://localhost:8000/docs`; ReDoc (with language `x-codeSamples`,
+including Ruby) is at `http://localhost:8000/redoc`. The JSON schema is
+`/openapi.json` (`/metrics` is omitted from the schema). For a runnable
+client, use the thin package helper or the snippets under
+[`examples/serve/`](../examples/serve/):
 
 ```sh
 docker run --rm --network host -e PYTHONPATH=/app/src \
@@ -540,7 +547,56 @@ request queries the table directly instead. Clean up when you're done:
 docker stop cicerone-tutorial-serve
 ```
 
-## 13. Trigger a retrain on demand
+## 13. Ingest incremental events (optional)
+
+Leave personalized LightFM rows for the next full retrain. `[events]` on
+the serve process can still refresh **popular / latest** slices from new
+interactions. Details and other backends (db / s3 / Redis Streams):
+[incremental-events.md](incremental-events.md). Why LightFM is not updated
+online: [how-it-works.md](how-it-works.md).
+
+Add this to `config/cicerone.serve.local.toml` (keep the `[output]` /
+`[serve]` edits from [step 12](#12-serve-recommendations-over-an-http-api)):
+
+```toml
+[events]
+enabled = true
+kind = "webhook"
+
+[events.incremental]
+batch_size = 1
+batch_window_seconds = 2
+```
+
+Start serve again, POST one event, wait for the micro-batch window, then
+read Alice's rows (and `cicerone_events_*` on `/metrics`):
+
+```sh
+docker run --rm -d --name cicerone-tutorial-serve -p 8000:8000 \
+  -v "$PWD/config/cicerone.serve.local.toml":/app/config/cicerone.toml:ro \
+  -v "$PWD/config/features.toml":/app/config/features.toml:ro \
+  -v "$PWD/data":/data \
+  -e CICERONE_CONFIG_PATH=/app/config/cicerone.toml \
+  cicerone-test python -m cicerone.serve
+
+curl -sS -X POST -H "Authorization: Bearer $SERVE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":"alice","item_id":"ipa-001","event_type":"purchase","quantity":1,"occurred_at":"2026-08-19T12:00:00Z"}' \
+  http://localhost:8000/events
+
+sleep 3
+curl -s -H "Authorization: Bearer $SERVE_TOKEN" \
+  "http://localhost:8000/recommendations/alice?limit=5" | python -m json.tool
+```
+
+`occurred_at` must include a timezone (`Z` / offset) or be Unix epoch
+seconds. A full backlog returns HTTP 429. Stop serve when you are done:
+
+```sh
+docker stop cicerone-tutorial-serve
+```
+
+## 14. Trigger a retrain on demand
 
 `[job.trigger]` adds an event-driven retrain trigger *in addition to* the
 cron schedule, running inside the same `cicerone.scheduler` process (not a
@@ -582,7 +638,7 @@ you're done:
 docker stop cicerone-tutorial-scheduler
 ```
 
-## 14. Check job status with the dashboard
+## 15. Check job status with the dashboard
 
 `cicerone.dashboard` is a small, standalone status page over job run
 history — always its own container/port, independent of `[job].mode`.
@@ -615,9 +671,14 @@ docker run --rm -it \
 ```
 
 Then start the dashboard and open `http://localhost:8090/dashboard` in a
-browser (log in with the user just created). The **Look up recommendations**
-form inspects a `user_id`'s current top-K from the same output store
-(including cold-start fallback):
+browser (log in with the user just created), or
+`http://localhost:8090/dashboard?user_id=alice` to fill the inspector on
+load. The **Look up recommendations** form inspects a `user_id`'s current
+top-K from the same output store (including cold-start fallback). Row count
+is `min(job.top_k, dashboard.lookup_k)` (default 20). If you enabled
+`[events]` in [step 13](#13-ingest-incremental-events-optional), an
+incremental-events panel appears once a flush is in the latest manifest
+(dataset `manifest.json` is overwritten by the next full job run).
 
 ```sh
 docker run --rm -d --name cicerone-tutorial-dashboard -p 8090:8090 \
@@ -636,7 +697,7 @@ run history table instead. Clean up when you're done:
 docker stop cicerone-tutorial-dashboard
 ```
 
-## 15. Run continuously, on a schedule
+## 16. Run continuously, on a schedule
 
 Everything above ran the job once via `docker run`. In practice, Cicerone
 runs continuously as a long-lived container: `docker-compose.yml` runs the
@@ -652,19 +713,19 @@ cp .env.example .env   # fill in the secrets your cicerone.toml references
 docker compose up --build
 ```
 
-## 16. Next steps
+## 17. Next steps
 
 - Swap in your own data, following the [data contract](../README.md#data-contract).
-- Read the full [model strategies](../README.md#model-strategies),
+- Read [how-it-works.md](how-it-works.md) for algorithms,
+  the [model strategies](../README.md#model-strategies),
   [AutoML](../README.md#automl), and
   [model artifacts](../README.md#model-artifacts) reference for every
   tunable knob covered above.
 - Point input/output at S3-compatible object storage (R2, AWS S3, MinIO) —
   see the README's [Configuration](../README.md#configuration-config-cicerone-toml)
   section.
-- Optional: enable `[events]` webhook ingest on the serve process so new
-  interactions micro-batch into popular/latest top-K between full retrains —
-  see [incremental-events.md](incremental-events.md).
+- Production incremental ingest (db / s3 / Redis Streams, HA):
+  [incremental-events.md](incremental-events.md).
 - Run the test suite (`docker compose -f docker-compose.ci.yml up --build
   --abort-on-container-exit --exit-code-from test`) if you're contributing
   code — see [CONTRIBUTING.md](../CONTRIBUTING.md). That suite includes a

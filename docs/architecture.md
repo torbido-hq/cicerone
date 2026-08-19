@@ -3,7 +3,8 @@
 # Architecture
 
 This document describes how the code under `src/cicerone/` fits together.
-For configuration and usage, see the main [README](../README.md).
+For configuration and usage, see the main [README](../README.md). For the
+pipeline and how strategies differ, see [how-it-works.md](how-it-works.md).
 
 ## Module overview
 
@@ -115,6 +116,8 @@ flowchart LR
     end
     J -->|OutputSink| S3O
     J -->|OutputSink| DB2
+    Ev["optional EventSource"] -->|"write-through popular/latest"| S3O
+    Ev -->|"write-through popular/latest"| DB2
 ```
 
 1. `job.run()` loads `Settings` (`config.load_settings`) and `FeatureConfig`
@@ -403,9 +406,13 @@ generic `IOSettings`.
 
 Between full retrains, optional `[events]` sources normalize interactions
 into the same event contract and micro-batch them into a cheap write-through
-update of top-K rows (popular/latest slices; LightFM waits for the next full
-`job.run()`). Design, backend roadmap, delivery semantics, and broker
-guidance: [incremental-events.md](incremental-events.md).
+update of top-K rows (popular/latest slices; LightFM / item-KNN / sequential
+wait for the next full `job.run()`). Serve replicas scale on the read path;
+incremental apply is single-writer unless `events.ha = true` with
+`job.trigger.lock_backend` postgres or redis (leader-only lease, separate
+key from the retrain lock). Operator guide:
+[incremental-events.md](incremental-events.md). Algorithms:
+[how-it-works.md](how-it-works.md).
 
 ## Cold-start behavior
 

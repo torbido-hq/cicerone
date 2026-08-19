@@ -24,6 +24,13 @@ const githubBlob = "https://github.com/torbido-hq/cicerone/blob/main";
 
 const PAGES = [
   {
+    source: "how-it-works.md",
+    out: "how-it-works.md",
+    title: "How it works",
+    description:
+      "Batch pipeline, recommendation strategies, combiners, and how they differ.",
+  },
+  {
     source: "tutorial.md",
     out: "tutorial.md",
     title: "Tutorial",
