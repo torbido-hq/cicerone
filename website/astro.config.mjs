@@ -1,19 +1,23 @@
 // @ts-check
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import starlightBlog from 'starlight-blog';
-import { hasPublishedArticles } from './src/lib/articles.mjs';
+import {
+	ARTICLES_PREFIX,
+	articlesContentDir,
+	hasPublishedArticles,
+} from './src/lib/articles.mjs';
 
 const websiteRoot = dirname(fileURLToPath(import.meta.url));
-const articlesDir = join(websiteRoot, 'src/content/docs/articles');
+const articlesDir = articlesContentDir(websiteRoot);
 
 const articlesPlugin = hasPublishedArticles(articlesDir)
 	? [
 			starlightBlog({
 				title: 'Articles',
-				prefix: 'articles',
+				prefix: ARTICLES_PREFIX,
 				metrics: { readingTime: true },
 				authors: {
 					nicholas: {

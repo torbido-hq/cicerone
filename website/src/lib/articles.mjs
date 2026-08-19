@@ -3,7 +3,11 @@ import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 
 const ARTICLE_EXT = /\.(mdx?|markdown)$/i;
-const ARTICLES_PREFIX = 'articles';
+export const ARTICLES_PREFIX = 'articles';
+
+export function articlesContentDir(websiteRoot) {
+	return join(websiteRoot, 'src/content/docs', ARTICLES_PREFIX);
+}
 
 function isYamlTruthy(value) {
 	if (value === true) return true;
