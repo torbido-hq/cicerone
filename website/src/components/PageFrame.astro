@@ -1,0 +1,20 @@
+---
+import Default from '@astrojs/starlight/components/PageFrame.astro';
+import { articlesLayoutKind } from '../lib/articles.mjs';
+
+const kind = articlesLayoutKind(Astro.locals.starlightRoute.id);
+---
+
+<div class="cicerone-page" data-cicerone-articles={kind}>
+	<Default>
+		<slot name="header" slot="header" />
+		<slot name="sidebar" slot="sidebar" />
+		<slot />
+	</Default>
+</div>
+
+<style>
+	.cicerone-page {
+		display: contents;
+	}
+</style>

@@ -54,7 +54,8 @@ authors:
 Body…
 ```
 
-Drafts (`draft: true`) are omitted from production builds. RSS is
+Drafts (`draft: true`, or YAML 1.1 `yes` / `on`) are omitted from
+production builds; frontmatter is parsed as YAML. RSS is
 `/articles/rss.xml` once a post is published. Article pages use IBM Plex
 Serif at ~65ch; chrome stays IBM Plex Sans, dates IBM Plex Mono.
 

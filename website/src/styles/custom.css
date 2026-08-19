@@ -42,10 +42,12 @@
 	overflow-wrap: anywhere;
 }
 
-/* Articles: serif prose in the main pane only; nav/sidebar stay --sl-font. */
-.main-pane:has(.sl-blog-posts),
-.main-pane:has(.sl-blog-post-footer) {
+/* Article layout/type: [data-cicerone-articles] from PageFrame, not plugin :has(). */
+[data-cicerone-articles] {
 	--sl-content-width: 38rem;
+}
+
+[data-cicerone-articles] .main-pane {
 	--sl-text-body: 1.125rem;
 	--sl-line-height: 1.6;
 	--sl-text-h1: 2.25rem;
@@ -53,57 +55,47 @@
 }
 
 @media (min-width: 50rem) {
-	.main-pane:has(.sl-blog-posts),
-	.main-pane:has(.sl-blog-post-footer) {
+	[data-cicerone-articles] .main-pane {
 		--sl-text-h1: 2.75rem;
 	}
 }
 
-.lg\:sl-flex:has(.sl-blog-posts) > .right-sidebar-container,
-.lg\:sl-flex:has(.sl-blog-post-footer) > .right-sidebar-container {
+[data-cicerone-articles] .right-sidebar-container {
 	display: none;
 }
 
-.lg\:sl-flex:has(.sl-blog-posts) > .main-pane,
-.lg\:sl-flex:has(.sl-blog-post-footer) > .main-pane {
+[data-cicerone-articles] .lg\:sl-flex > .main-pane {
 	width: 100% !important;
 	--sl-content-margin-inline: auto;
 }
 
-/* Plugin hides the listing h1; keep it for heading order and document title. */
-.main-pane:has(.sl-blog-posts) .content-panel:first-of-type {
+[data-cicerone-articles] .content-panel + .content-panel {
+	border-top: none;
+}
+
+[data-cicerone-articles='index'] .content-panel:first-of-type {
 	display: block;
 	padding-bottom: 0.25rem;
 }
 
-.main-pane:has(.sl-blog-posts) .content-panel:first-of-type h1 {
-	margin-top: 0;
-	font-family: var(--article-font);
-	font-weight: 600;
-	letter-spacing: -0.03em;
-	line-height: 1.15;
-}
-
-.main-pane:has(.sl-blog-posts) .content-panel + .content-panel {
-	border-top: none;
-}
-
-.main-pane:has(.sl-blog-post-footer) .content-panel:first-of-type {
+[data-cicerone-articles='post'] .content-panel:first-of-type {
 	padding-bottom: 0;
 }
 
-.main-pane:has(.sl-blog-post-footer) .content-panel:first-of-type h1 {
+[data-cicerone-articles='post'] .content-panel + .content-panel {
+	padding-top: 0.75rem;
+}
+
+[data-cicerone-articles] .content-panel:first-of-type h1 {
 	margin-top: 0;
 	font-family: var(--article-font);
 	font-weight: 600;
 	letter-spacing: -0.03em;
 	line-height: 1.15;
-	text-wrap: balance;
 }
 
-.main-pane:has(.sl-blog-post-footer) .content-panel + .content-panel {
-	border-top: none;
-	padding-top: 0.75rem;
+[data-cicerone-articles='post'] .content-panel:first-of-type h1 {
+	text-wrap: balance;
 }
 
 .sl-blog-metadata {
@@ -173,37 +165,36 @@ h2.sl-blog-preview-title {
 	gap: 2.25rem !important;
 }
 
-.main-pane:has(.sl-blog-posts) .sl-markdown-content,
-.main-pane:has(.sl-blog-post-footer) .sl-markdown-content {
+[data-cicerone-articles] .sl-markdown-content {
 	font-family: var(--article-font);
 }
 
-.main-pane:has(.sl-blog-post-footer) .sl-markdown-content p,
-.main-pane:has(.sl-blog-post-footer) .sl-markdown-content li {
+[data-cicerone-articles='post'] .sl-markdown-content p,
+[data-cicerone-articles='post'] .sl-markdown-content li {
 	text-wrap: pretty;
 }
 
-.main-pane:has(.sl-blog-post-footer) .sl-markdown-content :is(h2, h3) {
+[data-cicerone-articles='post'] .sl-markdown-content :is(h2, h3) {
 	font-family: var(--article-font);
 	letter-spacing: -0.02em;
 	text-wrap: balance;
 }
 
-.main-pane:has(.sl-blog-post-footer) .sl-markdown-content .sl-anchor-link {
+[data-cicerone-articles='post'] .sl-markdown-content .sl-anchor-link {
 	display: none;
 }
 
-.main-pane:has(.sl-blog-post-footer) .sl-markdown-content .sl-heading-wrapper > :first-child {
+[data-cicerone-articles='post'] .sl-markdown-content .sl-heading-wrapper > :first-child {
 	padding-inline-end: 0;
 }
 
-.main-pane:has(.sl-blog-post-footer) .sl-markdown-content blockquote {
+[data-cicerone-articles='post'] .sl-markdown-content blockquote {
 	border-inline-start-width: 2px;
 	font-style: italic;
 	color: var(--sl-color-gray-1);
 }
 
-.main-pane:has(.sl-blog-post-footer) .sl-markdown-content :is(code, pre) {
+[data-cicerone-articles='post'] .sl-markdown-content :is(code, pre) {
 	font-family: var(--sl-font-mono);
 	font-style: normal;
 }
