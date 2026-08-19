@@ -57,6 +57,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - README and docs-site dashboard screenshot include the user recommendation lookup.
+- Docs site copies `docs/images/dashboard.png` at build time (one file for README and cicerone.dev).
 - Dashboard lookup form is labeled, results are announced, and job-run
   tables expose captions / column headers; helper text contrast is higher.
 

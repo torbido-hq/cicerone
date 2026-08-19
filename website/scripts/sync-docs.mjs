@@ -3,7 +3,14 @@
  * Sync repo docs/*.md into Starlight content with frontmatter.
  * docs/ remains the source of truth; run before `astro build` / `astro dev`.
  */
-import { mkdirSync, readFileSync, writeFileSync, copyFileSync, existsSync } from "node:fs";
+import {
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  copyFileSync,
+  existsSync,
+  readdirSync,
+} from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -85,4 +92,14 @@ const openapiDst = join(websiteRoot, "public/openapi/serve.openapi.json");
 if (existsSync(openapiSrc)) {
   mkdirSync(dirname(openapiDst), { recursive: true });
   copyFileSync(openapiSrc, openapiDst);
+}
+
+const imagesSrc = join(docsSrc, "images");
+const imagesDst = join(websiteRoot, "public/images");
+if (existsSync(imagesSrc)) {
+  mkdirSync(imagesDst, { recursive: true });
+  for (const name of readdirSync(imagesSrc)) {
+    copyFileSync(join(imagesSrc, name), join(imagesDst, name));
+    console.log(`synced docs/images/${name} → public/images/${name}`);
+  }
 }
