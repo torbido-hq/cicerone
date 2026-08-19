@@ -107,11 +107,11 @@
 }
 
 .sl-blog-metadata {
-	font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+	font-family: var(--sl-font);
 }
 
 .sl-blog-metadata-date {
-	font-family: "IBM Plex Mono", ui-monospace, monospace;
+	font-family: var(--sl-font-mono);
 	font-size: var(--sl-text-xs);
 	font-variant-numeric: tabular-nums;
 	font-variant-caps: all-small-caps;
