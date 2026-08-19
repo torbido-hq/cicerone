@@ -1,5 +1,5 @@
 /* Brand tweaks on top of Starlight defaults. */
-@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Serif:ital,wght@0,400;0,500;0,600;1,400&display=swap");
 
 :root {
 	--sl-color-accent-low: #d7eef7;
@@ -34,4 +34,149 @@
 
 .sl-markdown-content td:not(:where(.not-content *)) {
 	overflow-wrap: anywhere;
+}
+
+/* Articles: serif prose, ~65ch measure, docs chrome stays sans. */
+body:has(.sl-blog-posts),
+body:has(.sl-blog-post-footer) {
+	--sl-content-width: 38rem;
+	--sl-text-body: 1.125rem;
+	--sl-line-height: 1.6;
+	--sl-text-h1: 2.25rem;
+	--sl-text-h2: 1.5rem;
+	--sl-font: "IBM Plex Serif", "IBM Plex Sans", ui-serif, Georgia, serif;
+	font-family: var(--sl-font);
+}
+
+@media (min-width: 50rem) {
+	body:has(.sl-blog-posts),
+	body:has(.sl-blog-post-footer) {
+		--sl-text-h1: 2.75rem;
+	}
+}
+
+body:has(.sl-blog-posts) .right-sidebar-container,
+body:has(.sl-blog-post-footer) .right-sidebar-container {
+	display: none;
+}
+
+body:has(.sl-blog-posts) .main-pane,
+body:has(.sl-blog-post-footer) .main-pane {
+	width: 100% !important;
+	--sl-content-margin-inline: auto;
+}
+
+body:has(.sl-blog-post-footer) .content-panel:first-of-type {
+	padding-bottom: 0;
+}
+
+body:has(.sl-blog-post-footer) .content-panel:first-of-type h1 {
+	margin-top: 0;
+	font-family: "IBM Plex Serif", "IBM Plex Sans", ui-serif, Georgia, serif;
+	font-weight: 600;
+	letter-spacing: -0.03em;
+	line-height: 1.15;
+	text-wrap: balance;
+}
+
+body:has(.sl-blog-post-footer) .content-panel + .content-panel {
+	border-top: none;
+	padding-top: 0.75rem;
+}
+
+.sl-blog-metadata {
+	font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+}
+
+.sl-blog-metadata-date {
+	font-family: "IBM Plex Mono", ui-monospace, monospace;
+	font-size: var(--sl-text-xs);
+	font-variant-numeric: tabular-nums;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--sl-color-gray-2);
+}
+
+.sl-blog-metadata-secondary {
+	font-size: var(--sl-text-xs);
+}
+
+.sl-blog-author-name,
+.sl-blog-author[href] .sl-blog-author-name {
+	font-weight: 500;
+	color: var(--sl-color-text) !important;
+}
+
+.sl-blog-author[href]:hover .sl-blog-author-name {
+	color: var(--sl-color-accent-high) !important;
+}
+
+h2.sl-blog-preview-title {
+	font-family: "IBM Plex Serif", "IBM Plex Sans", ui-serif, Georgia, serif;
+	font-size: var(--sl-text-2xl);
+	font-weight: 600;
+	letter-spacing: -0.02em;
+	line-height: 1.2;
+	text-wrap: balance;
+	color: var(--sl-color-white) !important;
+}
+
+.sl-blog-preview-link {
+	margin-bottom: 0.4rem !important;
+}
+
+.sl-blog-preview-link:hover .sl-blog-preview-title {
+	color: var(--sl-color-accent-high) !important;
+}
+
+:root[data-theme="dark"] .sl-blog-preview-link:hover .sl-blog-preview-title {
+	color: var(--sl-color-accent) !important;
+}
+
+.sl-blog-preview-excerpt {
+	max-width: 65ch;
+	color: var(--sl-color-gray-2);
+}
+
+.sl-blog-preview {
+	padding-bottom: 2.25rem;
+	border-bottom: 1px solid var(--sl-color-hairline);
+}
+
+.sl-blog-posts {
+	gap: 2.25rem !important;
+}
+
+body:has(.sl-blog-post-footer) .sl-markdown-content {
+	font-family: "IBM Plex Serif", "IBM Plex Sans", ui-serif, Georgia, serif;
+}
+
+body:has(.sl-blog-post-footer) .sl-markdown-content p,
+body:has(.sl-blog-post-footer) .sl-markdown-content li {
+	text-wrap: pretty;
+}
+
+body:has(.sl-blog-post-footer) .sl-markdown-content :is(h2, h3) {
+	font-family: "IBM Plex Serif", "IBM Plex Sans", ui-serif, Georgia, serif;
+	letter-spacing: -0.02em;
+	text-wrap: balance;
+}
+
+body:has(.sl-blog-post-footer) .sl-markdown-content .sl-anchor-link {
+	display: none;
+}
+
+body:has(.sl-blog-post-footer) .sl-markdown-content .sl-heading-wrapper > :first-child {
+	padding-inline-end: 0;
+}
+
+body:has(.sl-blog-post-footer) .sl-markdown-content blockquote {
+	border-inline-start-width: 2px;
+	font-style: italic;
+	color: var(--sl-color-gray-1);
+}
+
+body:has(.sl-blog-post-footer) .sl-markdown-content :is(code, pre) {
+	font-family: "IBM Plex Mono", ui-monospace, monospace;
+	font-style: normal;
 }

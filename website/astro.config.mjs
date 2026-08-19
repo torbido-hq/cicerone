@@ -15,7 +15,13 @@ function hasPublishedArticles() {
 		if (name.startsWith('_') || !/\.(md|mdx)$/i.test(name)) continue;
 		const text = readFileSync(join(articlesDir, name), 'utf8');
 		const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
-		if (fm && /^draft:\s*true\s*$/m.test(fm[1])) continue;
+		if (
+			fm &&
+			/^draft:\s*true\s*$/m.test(fm[1]) &&
+			process.env.NODE_ENV === 'production'
+		) {
+			continue;
+		}
 		return true;
 	}
 	return false;
@@ -26,6 +32,7 @@ const articlesPlugin = hasPublishedArticles()
 			starlightBlog({
 				title: 'Articles',
 				prefix: 'articles',
+				metrics: { readingTime: true },
 				authors: {
 					nicholas: {
 						name: 'Nicholas Wieland',
