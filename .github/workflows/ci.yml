@@ -23,61 +23,69 @@ jobs:
 
   lint:
     needs: scope
+    if: needs.scope.outputs.python == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Skip Python lint
-        if: needs.scope.outputs.python != 'true'
-        run: echo "Website-only change; skipping Docker lint."
-
-      - if: needs.scope.outputs.python == 'true'
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
 
       # Same test image used for pytest (see the "test" job below), so lint
       # runs against the exact dependency set installed there — nothing to
       # install on the runner itself.
       - name: Build test image
-        if: needs.scope.outputs.python == 'true'
         run: docker build --target test -t cicerone-test -f docker/Dockerfile .
 
       - name: Ruff lint
-        if: needs.scope.outputs.python == 'true'
         run: docker run --rm cicerone-test ruff check src tests
 
       - name: Ruff format check
-        if: needs.scope.outputs.python == 'true'
         run: docker run --rm cicerone-test ruff format --check src tests
 
       - name: mypy
-        if: needs.scope.outputs.python == 'true'
         run: docker run --rm cicerone-test mypy src
 
       - name: pip-audit (dependency vulnerability scan)
-        if: needs.scope.outputs.python == 'true'
         run: docker run --rm cicerone-test pip-audit -r requirements.txt -r requirements-dev.txt
 
   test:
     needs: scope
+    if: needs.scope.outputs.python == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Skip Python tests
-        if: needs.scope.outputs.python != 'true'
-        run: echo "Website-only change; skipping Docker pytest."
-
-      - if: needs.scope.outputs.python == 'true'
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
 
       # Everything (including the test run itself) happens inside Docker —
       # the runner only needs Docker, never a host Python install, so CI
       # matches exactly how the service is built and deployed.
       - name: Run test suite (>=95% coverage required)
-        if: needs.scope.outputs.python == 'true'
         run: |
           docker compose --env-file docker/postgres/defaults.env \
             -f docker-compose.ci.yml up \
             --build --abort-on-container-exit --exit-code-from test
 
       - name: Tear down
-        if: always() && needs.scope.outputs.python == 'true'
+        if: always()
         run: |
           docker compose --env-file docker/postgres/defaults.env \
             -f docker-compose.ci.yml down -v
+
+  # Always reports: website-only PRs skip lint/test (no Docker VMs) without
+  # leaving a required check pending. Require this job name, not lint/test.
+  ci:
+    needs: [scope, lint, test]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Python CI
+        run: |
+          if [ "${{ needs.scope.result }}" != "success" ]; then
+            echo "scope=${{ needs.scope.result }}"
+            exit 1
+          fi
+          if [ "${{ needs.scope.outputs.python }}" != "true" ]; then
+            echo "Website-only change; Python lint/test skipped."
+            exit 0
+          fi
+          if [ "${{ needs.lint.result }}" != "success" ] || [ "${{ needs.test.result }}" != "success" ]; then
+            echo "lint=${{ needs.lint.result }} test=${{ needs.test.result }}"
+            exit 1
+          fi

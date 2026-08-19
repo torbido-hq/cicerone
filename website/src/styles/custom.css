@@ -1,5 +1,4 @@
 /* Brand tweaks on top of Starlight defaults. */
-@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Serif:ital,wght@0,400;0,500;0,600;1,400&display=swap");
 
 :root {
 	--sl-font: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
@@ -72,6 +71,24 @@ body:has(.sl-blog-post-footer) .main-pane {
 	--sl-content-margin-inline: auto;
 }
 
+/* Plugin hides the listing h1; keep it for heading order and document title. */
+body:has(.sl-blog-posts) .content-panel:first-of-type {
+	display: block;
+	padding-bottom: 0.25rem;
+}
+
+body:has(.sl-blog-posts) .content-panel:first-of-type h1 {
+	margin-top: 0;
+	font-family: "IBM Plex Serif", "IBM Plex Sans", ui-serif, Georgia, serif;
+	font-weight: 600;
+	letter-spacing: -0.03em;
+	line-height: 1.15;
+}
+
+body:has(.sl-blog-posts) .content-panel + .content-panel {
+	border-top: none;
+}
+
 body:has(.sl-blog-post-footer) .content-panel:first-of-type {
 	padding-bottom: 0;
 }
@@ -98,8 +115,8 @@ body:has(.sl-blog-post-footer) .content-panel + .content-panel {
 	font-family: "IBM Plex Mono", ui-monospace, monospace;
 	font-size: var(--sl-text-xs);
 	font-variant-numeric: tabular-nums;
-	letter-spacing: 0.06em;
-	text-transform: uppercase;
+	font-variant-caps: all-small-caps;
+	letter-spacing: 0.04em;
 	color: var(--sl-color-gray-2);
 }
 
@@ -113,7 +130,8 @@ body:has(.sl-blog-post-footer) .content-panel + .content-panel {
 	color: var(--sl-color-text) !important;
 }
 
-.sl-blog-author[href]:hover .sl-blog-author-name {
+.sl-blog-author[href]:hover .sl-blog-author-name,
+.sl-blog-author[href]:focus-visible .sl-blog-author-name {
 	color: var(--sl-color-text-accent) !important;
 }
 
@@ -129,9 +147,16 @@ h2.sl-blog-preview-title {
 
 .sl-blog-preview-link {
 	margin-bottom: 0.4rem !important;
+	border-radius: 0.125rem;
 }
 
-.sl-blog-preview-link:hover .sl-blog-preview-title {
+.sl-blog-preview-link:focus-visible {
+	outline: 2px solid var(--sl-color-text-accent);
+	outline-offset: 0.25rem;
+}
+
+.sl-blog-preview-link:hover .sl-blog-preview-title,
+.sl-blog-preview-link:focus-visible .sl-blog-preview-title {
 	color: var(--sl-color-text-accent) !important;
 }
 

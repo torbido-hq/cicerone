@@ -104,6 +104,25 @@ export default defineConfig({
 			],
 			head: [
 				{
+					tag: 'link',
+					attrs: { rel: 'preconnect', href: 'https://fonts.googleapis.com' },
+				},
+				{
+					tag: 'link',
+					attrs: {
+						rel: 'preconnect',
+						href: 'https://fonts.gstatic.com',
+						crossorigin: 'anonymous',
+					},
+				},
+				{
+					tag: 'link',
+					attrs: {
+						rel: 'stylesheet',
+						href: 'https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Serif:ital,wght@0,400;0,500;0,600;1,400&display=swap',
+					},
+				},
+				{
 					tag: 'meta',
 					attrs: {
 						property: 'og:image',
@@ -126,6 +145,13 @@ export default defineConfig({
 					attrs: {
 						name: 'twitter:image',
 						content: 'https://cicerone.dev/images/docs/dashboard.png',
+					},
+				},
+				{
+					tag: 'meta',
+					attrs: {
+						name: 'twitter:image:alt',
+						content: 'Cicerone recommendation job status dashboard',
 					},
 				},
 				{

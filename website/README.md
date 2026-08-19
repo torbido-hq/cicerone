@@ -44,8 +44,9 @@ non-draft post exists, Articles is omitted from the build.
 ```md
 ---
 title: Post title
+description: One-line summary for search results and Open Graph.
 date: 2026-08-19
-excerpt: One-line summary
+excerpt: Listing blurb (falls back to description / body).
 authors:
   - nicholas
 ---
@@ -61,8 +62,8 @@ Serif at ~65ch; chrome stays IBM Plex Sans, dates IBM Plex Mono.
 
 [`.github/workflows/pages.yml`](../.github/workflows/pages.yml) builds
 `website/` on PRs and on pushes to `main` that touch `website/**` or
-`docs/**`. Only `main` deploys. Website-only PRs skip Docker lint/pytest
-(the `lint` / `test` jobs still succeed so required checks are not stuck).
+`docs/**`. Only `main` deploys. Website-only PRs skip Docker lint/pytest;
+the `ci` job still succeeds so a required check is not left pending.
 
 **One-time:** Settings → Pages → Source = **GitHub Actions**, custom domain
 `cicerone.dev`. DNS notes for Gandi apex records are below.
