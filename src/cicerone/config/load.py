@@ -18,6 +18,7 @@ from cicerone.config.constants import (
     DEFAULT_LOCK_KEY,
     DEFAULT_LOCK_TTL_SECONDS,
     DEFAULT_MAX_WORKERS,
+    DEFAULT_SEQUENTIAL_MIN_MEDIAN_INTERACTIONS,
     LOCK_BACKENDS,
     MODES,
     STRATEGY_NAMES,
@@ -160,6 +161,7 @@ def make_settings(**overrides: Any) -> Settings:
         model_configs=None,
         content_fallback_enabled=False,
         content_fallback_max_neighbors=DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS,
+        sequential_min_median_interactions=DEFAULT_SEQUENTIAL_MIN_MEDIAN_INTERACTIONS,
         automl=automl,
         mode="batch",
         serve=serve,
@@ -294,6 +296,7 @@ def load_settings(config_path: str | None = None) -> Settings:
 
     item_based = job.get("item_based", {}) or {}
     content_fallback = job.get("content_fallback", {}) or {}
+    sequential = job.get("sequential", {}) or {}
     legacy_k_explicit = "k_neighbors" in item_based
     legacy_k_neighbors = require_positive_int(
         int(item_based.get("k_neighbors", DEFAULT_ITEM_BASED_K_NEIGHBORS)),
@@ -367,6 +370,10 @@ def load_settings(config_path: str | None = None) -> Settings:
         content_fallback_max_neighbors=require_positive_int(
             int(content_fallback.get("max_neighbors", DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS)),
             name="job.content_fallback.max_neighbors",
+        ),
+        sequential_min_median_interactions=require_positive_int(
+            int(sequential.get("min_median_interactions", DEFAULT_SEQUENTIAL_MIN_MEDIAN_INTERACTIONS)),
+            name="job.sequential.min_median_interactions",
         ),
         automl=AutomlSettings(
             enabled=bool(automl.get("enabled", False)),

@@ -59,6 +59,7 @@ def test_load_settings_dataset_backends(tmp_path):
     assert settings.item_based_k_neighbors == 20
     assert settings.content_fallback_enabled is False
     assert settings.content_fallback_max_neighbors == 50
+    assert settings.sequential_min_median_interactions == 5
     assert settings.automl_enabled is False
     assert settings.automl_n_splits == 2
     assert settings.automl_test_days == 14
@@ -122,6 +123,58 @@ def test_load_settings_item_based_and_content_fallback(tmp_path):
     assert settings.item_based_k_neighbors == 15
     assert settings.content_fallback_enabled is True
     assert settings.content_fallback_max_neighbors == 25
+
+
+def test_load_settings_sequential_min_median_interactions(tmp_path):
+    config_path = write_toml(
+        tmp_path,
+        """
+        [job]
+        [job.sequential]
+        min_median_interactions = 8
+
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+    settings = load_settings(config_path)
+    assert settings.sequential_min_median_interactions == 8
+    assert settings.model_configs["sequential"]["cls"] == "SASRecModel"
+    assert settings.model_configs["sequential"]["architecture"] == "sasrec"
+
+
+def test_load_settings_rejects_invalid_sequential_min_median(tmp_path):
+    config_path = write_toml(
+        tmp_path,
+        """
+        [job]
+        [job.sequential]
+        min_median_interactions = 0
+
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+    with pytest.raises(ConfigError, match="job.sequential.min_median_interactions"):
+        load_settings(config_path)
 
 
 def test_load_settings_rejects_invalid_item_based_k_neighbors(tmp_path):
