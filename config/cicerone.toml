@@ -29,9 +29,12 @@ feature_config_path = "/app/config/features.toml"
 # entries win ties for the same user/item pair). Defaults to
 # ["collaborative", "item_based", "popular"] if omitted. Available:
 # "collaborative" (LightFM, hybrid CF), "item_based" (item-item KNN),
-# "content_fallback" (feature similarity for zero-interaction items; also
-# gated by [job.content_fallback].enabled), "popular" (global popularity
-# fallback), "latest" (trending in the last two weeks).
+# "sequential" (SASRec / BERT4Rec; requires pip install -r
+# requirements-sequential.txt), "content_fallback" (feature similarity for
+# zero-interaction items; also gated by [job.content_fallback].enabled),
+# "popular" (global popularity fallback), "latest" (trending in the last two
+# weeks). Sequential is opt-in (not in the default models list). Sequences
+# are unique items ordered by last interaction (see README).
 # models = ["collaborative", "item_based", "popular", "latest"]
 
 # Optional: item-item KNN neighbor count (legacy → model.item_based.model.K).
@@ -66,6 +69,22 @@ feature_config_path = "/app/config/features.toml"
 # cls = "PopularModel"
 # popularity = "n_interactions"
 # period = { days = 14 }
+#
+# Optional sequential strategy (SASRec default; BERT4Rec via architecture).
+# Requires: pip install -r requirements-sequential.txt
+# [model.sequential]
+# architecture = "sasrec"  # or "bert4rec"
+# n_factors = 64
+# epochs = 3
+# loss = "softmax"
+# session_max_len = 50
+# train_min_user_interactions = 2
+# batch_size = 128
+# lr = 0.001
+#
+# AutoML skip when median distinct items/user is below this (default 5).
+# [job.sequential]
+# min_median_interactions = 5
 
 # Optional: content-based cold-item tier. When enabled, inserted before the
 # first non-personalized strategy (popular/latest) if not already listed in

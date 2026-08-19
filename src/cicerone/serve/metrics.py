@@ -103,6 +103,7 @@ _SOURCE_TO_METRIC: dict[str, str] = {
     "personalized": "collaborative",
     "blended": "collaborative",
     "item_based": "item_based",
+    "sequential": "sequential",
     "popular_fallback": "popular",
     "latest": "latest",
 }

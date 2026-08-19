@@ -12,10 +12,17 @@ import pandas as pd
 from rectools.dataset import Dataset
 from rectools.models import model_from_config
 
-from cicerone.config import STRATEGY_NAMES
+from cicerone.config import STRATEGY_NAMES, ConfigError
 from cicerone.content_fallback import CONTENT_FALLBACK_SOURCE, ContentFallbackModel
 from cicerone.model.constants import LIGHTFM_NUM_THREADS_SEQUENTIAL
-from cicerone.model_config import RECTOOLS_STRATEGY_NAMES, default_model_configs
+from cicerone.model_config import (
+    RECTOOLS_STRATEGY_NAMES,
+    SEQUENTIAL_EXTRA_HINT,
+    SEQUENTIAL_STRATEGY,
+    default_model_configs,
+    rectools_model_config,
+    sequential_extra_available,
+)
 
 
 class RecommenderModel(Protocol):
@@ -58,7 +65,7 @@ def as_recommender_model(model: object) -> RecommenderModel:
 class Strategy:
     personalized: bool
     source_label: str
-    # Item-KNN / content_fallback need history; LightFM hybrid can score feature-only users.
+    # Item-KNN / sequential / content_fallback need history; LightFM hybrid can score feature-only users.
     requires_interactions: bool = False
     # Optional factory (tests / content_fallback); skips model_from_config.
     factory: Callable[[], RecommenderModel] | None = None
@@ -82,7 +89,9 @@ def build_strategy_model(
     if name == "collaborative":
         threads = lightfm_num_threads if lightfm_num_threads is not None else LIGHTFM_NUM_THREADS_SEQUENTIAL
         cfg["num_threads"] = threads
-    return as_recommender_model(model_from_config(cfg))
+    if name == SEQUENTIAL_STRATEGY and not sequential_extra_available():
+        raise ConfigError(f"strategy {name!r} requires torch; {SEQUENTIAL_EXTRA_HINT}")
+    return as_recommender_model(model_from_config(rectools_model_config(cfg)))
 
 
 def _build_content_fallback() -> RecommenderModel:
@@ -95,6 +104,11 @@ STRATEGIES: dict[str, Strategy] = {
     "item_based": Strategy(
         personalized=True,
         source_label="item_based",
+        requires_interactions=True,
+    ),
+    "sequential": Strategy(
+        personalized=True,
+        source_label="sequential",
         requires_interactions=True,
     ),
     "content_fallback": Strategy(

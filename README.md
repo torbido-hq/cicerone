@@ -79,7 +79,7 @@ By default (`[job].mode = "batch"`), the container only runs the batch job
 on its cron schedule — no HTTP surface at all. Setting `[job].mode = "serve"`
 switches `python -m cicerone.serve` to instead run a small FastAPI **read**
 API over the lookup table the batch job already wrote (never loads
-lightfm/rectools/implicit, never trains or imports):
+lightfm/rectools/implicit/torch, never trains or imports):
 
 | Method | Path | Description |
 | --- | --- | --- |
@@ -352,6 +352,17 @@ if omitted:
   similarity (`TFIDFRecommender`). Personalized, warm users only. Neighbor
   count is RecTools `model.item_based.model.K` (default `20`); the legacy
   `[job.item_based].k_neighbors` key is still accepted and translated.
+- `sequential`: RecTools `SASRecModel` (default) or `BERT4RecModel` —
+  transformer next-item model. Personalized, interacting users only. Opt-in
+  (`job.models`); not in the default chain. Requires
+  `pip install -r requirements-sequential.txt`. Hyperparameters via
+  `[model.sequential]` (`architecture = "sasrec"` | `"bert4rec"`, plus RecTools
+  keys such as `n_factors`, `epochs`, `loss`, `session_max_len`,
+  `train_min_user_interactions`). Sequences are **unique items ordered by
+  last interaction time** (Cicerone aggregates `(user, item)` before
+  `Dataset.construct`). AutoML skips this strategy when the extra is missing
+  or median distinct items/user is below
+  `[job.sequential].min_median_interactions` (default `5`).
 - `content_fallback`: feature-similarity recommendations for **zero-interaction
   items** (one-hot over `item_features`, cosine vs user history). Personalized,
   warm users only. Off by default — set `[job.content_fallback].enabled = true`
@@ -421,10 +432,13 @@ happened during it (`MAP@k`, `NDCG@k`, `Recall@k`, via `rectools.metrics`).
 for the run in place of the static config, ties broken by candidate order.
 
 The default candidate search space tries every strategy alone, the default
-priority combo, and one weighted-fusion blend across all four strategies —
-override it with `[[job.automl.candidates]]` (same shape as
+priority combo, and one weighted-fusion blend across all registered
+strategies — override it with `[[job.automl.candidates]]` (same shape as
 `models`/`model_weights`/`rrf_k` above, one array-of-tables entry per
-candidate) if you want to try a different set. Unlike top-level
+candidate) if you want to try a different set. The `sequential` strategy is
+dropped from that pool (with an INFO log) when `rectools[torch]` is not
+installed or the dataset's median distinct items per user is below
+`[job.sequential].min_median_interactions`. Unlike top-level
 `[job.model_weights]`, a candidate's `weights` table (if present) must give
 an explicit weight for every one of its `models` — there's no implicit
 default for an omitted model, to avoid silently backtesting a weighting you

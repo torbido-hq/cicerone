@@ -22,10 +22,22 @@ def test_validate_strategy_names_raises_on_mismatch():
 
 def test_as_recommender_model_accepts_every_registered_strategy():
     from cicerone.model import build_strategy_model
+    from cicerone.model_config import SEQUENTIAL_STRATEGY, sequential_extra_available
 
     for name, strategy in STRATEGIES.items():
+        if name == SEQUENTIAL_STRATEGY and not sequential_extra_available():
+            continue
         model = strategy.factory() if strategy.factory is not None else build_strategy_model(name)
         assert as_recommender_model(model) is model, name
+
+
+def test_build_sequential_without_extra_raises(monkeypatch):
+    from cicerone.config import ConfigError
+    from cicerone.model import build_strategy_model
+
+    monkeypatch.setattr("cicerone.model.strategies.sequential_extra_available", lambda: False)
+    with pytest.raises(ConfigError, match="requirements-sequential"):
+        build_strategy_model("sequential")
 
 
 def test_as_recommender_model_rejects_object_missing_recommend():
@@ -49,7 +61,10 @@ def test_as_recommender_model_rejects_recommend_missing_expected_parameters():
         as_recommender_model(WrongSignatureModel())
 
 
-def test_default_models_three_tier_chain():
+def test_sequential_strategy_is_personalized_and_requires_interactions():
+    assert STRATEGIES["sequential"].personalized is True
+    assert STRATEGIES["sequential"].requires_interactions is True
+    assert STRATEGIES["sequential"].source_label == "sequential"
     assert DEFAULT_MODELS == ["collaborative", "item_based", "popular"]
 
 

@@ -37,6 +37,7 @@ _PRESERVE_LABELS = frozenset(
     {
         "personalized",
         "item_based",
+        "sequential",
         "content_fallback",
         "blended",
     }
