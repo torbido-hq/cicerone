@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- OpenAPI `POST /events` curl sample builds the JSON body with `json.dumps`
+  so user ids with quotes stay valid.
+
 ## [0.6.0] - 2026-08-20
 
 ### Added

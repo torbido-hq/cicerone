@@ -247,7 +247,17 @@ BASE_URL="${{{ENV_SERVE_URL}:-{DEFAULT_SERVE_URL}}}"
 BASE_URL="${{BASE_URL%/}}"
 TOKEN="${{{ENV_SERVE_TOKEN}:?set {ENV_SERVE_TOKEN}}}"
 USER_ID="${{{ENV_USER_ID}:-{DEFAULT_USER_ID}}}"
-BODY='{{"user_id":"'"$USER_ID"'","item_id":"ipa-001","event_type":"purchase","quantity":1,"occurred_at":"2026-08-19T12:00:00Z"}}'
+BODY="$(
+  USER_ID="$USER_ID" python3 -c \\
+    'import json, os
+print(json.dumps({{
+    "user_id": os.environ["USER_ID"],
+    "item_id": "ipa-001",
+    "event_type": "purchase",
+    "quantity": 1,
+    "occurred_at": "2026-08-19T12:00:00Z",
+}}))'
+)"
 curl -fsS -X POST \\
   -H "Authorization: Bearer $TOKEN" \\
   -H "Content-Type: application/json" \\

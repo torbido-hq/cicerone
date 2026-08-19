@@ -49,14 +49,18 @@ def test_attach_code_samples_appends_to_existing():
     assert events_langs == [s["lang"] for s in EVENTS_CODE_SAMPLES]
 
 
-def test_events_javascript_invariants():
-    schema = {
+def _events_schema() -> dict:
+    return {
         "paths": {
             HEALTH_PATH: {"get": {}},
             RECOMMENDATIONS_PATH: {"get": {}},
             EVENTS_PATH: {"post": {}},
         }
     }
+
+
+def test_events_javascript_invariants():
+    schema = _events_schema()
     attach_code_samples(schema)
     js = _sample_source(schema, EVENTS_PATH, "JavaScript", method="post")
     assert ENV_SERVE_TOKEN in js
@@ -67,19 +71,47 @@ def test_events_javascript_invariants():
     assert "occurred_at" in js
 
 
+def test_events_python_invariants():
+    schema = _events_schema()
+    attach_code_samples(schema)
+    py = _sample_source(schema, EVENTS_PATH, "Python", method="post")
+    assert ENV_SERVE_TOKEN in py
+    assert f'os.environ["{ENV_SERVE_TOKEN}"]' in py
+    assert "Authorization" in py and "Bearer" in py
+    assert 'method="POST"' in py
+    assert EVENTS_PATH in py
+    assert "occurred_at" in py
+    assert "json.dumps" in py
+
+
+def test_events_ruby_invariants():
+    schema = _events_schema()
+    attach_code_samples(schema)
+    rb = _sample_source(schema, EVENTS_PATH, "Ruby", method="post")
+    assert ENV_SERVE_TOKEN in rb
+    assert f'ENV.fetch("{ENV_SERVE_TOKEN}")' in rb
+    assert "Authorization" in rb and "Bearer" in rb
+    assert "Net::HTTP::Post.new" in rb
+    assert EVENTS_PATH in rb
+    assert "occurred_at" in rb
+    assert ".to_json" in rb
+
+
 def test_events_shell_invariants():
-    schema = {
-        "paths": {
-            HEALTH_PATH: {"get": {}},
-            RECOMMENDATIONS_PATH: {"get": {}},
-            EVENTS_PATH: {"post": {}},
-        }
-    }
+    schema = _events_schema()
     attach_code_samples(schema)
     shell = _sample_source(schema, EVENTS_PATH, "Shell", method="post")
     assert "curl -fsS -X POST" in shell
     assert f"{ENV_SERVE_TOKEN}:?" in shell
+    assert f"{ENV_SERVE_URL}:-" in shell
+    assert "${BASE_URL%/}" in shell
     assert EVENTS_PATH in shell
+    assert "json.dumps" in shell
+    assert 'os.environ["USER_ID"]' in shell
+    assert '"user_id"' in shell
+    assert '"item_id"' in shell
+    assert '"event_type"' in shell
+    assert '"quantity"' in shell
     assert "occurred_at" in shell
     assert "|| exit 1" in shell
 

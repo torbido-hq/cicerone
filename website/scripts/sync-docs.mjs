@@ -57,7 +57,7 @@ function rewrite(source) {
   let text = source;
 
   text = text.replace(
-    /^\s*<img\s+src="\.\.\/src\/cicerone\/static\/cicerone-logo\.svg"[^>]*>\s*\n+/i,
+    /^\s*<img\s+src="(?:\.\.\/src\/cicerone\/static\/cicerone-logo\.svg|images\/cicerone-logo\.svg)"[^>]*>\s*\n+/i,
     "",
   );
 
