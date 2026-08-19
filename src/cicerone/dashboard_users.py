@@ -19,7 +19,7 @@ def save_users(path: str | Path, users: dict[str, str]) -> None:
     file_path = Path(path)
     file_path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
-        "# Managed by `python -m cicerone.manage_dashboard_users` -- do not edit by hand.",
+        "# Managed by `cicerone users` -- do not edit by hand.",
         "[users]",
     ]
     for username in sorted(users):

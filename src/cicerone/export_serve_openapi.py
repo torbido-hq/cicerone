@@ -2,8 +2,8 @@
 
 Usage::
 
-    PYTHONPATH=src python -m cicerone.export_serve_openapi
-    PYTHONPATH=src python -m cicerone.export_serve_openapi -o docs/openapi/serve.openapi.json
+    cicerone export-openapi
+    cicerone export-openapi -o docs/openapi/serve.openapi.json
 """
 
 from __future__ import annotations

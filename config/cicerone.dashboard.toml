@@ -1,9 +1,9 @@
 # Example "dashboard" configuration -- a small read-only status page over
 # the job run history the batch job already writes (job runs on cron, see
 # config/cicerone.toml). Deploy it as a separate container from the same
-# image, pointed at this file via CICERONE_CONFIG_PATH (see the "dashboard"
-# service in docker-compose.yml). Always its own process
-# (`python -m cicerone.dashboard`), independent of [job].mode -- it never
+# image, pointed at this file via `--config` / CICERONE_CONFIG_PATH (see the
+# "dashboard" service in docker-compose.yml). Always its own process
+# (`cicerone dashboard`), independent of [job].mode -- it never
 # imports cicerone.model/dataset/automl (no rectools/lightfm/implicit
 # needed here), same as serve mode.
 #
@@ -27,7 +27,7 @@ enabled = true
 host = "0.0.0.0"
 port = 8090
 # HTTP Basic Auth users (username -> bcrypt hash), managed with:
-#   docker compose run --rm dashboard python -m cicerone.manage_dashboard_users add <username>
+#   docker compose run --rm dashboard users add <username>
 # Meant for a handful of named people, not machine-to-machine access
 # (compare to [serve].auth_token / [job.trigger].auth_token, a single
 # shared bearer token for that use case).

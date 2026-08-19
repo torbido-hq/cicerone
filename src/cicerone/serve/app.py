@@ -427,7 +427,7 @@ def main() -> None:
 
     settings = load_settings()
     if settings.mode != "serve":
-        raise RuntimeError(f"job.mode is {settings.mode!r}; python -m cicerone.serve requires mode = 'serve'")
+        raise RuntimeError(f"job.mode is {settings.mode!r}; cicerone serve requires mode = 'serve'")
 
     reader = build_recommendation_reader(settings.output)
     manifest_reader = build_manifest_reader(settings.output)

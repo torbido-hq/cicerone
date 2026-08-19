@@ -134,7 +134,7 @@ client in sync:
 
 ```sh
 docker run --rm -v "$PWD":/app -w /app -e PYTHONPATH=/app/src cicerone-test \
-  python -m cicerone.export_serve_openapi -o docs/openapi/serve.openapi.json
+  cicerone export-openapi -o docs/openapi/serve.openapi.json
 ```
 
 `tests/test_serve_openapi_client.py` asserts the committed file matches

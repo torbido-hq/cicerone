@@ -79,7 +79,7 @@ at boot, then again on `[job].cron_schedule` in `config/cicerone.toml`
 
 By default (`[job].mode = "batch"`), the container only runs the batch job
 on its cron schedule — no HTTP surface at all. Setting `[job].mode = "serve"`
-switches `python -m cicerone.serve` to instead run a small FastAPI **read**
+switches `cicerone start` / `cicerone serve` to instead run a small FastAPI **read**
 API over the lookup table the batch job already wrote (never loads
 lightfm/rectools/implicit/torch, never trains or imports):
 
@@ -147,7 +147,7 @@ it with:
 
 ```sh
 docker run --rm -v "$PWD":/app -w /app -e PYTHONPATH=/app/src cicerone-test \
-  python -m cicerone.export_serve_openapi -o docs/openapi/serve.openapi.json
+  cicerone export-openapi -o docs/openapi/serve.openapi.json
 ```
 
 Thin clients (no generated SDK package — copy or import as needed). ReDoc
@@ -228,13 +228,14 @@ serve). Like serve mode, it never loads lightfm/rectools/implicit.
   users, not a shared token) with:
 
   ```
-  python -m cicerone.manage_dashboard_users --users-path <path> add <username>
-  python -m cicerone.manage_dashboard_users --users-path <path> remove <username>
-  python -m cicerone.manage_dashboard_users --users-path <path> list
+  cicerone users --users-path <path> add <username>
+  cicerone users --users-path <path> remove <username>
+  cicerone users --users-path <path> list
   ```
 
-  (note `--users-path` comes *before* the subcommand). Passwords are hashed
-  with bcrypt; the file is plain TOML (`username = "<bcrypt hash>"`).
+  (`--users-path` is optional when `--config` points at a dashboard TOML).
+  Passwords are hashed with bcrypt; the file is plain TOML
+  (`username = "<bcrypt hash>"`).
 - Enable it via `[dashboard].enabled = true` in `config/cicerone.toml` (or
   use the standalone `config/cicerone.dashboard.toml` example config). See
   the `dashboard` service in `docker-compose.yml` for how it's wired up
@@ -249,7 +250,8 @@ serve). Like serve mode, it never loads lightfm/rectools/implicit.
 All structural configuration — which backend to use for input/output,
 bucket/table names, scheduling, tuning — lives in one version-controlled
 TOML file, `config/cicerone.toml` (mounted read-only, see
-`docker-compose.yml`; override the path with `CICERONE_CONFIG_PATH`).
+`docker-compose.yml`; override the path with `cicerone --config PATH` or
+`CICERONE_CONFIG_PATH`).
 Secrets are never written into it directly: reference them with
 `${ENV_VAR_NAME}` placeholders, resolved from the environment at load time
 (see [.env.example](.env.example)).
@@ -537,8 +539,18 @@ pip install 'cicerone-recommender[redis]'        # lock backend / Redis Streams
 pip install 'cicerone-recommender[sequential]'   # SASRec / BERT4Rec
 ```
 
-Then `python -m cicerone.job` (or `.scheduler`, `.serve`, `.dashboard`) with
-the same TOML config as Docker. Prefer the image for production.
+Then, with your own TOML (the same files Docker mounts under `/app/config`):
+
+```sh
+cicerone --config ./config/cicerone.toml start          # job + scheduler, or serve
+cicerone --config ./config/cicerone.toml job            # one training run
+cicerone --config ./config/cicerone.serve.toml serve
+cicerone --config ./config/cicerone.dashboard.toml dashboard
+cicerone --config ./config/cicerone.dashboard.toml users add alice
+```
+
+Runs in the foreground; stop with Ctrl-C / SIGTERM (`docker compose stop`).
+Prefer the image for production.
 
 ## Usage
 

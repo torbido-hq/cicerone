@@ -29,6 +29,9 @@ Repository = "https://github.com/torbido-hq/cicerone"
 Changelog = "https://github.com/torbido-hq/cicerone/blob/main/CHANGELOG.md"
 Issues = "https://github.com/torbido-hq/cicerone/issues"
 
+[project.scripts]
+cicerone = "cicerone.cli:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

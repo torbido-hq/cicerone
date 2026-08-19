@@ -15,6 +15,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - PyPI distribution `cicerone-recommender` (`import cicerone`; the name
   `cicerone` is taken). Wheel includes compiled dashboard CSS. A GitHub
   Release publishes via trusted publishing (`.github/workflows/publish.yml`).
+- `cicerone` CLI (`start`/`job`/`serve`/`dashboard`/`scheduler`/`users`) with
+  `--config` for a TOML path. Runtime image pip-installs the wheel;
+  entrypoint is `cicerone start`.
 
 - Optional project-site articles at `/articles/` (static Markdown under
   `website/src/content/docs/articles/`). No nav, RSS, or index until a

@@ -2,7 +2,7 @@
 # that only exposes the read API (cicerone.serve) over the recommendations
 # the batch job (using config/cicerone.toml) already wrote out. Deploy it
 # as a separate container from the same image, pointed at this file via
-# CICERONE_CONFIG_PATH (see the "serve" service in docker-compose.yml).
+# `--config` / CICERONE_CONFIG_PATH (see the "serve" service in docker-compose.yml).
 #
 # [output] here MUST point at the exact same store the batch job writes to
 # -- everything else in this file is independent of the batch config.

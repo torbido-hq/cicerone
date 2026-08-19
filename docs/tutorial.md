@@ -108,8 +108,7 @@ docker run --rm \
   -v "$PWD/config/cicerone.local.toml":/app/config/cicerone.toml:ro \
   -v "$PWD/config/features.toml":/app/config/features.toml:ro \
   -v "$PWD/data":/data \
-  -e CICERONE_CONFIG_PATH=/app/config/cicerone.toml \
-  cicerone-test python -m cicerone.job
+  cicerone-test cicerone --config /app/config/cicerone.toml job
 ```
 
 You'll re-run this exact command after every config change below.
@@ -476,8 +475,7 @@ docker run --rm -d --name cicerone-tutorial-serve -p 8000:8000 \
   -v "$PWD/config/cicerone.serve.local.toml":/app/config/cicerone.toml:ro \
   -v "$PWD/config/features.toml":/app/config/features.toml:ro \
   -v "$PWD/data":/data \
-  -e CICERONE_CONFIG_PATH=/app/config/cicerone.toml \
-  cicerone-test python -m cicerone.serve
+  cicerone-test cicerone --config /app/config/cicerone.toml serve
 
 read -s -p "Serve auth token: " SERVE_TOKEN && echo
 curl -s -H "Authorization: Bearer $SERVE_TOKEN" \
@@ -564,8 +562,7 @@ docker run --rm -d --name cicerone-tutorial-scheduler -p 8080:8080 \
   -v "$PWD/config/cicerone.local.toml":/app/config/cicerone.toml:ro \
   -v "$PWD/config/features.toml":/app/config/features.toml:ro \
   -v "$PWD/data":/data \
-  -e CICERONE_CONFIG_PATH=/app/config/cicerone.toml \
-  cicerone-test python -m cicerone.scheduler
+  cicerone-test cicerone --config /app/config/cicerone.toml start
 
 read -s -p "Trigger auth token: " TRIGGER_TOKEN && echo
 curl -X POST -H "Authorization: Bearer $TRIGGER_TOKEN" http://localhost:8080/trigger/retrain
@@ -608,15 +605,13 @@ path = "/data/output"
 cron_schedule = "0 3 * * *"
 ```
 
-Add a login user (prompts for a password interactively, note `-it` and that
-`--users-path` comes *before* the subcommand):
+Add a login user (prompts for a password interactively, note `-it`):
 
 ```sh
 mkdir -p config
 docker run --rm -it \
   -v "$PWD/config":/app/config \
-  cicerone-test python -m cicerone.manage_dashboard_users \
-  --users-path /app/config/dashboard_users.toml add tutorial-user
+  cicerone-test cicerone users --users-path /app/config/dashboard_users.toml add tutorial-user
 ```
 
 Then start the dashboard and open `http://localhost:8090/dashboard` in a
@@ -629,8 +624,7 @@ docker run --rm -d --name cicerone-tutorial-dashboard -p 8090:8090 \
   -v "$PWD/config/cicerone.dashboard.local.toml":/app/config/cicerone.toml:ro \
   -v "$PWD/config":/app/config \
   -v "$PWD/data":/data \
-  -e CICERONE_CONFIG_PATH=/app/config/cicerone.toml \
-  cicerone-test python -m cicerone.dashboard
+  cicerone-test cicerone --config /app/config/cicerone.toml dashboard
 ```
 
 With our `dataset` output, only the latest run is ever shown (its

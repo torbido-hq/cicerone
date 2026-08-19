@@ -41,6 +41,11 @@ def test_optional_extras_match_requirements_files():
     assert (root / "requirements-sequential.txt").is_file()
 
 
+def test_console_script_entry_point():
+    scripts = _project()["project"]["scripts"]
+    assert scripts["cicerone"] == "cicerone.cli:main"
+
+
 def test_sdist_includes_requirement_pins():
     text = (_ROOT / "MANIFEST.in").read_text(encoding="utf-8")
     for name in (
