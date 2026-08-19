@@ -5,7 +5,9 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 
 import {
+	ARTICLES_PREFIX,
 	articleIsVisible,
+	articlesContentDir,
 	articlesLayoutKind,
 	hasPublishedArticles,
 	parseFrontmatter,
@@ -59,10 +61,14 @@ test('hasPublishedArticles skips drafts, dotfiles, and non-markdown', () => {
 });
 
 test('articlesLayoutKind classifies listing vs post from the route id', () => {
-	assert.equal(articlesLayoutKind('articles'), 'index');
-	assert.equal(articlesLayoutKind('articles/2'), 'index');
-	assert.equal(articlesLayoutKind('articles/tags/foo'), 'index');
-	assert.equal(articlesLayoutKind('articles/authors/nicholas'), 'index');
-	assert.equal(articlesLayoutKind('articles/hello-world'), 'post');
+	assert.equal(articlesLayoutKind(ARTICLES_PREFIX), 'index');
+	assert.equal(articlesLayoutKind(`${ARTICLES_PREFIX}/2`), 'index');
+	assert.equal(articlesLayoutKind(`${ARTICLES_PREFIX}/tags/foo`), 'index');
+	assert.equal(articlesLayoutKind(`${ARTICLES_PREFIX}/authors/nicholas`), 'index');
+	assert.equal(articlesLayoutKind(`${ARTICLES_PREFIX}/hello-world`), 'post');
 	assert.equal(articlesLayoutKind('tutorial'), undefined);
+});
+
+test('articlesContentDir nests under the shared prefix', () => {
+	assert.equal(articlesContentDir('/site'), `/site/src/content/docs/${ARTICLES_PREFIX}`);
 });
