@@ -5,11 +5,12 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import sys
 
 from cicerone import __version__
 
 logger = logging.getLogger(__name__)
+
+_FORWARDING_COMMANDS = frozenset({"users", "export-openapi"})
 
 
 def _apply_config(path: str | None) -> None:
@@ -17,73 +18,33 @@ def _apply_config(path: str | None) -> None:
         os.environ["CICERONE_CONFIG_PATH"] = path
 
 
-def _cmd_start() -> None:
-    from cicerone.config import load_settings
-    from cicerone.job import run
-    from cicerone.scheduler import main as scheduler_main
-    from cicerone.serve.app import main as serve_main
-
-    settings = load_settings()
-    if settings.mode == "serve":
-        logger.info("mode=serve, starting read API")
-        serve_main()
-        return
-    logger.info("mode=batch, running initial job")
-    try:
-        run()
-    except Exception:
-        logger.exception("Recommendation job failed")
-        raise SystemExit(1) from None
-    logger.info("entering schedule loop (cron_schedule=%s)", settings.cron_schedule)
-    scheduler_main()
+def _has_flag(argv: list[str], name: str) -> bool:
+    prefix = name + "="
+    return any(arg == name or arg.startswith(prefix) for arg in argv)
 
 
-def _cmd_job() -> None:
-    from cicerone.job import run
-
-    try:
-        run()
-    except Exception:
-        logger.exception("Recommendation job failed")
-        raise SystemExit(1) from None
-
-
-def _cmd_serve() -> None:
-    from cicerone.serve.app import main as serve_main
-
-    serve_main()
-
-
-def _cmd_dashboard() -> None:
-    from cicerone.dashboard import main as dashboard_main
-
-    dashboard_main()
-
-
-def _cmd_scheduler() -> None:
-    from cicerone.scheduler import main as scheduler_main
-
-    scheduler_main()
+def _peel_config(parser: argparse.ArgumentParser, args: argparse.Namespace, rest: list[str]) -> list[str]:
+    """Allow ``cicerone start --config PATH`` as well as ``cicerone --config PATH start``."""
+    kept: list[str] = []
+    i = 0
+    while i < len(rest):
+        token = rest[i]
+        if token in {"-c", "--config"}:
+            if i + 1 >= len(rest):
+                parser.error(f"argument {token}: expected one argument")
+            args.config = rest[i + 1]
+            i += 2
+            continue
+        if token.startswith("--config="):
+            args.config = token.split("=", 1)[1]
+            i += 1
+            continue
+        kept.append(token)
+        i += 1
+    return kept
 
 
-def _cmd_users(config: str | None, argv: list[str]) -> None:
-    from cicerone.manage_dashboard_users import main as users_main
-
-    if config and "--users-path" not in argv:
-        from cicerone.config import load_settings
-
-        argv = ["--users-path", load_settings().dashboard.users_path, *argv]
-    users_main(argv)
-
-
-def _cmd_export_openapi(argv: list[str]) -> None:
-    from cicerone.export_serve_openapi import main as export_main
-
-    raise SystemExit(export_main(argv))
-
-
-def main(argv: list[str] | None = None) -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="cicerone",
         description="Batch recommender, serve API, and dashboard. Stop with SIGTERM / Ctrl-C.",
@@ -95,31 +56,109 @@ def main(argv: list[str] | None = None) -> None:
         help="TOML config path (sets CICERONE_CONFIG_PATH for this process)",
     )
     parser.add_argument("-V", "--version", action="version", version=f"%(prog)s {__version__}")
-    parser.add_argument(
-        "command",
-        choices=("start", "run", "job", "serve", "dashboard", "scheduler", "users", "export-openapi"),
-        help="start/run: serve or job+scheduler from job.mode",
-    )
-    parser.add_argument("argv", nargs=argparse.REMAINDER, help="Command-specific arguments")
-    args = parser.parse_args(argv)
+    sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("start", aliases=["run"], help="Serve, or one job then the scheduler, from job.mode")
+    sub.add_parser("job", help="Run one training job")
+    sub.add_parser("serve", help="Read API (requires job.mode = serve)")
+    sub.add_parser("dashboard", help="Basic-Auth status page")
+    sub.add_parser("scheduler", help="Cron loop (and optional retrain trigger)")
+    sub.add_parser("users", add_help=False, help="Manage dashboard Basic Auth users")
+    sub.add_parser("export-openapi", add_help=False, help="Write the serve OpenAPI document")
+    return parser
+
+
+def _run_job() -> int:
+    from cicerone.job import run
+
+    try:
+        run()
+    except Exception:
+        logger.exception("Recommendation job failed")
+        return 1
+    return 0
+
+
+def _cmd_start() -> int:
+    from cicerone.config import load_settings
+    from cicerone.scheduler import main as scheduler_main
+    from cicerone.serve.app import main as serve_main
+
+    settings = load_settings()
+    if settings.mode == "serve":
+        logger.info("mode=serve, starting read API")
+        serve_main()
+        return 0
+    logger.info("mode=batch, running initial job")
+    status = _run_job()
+    if status != 0:
+        return status
+    logger.info("entering schedule loop (cron_schedule=%s)", settings.cron_schedule)
+    scheduler_main()
+    return 0
+
+
+def _cmd_serve() -> int:
+    from cicerone.serve.app import main as serve_main
+
+    serve_main()
+    return 0
+
+
+def _cmd_dashboard() -> int:
+    from cicerone.dashboard import main as dashboard_main
+
+    dashboard_main()
+    return 0
+
+
+def _cmd_scheduler() -> int:
+    from cicerone.scheduler import main as scheduler_main
+
+    scheduler_main()
+    return 0
+
+
+def _cmd_users(argv: list[str]) -> int:
+    from cicerone.manage_dashboard_users import main as users_main
+
+    if os.environ.get("CICERONE_CONFIG_PATH") and not _has_flag(argv, "--users-path"):
+        from cicerone.config import load_settings
+
+        argv = ["--users-path", load_settings().dashboard.users_path, *argv]
+    users_main(argv)
+    return 0
+
+
+def _cmd_export_openapi(argv: list[str]) -> int:
+    from cicerone.export_serve_openapi import main as export_main
+
+    return export_main(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = _parser()
+    args, rest = parser.parse_known_args(argv)
+    rest = _peel_config(parser, args, rest)
+    if args.command not in _FORWARDING_COMMANDS and rest:
+        parser.error(f"unrecognized arguments: {' '.join(rest)}")
     _apply_config(args.config)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
     command = args.command
     if command in {"start", "run"}:
-        _cmd_start()
-    elif command == "job":
-        _cmd_job()
-    elif command == "serve":
-        _cmd_serve()
-    elif command == "dashboard":
-        _cmd_dashboard()
-    elif command == "scheduler":
-        _cmd_scheduler()
-    elif command == "users":
-        _cmd_users(args.config, args.argv)
-    else:
-        _cmd_export_openapi(args.argv)
+        return _cmd_start()
+    if command == "job":
+        return _run_job()
+    if command == "serve":
+        return _cmd_serve()
+    if command == "dashboard":
+        return _cmd_dashboard()
+    if command == "scheduler":
+        return _cmd_scheduler()
+    if command == "users":
+        return _cmd_users(rest)
+    return _cmd_export_openapi(rest)
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    raise SystemExit(main())

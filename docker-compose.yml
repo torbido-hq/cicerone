@@ -78,7 +78,7 @@ services:
 
       # Only used if config/cicerone.toml sets [job.trigger].enabled = true.
       TRIGGER_AUTH_TOKEN: ${TRIGGER_AUTH_TOKEN:-}
-    command: ["--config", "/app/config/cicerone.toml", "start"]
+    command: ["start", "--config", "/app/config/cicerone.toml"]
     ports:
       - "8080:8080" # only listens if [job.trigger].enabled = true
     volumes:
@@ -101,7 +101,7 @@ services:
       # Unset by default — set in .env when serve reads a kind = "db" output.
       OUTPUT_DATABASE_URL: ${OUTPUT_DATABASE_URL:-}
       SERVE_AUTH_TOKEN: ${SERVE_AUTH_TOKEN:-}
-    command: ["--config", "/app/config/cicerone.serve.toml", "start"]
+    command: ["start", "--config", "/app/config/cicerone.serve.toml"]
     ports:
       - "8000:8000"
     volumes:
@@ -123,7 +123,7 @@ services:
       OUTPUT_S3_BUCKET: ${OUTPUT_S3_BUCKET:-}
       # Unset by default — set in .env when the dashboard reads a kind = "db" output.
       OUTPUT_DATABASE_URL: ${OUTPUT_DATABASE_URL:-}
-    command: ["--config", "/app/config/cicerone.dashboard.toml", "dashboard"]
+    command: ["dashboard", "--config", "/app/config/cicerone.dashboard.toml"]
     ports:
       - "8090:8090"
     volumes:

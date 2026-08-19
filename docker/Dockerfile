@@ -76,7 +76,8 @@ COPY --from=package /app/dist /dist
 COPY requirements.txt ./
 RUN pip install --no-cache-dir --no-index --find-links=/wheels -r requirements.txt \
     && pip install --no-cache-dir --no-index --find-links=/dist cicerone-recommender \
-    && rm -rf /wheels /dist
+    && rm -rf /wheels /dist \
+    && cicerone --help >/dev/null
 
 COPY config/ ./config/
 

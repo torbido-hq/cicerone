@@ -8,6 +8,11 @@ from cicerone import __version__
 from cicerone.cli import main
 
 
+@pytest.fixture(autouse=True)
+def _isolate_config_env(monkeypatch):
+    monkeypatch.delenv("CICERONE_CONFIG_PATH", raising=False)
+
+
 def _write_config(tmp_path, *, mode: str = "batch", users_path: str | None = None) -> str:
     extra = ""
     if mode == "serve":
@@ -52,6 +57,20 @@ def test_version_prints_package_version(capsys):
     assert __version__ in capsys.readouterr().out
 
 
+def test_job_help_does_not_run_job(monkeypatch):
+    monkeypatch.setattr("cicerone.job.run", lambda: pytest.fail("job must not run"))
+    with pytest.raises(SystemExit) as exc_info:
+        main(["job", "--help"])
+    assert exc_info.value.code == 0
+
+
+def test_start_rejects_extra_args(tmp_path):
+    config = _write_config(tmp_path)
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--config", config, "start", "nope"])
+    assert exc_info.value.code == 2
+
+
 def test_start_serve_mode_does_not_run_job(tmp_path, monkeypatch):
     config = _write_config(tmp_path, mode="serve")
     calls: list[str] = []
@@ -59,10 +78,29 @@ def test_start_serve_mode_does_not_run_job(tmp_path, monkeypatch):
     monkeypatch.setattr("cicerone.job.run", lambda: calls.append("job"))
     monkeypatch.setattr("cicerone.scheduler.main", lambda: calls.append("scheduler"))
 
-    main(["--config", config, "start"])
-
+    assert main(["--config", config, "start"]) == 0
     assert calls == ["serve"]
     assert os.environ["CICERONE_CONFIG_PATH"] == config
+
+
+def test_config_flag_after_command(tmp_path, monkeypatch):
+    config = _write_config(tmp_path, mode="serve")
+    monkeypatch.setattr("cicerone.serve.app.main", lambda: None)
+    assert main(["start", "--config", config]) == 0
+    assert os.environ["CICERONE_CONFIG_PATH"] == config
+
+
+def test_config_equals_form_after_command(tmp_path, monkeypatch):
+    config = _write_config(tmp_path, mode="serve")
+    monkeypatch.setattr("cicerone.serve.app.main", lambda: None)
+    assert main(["start", f"--config={config}"]) == 0
+    assert os.environ["CICERONE_CONFIG_PATH"] == config
+
+
+def test_config_flag_without_value_after_command_errors():
+    with pytest.raises(SystemExit) as exc_info:
+        main(["start", "--config"])
+    assert exc_info.value.code == 2
 
 
 def test_run_alias_batch_runs_job_then_scheduler(tmp_path, monkeypatch):
@@ -72,8 +110,7 @@ def test_run_alias_batch_runs_job_then_scheduler(tmp_path, monkeypatch):
     monkeypatch.setattr("cicerone.scheduler.main", lambda: calls.append("scheduler"))
     monkeypatch.setattr("cicerone.serve.app.main", lambda: calls.append("serve"))
 
-    main(["-c", config, "run"])
-
+    assert main(["-c", config, "run"]) == 0
     assert calls == ["job", "scheduler"]
 
 
@@ -86,23 +123,19 @@ def test_start_job_failure_skips_scheduler(tmp_path, monkeypatch):
     monkeypatch.setattr("cicerone.job.run", boom)
     monkeypatch.setattr("cicerone.scheduler.main", lambda: pytest.fail("scheduler should not run"))
 
-    with pytest.raises(SystemExit) as exc_info:
-        main(["--config", config, "start"])
-    assert exc_info.value.code == 1
+    assert main(["--config", config, "start"]) == 1
 
 
 def test_job_success_and_failure(tmp_path, monkeypatch):
     config = _write_config(tmp_path)
     monkeypatch.setattr("cicerone.job.run", lambda: None)
-    main(["--config", config, "job"])
+    assert main(["--config", config, "job"]) == 0
 
     def boom() -> None:
         raise RuntimeError("boom")
 
     monkeypatch.setattr("cicerone.job.run", boom)
-    with pytest.raises(SystemExit) as exc_info:
-        main(["--config", config, "job"])
-    assert exc_info.value.code == 1
+    assert main(["--config", config, "job"]) == 1
 
 
 def test_serve_dashboard_scheduler_dispatch(tmp_path, monkeypatch):
@@ -112,9 +145,9 @@ def test_serve_dashboard_scheduler_dispatch(tmp_path, monkeypatch):
     monkeypatch.setattr("cicerone.dashboard.main", lambda: calls.append("dashboard"))
     monkeypatch.setattr("cicerone.scheduler.main", lambda: calls.append("scheduler"))
 
-    main(["--config", config, "serve"])
-    main(["--config", config, "dashboard"])
-    main(["--config", config, "scheduler"])
+    assert main(["--config", config, "serve"]) == 0
+    assert main(["--config", config, "dashboard"]) == 0
+    assert main(["--config", config, "scheduler"]) == 0
     assert calls == ["serve", "dashboard", "scheduler"]
 
 
@@ -124,14 +157,18 @@ def test_users_injects_users_path_from_config(tmp_path, monkeypatch):
     seen: list[list[str]] = []
     monkeypatch.setattr("cicerone.manage_dashboard_users.main", lambda argv: seen.append(list(argv)))
 
-    main(["--config", config, "users", "list"])
-    main(["--config", config, "users", "--users-path", "/explicit", "add", "alice"])
-    main(["users", "list"])
+    assert main(["--config", config, "users", "list"]) == 0
+    assert main(["--config", config, "users", "--users-path=/explicit", "add", "alice"]) == 0
+    monkeypatch.delenv("CICERONE_CONFIG_PATH", raising=False)
+    assert main(["users", "list"]) == 0
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", config)
+    assert main(["users", "list"]) == 0
 
     assert seen == [
         ["--users-path", users_path, "list"],
-        ["--users-path", "/explicit", "add", "alice"],
+        ["--users-path=/explicit", "add", "alice"],
         ["list"],
+        ["--users-path", users_path, "list"],
     ]
 
 
@@ -143,9 +180,7 @@ def test_export_openapi_forwards_args(monkeypatch):
         return 0
 
     monkeypatch.setattr("cicerone.export_serve_openapi.main", fake_main)
-    with pytest.raises(SystemExit) as exc_info:
-        main(["export-openapi", "-o", "docs/openapi/serve.openapi.json"])
-    assert exc_info.value.code == 0
+    assert main(["export-openapi", "-o", "docs/openapi/serve.openapi.json"]) == 0
     assert seen == [["-o", "docs/openapi/serve.openapi.json"]]
 
 

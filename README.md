@@ -542,15 +542,15 @@ pip install 'cicerone-recommender[sequential]'   # SASRec / BERT4Rec
 Then, with your own TOML (the same files Docker mounts under `/app/config`):
 
 ```sh
-cicerone --config ./config/cicerone.toml start          # job + scheduler, or serve
-cicerone --config ./config/cicerone.toml job            # one training run
-cicerone --config ./config/cicerone.serve.toml serve
-cicerone --config ./config/cicerone.dashboard.toml dashboard
-cicerone --config ./config/cicerone.dashboard.toml users add alice
+cicerone start --config ./config/cicerone.toml           # job + scheduler, or serve
+cicerone job --config ./config/cicerone.toml             # one training run
+cicerone serve --config ./config/cicerone.serve.toml
+cicerone dashboard --config ./config/cicerone.dashboard.toml
+cicerone users --config ./config/cicerone.dashboard.toml add alice
 ```
 
-Runs in the foreground; stop with Ctrl-C / SIGTERM (`docker compose stop`).
-Prefer the image for production.
+`--config` may also come before the command. Runs in the foreground; stop with
+Ctrl-C / SIGTERM (`docker compose stop`). Prefer the image for production.
 
 ## Usage
 
