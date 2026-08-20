@@ -156,10 +156,7 @@ and/or `examples/serve/` when request/response fields change.
   notes (not repo policy): Cursor **User Rules** / **Team Rules**.
 - Add/update tests for any behavior change — the coverage gate is enforced
   in CI, not just locally.
-- Make sure the `ci` job passes before requesting review. Python changes
-  also run `lint` and `test`. PRs that only touch `website/**` skip those
-  Docker jobs; `ci` still succeeds. The Pages workflow builds the Starlight
-  site (`cd website && npm ci && npm run build`).
+- Make sure both the lint job and the test job pass before requesting review.
 
 ## Releasing
 

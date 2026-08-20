@@ -10,8 +10,7 @@
 
 **Site:** [cicerone.dev](https://cicerone.dev)
 ([Starlight](https://starlight.astro.build/) docs site; source in [`website/`](website/),
-guides synced from [`docs/`](docs/). Articles are static Markdown in
-`website/src/content/docs/articles/` and stay off the site until a post exists).
+content synced from [`docs/`](docs/)).
 
 A generic, self-hosted batch recommender system. It reads your interaction
 data, trains a hybrid [rectools](https://github.com/MobileTeleSystems/RecTools)

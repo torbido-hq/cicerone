@@ -1,34 +1,6 @@
 // @ts-check
-import { dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
-import starlightBlog from 'starlight-blog';
-import {
-	ARTICLES_PREFIX,
-	articlesContentDir,
-	hasPublishedArticles,
-} from './src/lib/articles.mjs';
-
-const websiteRoot = dirname(fileURLToPath(import.meta.url));
-const articlesDir = articlesContentDir(websiteRoot);
-const production = process.env.NODE_ENV === 'production';
-
-const articlesPlugin = hasPublishedArticles(articlesDir, { production })
-	? [
-			starlightBlog({
-				title: 'Articles',
-				prefix: ARTICLES_PREFIX,
-				metrics: { readingTime: true },
-				authors: {
-					nicholas: {
-						name: 'Nicholas Wieland',
-						url: 'https://github.com/ngw',
-					},
-				},
-			}),
-		]
-	: [];
 
 // https://astro.build/config
 export default defineConfig({
@@ -45,7 +17,6 @@ export default defineConfig({
 				alt: 'Cicerone',
 				replacesTitle: true,
 			},
-			plugins: articlesPlugin,
 			social: [
 				{
 					icon: 'github',
@@ -53,8 +24,8 @@ export default defineConfig({
 					href: 'https://github.com/torbido-hq/cicerone',
 				},
 			],
-			components: {
-				PageFrame: './src/components/PageFrame.astro',
+			editLink: {
+				baseUrl: 'https://github.com/torbido-hq/cicerone/edit/main/',
 			},
 			customCss: ['./src/styles/custom.css'],
 			sidebar: [
@@ -94,25 +65,6 @@ export default defineConfig({
 			],
 			head: [
 				{
-					tag: 'link',
-					attrs: { rel: 'preconnect', href: 'https://fonts.googleapis.com' },
-				},
-				{
-					tag: 'link',
-					attrs: {
-						rel: 'preconnect',
-						href: 'https://fonts.gstatic.com',
-						crossorigin: 'anonymous',
-					},
-				},
-				{
-					tag: 'link',
-					attrs: {
-						rel: 'stylesheet',
-						href: 'https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Serif:ital,wght@0,400;0,500;0,600;1,400&display=swap',
-					},
-				},
-				{
 					tag: 'meta',
 					attrs: {
 						property: 'og:image',
@@ -135,13 +87,6 @@ export default defineConfig({
 					attrs: {
 						name: 'twitter:image',
 						content: 'https://cicerone.dev/images/docs/dashboard.png',
-					},
-				},
-				{
-					tag: 'meta',
-					attrs: {
-						name: 'twitter:image:alt',
-						content: 'Cicerone recommendation job status dashboard',
 					},
 				},
 				{
