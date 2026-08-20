@@ -6,24 +6,7 @@ on:
     branches: [main]
 
 jobs:
-  scope:
-    runs-on: ubuntu-latest
-    outputs:
-      python: ${{ steps.filter.outputs.python }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dorny/paths-filter@v4
-        id: filter
-        with:
-          filters: |
-            python:
-              - "**"
-              - "!website/**"
-              - "!.github/workflows/pages.yml"
-
   lint:
-    needs: scope
-    if: needs.scope.outputs.python == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -47,8 +30,6 @@ jobs:
         run: docker run --rm cicerone-test pip-audit -r requirements.txt -r requirements-dev.txt
 
   test:
-    needs: scope
-    if: needs.scope.outputs.python == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -67,25 +48,3 @@ jobs:
         run: |
           docker compose --env-file docker/postgres/defaults.env \
             -f docker-compose.ci.yml down -v
-
-  # Always reports: website-only PRs skip lint/test (no Docker VMs) without
-  # leaving a required check pending. Require this job name, not lint/test.
-  ci:
-    needs: [scope, lint, test]
-    if: always() && !cancelled()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Python CI
-        run: |
-          if [ "${{ needs.scope.result }}" != "success" ]; then
-            echo "scope=${{ needs.scope.result }}"
-            exit 1
-          fi
-          if [ "${{ needs.scope.outputs.python }}" != "true" ]; then
-            echo "Website-only change; Python lint/test skipped."
-            exit 0
-          fi
-          if [ "${{ needs.lint.result }}" != "success" ] || [ "${{ needs.test.result }}" != "success" ]; then
-            echo "lint=${{ needs.lint.result }} test=${{ needs.test.result }}"
-            exit 1
-          fi

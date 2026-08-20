@@ -13,13 +13,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   with cold-start fallback, on the Basic-Auth status page.
   `GET /dashboard?user_id=` fills the lookup on load.
 
-- Optional project-site articles at `/articles/` (static Markdown under
-  `website/src/content/docs/articles/`). No nav, RSS, or index until a
-  published post exists. Article pages use IBM Plex Serif and a ~65ch
-  measure. Brand accents invert for dark theme. Listing keeps an h1;
-  posts use `description` for meta. Website-only PRs skip Docker lint/test
-  jobs; the `ci` job still succeeds.
-
 - Optional **sequential** strategy (`SASRecModel` / `BERT4RecModel`) via
   `[model.sequential]` (`architecture = "sasrec"` or `"bert4rec"`). Requires
   `pip install -r requirements-sequential.txt` (`rectools[torch]`); serve
@@ -63,13 +56,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- Parse article `draft` from YAML frontmatter; article layout CSS keys off
-  `data-cicerone-articles` rather than starlight-blog class names.
-- Share the articles URL prefix between the Starlight plugin and layout
-  classifier; `robots.txt` allows the site and disallows `/pagefind/`.
-- Article plugin gating passes `{ production }` explicitly; layout kind
-  matches starlight-blog listing routes and ignores a missing route id.
-- Drop the Starlight “Edit page” footer; site content is edited in git.
 - README and docs-site dashboard screenshot include the user recommendation lookup.
 - Docs site copies `docs/images/` into `website/public/images/docs/` at build time.
 - Dashboard lookup form is labeled, results are announced, and job-run

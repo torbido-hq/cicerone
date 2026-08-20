@@ -80,6 +80,7 @@ for (const page of PAGES) {
   const frontmatter = `---
 title: ${JSON.stringify(page.title)}
 description: ${JSON.stringify(page.description)}
+editUrl: ${JSON.stringify(`${githubBlob}/docs/${page.source}`)}
 ---
 
 `;

@@ -6,7 +6,6 @@ dist/
 # Synced from ../docs at build time (see scripts/sync-docs.mjs)
 src/content/docs/tutorial.md
 src/content/docs/architecture.md
-src/content/docs/incremental-events.md
 public/images/docs/
 
 # dependencies

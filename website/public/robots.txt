@@ -1,5 +1,0 @@
-User-agent: *
-Allow: /
-Disallow: /pagefind/
-
-Sitemap: https://cicerone.dev/sitemap-index.xml
