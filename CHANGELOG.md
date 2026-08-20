@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-08-20
+
 ### Fixed
 
 - Serve availability filters treat `"false"` / `"0"` as unavailable (same coercion as training).
@@ -15,6 +17,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   after a no-op write (DB) or dropping other users' rows (dataset).
 - S3 list-mode event source retries unreadable objects before skipping them; webhook
   `nack` no longer duplicates already-pending ids.
+- Full retrain skips artifact/recommendation writes if the distributed lock is lost
+  before write (cron and trigger paths pass `owned()` as a fence).
+- DB event source distinguishes same-payload rows at one timestamp via table identity
+  (`id` / SQLite `rowid` / Postgres `ctid`) so the watermark cannot skip a twin.
 
 ### Changed
 

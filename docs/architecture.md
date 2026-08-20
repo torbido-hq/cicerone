@@ -228,7 +228,8 @@ flowchart LR
    `OutputSink.write_model_artifact`. Serve mode never loads this artifact.
 6. For batch, `cicerone start` runs `scheduler.main()`: it
    computes the next run time from `cron_schedule` with `croniter`, sleeps,
-   calls `job.run(triggered_by="cron")`, and loops forever — a failed run is
+   calls `job.run(triggered_by="cron")` (with `fence_check=backend.owned` when a
+   distributed lock is held), and loops forever — a failed run is
    logged but never kills the loop. When `Settings.trigger_enabled`
    (`[job.trigger].enabled`), `scheduler.main()` instead delegates to
    `_run_with_trigger()`, which runs the same cron loop on a background

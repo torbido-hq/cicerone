@@ -214,11 +214,14 @@ def test_run_guard_debounce_with_distributed_lock_backend():
         def release(self) -> None:
             return None
 
+        def owned(self) -> bool:
+            return True
+
     calls: list[str] = []
     lock_backend = AlwaysAcquiringLock()
     done = threading.Event()
 
-    def fake_run(triggered_by: str) -> None:
+    def fake_run(triggered_by: str, **_kwargs) -> None:
         calls.append(triggered_by)
         done.set()
 
@@ -245,9 +248,12 @@ def test_run_guard_releases_backend_after_run():
         def release(self) -> None:
             events.append("release")
 
+        def owned(self) -> bool:
+            return True
+
     done = threading.Event()
 
-    def fake_run(triggered_by: str) -> None:
+    def fake_run(triggered_by: str, **_kwargs) -> None:
         events.append(f"run:{triggered_by}")
         done.set()
 
@@ -511,6 +517,7 @@ def test_cron_run_with_lock_runs_and_releases(monkeypatch):
     from cicerone import scheduler
 
     events: list[str] = []
+    captured: dict[str, object] = {}
 
     class Ok:
         def acquire(self) -> bool:
@@ -520,9 +527,19 @@ def test_cron_run_with_lock_runs_and_releases(monkeypatch):
         def release(self) -> None:
             events.append("release")
 
-    monkeypatch.setattr(scheduler.job, "run", lambda **kwargs: events.append(f"run:{kwargs['triggered_by']}"))
-    scheduler._cron_run_with_lock(Ok())
+        def owned(self) -> bool:
+            return True
+
+    lock = Ok()
+
+    def fake_run(**kwargs):
+        captured.update(kwargs)
+        events.append(f"run:{kwargs['triggered_by']}")
+
+    monkeypatch.setattr(scheduler.job, "run", fake_run)
+    scheduler._cron_run_with_lock(lock)
     assert events == ["acquire", "run:cron", "release"]
+    assert captured["fence_check"] == lock.owned
 
 
 def test_redis_owned_and_is_locked(monkeypatch):

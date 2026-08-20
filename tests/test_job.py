@@ -525,3 +525,71 @@ def test_job_preserves_success_when_manifest_write_fails(tmp_path, monkeypatch):
         job.run()
 
     assert (output_dir / "recommendations.parquet").exists()
+
+
+def test_job_skips_writes_when_fence_lost_before_output(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+
+    now = pd.Timestamp.utcnow()
+    events = pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    )
+    items = pd.DataFrame(
+        [{"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True}]
+    )
+    events.to_parquet(input_dir / "events.parquet", index=False)
+    items.to_parquet(input_dir / "items.parquet", index=False)
+
+    config_path = _write_config(tmp_path, input_dir, output_dir)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
+
+    from cicerone.locks import LockLostError
+
+    with pytest.raises(LockLostError, match="retrain lock lost before write"):
+        job.run(fence_check=lambda: False)
+
+    assert not (output_dir / "recommendations.parquet").exists()
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    assert manifest["status"] == "failed"
+    assert manifest["partial_outputs"] is False
+    assert "retrain lock lost" in manifest["error"]
+
+
+def test_job_marks_partial_outputs_when_fence_lost_after_write(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+
+    now = pd.Timestamp.utcnow()
+    events = pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    )
+    items = pd.DataFrame(
+        [{"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True}]
+    )
+    events.to_parquet(input_dir / "events.parquet", index=False)
+    items.to_parquet(input_dir / "items.parquet", index=False)
+
+    config_path = _write_config(tmp_path, input_dir, output_dir)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
+
+    from cicerone.locks import LockLostError
+
+    calls = {"n": 0}
+
+    def fence() -> bool:
+        calls["n"] += 1
+        return calls["n"] < 2
+
+    with pytest.raises(LockLostError, match="retrain lock lost before write"):
+        job.run(fence_check=fence)
+
+    assert (output_dir / "recommendations.parquet").exists()
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    assert manifest["status"] == "failed"
+    assert manifest["partial_outputs"] is True
+    assert calls["n"] == 2
