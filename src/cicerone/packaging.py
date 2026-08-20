@@ -20,8 +20,24 @@ REQUIRED_SUFFIXES = (
 )
 
 
-def wheel_prefix(name: str = WHEEL_NAME, version: str = __version__) -> str:
-    return f"{name}-{version}-"
+def parse_wheel_filename(filename: str) -> tuple[str, str, str | None]:
+    """Return (name, version, build_tag) from a PEP 427 wheel filename."""
+    if not filename.endswith(".whl"):
+        raise ValueError(f"{filename}: not a wheel filename")
+    parts = filename[:-4].split("-")
+    if len(parts) < 5:
+        raise ValueError(f"{filename}: expected name-version[-build]-python-abi-platform.whl")
+    name = parts[0]
+    middle = parts[1:-3]
+    if len(middle) == 1:
+        return name, middle[0], None
+    if len(middle) == 2 and middle[1][:1].isdigit():
+        return name, middle[0], middle[1]
+    raise ValueError(f"{filename}: cannot parse version from {filename[:-4]}")
+
+
+def version_matches(wheel_version: str, requested: str) -> bool:
+    return wheel_version == requested or wheel_version.startswith(f"{requested}+")
 
 
 def select_wheel(
@@ -31,20 +47,39 @@ def select_wheel(
     version: str = __version__,
 ) -> Path:
     directory = Path(dist_dir)
-    prefix = wheel_prefix(name, version)
-    matches = sorted(path for path in directory.glob("*.whl") if path.name.startswith(prefix))
-    if not matches:
-        found = ", ".join(sorted(path.name for path in directory.glob("*.whl")))
-        extra = f" (found: {found})" if found else ""
-        raise ValueError(f"no wheel matching {prefix}*.whl in {directory}{extra}")
-    if len(matches) > 1:
-        names = ", ".join(path.name for path in matches)
-        raise ValueError(f"multiple wheels matching {prefix}*.whl in {directory}: {names}")
-    return matches[0]
+    wheels = sorted(directory.glob("*.whl"))
+    found = [path.name for path in wheels]
+    candidates: list[tuple[Path, str, str | None, tuple[str, str, str]]] = []
+    for path in wheels:
+        try:
+            dist, ver, build = parse_wheel_filename(path.name)
+        except ValueError:
+            continue
+        if dist != name or not version_matches(ver, version):
+            continue
+        raw_tags = path.name[:-4].split("-")[-3:]
+        tags = (raw_tags[0], raw_tags[1], raw_tags[2])
+        candidates.append((path, ver, build, tags))
+
+    extra = f" (found: {', '.join(found)})" if found else ""
+    if not candidates:
+        raise ValueError(
+            f"no {name} wheel matching version {version} "
+            f"(PEP 440 local +… and numeric build tags ok) in {directory}{extra}"
+        )
+
+    tag_sets = {item[3] for item in candidates}
+    if len(tag_sets) > 1:
+        names = ", ".join(item[0].name for item in candidates)
+        raise ValueError(f"multiple {name} {version} wheels with different tags in {directory}: {names}")
+
+    candidates.sort(key=lambda item: (item[1] != version, item[2] is not None, item[0].name))
+    return candidates[0][0]
 
 
-def validate_wheel(wheel_path: str | Path, *, name: str = WHEEL_NAME, version: str = __version__) -> None:
+def validate_wheel(wheel_path: str | Path) -> None:
     path = Path(wheel_path)
+    name, version, _build = parse_wheel_filename(path.name)
     dist_info = f"{name}-{version}.dist-info"
     with zipfile.ZipFile(path) as zf:
         names = zf.namelist()
@@ -66,7 +101,7 @@ def validate_dist(
     version: str = __version__,
 ) -> Path:
     wheel = select_wheel(dist_dir, name=name, version=version)
-    validate_wheel(wheel, name=name, version=version)
+    validate_wheel(wheel)
     return wheel
 
 
