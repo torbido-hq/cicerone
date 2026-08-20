@@ -15,9 +15,9 @@ export CICERONE_SERVE_URL=http://localhost:8000
 export CICERONE_SERVE_TOKEN=tutorial-token   # matches [serve].auth_token
 # optional: CICERONE_USER_ID=alice
 
-python examples/serve/python_client.py   # needs cicerone-recommender; ServeClient → typed responses
+python3 examples/serve/python_client.py  # needs cicerone-recommender; ServeClient → typed responses
 node examples/serve/fetch.mjs            # Node 18+ / browser-style fetch
-examples/serve/curl_examples.sh          # curl; needs python (json.tool / json.dumps)
+examples/serve/curl_examples.sh          # curl; needs python3 or python (json.tool / json.dumps)
 ```
 
 Interactive docs while serve is up: `http://localhost:8000/docs` (Swagger)
@@ -30,4 +30,4 @@ section.
 `POST /events` is present only when `[events]` webhook ingest is enabled
 on that serve process. Tutorial step 13 walks through a local webhook;
 see [docs/incremental-events.md](../../docs/incremental-events.md).
-The curl script JSON-encodes `CICERONE_USER_ID` with `python` (`json.dumps`).
+The curl script JSON-encodes `CICERONE_USER_ID` with `python3` (or `python`).

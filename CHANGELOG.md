@@ -81,7 +81,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   cards; OpenAPI `x-codeSamples` for `POST /events`; PyPI extras
   (`cicerone-recommender[sequential]` / `[redis]`) next to `requirements-*.txt`;
   example TOML / OpenAPI regenerate command for pip hosts; missing-package
-  errors name the PyPI extras.
+  errors name the PyPI extras; how-it-works vs incremental-events links
+  split algorithms from operator ingest setup.
 - Parse article `draft` from YAML frontmatter; article layout CSS keys off
   `data-cicerone-articles` rather than starlight-blog class names.
 - Share the articles URL prefix between the Starlight plugin and layout
@@ -112,9 +113,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - OpenAPI `POST /events` curl sample JSON-encodes `USER_ID` with `python3`
-  (`json.dumps`) or `jq`, and errors if neither is on PATH.
-- `examples/serve/curl_examples.sh` `POST /events` builds the JSON body with
-  `json.dumps` so user ids with quotes stay valid.
+  (falls back to `python`, then `jq`) and errors if none is on PATH.
+  `examples/serve/curl_examples.sh` uses the same `python3` then `python` lookup.
 - Docker test image includes `examples/serve/` so CI can read `curl_examples.sh`.
 - Tutorial webhook step starts serve with `cicerone --config … serve` (same as
   the HTTP API step).

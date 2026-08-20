@@ -5,6 +5,8 @@
 This document describes how the code under `src/cicerone/` fits together.
 For configuration and usage, see the main [README](../README.md). For the
 pipeline and how strategies differ, see [how-it-works.md](how-it-works.md).
+For `[events]` ingest (webhook, backends, HA), see
+[incremental-events.md](incremental-events.md).
 
 ## Module overview
 
@@ -411,8 +413,7 @@ wait for the next full `job.run()`). Serve replicas scale on the read path;
 incremental apply is single-writer unless `events.ha = true` with
 `job.trigger.lock_backend` postgres or redis (leader-only lease, separate
 key from the retrain lock). Operator guide:
-[incremental-events.md](incremental-events.md). Algorithms:
-[how-it-works.md](how-it-works.md).
+[incremental-events.md](incremental-events.md).
 
 ## Cold-start behavior
 

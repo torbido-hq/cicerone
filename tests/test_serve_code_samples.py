@@ -109,9 +109,10 @@ def test_events_shell_invariants():
     assert "json.dumps" in shell
     assert 'os.environ["USER_ID"]' in shell
     assert "command -v python3" in shell
+    assert "command -v python" in shell
     assert "command -v jq" in shell
     assert "--arg user_id" in shell
-    assert "python3 or jq required" in shell
+    assert "python3, python, or jq required" in shell
     assert '"user_id"' in shell
     assert '"item_id"' in shell
     assert '"event_type"' in shell
@@ -138,6 +139,9 @@ def test_recommendations_shell_invariants():
     attach_code_samples(schema)
     shell = _sample_source(schema, RECOMMENDATIONS_PATH, "Shell")
     assert "urllib.parse.quote" in shell
+    assert "command -v python3" in shell
+    assert "command -v python" in shell
+    assert "python3 or python required" in shell
     assert f"{ENV_SERVE_TOKEN}:?" in shell
     assert f"{ENV_SERVE_URL}:-" in shell
     assert "${BASE_URL%/}" in shell

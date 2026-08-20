@@ -11,8 +11,9 @@ store serve already reads.
 This is not live ranking. LightFM, item-KNN, sequential, and content
 fallback wait for the next `job.run()` (cron or `POST /trigger/retrain`).
 The incremental path refreshes **popular / latest slices** (and recency
-boosts) for affected users plus `__cold_start__`. Why those models are
-offline-only: [how-it-works.md](how-it-works.md).
+boosts) for affected users plus `__cold_start__`.
+[how-it-works.md](how-it-works.md) explains why LightFM, item-KNN, and
+sequential wait for a full retrain.
 
 Batch I/O and serve packages: [architecture.md](architecture.md).
 

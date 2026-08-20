@@ -16,6 +16,14 @@ ENV_SERVE_URL = "CICERONE_SERVE_URL"
 ENV_SERVE_TOKEN = "CICERONE_SERVE_TOKEN"
 ENV_USER_ID = "CICERONE_USER_ID"
 
+# Prefer python3 (Debian); fall back to python (venv).
+_PYTHON_DETECT = """\
+if command -v python3 >/dev/null 2>&1; then PYTHON=python3
+elif command -v python >/dev/null 2>&1; then PYTHON=python
+else PYTHON=
+fi
+"""
+
 _HEALTH_RUBY = f"""\
 require "json"
 require "net/http"
@@ -144,8 +152,12 @@ BASE_URL="${{{ENV_SERVE_URL}:-{DEFAULT_SERVE_URL}}}"
 BASE_URL="${{BASE_URL%/}}"
 TOKEN="${{{ENV_SERVE_TOKEN}:?set {ENV_SERVE_TOKEN}}}"
 USER_ID="${{{ENV_USER_ID}:-{DEFAULT_USER_ID}}}"
+{_PYTHON_DETECT}if [ -z "$PYTHON" ]; then
+  echo "python3 or python required to URL-encode USER_ID" >&2
+  exit 1
+fi
 USER_ID_ENC="$(
-  USER_ID="$USER_ID" python3 -c \\
+  USER_ID="$USER_ID" "$PYTHON" -c \\
     'import os, urllib.parse; print(urllib.parse.quote(os.environ["USER_ID"], safe=""))'
 )"
 curl -fsS \\
@@ -247,9 +259,9 @@ BASE_URL="${{{ENV_SERVE_URL}:-{DEFAULT_SERVE_URL}}}"
 BASE_URL="${{BASE_URL%/}}"
 TOKEN="${{{ENV_SERVE_TOKEN}:?set {ENV_SERVE_TOKEN}}}"
 USER_ID="${{{ENV_USER_ID}:-{DEFAULT_USER_ID}}}"
-if command -v python3 >/dev/null 2>&1; then
+{_PYTHON_DETECT}if [ -n "$PYTHON" ]; then
   BODY="$(
-    USER_ID="$USER_ID" python3 -c \\
+    USER_ID="$USER_ID" "$PYTHON" -c \\
       'import json, os
 print(json.dumps({{
     "user_id": os.environ["USER_ID"],
@@ -265,7 +277,7 @@ elif command -v jq >/dev/null 2>&1; then
       '{{user_id:$user_id,item_id:"ipa-001",event_type:"purchase",quantity:1,occurred_at:"2026-08-19T12:00:00Z"}}'
   )"
 else
-  echo "python3 or jq required to JSON-encode USER_ID" >&2
+  echo "python3, python, or jq required to JSON-encode USER_ID" >&2
   exit 1
 fi
 curl -fsS -X POST \\

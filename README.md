@@ -22,7 +22,8 @@ mode can then expose those precomputed recommendations over a small
 read-only HTTP API — there's still no live inference, no model loaded in the
 request path. Optional `[events]` ingest can refresh popular/latest rows
 between full retrains; that is still write-through, not request-path
-ranking. How the strategies differ, with paper links:
+ranking ([docs/incremental-events.md](docs/incremental-events.md)). How the
+strategies differ, with paper links:
 [docs/how-it-works.md](docs/how-it-works.md). Optionally
 (`[job].save_model_artifact`), the batch job can also write a versioned
 fitted-model artifact for offline reload / future thin inference without
@@ -228,9 +229,8 @@ rows wait for the next `job.run()`. Shipped sources: `webhook`
 `redis_streams`. Default is one writer; multi-replica apply needs
 `events.ha = true` plus `job.trigger.lock_backend` postgres or redis.
 
-Operator guide (TOML, curl, HA, metrics):
-[docs/incremental-events.md](docs/incremental-events.md). Why those models
-are offline-only: [docs/how-it-works.md](docs/how-it-works.md).
+Operator guide (TOML, curl, backends, HA, metrics):
+[docs/incremental-events.md](docs/incremental-events.md).
 
 ## Dashboard
 
@@ -635,6 +635,8 @@ the [project site](https://cicerone.dev) (`website/`, Starlight; syncs `docs/*.m
 screenshots and documentation,
 [docs/how-it-works.md](docs/how-it-works.md) for the pipeline and
 algorithms,
+[docs/incremental-events.md](docs/incremental-events.md) for ingest between
+retrains,
 [docs/tutorial.md](docs/tutorial.md) for a hands-on walkthrough with local
 sample data, and [docs/architecture.md](docs/architecture.md) for how the
 code is structured. See [CHANGELOG.md](CHANGELOG.md) for release notes.

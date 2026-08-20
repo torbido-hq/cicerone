@@ -12,7 +12,8 @@ slices between full retrains; it still does not do live inference.
 Packages and I/O live in [architecture.md](architecture.md). Config knobs
 live in the [README](../README.md). This page is the product and algorithm
 story: what each strategy is, how they differ, and which papers or docs to
-read next.
+read next. Operator setup for `[events]` ingest (webhook, backends, HA):
+[incremental-events.md](incremental-events.md).
 
 ## Pipeline
 
@@ -42,8 +43,8 @@ flowchart LR
    serve can filter by category / availability).
 
 Full `job.run()` is the drift backstop (cron or `POST /trigger/retrain`).
-See [incremental-events.md](incremental-events.md) for the cheap path
-between runs.
+Optional `[events]` write-through of popular/latest between runs is
+covered in the Incremental vs full retrain section below.
 
 ## Interaction weighting
 
@@ -200,7 +201,7 @@ still runs fresh. Sequential skip rules above still apply.
 (and recency boosts) for affected users plus `__cold_start__`.
 Collaborative, item-KNN, sequential, and content-fallback rows wait for the
 next full `job.run()`. LightFM has no clean online `partial_fit` on this
-path — that is why. Operator guide:
+path — that is why. Webhook, backends, HA, and metrics:
 [incremental-events.md](incremental-events.md).
 
 ## Cold-start

@@ -12,8 +12,9 @@ with pip instead, see [README Installation](../README.md#installation)
 `docker-compose.yml` is for local developer convenience only — do not run
 it as a production deployment. For the full configuration reference, see
 the [README](../README.md); for algorithms and how strategies differ, see
-[how-it-works.md](how-it-works.md); for how the code is structured, see
-[architecture.md](architecture.md).
+[how-it-works.md](how-it-works.md); for `[events]` ingest between retrains,
+see [incremental-events.md](incremental-events.md); for how the code is
+structured, see [architecture.md](architecture.md).
 
 1. [Create a sample dataset](#1-create-a-sample-dataset)
 2. [Point cicerone.toml at it](#2-point-ciceronetoml-at-it)
@@ -557,9 +558,8 @@ docker stop cicerone-tutorial-serve
 
 Leave personalized LightFM rows for the next full retrain. `[events]` on
 the serve process can still refresh **popular / latest** slices from new
-interactions. Details and other backends (db / s3 / Redis Streams):
-[incremental-events.md](incremental-events.md). [how-it-works.md](how-it-works.md)
-explains why LightFM is not updated online.
+interactions. Operator guide (webhook, other backends, HA):
+[incremental-events.md](incremental-events.md).
 
 Add this to `config/cicerone.serve.local.toml` (keep the `[output]` /
 `[serve]` edits from [step 12](#12-serve-recommendations-over-an-http-api)):
