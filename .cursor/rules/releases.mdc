@@ -13,8 +13,8 @@ refactors, improvements); **minor** = `release/X.Y.0` (new features).
 Never land minor features on `main` until the patch is tagged. After
 that tag, `main` is the minor train.
 
-**Current trains:** patch **0.6.1** on `main`; minor **0.7.0** on
-`release/0.7.0`.
+**Current trains** live in [CONTRIBUTING.md](CONTRIBUTING.md) **Release
+trains** (update that snippet only).
 
 Split mixed PRs (refactor + feature): patch first, then minor. If the
 refactor has no standalone value, keep both on the minor train. Never

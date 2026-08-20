@@ -188,13 +188,21 @@ patch train and `release/X.Y.0` is the minor train.
   `main` is the minor train and new features land there. Stop
   cherry-picking. Update **Current trains** for the next split.
 
-**Current trains:** patch **0.6.1** on `main`; minor **0.7.0** on
-`release/0.7.0`.
+**Current trains** (update this line only when the split changes):
+patch **0.6.1** on `main`; minor **0.7.0** on `release/0.7.0`.
 
 Cherry-pick, hotfix, and merge-back commands are in
 [Cherry-picks and merge-backs](#cherry-picks-and-merge-backs).
 
 ### Cherry-picks and merge-backs
+
+Checklist (see **Current trains** for today's `X.Y.0`):
+
+1. **Fix** — PR to `main`, then cherry-pick onto `release/X.Y.0`.
+2. **Feature** — PR to `release/X.Y.0` (not `main`).
+3. **Hotfix (both trains)** — PR to `main` first, cherry-pick immediately.
+4. **Merge-back** — after the patch tag, cherry-pick any remaining patch
+   commits onto `release/X.Y.0`, merge it into `main`, then tag.
 
 Cherry-pick each patch-train fix onto `release/X.Y.0` after it lands on
 `main` (the commit that landed the change on `main`):
@@ -212,13 +220,13 @@ minor branch has a different API or config), abort
 `release/X.Y.0` that ports the same fix. Do not change `main` to match
 minor-only APIs.
 
-**Example** (current trains: 0.6.1 / 0.7.0). A dashboard lookup crash and
-a new serve filter in the same week:
+**Example.** A dashboard lookup crash and a new serve filter in the same
+week:
 
 1. **Fix:** branch `fix/dashboard-lookup` from `main`, PR into `main`,
-   then `git cherry-pick <sha>` onto `release/0.7.0`.
-2. **Feature:** branch `feature/serve-filters` from `release/0.7.0`, PR
-   into `release/0.7.0` (not `main`).
+   then `git cherry-pick <sha>` onto `release/X.Y.0`.
+2. **Feature:** branch `feature/serve-filters` from `release/X.Y.0`, PR
+   into `release/X.Y.0` (not `main`).
 
 **Hotfixes that must ship on both trains** always land on `main` first
 (patch). Do not open the fix only against `release/X.Y.0`. After the
@@ -235,11 +243,11 @@ If the merge still conflicts, keep patch behavior from `main` and minor
 features from the release branch:
 
 - **Prefer `main`:** both sides edited the dashboard lookup error path.
-  `main` has the patch crash fix; `release/0.7.0` still has the unfixed
-  copy. Take `main`'s error handling, then restore any 0.7.0-only fields
+  `main` has the patch crash fix; `release/X.Y.0` still has the unfixed
+  copy. Take `main`'s error handling, then restore any minor-only fields
   around it.
 - **Prefer `release/X.Y.0`:** `main` has no serve-filter helper;
-  `release/0.7.0` added `feature/serve-filters`. Keep the new helper and
+  `release/X.Y.0` added `feature/serve-filters`. Keep the new helper and
   call sites from the release branch.
 
 ## Releasing
@@ -265,11 +273,11 @@ for `cicerone-recommender` — owner `torbido-hq`, repo `cicerone`, workflow
    metadata uses it via `SERVE_API_VERSION` — regenerate
    `docs/openapi/serve.openapi.json` if the version string changed).
 2. Get that version onto `main`, then tag **from `main`**:
-   - **Patch** (current: 0.6.1): merge the completing PR to `main`. Tag
-     that commit on `main`: `git tag -a vX.Y.Z <sha> -m "…"` and
+   - **Patch:** merge the completing PR to `main`. Tag that commit on
+     `main`: `git tag -a vX.Y.Z <sha> -m "…"` and
      `git push origin vX.Y.Z`.
-   - **Minor** (current: 0.7.0): merge the completing PR to
-     `release/X.Y.0`. Merge `release/X.Y.0` into `main` (see
+   - **Minor:** merge the completing PR to `release/X.Y.0`. Merge
+     `release/X.Y.0` into `main` (see
      [Cherry-picks and merge-backs](#cherry-picks-and-merge-backs) if
      `main` diverged). Tag that commit on `main`:
      `git tag -a vX.Y.Z <sha> -m "…"` and `git push origin vX.Y.Z`.
