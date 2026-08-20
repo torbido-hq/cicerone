@@ -9,6 +9,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 
+import numpy as np
 import pandas as pd
 from rectools import Columns
 
@@ -149,22 +150,10 @@ def build_latest_ranking(
     """
     if not target_users:
         return _empty_recs()
-    ranked = rank_latest_items(items, date_column, allowed_item_ids, top_k)
-    if not ranked:
-        return _empty_recs()
-
-    rows = [
-        {
-            Columns.User: user_id,
-            Columns.Item: item_id,
-            Columns.Rank: rank,
-            Columns.Score: score,
-            SOURCE_COLUMN: LATEST_SOURCE,
-        }
-        for user_id in target_users
-        for item_id, rank, score in ranked
-    ]
-    return pd.DataFrame(rows)
+    return expand_latest_ranking(
+        rank_latest_items(items, date_column, allowed_item_ids, top_k),
+        target_users,
+    )
 
 
 def expand_latest_ranking(
@@ -174,18 +163,18 @@ def expand_latest_ranking(
     """Broadcast a shared latest ranking to ``target_users`` without re-sorting items."""
     if not ranked or not target_users:
         return _empty_recs()
-    rows = [
+    item_ids, ranks, scores = zip(*ranked, strict=True)
+    n_items = len(item_ids)
+    n_users = len(target_users)
+    return pd.DataFrame(
         {
-            Columns.User: user_id,
-            Columns.Item: item_id,
-            Columns.Rank: rank,
-            Columns.Score: score,
+            Columns.User: np.repeat(np.asarray(target_users, dtype=object), n_items),
+            Columns.Item: np.tile(np.asarray(item_ids, dtype=object), n_users),
+            Columns.Rank: np.tile(np.asarray(ranks, dtype=np.int64), n_users),
+            Columns.Score: np.tile(np.asarray(scores, dtype=np.float64), n_users),
             SOURCE_COLUMN: LATEST_SOURCE,
         }
-        for user_id in target_users
-        for item_id, rank, score in ranked
-    ]
-    return pd.DataFrame(rows)
+    )
 
 
 def _normalize_source_frame(frame: pd.DataFrame, source_label: str) -> pd.DataFrame:
