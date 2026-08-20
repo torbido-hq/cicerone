@@ -36,9 +36,11 @@ Do not merge 0.7.0 into `main` before 0.6.1 ships. After the tag, merge
 `release/0.7.0` into `main`; `main` becomes the 0.7.0 train. Stop
 cherry-picking onto `release/0.7.0`.
 
-Tag from `main`: 0.6.1 is the completing PR merged to `main`; 0.7.0
-merges `release/0.7.0` into `main` first, then tags that commit. If
-`main` diverged, cherry-pick remaining 0.6.1 commits onto
-`release/0.7.0` before the merge; do not force-push `main`.
+When merging `release/0.7.0` into `main`, prefer `main` for 0.6.1
+fixes on a shared surface and `release/0.7.0` for 0.7.0-only APIs
+(see CONTRIBUTING **Cherry-picks and merge-backs**). If `main`
+diverged, cherry-pick remaining 0.6.1 commits onto `release/0.7.0`
+before the merge; do not force-push `main`. Tag from `main` after that
+merge (0.6.1 tags the completing commit on `main` directly).
 
 Version bump still happens on the PR that completes that version.

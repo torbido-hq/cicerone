@@ -172,11 +172,19 @@ and/or `examples/serve/` when request/response fields change.
 | **0.6.1** (patch) | `main` | Bug fixes, small refactors, improvements (perf/docs/DX), dependency bumps, tests for existing behavior. No new user-facing capability, config keys, models, or I/O `kind`s. |
 | **0.7.0** (minor) | `release/0.7.0` (long-lived; PRs target this branch, not `main`) | New features and new public surface. |
 
-If a change is ambiguous, put it on **0.6.1** unless it adds user-facing
-capability. Never land 0.7.0 features on `main` until v0.6.1 ships.
+- Fixes, refactors, improvements → `main`. Features → `release/0.7.0`.
+- If ambiguous, use `main` unless the change adds user-facing capability.
+- Never land 0.7.0 features on `main` until v0.6.1 ships.
+- `## [Unreleased]` is per-branch (0.6.1 on `main`, 0.7.0 on
+  `release/0.7.0`).
+- After v0.6.1: merge `release/0.7.0` into `main`; then `main` is 0.7.0
+  and new features land there. Stop cherry-picking. Update this table
+  when the next patch vs minor split starts.
 
-`## [Unreleased]` is per-branch: next patch (0.6.1) on `main`, 0.7.0 on
-`release/0.7.0`.
+Cherry-pick, hotfix, and merge-back commands are in
+[Cherry-picks and merge-backs](#cherry-picks-and-merge-backs).
+
+### Cherry-picks and merge-backs
 
 Cherry-pick each 0.6.1 fix onto `release/0.7.0` after it lands on `main`
 (the commit that landed the change on `main`):
@@ -206,10 +214,22 @@ week:
 `main` PR merges, cherry-pick immediately (same commands as above) so
 0.7.0 does not wait for the next routine backport.
 
-**After v0.6.1 is tagged:** merge `release/0.7.0` into `main`. Then `main`
-is the 0.7.0 train (Unreleased = 0.7.0; new features land on `main`).
-Stop cherry-picking onto `release/0.7.0`. Update this table when the next
-patch vs minor split starts.
+When merging `release/0.7.0` into `main` (after v0.6.1, before tagging
+0.7.0): if `main` has 0.6.1 commits not yet on `release/0.7.0`,
+cherry-pick those first, then merge. Do not force-push `main`. If a
+conflict is a missing cherry-pick, abort the merge, port the fix, and
+retry.
+
+If the merge still conflicts, keep 0.6.1 behavior from `main` and 0.7.0
+features from the release branch:
+
+- **Prefer `main`:** both sides edited the dashboard lookup error path.
+  `main` has the 0.6.1 crash fix; `release/0.7.0` still has the unfixed
+  copy. Take `main`'s error handling, then restore any 0.7.0-only fields
+  around it.
+- **Prefer `release/0.7.0`:** `main` has no serve-filter helper;
+  `release/0.7.0` added `feature/serve-filters`. Keep the new helper and
+  call sites from the release branch.
 
 ## Releasing
 
@@ -238,13 +258,10 @@ for `cicerone-recommender` — owner `torbido-hq`, repo `cicerone`, workflow
      commit on `main`: `git tag -a v0.6.1 <sha> -m "…"` and
      `git push origin v0.6.1`.
    - **0.7.0 (minor):** merge the completing PR to `release/0.7.0`. Merge
-     `release/0.7.0` into `main`. Tag that commit on `main`:
+     `release/0.7.0` into `main` (see
+     [Cherry-picks and merge-backs](#cherry-picks-and-merge-backs) if
+     `main` diverged). Tag that commit on `main`:
      `git tag -a v0.7.0 <sha> -m "…"` and `git push origin v0.7.0`.
-     If `main` has 0.6.1 commits not yet on `release/0.7.0`, cherry-pick
-     those onto `release/0.7.0` first, then merge. If the merge still
-     conflicts, keep 0.6.1 behavior from `main` and 0.7.0 features from
-     the release branch; do not force-push `main`. If a conflict is a
-     missing cherry-pick, abort the merge, port the fix, and retry.
 3. Publish the GitHub release from that tag (notes can mirror the
    changelog section). `.github/workflows/publish.yml` builds the sdist and
    wheel (including dashboard CSS) and uploads them to PyPI.
