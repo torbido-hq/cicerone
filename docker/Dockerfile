@@ -109,6 +109,8 @@ COPY --from=frontend /build/tailwind.css ./src/cicerone/static/tailwind.css
 COPY tests/ ./tests/
 # Checked-in serve OpenAPI schema — asserted against create_app().openapi() in tests.
 COPY docs/openapi/ ./docs/openapi/
+# curl examples — asserted by tests/test_curl_examples.py
+COPY examples/serve/ ./examples/serve/
 # Canonical Postgres defaults — parsed by tests/support/postgres_defaults.py at runtime.
 COPY docker/postgres/defaults.env ./docker/postgres/defaults.env
 ENV PYTHONPATH=/app/src

@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (`json.dumps`) or `jq`, and errors if neither is on PATH.
 - `examples/serve/curl_examples.sh` `POST /events` builds the JSON body with
   `json.dumps` so user ids with quotes stay valid.
+- Docker test image includes `examples/serve/` so CI can read `curl_examples.sh`.
 
 ## [0.6.0] - 2026-08-20
 
