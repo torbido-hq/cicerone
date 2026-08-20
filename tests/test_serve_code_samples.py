@@ -108,6 +108,10 @@ def test_events_shell_invariants():
     assert EVENTS_PATH in shell
     assert "json.dumps" in shell
     assert 'os.environ["USER_ID"]' in shell
+    assert "command -v python3" in shell
+    assert "command -v jq" in shell
+    assert "--arg user_id" in shell
+    assert "python3 or jq required" in shell
     assert '"user_id"' in shell
     assert '"item_id"' in shell
     assert '"event_type"' in shell

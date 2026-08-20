@@ -247,9 +247,10 @@ BASE_URL="${{{ENV_SERVE_URL}:-{DEFAULT_SERVE_URL}}}"
 BASE_URL="${{BASE_URL%/}}"
 TOKEN="${{{ENV_SERVE_TOKEN}:?set {ENV_SERVE_TOKEN}}}"
 USER_ID="${{{ENV_USER_ID}:-{DEFAULT_USER_ID}}}"
-BODY="$(
-  USER_ID="$USER_ID" python3 -c \\
-    'import json, os
+if command -v python3 >/dev/null 2>&1; then
+  BODY="$(
+    USER_ID="$USER_ID" python3 -c \\
+      'import json, os
 print(json.dumps({{
     "user_id": os.environ["USER_ID"],
     "item_id": "ipa-001",
@@ -257,7 +258,16 @@ print(json.dumps({{
     "quantity": 1,
     "occurred_at": "2026-08-19T12:00:00Z",
 }}))'
-)"
+  )"
+elif command -v jq >/dev/null 2>&1; then
+  BODY="$(
+    jq -n --arg user_id "$USER_ID" \\
+      '{{user_id:$user_id,item_id:"ipa-001",event_type:"purchase",quantity:1,occurred_at:"2026-08-19T12:00:00Z"}}'
+  )"
+else
+  echo "python3 or jq required to JSON-encode USER_ID" >&2
+  exit 1
+fi
 curl -fsS -X POST \\
   -H "Authorization: Bearer $TOKEN" \\
   -H "Content-Type: application/json" \\

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # curl examples for Cicerone serve mode.
+# Needs python (`json.tool`, and `json.dumps` so USER_ID with quotes stays valid).
 #   export CICERONE_SERVE_URL=http://localhost:8000
 #   export CICERONE_SERVE_TOKEN=tutorial-token
 #   examples/serve/curl_examples.sh
@@ -42,8 +43,20 @@ print("paths:", ", ".join(sorted(doc.get("paths", {}))))
 if [[ "${CICERONE_POST_EVENTS:-}" == "1" ]]; then
   echo
   echo "## POST /events (set CICERONE_POST_EVENTS=1; webhook ingest must be enabled)"
+  events_body="$(
+    USER_ID="$USER_ID" python -c '
+import json, os
+print(json.dumps({
+    "user_id": os.environ["USER_ID"],
+    "item_id": "ipa-001",
+    "event_type": "purchase",
+    "quantity": 1,
+    "occurred_at": "2026-08-19T12:00:00Z",
+}))
+'
+  )"
   curl -sS "${auth_header[@]}" -X POST \
     -H "Content-Type: application/json" \
-    -d "{\"user_id\":\"${USER_ID}\",\"item_id\":\"ipa-001\",\"event_type\":\"purchase\",\"quantity\":1,\"occurred_at\":\"2026-08-19T12:00:00Z\"}" \
+    -d "$events_body" \
     "${BASE_URL}/events" | python -m json.tool
 fi

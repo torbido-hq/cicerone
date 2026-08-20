@@ -17,7 +17,7 @@ export CICERONE_SERVE_TOKEN=tutorial-token   # matches [serve].auth_token
 
 python examples/serve/python_client.py   # ServeClient → typed HealthResponse / RecommendationsResponse
 node examples/serve/fetch.mjs            # Node 18+ / browser-style fetch
-examples/serve/curl_examples.sh          # curl + /openapi.json peek
+examples/serve/curl_examples.sh          # curl; needs python (json.tool / json.dumps)
 ```
 
 Interactive docs while serve is up: `http://localhost:8000/docs` (Swagger)
@@ -30,3 +30,4 @@ section.
 `POST /events` is present only when `[events]` webhook ingest is enabled
 on that serve process. Tutorial step 13 walks through a local webhook;
 see [docs/incremental-events.md](../../docs/incremental-events.md).
+The curl script JSON-encodes `CICERONE_USER_ID` with `python` (`json.dumps`).

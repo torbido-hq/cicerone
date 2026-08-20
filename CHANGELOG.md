@@ -8,8 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- OpenAPI `POST /events` curl sample builds the JSON body with `json.dumps`
-  so user ids with quotes stay valid.
+- OpenAPI `POST /events` curl sample JSON-encodes `USER_ID` with `python3`
+  (`json.dumps`) or `jq`, and errors if neither is on PATH.
+- `examples/serve/curl_examples.sh` `POST /events` builds the JSON body with
+  `json.dumps` so user ids with quotes stay valid.
 
 ## [0.6.0] - 2026-08-20
 

@@ -483,7 +483,7 @@
           {
             "label": "curl",
             "lang": "Shell",
-            "source": "BASE_URL=\"${CICERONE_SERVE_URL:-http://localhost:8000}\"\nBASE_URL=\"${BASE_URL%/}\"\nTOKEN=\"${CICERONE_SERVE_TOKEN:?set CICERONE_SERVE_TOKEN}\"\nUSER_ID=\"${CICERONE_USER_ID:-alice}\"\nBODY=\"$(\n  USER_ID=\"$USER_ID\" python3 -c \\\n    'import json, os\nprint(json.dumps({\n    \"user_id\": os.environ[\"USER_ID\"],\n    \"item_id\": \"ipa-001\",\n    \"event_type\": \"purchase\",\n    \"quantity\": 1,\n    \"occurred_at\": \"2026-08-19T12:00:00Z\",\n}))'\n)\"\ncurl -fsS -X POST \\\n  -H \"Authorization: Bearer $TOKEN\" \\\n  -H \"Content-Type: application/json\" \\\n  -d \"$BODY\" \\\n  \"$BASE_URL/events\" || exit 1\n"
+            "source": "BASE_URL=\"${CICERONE_SERVE_URL:-http://localhost:8000}\"\nBASE_URL=\"${BASE_URL%/}\"\nTOKEN=\"${CICERONE_SERVE_TOKEN:?set CICERONE_SERVE_TOKEN}\"\nUSER_ID=\"${CICERONE_USER_ID:-alice}\"\nif command -v python3 >/dev/null 2>&1; then\n  BODY=\"$(\n    USER_ID=\"$USER_ID\" python3 -c \\\n      'import json, os\nprint(json.dumps({\n    \"user_id\": os.environ[\"USER_ID\"],\n    \"item_id\": \"ipa-001\",\n    \"event_type\": \"purchase\",\n    \"quantity\": 1,\n    \"occurred_at\": \"2026-08-19T12:00:00Z\",\n}))'\n  )\"\nelif command -v jq >/dev/null 2>&1; then\n  BODY=\"$(\n    jq -n --arg user_id \"$USER_ID\" \\\n      '{user_id:$user_id,item_id:\"ipa-001\",event_type:\"purchase\",quantity:1,occurred_at:\"2026-08-19T12:00:00Z\"}'\n  )\"\nelse\n  echo \"python3 or jq required to JSON-encode USER_ID\" >&2\n  exit 1\nfi\ncurl -fsS -X POST \\\n  -H \"Authorization: Bearer $TOKEN\" \\\n  -H \"Content-Type: application/json\" \\\n  -d \"$BODY\" \\\n  \"$BASE_URL/events\" || exit 1\n"
           }
         ]
       }
