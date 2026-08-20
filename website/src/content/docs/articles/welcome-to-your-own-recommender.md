@@ -46,7 +46,11 @@ Cicerone is worth it when you want that second row without becoming a recs team 
 Other downsides, said plainly:
 
 - Each successful job **truncates then rewrites** the recommendations table. Point `recommendations_table` at anything you care about and you will empty it. Prefix the name.
-- Default input tables are `users` / `events` / `items`. Rails already has `users`. If you omit `users_query`, Cicerone will `SELECT * FROM users` and then look for a `user_id` column that is actually `id`. Always set the queries.
+- Default input tables are `users` / `events` / `items`. Rails already has `users`, often with `email`, `encrypted_password`, and reset tokens. If you omit `users_query`, Cicerone will `SELECT * FROM users` and then look for a `user_id` column that is actually `id`. Always set a query that aliases `id` and selects nothing else:
+
+```sql
+SELECT id::text AS user_id FROM users
+```
 - IDs are strings. `42` and `"42"` are the same only if you `::text` in SQL and `id.to_s` in Ruby.
 - Output identifiers cannot be schema-qualified (`cicerone.recommendations` is rejected). Tables live in `public` with a prefix, or you use the same database role as the app.
 - The job needs `CREATE` (first run) and `TRUNCATE` on its output tables. A dedicated role that is `SELECT`-only on `orders` is the right idea; granting `CREATE` on `public` is the awkward part. Many small shops just use the app role and are careful with the table name. I would still not use the default name `recommendations`.
@@ -120,13 +124,7 @@ FROM products p
 
 Rename `published` / `in_stock` to whatever booleans you actually have (`active`, `inventory_count > 0`, …). If those columns do not exist, either add expressions or set `item_availability_filters = []` so Cicerone does not look for them. A missing filter column is skipped (fail-open), which is easy to miss in the logs.
 
-Users can be as small as:
-
-```sql
-SELECT id::text AS user_id FROM users
-```
-
-You do not need user features for this setup. The query is there so Cicerone does not try to eat the Devise `users` table raw.
+Users can be as small as that same query — `id` only, no `email` / `encrypted_password` / tokens. You do not need user features for this setup. The query is there so Cicerone does not `SELECT *` the Devise `users` table.
 
 ## Two TOML files
 
@@ -358,14 +356,16 @@ docker run --rm --name cicerone-dashboard -p 127.0.0.1:8090:8090 \
 
 Open `http://127.0.0.1:8090/dashboard`, sign in, type a `user_id` (the string form, `'42'`). Bind only to localhost unless this sits behind your own auth.
 
+![Cicerone dashboard: user lookup of current top-K, latest job status, and run history](https://cicerone.dev/images/docs/dashboard.png)
+
 ## Read it from the app
 
-This is a `SELECT`, not an SDK. ActiveRecord is one way to do it; Eloquent, SQLAlchemy, Ecto, or `database/sql` would ask for the same columns. The table has no ActiveRecord primary key. Treat it as a query, not as a `belongs_to :product` (string `item_id` vs integer `products.id`):
+This is a `SELECT`, not an SDK. ActiveRecord is one way to do it; Eloquent, SQLAlchemy, Ecto, or `database/sql` would ask for the same columns. The table has no ActiveRecord `id`. Treat it as a query, not as a `belongs_to :product` (string `item_id` vs integer `products.id`). Rails 7.1 can disable the assumed primary key; on 7.0 leave that line out and stick to `pluck` / `select_values` (never `find` / `update`):
 
 ```ruby
 class CiceroneRecommendation < ApplicationRecord
   self.table_name = "cicerone_recommendations"
-  self.primary_key = false
+  self.primary_key = false # Rails 7.1+; omit on 7.0
 
   def readonly?
     true
@@ -380,15 +380,25 @@ class CiceroneRecommendation < ApplicationRecord
   end
 
   def self.product_ids_for(user, limit: 8)
-    scope = user ? for_user(user) : cold_start
-    ids = scope.limit(limit).pluck(:item_id)
-    ids = cold_start.limit(limit).pluck(:item_id) if user && ids.empty?
-    ids.map { |id| Integer(id) }
+    user_id = user ? user.id.to_s : "__cold_start__"
+    ids = ids_for(user_id, limit)
+    ids = ids_for("__cold_start__", limit) if user && ids.empty?
+    ids
+  end
+
+  def self.ids_for(user_id, limit)
+    connection.select_values(
+      sanitize_sql_array(
+        [
+          "SELECT item_id FROM cicerone_recommendations WHERE user_id = ? ORDER BY rank LIMIT ?",
+          user_id,
+          limit,
+        ]
+      )
+    ).map { |id| Integer(id) }
   end
 end
 ```
-
-`self.primary_key = false` is Rails 7.1. On 7.0 you can still `pluck` without it; skip `find`.
 
 ```ruby
 class HomeController < ApplicationController
