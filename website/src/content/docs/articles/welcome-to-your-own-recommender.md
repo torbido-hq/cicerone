@@ -27,6 +27,8 @@ Your app `SELECT`s that table and joins `products`. Guests and brand-new account
 
 Nothing Cicerone-shaped loads in the web process. A purchase this afternoon does not change tonight’s ranks. Personalized LightFM only moves on a full retrain.
 
+That is the trick worth getting excited about: **Netflix-shaped math on a shop-sized catalog**, without putting a Python model on the hot path. [LightFM](https://arxiv.org/abs/1507.08439) (WARP) embeds users, items, and side features — here, `category` — in one latent space, so a newly listed IPA can sit near other IPAs before it has a sales history. Popularity covers people with one order. Per-user blending mixes those ranks so you do not fall off a cliff from “personalized” to “everyone sees the same ten SKUs”. You get that as a table. The storefront never imports `rectools`.
+
 ## Compare this with the in-house thing you would write anyway
 
 On a thin event log, **collaborative filtering is mostly popularity with extra steps**. Overlap is the scarce resource: two customers have to have bought some of the same things before matrix factorization has anything to say. Until then, a decent `GROUP BY product_id ORDER BY COUNT(*) DESC` homepage is not naïve — it is often the honest global model.
@@ -78,7 +80,31 @@ WHERE o.status IN ('paid', 'complete', 'completed')
   AND o.user_id IS NOT NULL
 ```
 
-If you also store authenticated product views, `UNION ALL` them as `event_type = 'view'` with `quantity = 1`. Skip `user_id IS NULL` (guest checkouts, anonymous pageviews) — there is no one to personalize.
+If you also store authenticated product views, fold them in. Same contract, a second `event_type` the weights already know:
+
+```sql
+SELECT
+  o.user_id::text AS user_id,
+  oi.product_id::text AS item_id,
+  'purchase'::text AS event_type,
+  oi.quantity,
+  o.created_at AS occurred_at
+FROM order_items oi
+INNER JOIN orders o ON o.id = oi.order_id
+WHERE o.status IN ('paid', 'complete', 'completed')
+  AND o.user_id IS NOT NULL
+UNION ALL
+SELECT
+  v.user_id::text,
+  v.product_id::text,
+  'view',
+  1,
+  v.created_at
+FROM product_views v
+WHERE v.user_id IS NOT NULL
+```
+
+Skip `user_id IS NULL` (guest checkouts, anonymous pageviews) — there is no one to personalize. A `view` weight with no view table yet is harmless; paste the `UNION ALL` when you have the rows.
 
 Items (optional, but you want them so we can hide unpublished / out-of-stock and use `category`):
 
@@ -252,6 +278,25 @@ SELECT * FROM cicerone_recommendations WHERE user_id = '42' ORDER BY rank;
 
 You want a non-empty sentinel. For user `42`, mixed `personalized` / `blended` / `popular_fallback` is success; **only** `popular_fallback` means that user did not give the collaborative model enough to work with.
 
+The moment it clicks is joining back to names (illustrative rows — your catalog, your scores):
+
+```sql
+SELECT r.rank, r.source, r.score, p.name, p.category
+FROM cicerone_recommendations r
+INNER JOIN products p ON p.id::text = r.item_id
+WHERE r.user_id = '42'
+ORDER BY r.rank;
+```
+
+```text
+ rank | source         | score | name              | category
+    1 | blended        |  0.81 | Hazy IPA 440ml    | beer
+    2 | personalized   |  0.44 | Oat Stout         | beer
+    3 | popular_fallback | 0.31 | House Lager       | beer
+```
+
+Those `source` labels are the model talking. `blended` means LightFM and popularity both voted for that row; `personalized` is the latent space on its own. Swap `'42'` for `'__cold_start__'` to see what guests get.
+
 ## Read it from the app
 
 This is a `SELECT`, not an SDK. ActiveRecord is one way to do it; Eloquent, SQLAlchemy, Ecto, or `database/sql` would ask for the same columns. The table has no ActiveRecord primary key. Treat it as a query, not as a `belongs_to :product` (string `item_id` vs integer `products.id`):
@@ -285,13 +330,52 @@ end
 `self.primary_key = false` is Rails 7.1. On 7.0 you can still `pluck` without it; skip `find`.
 
 ```ruby
-def recommended_products(user, limit: 8)
-  ids = CiceroneRecommendation.product_ids_for(user, limit: limit)
-  Product.where(id: ids).sort_by { |p| ids.index(p.id) }
+class HomeController < ApplicationController
+  def index
+    ids = CiceroneRecommendation.product_ids_for(current_user)
+    @recommended = Product.where(id: ids).sort_by { |product| ids.index(product.id) }
+  end
 end
 ```
 
-A template is then ordinary: iterate `@products`. If the job has never succeeded, `ids` is empty — show nothing, or your old bestsellers partial. Empty is better than inventing a failure UI.
+```erb
+<% if @recommended.any? %>
+  <section aria-labelledby="recommended-heading">
+    <h2 id="recommended-heading">Recommended for you</h2>
+    <ul>
+      <% @recommended.each do |product| %>
+        <li><%= link_to product.name, product %></li>
+      <% end %>
+    </ul>
+  </section>
+<% end %>
+```
+
+If the job has never succeeded, `@recommended` is empty — hide the section, or fall back to your old bestsellers partial. Empty is better than inventing a failure UI.
+
+Same table, no Rails. A Python worker or a Node renderer is the same `SELECT`:
+
+```python
+user_key = str(user_id) if user_id else "__cold_start__"
+rows = conn.execute(
+    """
+    SELECT item_id FROM cicerone_recommendations
+    WHERE user_id = %s ORDER BY rank LIMIT 8
+    """,
+    (user_key,),
+).fetchall()
+ids = [int(item_id) for (item_id,) in rows]
+```
+
+```js
+const userKey = userId != null ? String(userId) : "__cold_start__";
+const { rows } = await pool.query(
+  `SELECT item_id FROM cicerone_recommendations
+   WHERE user_id = $1 ORDER BY rank LIMIT 8`,
+  [userKey],
+);
+const ids = rows.map((row) => Number(row.item_id));
+```
 
 ## Keep it running
 
