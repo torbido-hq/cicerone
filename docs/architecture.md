@@ -299,7 +299,9 @@ rectools/lightfm/implicit/torch needed in that process or its request path):
   `requirements-redis.txt`) for dataset/S3-only HA. Redis `owned()` checks the
   fencing token before commit so an expired TTL cannot split-brain a long
   apply/retrain; Postgres advisory locks are session-scoped (disconnect
-  releases; `owned()` checks `pg_locks` for this backend pid).
+  releases; `owned()` checks `pg_locks` for this backend pid). Cron and
+  `RunGuard` pass `owned()` into `job.run` as `fence_check` so a lost lock
+  skips artifact and recommendation writes.
 
 Serve replicas scale on the read path. Incremental `[events]` apply is
 single-writer unless `events.ha = true` with `lock_backend` postgres/redis

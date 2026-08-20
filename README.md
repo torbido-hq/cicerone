@@ -211,7 +211,9 @@ process:
   (and Redis-only `lock_ttl_seconds`) that namespace the lock when several
   schedulers share one Postgres/Redis; Redis refreshes TTL while the lock is
   held so long jobs stay exclusive. This is a lock, not a job queue.
-  Serve replicas scale on the **read** path. Incremental `[events]` apply is
+  Cron and the retrain trigger pass `owned()` into `job.run` so a lost lock
+  skips artifact and recommendation writes. Serve replicas scale on the
+  **read** path. Incremental `[events]` apply is
   single-writer by default; HA is in
   [docs/incremental-events.md](docs/incremental-events.md).
 - The run manifest records `triggered_by` (`"cron"`, `"webhook"`, or
