@@ -144,7 +144,8 @@ and/or `examples/serve/` when request/response fields change.
 
 ## Pull requests
 
-- Branch off `main`, keep PRs focused on one change.
+- Branch off the train you are targeting (`main` for 0.6.1, `release/0.7.0`
+  for new features). Keep PRs focused on one change.
 - **Branch names (required):** short and human-readable only —
   `feature/…`, `fix/…`, `release/0.3.1`, `docs/…`, `chore/…`.
   **Never** use `cursor/<slug>-<id>` (or any other opaque agent/id suffix).
@@ -161,6 +162,26 @@ and/or `examples/serve/` when request/response fields change.
   also run `lint` and `test`. PRs that only touch `website/**` skip those
   Docker jobs; `ci` still succeeds. The Pages workflow builds the Starlight
   site (`cd website && npm ci && npm run build`).
+
+## Release trains
+
+**v0.6.0** is tagged. Unreleased on `main` is 0.6.1.
+
+| Train | Branch | What lands |
+|---|---|---|
+| **0.6.1** (patch) | `main` | Bug fixes, small refactors, improvements (perf/docs/DX), dependency bumps, tests for existing behavior. No new user-facing capability, config keys, models, or I/O `kind`s. |
+| **0.7.0** (minor) | `release/0.7.0` (long-lived; PRs target this branch, not `main`) | New features and new public surface. |
+
+If a change is ambiguous, put it on **0.6.1** unless it adds user-facing
+capability. Never land 0.7.0 features on `main`.
+
+`## [Unreleased]` is per-branch: next patch (0.6.1) on `main`, 0.7.0 on
+`release/0.7.0`.
+
+Cherry-pick 0.6.1 fixes onto `release/0.7.0` so the minor branch stays
+current. Do not merge 0.7.0 into `main` before 0.6.1 ships. After
+**v0.6.1** is tagged, merge `release/0.7.0` into `main`; `main` becomes
+the 0.7.0 train.
 
 ## Releasing
 
@@ -184,7 +205,9 @@ for `cicerone-recommender` — owner `torbido-hq`, repo `cicerone`, workflow
    (`src/cicerone/__init__.py`) to the same `X.Y.Z` (serve OpenAPI
    metadata uses it via `SERVE_API_VERSION` — regenerate
    `docs/openapi/serve.openapi.json` if the version string changed).
-2. Merge that PR to `main`.
+2. Merge that PR to its train (`main` for 0.6.1, `release/0.7.0` for
+   0.7.0). Tag from `main` (merge `release/0.7.0` into `main` first when
+   shipping 0.7.0).
 3. Tag the merge commit: `git tag -a vX.Y.Z <sha> -m "…"` and
    `git push origin vX.Y.Z`.
 4. Publish the GitHub release from that tag (notes can mirror the

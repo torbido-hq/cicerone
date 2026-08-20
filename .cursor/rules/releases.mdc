@@ -1,0 +1,31 @@
+---
+alwaysApply: true
+description: Two-train release policy — 0.6.1 on main, 0.7.0 on release/0.7.0
+---
+
+# Release trains (required)
+
+Classify the change first, then branch off that train. See
+[CONTRIBUTING.md](CONTRIBUTING.md) **Release trains**. **v0.6.0** is
+tagged; Unreleased on `main` is 0.6.1.
+
+| Train | Base branch | What lands |
+|---|---|---|
+| **0.6.1** (patch) | `main` | Fixes, small refactors, improvements, dependency bumps, tests for existing behavior. No new user-facing capability, config keys, models, or I/O `kind`s. |
+| **0.7.0** (minor) | `release/0.7.0` | New features and new public surface. PRs target this branch, not `main`. |
+
+If ambiguous, put it on **0.6.1** unless it adds user-facing capability.
+Never land 0.7.0 features on `main`.
+
+## Changelog
+
+`## [Unreleased]` is per-branch: next patch (0.6.1) on `main`, 0.7.0 on
+`release/0.7.0`. Dated sections stay frozen.
+
+## After v0.6.1
+
+Cherry-pick 0.6.1 fixes onto `release/0.7.0`. Do not merge 0.7.0 into
+`main` before 0.6.1 ships. After the tag, merge `release/0.7.0` into
+`main`; `main` becomes the 0.7.0 train.
+
+Version bump still happens on the PR that completes that version.
