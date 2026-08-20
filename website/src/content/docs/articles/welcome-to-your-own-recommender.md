@@ -230,9 +230,10 @@ class CreateCiceroneRecommendations < ActiveRecord::Migration[7.1]
       t.integer :rank, null: false
       t.float :score
       t.string :source
-    end
 
-    add_index :cicerone_recommendations, [:user_id, :rank]
+      t.index [:user_id, :item_id], unique: true
+      t.index [:user_id, :rank]
+    end
   end
 end
 ```
@@ -365,42 +366,32 @@ Open `http://127.0.0.1:8090/dashboard`, sign in, type a `user_id` (the string fo
 
 ## Read it from the app
 
-This is a `SELECT`, not an SDK. ActiveRecord is one way to do it; Eloquent, SQLAlchemy, Ecto, or `database/sql` would ask for the same columns. The table has no ActiveRecord `id`. Treat it as a query, not as a `belongs_to :product` (string `item_id` vs integer `products.id`). Rails 7.1 can disable the assumed primary key; on 7.0 leave that line out and stick to `pluck` / `select_values` (never `find` / `update`):
+This is a `SELECT`, not an SDK. ActiveRecord is one way to do it; Eloquent, SQLAlchemy, Ecto, or `database/sql` would ask for the same columns. The table has no `id`. Set `primary_key` to `nil` so ActiveRecord does not assume one. Query it (`where` / `pluck`); do not `find`, `update`, or `belongs_to :product` (string `item_id` vs integer `products.id`):
 
 ```ruby
 class CiceroneRecommendation < ApplicationRecord
   self.table_name = "cicerone_recommendations"
-  self.primary_key = false # Rails 7.1+; omit on 7.0
+  self.primary_key = nil
+
+  scope :for_user, ->(user) { where(user_id: user.id.to_s).order(:rank) }
+  scope :cold_start, -> { where(user_id: "__cold_start__").order(:rank) }
 
   def readonly?
     true
   end
 
-  def self.for_user(user)
-    where(user_id: user.id.to_s).order(:rank)
-  end
+  class << self
+    def product_ids_for(user, limit: 8)
+      ids = ids_for(user.id.to_s, limit) if user
+      ids = ids_for("__cold_start__", limit) if ids.blank?
+      ids
+    end
 
-  def self.cold_start
-    where(user_id: "__cold_start__").order(:rank)
-  end
+    private
 
-  def self.product_ids_for(user, limit: 8)
-    user_id = user ? user.id.to_s : "__cold_start__"
-    ids = ids_for(user_id, limit)
-    ids = ids_for("__cold_start__", limit) if user && ids.empty?
-    ids
-  end
-
-  def self.ids_for(user_id, limit)
-    connection.select_values(
-      sanitize_sql_array(
-        [
-          "SELECT item_id FROM cicerone_recommendations WHERE user_id = ? ORDER BY rank LIMIT ?",
-          user_id,
-          limit,
-        ]
-      )
-    ).map { |id| Integer(id) }
+    def ids_for(user_id, limit)
+      where(user_id: user_id).order(:rank).limit(limit).pluck(:item_id).map(&:to_i)
+    end
   end
 end
 ```
@@ -409,7 +400,7 @@ end
 class HomeController < ApplicationController
   def index
     ids = CiceroneRecommendation.product_ids_for(current_user)
-    @recommended = Product.where(id: ids).sort_by { |product| ids.index(product.id) }
+    @recommended = Product.in_order_of(:id, ids)
   end
 end
 ```
