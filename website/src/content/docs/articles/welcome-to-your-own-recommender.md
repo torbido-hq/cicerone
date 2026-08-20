@@ -7,6 +7,8 @@ authors:
   - nicholas
 ---
 
+<img src="https://cicerone.dev/images/docs/cicerone-logo.svg" alt="Cicerone" width="200">
+
 Canonical URL: [https://cicerone.dev/articles/welcome-to-your-own-recommender/](https://cicerone.dev/articles/welcome-to-your-own-recommender/)
 
 If you have been meaning to put “recommended for you” on the site, you already have the ingredients. Most shops start in-house, on not much data: a bestsellers query, “customers who bought this also bought”, maybe a weekend with [LightFM](https://making.lyst.com/lightfm/docs/home.html). That is the right comparison for [Cicerone](https://cicerone.dev) — a self-hosted **batch** recommender that reads your interactions, writes a top-K table, and otherwise stays out of the request path.
