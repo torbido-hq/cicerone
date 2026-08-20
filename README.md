@@ -16,16 +16,6 @@ guides synced from [`docs/`](docs/). Articles are static Markdown in
 
 A generic, self-hosted batch recommender system. It reads your interaction
 data, trains a hybrid [rectools](https://github.com/MobileTeleSystems/RecTools)
-<<<<<<< HEAD
-+ LightFM model, and writes out top-K recommendations per user. An optional
-lightweight "serve" mode can then expose those precomputed recommendations
-over a small read-only HTTP API — there's still no live inference, no
-model loaded in the request path. Optionally (`[job].save_model_artifact`),
-the batch job can also write a versioned fitted-model artifact for offline
-reload / future thin inference without redesigning training. The supported
-deploy path is Docker (Python 3.11 lives inside the image). A PyPI package
-is also published for Python 3.11 hosts — see Installation.
-=======
 + LightFM model (optional item-KNN, SASRec/BERT4Rec, popular/latest), and
 writes out top-K recommendations per user. An optional lightweight "serve"
 mode can then expose those precomputed recommendations over a small
@@ -36,9 +26,9 @@ ranking. How the strategies differ, with paper links:
 [docs/how-it-works.md](docs/how-it-works.md). Optionally
 (`[job].save_model_artifact`), the batch job can also write a versioned
 fitted-model artifact for offline reload / future thin inference without
-redesigning training. Everything runs in Docker (Python 3.11 only lives
-inside the image, nothing to install on the host).
->>>>>>> e41bf3a (docs: cover post-0.5.1 features and how Cicerone works)
+redesigning training. The supported deploy path is Docker (Python 3.11 lives
+inside the image). A PyPI package is also published for Python 3.11 hosts —
+see Installation.
 
 Cicerone isn't tied to any particular product, shop, or domain — it works
 for any catalog of "users" and "items" with interaction events (purchases,

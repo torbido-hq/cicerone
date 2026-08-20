@@ -18,6 +18,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `examples/serve/curl_examples.sh` `POST /events` builds the JSON body with
   `json.dumps` so user ids with quotes stay valid.
 - Docker test image includes `examples/serve/` so CI can read `curl_examples.sh`.
+- Tutorial webhook step starts serve with `cicerone --config … serve` (same as
+  the HTTP API step).
 
 ## [0.6.0] - 2026-08-20
 
