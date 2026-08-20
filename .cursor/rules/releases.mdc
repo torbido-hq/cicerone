@@ -70,6 +70,8 @@ tagging the minor): if `main` has patch commits not yet on
 `main`. If a conflict is a missing cherry-pick, abort the merge, port
 the fix, and retry.
 
+Tag from `main` only after the merge; do not tag `release/X.Y.0`.
+
 If the merge still conflicts, keep patch behavior from `main` and minor
 features from the release branch:
 

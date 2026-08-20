@@ -172,14 +172,15 @@ is the **single source of truth** for current train versions. Any change
 to branch ownership must update that file in the same PR.
 
 `release/X.Y.0` below is a **placeholder** for the in-flight minor
-branch — substitute the version from **Current trains**. While a
-**patch** and a **minor** are in flight together, `main` is the patch
-train and `release/X.Y.0` is the minor train.
+branch — substitute the version from **Current trains**. While 0.6.1
+and 0.7.0 are in flight, `X.Y.0` = `0.7.0`. While a **patch** and a
+**minor** are in flight together, `main` is the patch train and
+`release/X.Y.0` is the minor train.
 
 | Train | Branch | What lands |
 |---|---|---|
 | **Patch** | `main` | Bug fixes, small refactors, improvements (perf/docs/DX), dependency bumps, tests for existing behavior. No new user-facing capability, config keys, models, or I/O `kind`s. |
-| **Minor** | `release/X.Y.0` (long-lived; PRs target this branch, not `main`). While 0.6.1 and 0.7.0 are in flight, use `release/0.7.0`. | New features and new public surface. |
+| **Minor** | `release/X.Y.0` (long-lived; PRs target this branch, not `main`). While 0.6.1 and 0.7.0 are in flight, `X.Y.0` = `0.7.0`. | New features and new public surface. |
 
 - Fixes, refactors, improvements → patch (`main`). Features → minor
   (`release/X.Y.0`).
@@ -223,7 +224,8 @@ for `cicerone-recommender` — owner `torbido-hq`, repo `cicerone`, workflow
    (`src/cicerone/__init__.py`) to the same `X.Y.Z` (serve OpenAPI
    metadata uses it via `SERVE_API_VERSION` — regenerate
    `docs/openapi/serve.openapi.json` if the version string changed).
-2. Get that version onto `main`, then tag **from `main`**:
+2. Tagging always happens from `main`, even when the completing PR
+   lands on the minor train. Never tag `release/X.Y.0`.
    - **Patch:** merge the completing PR to `main`. Tag that commit on
      `main`: `git tag -a vX.Y.Z <sha> -m "…"` and
      `git push origin vX.Y.Z`.
