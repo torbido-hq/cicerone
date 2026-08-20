@@ -576,8 +576,7 @@ docker run --rm -d --name cicerone-tutorial-serve -p 8000:8000 \
   -v "$PWD/config/cicerone.serve.local.toml":/app/config/cicerone.toml:ro \
   -v "$PWD/config/features.toml":/app/config/features.toml:ro \
   -v "$PWD/data":/data \
-  -e CICERONE_CONFIG_PATH=/app/config/cicerone.toml \
-  cicerone-test python -m cicerone.serve
+  cicerone-test cicerone --config /app/config/cicerone.toml serve
 
 curl -sS -X POST -H "Authorization: Bearer $SERVE_TOKEN" \
   -H "Content-Type: application/json" \
