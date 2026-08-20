@@ -13,9 +13,21 @@ Canonical URL: [https://cicerone.dev/articles/welcome-to-your-own-recommender/](
 
 If you have been meaning to put “recommended for you” on the site, you already have the ingredients. Most shops start in-house, on not much data: a bestsellers query, “customers who bought this also bought”, maybe a weekend with [LightFM](https://making.lyst.com/lightfm/docs/home.html). That is the right comparison for [Cicerone](https://cicerone.dev) — a self-hosted **batch** recommender that reads your interactions, writes a top-K table, and otherwise stays out of the request path.
 
-The name is a [beer sommelier](https://www.cicerone.org): someone who knows styles and what to pour next. I wrote the first version for a drinks catalog — not Netflix, not a recs team, just “what should this person try”. The engine never needed the SKUs to be bottles. Users, items, events.
+The name is borrowed twice. In Italian a *cicerone* is a guide, after Cicero. In beer, a [Cicerone](https://www.cicerone.org) is the sommelier: styles, pairings, what to pour next. I needed the second one for a bottle shop — [Torbido](https://torbido.it) — that was never going to import `rectools` into checkout. A cron read `order_items`, fitted LightFM, wrote ranks, went back to sleep. The SKUs were IPAs; the contract was `user_id`, `item_id`, `event_type`. Pull the drinks columns out and the same job still runs. The default `features.toml` in the repo did not get the memo:
 
-It also does not care what you wrote the shop in. There is no Rails gem, no Django package, no Node SDK to keep in lockstep. Cicerone is a container that speaks SQL (or parquet / S3) and writes rows. Your request path stays yours. Rails is this article’s example because it is a common small-shop stack; the same two TOML files sit next to Laravel, Django, Phoenix, or a Go service. The HTTP serve API is optional and we will not use it here.
+```toml
+[[user_features]]
+column = "favorite_styles"
+type = "list"
+
+[[item_features]]
+column = "abv_bucket"
+type = "categorical"
+```
+
+Copy those if you actually have them. This walkthrough will not.
+
+It does not care what you wrote the shop in. There is no Rails gem, no Django package, no Node SDK to keep in lockstep. Cicerone is a container that speaks SQL (or parquet / S3) and writes rows. Your request path stays yours. Rails is this article’s example because it is a common small-shop stack; the same two TOML files sit next to Laravel, Django, Phoenix, or a Go service. The HTTP serve API is optional and we will not use it here.
 
 ## What you are actually getting
 
@@ -188,7 +200,7 @@ recommendations_table = "cicerone_recommendations"
 manifest_table = "cicerone_recommendation_runs"
 ```
 
-`features.toml` — slim on purpose. Do not copy the beer-oriented `favorite_styles` / `abv_bucket` columns from the repo defaults. Root keys have to sit **above** the first `[table]` header (TOML assigns keys to whichever table they follow):
+`features.toml` — slim on purpose. The `favorite_styles` / `abv_bucket` fossils from the opening stay in the repo defaults; leave them there. Root keys have to sit **above** the first `[table]` header (TOML assigns keys to whichever table they follow):
 
 ```toml
 quantity_scaled_events = ["purchase"]
