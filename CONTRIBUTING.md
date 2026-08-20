@@ -166,9 +166,10 @@ and/or `examples/serve/` when request/response fields change.
 ## Release trains
 
 `release/X.Y.0` in this section is a **placeholder** for the in-flight
-minor branch. **Current trains** is the only concrete mapping — substitute
-those versions whenever you see `X.Y.0`. Who updates **Current trains**
-and when is below that snippet.
+minor branch. The concrete mapping is **Current trains** in
+[`.cursor/rules/releases.mdc`](.cursor/rules/releases.mdc) — substitute
+those versions whenever you see `X.Y.0`. Who updates that line and when
+is below.
 
 While a **patch** and a **minor** are in flight together, `main` is the
 patch train and `release/X.Y.0` is the minor train.
@@ -191,28 +192,30 @@ patch train and `release/X.Y.0` is the minor train.
   `release/X.Y.0`).
 - After the patch is tagged: merge `release/X.Y.0` into `main`; then
   `main` is the minor train and new features land there. Stop
-  cherry-picking. Update **Current trains** in that same PR (see
-  below).
+  cherry-picking. Update **Current trains** in
+  `.cursor/rules/releases.mdc` in that same PR (see below).
 
-**Current trains** (concrete mapping; this line only):
-patch **0.6.1** on `main`; minor **0.7.0** on `release/0.7.0`.
-
-The PR that changes the split updates **Current trains** in the same
-change (not a follow-up):
+The PR that changes the split updates **Current trains** in
+`.cursor/rules/releases.mdc` in the same change (not a follow-up):
 
 - After the patch tag, when merging `release/X.Y.0` into `main`: if you
   are not cutting a new split, set it to no split (`main` is the minor,
-  using the version just tagged).
+  using the version just tagged). **Example:** v0.6.1 is tagged and
+  `release/0.7.0` is merged into `main` → **Current trains** is `no
+  split; main is 0.7.0`. Fixes and features both land on `main`;
+  Unreleased is 0.7.0; cherry-picking stops.
 - When cutting a new patch+minor split, the PR that creates
   `release/X.Y.0` from `main` sets patch on `main` and minor on that
-  branch.
+  branch. **Example:** 0.7.1 stays on `main` and `release/0.8.0` is cut
+  for 0.8.0 features.
 
 Cherry-pick, hotfix, and merge-back commands are in
 [Cherry-picks and merge-backs](#cherry-picks-and-merge-backs).
 
 ### Cherry-picks and merge-backs
 
-Checklist (see **Current trains** for today's `X.Y.0`):
+Checklist (see **Current trains** in `.cursor/rules/releases.mdc` for
+today's `X.Y.0`):
 
 1. **Fix** — PR to `main`, then cherry-pick onto `release/X.Y.0`.
 2. **Feature** — PR to `release/X.Y.0` (not `main`).

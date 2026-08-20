@@ -23,7 +23,7 @@ enforcement. Do not re‑create a giant `AGENTS.md` in git.
 ## In this repo
 
 - `git-workflow.mdc` — branch / PR naming
-- `releases.mdc` — follow CONTRIBUTING **Release trains** (canonical)
+- `releases.mdc` — **Current trains** mapping; workflow in CONTRIBUTING
 - `coding-standards.mdc` — no essay comments
 - `changelog.mdc` — never edit dated release sections
 - `verification.mdc` — always run ruff / mypy / pytest

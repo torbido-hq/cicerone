@@ -1,9 +1,16 @@
 ---
 alwaysApply: true
-description: Follow CONTRIBUTING Release trains — canonical, do not duplicate
+description: Current trains mapping; workflow is CONTRIBUTING Release trains
 ---
 
 # Release trains (required)
 
-Follow [CONTRIBUTING.md](CONTRIBUTING.md) **Release trains**. That
-section is the single source of truth. Do not restate those rules here.
+Workflow: follow [CONTRIBUTING.md](CONTRIBUTING.md) **Release trains**.
+Do not restate that workflow here. `X.Y.0` there is a placeholder;
+substitute **Current trains** below.
+
+**Current trains** (concrete mapping; this line only):
+patch **0.6.1** on `main`; minor **0.7.0** on `release/0.7.0`.
+
+Update this line in the same PR that changes the split (see CONTRIBUTING
+**Release trains**).
