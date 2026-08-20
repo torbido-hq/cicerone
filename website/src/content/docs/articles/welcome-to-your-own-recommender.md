@@ -1,8 +1,8 @@
 ---
 title: Welcome to your own recommender
-description: A Rails shop, your Postgres, a nightly top-K table — come with the orders you have, not the catalog you wish you had.
+description: Cicerone stays out of your stack — any language, your database, a nightly top-K table. Rails is the walkthrough, not a dependency.
 date: 2026-08-20
-excerpt: Point Cicerone at your orders table, let it write top-K rows overnight, and JOIN them in Rails. Honest about what sparse data will and will not do.
+excerpt: Point it at your orders table, JOIN the ranks in whatever you already run. Honest about what sparse data will and will not do.
 authors:
   - nicholas
 ---
@@ -13,7 +13,7 @@ If you have been meaning to put “recommended for you” on the site, you alrea
 
 I wrote it for a catalog that is not Netflix. The engine does not care that the original catalog was drinks. Users, items, events.
 
-This walkthrough wires it to a typical Rails + Postgres shop **without** the HTTP serve API. One job container, the database you already have, ActiveRecord on the way out.
+It also does not care what you wrote the shop in. There is no Rails gem, no Django package, no Node SDK to keep in lockstep. Cicerone is a container that speaks SQL (or parquet / S3) and writes rows. Your request path stays yours. Rails is this article’s example because it is a common small-shop stack; the same two TOML files sit next to Laravel, Django, Phoenix, or a Go service. The HTTP serve API is optional and we will not use it here.
 
 ## What you are actually getting
 
@@ -25,7 +25,7 @@ Cicerone trains **offline**. On a cron (default 03:00 UTC) it:
 
 Your app `SELECT`s that table and joins `products`. Guests and brand-new accounts use a sentinel row set, `user_id = '__cold_start__'`, which is why we turn on per-user blending below.
 
-There is no model in the Rails process. A purchase this afternoon does not change tonight’s ranks. Personalized LightFM only moves on a full retrain.
+Nothing Cicerone-shaped loads in the web process. A purchase this afternoon does not change tonight’s ranks. Personalized LightFM only moves on a full retrain.
 
 ## Compare this with the in-house thing you would write anyway
 
@@ -35,9 +35,9 @@ On a thin event log, **collaborative filtering is mostly popularity with extra s
 | --- | --- | --- |
 | Bestsellers / “also bought” SQL | An afternoon | Works immediately; no personalization |
 | Your own LightFM + cron + fallbacks | Days of glue, then you own it | Same math as Cicerone; you still write weights, cold-start, and a job that cannot overlap itself |
-| Cicerone on this Postgres | A container, two TOML files, a `JOIN` | Same math, less glue; **still** falls back to popular when history is thin |
+| Cicerone beside the database | A container, two TOML files, a `JOIN` in any language | Same math, less glue; **still** falls back to popular when history is thin |
 
-Cicerone is worth it when you want that second row without becoming a recs team: time-decayed event weights, hybrid CF with optional item features, a popularity backfill, and a table Rails already knows how to read. It is not worth it if you wanted live inference, session-level next-click, or a model that “just knows” from fifty checkouts a week.
+Cicerone is worth it when you want that second row without becoming a recs team — and without marrying the shop to a recs framework: time-decayed event weights, hybrid CF with optional item features, a popularity backfill, and a table any app can `SELECT`. It is not worth it if you wanted live inference, session-level next-click, or a model that “just knows” from fifty checkouts a week.
 
 **Keep the bestsellers query.** After the first job, look at `source`. If almost every signed-in user is `popular_fallback` (or `blended` that is still mostly popular), the fancy part is not earning its keep yet. That is a data problem, not a config problem.
 
@@ -252,9 +252,9 @@ SELECT * FROM cicerone_recommendations WHERE user_id = '42' ORDER BY rank;
 
 You want a non-empty sentinel. For user `42`, mixed `personalized` / `blended` / `popular_fallback` is success; **only** `popular_fallback` means that user did not give the collaborative model enough to work with.
 
-## Read it from Rails
+## Read it from the app
 
-The table has no ActiveRecord primary key. Treat it as a query, not as a `belongs_to :product` (string `item_id` vs integer `products.id`):
+This is a `SELECT`, not an SDK. ActiveRecord is one way to do it; Eloquent, SQLAlchemy, Ecto, or `database/sql` would ask for the same columns. The table has no ActiveRecord primary key. Treat it as a query, not as a `belongs_to :product` (string `item_id` vs integer `products.id`):
 
 ```ruby
 class CiceroneRecommendation < ApplicationRecord
