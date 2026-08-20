@@ -12,9 +12,8 @@ Cloud/Cursor branch template such as `cursor/<slug>-<id>`.
 
 - Use short, human-readable names only: `feature/…`, `fix/…`, `docs/…`, `chore/…`, `release/0.x.y`.
 - **Never** create or push `cursor/<slug>-<id>` (or any opaque agent/id suffix such as `-<4 hex>`).
-- Branch off the train you are targeting (patch = `main`, minor =
-  `release/X.Y.0`) — not always `main`. Canonical:
-  CONTRIBUTING.md **Release trains**.
+- Branch off the train in CONTRIBUTING.md **Release trains** — not
+  always `main`.
 - Before creating a branch, read CONTRIBUTING.md "Pull requests" and name the branch accordingly.
 - If you are already on a forbidden `cursor/…` branch, rename immediately to `feature/…` (etc.), push the new name, open/update the PR from it, and delete the old remote branch.
 

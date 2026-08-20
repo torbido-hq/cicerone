@@ -1,16 +1,9 @@
 ---
 alwaysApply: true
-description: Follow CONTRIBUTING Release trains — do not duplicate that workflow here
+description: Follow CONTRIBUTING Release trains — canonical, do not duplicate
 ---
 
 # Release trains (required)
 
-Canonical workflow is [CONTRIBUTING.md](CONTRIBUTING.md) **Release
-trains**. Follow that section. Do not invent a parallel process.
-
-`X.Y.0` in CONTRIBUTING is a placeholder. Substitute **Current trains**
-(same section) for the concrete patch/minor versions and branch name.
-
-Classify, then branch off that train: patch → `main`; minor →
-`release/X.Y.0`. Never land minor features on `main` until the patch is
-tagged.
+Follow [CONTRIBUTING.md](CONTRIBUTING.md) **Release trains**. That
+section is the single source of truth. Do not restate those rules here.

@@ -167,8 +167,8 @@ and/or `examples/serve/` when request/response fields change.
 
 `release/X.Y.0` in this section is a **placeholder** for the in-flight
 minor branch. **Current trains** is the only concrete mapping — substitute
-those versions whenever you see `X.Y.0`. Update that snippet only when
-the split changes.
+those versions whenever you see `X.Y.0`. Who updates **Current trains**
+and when is below that snippet.
 
 While a **patch** and a **minor** are in flight together, `main` is the
 patch train and `release/X.Y.0` is the minor train.
@@ -191,10 +191,21 @@ patch train and `release/X.Y.0` is the minor train.
   `release/X.Y.0`).
 - After the patch is tagged: merge `release/X.Y.0` into `main`; then
   `main` is the minor train and new features land there. Stop
-  cherry-picking. Update **Current trains** for the next split.
+  cherry-picking. Update **Current trains** in that same PR (see
+  below).
 
-**Current trains** (concrete mapping; update this line only):
+**Current trains** (concrete mapping; this line only):
 patch **0.6.1** on `main`; minor **0.7.0** on `release/0.7.0`.
+
+The PR that changes the split updates **Current trains** in the same
+change (not a follow-up):
+
+- After the patch tag, when merging `release/X.Y.0` into `main`: if you
+  are not cutting a new split, set it to no split (`main` is the minor,
+  using the version just tagged).
+- When cutting a new patch+minor split, the PR that creates
+  `release/X.Y.0` from `main` sets patch on `main` and minor on that
+  branch.
 
 Cherry-pick, hotfix, and merge-back commands are in
 [Cherry-picks and merge-backs](#cherry-picks-and-merge-backs).
