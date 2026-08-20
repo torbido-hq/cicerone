@@ -52,7 +52,7 @@ pipeline and how strategies differ, see [how-it-works.md](how-it-works.md).
 | `locks.py` | Optional lock backends (postgres / redis) for `RunGuard` and the events apply lease; Redis `owned()` checks the fencing token, Postgres `owned()` checks `pg_locks` for this backend pid |
 | `config/lock_url.py` | Postgres lock URL resolution for config load + lock builder |
 | `http_auth.py` | Shared bearer-token (serve/trigger) and HTTP Basic Auth (dashboard) dependencies |
-| `dashboard.py` | Standalone FastAPI dashboard: job status/history plus user-id lookup, own container/port |
+| `dashboard.py` | Standalone FastAPI dashboard: job status/history plus user-id lookup (`cicerone dashboard`) |
 | `dashboard_lookup.py` | Output-store user lookup for the dashboard (fallback, category join, display formatting) |
 | `dashboard_users.py` | Load/save the dashboard's Basic Auth users file (TOML, username → bcrypt hash) |
 | `manage_dashboard_users.py` | CLI to add/remove/list dashboard users |
@@ -223,7 +223,7 @@ flowchart LR
    a versioned fitted-model artifact (`model.artifact` for the dataset
    backend, `model_artifacts` table for db) via
    `OutputSink.write_model_artifact`. Serve mode never loads this artifact.
-6. `scheduler.main()` is the container's actual entrypoint for batch mode: it
+6. For batch, `cicerone start` runs `scheduler.main()`: it
    computes the next run time from `cron_schedule` with `croniter`, sleeps,
    calls `job.run(triggered_by="cron")`, and loops forever — a failed run is
    logged but never kills the loop. When `Settings.trigger_enabled`
@@ -291,7 +291,7 @@ rectools/lightfm/implicit/torch needed in that process or its request path):
   distributed backend (`lock_backend = "in_process"`). Optional `postgres` /
   `redis` backends (see `cicerone.locks`) coordinate across scheduler
   replicas; clients are imported only when selected. Prefer `postgres`
-  when a DB URL is available; use `redis` (optional
+  when a DB URL is available; use `redis` (`cicerone-recommender[redis]` /
   `requirements-redis.txt`) for dataset/S3-only HA. Redis `owned()` checks the
   fencing token before commit so an expired TTL cannot split-brain a long
   apply/retrain; Postgres advisory locks are session-scoped (disconnect
@@ -303,8 +303,8 @@ single-writer unless `events.ha = true` with `lock_backend` postgres/redis
 
 ## Dashboard
 
-`cicerone.dashboard` is a standalone entrypoint (`cicerone dashboard`,
-its own container/port `8090` in `docker-compose.yml`) for checking whether
+`cicerone.dashboard` is a standalone entrypoint (`cicerone dashboard`;
+compose maps port `8090`) for checking whether
 the last job run succeeded and inspecting a user's current top-K — it is
 **not** gated by `[job].mode` like serve/batch, so it's available even in
 plain batch-only deployments with no other HTTP surface. Like serve mode, it

@@ -76,7 +76,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Docs: `docs/how-it-works.md` (pipeline, strategies, papers); incremental
   events operator guide; tutorial webhook step; site sidebar/homepage
-  cards; OpenAPI `x-codeSamples` for `POST /events`.
+  cards; OpenAPI `x-codeSamples` for `POST /events`; PyPI extras
+  (`cicerone-recommender[sequential]` / `[redis]`) next to `requirements-*.txt`.
 - Parse article `draft` from YAML frontmatter; article layout CSS keys off
   `data-cicerone-articles` rather than starlight-blog class names.
 - Share the articles URL prefix between the Starlight plugin and layout

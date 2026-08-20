@@ -115,6 +115,7 @@ recovery). Required: `redis_url`, `stream`, `consumer_group`. Optional
 `consumer_name` (default hostname), `group_start_id` (`0-0`), `block_ms`,
 `claim_idle_ms`. Flat hash fields match the event contract; missing
 `event_id` uses the stream entry id. Requires
+`pip install 'cicerone-recommender[redis]'` or
 `pip install -r requirements-redis.txt` (same extra as the Redis lock).
 
 ## High availability

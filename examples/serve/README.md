@@ -1,8 +1,8 @@
 # Serve API client examples
 
 Minimal examples for calling Cicerone serve mode. Point them at a live
-serve container (see the README Serve section and
-[docs/tutorial.md](../../docs/tutorial.md) step 12).
+serve process (`cicerone serve` or the serve container — see the README
+Serve section and [docs/tutorial.md](../../docs/tutorial.md) step 12).
 
 OpenAPI / ReDoc also embed language samples (`x-codeSamples`, including
 Ruby) on `/health`, `/recommendations/{user_id}`, and `POST /events`

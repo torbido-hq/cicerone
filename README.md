@@ -48,6 +48,8 @@ up to your own data doesn't require touching any code.
   OpenAPI at `/docs` + thin `ServeClient`)
 - **Incremental events** — webhook / DB / S3 / Redis Streams write-through
   of popular/latest slices between full retrains
+- **CLI / PyPI** — `cicerone` console script; `pip install cicerone-recommender`
+  (import name `cicerone`; the PyPI name `cicerone` is a different project)
 - **Retrain trigger** — webhook (+ optional input poll) alongside cron
 - **Dashboard** — Basic-Auth status page for run success/failure, history, and user-id lookup
 - **Model artifacts** — optional versioned fitted-model bundle for offline reload
@@ -152,7 +154,8 @@ While serve is running, FastAPI exposes interactive docs at `/docs` and
 `/redoc`, and the machine-readable schema at `/openapi.json`. A checked-in
 copy (for codegen / offline review without a live process) lives at
 [`docs/openapi/serve.openapi.json`](docs/openapi/serve.openapi.json); refresh
-it with:
+it with `cicerone export-openapi -o docs/openapi/serve.openapi.json`
+(from a checkout, the test image still needs `PYTHONPATH=/app/src`):
 
 ```sh
 docker run --rm -v "$PWD":/app -w /app -e PYTHONPATH=/app/src cicerone-test \
@@ -161,8 +164,8 @@ docker run --rm -v "$PWD":/app -w /app -e PYTHONPATH=/app/src cicerone-test \
 
 Thin clients (no generated SDK package — copy or import as needed). ReDoc
 (`http://localhost:8000/redoc`) and the checked-in OpenAPI schema also include
-`x-codeSamples` (Ruby, Python, JavaScript, Shell) on `/health` and
-`/recommendations/{user_id}`:
+`x-codeSamples` (Ruby, Python, JavaScript, Shell) on `/health`,
+`/recommendations/{user_id}`, and `POST /events` (when webhook events are enabled):
 
 | Path | Notes |
 | --- | --- |
@@ -202,7 +205,8 @@ process:
   For multiple scheduler replicas, set `[job.trigger].lock_backend` to
   `"postgres"` or `"redis"` — use `postgres` if your output is already `db`
   (or set `postgres_url`); use `redis` only if you're on dataset/S3 output
-  and need HA (`pip install -r requirements-redis.txt`). Optional `lock_key`
+  and need HA (`pip install 'cicerone-recommender[redis]'` or
+  `pip install -r requirements-redis.txt`). Optional `lock_key`
   (and Redis-only `lock_ttl_seconds`) that namespace the lock when several
   schedulers share one Postgres/Redis; Redis refreshes TTL while the lock is
   held so long jobs stay exclusive. This is a lock, not a job queue.
@@ -230,8 +234,8 @@ are offline-only: [docs/how-it-works.md](docs/how-it-works.md).
 ## Dashboard
 
 A lightweight, standalone web dashboard for checking whether the last job
-run succeeded and inspecting a user's current top-K — it's always available
-as its own container/port (`8090`), regardless of `[job].mode` (batch or
+run succeeded and inspecting a user's current top-K — `cicerone dashboard`
+(compose maps port `8090`), regardless of `[job].mode` (batch or
 serve). Like serve mode, it never loads lightfm/rectools/implicit.
 
 ![Cicerone dashboard with a user recommendation lookup, latest job status, and history including a failed run](docs/images/dashboard.png)
@@ -389,6 +393,7 @@ if omitted:
 - `sequential`: RecTools `SASRecModel` (default) or `BERT4RecModel` —
   transformer next-item model. Personalized, interacting users only. Opt-in
   (`job.models`); not in the default chain. Requires
+  `pip install 'cicerone-recommender[sequential]'` or
   `pip install -r requirements-sequential.txt`. Hyperparameters via
   `[model.sequential]` (`architecture = "sasrec"` | `"bert4rec"`, plus RecTools
   keys such as `n_factors`, `epochs`, `loss`, `session_max_len`,

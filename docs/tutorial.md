@@ -5,7 +5,9 @@
 This is a hands-on, step-by-step walkthrough of Cicerone's main features
 using a handful of made-up users/items/events on local disk — no S3 bucket
 or database required until the optional "database backend" section.
-Everything runs in Docker (nothing gets installed on the host).
+Commands below use Docker so the host stays clean. To run the same TOML
+with pip instead, see [README Installation](../README.md#installation)
+(`pip install cicerone-recommender`, then `cicerone --config …`).
 `docker-compose.yml` is for local developer convenience only — do not run
 it as a production deployment. For the full configuration reference, see
 the [README](../README.md); for algorithms and how strategies differ, see
@@ -160,10 +162,10 @@ Available strategies:
   with interactions only (feature-only warm users stay on
   collaborative/popular).
 - `sequential`: RecTools `SASRecModel` (default) or `BERT4RecModel`. Opt-in;
-  not in the default Docker image (`pip install -r
-  requirements-sequential.txt`). Sequences are unique items by last-touch
-  time. AutoML skips it on sparse data or a missing extra. Skip it in this
-  tutorial.
+  not in the default Docker image (`pip install 'cicerone-recommender[sequential]'`
+  or `pip install -r requirements-sequential.txt`). Sequences are unique
+  items by last-touch time. AutoML skips it on sparse data or a missing
+  extra. Skip it in this tutorial.
 - `content_fallback`: zero-interaction items via categorical feature
   similarity (opt-in: `[job.content_fallback].enabled = true`).
 - `popular`: `PopularModel` — global popularity. Non-personalized, backfills
@@ -536,6 +538,9 @@ docker run --rm --network host -e PYTHONPATH=/app/src \
   python examples/serve/python_client.py
 ```
 
+From a PyPI install, drop `PYTHONPATH` and run
+`python examples/serve/python_client.py` on the host with the same env vars.
+
 For a `dataset` output (as here), the recommendations file and optional
 `items_snapshot.parquet` are cached in memory and reloaded every
 `[serve].refresh_interval_seconds` (default 60s) — re-run
@@ -640,7 +645,7 @@ docker stop cicerone-tutorial-scheduler
 ## 15. Check job status with the dashboard
 
 `cicerone.dashboard` is a small, standalone status page over job run
-history — always its own container/port, independent of `[job].mode`.
+history — `cicerone dashboard`, independent of `[job].mode`.
 Reuse the same local `data/output/`:
 
 ```sh
@@ -715,6 +720,9 @@ docker compose up --build
 ## 17. Next steps
 
 - Swap in your own data, following the [data contract](../README.md#data-contract).
+- Install from PyPI (`pip install cicerone-recommender`) and run
+  `cicerone --config ./config/cicerone.toml start` — see
+  [README Installation](../README.md#installation).
 - Read [how-it-works.md](how-it-works.md) for algorithms,
   the [model strategies](../README.md#model-strategies),
   [AutoML](../README.md#automl), and

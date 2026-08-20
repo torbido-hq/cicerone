@@ -72,7 +72,7 @@ for warm users; `popular` / `latest` backfill. Hyperparameters stay in
 | --- | --- | --- | --- |
 | `collaborative` | Hybrid matrix factorization + metadata | Warm users (interactions **or** features) | none |
 | `item_based` | Item–item KNN on interaction vectors | Users with interactions | none |
-| `sequential` | Transformer next-item on ordered history | Users with interactions | `rectools[torch]` |
+| `sequential` | Transformer next-item on ordered history | Users with interactions | `cicerone-recommender[sequential]` |
 | `content_fallback` | Cosine over item category features | Users with interactions; **cold catalog items** | none (in-repo) |
 | `popular` | Global interaction counts | Everyone (non-personalized) | none |
 | `latest` | Popularity in a recency window | Everyone (non-personalized) | none |
@@ -106,6 +106,7 @@ Feature-only users skip this strategy.
 Opt-in (`job.models`); not in the default chain. RecTools
 [`SASRecModel`](https://rectools.readthedocs.io/en/stable/api/rectools.models.nn.transformers.sasrec.SASRecModel.html)
 (default) or `BERT4RecModel` via `[model.sequential].architecture`. Needs
+`pip install 'cicerone-recommender[sequential]'` or
 `pip install -r requirements-sequential.txt`. The default Docker image does
 **not** install torch; serve never imports it.
 
