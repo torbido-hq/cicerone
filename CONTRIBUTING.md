@@ -187,7 +187,19 @@ git cherry-pick <sha>
 git push origin release/0.7.0
 ```
 
-Do not merge 0.7.0 into `main` before 0.6.1 ships.
+If the cherry-pick conflicts, keep the 0.7.0 feature code and re-apply the
+0.6.1 fix on that surface. If it still will not apply (the 0.7.0 branch
+has a different API or config), abort (`git cherry-pick --abort`) and
+open a small PR targeting `release/0.7.0` that ports the same fix. Do not
+change `main` to match 0.7.0-only APIs.
+
+**Example.** A dashboard lookup crash and a new serve filter in the same
+week:
+
+1. **Fix:** branch `fix/dashboard-lookup` from `main`, PR into `main`,
+   then `git cherry-pick <sha>` onto `release/0.7.0`.
+2. **Feature:** branch `feature/serve-filters` from `release/0.7.0`, PR
+   into `release/0.7.0` (not `main`).
 
 **Hotfixes that must ship on both trains** always land on `main` first
 (0.6.1). Do not open the fix only against `release/0.7.0`. After the
