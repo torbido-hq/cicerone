@@ -1,8 +1,8 @@
 ---
 title: Welcome to your own recommender
-description: Cicerone stays out of your stack — any language, your database, a nightly top-K table. Rails is the walkthrough, not a dependency.
+description: A nightly top-K table next to your orders — LightFM without Python in the request. Rails is the walkthrough, not a dependency.
 date: 2026-08-20
-excerpt: Point it at your orders table, JOIN the ranks in whatever you already run. Honest about what sparse data will and will not do.
+excerpt: You already have order_items. Join a ranked table. Honest about what sparse data will and will not do.
 authors:
   - nicholas
 ---
@@ -11,7 +11,9 @@ authors:
 
 Canonical URL: [https://cicerone.dev/articles/welcome-to-your-own-recommender/](https://cicerone.dev/articles/welcome-to-your-own-recommender/)
 
-If you have been meaning to put “recommended for you” on the site, you already have the ingredients. Most shops start in-house, on not much data: a bestsellers query, “customers who bought this also bought”, maybe a weekend with [LightFM](https://making.lyst.com/lightfm/docs/home.html). That is the right comparison for [Cicerone](https://cicerone.dev) — a self-hosted **batch** recommender that reads your interactions, writes a top-K table, and otherwise stays out of the request path.
+You already have `order_items`. What you do not have is a recs team — and you are not fitting LightFM inside the web process. The “Recommended for you” row is usually `ORDER BY sold_count DESC` with better copy. That query is honest. It is also a ceiling.
+
+[Cicerone](https://cicerone.dev) is how you go past it without a new request-path runtime: a self-hosted **batch** job that reads the interactions you already store, writes a top-K table, and stays out of the hot path. Most shops get there by hand — bestsellers, “customers who bought this also bought”, a weekend with [LightFM](https://making.lyst.com/lightfm/docs/home.html). This is that weekend, packaged.
 
 The name is borrowed twice. In Italian a *cicerone* is a guide, after Cicero. In beer, a [Cicerone](https://www.cicerone.org) is the sommelier: styles, pairings, what to pour next. I needed the second one for a bottle shop — [Torbido](https://torbido.it) — that was never going to import `rectools` into checkout. A cron read `order_items`, fitted LightFM, wrote ranks, went back to sleep. The SKUs were IPAs; the contract was `user_id`, `item_id`, `event_type`. Pull the drinks columns out and the same job still runs. The default `features.toml` in the repo did not get the memo:
 
@@ -27,7 +29,7 @@ type = "categorical"
 
 Copy those if you actually have them. This walkthrough will not.
 
-It does not care what you wrote the shop in. There is no Rails gem, no Django package, no Node SDK to keep in lockstep. Cicerone is a container that speaks SQL (or parquet / S3) and writes rows. Your request path stays yours. Rails is this article’s example because it is a common small-shop stack; the same two TOML files sit next to Laravel, Django, Phoenix, or a Go service. The HTTP serve API is optional and we will not use it here.
+The engine does not care what language the shop is in. There is no Rails gem, no Django package, no Node SDK to keep in lockstep. Cicerone is a container that speaks SQL (or parquet / S3) and writes rows. Your request path stays yours. Rails is this article’s example because it is a common small-shop stack; the same two TOML files sit next to Laravel, Django, Phoenix, or a Go service. The HTTP serve API is optional and we will not use it here.
 
 ## What you are actually getting
 
@@ -83,7 +85,7 @@ Cicerone wants **events** (required):
 | `quantity` | optional; purchases can scale with `log1p(quantity)` |
 | `occurred_at` | UTC |
 
-Paid order lines are enough to start. Product views help a bit; they will not rescue a catalog nobody has bought.
+Paid order lines are enough to start. Use the timestamp that means the money moved (`paid_at` if you have it). Product views help a bit; they will not rescue a catalog nobody has bought.
 
 ```sql
 SELECT
@@ -98,7 +100,7 @@ WHERE o.status IN ('paid', 'complete', 'completed')
   AND o.user_id IS NOT NULL
 ```
 
-If you also store authenticated product views, fold them in. Same contract, a second `event_type` the weights already know:
+If you also store authenticated product views, fold them in. Same contract, a second `event_type` that the weights already know:
 
 ```sql
 SELECT
@@ -124,7 +126,7 @@ WHERE v.user_id IS NOT NULL
 
 Skip `user_id IS NULL` (guest checkouts, anonymous pageviews) — there is no one to personalize. A `view` weight with no view table yet is harmless; paste the `UNION ALL` when you have the rows.
 
-Items (optional, but you want them so we can hide unpublished / out-of-stock and use `category`):
+Items (optional, but you want them so you can hide unpublished / out-of-stock and feed `category` into LightFM):
 
 ```sql
 SELECT
@@ -225,7 +227,7 @@ popular_share = 0.7
 latest_date_columns = ["created_at"]
 ```
 
-Blending is what writes `__cold_start__`. Linear `saturate_at = 5` means a customer with a handful of distinct products already leans personalized; people with one order stay mostly on popular / latest. On a small shop that is the behaviour you want. If `products` has no usable date column among `latest_date_columns`, latest is skipped and its weight moves to popular (you will see that in the job log).
+Blending is what writes `__cold_start__`. Linear `saturate_at = 5` means five distinct products is fully on LightFM; a single order stays mostly popular / latest. On a small shop that is the behaviour you want. If `products` has no usable date column among `latest_date_columns`, latest is skipped and its weight moves to popular (you will see that in the job log).
 
 A `view` weight with no view rows is harmless. An `event_type` in SQL that you forget to list under `[event_weights]` is dropped, with a warning.
 
@@ -278,7 +280,7 @@ docker run --rm \
   job --config /app/config/cicerone.toml
 ```
 
-The image is tagged `cicerone`; its `ENTRYPOINT` is already the CLI. Every `docker run` in this article is therefore `docker run … cicerone <subcommand> …` — `job`, `users`, `dashboard`. Do not pass a second `cicerone` (`cicerone cicerone job` will fail). Compose `command:` is only the subcommand, because Compose keeps that ENTRYPOINT.
+The image is tagged `cicerone`; `ENTRYPOINT` is already the CLI. Pass `job`, `users`, or `dashboard` — not a second `cicerone`. Compose `command:` is only the subcommand.
 
 If the process cannot see Postgres, it is almost always the hostname (container DNS vs `localhost`) or the URL scheme (`postgres://` vs `postgresql+psycopg://`).
 
@@ -304,7 +306,7 @@ GROUP BY source
 ORDER BY n DESC;
 ```
 
-`status` should be `success`. `n_events` should match the order lines you think you have. `models` should list `collaborative,popular` (blending may still add popular if you omitted it). If almost every row is `popular_fallback`, the collaborative model did not have enough overlap yet — keep the bestsellers query.
+`status` should be `success`. `n_events` should match the order lines you think you have. `models` should read `collaborative,popular`. If almost every row is `popular_fallback`, overlap was too thin — keep the bestsellers query.
 
 Then look at a real person, with names:
 
@@ -430,29 +432,30 @@ end
 <% end %>
 ```
 
-If the job has never succeeded, `@recommended` is empty — hide the section, or fall back to your old bestsellers partial. Empty is better than inventing a failure UI.
+If the job has never succeeded, `@recommended` is empty — hide the section, or fall back to your old bestsellers partial. Empty is better than inventing a failure UI. Integer `products.id` is the usual Rails case; if your primary keys are UUIDs, skip `.map(&:to_i)` and pass the strings through.
 
-Same table, no Rails. A Python worker or a Node renderer is the same `SELECT`:
+Same table, no Rails. A Python worker or a Node renderer is the same `SELECT` — including the cold-start fallback when a signed-in user has no rows yet:
 
 ```python
+sql = """
+SELECT item_id FROM cicerone_recommendations
+WHERE user_id = %s ORDER BY rank LIMIT 8
+"""
 user_key = str(user_id) if user_id else "__cold_start__"
-rows = conn.execute(
-    """
-    SELECT item_id FROM cicerone_recommendations
-    WHERE user_id = %s ORDER BY rank LIMIT 8
-    """,
-    (user_key,),
-).fetchall()
+rows = conn.execute(sql, (user_key,)).fetchall()
+if user_id and not rows:
+    rows = conn.execute(sql, ("__cold_start__",)).fetchall()
 ids = [int(item_id) for (item_id,) in rows]
 ```
 
 ```js
+const sql = `SELECT item_id FROM cicerone_recommendations
+ WHERE user_id = $1 ORDER BY rank LIMIT 8`;
 const userKey = userId != null ? String(userId) : "__cold_start__";
-const { rows } = await pool.query(
-  `SELECT item_id FROM cicerone_recommendations
-   WHERE user_id = $1 ORDER BY rank LIMIT 8`,
-  [userKey],
-);
+let { rows } = await pool.query(sql, [userKey]);
+if (userId != null && rows.length === 0) {
+  ({ rows } = await pool.query(sql, ["__cold_start__"]));
+}
 const ids = rows.map((row) => Number(row.item_id));
 ```
 
@@ -475,7 +478,7 @@ cicerone:
     - postgres
 ```
 
-No ports on the job. Batch mode does not listen. Disk is a couple of TOML files; CPU is a nightly LightFM fit. For a shop-sized catalog that is a small VM, not a GPU story.
+No ports on the job. Batch mode does not listen. Disk is a couple of TOML files; CPU is a nightly LightFM fit. A shop-sized catalog fits on a small VM, not a GPU.
 
 Optional: keep the dashboard up too. The config directory is read-write so `users add` can persist the bcrypt file:
 
@@ -496,7 +499,7 @@ cicerone-dashboard:
 
 ## When this is the wrong tool
 
-- You need the list to change inside the same request as “add to cart”. That is a different product (and Cicerone’s optional [serve API](https://cicerone.dev/) plus incremental events still do not retrain LightFM on the request path).
+- You need the list to change inside the same request as “add to cart”. That is a different product (Cicerone’s optional [serve API](https://cicerone.dev/openapi/) plus incremental events still do not retrain LightFM on the request path).
 - You have almost no overlapping buyers. Ship bestsellers, collect events, come back.
 - You already enjoy operating a Python training stack and want SASRec, AutoML, eligibility rules. Those exist — they are not this article. See the [tutorial](https://cicerone.dev/tutorial/) and [how it works](https://cicerone.dev/how-it-works/).
 
