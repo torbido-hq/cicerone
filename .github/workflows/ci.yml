@@ -46,6 +46,9 @@ jobs:
       - name: pip-audit (dependency vulnerability scan)
         run: docker run --rm cicerone-test pip-audit -r requirements.txt -r requirements-dev.txt
 
+      - name: Build sdist and wheel
+        run: docker build --target package -t cicerone-package -f docker/Dockerfile .
+
   test:
     needs: scope
     if: needs.scope.outputs.python == 'true'

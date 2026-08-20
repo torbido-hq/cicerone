@@ -12,6 +12,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (rank, item, score, source, optional category) from the job output store,
   with cold-start fallback, on the Basic-Auth status page.
   `GET /dashboard?user_id=` fills the lookup on load.
+- PyPI distribution `cicerone-recommender` (`import cicerone`; the name
+  `cicerone` is taken). Wheel includes compiled dashboard CSS. A GitHub
+  Release publishes via trusted publishing (`.github/workflows/publish.yml`).
+- `cicerone` CLI (`start`/`job`/`serve`/`dashboard`/`scheduler`/`users`) with
+  `--config` for a TOML path, plus `--log-level` / `--log-format` (or
+  `CICERONE_LOG_LEVEL` / `CICERONE_LOG_FORMAT`). Runtime image pip-installs
+  the wheel; entrypoint is `cicerone start`.
 
 - Optional project-site articles at `/articles/` (static Markdown under
   `website/src/content/docs/articles/`). No nav, RSS, or index until a
@@ -70,6 +77,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Article plugin gating passes `{ production }` explicitly; layout kind
   matches starlight-blog listing routes and ignores a missing route id.
 - Drop the Starlight “Edit page” footer; site content is edited in git.
+- Docker `package` stage validates the wheel via `python -m cicerone.packaging`
+  (selects `cicerone_recommender-<version>` including PEP 440 local versions
+  and numeric wheel build tags).
+
 - README and docs-site dashboard screenshot include the user recommendation lookup.
 - Docs site copies `docs/images/` into `website/public/images/docs/` at build time.
 - Dashboard lookup form is labeled, results are announced, and job-run
@@ -87,6 +98,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `website/`, synced from `docs/`, published at [cicerone.dev](https://cicerone.dev).
 
 ### Fixed
+
+- `cicerone users` with a config path requires enabled `dashboard.users_path`
+  (or an explicit `--users-path`); the error names the loaded config and the
+  dashboard settings that were resolved.
 
 - Dashboard still starts if the recommendation store cannot be opened (lookup disabled).
 - Dashboard lookup errors show a generic message; details stay in the logs.

@@ -20,7 +20,7 @@ node_modules/
 website/dist/
 
 # Dashboard Basic Auth credentials (managed via
-# `python -m cicerone.manage_dashboard_users`) -- never commit real ones.
+# `cicerone users`) -- never commit real ones.
 config/dashboard_users.toml
 
 
@@ -37,3 +37,5 @@ config/dashboard_users.toml
 AGENTS.md
 
 *.egg-info/
+/build/
+/dist/

@@ -134,7 +134,7 @@ client in sync:
 
 ```sh
 docker run --rm -v "$PWD":/app -w /app -e PYTHONPATH=/app/src cicerone-test \
-  python -m cicerone.export_serve_openapi -o docs/openapi/serve.openapi.json
+  cicerone export-openapi -o docs/openapi/serve.openapi.json
 ```
 
 `tests/test_serve_openapi_client.py` asserts the committed file matches
@@ -167,9 +167,18 @@ and/or `examples/serve/` when request/response fields change.
 Do **not** open a follow-up PR that only dates `CHANGELOG.md` — it still
 needs that approval and is pure process drag.
 
-1. On the feature PR that completes the version, change
-   `## [X.Y.Z] - Unreleased` to `## [X.Y.Z] - YYYY-MM-DD` (today's date)
-   in the same branch before merge, and set `cicerone.__version__`
+The PyPI project is **`cicerone-recommender`** (`pip install
+cicerone-recommender`; `import cicerone`). The name `cicerone` is a
+different package.
+
+One-time PyPI setup (before the first upload): create a GitHub Environment
+named `pypi`, then a [pending trusted publisher](https://docs.pypi.org/trusted-publishers/)
+for `cicerone-recommender` — owner `torbido-hq`, repo `cicerone`, workflow
+`publish.yml`, environment `pypi`. No API token.
+
+1. On the feature PR that completes the version, move `## [Unreleased]`
+   notes into `## [X.Y.Z] - YYYY-MM-DD` (today's date) in the same branch
+   before merge, and set `cicerone.__version__`
    (`src/cicerone/__init__.py`) to the same `X.Y.Z` (serve OpenAPI
    metadata uses it via `SERVE_API_VERSION` — regenerate
    `docs/openapi/serve.openapi.json` if the version string changed).
@@ -177,7 +186,8 @@ needs that approval and is pure process drag.
 3. Tag the merge commit: `git tag -a vX.Y.Z <sha> -m "…"` and
    `git push origin vX.Y.Z`.
 4. Publish the GitHub release from that tag (notes can mirror the
-   changelog section).
+   changelog section). `.github/workflows/publish.yml` builds the sdist and
+   wheel (including dashboard CSS) and uploads them to PyPI.
 
 If the version was already tagged while the changelog still said
 Unreleased, fold the date fix into the next real PR — never a dating-only

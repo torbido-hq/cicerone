@@ -2,15 +2,14 @@
 job.run() writes on every run, success or failure (see
 cicerone.io.manifest_reader), plus a user_id lookup of precomputed
 recommendations from the same output store. Runs as its own
-process/entrypoint (`python -m cicerone.dashboard`), independent of
+process/entrypoint (`cicerone dashboard`), independent of
 [job].mode.
 
 Rendered server-side (FastAPI + Jinja2 + htmx for polling, a small Stimulus
 controller for relative timestamps) rather than a JSON API + JS framework.
 
 Protected by HTTP Basic Auth against a small, fixed set of named users
-(cicerone.dashboard_users, managed via
-`python -m cicerone.manage_dashboard_users`).
+(cicerone.dashboard_users, managed via `cicerone users`).
 """
 
 from __future__ import annotations
@@ -142,7 +141,7 @@ def main() -> None:
     if not users:
         raise RuntimeError(
             f"No dashboard users configured at {settings.dashboard.users_path!r} -- "
-            "add one with `python -m cicerone.manage_dashboard_users add <username>`"
+            "add one with `cicerone users add <username>`"
         )
 
     reader = build_manifest_reader(settings.output)

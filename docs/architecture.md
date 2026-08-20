@@ -34,10 +34,12 @@ For configuration and usage, see the main [README](../README.md).
 | `content_fallback.py` | Optional content-based cold-item strategy (one-hot item features + cosine vs user history) |
 | `artifact.py` | Optional versioned fitted-model bundle (schema **v3**: RecTools `save`/`load_model` for library models + pickle envelope; `content_fallback` still pickle) |
 | `automl.py` | Optional: backtests candidate models/weights/`rrf_k` configs over time-based folds of event history and picks the best one |
+| `cli.py` | `cicerone` console script (`start` / `job` / `serve` / `dashboard` / `scheduler` / `users`; `--config`, `--log-level`) |
+| `packaging.py` | Wheel checks for the Docker `package` stage (`python -m cicerone.packaging`) |
 | `job.py` | Orchestrates one end-to-end run (source → dataset → model → sink) |
 | `scheduler.py` | In-process cron loop that calls `job.run()`; when `[job.trigger]` is enabled, also hosts the retrain-trigger HTTP server (`trigger.py`) |
 | `serve/` | Serve mode package: FastAPI read API over precomputed recommendations |
-| `serve/app.py` | Routes, middleware, refresh loop (`python -m cicerone.serve`) |
+| `serve/app.py` | Routes, middleware, refresh loop (`cicerone serve`) |
 | `serve/events_routes.py` | Optional `POST /events` webhook mount when `[events]` webhook is enabled |
 | `serve/bootstrap_events.py` | Start/stop the serve-process event worker (micro-batch → write-through) |
 | `serve/metrics.py` | Prometheus metric objects + helpers (default in-process registry) |
@@ -231,7 +233,7 @@ flowchart LR
 ## Serve mode and the retrain trigger
 
 Selected via `[job].mode = "serve"`, `cicerone.serve` is a separate entrypoint
-(`python -m cicerone.serve`) from the batch scheduler — a serve-only
+(`cicerone serve`) from the batch scheduler — a serve-only
 deployment never imports `cicerone.model`/`dataset`/`automl` (no
 rectools/lightfm/implicit/torch needed in that process or its request path):
 
@@ -298,7 +300,7 @@ single-writer unless `events.ha = true` with `lock_backend` postgres/redis
 
 ## Dashboard
 
-`cicerone.dashboard` is a standalone entrypoint (`python -m cicerone.dashboard`,
+`cicerone.dashboard` is a standalone entrypoint (`cicerone dashboard`,
 its own container/port `8090` in `docker-compose.yml`) for checking whether
 the last job run succeeded and inspecting a user's current top-K — it is
 **not** gated by `[job].mode` like serve/batch, so it's available even in
@@ -325,10 +327,9 @@ never imports `cicerone.model`/`dataset`/`automl`.
   pattern used by serve/trigger — a browser-navigable page needs a login
   prompt, since a human can't attach a custom `Authorization` header to a
   plain top-level page load. Users live in a small TOML file
-  (`dashboard_users.py`: username -> bcrypt hash) managed via the
-  `manage_dashboard_users` CLI (`python -m cicerone.manage_dashboard_users
-  --users-path <path> add <username>` — note `--users-path` must precede the
-  subcommand, since it's a global `argparse` option).
+  (`dashboard_users.py`: username -> bcrypt hash) managed via
+  `cicerone users add <username>` (optional `--users-path`, or `--config`
+  pointing at the dashboard TOML).
 - `dashboard.create_app()` exposes `GET /health` (no auth), `GET
   /partials/status` (Basic Auth, an htmx-polled fragment — see
   `templates/_status.html`), `GET /partials/recommendations` (Basic Auth,
@@ -343,8 +344,9 @@ never imports `cicerone.model`/`dataset`/`automl`.
   Tailwind CSS, all vendored under `src/cicerone/static/` — no CDN at
   runtime and no Node/npm dependency at runtime or for end users. Tailwind
   is compiled ahead of time in a dedicated `frontend` Docker build stage
-  (`node:22-slim`, pinned via `package.json`/`package-lock.json`) whose only
-  output (`static/tailwind.css`) is copied into the runtime image.
+  (`node:26.7.0-slim`, pinned via `package.json`/`package-lock.json`) whose only
+  output (`static/tailwind.css`) is copied into the runtime image and the
+  PyPI wheel (`package` Docker stage).
 
 ## Business policies
 

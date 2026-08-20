@@ -21,8 +21,7 @@ version: "3.9"
 #   dashboard   — a small status page over job run history
 #                 (config/cicerone.dashboard.toml). Optional: comment it out
 #                 if you don't need it. Manage its login users with:
-#                   docker compose run --rm dashboard \
-#                     python -m cicerone.manage_dashboard_users add <username>
+#                   docker compose run --rm dashboard users add <username>
 #
 # Postgres is opt-in via --profile db so a host already using :5432 (or an
 # S3/dataset-only setup) can still `docker compose up` without waiting on DB.
@@ -79,6 +78,7 @@ services:
 
       # Only used if config/cicerone.toml sets [job.trigger].enabled = true.
       TRIGGER_AUTH_TOKEN: ${TRIGGER_AUTH_TOKEN:-}
+    command: ["start", "--config", "/app/config/cicerone.toml"]
     ports:
       - "8080:8080" # only listens if [job.trigger].enabled = true
     volumes:
@@ -101,6 +101,7 @@ services:
       # Unset by default — set in .env when serve reads a kind = "db" output.
       OUTPUT_DATABASE_URL: ${OUTPUT_DATABASE_URL:-}
       SERVE_AUTH_TOKEN: ${SERVE_AUTH_TOKEN:-}
+    command: ["start", "--config", "/app/config/cicerone.serve.toml"]
     ports:
       - "8000:8000"
     volumes:
@@ -111,7 +112,6 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-    entrypoint: ["python", "-m", "cicerone.dashboard"]
     environment:
       PYTHONUNBUFFERED: "1"
       TZ: "Europe/Rome"
@@ -123,13 +123,13 @@ services:
       OUTPUT_S3_BUCKET: ${OUTPUT_S3_BUCKET:-}
       # Unset by default — set in .env when the dashboard reads a kind = "db" output.
       OUTPUT_DATABASE_URL: ${OUTPUT_DATABASE_URL:-}
+    command: ["dashboard", "--config", "/app/config/cicerone.dashboard.toml"]
     ports:
       - "8090:8090"
     volumes:
-      # Read-write (unlike recommender/serve above): `manage_dashboard_users`
-      # (run via `docker compose run --rm dashboard python -m
-      # cicerone.manage_dashboard_users add <username>`) writes
-      # config/dashboard_users.toml here.
+      # Read-write (unlike recommender/serve above): `cicerone users`
+      # (run via `docker compose run --rm dashboard users add <username>`)
+      # writes config/dashboard_users.toml here.
       - ./config:/app/config
     restart: unless-stopped
 

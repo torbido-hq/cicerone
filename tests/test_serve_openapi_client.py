@@ -87,9 +87,7 @@ def test_docs_ui_is_available():
 
 def test_committed_openapi_matches_generated_schema():
     generated = build_openapi()
-    assert OPENAPI_PATH.is_file(), (
-        f"missing {OPENAPI_PATH}; run: python -m cicerone.export_serve_openapi -o {OPENAPI_PATH}"
-    )
+    assert OPENAPI_PATH.is_file(), f"missing {OPENAPI_PATH}; run: cicerone export-openapi -o {OPENAPI_PATH}"
     committed = json.loads(OPENAPI_PATH.read_text())
     assert committed == generated
 

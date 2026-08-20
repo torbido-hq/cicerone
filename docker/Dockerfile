@@ -40,6 +40,23 @@ COPY src/cicerone/static/dashboard.js ./src/cicerone/static/dashboard.js
 COPY src/cicerone/static/tailwind.input.css ./tailwind.input.css
 RUN npx tailwindcss -i ./tailwind.input.css -o ./tailwind.css --minify
 
+# --- package ---------------------------------------------------------------
+# sdist + wheel for PyPI and the runtime image. Reuses the frontend CSS
+# artifact; does not install the ML stack.
+FROM python:3.11-slim-bookworm AS package
+
+WORKDIR /app
+RUN pip install --no-cache-dir build==1.5.0 twine==7.0.0
+
+COPY pyproject.toml MANIFEST.in LICENSE README.md CHANGELOG.md ./
+COPY requirements.txt requirements-redis.txt requirements-sequential.txt ./
+COPY src/ ./src/
+COPY --from=frontend /build/tailwind.css ./src/cicerone/static/tailwind.css
+
+RUN python -m build \
+    && python -m twine check dist/* \
+    && PYTHONPATH=src python -m cicerone.packaging
+
 # --- runtime -----------------------------------------------------------------
 FROM python:3.11-slim-bookworm AS runtime
 
@@ -55,33 +72,27 @@ RUN groupadd --gid 1000 cicerone && \
 WORKDIR /app
 
 COPY --from=builder /wheels /wheels
+COPY --from=package /app/dist /dist
 COPY requirements.txt ./
 RUN pip install --no-cache-dir --no-index --find-links=/wheels -r requirements.txt \
-    && rm -rf /wheels
+    && pip install --no-cache-dir --no-index --find-links=/dist cicerone-recommender \
+    && rm -rf /wheels /dist \
+    && cicerone --help >/dev/null
 
-COPY src/ ./src/
-COPY --from=frontend /build/tailwind.css ./src/cicerone/static/tailwind.css
 COPY config/ ./config/
-COPY docker/entrypoint.sh ./docker/entrypoint.sh
-RUN chmod +x ./docker/entrypoint.sh
 
-ENV PYTHONPATH=/app/src \
-    PYTHONDONTWRITEBYTECODE=1 \
+ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 RUN mkdir -p /tmp/cicerone && chown -R cicerone:cicerone /app /tmp/cicerone
 USER cicerone
 
-# Batch mode (default): no HTTP surface, just a scheduled job (R2 in ->
-# train -> R2 out), plus an optional event-driven trigger listener on 8080
-# (see [job.trigger] in cicerone.toml). Serve mode (job.mode = "serve")
-# instead exposes the read API on 8000. entrypoint.sh picks the right one
-# based on the loaded config. The dashboard (cicerone.dashboard, port 8090)
-# is always its own separate entrypoint/container -- see the "dashboard"
-# service in docker-compose.yml, which overrides ENTRYPOINT directly rather
-# than going through entrypoint.sh's batch/serve dispatch.
+# Default: `cicerone start` (batch job + scheduler, or serve from job.mode).
+# Override command per compose service, e.g. `--config … dashboard`.
+# Config is `/app/config/cicerone.toml` unless `--config` / CICERONE_CONFIG_PATH.
 EXPOSE 8000 8080 8090
-ENTRYPOINT ["./docker/entrypoint.sh"]
+ENTRYPOINT ["cicerone"]
+CMD ["start"]
 
 # --- test ---------------------------------------------------------------
 # Never shipped/deployed: only built and run in CI (see .github/workflows/ci.yml
@@ -91,12 +102,16 @@ FROM runtime AS test
 USER root
 COPY requirements-dev.txt ./
 RUN pip install --no-cache-dir -r requirements-dev.txt
-COPY pyproject.toml ./
+COPY pyproject.toml MANIFEST.in ./
+COPY requirements-redis.txt requirements-sequential.txt ./
+COPY src/ ./src/
+COPY --from=frontend /build/tailwind.css ./src/cicerone/static/tailwind.css
 COPY tests/ ./tests/
 # Checked-in serve OpenAPI schema — asserted against create_app().openapi() in tests.
 COPY docs/openapi/ ./docs/openapi/
 # Canonical Postgres defaults — parsed by tests/support/postgres_defaults.py at runtime.
 COPY docker/postgres/defaults.env ./docker/postgres/defaults.env
+ENV PYTHONPATH=/app/src
 RUN chown -R cicerone:cicerone /app
 USER cicerone
 ENTRYPOINT []

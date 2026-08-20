@@ -1,4 +1,4 @@
-"""CLI for dashboard Basic Auth users (python -m cicerone.manage_dashboard_users)."""
+"""CLI for dashboard Basic Auth users (`cicerone users`)."""
 
 from __future__ import annotations
 

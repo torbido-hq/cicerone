@@ -1,0 +1,50 @@
+name: Publish to PyPI
+
+# Uploads sdist + wheel when a GitHub release is published.
+# One-time: GitHub Environment `pypi`, and a PyPI trusted publisher for
+# `cicerone-recommender` (repo torbido-hq/cicerone, workflow publish.yml,
+# environment pypi). The PyPI name `cicerone` is a different project.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build sdist and wheel
+        run: docker build --target package -t cicerone-package -f docker/Dockerfile .
+
+      - name: Extract dist/
+        run: |
+          cid="$(docker create cicerone-package)"
+          docker cp "$cid":/app/dist dist
+          docker rm "$cid"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/cicerone-recommender
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1

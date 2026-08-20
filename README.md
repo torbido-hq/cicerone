@@ -1,4 +1,4 @@
-<img src="src/cicerone/static/cicerone-logo.svg" alt="Cicerone" width="200">
+<img src="https://raw.githubusercontent.com/torbido-hq/cicerone/main/src/cicerone/static/cicerone-logo.svg" alt="Cicerone" width="200">
 
 # Cicerone
 
@@ -7,6 +7,7 @@
 [![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/release/python-3110/)
 [![License: Beerware](https://img.shields.io/badge/license-Beerware%20🍺-f28e1c.svg)](LICENSE)
 [![GitHub Pages](https://img.shields.io/badge/docs-cicerone.dev-004B75.svg)](https://cicerone.dev)
+[![PyPI](https://img.shields.io/pypi/v/cicerone-recommender.svg)](https://pypi.org/project/cicerone-recommender/)
 
 **Site:** [cicerone.dev](https://cicerone.dev)
 ([Starlight](https://starlight.astro.build/) docs site; source in [`website/`](website/),
@@ -20,9 +21,9 @@ lightweight "serve" mode can then expose those precomputed recommendations
 over a small read-only HTTP API — there's still no live inference, no
 model loaded in the request path. Optionally (`[job].save_model_artifact`),
 the batch job can also write a versioned fitted-model artifact for offline
-reload / future thin inference without redesigning training. Everything
-runs in Docker (Python 3.11 only lives inside the image, nothing to install
-on the host).
+reload / future thin inference without redesigning training. The supported
+deploy path is Docker (Python 3.11 lives inside the image). A PyPI package
+is also published for Python 3.11 hosts — see Installation.
 
 Cicerone isn't tied to any particular product, shop, or domain — it works
 for any catalog of "users" and "items" with interaction events (purchases,
@@ -78,7 +79,7 @@ at boot, then again on `[job].cron_schedule` in `config/cicerone.toml`
 
 By default (`[job].mode = "batch"`), the container only runs the batch job
 on its cron schedule — no HTTP surface at all. Setting `[job].mode = "serve"`
-switches `python -m cicerone.serve` to instead run a small FastAPI **read**
+switches `cicerone start` / `cicerone serve` to instead run a small FastAPI **read**
 API over the lookup table the batch job already wrote (never loads
 lightfm/rectools/implicit/torch, never trains or imports):
 
@@ -146,7 +147,7 @@ it with:
 
 ```sh
 docker run --rm -v "$PWD":/app -w /app -e PYTHONPATH=/app/src cicerone-test \
-  python -m cicerone.export_serve_openapi -o docs/openapi/serve.openapi.json
+  cicerone export-openapi -o docs/openapi/serve.openapi.json
 ```
 
 Thin clients (no generated SDK package — copy or import as needed). ReDoc
@@ -227,13 +228,14 @@ serve). Like serve mode, it never loads lightfm/rectools/implicit.
   users, not a shared token) with:
 
   ```
-  python -m cicerone.manage_dashboard_users --users-path <path> add <username>
-  python -m cicerone.manage_dashboard_users --users-path <path> remove <username>
-  python -m cicerone.manage_dashboard_users --users-path <path> list
+  cicerone users --users-path <path> add <username>
+  cicerone users --users-path <path> remove <username>
+  cicerone users --users-path <path> list
   ```
 
-  (note `--users-path` comes *before* the subcommand). Passwords are hashed
-  with bcrypt; the file is plain TOML (`username = "<bcrypt hash>"`).
+  (`--users-path` is optional when `--config` points at a dashboard TOML).
+  Passwords are hashed with bcrypt; the file is plain TOML
+  (`username = "<bcrypt hash>"`).
 - Enable it via `[dashboard].enabled = true` in `config/cicerone.toml` (or
   use the standalone `config/cicerone.dashboard.toml` example config). See
   the `dashboard` service in `docker-compose.yml` for how it's wired up
@@ -248,7 +250,8 @@ serve). Like serve mode, it never loads lightfm/rectools/implicit.
 All structural configuration — which backend to use for input/output,
 bucket/table names, scheduling, tuning — lives in one version-controlled
 TOML file, `config/cicerone.toml` (mounted read-only, see
-`docker-compose.yml`; override the path with `CICERONE_CONFIG_PATH`).
+`docker-compose.yml`; override the path with `cicerone --config PATH` or
+`CICERONE_CONFIG_PATH`).
 Secrets are never written into it directly: reference them with
 `${ENV_VAR_NAME}` placeholders, resolved from the environment at load time
 (see [.env.example](.env.example)).
@@ -519,6 +522,35 @@ by `popular_share`. An item is labeled `source = "blended"` only when more
 than one source contributed it. Without blending, users without enough
 interactions still get a fallback list from `PopularModel` (rectools),
 still honoring availability and any configured eligibility/boost policies.
+
+## Installation
+
+**Docker** is the supported deploy path (see Usage below). Python 3.11 and
+the LightFM build live inside the image.
+
+**pip** (Python 3.11 only). The distribution name is `cicerone-recommender`
+because [`cicerone`](https://pypi.org/project/cicerone/) is a different
+project; the import remains `cicerone`. LightFM may need a C compiler
+(`gcc`/`g++`) and OpenMP (`libgomp1`) on the host.
+
+```sh
+pip install cicerone-recommender
+pip install 'cicerone-recommender[redis]'        # lock backend / Redis Streams
+pip install 'cicerone-recommender[sequential]'   # SASRec / BERT4Rec
+```
+
+Then, with your own TOML (the same files Docker mounts under `/app/config`):
+
+```sh
+cicerone start --config ./config/cicerone.toml           # job + scheduler, or serve
+cicerone job --config ./config/cicerone.toml             # one training run
+cicerone serve --config ./config/cicerone.serve.toml
+cicerone dashboard --config ./config/cicerone.dashboard.toml
+cicerone users --config ./config/cicerone.dashboard.toml add alice
+```
+
+`--config` may also come before the command. Runs in the foreground; stop with
+Ctrl-C / SIGTERM (`docker compose stop`). Prefer the image for production.
 
 ## Usage
 
