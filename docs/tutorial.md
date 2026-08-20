@@ -558,8 +558,8 @@ docker stop cicerone-tutorial-serve
 Leave personalized LightFM rows for the next full retrain. `[events]` on
 the serve process can still refresh **popular / latest** slices from new
 interactions. Details and other backends (db / s3 / Redis Streams):
-[incremental-events.md](incremental-events.md). Why LightFM is not updated
-online: [how-it-works.md](how-it-works.md).
+[incremental-events.md](incremental-events.md). [how-it-works.md](how-it-works.md)
+explains why LightFM is not updated online.
 
 Add this to `config/cicerone.serve.local.toml` (keep the `[output]` /
 `[serve]` edits from [step 12](#12-serve-recommendations-over-an-http-api)):
