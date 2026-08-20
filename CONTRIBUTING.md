@@ -144,8 +144,8 @@ and/or `examples/serve/` when request/response fields change.
 
 ## Pull requests
 
-- Branch off the train you are targeting (`main` for 0.6.1, `release/0.7.0`
-  for new features). Keep PRs focused on one change.
+- Branch off the train you are targeting (patch = `main`, minor =
+  `release/X.Y.0`). Keep PRs focused on one change.
 - **Branch names (required):** short and human-readable only —
   `feature/…`, `fix/…`, `release/0.3.1`, `docs/…`, `chore/…`.
   **Never** use `cursor/<slug>-<id>` (or any other opaque agent/id suffix).
@@ -165,44 +165,55 @@ and/or `examples/serve/` when request/response fields change.
 
 ## Release trains
 
-**v0.6.0** is tagged. Unreleased on `main` is 0.6.1.
+While a **patch** and a **minor** are in flight together, `main` is the
+patch train and `release/X.Y.0` is the minor train.
 
 | Train | Branch | What lands |
 |---|---|---|
-| **0.6.1** (patch) | `main` | Bug fixes, small refactors, improvements (perf/docs/DX), dependency bumps, tests for existing behavior. No new user-facing capability, config keys, models, or I/O `kind`s. |
-| **0.7.0** (minor) | `release/0.7.0` (long-lived; PRs target this branch, not `main`) | New features and new public surface. |
+| **Patch** | `main` | Bug fixes, small refactors, improvements (perf/docs/DX), dependency bumps, tests for existing behavior. No new user-facing capability, config keys, models, or I/O `kind`s. |
+| **Minor** | `release/X.Y.0` (long-lived; PRs target this branch, not `main`) | New features and new public surface. |
 
-- Fixes, refactors, improvements → `main`. Features → `release/0.7.0`.
-- If ambiguous, use `main` unless the change adds user-facing capability.
-- Never land 0.7.0 features on `main` until v0.6.1 ships.
-- `## [Unreleased]` is per-branch (0.6.1 on `main`, 0.7.0 on
-  `release/0.7.0`).
-- After v0.6.1: merge `release/0.7.0` into `main`; then `main` is 0.7.0
-  and new features land there. Stop cherry-picking. Update this table
-  when the next patch vs minor split starts.
+- Fixes, refactors, improvements → patch (`main`). Features → minor
+  (`release/X.Y.0`).
+- Split mixed work (refactor + feature) into two PRs: patch first, then
+  feature on the minor train. If the refactor has no value without the
+  feature, keep both on the minor train. Never land a feature on the
+  patch train because a refactor is in the same diff.
+- If still ambiguous, use the patch train unless the change adds
+  user-facing capability.
+- Never land minor-train features on `main` until the patch is tagged.
+- `## [Unreleased]` is per-branch (patch on `main`, minor on
+  `release/X.Y.0`).
+- After the patch is tagged: merge `release/X.Y.0` into `main`; then
+  `main` is the minor train and new features land there. Stop
+  cherry-picking. Update **Current trains** for the next split.
+
+**Current trains:** patch **0.6.1** on `main`; minor **0.7.0** on
+`release/0.7.0`.
 
 Cherry-pick, hotfix, and merge-back commands are in
 [Cherry-picks and merge-backs](#cherry-picks-and-merge-backs).
 
 ### Cherry-picks and merge-backs
 
-Cherry-pick each 0.6.1 fix onto `release/0.7.0` after it lands on `main`
-(the commit that landed the change on `main`):
+Cherry-pick each patch-train fix onto `release/X.Y.0` after it lands on
+`main` (the commit that landed the change on `main`):
 
 ```sh
-git checkout release/0.7.0
+git checkout release/X.Y.0
 git cherry-pick <sha>
-git push origin release/0.7.0
+git push origin release/X.Y.0
 ```
 
-If the cherry-pick conflicts, keep the 0.7.0 feature code and re-apply the
-0.6.1 fix on that surface. If it still will not apply (the 0.7.0 branch
-has a different API or config), abort (`git cherry-pick --abort`) and
-open a small PR targeting `release/0.7.0` that ports the same fix. Do not
-change `main` to match 0.7.0-only APIs.
+If the cherry-pick conflicts, keep the minor-train feature code and
+re-apply the patch fix on that surface. If it still will not apply (the
+minor branch has a different API or config), abort
+(`git cherry-pick --abort`) and open a small PR targeting
+`release/X.Y.0` that ports the same fix. Do not change `main` to match
+minor-only APIs.
 
-**Example.** A dashboard lookup crash and a new serve filter in the same
-week:
+**Example** (current trains: 0.6.1 / 0.7.0). A dashboard lookup crash and
+a new serve filter in the same week:
 
 1. **Fix:** branch `fix/dashboard-lookup` from `main`, PR into `main`,
    then `git cherry-pick <sha>` onto `release/0.7.0`.
@@ -210,24 +221,24 @@ week:
    into `release/0.7.0` (not `main`).
 
 **Hotfixes that must ship on both trains** always land on `main` first
-(0.6.1). Do not open the fix only against `release/0.7.0`. After the
-`main` PR merges, cherry-pick immediately (same commands as above) so
-0.7.0 does not wait for the next routine backport.
+(patch). Do not open the fix only against `release/X.Y.0`. After the
+`main` PR merges, cherry-pick immediately (same commands as above) so the
+minor train does not wait for the next routine backport.
 
-When merging `release/0.7.0` into `main` (after v0.6.1, before tagging
-0.7.0): if `main` has 0.6.1 commits not yet on `release/0.7.0`,
-cherry-pick those first, then merge. Do not force-push `main`. If a
-conflict is a missing cherry-pick, abort the merge, port the fix, and
-retry.
+When merging `release/X.Y.0` into `main` (after the patch tag, before
+tagging the minor): if `main` has patch commits not yet on
+`release/X.Y.0`, cherry-pick those first, then merge. Do not force-push
+`main`. If a conflict is a missing cherry-pick, abort the merge, port
+the fix, and retry.
 
-If the merge still conflicts, keep 0.6.1 behavior from `main` and 0.7.0
+If the merge still conflicts, keep patch behavior from `main` and minor
 features from the release branch:
 
 - **Prefer `main`:** both sides edited the dashboard lookup error path.
-  `main` has the 0.6.1 crash fix; `release/0.7.0` still has the unfixed
+  `main` has the patch crash fix; `release/0.7.0` still has the unfixed
   copy. Take `main`'s error handling, then restore any 0.7.0-only fields
   around it.
-- **Prefer `release/0.7.0`:** `main` has no serve-filter helper;
+- **Prefer `release/X.Y.0`:** `main` has no serve-filter helper;
   `release/0.7.0` added `feature/serve-filters`. Keep the new helper and
   call sites from the release branch.
 
@@ -254,14 +265,14 @@ for `cicerone-recommender` — owner `torbido-hq`, repo `cicerone`, workflow
    metadata uses it via `SERVE_API_VERSION` — regenerate
    `docs/openapi/serve.openapi.json` if the version string changed).
 2. Get that version onto `main`, then tag **from `main`**:
-   - **0.6.1 (patch):** merge the completing PR to `main`. Tag that
-     commit on `main`: `git tag -a v0.6.1 <sha> -m "…"` and
-     `git push origin v0.6.1`.
-   - **0.7.0 (minor):** merge the completing PR to `release/0.7.0`. Merge
-     `release/0.7.0` into `main` (see
+   - **Patch** (current: 0.6.1): merge the completing PR to `main`. Tag
+     that commit on `main`: `git tag -a vX.Y.Z <sha> -m "…"` and
+     `git push origin vX.Y.Z`.
+   - **Minor** (current: 0.7.0): merge the completing PR to
+     `release/X.Y.0`. Merge `release/X.Y.0` into `main` (see
      [Cherry-picks and merge-backs](#cherry-picks-and-merge-backs) if
      `main` diverged). Tag that commit on `main`:
-     `git tag -a v0.7.0 <sha> -m "…"` and `git push origin v0.7.0`.
+     `git tag -a vX.Y.Z <sha> -m "…"` and `git push origin vX.Y.Z`.
 3. Publish the GitHub release from that tag (notes can mirror the
    changelog section). `.github/workflows/publish.yml` builds the sdist and
    wheel (including dashboard CSS) and uploads them to PyPI.

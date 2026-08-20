@@ -11,7 +11,7 @@ sections are **immutable**.
 ## Do
 
 - Put new notes only under `## [Unreleased]` on the train you are
-  targeting: 0.6.1 on `main`, 0.7.0 on `release/0.7.0`.
+  targeting (patch on `main`, minor on `release/X.Y.0`).
 - Short bullets for **this** change. Do not re-tell older releases.
 
 ## Do not

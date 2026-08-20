@@ -1,46 +1,45 @@
 ---
 alwaysApply: true
-description: Two-train release policy — 0.6.1 on main, 0.7.0 on release/0.7.0
+description: Patch vs minor release trains — main is patch, release/X.Y.0 is minor
 ---
 
 # Release trains (required)
 
 Classify the change first, then branch off that train. See
-[CONTRIBUTING.md](CONTRIBUTING.md) **Release trains**. **v0.6.0** is
-tagged; Unreleased on `main` is 0.6.1.
+[CONTRIBUTING.md](CONTRIBUTING.md) **Release trains**.
 
-| Train | Base branch | What lands |
-|---|---|---|
-| **0.6.1** (patch) | `main` | Fixes, small refactors, improvements, dependency bumps, tests for existing behavior. No new user-facing capability, config keys, models, or I/O `kind`s. |
-| **0.7.0** (minor) | `release/0.7.0` | New features and new public surface. PRs target this branch, not `main`. |
+While a patch and a minor are in flight: **patch** = `main` (fixes,
+refactors, improvements); **minor** = `release/X.Y.0` (new features).
+Never land minor features on `main` until the patch is tagged. After
+that tag, `main` is the minor train.
 
-If ambiguous, put it on **0.6.1** unless it adds user-facing capability.
-Never land 0.7.0 features on `main` until v0.6.1 ships. After that tag,
-`main` is 0.7.0 and new features land on `main`.
+**Current trains:** patch **0.6.1** on `main`; minor **0.7.0** on
+`release/0.7.0`.
+
+Split mixed PRs (refactor + feature): patch first, then minor. If the
+refactor has no standalone value, keep both on the minor train. Never
+put a feature on the patch train. If still ambiguous, use the patch
+train unless the change adds user-facing capability.
 
 ## Changelog
 
-`## [Unreleased]` is per-branch: next patch (0.6.1) on `main`, 0.7.0 on
-`release/0.7.0`. Dated sections stay frozen.
+`## [Unreleased]` is per-branch (patch on `main`, minor on
+`release/X.Y.0`). Dated sections stay frozen.
 
-## After v0.6.1
+## Cherry-picks
 
-Cherry-pick each 0.6.1 fix from `main` onto `release/0.7.0`
-(`git cherry-pick` the commit that landed the change on `main`). On
-conflict, keep 0.7.0 feature code and re-apply the fix; if it still will
-not apply, abort and PR a port to `release/0.7.0` — do not change `main`
-to match 0.7.0-only APIs.
+Cherry-pick each patch fix from `main` onto `release/X.Y.0` (the commit
+that landed the change on `main`). On conflict, keep minor feature code
+and re-apply the fix; if it still will not apply, abort and PR a port to
+`release/X.Y.0` — do not change `main` to match minor-only APIs.
 Hotfixes that must ship on both trains land on `main` first, then
-cherry-pick immediately — do not open them only against `release/0.7.0`.
-Do not merge 0.7.0 into `main` before 0.6.1 ships. After the tag, merge
-`release/0.7.0` into `main`; `main` becomes the 0.7.0 train. Stop
-cherry-picking onto `release/0.7.0`.
+cherry-pick immediately.
 
-When merging `release/0.7.0` into `main`, prefer `main` for 0.6.1
-fixes on a shared surface and `release/0.7.0` for 0.7.0-only APIs
-(see CONTRIBUTING **Cherry-picks and merge-backs**). If `main`
-diverged, cherry-pick remaining 0.6.1 commits onto `release/0.7.0`
-before the merge; do not force-push `main`. Tag from `main` after that
-merge (0.6.1 tags the completing commit on `main` directly).
+When merging `release/X.Y.0` into `main`, prefer `main` for patch fixes
+on a shared surface and `release/X.Y.0` for minor-only APIs (see
+CONTRIBUTING **Cherry-picks and merge-backs**). If `main` diverged,
+cherry-pick remaining patch commits onto `release/X.Y.0` first; do not
+force-push `main`. Tag from `main` (patch tags the completing commit on
+`main`; minor merges `release/X.Y.0` into `main` first).
 
 Version bump still happens on the PR that completes that version.
