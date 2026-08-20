@@ -179,7 +179,7 @@ capability. Never land 0.7.0 features on `main` until v0.6.1 ships.
 `release/0.7.0`.
 
 Cherry-pick each 0.6.1 fix onto `release/0.7.0` after it lands on `main`
-(use the merge commit SHA, or the PR's squash commit):
+(the commit that landed the change on `main`):
 
 ```sh
 git checkout release/0.7.0
@@ -234,11 +234,17 @@ for `cicerone-recommender` — owner `torbido-hq`, repo `cicerone`, workflow
    metadata uses it via `SERVE_API_VERSION` — regenerate
    `docs/openapi/serve.openapi.json` if the version string changed).
 2. Get that version onto `main`, then tag **from `main`**:
-   - **0.6.1 (patch):** merge the completing PR to `main`. Tag that merge
-     commit: `git tag -a v0.6.1 <sha> -m "…"` and `git push origin v0.6.1`.
+   - **0.6.1 (patch):** merge the completing PR to `main`. Tag that
+     commit on `main`: `git tag -a v0.6.1 <sha> -m "…"` and
+     `git push origin v0.6.1`.
    - **0.7.0 (minor):** merge the completing PR to `release/0.7.0`. Merge
-     `release/0.7.0` into `main`. Tag the merge commit on `main`:
+     `release/0.7.0` into `main`. Tag that commit on `main`:
      `git tag -a v0.7.0 <sha> -m "…"` and `git push origin v0.7.0`.
+     If `main` has 0.6.1 commits not yet on `release/0.7.0`, cherry-pick
+     those onto `release/0.7.0` first, then merge. If the merge still
+     conflicts, keep 0.6.1 behavior from `main` and 0.7.0 features from
+     the release branch; do not force-push `main`. If a conflict is a
+     missing cherry-pick, abort the merge, port the fix, and retry.
 3. Publish the GitHub release from that tag (notes can mirror the
    changelog section). `.github/workflows/publish.yml` builds the sdist and
    wheel (including dashboard CSS) and uploads them to PyPI.
