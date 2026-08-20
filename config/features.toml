@@ -1,10 +1,4 @@
-# Event weights and feature wiring for the Cicerone recommender.
-#
-# Edit this file to change how signals are weighted or which columns from
-# users.parquet / items.parquet feed the model — no code changes or image
-# rebuild required (docker-compose mounts this file read-only into the
-# container). Your own analytics/producer data can be wired in simply by
-# adding a column to items.parquet and a matching entry below.
+# Event weights and feature wiring. Edit in place; no rebuild.
 #
 # NOTE: root-level keys (quantity_scaled_events, item_availability_filters)
 # must be declared before any [table] header below — in TOML, key = value

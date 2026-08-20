@@ -1,4 +1,3 @@
-# Optional: only needed for Redis lock_backend and/or events.kind = "redis_streams".
-# Install: pip install 'cicerone-recommender[redis]'
-# (from a checkout: pip install -r requirements-redis.txt)
+# Optional Redis extra (lock_backend / events.kind = redis_streams).
+# pip install 'cicerone-recommender[redis]'
 redis==8.1.0

@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""Thin Python client example for Cicerone serve mode.
-
-Uses ``cicerone.serve_client.ServeClient`` (stdlib urllib + typed serve schemas).
-"""
+"""Example: ServeClient against a live serve process."""
 
 from __future__ import annotations
 

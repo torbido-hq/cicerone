@@ -20,7 +20,7 @@ SEQUENTIAL_ARCHITECTURES: dict[str, str] = {
 _SEQUENTIAL_CLS_TO_ARCHITECTURE = {cls: name for name, cls in SEQUENTIAL_ARCHITECTURES.items()}
 # Cicerone-only keys; strip before RecTools model_from_config.
 _CICERONE_MODEL_KEYS = frozenset({"architecture"})
-SEQUENTIAL_EXTRA_HINT = "install with: pip install -r requirements-sequential.txt"
+SEQUENTIAL_EXTRA_HINT = "install with: pip install 'cicerone-recommender[sequential]'"
 
 RECTOOLS_STRATEGY_NAMES: tuple[str, ...] = (
     "collaborative",

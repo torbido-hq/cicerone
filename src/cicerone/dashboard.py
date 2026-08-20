@@ -1,16 +1,4 @@
-"""Dashboard: a small read-only status page over the run manifest data
-job.run() writes on every run, success or failure (see
-cicerone.io.manifest_reader), plus a user_id lookup of precomputed
-recommendations from the same output store. Runs as its own
-process/entrypoint (`cicerone dashboard`), independent of
-[job].mode.
-
-Rendered server-side (FastAPI + Jinja2 + htmx for polling, a small Stimulus
-controller for relative timestamps) rather than a JSON API + JS framework.
-
-Protected by HTTP Basic Auth against a small, fixed set of named users
-(cicerone.dashboard_users, managed via `cicerone users`).
-"""
+"""Standalone Basic-Auth status page (`cicerone dashboard`); independent of job.mode."""
 
 from __future__ import annotations
 

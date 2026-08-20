@@ -22,11 +22,7 @@ class ServeClientError(Exception):
 
 
 class ServeClient:
-    """Minimal client for `GET /health` and `GET /recommendations/{user_id}`.
-
-    Uses stdlib ``urllib`` for transport and the same Pydantic models as the
-    serve OpenAPI schema (``cicerone.serve_schemas``) for typed responses.
-    """
+    """GET /health and GET /recommendations/{user_id}."""
 
     def __init__(
         self,

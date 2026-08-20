@@ -1,9 +1,4 @@
-"""Loads the user-editable feature/weight configuration (config/features.toml).
-
-Kept as plain TOML instead of Python constants so event weights and which
-user/item columns feed the model can change without touching code or
-rebuilding the image.
-"""
+"""Loads config/features.toml (event weights and feature columns)."""
 
 from __future__ import annotations
 

@@ -302,7 +302,7 @@ def test_missing_redis_package(monkeypatch):
 
     monkeypatch.setattr(builtins, "__import__", _import)
     source = RedisStreamsEventSource(_options())
-    with pytest.raises(ConfigError, match="requirements-redis"):
+    with pytest.raises(ConfigError, match=r"cicerone-recommender\[redis\]"):
         source.connect()
 
 

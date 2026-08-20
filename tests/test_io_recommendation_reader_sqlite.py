@@ -1,9 +1,4 @@
-"""SQLite-backed smoke coverage for DB recommendation reader SQL paths.
-
-Postgres remains the CI source of truth (``test_io_recommendation_reader_db.py``);
-these tests exercise the same reader against an in-memory SQLite URL so coverage
-does not depend on ``TEST_DATABASE_URL`` for the new cold-start SQL.
-"""
+"""SQLite smoke coverage for DB recommendation reader SQL (no TEST_DATABASE_URL)."""
 
 from __future__ import annotations
 

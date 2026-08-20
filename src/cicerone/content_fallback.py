@@ -1,8 +1,6 @@
-"""Content-based cold-item fallback: recommend zero-interaction items by feature similarity.
+"""Content-based cold-item fallback: one-hot item features, cosine vs user history.
 
-Uses one-hot encodings of configured item_features (categorical / list) and
-cosine similarity against each user's interaction history. No free-text / TF-IDF
-path — features.toml item_features are pure categoricals.
+No free-text / TF-IDF — ``item_features`` are categoricals / lists.
 """
 
 from __future__ import annotations

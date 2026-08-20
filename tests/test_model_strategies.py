@@ -36,7 +36,7 @@ def test_build_sequential_without_extra_raises(monkeypatch):
     from cicerone.model import build_strategy_model
 
     monkeypatch.setattr("cicerone.model.strategies.sequential_extra_available", lambda: False)
-    with pytest.raises(ConfigError, match="requirements-sequential"):
+    with pytest.raises(ConfigError, match=r"cicerone-recommender\[sequential\]"):
         build_strategy_model("sequential")
 
 

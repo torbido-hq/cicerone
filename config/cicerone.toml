@@ -1,15 +1,9 @@
 # Cicerone configuration.
 #
-# This file is meant to be edited (and mounted read-only into the container,
-# see docker-compose.yml) without ever rebuilding the image. A pip install
-# (`cicerone --config ./config/cicerone.toml`) uses the same TOML; set
-# feature_config_path and dashboard users_path to host paths instead of
-# /app/config/…. Secrets are never written here directly — reference them
-# with "${ENV_VAR_NAME}" and set the actual value in your environment / .env
-# (see .env.example). A referenced variable that isn't set fails config
-# loading immediately. If you ever need a literal "${...}" value (no
-# substitution), escape it with a doubled leading "$", e.g. "$${NOT_A_VAR}"
-# resolves to "${NOT_A_VAR}".
+# Structural config. Mount into the image or pass `cicerone --config`.
+# Host installs: set feature_config_path / users_path (defaults are /app/config/…).
+# Secrets: "${ENV_VAR}" from the environment / .env; unset vars fail load.
+# Literal "${…}": "$${NOT_A_VAR}".
 #
 # Input and output are each independently configurable. Every backend
 # ("kind") interprets its own "options" table — see src/cicerone/io/ for the
@@ -117,7 +111,7 @@ feature_config_path = "/app/config/features.toml"
 # epoch_metrics_plateau_window = 3
 
 # Parallelism for AutoML fold evaluation and strategy fitting (ProcessPool).
-# Default 1 (sequential). Set >1 when the host has spare cores.
+# Default 1. Set >1 when the host has spare cores.
 # max_workers = 1
 
 # Optional: combine the enabled strategies via weighted reciprocal rank

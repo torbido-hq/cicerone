@@ -305,11 +305,7 @@ def _extend_code_samples(operation: dict[str, Any], samples: list[dict[str, str]
 
 
 def attach_code_samples(schema: dict[str, Any]) -> None:
-    """Attach ReDoc ``x-codeSamples`` to serve operations (mutates ``schema``).
-
-    Appends to any samples already present on the operation so route-level
-    ``openapi_extra`` additions are preserved.
-    """
+    """Attach ReDoc ``x-codeSamples`` to serve operations (mutates ``schema``)."""
     paths = schema.get("paths")
     if not isinstance(paths, dict):
         return
