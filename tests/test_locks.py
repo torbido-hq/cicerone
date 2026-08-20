@@ -267,6 +267,39 @@ def test_run_guard_releases_backend_after_run():
     assert events == ["acquire", "run:cron", "release"]
 
 
+def test_run_guard_passes_owned_as_fence_check():
+    owned_calls: list[bool] = []
+    received: dict[str, object] = {}
+    done = threading.Event()
+
+    class Lock:
+        def acquire(self) -> bool:
+            return True
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            owned_calls.append(True)
+            return True
+
+    lock = Lock()
+
+    def fake_run(triggered_by: str, *, fence_check=None) -> None:
+        received["triggered_by"] = triggered_by
+        received["fence_check"] = fence_check
+        assert fence_check is not None
+        assert fence_check() is True
+        done.set()
+
+    guard = RunGuard(debounce_seconds=0, run_fn=fake_run, lock_backend=lock)
+    assert guard.trigger("webhook") is True
+    _wait_for_event(done)
+    assert received["triggered_by"] == "webhook"
+    assert received["fence_check"] == lock.owned
+    assert owned_calls == [True]
+
+
 def test_build_redis_lock_backend(monkeypatch):
     _mock_redis_module(monkeypatch)
     settings = make_settings(trigger_lock_backend="redis", trigger_redis_url="redis://localhost:6379/0")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 import pandas as pd
@@ -593,3 +594,45 @@ def test_job_marks_partial_outputs_when_fence_lost_after_write(tmp_path, monkeyp
     assert manifest["status"] == "failed"
     assert manifest["partial_outputs"] is True
     assert calls["n"] == 2
+
+
+def test_run_guard_skips_job_writes_when_owned_is_false(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+
+    now = pd.Timestamp.utcnow()
+    events = pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    )
+    items = pd.DataFrame(
+        [{"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True}]
+    )
+    events.to_parquet(input_dir / "events.parquet", index=False)
+    items.to_parquet(input_dir / "items.parquet", index=False)
+
+    config_path = _write_config(tmp_path, input_dir, output_dir)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
+
+    from cicerone.trigger import RunGuard
+
+    released = threading.Event()
+
+    class DeadLock:
+        def acquire(self) -> bool:
+            return True
+
+        def release(self) -> None:
+            released.set()
+
+        def owned(self) -> bool:
+            return False
+
+    guard = RunGuard(debounce_seconds=0, run_fn=job.run, lock_backend=DeadLock())
+    assert guard.trigger("webhook") is True
+    assert released.wait(timeout=30)
+    assert not (output_dir / "recommendations.parquet").exists()
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    assert manifest["status"] == "failed"
+    assert "retrain lock lost" in manifest["error"]
