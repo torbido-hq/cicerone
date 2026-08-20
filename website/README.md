@@ -30,8 +30,8 @@ npm run preview  # serve dist/
 | `public/images/docs/` | Copied from `../docs/images/` at build time (gitignored) |
 
 Generated `src/content/docs/how-it-works.md`, `tutorial.md`,
-`architecture.md`, `incremental-events.md`, and `public/images/docs/` are
-gitignored; they are created at build/dev time. CI and local builds always
+`architecture.md`, `incremental-events.md`, `src/generated/latest-release.json`,
+and `public/images/docs/` are gitignored; they are created at build/dev time. CI and local builds always
 sync from `docs/`. Articles are **not** synced from `docs/` — add Markdown
 under `src/content/docs/articles/` (see below).
 

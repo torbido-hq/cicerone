@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Docs site homepage: latest dated CHANGELOG release and a GitHub **what changed**
+  link to that section.
+
 ### Fixed
 
 - OpenAPI `POST /events` curl sample JSON-encodes `USER_ID` with `python3`

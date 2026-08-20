@@ -9,6 +9,7 @@ src/content/docs/tutorial.md
 src/content/docs/architecture.md
 src/content/docs/incremental-events.md
 public/images/docs/
+src/generated/
 
 # dependencies
 node_modules/

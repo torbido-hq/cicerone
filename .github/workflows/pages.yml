@@ -41,6 +41,7 @@ jobs:
         working-directory: website
         run: |
           npm ci
+          npm test
           npm run build
 
       - if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'

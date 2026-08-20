@@ -14,6 +14,7 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseLatestRelease } from "../src/lib/changelog.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const websiteRoot = resolve(__dirname, "..");
@@ -118,3 +119,12 @@ if (existsSync(imagesSrc)) {
     console.log(`removed stale public/images/docs/${entry.name}`);
   }
 }
+
+const changelogSrc = join(repoRoot, "CHANGELOG.md");
+const latestReleaseOut = join(websiteRoot, "src/generated/latest-release.json");
+mkdirSync(dirname(latestReleaseOut), { recursive: true });
+const latestRelease = existsSync(changelogSrc)
+  ? parseLatestRelease(readFileSync(changelogSrc, "utf8"))
+  : null;
+writeFileSync(latestReleaseOut, `${JSON.stringify(latestRelease)}\n`);
+console.log(`synced CHANGELOG.md → src/generated/latest-release.json`);
