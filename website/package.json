@@ -10,11 +10,14 @@
     "start": "npm run dev",
     "build": "npm run sync-docs && astro build",
     "preview": "astro preview",
-    "astro": "astro"
+    "astro": "astro",
+    "test": "node --test src/lib/articles.test.mjs"
   },
   "dependencies": {
     "@astrojs/starlight": "^0.41.7",
     "astro": "^7.1.6",
-    "sharp": "^0.35.3"
+    "sharp": "^0.35.3",
+    "starlight-blog": "^0.29.0",
+    "yaml": "^2.8.0"
   }
 }
