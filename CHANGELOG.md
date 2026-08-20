@@ -6,25 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Added
-
-- Docs site homepage: latest dated CHANGELOG release and a GitHub **what changed**
-  link to that section.
-
-### Fixed
-
-- OpenAPI `POST /events` curl sample JSON-encodes `USER_ID` with `python3`
-  (`json.dumps`) or `jq`, and errors if neither is on PATH.
-- `examples/serve/curl_examples.sh` `POST /events` builds the JSON body with
-  `json.dumps` so user ids with quotes stay valid.
-- Docker test image includes `examples/serve/` so CI can read `curl_examples.sh`.
-- Tutorial webhook step starts serve with `cicerone --config … serve` (same as
-  the HTTP API step).
-
 ## [0.6.0] - 2026-08-20
 
 ### Added
 
+- Docs site homepage: latest dated CHANGELOG release and a GitHub **what changed**
+  link to that section.
 - Dashboard user lookup: inspect a `user_id`'s current precomputed top-K
   (rank, item, score, source, optional category) from the job output store,
   with cold-start fallback, on the Basic-Auth status page.
@@ -119,6 +106,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- OpenAPI `POST /events` curl sample JSON-encodes `USER_ID` with `python3`
+  (`json.dumps`) or `jq`, and errors if neither is on PATH.
+- `examples/serve/curl_examples.sh` `POST /events` builds the JSON body with
+  `json.dumps` so user ids with quotes stay valid.
+- Docker test image includes `examples/serve/` so CI can read `curl_examples.sh`.
+- Tutorial webhook step starts serve with `cicerone --config … serve` (same as
+  the HTTP API step).
 - `cicerone users` with a config path requires enabled `dashboard.users_path`
   (or an explicit `--users-path`); the error names the loaded config and the
   dashboard settings that were resolved.
