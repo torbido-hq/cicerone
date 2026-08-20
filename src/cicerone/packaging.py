@@ -17,6 +17,7 @@ REQUIRED_SUFFIXES = (
     "cicerone/templates/dashboard.html",
     "cicerone/templates/_status.html",
     "cicerone/templates/_recommendations.html",
+    "cicerone/serve/python_detect.sh",
 )
 
 

@@ -49,7 +49,7 @@ For `[events]` ingest (webhook, backends, HA), see
 | `serve_schemas.py` | Pydantic models that drive the serve OpenAPI schema |
 | `serve_client.py` | Thin stdlib HTTP client for the serve read API |
 | `export_serve_openapi.py` | `cicerone export-openapi` — dump FastAPI OpenAPI JSON (`docs/openapi/…`) |
-| `events/` | Incremental event ingest: `EventSource` protocol + registry, normalize, micro-batch buffer, user-scoped write-through updater; webhook (`POST /events`), DB watermark, S3-compatible (R2 list/marker; optional AWS SQS), and Redis Streams backends — see [incremental-events.md](incremental-events.md) |
+| `events/` | EventSource registry, micro-batch write-through — [incremental-events.md](incremental-events.md) |
 | `trigger.py` | Event-driven retrain trigger: webhook + optional input-bucket poll, debounce guard (`RunGuard`) shared with the cron loop; increments `cicerone_retrain_trigger_total` (per replica) |
 | `locks.py` | Optional lock backends (postgres / redis) for `RunGuard` and the events apply lease; Redis `owned()` checks the fencing token, Postgres `owned()` checks `pg_locks` for this backend pid |
 | `config/lock_url.py` | Postgres lock URL resolution for config load + lock builder |
@@ -406,13 +406,8 @@ generic `IOSettings`.
 
 ## Incremental events
 
-Between full retrains, optional `[events]` sources normalize interactions
-into the same event contract and micro-batch them into a cheap write-through
-update of top-K rows (popular/latest slices; LightFM / item-KNN / sequential
-wait for the next full `job.run()`). Serve replicas scale on the read path;
-incremental apply is single-writer unless `events.ha = true` with
-`job.trigger.lock_backend` postgres or redis (leader-only lease, separate
-key from the retrain lock). Operator guide:
+Serve-process ingest lives in `events/` plus `serve/events_routes.py` and
+`serve/bootstrap_events.py`. Operator guide:
 [incremental-events.md](incremental-events.md).
 
 ## Cold-start behavior

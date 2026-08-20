@@ -39,7 +39,7 @@ where = ["src"]
 include-package-data = true
 
 [tool.setuptools.package-data]
-cicerone = ["static/**/*", "templates/**/*"]
+cicerone = ["static/**/*", "templates/**/*", "serve/python_detect.sh"]
 
 [tool.setuptools.dynamic]
 version = { attr = "cicerone.__version__" }

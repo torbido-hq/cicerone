@@ -196,5 +196,6 @@ def test_sdist_includes_requirement_pins():
         "requirements-redis.txt",
         "requirements-sequential.txt",
         "LICENSE",
+        "python_detect.sh",
     ):
         assert name in text

@@ -47,8 +47,8 @@ up to your own data doesn't require touching any code.
 - **Serve mode** — read-only HTTP API over precomputed recommendations
   (`limit` / `category` / `exclude_unavailable`, cold-start fallback;
   OpenAPI at `/docs` + thin `ServeClient`)
-- **Incremental events** — webhook / DB / S3 / Redis Streams write-through
-  of popular/latest slices between full retrains
+- **Incremental events** — write-through of popular/latest between retrains
+  ([docs/incremental-events.md](docs/incremental-events.md))
 - **CLI / PyPI** — `cicerone` console script; `pip install cicerone-recommender`
   (import name `cicerone`; the PyPI name `cicerone` is a different project)
 - **Retrain trigger** — webhook (+ optional input poll) alongside cron
@@ -212,24 +212,17 @@ process:
   (and Redis-only `lock_ttl_seconds`) that namespace the lock when several
   schedulers share one Postgres/Redis; Redis refreshes TTL while the lock is
   held so long jobs stay exclusive. This is a lock, not a job queue.
-  Serve replicas scale on the **read** path. Incremental `[events]` writes are
-  single-writer by default; set `events.ha = true` with the same
-  `lock_backend` for leader-only apply (see Incremental events below).
+  Serve replicas scale on the **read** path. Incremental `[events]` apply is
+  single-writer by default; HA is in
+  [docs/incremental-events.md](docs/incremental-events.md).
 - The run manifest records `triggered_by` (`"cron"`, `"webhook"`, or
   `"s3-poll"`) and `lock_backend` alongside its existing counts/timestamp
   fields.
 
 ### Incremental events
 
-Optional `[events]` on the **serve** process accepts new interactions
-between full retrains and write-through **popular / latest** top-K for
-affected users (plus `__cold_start__`). LightFM / item-KNN / sequential
-rows wait for the next `job.run()`. Shipped sources: `webhook`
-(`POST /events`), `db` watermark, `s3` (R2 list or AWS SQS),
-`redis_streams`. Default is one writer; multi-replica apply needs
-`events.ha = true` plus `job.trigger.lock_backend` postgres or redis.
-
-Operator guide (TOML, curl, backends, HA, metrics):
+Optional `[events]` on the serve process write-through popular/latest rows
+between full retrains (not request-path ranking). Guide:
 [docs/incremental-events.md](docs/incremental-events.md).
 
 ## Dashboard

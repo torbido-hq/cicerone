@@ -6,11 +6,11 @@
 #   examples/serve/curl_examples.sh
 set -euo pipefail
 
-if command -v python3 >/dev/null 2>&1; then
-  PYTHON=python3
-elif command -v python >/dev/null 2>&1; then
-  PYTHON=python
-else
+# Prefer python3 (Debian); fall back to python (venv). Shared with OpenAPI samples.
+_SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=../../src/cicerone/serve/python_detect.sh
+. "$_SCRIPT_DIR/../../src/cicerone/serve/python_detect.sh"
+if [ -z "${PYTHON:-}" ]; then
   echo "python3 or python required" >&2
   exit 1
 fi

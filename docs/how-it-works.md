@@ -6,14 +6,12 @@ Cicerone is a **batch hybrid recommender**. It reads interaction events,
 weighs them, fits one or more strategies, combines those rankings into a
 per-user top-K table, and writes that table. Optional serve mode is a
 **read API over those rows** — `GET /recommendations/{user_id}` never runs
-LightFM or SASRec. Optional `[events]` ingest can refresh popular/latest
-slices between full retrains; it still does not do live inference.
+LightFM or SASRec.
 
 Packages and I/O live in [architecture.md](architecture.md). Config knobs
 live in the [README](../README.md). This page is the product and algorithm
 story: what each strategy is, how they differ, and which papers or docs to
-read next. Operator setup for `[events]` ingest (webhook, backends, HA):
-[incremental-events.md](incremental-events.md).
+read next.
 
 ## Pipeline
 
@@ -43,8 +41,6 @@ flowchart LR
    serve can filter by category / availability).
 
 Full `job.run()` is the drift backstop (cron or `POST /trigger/retrain`).
-Optional `[events]` write-through of popular/latest between runs is
-covered in the Incremental vs full retrain section below.
 
 ## Interaction weighting
 
@@ -197,11 +193,10 @@ still runs fresh. Sequential skip rules above still apply.
 
 ## Incremental vs full retrain
 
-`[events]` micro-batches new interactions into **popular / latest slices**
-(and recency boosts) for affected users plus `__cold_start__`.
-Collaborative, item-KNN, sequential, and content-fallback rows wait for the
-next full `job.run()`. LightFM has no clean online `partial_fit` on this
-path — that is why. Webhook, backends, HA, and metrics:
+`[events]` refreshes **popular / latest slices** (and recency boosts) for
+affected users plus `__cold_start__`. Collaborative, item-KNN, sequential,
+and content-fallback rows wait for the next full `job.run()` — LightFM has
+no clean online `partial_fit` on this path. Operator guide:
 [incremental-events.md](incremental-events.md).
 
 ## Cold-start

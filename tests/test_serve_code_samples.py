@@ -13,6 +13,7 @@ from cicerone.serve.code_samples import (
     EVENTS_PATH,
     HEALTH_CODE_SAMPLES,
     HEALTH_PATH,
+    PYTHON_DETECT,
     RECOMMENDATIONS_CODE_SAMPLES,
     RECOMMENDATIONS_PATH,
     RECOMMENDATIONS_PATH_PREFIX,
@@ -110,6 +111,7 @@ def test_events_shell_invariants():
     assert 'os.environ["USER_ID"]' in shell
     assert "command -v python3" in shell
     assert "command -v python" in shell
+    assert PYTHON_DETECT in shell
     assert "command -v jq" in shell
     assert "--arg user_id" in shell
     assert "python3, python, or jq required" in shell
@@ -139,6 +141,7 @@ def test_recommendations_shell_invariants():
     attach_code_samples(schema)
     shell = _sample_source(schema, RECOMMENDATIONS_PATH, "Shell")
     assert "urllib.parse.quote" in shell
+    assert PYTHON_DETECT in shell
     assert "command -v python3" in shell
     assert "command -v python" in shell
     assert "python3 or python required" in shell

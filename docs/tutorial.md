@@ -556,10 +556,8 @@ docker stop cicerone-tutorial-serve
 
 ## 13. Ingest incremental events (optional)
 
-Leave personalized LightFM rows for the next full retrain. `[events]` on
-the serve process can still refresh **popular / latest** slices from new
-interactions. Operator guide (webhook, other backends, HA):
-[incremental-events.md](incremental-events.md).
+Enable webhook `[events]` on serve and POST one interaction. Other backends
+and HA: [incremental-events.md](incremental-events.md).
 
 Add this to `config/cicerone.serve.local.toml` (keep the `[output]` /
 `[serve]` edits from [step 12](#12-serve-recommendations-over-an-http-api)):
