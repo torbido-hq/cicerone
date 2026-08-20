@@ -1,15 +1,15 @@
 ---
-title: A cheap recommender for a small Rails shop
-description: Batch recommendations on the Postgres you already have — compared with rolling your own on sparse data, not with a recs SaaS.
+title: Welcome to your own recommender
+description: A Rails shop, your Postgres, a nightly top-K table — come with the orders you have, not the catalog you wish you had.
 date: 2026-08-20
 excerpt: Point Cicerone at your orders table, let it write top-K rows overnight, and JOIN them in Rails. Honest about what sparse data will and will not do.
 authors:
   - nicholas
 ---
 
-Canonical URL: [https://cicerone.dev/articles/cheap-recommender-rails/](https://cicerone.dev/articles/cheap-recommender-rails/)
+Canonical URL: [https://cicerone.dev/articles/welcome-to-your-own-recommender/](https://cicerone.dev/articles/welcome-to-your-own-recommender/)
 
-Most small shops that want “recommended for you” do not start by buying a recs platform. They start in-house, on not much data: a bestsellers query, “customers who bought this also bought”, maybe a weekend with [LightFM](https://making.lyst.com/lightfm/docs/home.html). That is the right comparison for [Cicerone](https://cicerone.dev) — a self-hosted **batch** recommender that reads your interactions, writes a top-K table, and otherwise stays out of the request path.
+If you have been meaning to put “recommended for you” on the site, you already have the ingredients. Most shops start in-house, on not much data: a bestsellers query, “customers who bought this also bought”, maybe a weekend with [LightFM](https://making.lyst.com/lightfm/docs/home.html). That is the right comparison for [Cicerone](https://cicerone.dev) — a self-hosted **batch** recommender that reads your interactions, writes a top-K table, and otherwise stays out of the request path.
 
 I wrote it for a catalog that is not Netflix. The engine does not care that the original catalog was drinks. Users, items, events.
 
@@ -320,4 +320,4 @@ No ports. Batch mode does not listen. Disk is a couple of TOML files; CPU is a n
 - You have almost no overlapping buyers. Ship bestsellers, collect events, come back.
 - You already enjoy operating a Python training stack and want SASRec, AutoML, eligibility rules, a dashboard. Those exist — they are not this article. See the [tutorial](https://cicerone.dev/tutorial/) and [how it works](https://cicerone.dev/how-it-works/).
 
-If you do try this and `source` stays popular for everyone who matters, write me off until the catalog is denser. The cheap part is not pretending sparse data is dense. It is not spending a quarter building the glue around a model that, on your data, should mostly agree with `ORDER BY COUNT(*) DESC` anyway.
+If you try this and `source` stays popular for everyone who matters, that is fine: keep bestsellers on the homepage, let events accumulate, and come back. You are not behind. You are just early. The honest win is skipping a quarter of glue around a model that, on today’s data, should mostly agree with `ORDER BY COUNT(*) DESC` — and still having a real table to grow into.
