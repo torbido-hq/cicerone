@@ -166,10 +166,10 @@ and/or `examples/serve/` when request/response fields change.
 ## Release trains
 
 `release/X.Y.0` in this section is a **placeholder** for the in-flight
-minor branch. The concrete mapping is **Current trains** in
-[`.cursor/rules/releases.mdc`](.cursor/rules/releases.mdc) — substitute
-those versions whenever you see `X.Y.0`. Who updates that line and when
-is below.
+minor branch. [`.cursor/rules/releases.mdc`](.cursor/rules/releases.mdc)
+is the **single source of truth** for current train versions (**Current
+trains**). Substitute those versions whenever you see `X.Y.0`. Any change
+to branch ownership must update that file in the same PR.
 
 While a **patch** and a **minor** are in flight together, `main` is the
 patch train and `release/X.Y.0` is the minor train.
@@ -192,82 +192,15 @@ patch train and `release/X.Y.0` is the minor train.
   `release/X.Y.0`).
 - After the patch is tagged: merge `release/X.Y.0` into `main`; then
   `main` is the minor train and new features land there. Stop
-  cherry-picking. Update **Current trains** in
-  `.cursor/rules/releases.mdc` in that same PR (see below).
+  cherry-picking. Update **Current trains** in that same PR.
 
-The PR that changes the split updates **Current trains** in
-`.cursor/rules/releases.mdc` in the same change (not a follow-up):
+**Example (no split):** v0.6.1 is tagged and `release/0.7.0` is merged
+into `main` → **Current trains** is `no split; main is 0.7.0`. Cutting a
+new split (0.7.1 on `main`, `release/0.8.0` for 0.8.0) updates it the
+other way.
 
-- After the patch tag, when merging `release/X.Y.0` into `main`: if you
-  are not cutting a new split, set it to no split (`main` is the minor,
-  using the version just tagged). **Example:** v0.6.1 is tagged and
-  `release/0.7.0` is merged into `main` → **Current trains** is `no
-  split; main is 0.7.0`. Fixes and features both land on `main`;
-  Unreleased is 0.7.0; cherry-picking stops.
-- When cutting a new patch+minor split, the PR that creates
-  `release/X.Y.0` from `main` sets patch on `main` and minor on that
-  branch. **Example:** 0.7.1 stays on `main` and `release/0.8.0` is cut
-  for 0.8.0 features.
-
-Cherry-pick, hotfix, and merge-back commands are in
-[Cherry-picks and merge-backs](#cherry-picks-and-merge-backs).
-
-### Cherry-picks and merge-backs
-
-Checklist (see **Current trains** in `.cursor/rules/releases.mdc` for
-today's `X.Y.0`):
-
-1. **Fix** — PR to `main`, then cherry-pick onto `release/X.Y.0`.
-2. **Feature** — PR to `release/X.Y.0` (not `main`).
-3. **Hotfix (both trains)** — PR to `main` first, cherry-pick immediately.
-4. **Merge-back** — after the patch tag, cherry-pick any remaining patch
-   commits onto `release/X.Y.0`, merge it into `main`, then tag.
-
-Cherry-pick each patch-train fix onto `release/X.Y.0` after it lands on
-`main` (the commit that landed the change on `main`):
-
-```sh
-git checkout release/X.Y.0
-git cherry-pick <sha>
-git push origin release/X.Y.0
-```
-
-If the cherry-pick conflicts, keep the minor-train feature code and
-re-apply the patch fix on that surface. If it still will not apply (the
-minor branch has a different API or config), abort
-(`git cherry-pick --abort`) and open a small PR targeting
-`release/X.Y.0` that ports the same fix. Do not change `main` to match
-minor-only APIs.
-
-**Example.** A dashboard lookup crash and a new serve filter in the same
-week:
-
-1. **Fix:** branch `fix/dashboard-lookup` from `main`, PR into `main`,
-   then `git cherry-pick <sha>` onto `release/X.Y.0`.
-2. **Feature:** branch `feature/serve-filters` from `release/X.Y.0`, PR
-   into `release/X.Y.0` (not `main`).
-
-**Hotfixes that must ship on both trains** always land on `main` first
-(patch). Do not open the fix only against `release/X.Y.0`. After the
-`main` PR merges, cherry-pick immediately (same commands as above) so the
-minor train does not wait for the next routine backport.
-
-When merging `release/X.Y.0` into `main` (after the patch tag, before
-tagging the minor): if `main` has patch commits not yet on
-`release/X.Y.0`, cherry-pick those first, then merge. Do not force-push
-`main`. If a conflict is a missing cherry-pick, abort the merge, port
-the fix, and retry.
-
-If the merge still conflicts, keep patch behavior from `main` and minor
-features from the release branch:
-
-- **Prefer `main`:** both sides edited the dashboard lookup error path.
-  `main` has the patch crash fix; `release/X.Y.0` still has the unfixed
-  copy. Take `main`'s error handling, then restore any minor-only fields
-  around it.
-- **Prefer `release/X.Y.0`:** `main` has no serve-filter helper;
-  `release/X.Y.0` added `feature/serve-filters`. Keep the new helper and
-  call sites from the release branch.
+Cherry-pick, hotfix, merge-back, and conflict procedures:
+[`.cursor/rules/releases.mdc`](.cursor/rules/releases.mdc).
 
 ## Releasing
 
@@ -297,7 +230,7 @@ for `cicerone-recommender` — owner `torbido-hq`, repo `cicerone`, workflow
      `git push origin vX.Y.Z`.
    - **Minor:** merge the completing PR to `release/X.Y.0`. Merge
      `release/X.Y.0` into `main` (see
-     [Cherry-picks and merge-backs](#cherry-picks-and-merge-backs) if
+     [`.cursor/rules/releases.mdc`](.cursor/rules/releases.mdc) if
      `main` diverged). Tag that commit on `main`:
      `git tag -a vX.Y.Z <sha> -m "…"` and `git push origin vX.Y.Z`.
 3. Publish the GitHub release from that tag (notes can mirror the
