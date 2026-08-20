@@ -261,10 +261,11 @@ docker run --rm \
   -e OUTPUT_DATABASE_URL \
   -v "$PWD/cicerone/cicerone.toml:/app/config/cicerone.toml:ro" \
   -v "$PWD/cicerone/features.toml:/app/config/features.toml:ro" \
-  cicerone job --config /app/config/cicerone.toml
+  cicerone \
+  job --config /app/config/cicerone.toml
 ```
 
-The image `ENTRYPOINT` is already `cicerone`, so the command is `job --config …`, not `cicerone job …`.
+The image is tagged `cicerone`; its `ENTRYPOINT` is already the CLI. Every `docker run` in this article is therefore `docker run … cicerone <subcommand> …` — `job`, `users`, `dashboard`. Do not pass a second `cicerone` (`cicerone cicerone job` will fail). Compose `command:` is only the subcommand, because Compose keeps that ENTRYPOINT.
 
 If the process cannot see Postgres, it is almost always the hostname (container DNS vs `localhost`) or the URL scheme (`postgres://` vs `postgresql+psycopg://`).
 
@@ -272,7 +273,7 @@ If the process cannot see Postgres, it is almost always the hostname (container 
 
 The job always writes two things: a **manifest row** (did this run succeed, how much data, which models) and the **recommendations table** (what each user got). Dataset/parquet output overwrites the last manifest; **db output appends**, so you keep a short history. That is one reason to share Postgres.
 
-Stdout of `cicerone job` is the first place to look (`Job finished: {…}` plus any `WARN` about dropped `event_type`s or missing feature columns). Then SQL:
+Stdout of the job container is the first place to look (`Job finished: {…}` plus any `WARN` about dropped `event_type`s or missing feature columns). Then SQL:
 
 ```sql
 SELECT generated_at, status, error,
@@ -342,18 +343,20 @@ lookup_k = 20
 
 `cron_schedule` must match the batch job so the page can tell you the run looks overdue. `[input]` is required by the config loader and unused.
 
-Add a login (prompts for a password; note `-it`), then start it. The image `ENTRYPOINT` is already `cicerone`:
+Add a login (prompts for a password; note `-it`), then start it. Same convention as the job: image name, then the subcommand.
 
 ```sh
 docker run --rm -it \
   -v "$PWD/cicerone:/app/config" \
-  cicerone users --config /app/config/cicerone.dashboard.toml add you
+  cicerone \
+  users --config /app/config/cicerone.dashboard.toml add you
 
 docker run --rm --name cicerone-dashboard -p 127.0.0.1:8090:8090 \
   --network myapp_default \
   -e OUTPUT_DATABASE_URL \
   -v "$PWD/cicerone:/app/config" \
-  cicerone dashboard --config /app/config/cicerone.dashboard.toml
+  cicerone \
+  dashboard --config /app/config/cicerone.dashboard.toml
 ```
 
 Open `http://127.0.0.1:8090/dashboard`, sign in, type a `user_id` (the string form, `'42'`). Bind only to localhost unless this sits behind your own auth.
@@ -471,7 +474,7 @@ cicerone:
 
 No ports on the job. Batch mode does not listen. Disk is a couple of TOML files; CPU is a nightly LightFM fit. For a shop-sized catalog that is a small VM, not a GPU story.
 
-Optional: keep the dashboard up too. The config directory is read-write so `cicerone users` can persist the bcrypt file:
+Optional: keep the dashboard up too. The config directory is read-write so `users add` can persist the bcrypt file:
 
 ```yaml
 cicerone-dashboard:
