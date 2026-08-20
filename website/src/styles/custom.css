@@ -21,6 +21,23 @@
 	max-width: min(16rem, 70vw);
 }
 
+.latest-release {
+	margin: 0 0 1.75rem;
+	color: var(--sl-color-gray-2);
+	font-size: var(--sl-text-sm);
+}
+
+.latest-release time {
+	margin-inline-start: 0.35rem;
+	font-family: var(--sl-font-mono);
+	font-size: var(--sl-text-xs);
+	font-variant-numeric: tabular-nums;
+}
+
+.latest-release a {
+	font-weight: 500;
+}
+
 .dashboard-shot {
 	border: 1px solid var(--sl-color-gray-5);
 	border-radius: 0.25rem;

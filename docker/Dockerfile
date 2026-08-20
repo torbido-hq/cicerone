@@ -21,14 +21,8 @@ COPY requirements.txt ./
 RUN pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt
 
 # --- frontend ----------------------------------------------------------------
-# Compiles the dashboard's Tailwind CSS. This is the only place Node/npm
-# exists anywhere in this project -- it's a Docker build stage, not a host
-# requirement (everything ships/builds via `docker compose build`), and it
-# never makes it into the runtime image below, which only gets the compiled
-# static/tailwind.css. package-lock.json pins the exact dependency tree so
-# this stage is reproducible, matching requirements.txt's exact-pin style.
-# Pin Node minor/patch so 26.x floating tags cannot change the frontend build
-# without an explicit bump in this file.
+# Compiles dashboard Tailwind CSS into the wheel and runtime image.
+# Node exists only in this stage. Pin the tag so 26.x floats cannot drift.
 FROM node:26.7.0-slim AS frontend
 
 WORKDIR /build
@@ -95,9 +89,8 @@ ENTRYPOINT ["cicerone"]
 CMD ["start"]
 
 # --- test ---------------------------------------------------------------
-# Never shipped/deployed: only built and run in CI (see .github/workflows/ci.yml
-# and docker-compose.ci.yml). Adds pytest/coverage/moto on top of the runtime
-# image so tests exercise the exact same dependency versions as production.
+# CI-only. Copies src/ (PYTHONPATH=/app/src) over the installed wheel so tests
+# run the tree under test; runtime wheels/pins stay from the image above.
 FROM runtime AS test
 USER root
 COPY requirements-dev.txt ./
@@ -109,6 +102,8 @@ COPY --from=frontend /build/tailwind.css ./src/cicerone/static/tailwind.css
 COPY tests/ ./tests/
 # Checked-in serve OpenAPI schema — asserted against create_app().openapi() in tests.
 COPY docs/openapi/ ./docs/openapi/
+# curl examples — asserted by tests/test_curl_examples.py
+COPY examples/serve/ ./examples/serve/
 # Canonical Postgres defaults — parsed by tests/support/postgres_defaults.py at runtime.
 COPY docker/postgres/defaults.env ./docker/postgres/defaults.env
 ENV PYTHONPATH=/app/src

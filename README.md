@@ -16,14 +16,20 @@ guides synced from [`docs/`](docs/). Articles are static Markdown in
 
 A generic, self-hosted batch recommender system. It reads your interaction
 data, trains a hybrid [rectools](https://github.com/MobileTeleSystems/RecTools)
-+ LightFM model, and writes out top-K recommendations per user. An optional
-lightweight "serve" mode can then expose those precomputed recommendations
-over a small read-only HTTP API — there's still no live inference, no
-model loaded in the request path. Optionally (`[job].save_model_artifact`),
-the batch job can also write a versioned fitted-model artifact for offline
-reload / future thin inference without redesigning training. The supported
-deploy path is Docker (Python 3.11 lives inside the image). A PyPI package
-is also published for Python 3.11 hosts — see Installation.
++ LightFM model (optional item-KNN, SASRec/BERT4Rec, popular/latest), and
+writes out top-K recommendations per user. An optional lightweight "serve"
+mode can then expose those precomputed recommendations over a small
+read-only HTTP API — there's still no live inference, no model loaded in the
+request path. Optional `[events]` ingest can refresh popular/latest rows
+between full retrains; that is still write-through, not request-path
+ranking ([docs/incremental-events.md](docs/incremental-events.md)). How the
+strategies differ, with paper links:
+[docs/how-it-works.md](docs/how-it-works.md). Optionally
+(`[job].save_model_artifact`), the batch job can also write a versioned
+fitted-model artifact for offline reload / future thin inference without
+redesigning training. The supported deploy path is Docker (Python 3.11 lives
+inside the image). A PyPI package is also published for Python 3.11 hosts —
+see Installation.
 
 Cicerone isn't tied to any particular product, shop, or domain — it works
 for any catalog of "users" and "items" with interaction events (purchases,
@@ -34,13 +40,17 @@ up to your own data doesn't require touching any code.
 ## Features
 
 - **Batch recommender** — cron-scheduled train + top-K write (dataset or DB I/O)
-- **Hybrid strategies** — collaborative (LightFM), item-based KNN, optional content cold-item fallback, popular, latest
-- **Priority or RRF fusion** — combine strategies by order or weighted ranks
+- **Hybrid strategies** — collaborative (LightFM), item-based KNN, optional SASRec/BERT4Rec, optional content cold-item fallback, popular, latest
+- **Priority, RRF, or blending** — combine strategies by order, weighted ranks, or per-user mix
 - **AutoML** — time-fold backtest to pick models/weights per run
 - **Business policies** — TOML eligibility filters and score boosts
 - **Serve mode** — read-only HTTP API over precomputed recommendations
   (`limit` / `category` / `exclude_unavailable`, cold-start fallback;
   OpenAPI at `/docs` + thin `ServeClient`)
+- **Incremental events** — write-through of popular/latest between retrains
+  ([docs/incremental-events.md](docs/incremental-events.md))
+- **CLI / PyPI** — `cicerone` console script; `pip install cicerone-recommender`
+  (import name `cicerone`; the PyPI name `cicerone` is a different project)
 - **Retrain trigger** — webhook (+ optional input poll) alongside cron
 - **Dashboard** — Basic-Auth status page for run success/failure, history, and user-id lookup
 - **Model artifacts** — optional versioned fitted-model bundle for offline reload
@@ -59,12 +69,12 @@ up to your own data doesn't require touching any code.
 input source (S3-compatible/local dataset, or a database)
                                         |
                                         v
-                              cicerone (container "recommender")
+                              cicerone (batch job)
                                  1. reads events/users/items
                                  2. weighs interactions (see below,
                                     config/features.toml)
                                  3. trains the configured model strategies
-                                    (collaborative/item-based/popular/latest)
+                                    (collaborative/item-based/sequential/popular/latest)
                                  4. combines them into top-K recs per user
                                         |
                                         v
@@ -87,6 +97,8 @@ lightfm/rectools/implicit/torch, never trains or imports):
 | --- | --- | --- |
 | `GET` | `/health` | Liveness probe (no auth) |
 | `GET` | `/recommendations/{user_id}` | Precomputed top-K for that user |
+| `GET` | `/metrics` | Prometheus text format (no bearer token; optional `X-Metrics-Token`) |
+| `POST` | `/events` | Incremental ingest when `[events]` `kind = "webhook"` |
 | `GET` | `/docs` / `/redoc` | Interactive OpenAPI docs (Swagger / ReDoc) |
 | `GET` | `/openapi.json` | Machine-readable OpenAPI schema |
 
@@ -143,7 +155,9 @@ While serve is running, FastAPI exposes interactive docs at `/docs` and
 `/redoc`, and the machine-readable schema at `/openapi.json`. A checked-in
 copy (for codegen / offline review without a live process) lives at
 [`docs/openapi/serve.openapi.json`](docs/openapi/serve.openapi.json); refresh
-it with:
+it with `cicerone export-openapi -o docs/openapi/serve.openapi.json`.
+The test image does not install the wheel, so that path still needs
+`PYTHONPATH=/app/src`:
 
 ```sh
 docker run --rm -v "$PWD":/app -w /app -e PYTHONPATH=/app/src cicerone-test \
@@ -152,8 +166,8 @@ docker run --rm -v "$PWD":/app -w /app -e PYTHONPATH=/app/src cicerone-test \
 
 Thin clients (no generated SDK package — copy or import as needed). ReDoc
 (`http://localhost:8000/redoc`) and the checked-in OpenAPI schema also include
-`x-codeSamples` (Ruby, Python, JavaScript, Shell) on `/health` and
-`/recommendations/{user_id}`:
+`x-codeSamples` (Ruby, Python, JavaScript, Shell) on `/health`,
+`/recommendations/{user_id}`, and `POST /events` (when webhook events are enabled):
 
 | Path | Notes |
 | --- | --- |
@@ -193,22 +207,29 @@ process:
   For multiple scheduler replicas, set `[job.trigger].lock_backend` to
   `"postgres"` or `"redis"` — use `postgres` if your output is already `db`
   (or set `postgres_url`); use `redis` only if you're on dataset/S3 output
-  and need HA (`pip install -r requirements-redis.txt`). Optional `lock_key`
+  and need HA (`pip install 'cicerone-recommender[redis]'` or
+  `pip install -r requirements-redis.txt`). Optional `lock_key`
   (and Redis-only `lock_ttl_seconds`) that namespace the lock when several
   schedulers share one Postgres/Redis; Redis refreshes TTL while the lock is
   held so long jobs stay exclusive. This is a lock, not a job queue.
-  Serve replicas scale on the **read** path. Incremental `[events]` writes are
-  single-writer by default; set `events.ha = true` with the same
-  `lock_backend` for leader-only apply (see `docs/incremental-events.md`).
+  Serve replicas scale on the **read** path. Incremental `[events]` apply is
+  single-writer by default; HA is in
+  [docs/incremental-events.md](docs/incremental-events.md).
 - The run manifest records `triggered_by` (`"cron"`, `"webhook"`, or
   `"s3-poll"`) and `lock_backend` alongside its existing counts/timestamp
   fields.
 
+### Incremental events
+
+Optional `[events]` on the serve process write-through popular/latest rows
+between full retrains (not request-path ranking). Guide:
+[docs/incremental-events.md](docs/incremental-events.md).
+
 ## Dashboard
 
 A lightweight, standalone web dashboard for checking whether the last job
-run succeeded and inspecting a user's current top-K — it's always available
-as its own container/port (`8090`), regardless of `[job].mode` (batch or
+run succeeded and inspecting a user's current top-K — `cicerone dashboard`
+(compose maps port `8090`), regardless of `[job].mode` (batch or
 serve). Like serve mode, it never loads lightfm/rectools/implicit.
 
 ![Cicerone dashboard with a user recommendation lookup, latest job status, and history including a failed run](docs/images/dashboard.png)
@@ -216,10 +237,13 @@ serve). Like serve mode, it never loads lightfm/rectools/implicit.
 - `GET /dashboard` shows the latest run's status (success/failed), counts,
   effective models, and (for a `db` output only — a `dataset` output's
   `manifest.json` is overwritten every run, so it only ever has the latest)
-  a short run history. Enter a `user_id` to inspect that user's current
+  a short run history. `GET /dashboard?user_id=` fills the inspector on
+  load. Enter a `user_id` to inspect that user's current
   precomputed top-K from the same output store (cold-start fallback when
   they have no personal rows). The inspector shows
-  `min(job.top_k, dashboard.lookup_k)` rows (default 20). The status block
+  `min(job.top_k, dashboard.lookup_k)` rows (default 20). When `[events]` is
+  enabled, a panel shows the latest incremental flush from recent manifests
+  (dataset outputs may clear it on the next full retrain). The status block
   auto-refreshes via
   [htmx](https://htmx.org) polling, so no page reload is needed.
 - Protected by HTTP Basic Auth rather than a bearer token, since it's meant
@@ -242,8 +266,8 @@ serve). Like serve mode, it never loads lightfm/rectools/implicit.
   alongside the batch `recommender` service.
 - The frontend (htmx + [Stimulus](https://stimulus.hotwired.dev) + Tailwind
   CSS) is fully vendored — no CDN calls at runtime, and no Node/npm needed
-  to run the container (Node only exists in a Docker build stage that
-  compiles Tailwind ahead of time).
+  to run the image or the PyPI wheel (Node only exists in a Docker build
+  stage that compiles Tailwind ahead of time).
 
 ## Configuration (`config/cicerone.toml`)
 
@@ -285,7 +309,7 @@ variant, commented out).
 | item_id     | str       | any stable item/product identifier                                |
 | event_type  | str       | see `config/features.toml` → `event_weights`                       |
 | quantity    | int       | optional, used for the types listed in `quantity_scaled_events`   |
-| occurred_at | datetime  | UTC                                                                |
+| occurred_at | datetime  | timezone-aware; webhook JSON needs `Z` / offset or Unix epoch seconds (UTC). Batch parquet may be UTC-naive and is treated as UTC. |
 
 `event_type` is entirely up to you — map your own events to whatever names
 you list in `config/features.toml` → `event_weights`. A typical e-commerce
@@ -363,6 +387,7 @@ if omitted:
 - `sequential`: RecTools `SASRecModel` (default) or `BERT4RecModel` —
   transformer next-item model. Personalized, interacting users only. Opt-in
   (`job.models`); not in the default chain. Requires
+  `pip install 'cicerone-recommender[sequential]'` or
   `pip install -r requirements-sequential.txt`. Hyperparameters via
   `[model.sequential]` (`architecture = "sasrec"` | `"bert4rec"`, plus RecTools
   keys such as `n_factors`, `epochs`, `loss`, `session_max_len`,
@@ -384,7 +409,9 @@ if omitted:
   `popular`. Optional `[model.latest]` (`period = { days = 14 }`).
 
 Strategy construction and hyperparameters live in `cicerone.model_config`
-+ `cicerone.model` (`strategies` / `fit` / `recommend` / `combine`); see
++ `cicerone.model` (`strategies` / `fit` / `recommend` / `combine`). What
+each algorithm is and how they differ (with paper links):
+[docs/how-it-works.md](docs/how-it-works.md). Package map:
 [docs/architecture.md](docs/architecture.md).
 
 By default, strategies are combined in priority order: earlier strategies
@@ -539,7 +566,9 @@ pip install 'cicerone-recommender[redis]'        # lock backend / Redis Streams
 pip install 'cicerone-recommender[sequential]'   # SASRec / BERT4Rec
 ```
 
-Then, with your own TOML (the same files Docker mounts under `/app/config`):
+Then, with your own TOML. Example files default to image paths
+(`/app/config/features.toml`, `/app/config/dashboard_users.toml`); on a pip
+host set those to files next to `--config`:
 
 ```sh
 cicerone start --config ./config/cicerone.toml           # job + scheduler, or serve
@@ -597,6 +626,10 @@ layout (`tests/test_model_*.py`, `tests/test_config_*.py`). See
 [CONTRIBUTING.md](CONTRIBUTING.md) for how to run tests/lint locally,
 the [project site](https://cicerone.dev) (`website/`, Starlight; syncs `docs/*.md`) for
 screenshots and documentation,
+[docs/how-it-works.md](docs/how-it-works.md) for the pipeline and
+algorithms,
+[docs/incremental-events.md](docs/incremental-events.md) for ingest between
+retrains,
 [docs/tutorial.md](docs/tutorial.md) for a hands-on walkthrough with local
 sample data, and [docs/architecture.md](docs/architecture.md) for how the
 code is structured. See [CHANGELOG.md](CHANGELOG.md) for release notes.

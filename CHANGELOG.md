@@ -6,8 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-20
+
 ### Added
 
+- Docs site homepage: latest dated CHANGELOG release and a GitHub **what changed**
+  link to that section.
 - Dashboard user lookup: inspect a `user_id`'s current precomputed top-K
   (rank, item, score, source, optional category) from the job output store,
   with cold-start fallback, on the Basic-Auth status page.
@@ -15,10 +19,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - PyPI distribution `cicerone-recommender` (`import cicerone`; the name
   `cicerone` is taken). Wheel includes compiled dashboard CSS. A GitHub
   Release publishes via trusted publishing (`.github/workflows/publish.yml`).
-- `cicerone` CLI (`start`/`job`/`serve`/`dashboard`/`scheduler`/`users`) with
-  `--config` for a TOML path, plus `--log-level` / `--log-format` (or
-  `CICERONE_LOG_LEVEL` / `CICERONE_LOG_FORMAT`). Runtime image pip-installs
-  the wheel; entrypoint is `cicerone start`.
+- `cicerone` CLI (`start`/`job`/`serve`/`dashboard`/`scheduler`/`users` /
+  `export-openapi`) with `--config` for a TOML path, plus `--log-level` /
+  `--log-format` (or `CICERONE_LOG_LEVEL` / `CICERONE_LOG_FORMAT`). Runtime
+  image pip-installs the wheel; entrypoint is `cicerone start`.
 
 - Optional project-site articles at `/articles/` (static Markdown under
   `website/src/content/docs/articles/`). No nav, RSS, or index until a
@@ -29,10 +33,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Optional **sequential** strategy (`SASRecModel` / `BERT4RecModel`) via
   `[model.sequential]` (`architecture = "sasrec"` or `"bert4rec"`). Requires
-  `pip install -r requirements-sequential.txt` (`rectools[torch]`); serve
-  mode never imports torch. AutoML drops it from the candidate pool when
-  the extra is missing or median distinct items/user is below
-  `[job.sequential].min_median_interactions` (default 5), and logs the skip.
+  `cicerone-recommender[sequential]` / `requirements-sequential.txt`
+  (`rectools[torch]`); serve mode never imports torch. AutoML drops it from
+  the candidate pool when the extra is missing or median distinct items/user
+  is below `[job.sequential].min_median_interactions` (default 5), and logs
+  the skip.
 
 - Incremental events horizontal HA: leader-only apply lease
   (`{lock_key}:events:apply`) when `events.ha = true` with
@@ -44,7 +49,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Redis Streams EventSource (`events.kind = "redis_streams"`): consumer-group
   poll via `XREADGROUP` / `XACK`, idle PEL recovery with `XAUTOCLAIM`, and
   stream entry id fallback when `event_id` is omitted. Requires
-  `requirements-redis.txt` (same optional `redis` pin as the lock backend).
+  `cicerone-recommender[redis]` / `requirements-redis.txt` (same optional
+  `redis` pin as the lock backend).
 - User-scoped incremental write-through: load/replace only affected users
   (plus `__cold_start__`) via `OutputSink.replace_recommendations_for_users`
   (returns post-write distinct user count) instead of full-frame overwrite.
@@ -57,7 +63,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   incremental-events panel on the Basic-Auth dashboard (from manifests).
 - Incremental events between full retrains: internal `EventSource` surface,
   webhook `POST /events`, micro-batch buffer/worker, and write-through
-  updater for popular/latest slices (`[events]` config). Design:
+  updater for popular/latest slices (`[events]` config). Operator guide:
   `docs/incremental-events.md`. Webhook `occurred_at` requires an explicit
   timezone (`Z` / offset) or Unix epoch seconds (UTC).
 - DB event source (`events.kind = "db"`): watermark poll over
@@ -70,6 +76,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Docs: `docs/how-it-works.md` (pipeline, strategies, papers); incremental
+  events operator guide; tutorial webhook step; site sidebar/homepage
+  cards; OpenAPI `x-codeSamples` for `POST /events`; PyPI extras
+  (`cicerone-recommender[sequential]` / `[redis]`) next to `requirements-*.txt`;
+  example TOML / OpenAPI regenerate command for pip hosts; missing-package
+  errors name the PyPI extras; operator ingest recap lives in
+  `docs/incremental-events.md` (other pages link it).
 - Parse article `draft` from YAML frontmatter; article layout CSS keys off
   `data-cicerone-articles` rather than starlight-blog class names.
 - Share the articles URL prefix between the Starlight plugin and layout
@@ -99,6 +112,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- OpenAPI `POST /events` curl sample JSON-encodes `USER_ID` with `python3`
+  (falls back to `python`, then `jq`) and errors if none is on PATH.
+  `examples/serve/curl_examples.sh` sources the same
+  `src/cicerone/serve/python_detect.sh` snippet the OpenAPI samples embed.
+- Docker test image includes `examples/serve/` so CI can read `curl_examples.sh`.
+- Tutorial webhook step starts serve with `cicerone --config … serve` (same as
+  the HTTP API step).
 - `cicerone users` with a config path requires enabled `dashboard.users_path`
   (or an explicit `--users-path`); the error names the loaded config and the
   dashboard settings that were resolved.

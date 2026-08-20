@@ -56,15 +56,7 @@ def _is_preserved_source(source: str) -> bool:
 
 
 class IncrementalUpdater:
-    """Merge micro-batch events into existing top-K rows and write via OutputSink.
-
-    Does not import LightFM / RecTools. Personalized / blended rows are preserved
-    (with reserved slots for incremental boosts); popular/latest slices refresh
-    from the flushed batch. Full collaborative refits wait for ``job.run()``.
-
-    Reads and writes only affected users (plus ``__cold_start__``), not the
-    full recommendations table/file. Per-user frames are cached with LRU eviction.
-    """
+    """Write-through popular/latest slices for affected users; preserves personalized rows."""
 
     def __init__(
         self,

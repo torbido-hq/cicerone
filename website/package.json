@@ -11,7 +11,7 @@
     "build": "npm run sync-docs && astro build",
     "preview": "astro preview",
     "astro": "astro",
-    "test": "node --test src/lib/articles.test.mjs"
+    "test": "node --test src/lib/*.test.mjs"
   },
   "dependencies": {
     "@astrojs/starlight": "^0.41.7",

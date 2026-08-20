@@ -33,7 +33,7 @@ from cicerone.model_config import (
 
 requires_sequential_extra = pytest.mark.skipif(
     not sequential_extra_available(),
-    reason="requires requirements-sequential.txt (rectools[torch])",
+    reason="requires cicerone-recommender[sequential] (rectools[torch])",
 )
 
 

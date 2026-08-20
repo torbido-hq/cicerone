@@ -35,7 +35,8 @@ setting the hostname only — pytest builds `TEST_DATABASE_URL` from
 docker compose --env-file docker/postgres/defaults.env --profile db up -d postgres
 export POSTGRES_TEST_HOST=localhost
 export ALLOW_SCHEMA_RESET_FOR_TESTS=1
-# then run pytest inside the test image / your venv with PYTHONPATH=src
+# then run pytest inside the test image / your venv
+# (`pip install -e '.[redis]'` from a checkout, or PYTHONPATH=src)
 #
 # Need the literal URL string? Same source of truth:
 #   ./docker/postgres/test-database-url.sh localhost
@@ -169,7 +170,8 @@ needs that approval and is pure process drag.
 
 The PyPI project is **`cicerone-recommender`** (`pip install
 cicerone-recommender`; `import cicerone`). The name `cicerone` is a
-different package.
+different package. Optional extras `[redis]` and `[sequential]` match
+`requirements-redis.txt` / `requirements-sequential.txt`.
 
 One-time PyPI setup (before the first upload): create a GitHub Environment
 named `pypi`, then a [pending trusted publisher](https://docs.pypi.org/trusted-publishers/)

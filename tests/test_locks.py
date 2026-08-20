@@ -164,7 +164,7 @@ def test_redis_lock_missing_package(monkeypatch):
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
-    with pytest.raises(ConfigError, match="requirements-redis"):
+    with pytest.raises(ConfigError, match=r"cicerone-recommender\[redis\]"):
         RedisLock("redis://localhost:6379/0")
 
 

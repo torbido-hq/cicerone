@@ -213,7 +213,7 @@ class RedisLock:
         except ImportError as exc:
             raise ConfigError(
                 'lock_backend = "redis" requires the redis package; '
-                "install with: pip install -r requirements-redis.txt"
+                "install with: pip install 'cicerone-recommender[redis]'"
             ) from exc
         self._client = redis.Redis.from_url(redis_url)
         self._key = key

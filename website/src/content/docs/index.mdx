@@ -1,6 +1,6 @@
 ---
 title: Home
-description: Self-hosted batch recommender — hybrid models, policies, serve API, and dashboard. No live inference in the request path.
+description: Self-hosted batch recommender — hybrid models, policies, incremental events, serve API, and dashboard. No live inference in the request path.
 template: splash
 hero:
   title: Cicerone
@@ -10,11 +10,11 @@ hero:
     dark: ../../assets/cicerone-logo-dark.svg
     alt: Cicerone
   actions:
+    - text: How it works
+      link: /how-it-works/
+      icon: right-arrow
     - text: Tutorial
       link: /tutorial/
-      icon: right-arrow
-    - text: Architecture
-      link: /architecture/
       variant: minimal
     - text: GitHub
       link: https://github.com/torbido-hq/cicerone
@@ -23,14 +23,19 @@ hero:
 ---
 
 import { LinkCard, CardGrid } from '@astrojs/starlight/components';
+import LatestRelease from '../../components/LatestRelease.astro';
+
+<LatestRelease />
 
 ## Features
 
 - **Batch job** — cron-scheduled train and top-K write (dataset or DB I/O)
-- **Hybrid strategies** — collaborative (LightFM), item KNN, content cold-item fallback, popular, latest; priority or RRF fusion
+- **Hybrid strategies** — LightFM, item KNN, optional SASRec/BERT4Rec, content cold-item fallback, popular, latest; priority, RRF, or per-user blending
 - **Serve mode** — read-only HTTP API over precomputed recommendations; OpenAPI at `/docs`
+- **Incremental events** — write-through of popular/latest between retrains
 - **Policies & AutoML** — eligibility filters, score boosts, time-fold backtests
-- **Ops** — retrain webhook, optional input poll, Prometheus metrics, Basic-Auth dashboard
+- **Ops** — retrain webhook, optional input poll, Prometheus metrics, Basic-Auth dashboard with user-id lookup
+- **Install** — Docker image, or `pip install cicerone-recommender` (`cicerone` CLI)
 
 ## Flow
 
@@ -59,9 +64,12 @@ Standalone status page for the latest job run (and history with a DB output), pl
 Markdown under [`docs/`](https://github.com/torbido-hq/cicerone/tree/main/docs) in the repository is the source of truth; this site rebuilds it on deploy.
 
 <CardGrid>
+  <LinkCard title="How it works" href="/how-it-works/" description="Pipeline, algorithms, and how strategies differ." />
   <LinkCard title="Tutorial" href="/tutorial/" description="From sample data to serve API and dashboard." />
   <LinkCard title="Architecture" href="/architecture/" description="How packages under src/cicerone/ fit together." />
+  <LinkCard title="Incremental events" href="/incremental-events/" description="Webhook, DB, S3, and Redis Streams between retrains." />
   <LinkCard title="Serve OpenAPI" href="/openapi/" description="Swagger UI for the read-only HTTP API." />
-  <LinkCard title="Changelog" href="https://github.com/torbido-hq/cicerone/blob/main/CHANGELOG.md" description="Release notes on GitHub." />
+  <LinkCard title="Changelog" href="https://github.com/torbido-hq/cicerone/blob/main/CHANGELOG.md" description="What changed, on GitHub." />
+  <LinkCard title="PyPI" href="https://pypi.org/project/cicerone-recommender/" description="pip install cicerone-recommender (import cicerone; extras [redis] / [sequential])." />
   <LinkCard title="License" href="https://github.com/torbido-hq/cicerone/blob/main/LICENSE" description="Beerware." />
 </CardGrid>

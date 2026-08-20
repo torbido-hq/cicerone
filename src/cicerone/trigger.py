@@ -1,8 +1,4 @@
-"""Event-driven retrain trigger (webhook + optional input-bucket poller).
-
-Runs alongside cron in cicerone.scheduler. Both paths call job.run() through
-a RunGuard that debounces concurrent / rapid-fire triggers.
-"""
+"""Retrain webhook + optional input poll; shares RunGuard with cron."""
 
 from __future__ import annotations
 

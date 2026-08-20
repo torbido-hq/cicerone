@@ -6,3 +6,4 @@ include requirements-redis.txt
 include requirements-sequential.txt
 graft src/cicerone/static
 graft src/cicerone/templates
+include src/cicerone/serve/python_detect.sh

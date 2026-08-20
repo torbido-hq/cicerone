@@ -1,11 +1,7 @@
-"""AutoML harness: backtests candidate strategy/weight configurations over
-time-based folds and picks the best one by a ranking metric.
+"""Time-fold backtest of strategy/weight candidates; picks the best ranking metric.
 
-Uses a custom time-based event split rather than
-rectools.model_selection's splitters, since candidates here combine
-multiple STRATEGIES via cicerone.model.train_and_recommend (which needs raw
-events/users/items to rebuild a BuiltDataset per fold), not a single
-rectools model.
+Custom event split (not rectools splitters) so each fold rebuilds BuiltDataset
+and runs train_and_recommend.
 """
 
 from __future__ import annotations

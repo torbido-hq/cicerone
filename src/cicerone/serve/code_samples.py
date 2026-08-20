@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 HEALTH_PATH = "/health"
 RECOMMENDATIONS_PATH = "/recommendations/{user_id}"
 RECOMMENDATIONS_PATH_PREFIX = RECOMMENDATIONS_PATH.rsplit("/", 1)[0] + "/"
+EVENTS_PATH = "/events"
 
 DEFAULT_SERVE_URL = "http://localhost:8000"
 DEFAULT_USER_ID = "alice"
@@ -14,6 +16,9 @@ DEFAULT_LIMIT = 5
 ENV_SERVE_URL = "CICERONE_SERVE_URL"
 ENV_SERVE_TOKEN = "CICERONE_SERVE_TOKEN"
 ENV_USER_ID = "CICERONE_USER_ID"
+
+PYTHON_DETECT_PATH = Path(__file__).with_name("python_detect.sh")
+PYTHON_DETECT = PYTHON_DETECT_PATH.read_text(encoding="utf-8")
 
 _HEALTH_RUBY = f"""\
 require "json"
@@ -143,13 +148,139 @@ BASE_URL="${{{ENV_SERVE_URL}:-{DEFAULT_SERVE_URL}}}"
 BASE_URL="${{BASE_URL%/}}"
 TOKEN="${{{ENV_SERVE_TOKEN}:?set {ENV_SERVE_TOKEN}}}"
 USER_ID="${{{ENV_USER_ID}:-{DEFAULT_USER_ID}}}"
+{PYTHON_DETECT}if [ -z "$PYTHON" ]; then
+  echo "python3 or python required to URL-encode USER_ID" >&2
+  exit 1
+fi
 USER_ID_ENC="$(
-  USER_ID="$USER_ID" python3 -c \\
+  USER_ID="$USER_ID" "$PYTHON" -c \\
     'import os, urllib.parse; print(urllib.parse.quote(os.environ["USER_ID"], safe=""))'
 )"
 curl -fsS \\
   -H "Authorization: Bearer $TOKEN" \\
   "$BASE_URL{RECOMMENDATIONS_PATH_PREFIX}${{USER_ID_ENC}}?limit={DEFAULT_LIMIT}" || exit 1
+"""
+
+_EVENTS_RUBY = f"""\
+require "json"
+require "net/http"
+require "uri"
+
+base = ENV.fetch("{ENV_SERVE_URL}", "{DEFAULT_SERVE_URL}").sub(%r{{/\\z}}, "")
+token = ENV.fetch("{ENV_SERVE_TOKEN}")
+uri = URI("#{{base}}{EVENTS_PATH}")
+body = {{
+  "user_id" => ENV.fetch("{ENV_USER_ID}", "{DEFAULT_USER_ID}"),
+  "item_id" => "ipa-001",
+  "event_type" => "purchase",
+  "quantity" => 1,
+  "occurred_at" => "2026-08-19T12:00:00Z",
+}}.to_json
+req = Net::HTTP::Post.new(uri)
+req["Authorization"] = "Bearer #{{token}}"
+req["Content-Type"] = "application/json"
+req["Accept"] = "application/json"
+req.body = body
+res = Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == "https") do |http|
+  http.request(req)
+end
+abort("HTTP #{{res.code}}: #{{res.body}}") unless res.is_a?(Net::HTTPSuccess)
+puts JSON.parse(res.body)
+"""
+
+_EVENTS_PYTHON = f"""\
+import json
+import os
+from urllib.request import Request, urlopen
+
+base = os.environ.get("{ENV_SERVE_URL}", "{DEFAULT_SERVE_URL}").rstrip("/")
+token = os.environ["{ENV_SERVE_TOKEN}"]
+payload = {{
+    "user_id": os.environ.get("{ENV_USER_ID}", "{DEFAULT_USER_ID}"),
+    "item_id": "ipa-001",
+    "event_type": "purchase",
+    "quantity": 1,
+    "occurred_at": "2026-08-19T12:00:00Z",
+}}
+request = Request(
+    f"{{base}}{EVENTS_PATH}",
+    data=json.dumps(payload).encode(),
+    headers={{
+        "Authorization": f"Bearer {{token}}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }},
+    method="POST",
+)
+print(json.load(urlopen(request)))
+"""
+
+_EVENTS_JAVASCRIPT = f"""\
+const baseUrl = (process.env.{ENV_SERVE_URL} || "{DEFAULT_SERVE_URL}").replace(/\\/$/, "");
+const token = process.env.{ENV_SERVE_TOKEN};
+if (!token) {{
+  console.error("Set {ENV_SERVE_TOKEN} to a bearer token");
+  process.exit(1);
+}}
+const userId = process.env.{ENV_USER_ID} || "{DEFAULT_USER_ID}";
+
+async function main() {{
+  const response = await fetch(`${{baseUrl}}{EVENTS_PATH}`, {{
+    method: "POST",
+    headers: {{
+      Accept: "application/json",
+      Authorization: `Bearer ${{token}}`,
+      "Content-Type": "application/json",
+    }},
+    body: JSON.stringify({{
+      user_id: userId,
+      item_id: "ipa-001",
+      event_type: "purchase",
+      quantity: 1,
+      occurred_at: "2026-08-19T12:00:00Z",
+    }}),
+  }});
+  if (!response.ok) throw new Error(`${{response.status}} ${{await response.text()}}`);
+  console.log(await response.json());
+}}
+
+main().catch((err) => {{
+  console.error(err);
+  process.exitCode = 1;
+}});
+"""
+
+_EVENTS_SHELL = f"""\
+BASE_URL="${{{ENV_SERVE_URL}:-{DEFAULT_SERVE_URL}}}"
+BASE_URL="${{BASE_URL%/}}"
+TOKEN="${{{ENV_SERVE_TOKEN}:?set {ENV_SERVE_TOKEN}}}"
+USER_ID="${{{ENV_USER_ID}:-{DEFAULT_USER_ID}}}"
+{PYTHON_DETECT}if [ -n "$PYTHON" ]; then
+  BODY="$(
+    USER_ID="$USER_ID" "$PYTHON" -c \\
+      'import json, os
+print(json.dumps({{
+    "user_id": os.environ["USER_ID"],
+    "item_id": "ipa-001",
+    "event_type": "purchase",
+    "quantity": 1,
+    "occurred_at": "2026-08-19T12:00:00Z",
+}}))'
+  )"
+elif command -v jq >/dev/null 2>&1; then
+  BODY="$(
+    jq -n --arg user_id "$USER_ID" \\
+      '{{user_id:$user_id,item_id:"ipa-001",event_type:"purchase",quantity:1,occurred_at:"2026-08-19T12:00:00Z"}}'
+  )"
+else
+  echo "python3, python, or jq required to JSON-encode USER_ID" >&2
+  exit 1
+fi
+curl -fsS -X POST \\
+  -H "Authorization: Bearer $TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d "$BODY" \\
+  "$BASE_URL{EVENTS_PATH}" || exit 1
 """
 
 HEALTH_CODE_SAMPLES: list[dict[str, str]] = [
@@ -166,6 +297,13 @@ RECOMMENDATIONS_CODE_SAMPLES: list[dict[str, str]] = [
     {"lang": "Shell", "label": "curl", "source": _RECOMMENDATIONS_SHELL},
 ]
 
+EVENTS_CODE_SAMPLES: list[dict[str, str]] = [
+    {"lang": "Ruby", "label": "Net::HTTP", "source": _EVENTS_RUBY},
+    {"lang": "Python", "label": "urllib", "source": _EVENTS_PYTHON},
+    {"lang": "JavaScript", "label": "fetch", "source": _EVENTS_JAVASCRIPT},
+    {"lang": "Shell", "label": "curl", "source": _EVENTS_SHELL},
+]
+
 
 def _extend_code_samples(operation: dict[str, Any], samples: list[dict[str, str]]) -> None:
     existing = operation.get("x-codeSamples")
@@ -175,11 +313,7 @@ def _extend_code_samples(operation: dict[str, Any], samples: list[dict[str, str]
 
 
 def attach_code_samples(schema: dict[str, Any]) -> None:
-    """Attach ReDoc ``x-codeSamples`` to serve operations (mutates ``schema``).
-
-    Appends to any samples already present on the operation so route-level
-    ``openapi_extra`` additions are preserved.
-    """
+    """Attach ReDoc ``x-codeSamples`` to serve operations (mutates ``schema``)."""
     paths = schema.get("paths")
     if not isinstance(paths, dict):
         return
@@ -189,3 +323,6 @@ def attach_code_samples(schema: dict[str, Any]) -> None:
     recommendations = paths.get(RECOMMENDATIONS_PATH, {}).get("get")
     if isinstance(recommendations, dict):
         _extend_code_samples(recommendations, RECOMMENDATIONS_CODE_SAMPLES)
+    events = paths.get(EVENTS_PATH, {}).get("post")
+    if isinstance(events, dict):
+        _extend_code_samples(events, EVENTS_CODE_SAMPLES)

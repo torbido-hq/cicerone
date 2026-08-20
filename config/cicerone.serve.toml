@@ -1,8 +1,7 @@
-# Example "serve mode" configuration -- a second cicerone process/container
-# that only exposes the read API (cicerone.serve) over the recommendations
-# the batch job (using config/cicerone.toml) already wrote out. Deploy it
-# as a separate container from the same image, pointed at this file via
-# `--config` / CICERONE_CONFIG_PATH (see the "serve" service in docker-compose.yml).
+# Example "serve mode" configuration -- a second process (`cicerone serve`
+# or the compose "serve" service) that only exposes the read API over the
+# recommendations the batch job (using config/cicerone.toml) already wrote.
+# Point it at this file via `--config` / CICERONE_CONFIG_PATH.
 #
 # [output] here MUST point at the exact same store the batch job writes to
 # -- everything else in this file is independent of the batch config.
@@ -36,7 +35,7 @@ metrics_token = ""   # empty = open endpoint; bind to a trusted network or rever
 
 # Optional incremental event ingest. See docs/incremental-events.md.
 # Webhook: POST /events. DB: watermark poll. S3/R2: list/marker (or AWS SQS).
-# Redis Streams: kind = "redis_streams" (requires requirements-redis.txt).
+# Redis Streams: kind = "redis_streams" (`cicerone-recommender[redis]`).
 # [events]
 # enabled = true
 # kind = "webhook"

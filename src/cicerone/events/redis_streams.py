@@ -88,7 +88,7 @@ class RedisStreamsEventSource(EventSource):
         except ImportError as exc:
             raise ConfigError(
                 'events.kind = "redis_streams" requires the redis package; '
-                "install with: pip install -r requirements-redis.txt"
+                "install with: pip install 'cicerone-recommender[redis]'"
             ) from exc
 
         client = redis.Redis.from_url(self._redis_url, decode_responses=True)

@@ -1,10 +1,6 @@
 version: "3.9"
 
-# Cicerone — a generic, low-volume batch recommender (rectools + LightFM).
-# Everything about how it's wired up (input/output backend, tuning,
-# scheduling) lives in config/cicerone.toml — see README.md. This file only
-# supplies the secrets that cicerone.toml references via ${...} placeholders
-# (set them in .env, see .env.example).
+# Local Compose. Config: config/cicerone.toml. Secrets: .env (.env.example).
 #
 # Services (same app image for the three app containers):
 #   postgres    — optional local Postgres 16 for kind = "db" (compose profile

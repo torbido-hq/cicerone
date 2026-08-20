@@ -19,7 +19,7 @@ STRATEGY_NAMES: tuple[str, ...] = (
 AUTOML_DEFAULT_N_SPLITS = 2
 AUTOML_DEFAULT_TEST_DAYS = 14
 AUTOML_DEFAULT_PRIMARY_METRIC = "MAP"
-# Sequential default: ProcessPool after threaded I/O deadlocks easily (LightFM/OpenBLAS).
+# Default 1: ProcessPool after threaded I/O deadlocks (LightFM/OpenBLAS).
 DEFAULT_MAX_WORKERS = 1
 DEFAULT_EPOCH_METRICS_EVERY = 5
 DEFAULT_EPOCH_METRICS_MAX_USERS = 500

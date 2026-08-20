@@ -3,7 +3,10 @@
 # Architecture
 
 This document describes how the code under `src/cicerone/` fits together.
-For configuration and usage, see the main [README](../README.md).
+For configuration and usage, see the main [README](../README.md). For the
+pipeline and how strategies differ, see [how-it-works.md](how-it-works.md).
+For `[events]` ingest (webhook, backends, HA), see
+[incremental-events.md](incremental-events.md).
 
 ## Module overview
 
@@ -34,7 +37,7 @@ For configuration and usage, see the main [README](../README.md).
 | `content_fallback.py` | Optional content-based cold-item strategy (one-hot item features + cosine vs user history) |
 | `artifact.py` | Optional versioned fitted-model bundle (schema **v3**: RecTools `save`/`load_model` for library models + pickle envelope; `content_fallback` still pickle) |
 | `automl.py` | Optional: backtests candidate models/weights/`rrf_k` configs over time-based folds of event history and picks the best one |
-| `cli.py` | `cicerone` console script (`start` / `job` / `serve` / `dashboard` / `scheduler` / `users`; `--config`, `--log-level`) |
+| `cli.py` | `cicerone` console script (`start` / `job` / `serve` / `dashboard` / `scheduler` / `users` / `export-openapi`; `--config`, `--log-level`) |
 | `packaging.py` | Wheel checks for the Docker `package` stage (`python -m cicerone.packaging`) |
 | `job.py` | Orchestrates one end-to-end run (source → dataset → model → sink) |
 | `scheduler.py` | In-process cron loop that calls `job.run()`; when `[job.trigger]` is enabled, also hosts the retrain-trigger HTTP server (`trigger.py`) |
@@ -45,13 +48,13 @@ For configuration and usage, see the main [README](../README.md).
 | `serve/metrics.py` | Prometheus metric objects + helpers (default in-process registry) |
 | `serve_schemas.py` | Pydantic models that drive the serve OpenAPI schema |
 | `serve_client.py` | Thin stdlib HTTP client for the serve read API |
-| `export_serve_openapi.py` | CLI to dump FastAPI's OpenAPI JSON (`docs/openapi/…`) |
-| `events/` | Incremental event ingest: `EventSource` protocol + registry, normalize, micro-batch buffer, user-scoped write-through updater; webhook (`POST /events`), DB watermark, S3-compatible (R2 list/marker; optional AWS SQS), and Redis Streams backends — see [incremental-events.md](incremental-events.md) |
+| `export_serve_openapi.py` | `cicerone export-openapi` — dump FastAPI OpenAPI JSON (`docs/openapi/…`) |
+| `events/` | EventSource registry, micro-batch write-through — [incremental-events.md](incremental-events.md) |
 | `trigger.py` | Event-driven retrain trigger: webhook + optional input-bucket poll, debounce guard (`RunGuard`) shared with the cron loop; increments `cicerone_retrain_trigger_total` (per replica) |
 | `locks.py` | Optional lock backends (postgres / redis) for `RunGuard` and the events apply lease; Redis `owned()` checks the fencing token, Postgres `owned()` checks `pg_locks` for this backend pid |
 | `config/lock_url.py` | Postgres lock URL resolution for config load + lock builder |
 | `http_auth.py` | Shared bearer-token (serve/trigger) and HTTP Basic Auth (dashboard) dependencies |
-| `dashboard.py` | Standalone FastAPI dashboard: job status/history plus user-id lookup, own container/port |
+| `dashboard.py` | Standalone FastAPI dashboard: job status/history plus user-id lookup (`cicerone dashboard`) |
 | `dashboard_lookup.py` | Output-store user lookup for the dashboard (fallback, category join, display formatting) |
 | `dashboard_users.py` | Load/save the dashboard's Basic Auth users file (TOML, username → bcrypt hash) |
 | `manage_dashboard_users.py` | CLI to add/remove/list dashboard users |
@@ -115,6 +118,8 @@ flowchart LR
     end
     J -->|OutputSink| S3O
     J -->|OutputSink| DB2
+    Ev["optional EventSource"] -->|"write-through popular/latest"| S3O
+    Ev -->|"write-through popular/latest"| DB2
 ```
 
 1. `job.run()` loads `Settings` (`config.load_settings`) and `FeatureConfig`
@@ -220,7 +225,7 @@ flowchart LR
    a versioned fitted-model artifact (`model.artifact` for the dataset
    backend, `model_artifacts` table for db) via
    `OutputSink.write_model_artifact`. Serve mode never loads this artifact.
-6. `scheduler.main()` is the container's actual entrypoint for batch mode: it
+6. For batch, `cicerone start` runs `scheduler.main()`: it
    computes the next run time from `cron_schedule` with `croniter`, sleeps,
    calls `job.run(triggered_by="cron")`, and loops forever — a failed run is
    logged but never kills the loop. When `Settings.trigger_enabled`
@@ -288,7 +293,7 @@ rectools/lightfm/implicit/torch needed in that process or its request path):
   distributed backend (`lock_backend = "in_process"`). Optional `postgres` /
   `redis` backends (see `cicerone.locks`) coordinate across scheduler
   replicas; clients are imported only when selected. Prefer `postgres`
-  when a DB URL is available; use `redis` (optional
+  when a DB URL is available; use `redis` (`cicerone-recommender[redis]` /
   `requirements-redis.txt`) for dataset/S3-only HA. Redis `owned()` checks the
   fencing token before commit so an expired TTL cannot split-brain a long
   apply/retrain; Postgres advisory locks are session-scoped (disconnect
@@ -300,8 +305,8 @@ single-writer unless `events.ha = true` with `lock_backend` postgres/redis
 
 ## Dashboard
 
-`cicerone.dashboard` is a standalone entrypoint (`cicerone dashboard`,
-its own container/port `8090` in `docker-compose.yml`) for checking whether
+`cicerone.dashboard` is a standalone entrypoint (`cicerone dashboard`;
+compose maps port `8090`) for checking whether
 the last job run succeeded and inspecting a user's current top-K — it is
 **not** gated by `[job].mode` like serve/batch, so it's available even in
 plain batch-only deployments with no other HTTP surface. Like serve mode, it
@@ -401,11 +406,9 @@ generic `IOSettings`.
 
 ## Incremental events
 
-Between full retrains, optional `[events]` sources normalize interactions
-into the same event contract and micro-batch them into a cheap write-through
-update of top-K rows (popular/latest slices; LightFM waits for the next full
-`job.run()`). Design, backend roadmap, delivery semantics, and broker
-guidance: [incremental-events.md](incremental-events.md).
+Serve-process ingest lives in `events/` plus `serve/events_routes.py` and
+`serve/bootstrap_events.py`. Operator guide:
+[incremental-events.md](incremental-events.md).
 
 ## Cold-start behavior
 
