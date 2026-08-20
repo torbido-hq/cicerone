@@ -173,15 +173,26 @@ and/or `examples/serve/` when request/response fields change.
 | **0.7.0** (minor) | `release/0.7.0` (long-lived; PRs target this branch, not `main`) | New features and new public surface. |
 
 If a change is ambiguous, put it on **0.6.1** unless it adds user-facing
-capability. Never land 0.7.0 features on `main`.
+capability. Never land 0.7.0 features on `main` until v0.6.1 ships.
 
 `## [Unreleased]` is per-branch: next patch (0.6.1) on `main`, 0.7.0 on
 `release/0.7.0`.
 
-Cherry-pick 0.6.1 fixes onto `release/0.7.0` so the minor branch stays
-current. Do not merge 0.7.0 into `main` before 0.6.1 ships. After
-**v0.6.1** is tagged, merge `release/0.7.0` into `main`; `main` becomes
-the 0.7.0 train.
+Cherry-pick each 0.6.1 fix onto `release/0.7.0` after it lands on `main`
+(use the merge commit SHA, or the PR's squash commit):
+
+```sh
+git checkout release/0.7.0
+git cherry-pick <sha>
+git push origin release/0.7.0
+```
+
+Do not merge 0.7.0 into `main` before 0.6.1 ships.
+
+**After v0.6.1 is tagged:** merge `release/0.7.0` into `main`. Then `main`
+is the 0.7.0 train (Unreleased = 0.7.0; new features land on `main`).
+Stop cherry-picking onto `release/0.7.0`. Update this table when the next
+patch vs minor split starts.
 
 ## Releasing
 

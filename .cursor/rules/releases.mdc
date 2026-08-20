@@ -15,7 +15,8 @@ tagged; Unreleased on `main` is 0.6.1.
 | **0.7.0** (minor) | `release/0.7.0` | New features and new public surface. PRs target this branch, not `main`. |
 
 If ambiguous, put it on **0.6.1** unless it adds user-facing capability.
-Never land 0.7.0 features on `main`.
+Never land 0.7.0 features on `main` until v0.6.1 ships. After that tag,
+`main` is 0.7.0 and new features land on `main`.
 
 ## Changelog
 
@@ -24,8 +25,9 @@ Never land 0.7.0 features on `main`.
 
 ## After v0.6.1
 
-Cherry-pick 0.6.1 fixes onto `release/0.7.0`. Do not merge 0.7.0 into
-`main` before 0.6.1 ships. After the tag, merge `release/0.7.0` into
-`main`; `main` becomes the 0.7.0 train.
+Cherry-pick each 0.6.1 fix from `main` onto `release/0.7.0`
+(`git cherry-pick <sha>`). Do not merge 0.7.0 into `main` before 0.6.1
+ships. After the tag, merge `release/0.7.0` into `main`; `main` becomes
+the 0.7.0 train. Stop cherry-picking onto `release/0.7.0`.
 
 Version bump still happens on the PR that completes that version.
