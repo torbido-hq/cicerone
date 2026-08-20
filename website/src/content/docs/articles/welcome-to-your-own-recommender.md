@@ -227,7 +227,7 @@ popular_share = 0.7
 latest_date_columns = ["created_at"]
 ```
 
-Blending is what writes `__cold_start__`. Linear `saturate_at = 5` means five distinct products is fully on LightFM; a single order stays mostly popular / latest. On a small shop that is the behaviour you want. If `products` has no usable date column among `latest_date_columns`, latest is skipped and its weight moves to popular (you will see that in the job log).
+Blending is what writes `__cold_start__`. Linear `saturate_at = 5` means five distinct products is fully on LightFM; a single order stays mostly popular / latest. On a small shop that is the behavior you want. If `products` has no usable date column among `latest_date_columns`, latest is skipped and its weight moves to popular (you will see that in the job log).
 
 A `view` weight with no view rows is harmless. An `event_type` in SQL that you forget to list under `[event_weights]` is dropped, with a warning.
 
