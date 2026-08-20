@@ -6,8 +6,10 @@ No free-text / TF-IDF — ``item_features`` are categoricals / lists.
 from __future__ import annotations
 
 import logging
+import os
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import numpy as np
@@ -29,6 +31,8 @@ CONTENT_FALLBACK_SOURCE = "content_fallback"
 _MAX_HISTORY_ITEMS = 50
 # Soft cap on a single dense cosine block; larger cold sets are scored in batches.
 _DENSE_SIM_BATCH_PRODUCT = 50_000
+_RECOMMEND_THREAD_MIN_USERS = 8
+_RECOMMEND_THREAD_MAX_WORKERS = 8
 
 
 def _feature_dict(
@@ -107,6 +111,13 @@ def _max_cosine_scores(cold_matrix, hist_matrix) -> np.ndarray:
         block = cosine_similarity(cold_matrix[start:end], hist_matrix, dense_output=True)
         scores[start:end] = block.max(axis=1)
     return scores
+
+
+def _recommend_thread_workers(n_users: int) -> int:
+    if n_users < _RECOMMEND_THREAD_MIN_USERS:
+        return 1
+    cpus = os.cpu_count() or 1
+    return max(1, min(_RECOMMEND_THREAD_MAX_WORKERS, cpus, n_users))
 
 
 class ContentFallbackModel:
@@ -219,59 +230,65 @@ class ContentFallbackModel:
         empty = pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Score, Columns.Rank])
         if self._matrix is None or len(self._cold_ids) == 0 or k < 1:
             return empty
+        matrix = self._matrix
 
-        allow = None if items_to_recommend is None else set(items_to_recommend)
+        allow = None if items_to_recommend is None else {str(i) for i in items_to_recommend}
         cold_mask = []
         cold_ids_filtered = []
         for idx, item_id in zip(self._cold_indices.tolist(), self._cold_ids, strict=True):
-            if allow is not None and item_id not in allow:
+            if allow is not None and str(item_id) not in allow:
                 continue
             cold_mask.append(idx)
             cold_ids_filtered.append(item_id)
         if not cold_mask:
             return empty
 
-        cold_matrix = self._matrix[cold_mask]
+        cold_matrix = matrix[cold_mask]
         item_index = self._item_index
         take = min(k, self.max_neighbors, len(cold_ids_filtered))
         cold_ids_arr = np.asarray(cold_ids_filtered, dtype=object)
 
-        rows: list[dict] = []
-        for user in users:
+        def _score_user(user: object) -> list[dict]:
             history = self._user_history.get(user, [])
             if not history:
-                continue
-            # Most recent interactions first when history was appended in event order.
+                return []
             recent_history = history[-_MAX_HISTORY_ITEMS:]
             hist_indices = [item_index[i] for i in recent_history if i in item_index]
             if not hist_indices:
-                continue
-            hist_matrix = self._matrix[hist_indices]
+                return []
+            hist_matrix = matrix[hist_indices]
             scores = _max_cosine_scores(cold_matrix, hist_matrix)
             if filter_viewed:
-                seen = set(history)
+                seen = {str(item) for item in history}
                 for i, item_id in enumerate(cold_ids_arr):
-                    if item_id in seen:
+                    if str(item_id) in seen:
                         scores[i] = 0.0
             positive = np.flatnonzero(scores > 0)
             if positive.size == 0:
-                continue
+                return []
             if take >= positive.size:
                 order = positive[np.argsort(-scores[positive], kind="mergesort")]
             else:
-                # Partition among positive scores only, then sort the top slice.
                 pos_scores = scores[positive]
                 top_local = np.argpartition(pos_scores, -take)[-take:]
                 order = positive[top_local[np.argsort(-pos_scores[top_local], kind="mergesort")]]
-            for rank, idx in enumerate(order, start=1):
-                rows.append(
-                    {
-                        Columns.User: user,
-                        Columns.Item: cold_ids_arr[idx],
-                        Columns.Score: float(scores[idx]),
-                        Columns.Rank: rank,
-                    }
-                )
+            return [
+                {
+                    Columns.User: user,
+                    Columns.Item: cold_ids_arr[idx],
+                    Columns.Score: float(scores[idx]),
+                    Columns.Rank: rank,
+                }
+                for rank, idx in enumerate(order, start=1)
+            ]
+
+        workers = _recommend_thread_workers(len(users))
+        if workers > 1:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                user_rows = list(pool.map(_score_user, users))
+        else:
+            user_rows = [_score_user(user) for user in users]
+        rows = [row for part in user_rows for row in part]
 
         if not rows:
             return empty

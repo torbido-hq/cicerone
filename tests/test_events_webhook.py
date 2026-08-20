@@ -46,6 +46,16 @@ def test_webhook_dedupes_event_id_and_nack():
     assert [event.event_id for event in again] == ["same"]
 
 
+def test_webhook_repeated_nack_does_not_duplicate():
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="same"))
+    polled = list(source.poll(10))
+    source.nack(polled)
+    source.nack(polled)
+    assert source.health().lag == 1
+    assert [event.event_id for event in source.poll(10)] == ["same"]
+
+
 def test_webhook_poll_zero_and_reject_scalar():
     source = WebhookEventSource({})
     assert source.poll(0) == []

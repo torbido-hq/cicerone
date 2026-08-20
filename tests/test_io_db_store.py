@@ -9,6 +9,7 @@ from support.postgres_defaults import resolve_test_database_url
 
 from cicerone.config import ConfigError
 from cicerone.io.db_store import DatabaseInputSource, DatabaseOutputSink
+from cicerone.io.replace_users import RecommendationSchemaError
 
 TEST_DATABASE_URL = resolve_test_database_url()
 
@@ -162,14 +163,13 @@ def test_database_output_replace_recommendations_for_users_schema_mismatch(caplo
         )
 
     sink = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})
-    with caplog.at_level(logging.WARNING):
-        updated = sink.replace_recommendations_for_users(
+    with caplog.at_level(logging.WARNING), pytest.raises(RecommendationSchemaError, match="schema mismatch"):
+        sink.replace_recommendations_for_users(
             pd.DataFrame(
                 [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"}]
             ),
             user_ids=["u1"],
         )
-    assert updated == 0
     assert any(
         "delete skipped" in record.getMessage().lower() and "schema" in record.getMessage().lower()
         for record in caplog.records

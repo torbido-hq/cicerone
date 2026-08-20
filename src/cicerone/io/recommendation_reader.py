@@ -29,6 +29,7 @@ from cicerone.io.options import (
     validate_storage_options,
 )
 from cicerone.serve.metrics import observe_cache_refresh, record_cache_hit, record_cache_miss
+from cicerone.values import item_true_mask
 
 logger = logging.getLogger(__name__)
 
@@ -63,9 +64,7 @@ def normalize_items_snapshot(
         out[category_column] = out[category_column].astype(str)
     for column in availability_filters:
         if column in out.columns:
-            with pd.option_context("future.no_silent_downcasting", True):
-                filled = out[column].fillna(False)
-            out[column] = filled.infer_objects(copy=False).astype(bool)
+            out[column] = item_true_mask(out[column])
     return out
 
 

@@ -9,6 +9,10 @@ import pandas as pd
 from cicerone.io.recommendation_schema import USER_COLUMN
 
 
+class RecommendationSchemaError(RuntimeError):
+    """Existing recommendations are missing ``user_id``; refuse to mutate."""
+
+
 def normalize_replace_user_ids(df: pd.DataFrame, user_ids: Sequence[str]) -> list[str]:
     """Return sorted unique user ids to replace; ``[]`` means no-op.
 

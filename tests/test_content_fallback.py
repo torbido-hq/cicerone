@@ -267,3 +267,34 @@ def test_feature_dict_parses_list_like_strings():
     assert tokens["styles=lager"] == 1.0
     assert tokens["styles=pils"] == 1.0
     assert tokens["solo=single"] == 1.0
+
+
+def test_recommend_thread_pool_path_returns_rows_for_each_user(monkeypatch):
+    monkeypatch.setattr("cicerone.content_fallback._RECOMMEND_THREAD_MIN_USERS", 1)
+    items = pd.DataFrame(
+        [
+            {"item_id": "i1", "category": "beer"},
+            {"item_id": "i_new", "category": "beer"},
+        ]
+    )
+    interactions = pd.DataFrame(
+        {
+            Columns.User: ["u1", "u2"],
+            Columns.Item: ["i1", "i1"],
+            Columns.Weight: [1.0, 1.0],
+            Columns.Datetime: [pd.Timestamp.utcnow(), pd.Timestamp.utcnow()],
+        }
+    )
+    model = ContentFallbackModel(
+        feature_columns=[FeatureColumn(column="category", type="categorical")],
+        items=items,
+        interactions=interactions,
+    )
+    model.fit(_DummyDataset())
+    recs = model.recommend(
+        users=["u1", "u2"],
+        dataset=_DummyDataset(),
+        k=5,
+        filter_viewed=True,
+    )
+    assert set(recs[Columns.User].astype(str)) == {"u1", "u2"}

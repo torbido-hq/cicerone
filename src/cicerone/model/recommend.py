@@ -45,6 +45,8 @@ from cicerone.policy import (
 
 logger = logging.getLogger(__name__)
 
+RecommendCache = dict[tuple[Any, ...], Any]
+
 
 def boost_overfetch_k(
     top_k: int, has_boosts: bool, overfetch_factor: int = DEFAULT_BOOST_OVERFETCH_FACTOR
@@ -162,6 +164,7 @@ def _recommend_per_strategy(
     blending_enabled: bool,
     blending_latest_date_columns: tuple[str, ...],
     top_k: int,
+    recommend_cache: RecommendCache | None = None,
 ) -> _StrategyFrames:
     frames: list[pd.DataFrame] = []
     personalized_frames: list[pd.DataFrame] = []
@@ -202,15 +205,24 @@ def _recommend_per_strategy(
             else:
                 recommend_users = cohort_users
 
-            recs = models[name].recommend(
-                users=recommend_users,
-                dataset=dataset,
-                k=cohort_plan.recommend_k,
-                filter_viewed=strategy.personalized,
-                items_to_recommend=allowed_items,
-            )
-            recs[SOURCE_COLUMN] = strategy.source_label
-            recs[WEIGHT_COLUMN] = 1.0
+            cache_key = ("strategy", name, cohort_key_value, cohort_plan.recommend_k)
+            cached = recommend_cache.get(cache_key) if recommend_cache is not None else None
+            if cached is not None:
+                recs = cached.copy()
+            else:
+                recs = models[name].recommend(
+                    users=recommend_users,
+                    dataset=dataset,
+                    k=cohort_plan.recommend_k,
+                    filter_viewed=strategy.personalized,
+                    items_to_recommend=allowed_items,
+                )
+                recs = recs.copy()
+                recs[SOURCE_COLUMN] = strategy.source_label
+                recs[WEIGHT_COLUMN] = 1.0
+                if recommend_cache is not None:
+                    recommend_cache[cache_key] = recs
+                recs = recs.copy()
             frames.append(recs)
             if blending_enabled:
                 if strategy.personalized:
@@ -224,9 +236,15 @@ def _recommend_per_strategy(
             allowed_items = cohort_plan.allowed_by_cohort[cohort_key]
             if not allowed_items:
                 continue
-            latest_by_cohort[cohort_key] = rank_latest_items(
-                built.items, date_column, allowed_items, latest_k
-            )
+            latest_key = ("latest", date_column, cohort_key, latest_k)
+            cached_latest = recommend_cache.get(latest_key) if recommend_cache is not None else None
+            if cached_latest is not None:
+                latest_by_cohort[cohort_key] = list(cached_latest)
+            else:
+                ranked = rank_latest_items(built.items, date_column, allowed_items, latest_k)
+                latest_by_cohort[cohort_key] = ranked
+                if recommend_cache is not None:
+                    recommend_cache[latest_key] = list(ranked)
 
     return _StrategyFrames(
         frames=frames,
@@ -367,6 +385,7 @@ def recommend_with_models(
     weights: dict[str, float] | None = None,
     rrf_k: float | None = None,
     run_plan: ModelRunPlan | None = None,
+    recommend_cache: RecommendCache | None = None,
 ) -> pd.DataFrame:
     """Recommend + combine on already-fitted strategies (no fit)."""
     blending = config.blending
@@ -408,6 +427,7 @@ def recommend_with_models(
         blending_enabled=blending_enabled,
         blending_latest_date_columns=tuple(blending.latest_date_columns),
         top_k=top_k,
+        recommend_cache=recommend_cache,
     )
     combined = _combine_strategy_frames(
         models,
@@ -444,6 +464,7 @@ def train_and_recommend(
     content_fallback_enabled: bool | None = None,
     content_fallback_max_neighbors: int = DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS,
     run_plan: ModelRunPlan | None = None,
+    recommend_cache: RecommendCache | None = None,
 ) -> pd.DataFrame:
     """Fit enabled strategies, then recommend + combine."""
     if run_plan is None:
@@ -475,4 +496,5 @@ def train_and_recommend(
         weights=weights,
         rrf_k=rrf_k,
         run_plan=run_plan,
+        recommend_cache=recommend_cache,
     )

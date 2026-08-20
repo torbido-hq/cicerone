@@ -5,10 +5,12 @@ from __future__ import annotations
 import logging
 
 import pandas as pd
+import pytest
 from sqlalchemy import create_engine, text
 
 from cicerone.io.db_store import DatabaseOutputSink
 from cicerone.io.recommendation_reader import DbRecommendationReader
+from cicerone.io.replace_users import RecommendationSchemaError
 
 
 def _sqlite_url(tmp_path) -> str:
@@ -143,14 +145,13 @@ def test_sqlite_replace_recommendations_schema_mismatch(tmp_path, caplog):
         )
         conn.execute(text("INSERT INTO recommendations VALUES ('old', 1, 0.1, 'x')"))
     sink = DatabaseOutputSink({"database_url": url})
-    with caplog.at_level(logging.WARNING):
-        updated = sink.replace_recommendations_for_users(
+    with caplog.at_level(logging.WARNING), pytest.raises(RecommendationSchemaError, match="schema mismatch"):
+        sink.replace_recommendations_for_users(
             pd.DataFrame(
                 [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "incremental"}]
             ),
             user_ids=["u1"],
         )
-    assert updated == 0
     assert any("delete skipped" in record.getMessage().lower() for record in caplog.records)
     stored = pd.read_sql(text("SELECT item_id FROM recommendations"), engine)
     assert list(stored["item_id"]) == ["old"]

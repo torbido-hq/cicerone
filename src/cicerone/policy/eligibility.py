@@ -1,4 +1,4 @@
-"""Declarative eligibility filters and score boosts (see config/features.toml).
+"""Declarative eligibility filters (see config/features.toml).
 
 Eligibility fail-open / fail-closed matrix (intentional):
 
@@ -18,27 +18,22 @@ import logging
 from collections.abc import Hashable, Iterable, Sequence
 
 import pandas as pd
-from rectools import Columns
 
-from cicerone.feature_config import BoostRule, EligibilityRule, FeatureConfig
+from cicerone.feature_config import EligibilityRule, FeatureConfig
 from cicerone.ids import items_id_column
 from cicerone.values import MISSING as _MISSING
 from cicerone.values import as_list as _as_list
 from cicerone.values import is_missing as _is_missing
 from cicerone.values import is_sequence_attr as _is_sequence_attr
+from cicerone.values import item_true_mask
 from cicerone.values import str_set as _str_set
 
 logger = logging.getLogger(__name__)
 
 _warned_missing_columns: set[tuple[str, str, str]] = set()
-_warned_boost_without_items = False
-
-# ``item_true`` string tokens only; avoid ``astype(bool)`` ("false" → True).
-_ITEM_TRUE_STRINGS = frozenset({"1", "true", "True", "TRUE", "yes", "Yes", "YES"})
-_ITEM_FALSE_STRINGS = frozenset({"0", "false", "False", "FALSE", "no", "No", "NO", ""})
 
 
-def _warn_missing_column(kind: str, rule_name: str, column: str) -> None:
+def warn_missing_column(kind: str, rule_name: str, column: str) -> None:
     key = (kind, rule_name, column)
     if key in _warned_missing_columns:
         return
@@ -48,37 +43,6 @@ def _warn_missing_column(kind: str, rule_name: str, column: str) -> None:
         kind,
         rule_name,
         column,
-    )
-
-
-def _coerce_item_true(value: object) -> bool:
-    """Return True only for explicit truthy tokens; unknowns are False."""
-    if _is_missing(value):
-        return False
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return value != 0
-    token = str(value).strip()
-    if token in _ITEM_TRUE_STRINGS:
-        return True
-    if token in _ITEM_FALSE_STRINGS:
-        return False
-    return False
-
-
-def _item_true_mask(item_values: pd.Series) -> pd.Series:
-    """Boolean mask for ``item_true`` without silent string→True coercion."""
-    return item_values.map(_coerce_item_true).astype(bool)
-
-
-def _warn_boost_without_items() -> None:
-    global _warned_boost_without_items
-    if _warned_boost_without_items:
-        return
-    _warned_boost_without_items = True
-    logger.warning(
-        "Boost rules are configured but items data is missing or empty — item boosts will not be applied"
     )
 
 
@@ -149,13 +113,13 @@ def eligible_item_mask(
 
     for rule in rules:
         if rule.item_column not in items.columns:
-            _warn_missing_column("eligibility", rule.name, rule.item_column)
+            warn_missing_column("eligibility", rule.name, rule.item_column)
             continue
 
         item_values = items[rule.item_column]
 
         if rule.op == "item_true":
-            mask &= _item_true_mask(item_values)
+            mask &= item_true_mask(item_values)
             continue
 
         user_value = _user_attr(user_row, rule.user_column)
@@ -275,93 +239,3 @@ def group_users_by_cohort(
             order.append(key)
         cohorts[key].append(user_id)
     return [(key, cohorts[key]) for key in order]
-
-
-def _boolean_factor(value: object, factor: float) -> float:
-    if _is_missing(value):
-        return 1.0
-    if isinstance(value, bool):
-        return factor if value else 1.0
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return factor if value != 0 else 1.0
-    token = str(value).strip()
-    if token in _ITEM_TRUE_STRINGS or token.lower() in {"true", "1", "yes"}:
-        return factor
-    return 1.0
-
-
-def _value_map_factor(value: object, value_factors: dict[str, float]) -> float:
-    if _is_missing(value):
-        return 1.0
-    return float(value_factors.get(str(value), 1.0))
-
-
-def _numeric_factors(items: pd.DataFrame, column: str, weight: float) -> pd.Series:
-    if column not in items.columns or items.empty:
-        return pd.Series(1.0, index=items.index)
-    series = pd.to_numeric(items[column], errors="coerce")
-    lo = series.min(skipna=True)
-    hi = series.max(skipna=True)
-    if pd.isna(lo) or pd.isna(hi) or hi == lo:
-        normalized = pd.Series(0.0, index=items.index)
-    else:
-        normalized = (series - lo) / (hi - lo)
-    return 1.0 + weight * normalized.fillna(0.0)
-
-
-def item_boost_factors(items: pd.DataFrame | None, boosts: Sequence[BoostRule]) -> dict:
-    """item_id → product of configured boost factors."""
-    if not boosts:
-        return {}
-    if items is None or items.empty:
-        _warn_boost_without_items()
-        return {}
-
-    factors = pd.Series(1.0, index=items.index)
-    for boost in boosts:
-        if boost.item_column not in items.columns:
-            _warn_missing_column("boost", boost.name, boost.item_column)
-            continue
-        col = items[boost.item_column]
-        if boost.kind == "boolean":
-            factors *= col.map(lambda v, f=boost.factor: _boolean_factor(v, f))
-        elif boost.kind == "value_map":
-            factors *= col.map(lambda v, vf=boost.value_factors: _value_map_factor(v, vf))
-        elif boost.kind == "numeric":
-            factors *= _numeric_factors(items, boost.item_column, boost.weight)
-        else:
-            raise ValueError(f"Unknown boost kind {boost.kind!r} in rule {boost.name!r}")
-
-    id_col = items_id_column(items)
-    return dict(zip(items[id_col].astype(str), factors.astype(float), strict=True))
-
-
-def apply_boosts(
-    recs: pd.DataFrame,
-    items: pd.DataFrame | None,
-    boosts: Sequence[BoostRule],
-    top_k: int | None = None,
-) -> pd.DataFrame:
-    """Apply boost multipliers, re-rank; always truncates to ``top_k`` when set."""
-    if recs.empty:
-        return recs
-    if not boosts:
-        return _truncate_recs(recs, top_k) if top_k is not None else recs
-
-    factor_by_item = item_boost_factors(items, boosts)
-    out = recs.copy()
-    if factor_by_item:
-        item_ids = out[Columns.Item].astype(str)
-        out[Columns.Score] = out[Columns.Score] * item_ids.map(factor_by_item).fillna(1.0)
-        out = out.sort_values(
-            [Columns.User, Columns.Score, Columns.Item],
-            ascending=[True, False, True],
-        )
-        out[Columns.Rank] = out.groupby(Columns.User).cumcount() + 1
-    return _truncate_recs(out, top_k)
-
-
-def _truncate_recs(recs: pd.DataFrame, top_k: int | None) -> pd.DataFrame:
-    if top_k is None:
-        return recs.reset_index(drop=True)
-    return recs.groupby(Columns.User, as_index=False).head(top_k).reset_index(drop=True)

@@ -87,6 +87,8 @@ class WebhookEventSource(EventSource):
         with self._lock:
             for event in reversed(list(events)):
                 self._in_flight.pop(event.event_id, None)
+                if event.event_id in self._pending_ids:
+                    continue
                 self._pending.appendleft(event)
                 self._pending_ids.add(event.event_id)
 

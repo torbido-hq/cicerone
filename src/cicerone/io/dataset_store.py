@@ -27,7 +27,7 @@ from cicerone.io.options import (
     validate_storage_options,
 )
 from cicerone.io.recommendation_schema import USER_COLUMN
-from cicerone.io.replace_users import normalize_replace_user_ids
+from cicerone.io.replace_users import RecommendationSchemaError, normalize_replace_user_ids
 
 logger = logging.getLogger(__name__)
 
@@ -106,11 +106,9 @@ class DatasetOutputSink:
         if existing.empty:
             remaining = existing
         elif USER_COLUMN not in existing.columns:
-            logger.warning(
-                "Recommendations schema mismatch (missing %s); treating existing rows as empty",
-                USER_COLUMN,
+            raise RecommendationSchemaError(
+                f"Recommendations schema mismatch (missing {USER_COLUMN}); refusing replace"
             )
-            remaining = pd.DataFrame()
         else:
             remaining = existing[~existing[USER_COLUMN].astype(str).isin(ids)]
         parts = [frame for frame in (remaining, df) if not frame.empty]

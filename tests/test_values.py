@@ -7,7 +7,7 @@ import math
 import numpy as np
 import pandas as pd
 
-from cicerone.values import MISSING, as_list, is_missing, is_sequence_attr, str_set
+from cicerone.values import MISSING, as_list, coerce_item_true, is_missing, is_sequence_attr, str_set
 
 
 def test_is_missing_scalars_and_containers():
@@ -46,3 +46,16 @@ def test_as_list_and_str_set():
     assert is_sequence_attr(np.array([1, 2]))
     assert not is_sequence_attr(np.array(3))
     assert not is_sequence_attr(math.nan)
+
+
+def test_coerce_item_true_rejects_false_strings():
+    assert coerce_item_true(True) is True
+    assert coerce_item_true(1) is True
+    assert coerce_item_true("true") is True
+    assert coerce_item_true(False) is False
+    assert coerce_item_true(0) is False
+    assert coerce_item_true("false") is False
+    assert coerce_item_true("0") is False
+    assert coerce_item_true("") is False
+    assert coerce_item_true(None) is False
+    assert coerce_item_true("maybe") is False

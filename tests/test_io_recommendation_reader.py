@@ -111,6 +111,19 @@ def test_normalize_items_snapshot_casts_filter_columns():
     assert list(items["in_stock"]) == [False, True]
 
 
+def test_normalize_items_snapshot_rejects_false_strings():
+    raw = pd.DataFrame(
+        [
+            {"item_id": "a", "published": "false", "in_stock": "0"},
+            {"item_id": "b", "published": "true", "in_stock": "yes"},
+        ]
+    )
+    items = normalize_items_snapshot(raw, availability_filters=["published", "in_stock"])
+    assert items is not None
+    assert list(items["published"]) == [False, True]
+    assert list(items["in_stock"]) == [False, True]
+
+
 def test_dataset_reader_configure_item_filters_and_refresh(tmp_path):
     _write_recommendations(
         tmp_path,

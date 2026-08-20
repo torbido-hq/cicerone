@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Serve availability filters treat `"false"` / `"0"` as unavailable (same coercion as training).
+- Incremental apply no longer deletes popular-only users on unknown/zero-weight events, and
+  keeps the best preserved ranks when boost slots truncate top-K.
+- Recommendation replace raises on a missing `user_id` column instead of ACKing events
+  after a no-op write (DB) or dropping other users' rows (dataset).
+- S3 list-mode event source retries unreadable objects before skipping them; webhook
+  `nack` no longer duplicates already-pending ids.
+
+### Changed
+
+- AutoML reuses per-strategy recommend frames across candidates in a fold.
+- Content-fallback scoring parallelizes across users; incremental merge groups events
+  by user once.
+- Split `locks`, `policy`, and serve item-filter helpers into smaller modules
+  (public imports unchanged).
+
 ## [0.6.0] - 2026-08-20
 
 ### Added

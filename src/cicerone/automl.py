@@ -223,6 +223,7 @@ def _evaluate_fold(
     test_interactions = build_interactions(test_events, config, half_life_days=half_life_days)
     test_users = sorted(set(test_events["user_id"]))
     strategy_cache: dict[str, RecommenderModel] = {}
+    recommend_cache: dict[tuple[Any, ...], Any] = {}
 
     fold_metrics = []
     for candidate in candidates:
@@ -236,6 +237,7 @@ def _evaluate_fold(
             rrf_k=candidate.rrf_k,
             strategy_cache=strategy_cache,
             model_configs=model_configs,
+            recommend_cache=recommend_cache,
         )
         fold_metrics.append(calc_metrics(metrics, reco=reco, interactions=test_interactions))
     return fold_metrics

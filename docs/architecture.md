@@ -14,7 +14,7 @@ For `[events]` ingest (webhook, backends, HA), see
 | --- | --- |
 | `config/` | Load & resolve `config/cicerone.toml` (structural config + `${ENV_VAR}` secrets); package: constants / settings / validation / load / `events` / lock_url; nested Serve/Trigger/Dashboard/AutoML/Events settings (+ flat property aliases); `ConfigError` for invalid knobs; `make_settings(**overrides)` for tests / OpenAPI export |
 | `feature_config.py` | Load `config/features.toml` (event weights, feature columns, eligibility/boost policy rules; `[[boost]]` / `[[boosts]]`) |
-| `policy.py` | Declarative eligibility masks (documented fail-open/fail-closed matrix), cohort grouping, score boosts |
+| `policy/` | Declarative eligibility masks (fail-open/fail-closed matrix), cohort grouping (`eligibility.py`), score boosts (`boosts.py`) |
 | `blending.py` | Per-user weighted mix of personalized/popular/latest (optional) |
 | `io/base.py` | `InputSource` / `OutputSink` / `RecommendationReader` protocols (including `configure_item_filters` and `replace_recommendations_for_users`); `BaseRecommendationReader` with empty defaults for custom readers |
 | `io/recommendation_schema.py` | Shared recommendation column constants + SQL identifier helper for read/write paths |
@@ -43,6 +43,7 @@ For `[events]` ingest (webhook, backends, HA), see
 | `scheduler.py` | In-process cron loop that calls `job.run()`; when `[job.trigger]` is enabled, also hosts the retrain-trigger HTTP server (`trigger.py`) |
 | `serve/` | Serve mode package: FastAPI read API over precomputed recommendations |
 | `serve/app.py` | Routes, middleware, refresh loop (`cicerone serve`) |
+| `serve/item_filters.py` | Category / availability snapshot cache for serve requests |
 | `serve/events_routes.py` | Optional `POST /events` webhook mount when `[events]` webhook is enabled |
 | `serve/bootstrap_events.py` | Start/stop the serve-process event worker (micro-batch → write-through) |
 | `serve/metrics.py` | Prometheus metric objects + helpers (default in-process registry) |
@@ -51,7 +52,7 @@ For `[events]` ingest (webhook, backends, HA), see
 | `export_serve_openapi.py` | `cicerone export-openapi` — dump FastAPI OpenAPI JSON (`docs/openapi/…`) |
 | `events/` | EventSource registry, micro-batch write-through — [incremental-events.md](incremental-events.md) |
 | `trigger.py` | Event-driven retrain trigger: webhook + optional input-bucket poll, debounce guard (`RunGuard`) shared with the cron loop; increments `cicerone_retrain_trigger_total` (per replica) |
-| `locks.py` | Optional lock backends (postgres / redis) for `RunGuard` and the events apply lease; Redis `owned()` checks the fencing token, Postgres `owned()` checks `pg_locks` for this backend pid |
+| `locks/` | Optional lock backends (`postgres.py` / `redis.py`) for `RunGuard` and the events apply lease; Redis `owned()` checks the fencing token, Postgres `owned()` checks `pg_locks` for this backend pid |
 | `config/lock_url.py` | Postgres lock URL resolution for config load + lock builder |
 | `http_auth.py` | Shared bearer-token (serve/trigger) and HTTP Basic Auth (dashboard) dependencies |
 | `dashboard.py` | Standalone FastAPI dashboard: job status/history plus user-id lookup (`cicerone dashboard`) |

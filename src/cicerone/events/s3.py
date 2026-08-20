@@ -29,6 +29,8 @@ _MODES = frozenset({"sqs", "list"})
 _DEFAULT_LIST_PAGE_SIZE = 100
 _DEFAULT_SQS_LAG_CACHE_TTL_SECONDS = 5.0
 _DEFAULT_SQS_CLIENT_TIMEOUT_SECONDS = 2.0
+# Transient S3 read errors retry; after this many failures the object is skipped.
+_LOAD_FAILURE_SKIP_AFTER = 3
 # Cover lock-busy nack retries so the message is not stolen mid-lease wait.
 _SQS_NACK_VISIBILITY_TIMEOUT_SECONDS = 60
 
@@ -207,6 +209,7 @@ class S3EventSource(EventSource):
         self._event_batch: dict[str, _Batch] = {}
         self._batches: OrderedDict[str, _Batch] = OrderedDict()
         self._batch_seq = 0
+        self._load_failures: dict[str, int] = {}
         self._sqs_visible_lag: int | None = None
         self._sqs_visible_lag_at: float = 0.0
 
@@ -379,10 +382,33 @@ class S3EventSource(EventSource):
             etag = str(obj.get("ETag") or "")
             try:
                 events = self._load_object_events(s3, bucket, key, etag=etag)
-            except Exception:
+            except ValueError:
                 logger.exception("Skipping unreadable s3://%s/%s", bucket, key)
                 self._register_batch([], object_key=key, object_etag=etag)
+                self._load_failures.pop(key, None)
                 continue
+            except Exception:
+                failures = self._load_failures.get(key, 0) + 1
+                self._load_failures[key] = failures
+                logger.exception(
+                    "Failed to read s3://%s/%s (%d/%d)",
+                    bucket,
+                    key,
+                    failures,
+                    _LOAD_FAILURE_SKIP_AFTER,
+                )
+                if failures >= _LOAD_FAILURE_SKIP_AFTER:
+                    logger.error(
+                        "Skipping unreadable s3://%s/%s after %d load failures",
+                        bucket,
+                        key,
+                        failures,
+                    )
+                    self._register_batch([], object_key=key, object_etag=etag)
+                    self._load_failures.pop(key, None)
+                    continue
+                break
+            self._load_failures.pop(key, None)
             novel = [event for event in events if event.event_id not in held_ids]
             if not novel:
                 self._register_batch([], object_key=key, object_etag=etag)
