@@ -13,7 +13,7 @@ Canonical URL: [https://cicerone.dev/articles/welcome-to-your-own-recommender/](
 
 If you have been meaning to put “recommended for you” on the site, you already have the ingredients. Most shops start in-house, on not much data: a bestsellers query, “customers who bought this also bought”, maybe a weekend with [LightFM](https://making.lyst.com/lightfm/docs/home.html). That is the right comparison for [Cicerone](https://cicerone.dev) — a self-hosted **batch** recommender that reads your interactions, writes a top-K table, and otherwise stays out of the request path.
 
-I wrote it for a catalog that is not Netflix. The engine does not care that the original catalog was drinks. Users, items, events.
+The name is a [beer sommelier](https://www.cicerone.org): someone who knows styles and what to pour next. I wrote the first version for a drinks catalog — not Netflix, not a recs team, just “what should this person try”. The engine never needed the SKUs to be bottles. Users, items, events.
 
 It also does not care what you wrote the shop in. There is no Rails gem, no Django package, no Node SDK to keep in lockstep. Cicerone is a container that speaks SQL (or parquet / S3) and writes rows. Your request path stays yours. Rails is this article’s example because it is a common small-shop stack; the same two TOML files sit next to Laravel, Django, Phoenix, or a Go service. The HTTP serve API is optional and we will not use it here.
 
