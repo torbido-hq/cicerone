@@ -15,7 +15,7 @@ export CICERONE_SERVE_URL=http://localhost:8000
 export CICERONE_SERVE_TOKEN=tutorial-token   # matches [serve].auth_token
 # optional: CICERONE_USER_ID=alice
 
-python examples/serve/python_client.py   # ServeClient → typed HealthResponse / RecommendationsResponse
+python examples/serve/python_client.py   # needs cicerone-recommender; ServeClient → typed responses
 node examples/serve/fetch.mjs            # Node 18+ / browser-style fetch
 examples/serve/curl_examples.sh          # curl; needs python (json.tool / json.dumps)
 ```

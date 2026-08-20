@@ -68,7 +68,7 @@ up to your own data doesn't require touching any code.
 input source (S3-compatible/local dataset, or a database)
                                         |
                                         v
-                              cicerone (container "recommender")
+                              cicerone (batch job)
                                  1. reads events/users/items
                                  2. weighs interactions (see below,
                                     config/features.toml)
@@ -154,8 +154,9 @@ While serve is running, FastAPI exposes interactive docs at `/docs` and
 `/redoc`, and the machine-readable schema at `/openapi.json`. A checked-in
 copy (for codegen / offline review without a live process) lives at
 [`docs/openapi/serve.openapi.json`](docs/openapi/serve.openapi.json); refresh
-it with `cicerone export-openapi -o docs/openapi/serve.openapi.json`
-(from a checkout, the test image still needs `PYTHONPATH=/app/src`):
+it with `cicerone export-openapi -o docs/openapi/serve.openapi.json`.
+The test image does not install the wheel, so that path still needs
+`PYTHONPATH=/app/src`:
 
 ```sh
 docker run --rm -v "$PWD":/app -w /app -e PYTHONPATH=/app/src cicerone-test \
@@ -272,8 +273,8 @@ serve). Like serve mode, it never loads lightfm/rectools/implicit.
   alongside the batch `recommender` service.
 - The frontend (htmx + [Stimulus](https://stimulus.hotwired.dev) + Tailwind
   CSS) is fully vendored — no CDN calls at runtime, and no Node/npm needed
-  to run the container (Node only exists in a Docker build stage that
-  compiles Tailwind ahead of time).
+  to run the image or the PyPI wheel (Node only exists in a Docker build
+  stage that compiles Tailwind ahead of time).
 
 ## Configuration (`config/cicerone.toml`)
 
@@ -572,7 +573,9 @@ pip install 'cicerone-recommender[redis]'        # lock backend / Redis Streams
 pip install 'cicerone-recommender[sequential]'   # SASRec / BERT4Rec
 ```
 
-Then, with your own TOML (the same files Docker mounts under `/app/config`):
+Then, with your own TOML. Example files default to image paths
+(`/app/config/features.toml`, `/app/config/dashboard_users.toml`); on a pip
+host set those to files next to `--config`:
 
 ```sh
 cicerone start --config ./config/cicerone.toml           # job + scheduler, or serve

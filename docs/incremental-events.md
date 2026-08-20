@@ -3,9 +3,10 @@
 # Incremental events
 
 Cicerone can fold new interaction events into recommendations **between**
-full batch retrains. Enable `[events]` on the **serve** process: sources
-normalize to the same event contract, micro-batch, then write-through to
-the same `[output]` store serve already reads.
+full batch retrains. Enable `[events]` on the **serve** process
+(`cicerone serve` or the serve container): sources normalize to the same
+event contract, micro-batch, then write-through to the same `[output]`
+store serve already reads.
 
 This is not live ranking. LightFM, item-KNN, sequential, and content
 fallback wait for the next `job.run()` (cron or `POST /trigger/retrain`).

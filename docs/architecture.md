@@ -35,7 +35,7 @@ pipeline and how strategies differ, see [how-it-works.md](how-it-works.md).
 | `content_fallback.py` | Optional content-based cold-item strategy (one-hot item features + cosine vs user history) |
 | `artifact.py` | Optional versioned fitted-model bundle (schema **v3**: RecTools `save`/`load_model` for library models + pickle envelope; `content_fallback` still pickle) |
 | `automl.py` | Optional: backtests candidate models/weights/`rrf_k` configs over time-based folds of event history and picks the best one |
-| `cli.py` | `cicerone` console script (`start` / `job` / `serve` / `dashboard` / `scheduler` / `users`; `--config`, `--log-level`) |
+| `cli.py` | `cicerone` console script (`start` / `job` / `serve` / `dashboard` / `scheduler` / `users` / `export-openapi`; `--config`, `--log-level`) |
 | `packaging.py` | Wheel checks for the Docker `package` stage (`python -m cicerone.packaging`) |
 | `job.py` | Orchestrates one end-to-end run (source → dataset → model → sink) |
 | `scheduler.py` | In-process cron loop that calls `job.run()`; when `[job.trigger]` is enabled, also hosts the retrain-trigger HTTP server (`trigger.py`) |
@@ -46,7 +46,7 @@ pipeline and how strategies differ, see [how-it-works.md](how-it-works.md).
 | `serve/metrics.py` | Prometheus metric objects + helpers (default in-process registry) |
 | `serve_schemas.py` | Pydantic models that drive the serve OpenAPI schema |
 | `serve_client.py` | Thin stdlib HTTP client for the serve read API |
-| `export_serve_openapi.py` | CLI to dump FastAPI's OpenAPI JSON (`docs/openapi/…`) |
+| `export_serve_openapi.py` | `cicerone export-openapi` — dump FastAPI OpenAPI JSON (`docs/openapi/…`) |
 | `events/` | Incremental event ingest: `EventSource` protocol + registry, normalize, micro-batch buffer, user-scoped write-through updater; webhook (`POST /events`), DB watermark, S3-compatible (R2 list/marker; optional AWS SQS), and Redis Streams backends — see [incremental-events.md](incremental-events.md) |
 | `trigger.py` | Event-driven retrain trigger: webhook + optional input-bucket poll, debounce guard (`RunGuard`) shared with the cron loop; increments `cicerone_retrain_trigger_total` (per replica) |
 | `locks.py` | Optional lock backends (postgres / redis) for `RunGuard` and the events apply lease; Redis `owned()` checks the fencing token, Postgres `owned()` checks `pg_locks` for this backend pid |

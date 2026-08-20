@@ -53,7 +53,7 @@ same output store). See `docs/incremental-events.md`.
 Interactive docs: `/docs` (Swagger UI) and `/redoc` (includes language
 code samples via ``x-codeSamples``). Machine-readable schema: `/openapi.json`.
 A checked-in copy lives at `docs/openapi/serve.openapi.json` (regenerate with
-`python -m cicerone.export_serve_openapi`).
+`cicerone export-openapi`).
 """.strip()
 
 

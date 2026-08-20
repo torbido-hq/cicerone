@@ -19,10 +19,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - PyPI distribution `cicerone-recommender` (`import cicerone`; the name
   `cicerone` is taken). Wheel includes compiled dashboard CSS. A GitHub
   Release publishes via trusted publishing (`.github/workflows/publish.yml`).
-- `cicerone` CLI (`start`/`job`/`serve`/`dashboard`/`scheduler`/`users`) with
-  `--config` for a TOML path, plus `--log-level` / `--log-format` (or
-  `CICERONE_LOG_LEVEL` / `CICERONE_LOG_FORMAT`). Runtime image pip-installs
-  the wheel; entrypoint is `cicerone start`.
+- `cicerone` CLI (`start`/`job`/`serve`/`dashboard`/`scheduler`/`users` /
+  `export-openapi`) with `--config` for a TOML path, plus `--log-level` /
+  `--log-format` (or `CICERONE_LOG_LEVEL` / `CICERONE_LOG_FORMAT`). Runtime
+  image pip-installs the wheel; entrypoint is `cicerone start`.
 
 - Optional project-site articles at `/articles/` (static Markdown under
   `website/src/content/docs/articles/`). No nav, RSS, or index until a
@@ -33,10 +33,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Optional **sequential** strategy (`SASRecModel` / `BERT4RecModel`) via
   `[model.sequential]` (`architecture = "sasrec"` or `"bert4rec"`). Requires
-  `pip install -r requirements-sequential.txt` (`rectools[torch]`); serve
-  mode never imports torch. AutoML drops it from the candidate pool when
-  the extra is missing or median distinct items/user is below
-  `[job.sequential].min_median_interactions` (default 5), and logs the skip.
+  `cicerone-recommender[sequential]` / `requirements-sequential.txt`
+  (`rectools[torch]`); serve mode never imports torch. AutoML drops it from
+  the candidate pool when the extra is missing or median distinct items/user
+  is below `[job.sequential].min_median_interactions` (default 5), and logs
+  the skip.
 
 - Incremental events horizontal HA: leader-only apply lease
   (`{lock_key}:events:apply`) when `events.ha = true` with
@@ -48,7 +49,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Redis Streams EventSource (`events.kind = "redis_streams"`): consumer-group
   poll via `XREADGROUP` / `XACK`, idle PEL recovery with `XAUTOCLAIM`, and
   stream entry id fallback when `event_id` is omitted. Requires
-  `requirements-redis.txt` (same optional `redis` pin as the lock backend).
+  `cicerone-recommender[redis]` / `requirements-redis.txt` (same optional
+  `redis` pin as the lock backend).
 - User-scoped incremental write-through: load/replace only affected users
   (plus `__cold_start__`) via `OutputSink.replace_recommendations_for_users`
   (returns post-write distinct user count) instead of full-frame overwrite.
@@ -77,7 +79,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Docs: `docs/how-it-works.md` (pipeline, strategies, papers); incremental
   events operator guide; tutorial webhook step; site sidebar/homepage
   cards; OpenAPI `x-codeSamples` for `POST /events`; PyPI extras
-  (`cicerone-recommender[sequential]` / `[redis]`) next to `requirements-*.txt`.
+  (`cicerone-recommender[sequential]` / `[redis]`) next to `requirements-*.txt`;
+  example TOML / OpenAPI regenerate command for pip hosts.
 - Parse article `draft` from YAML frontmatter; article layout CSS keys off
   `data-cicerone-articles` rather than starlight-blog class names.
 - Share the articles URL prefix between the Starlight plugin and layout

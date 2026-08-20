@@ -47,6 +47,7 @@ def test_openapi_json_lists_serve_paths_and_schemas():
 
     assert schema["info"]["title"] == SERVE_API_TITLE
     assert schema["info"]["version"] == SERVE_API_VERSION
+    assert "cicerone export-openapi" in schema["info"]["description"]
     assert HEALTH_PATH in schema["paths"]
     assert RECOMMENDATIONS_PATH in schema["paths"]
 

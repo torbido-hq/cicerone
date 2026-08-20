@@ -1,12 +1,15 @@
 # Cicerone configuration.
 #
 # This file is meant to be edited (and mounted read-only into the container,
-# see docker-compose.yml) without ever rebuilding the image. Secrets are
-# never written here directly — reference them with "${ENV_VAR_NAME}" and
-# set the actual value in your environment / .env (see .env.example). A
-# referenced variable that isn't set fails config loading immediately. If
-# you ever need a literal "${...}" value (no substitution), escape it with a
-# doubled leading "$", e.g. "$${NOT_A_VAR}" resolves to "${NOT_A_VAR}".
+# see docker-compose.yml) without ever rebuilding the image. A pip install
+# (`cicerone --config ./config/cicerone.toml`) uses the same TOML; set
+# feature_config_path and dashboard users_path to host paths instead of
+# /app/config/…. Secrets are never written here directly — reference them
+# with "${ENV_VAR_NAME}" and set the actual value in your environment / .env
+# (see .env.example). A referenced variable that isn't set fails config
+# loading immediately. If you ever need a literal "${...}" value (no
+# substitution), escape it with a doubled leading "$", e.g. "$${NOT_A_VAR}"
+# resolves to "${NOT_A_VAR}".
 #
 # Input and output are each independently configurable. Every backend
 # ("kind") interprets its own "options" table — see src/cicerone/io/ for the
@@ -29,8 +32,8 @@ feature_config_path = "/app/config/features.toml"
 # entries win ties for the same user/item pair). Defaults to
 # ["collaborative", "item_based", "popular"] if omitted. Available:
 # "collaborative" (LightFM, hybrid CF), "item_based" (item-item KNN),
-# "sequential" (SASRec / BERT4Rec; requires pip install -r
-# requirements-sequential.txt), "content_fallback" (feature similarity for
+# "sequential" (SASRec / BERT4Rec; pip install 'cicerone-recommender[sequential]'
+# or requirements-sequential.txt), "content_fallback" (feature similarity for
 # zero-interaction items; also gated by [job.content_fallback].enabled),
 # "popular" (global popularity fallback), "latest" (trending in the last two
 # weeks). Sequential is opt-in (not in the default models list). Sequences
@@ -71,7 +74,8 @@ feature_config_path = "/app/config/features.toml"
 # period = { days = 14 }
 #
 # Optional sequential strategy (SASRec default; BERT4Rec via architecture).
-# Requires: pip install -r requirements-sequential.txt
+# Requires: pip install 'cicerone-recommender[sequential]'
+# (or pip install -r requirements-sequential.txt from a checkout)
 # [model.sequential]
 # architecture = "sasrec"  # or "bert4rec"
 # n_factors = 64
@@ -184,7 +188,7 @@ feature_config_path = "/app/config/features.toml"
 # # "in_process" = single-instance threading.Lock, no extra infra).
 # # Prefer "postgres" when you already have Postgres (reuses [output] db URL,
 # # or set postgres_url). Use "redis" only for dataset/S3-only output that
-# # needs HA (requires: pip install -r requirements-redis.txt).
+# # needs HA (requires: pip install 'cicerone-recommender[redis]').
 # # lock_backend = "in_process"  # "in_process" | "postgres" | "redis"
 # # postgres_url = "${LOCK_DATABASE_URL}"  # optional override / non-db output
 # # redis_url = "${REDIS_URL}"             # required when lock_backend = "redis"
@@ -279,7 +283,7 @@ prefix = "recommendations/latest"
 # # sqs_client_timeout_seconds = 2
 # # AWS-only alternative (no endpoint_url): mode = "sqs", queue_url = "..."
 
-# Redis Streams (consumer group). Requires: pip install -r requirements-redis.txt
+# Redis Streams (consumer group). Requires: pip install 'cicerone-recommender[redis]'
 # [events]
 # enabled = true
 # kind = "redis_streams"

@@ -7,7 +7,8 @@ using a handful of made-up users/items/events on local disk — no S3 bucket
 or database required until the optional "database backend" section.
 Commands below use Docker so the host stays clean. To run the same TOML
 with pip instead, see [README Installation](../README.md#installation)
-(`pip install cicerone-recommender`, then `cicerone --config …`).
+(`pip install cicerone-recommender`, then `cicerone --config …`; point
+`feature_config_path` and local dataset paths at host files).
 `docker-compose.yml` is for local developer convenience only — do not run
 it as a production deployment. For the full configuration reference, see
 the [README](../README.md); for algorithms and how strategies differ, see
@@ -721,7 +722,8 @@ docker compose up --build
 
 - Swap in your own data, following the [data contract](../README.md#data-contract).
 - Install from PyPI (`pip install cicerone-recommender`) and run
-  `cicerone --config ./config/cicerone.toml start` — see
+  `cicerone --config ./config/cicerone.toml start` — set
+  `feature_config_path` (and dashboard `users_path`) to host files; see
   [README Installation](../README.md#installation).
 - Read [how-it-works.md](how-it-works.md) for algorithms,
   the [model strategies](../README.md#model-strategies),
