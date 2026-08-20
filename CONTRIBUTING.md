@@ -165,6 +165,11 @@ and/or `examples/serve/` when request/response fields change.
 
 ## Release trains
 
+`release/X.Y.0` in this section is a **placeholder** for the in-flight
+minor branch. **Current trains** is the only concrete mapping — substitute
+those versions whenever you see `X.Y.0`. Update that snippet only when
+the split changes.
+
 While a **patch** and a **minor** are in flight together, `main` is the
 patch train and `release/X.Y.0` is the minor train.
 
@@ -188,7 +193,7 @@ patch train and `release/X.Y.0` is the minor train.
   `main` is the minor train and new features land there. Stop
   cherry-picking. Update **Current trains** for the next split.
 
-**Current trains** (update this line only when the split changes):
+**Current trains** (concrete mapping; update this line only):
 patch **0.6.1** on `main`; minor **0.7.0** on `release/0.7.0`.
 
 Cherry-pick, hotfix, and merge-back commands are in
