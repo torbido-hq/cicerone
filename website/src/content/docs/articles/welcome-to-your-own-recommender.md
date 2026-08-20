@@ -268,17 +268,31 @@ The image `ENTRYPOINT` is already `cicerone`, so the command is `job --config �
 
 If the process cannot see Postgres, it is almost always the hostname (container DNS vs `localhost`) or the URL scheme (`postgres://` vs `postgresql+psycopg://`).
 
-Sanity check:
+## See what it did
+
+The job always writes two things: a **manifest row** (did this run succeed, how much data, which models) and the **recommendations table** (what each user got). Dataset/parquet output overwrites the last manifest; **db output appends**, so you keep a short history. That is one reason to share Postgres.
+
+Stdout of `cicerone job` is the first place to look (`Job finished: {…}` plus any `WARN` about dropped `event_type`s or missing feature columns). Then SQL:
 
 ```sql
-SELECT source, COUNT(*) FROM cicerone_recommendations GROUP BY 1;
-SELECT * FROM cicerone_recommendations WHERE user_id = '__cold_start__' ORDER BY rank;
-SELECT * FROM cicerone_recommendations WHERE user_id = '42' ORDER BY rank;
+SELECT generated_at, status, error,
+       n_events, n_target_users, n_users_with_recommendations, n_items,
+       models, triggered_by
+FROM cicerone_recommendation_runs
+ORDER BY generated_at DESC
+LIMIT 5;
 ```
 
-You want a non-empty sentinel. For user `42`, mixed `personalized` / `blended` / `popular_fallback` is success; **only** `popular_fallback` means that user did not give the collaborative model enough to work with.
+```sql
+SELECT source, COUNT(*) AS n
+FROM cicerone_recommendations
+GROUP BY source
+ORDER BY n DESC;
+```
 
-The moment it clicks is joining back to names (illustrative rows — your catalog, your scores):
+`status` should be `success`. `n_events` should match the order lines you think you have. `models` should list `collaborative,popular` (blending may still add popular if you omitted it). If almost every row is `popular_fallback`, the collaborative model did not have enough overlap yet — keep the bestsellers query.
+
+Then look at a real person, with names:
 
 ```sql
 SELECT r.rank, r.source, r.score, p.name, p.category
@@ -289,13 +303,60 @@ ORDER BY r.rank;
 ```
 
 ```text
- rank | source         | score | name              | category
-    1 | blended        |  0.81 | Hazy IPA 440ml    | beer
-    2 | personalized   |  0.44 | Oat Stout         | beer
-    3 | popular_fallback | 0.31 | House Lager       | beer
+ rank | source           | score | name            | category
+    1 | blended          |  0.81 | Hazy IPA 440ml  | beer
+    2 | personalized     |  0.44 | Oat Stout       | beer
+    3 | popular_fallback |  0.31 | House Lager     | beer
 ```
 
-Those `source` labels are the model talking. `blended` means LightFM and popularity both voted for that row; `personalized` is the latent space on its own. Swap `'42'` for `'__cold_start__'` to see what guests get.
+Illustrative rows — your catalog, your scores. `blended` means LightFM and popularity both voted; `personalized` is the latent space on its own. Swap `'42'` for `'__cold_start__'` to see guests.
+
+If you would rather click than query, Cicerone ships a small Basic-Auth **dashboard** that reads the same two tables: latest run (and history, because this is a db output), plus a user-id lookup of current top-K. It never loads LightFM. Put this next to the other TOML as `cicerone.dashboard.toml`:
+
+```toml
+[job]
+cron_schedule = "0 3 * * *"
+
+[input]
+kind = "dataset"
+
+[input.options]
+storage_backend = "local"
+path = "/tmp/unused-in-dashboard-mode"
+
+[output]
+kind = "db"
+
+[output.options]
+database_url = "${OUTPUT_DATABASE_URL}"
+recommendations_table = "cicerone_recommendations"
+manifest_table = "cicerone_recommendation_runs"
+
+[dashboard]
+enabled = true
+host = "0.0.0.0"
+port = 8090
+users_path = "/app/config/dashboard_users.toml"
+lookup_k = 20
+```
+
+`cron_schedule` must match the batch job so the page can tell you the run looks overdue. `[input]` is required by the config loader and unused.
+
+Add a login (prompts for a password; note `-it`), then start it. The image `ENTRYPOINT` is already `cicerone`:
+
+```sh
+docker run --rm -it \
+  -v "$PWD/cicerone:/app/config" \
+  cicerone users --config /app/config/cicerone.dashboard.toml add you
+
+docker run --rm --name cicerone-dashboard -p 127.0.0.1:8090:8090 \
+  --network myapp_default \
+  -e OUTPUT_DATABASE_URL \
+  -v "$PWD/cicerone:/app/config" \
+  cicerone dashboard --config /app/config/cicerone.dashboard.toml
+```
+
+Open `http://127.0.0.1:8090/dashboard`, sign in, type a `user_id` (the string form, `'42'`). Bind only to localhost unless this sits behind your own auth.
 
 ## Read it from the app
 
@@ -396,12 +457,29 @@ cicerone:
     - postgres
 ```
 
-No ports. Batch mode does not listen. Disk is a couple of TOML files; CPU is a nightly LightFM fit. For a shop-sized catalog that is a small VM, not a GPU story.
+No ports on the job. Batch mode does not listen. Disk is a couple of TOML files; CPU is a nightly LightFM fit. For a shop-sized catalog that is a small VM, not a GPU story.
+
+Optional: keep the dashboard up too. The config directory is read-write so `cicerone users` can persist the bcrypt file:
+
+```yaml
+cicerone-dashboard:
+  image: cicerone
+  command: ["dashboard", "--config", "/app/config/cicerone.dashboard.toml"]
+  environment:
+    OUTPUT_DATABASE_URL: postgresql+psycopg://USER:PASS@postgres:5432/myapp_production
+  ports:
+    - "127.0.0.1:8090:8090"
+  volumes:
+    - ./cicerone:/app/config
+  restart: unless-stopped
+  depends_on:
+    - postgres
+```
 
 ## When this is the wrong tool
 
 - You need the list to change inside the same request as “add to cart”. That is a different product (and Cicerone’s optional [serve API](https://cicerone.dev/) plus incremental events still do not retrain LightFM on the request path).
 - You have almost no overlapping buyers. Ship bestsellers, collect events, come back.
-- You already enjoy operating a Python training stack and want SASRec, AutoML, eligibility rules, a dashboard. Those exist — they are not this article. See the [tutorial](https://cicerone.dev/tutorial/) and [how it works](https://cicerone.dev/how-it-works/).
+- You already enjoy operating a Python training stack and want SASRec, AutoML, eligibility rules. Those exist — they are not this article. See the [tutorial](https://cicerone.dev/tutorial/) and [how it works](https://cicerone.dev/how-it-works/).
 
 If you try this and `source` stays popular for everyone who matters, that is fine: keep bestsellers on the homepage, let events accumulate, and come back. You are not behind. You are just early. The honest win is skipping a quarter of glue around a model that, on today’s data, should mostly agree with `ORDER BY COUNT(*) DESC` — and still having a real table to grow into.
