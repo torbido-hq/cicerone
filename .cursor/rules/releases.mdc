@@ -26,8 +26,13 @@ Never land 0.7.0 features on `main` until v0.6.1 ships. After that tag,
 ## After v0.6.1
 
 Cherry-pick each 0.6.1 fix from `main` onto `release/0.7.0`
-(`git cherry-pick <sha>`). Do not merge 0.7.0 into `main` before 0.6.1
+(`git cherry-pick <sha>`). Hotfixes that must ship on both trains land
+on `main` first, then cherry-pick immediately — do not open them only
+against `release/0.7.0`. Do not merge 0.7.0 into `main` before 0.6.1
 ships. After the tag, merge `release/0.7.0` into `main`; `main` becomes
 the 0.7.0 train. Stop cherry-picking onto `release/0.7.0`.
+
+Tag from `main`: 0.6.1 is the completing PR merged to `main`; 0.7.0
+merges `release/0.7.0` into `main` first, then tags that merge commit.
 
 Version bump still happens on the PR that completes that version.

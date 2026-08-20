@@ -189,6 +189,11 @@ git push origin release/0.7.0
 
 Do not merge 0.7.0 into `main` before 0.6.1 ships.
 
+**Hotfixes that must ship on both trains** always land on `main` first
+(0.6.1). Do not open the fix only against `release/0.7.0`. After the
+`main` PR merges, cherry-pick immediately (same commands as above) so
+0.7.0 does not wait for the next routine backport.
+
 **After v0.6.1 is tagged:** merge `release/0.7.0` into `main`. Then `main`
 is the 0.7.0 train (Unreleased = 0.7.0; new features land on `main`).
 Stop cherry-picking onto `release/0.7.0`. Update this table when the next
@@ -210,18 +215,19 @@ named `pypi`, then a [pending trusted publisher](https://docs.pypi.org/trusted-p
 for `cicerone-recommender` — owner `torbido-hq`, repo `cicerone`, workflow
 `publish.yml`, environment `pypi`. No API token.
 
-1. On the feature PR that completes the version, move `## [Unreleased]`
-   notes into `## [X.Y.Z] - YYYY-MM-DD` (today's date) in the same branch
+1. On the PR that completes the version, move `## [Unreleased]` notes
+   into `## [X.Y.Z] - YYYY-MM-DD` (today's date) in the same branch
    before merge, and set `cicerone.__version__`
    (`src/cicerone/__init__.py`) to the same `X.Y.Z` (serve OpenAPI
    metadata uses it via `SERVE_API_VERSION` — regenerate
    `docs/openapi/serve.openapi.json` if the version string changed).
-2. Merge that PR to its train (`main` for 0.6.1, `release/0.7.0` for
-   0.7.0). Tag from `main` (merge `release/0.7.0` into `main` first when
-   shipping 0.7.0).
-3. Tag the merge commit: `git tag -a vX.Y.Z <sha> -m "…"` and
-   `git push origin vX.Y.Z`.
-4. Publish the GitHub release from that tag (notes can mirror the
+2. Get that version onto `main`, then tag **from `main`**:
+   - **0.6.1 (patch):** merge the completing PR to `main`. Tag that merge
+     commit: `git tag -a v0.6.1 <sha> -m "…"` and `git push origin v0.6.1`.
+   - **0.7.0 (minor):** merge the completing PR to `release/0.7.0`. Merge
+     `release/0.7.0` into `main`. Tag the merge commit on `main`:
+     `git tag -a v0.7.0 <sha> -m "…"` and `git push origin v0.7.0`.
+3. Publish the GitHub release from that tag (notes can mirror the
    changelog section). `.github/workflows/publish.yml` builds the sdist and
    wheel (including dashboard CSS) and uploads them to PyPI.
 
