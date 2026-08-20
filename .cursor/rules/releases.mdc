@@ -9,13 +9,6 @@ High-level targeting: [CONTRIBUTING.md](CONTRIBUTING.md) **Release trains**.
 `X.Y.0` there is a placeholder; substitute **Current trains** below.
 This file is the single source of truth for current train versions.
 
-**Current trains** (concrete mapping; this line only):
-patch **0.6.1** on `main`; minor **0.7.0** on `release/0.7.0`.
-
-Update this line in the same PR that changes the split.
-
-## Cherry-picks and merge-backs
-
 Checklist:
 
 1. **Fix** — PR to `main`, then cherry-pick onto `release/X.Y.0`.
@@ -23,6 +16,15 @@ Checklist:
 3. **Hotfix (both trains)** — PR to `main` first, cherry-pick immediately.
 4. **Merge-back** — after the patch tag, cherry-pick any remaining patch
    commits onto `release/X.Y.0`, merge it into `main`, then tag.
+
+## Current trains
+
+Concrete mapping (this line only):
+patch **0.6.1** on `main`; minor **0.7.0** on `release/0.7.0`.
+
+Update this line in the same PR that changes the split.
+
+## Cherry-picks
 
 Cherry-pick each patch-train fix onto `release/X.Y.0` after it lands on
 `main` (the commit that landed the change on `main`). One SHA is the
@@ -52,10 +54,15 @@ week:
 2. **Feature:** branch `feature/serve-filters` from `release/X.Y.0`, PR
    into `release/X.Y.0` (not `main`).
 
+## Hotfixes
+
 **Hotfixes that must ship on both trains** always land on `main` first
 (patch). Do not open the fix only against `release/X.Y.0`. After the
-`main` PR merges, cherry-pick immediately (same commands as above) so the
-minor train does not wait for the next routine backport.
+`main` PR merges, cherry-pick immediately (same commands as
+[Cherry-picks](#cherry-picks)) so the minor train does not wait for the
+next routine backport.
+
+## Merge-backs
 
 When merging `release/X.Y.0` into `main` (after the patch tag, before
 tagging the minor): if `main` has patch commits not yet on

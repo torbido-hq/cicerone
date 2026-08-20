@@ -144,8 +144,10 @@ and/or `examples/serve/` when request/response fields change.
 
 ## Pull requests
 
-- Branch off the train you are targeting (patch = `main`, minor =
-  `release/X.Y.0`). Keep PRs focused on one change.
+- Branch off the train you are targeting
+  ([Release trains](#release-trains);
+  [Current trains](.cursor/rules/releases.mdc#current-trains)).
+  Keep PRs focused on one change.
 - **Branch names (required):** short and human-readable only —
   `feature/…`, `fix/…`, `release/0.3.1`, `docs/…`, `chore/…`.
   **Never** use `cursor/<slug>-<id>` (or any other opaque agent/id suffix).
@@ -165,19 +167,19 @@ and/or `examples/serve/` when request/response fields change.
 
 ## Release trains
 
-`release/X.Y.0` in this section is a **placeholder** for the in-flight
-minor branch. [`.cursor/rules/releases.mdc`](.cursor/rules/releases.mdc)
-is the **single source of truth** for current train versions (**Current
-trains**). Substitute those versions whenever you see `X.Y.0`. Any change
+[`.cursor/rules/releases.mdc`](.cursor/rules/releases.mdc#current-trains)
+is the **single source of truth** for current train versions. Any change
 to branch ownership must update that file in the same PR.
 
-While a **patch** and a **minor** are in flight together, `main` is the
-patch train and `release/X.Y.0` is the minor train.
+`release/X.Y.0` below is a **placeholder** for the in-flight minor
+branch — substitute the version from **Current trains**. While a
+**patch** and a **minor** are in flight together, `main` is the patch
+train and `release/X.Y.0` is the minor train.
 
 | Train | Branch | What lands |
 |---|---|---|
 | **Patch** | `main` | Bug fixes, small refactors, improvements (perf/docs/DX), dependency bumps, tests for existing behavior. No new user-facing capability, config keys, models, or I/O `kind`s. |
-| **Minor** | `release/X.Y.0` (long-lived; PRs target this branch, not `main`) | New features and new public surface. |
+| **Minor** | `release/X.Y.0` (long-lived; PRs target this branch, not `main`). While 0.6.1 and 0.7.0 are in flight, use `release/0.7.0`. | New features and new public surface. |
 
 - Fixes, refactors, improvements → patch (`main`). Features → minor
   (`release/X.Y.0`).
@@ -190,17 +192,14 @@ patch train and `release/X.Y.0` is the minor train.
 - Never land minor-train features on `main` until the patch is tagged.
 - `## [Unreleased]` is per-branch (patch on `main`, minor on
   `release/X.Y.0`).
-- After the patch is tagged: merge `release/X.Y.0` into `main`; then
-  `main` is the minor train and new features land there. Stop
-  cherry-picking. Update **Current trains** in that same PR.
+- After the patch is tagged, follow
+  [Merge-backs](.cursor/rules/releases.mdc#merge-backs) and update
+  **Current trains** in that same PR.
 
-**Example (no split):** v0.6.1 is tagged and `release/0.7.0` is merged
-into `main` → **Current trains** is `no split; main is 0.7.0`. Cutting a
-new split (0.7.1 on `main`, `release/0.8.0` for 0.8.0) updates it the
-other way.
-
-Cherry-pick, hotfix, merge-back, and conflict procedures:
-[`.cursor/rules/releases.mdc`](.cursor/rules/releases.mdc).
+Procedures:
+[Cherry-picks](.cursor/rules/releases.mdc#cherry-picks),
+[Hotfixes](.cursor/rules/releases.mdc#hotfixes),
+[Merge-backs](.cursor/rules/releases.mdc#merge-backs).
 
 ## Releasing
 
@@ -229,10 +228,10 @@ for `cicerone-recommender` — owner `torbido-hq`, repo `cicerone`, workflow
      `main`: `git tag -a vX.Y.Z <sha> -m "…"` and
      `git push origin vX.Y.Z`.
    - **Minor:** merge the completing PR to `release/X.Y.0`. Merge
-     `release/X.Y.0` into `main` (see
-     [`.cursor/rules/releases.mdc`](.cursor/rules/releases.mdc) if
-     `main` diverged). Tag that commit on `main`:
-     `git tag -a vX.Y.Z <sha> -m "…"` and `git push origin vX.Y.Z`.
+     `release/X.Y.0` into `main`
+     ([Merge-backs](.cursor/rules/releases.mdc#merge-backs)). Tag
+     that commit on `main`: `git tag -a vX.Y.Z <sha> -m "…"` and
+     `git push origin vX.Y.Z`.
 3. Publish the GitHub release from that tag (notes can mirror the
    changelog section). `.github/workflows/publish.yml` builds the sdist and
    wheel (including dashboard CSS) and uploads them to PyPI.
