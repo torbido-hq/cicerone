@@ -29,20 +29,23 @@ On a cron (default 03:00 UTC) the job:
 2. Fits two lists — personalized ([LightFM](https://making.lyst.com/lightfm/docs/home.html)) and store-wide bestsellers — then mixes them
 3. Writes `cicerone_recommendations` (`user_id`, `item_id`, `rank`, `score`, `source`)
 
-Your app joins that table to `products`. Guests and brand-new accounts use a fake user id, `__cold_start__`. A purchase this afternoon does not change tonight’s ranks. ([Incremental events](https://cicerone.dev/incremental-events/) can refresh bestsellers between jobs. LightFM still waits for the cron.)
+Your app joins that table to `products`. A purchase this afternoon does not change tonight’s ranks. ([Incremental events](https://cicerone.dev/incremental-events/) can refresh the bestsellers list between jobs. LightFM still waits for the cron.)
+
+In config the bestsellers model is named `popular`. In the table it shows up as `source = popular_fallback` when it filled in for someone LightFM could not personalize. Same list.
+
+Guests and brand-new accounts have no `user_id` on an order line. The job still writes them a list under the id `__cold_start__` — the mix with no personal history. Look that id up the same way you look up `'42'`.
 
 ## What the job does
 
-You do not have 1–5 star ratings. You have purchases: a weak yes, and silence for everything else.
+You do not have 1–5 star ratings. You have purchases: a weak yes, and silence for everything else. Before any model, those rows become training weights: recent purchases count more; caps and `log1p(quantity)` apply. That recipe is [interaction weighting](https://cicerone.dev/how-it-works/#interaction-weighting). This walkthrough does not retell it.
 
 Each night:
 
-1. Your SQL becomes training weights. Recent purchases count more. Caps, `log1p(quantity)`, and the 90-day half-life all run *before* any model. Details: [interaction weighting](https://cicerone.dev/how-it-works/#interaction-weighting).
-2. LightFM builds a personalized list (people with similar purchases; optional tags like `category` help brand-new SKUs). A second list is just weighted sales counts — the homepage bestsellers query, as a model.
-3. Those two lists are mixed by **rank**, not by raw score. A LightFM number and a sales count are not the same unit. With little history, bestsellers win. With enough overlap, LightFM wins. Guests (`__cold_start__`) get the mix with no personal history.
-4. The result is the table. `source` says who voted: `personalized`, `popular_fallback`, `latest` (newest by item date), or `blended` if more than one list contributed that SKU.
+1. LightFM builds a personalized list (people with similar purchases; optional tags like `category` help brand-new SKUs). The second list is weighted sales counts — the homepage bestsellers query, as the `popular` model.
+2. Those two lists are mixed by **rank**, not by raw score. A LightFM number and a sales count are not the same unit. With little history, bestsellers win. With enough overlap, LightFM wins.
+3. The result is the table. `source` says who voted: `personalized`, `popular_fallback` (bestsellers filled in), `latest` (newest by item date), or `blended` if more than one list contributed that SKU.
 
-If two customers never bought the same products, there is nothing to personalize. The mix falls back to bestsellers. That is thin data, not a misconfigured job.
+If two customers never bought the same products, there is nothing to personalize. That is thin data, not a misconfigured job.
 
 This walkthrough trains `collaborative` + `popular` only. Other models, the mix formula, and the papers are in [how it works](https://cicerone.dev/how-it-works/).
 
@@ -53,12 +56,12 @@ On a thin order log, “collaborative filtering” is mostly bestsellers with ex
 | Approach | What it costs you | What thin data does to it |
 | --- | --- | --- |
 | Bestsellers / “also bought” SQL | An afternoon | Works immediately; no personalization |
-| Your own LightFM + cron + fallbacks | Days of glue, then you own it | Same math as Cicerone; you still write weights, cold-start, and a job that cannot overlap itself |
-| Cicerone beside the database | A container, two TOML files, a `JOIN` in any language | Same math, less glue; **still** falls back to bestsellers when history is thin |
+| Your own LightFM + cron + fallbacks | Days of glue, then you own it | Same math as Cicerone; you still write weights, guest rows, and a job that cannot overlap itself |
+| Cicerone beside the database | A container, two TOML files, a `JOIN` in any language | Same math, less glue; **still** falls back to `popular` when history is thin |
 
-Use Cicerone if you want that second row without becoming a recs team, and without putting a Python model in the shop process. Do not use it if you need the list to change in the same request as “add to cart”, or if you expected a model to “just know” from fifty checkouts a week.
+Use Cicerone if you want that second row without becoming a recs team, and without putting a Python model in the shop process. Fifty checkouts a week will not make LightFM “just know.”
 
-**Keep the bestsellers query.** After the first job, look at `source`. If almost every signed-in user is `popular_fallback` (or `blended` that is still mostly popular), the fancy part is not earning its keep yet. That is a data problem, not a config problem.
+**Keep the bestsellers query.** After the first job, look at `source`. If almost every signed-in user is `popular_fallback` (or `blended` that is still mostly that), the fancy part is not earning its keep yet. That is a data problem, not a config problem.
 
 Trap: each successful job **truncates then rewrites** the recommendations table. Point `recommendations_table` at anything you care about and you will empty it. Prefix the name.
 
@@ -211,9 +214,9 @@ popular_share = 0.7
 latest_date_columns = ["created_at"]
 ```
 
-Blending is what writes `__cold_start__`. `saturate_at = 5` means five distinct products is fully on LightFM; a single order stays mostly bestsellers and newest-by-date. On a small shop that is the behavior you want.
+Blending is also how `__cold_start__` gets written. `saturate_at = 5` means five distinct products is fully on LightFM; a single order stays mostly `popular` and newest-by-date. On a small shop that is the behavior you want.
 
-**Two different “latest”s.** `latest_date_columns` ranks products by an item timestamp (`created_at` here). `"latest"` in `[job].models` is windowed popularity on *events*. This walkthrough uses the date list only. Do not add `"latest"` to `models` while blending is on — the two fight. Details: [how it works](https://cicerone.dev/how-it-works/). If `products` has no usable date column among those names, the date list is skipped and its weight moves to bestsellers (you will see that in the job log).
+**Two different “latest”s.** `latest_date_columns` ranks products by an item timestamp (`created_at` here). `"latest"` in `[job].models` is a recency-window sales list on *events* — a third model, not `popular`. This walkthrough uses the date list only. Do not add `"latest"` to `models` while blending is on — the two fight. Details: [how it works](https://cicerone.dev/how-it-works/). If `products` has no usable date column among those names, the date list is skipped and its weight moves to `popular` (you will see that in the job log).
 
 A `view` weight with no view rows is harmless. An `event_type` in SQL that you forget to list under `[event_weights]` is dropped, with a warning.
 
@@ -292,7 +295,7 @@ GROUP BY source
 ORDER BY n DESC;
 ```
 
-`status` should be `success`. `n_events` should match the order lines you think you have. `models` should read `collaborative,popular`. If almost every row is `popular_fallback`, overlap was too thin — keep the bestsellers query.
+`status` should be `success`. `n_events` should match the order lines you think you have. `models` should read `collaborative,popular`. If almost every row is `popular_fallback`, overlap was too thin — the job is still serving bestsellers.
 
 Then look at a real person, with names:
 
@@ -311,7 +314,7 @@ ORDER BY r.rank;
     3 | popular_fallback |  0.31 | House Lager     | beer
 ```
 
-Illustrative rows — your catalog, your scores. `blended` means LightFM and bestsellers both voted; `personalized` is LightFM on its own. Swap `'42'` for `'__cold_start__'` to see guests.
+Illustrative rows — your catalog, your scores. `blended` means LightFM and `popular` both voted; `personalized` is LightFM on its own. Swap `'42'` for `__cold_start__` to see the guest list.
 
 If you would rather click than query, Cicerone ships a small Basic-Auth **dashboard** that reads the same two tables: latest run (and history, because this is a db output), plus a user-id lookup of current top-K. It never loads LightFM. Put this next to the other TOML as `cicerone.dashboard.toml`:
 
@@ -366,7 +369,7 @@ Open `http://127.0.0.1:8090/dashboard`, sign in, type a `user_id` (the string fo
 
 ## Read it from the app
 
-This is a `SELECT`, not an SDK. ActiveRecord is one way to do it; Eloquent, SQLAlchemy, Ecto, or `database/sql` would ask for the same columns. The table has no `id`. Set `primary_key` to `nil` so ActiveRecord does not assume one. `for_user` takes a string `user_id` (`current_user.id.to_s`); `cold_start` is the guest list. Query with `pluck`; do not `find`, `update`, or `belongs_to :product` (string `item_id` vs integer `products.id`):
+This is a `SELECT`, not an SDK. ActiveRecord is one way to do it; Eloquent, SQLAlchemy, Ecto, or `database/sql` would ask for the same columns. The table has no `id`. Set `primary_key` to `nil` so ActiveRecord does not assume one. `for_user` takes a string `user_id` (`current_user.id.to_s`); `cold_start` is `__cold_start__`. Query with `pluck`; do not `find`, `update`, or `belongs_to :product` (string `item_id` vs integer `products.id`):
 
 ```ruby
 class CiceroneRecommendation < ApplicationRecord
@@ -414,7 +417,7 @@ end
 
 If the job has never succeeded, `@recommended` is empty — hide the section, or fall back to your old bestsellers partial. Empty is better than inventing a failure UI. Integer `products.id` is the usual Rails case; if your primary keys are UUIDs, skip `.map(&:to_i)` and pass the strings through.
 
-Same table, no Rails. A Python worker or a Node renderer is the same `SELECT` — including the cold-start fallback when a signed-in user has no rows yet:
+Same table, no Rails. A Python worker or a Node renderer is the same `SELECT` — including `__cold_start__` when a signed-in user has no rows yet:
 
 ```python
 sql = """
@@ -489,7 +492,7 @@ cicerone-dashboard:
 
 Last night’s cron already ran (or you ran `job` once). Look at `source`. That column is the only metric that matters on day one.
 
-If it is mostly `popular_fallback`, keep bestsellers on the homepage. Overlap is still thin. Come back when more customers have bought the same things. You are not behind. You are just early.
+If it is mostly `popular_fallback`, the job is still serving bestsellers. Keep that query on the homepage. Overlap is still thin. Come back when more customers have bought the same things. You are not behind. You are just early.
 
 If `personalized` and `blended` show up for people who actually buy, put the `SELECT` on the homepage and leave the cron in Compose. That is the product this walkthrough set up: a table your shop already knows how to read.
 
