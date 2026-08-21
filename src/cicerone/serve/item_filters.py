@@ -56,38 +56,35 @@ class ItemsFilterCache:
 
     def get(self) -> tuple[pd.DataFrame | None, frozenset[str] | None, dict[str, frozenset[str]]]:
         with self._lock:
-            return self._get_unlocked()
+            version = self._reader.items_version()
+            if version == self._version:
+                return self._items, self._available_ids, self._ids_by_category
 
-    def _get_unlocked(self) -> tuple[pd.DataFrame | None, frozenset[str] | None, dict[str, frozenset[str]]]:
-        version = self._reader.items_version()
-        if version == self._version:
-            return self._items, self._available_ids, self._ids_by_category
-
-        items = normalize_items_snapshot(
-            self._reader.get_items(),
-            category_column=self._category_column,
-            availability_filters=self._availability_filters,
-        )
-        available = (
-            available_item_ids(items, self._availability_filters)
-            if items is not None and not items.empty
-            else None
-        )
-        ids_by_category: dict[str, frozenset[str]] = {}
-        if (
-            items is not None
-            and not items.empty
-            and self._category_column in items.columns
-            and ITEM_COLUMN in items.columns
-        ):
-            item_ids = items[ITEM_COLUMN].astype(str)
-            for cat, idx in items.groupby(self._category_column, sort=False).groups.items():
-                ids_by_category[str(cat)] = frozenset(item_ids.loc[idx].tolist())
-        self._version = version
-        self._items = items
-        self._available_ids = available
-        self._ids_by_category = ids_by_category
-        return items, available, ids_by_category
+            items = normalize_items_snapshot(
+                self._reader.get_items(),
+                category_column=self._category_column,
+                availability_filters=self._availability_filters,
+            )
+            available = (
+                available_item_ids(items, self._availability_filters)
+                if items is not None and not items.empty
+                else None
+            )
+            ids_by_category: dict[str, frozenset[str]] = {}
+            if (
+                items is not None
+                and not items.empty
+                and self._category_column in items.columns
+                and ITEM_COLUMN in items.columns
+            ):
+                item_ids = items[ITEM_COLUMN].astype(str)
+                for cat, idx in items.groupby(self._category_column, sort=False).groups.items():
+                    ids_by_category[str(cat)] = frozenset(item_ids.loc[idx].tolist())
+            self._version = version
+            self._items = items
+            self._available_ids = available
+            self._ids_by_category = ids_by_category
+            return items, available, ids_by_category
 
 
 def filter_recommendations(
