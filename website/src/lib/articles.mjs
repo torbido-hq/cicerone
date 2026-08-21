@@ -5,6 +5,12 @@ import { parse as parseYaml } from 'yaml';
 const ARTICLE_EXT = /\.(mdx?|markdown)$/i;
 export const ARTICLES_PREFIX = 'articles';
 
+// One Astro key: slash variants are one static route (duplicate keys warn,
+// later a hard error). GitHub Pages serves dir/index.html at /path and /path/.
+export const articleRedirects = {
+	'/articles/welcome-to-your-own-recommender/': '/articles/a-nightly-table-next-to-your-orders/',
+};
+
 export function articlesContentDir(websiteRoot) {
 	return join(websiteRoot, 'src/content/docs', ARTICLES_PREFIX);
 }

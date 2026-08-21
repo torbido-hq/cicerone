@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import {
 	ARTICLES_PREFIX,
 	articleIsVisible,
+	articleRedirects,
 	articlesContentDir,
 	articlesLayoutKind,
 	hasPublishedArticles,
@@ -76,4 +77,11 @@ test('articlesLayoutKind classifies listing vs post from the route id', () => {
 
 test('articlesContentDir nests under the shared prefix', () => {
 	assert.equal(articlesContentDir('/site'), `/site/src/content/docs/${ARTICLES_PREFIX}`);
+});
+
+test('old article redirect is one directory route covering both slash variants', () => {
+	const froms = Object.keys(articleRedirects);
+	assert.equal(froms.length, 1, 'duplicate slash keys collide in Astro');
+	assert.deepEqual(froms, ['/articles/welcome-to-your-own-recommender/']);
+	assert.equal(articleRedirects[froms[0]], '/articles/a-nightly-table-next-to-your-orders/');
 });

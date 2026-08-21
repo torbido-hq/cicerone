@@ -1,5 +1,5 @@
 ---
-title: Welcome to your own recommender
+title: A nightly table next to your orders
 description: A nightly top-K table next to your orders — LightFM without Python in the request. Rails is the walkthrough, not a dependency.
 date: 2026-08-20
 excerpt: You already have order_items. Join a ranked table. Honest about what sparse data will and will not do.
@@ -9,13 +9,13 @@ authors:
 
 <img src="https://cicerone.dev/images/docs/cicerone-logo.svg" alt="Cicerone" width="200">
 
-Canonical URL: [https://cicerone.dev/articles/welcome-to-your-own-recommender/](https://cicerone.dev/articles/welcome-to-your-own-recommender/)
+Canonical URL: [https://cicerone.dev/articles/a-nightly-table-next-to-your-orders/](https://cicerone.dev/articles/a-nightly-table-next-to-your-orders/)
 
 You already have `order_items`. What you do not have is a recs team — and you are not fitting LightFM inside the web process. The “Recommended for you” row is usually `ORDER BY sold_count DESC` with better copy. That query is honest. It is also a ceiling.
 
-[Cicerone](https://cicerone.dev) is how you go past it without a new request-path runtime: a self-hosted **batch** job that reads the interactions you already store, writes a top-K table, and stays out of the hot path. Most shops get there by hand — bestsellers, “customers who bought this also bought”, a weekend with [LightFM](https://making.lyst.com/lightfm/docs/home.html). This is that weekend, packaged.
+[Cicerone](https://cicerone.dev) is how you go past it without a new request-path runtime: a self-hosted **batch** job that reads the interactions you already store, writes a top-K table, and stays out of the hot path. Most shops get there by hand — bestsellers, “customers who bought this also bought”, a weekend with [LightFM](https://making.lyst.com/lightfm/docs/home.html). The weekend is the model. The days are weights, cold-start, and a job that cannot overlap itself. Cicerone is that glue.
 
-The name is borrowed twice. In Italian a *cicerone* is a guide, after Cicero. In beer, a [Cicerone](https://www.cicerone.org) is the sommelier: styles, pairings, what to pour next. I needed the second one for a bottle shop — [Torbido](https://torbido.co) — that was never going to import `rectools` into checkout. A cron read `order_items`, fitted LightFM, wrote ranks, went back to sleep. The SKUs were IPAs; the contract was `user_id`, `item_id`, `event_type`. Pull the drinks columns out and the same job still runs. The default `features.toml` in the repo did not get the memo:
+The name is borrowed twice. In Italian a *cicerone* is a guide, after Cicero. In beer, a [Cicerone](https://www.cicerone.org) is the sommelier: styles, pairings, what to pour next. I needed the second one for [Torbido](https://torbido.co): once a bottle shop, now just a landing page. Checkout was not going to import [RecTools](https://github.com/MobileTeleSystems/RecTools): a cron read `order_items`, fitted LightFM, wrote ranks, went back to sleep. The SKUs were drinks; the contract was `user_id`, `item_id`, `event_type`. Pull the drinks columns out and the same job still runs. The default `features.toml` in the repo did not get the memo:
 
 ```toml
 [[user_features]]
@@ -36,14 +36,26 @@ The engine does not care what language the shop is in. There is no Rails gem, no
 Cicerone trains **offline**. On a cron (default 03:00 UTC) it:
 
 1. Runs SQL you give it (`events`, optional `users` / `items`)
-2. Weighs those events, fits a couple of strategies (here: LightFM + popularity)
+2. Weighs those events, fits LightFM + popularity, blends the lists
 3. Writes `cicerone_recommendations` (`user_id`, `item_id`, `rank`, `score`, `source`)
 
-Your app `SELECT`s that table and joins `products`. Guests and brand-new accounts use a sentinel row set, `user_id = '__cold_start__'`, which is why we turn on per-user blending below.
+Your app `SELECT`s that table and joins `products`. Guests and brand-new accounts use a sentinel row set, `user_id = '__cold_start__'`. Nothing Cicerone-shaped loads in the web process. A purchase this afternoon does not change tonight’s ranks. ([Incremental events](https://cicerone.dev/incremental-events/) can refresh popular / latest slices between jobs; LightFM still waits for the cron.)
 
-Nothing Cicerone-shaped loads in the web process. A purchase this afternoon does not change tonight’s ranks. Personalized LightFM only moves on a full retrain.
+## What the job actually does
 
-That is the trick worth getting excited about: **Netflix-shaped math on a shop-sized catalog**, without putting a Python model on the hot path. [LightFM](https://arxiv.org/abs/1507.08439) (WARP) embeds users, items, and side features — here, `category` — in one latent space, so a newly listed IPA can sit near other IPAs before it has a sales history. Popularity covers people with one order. Per-user blending mixes those ranks so you do not fall off a cliff from “personalized” to “everyone sees the same ten SKUs”. You get that as a table. The storefront never imports `rectools`.
+You do not have 1–5 stars. You have purchases — a weak yes, and silence everywhere else. That is [implicit feedback (Hu, Koren & Volinsky, ICDM 2008)](https://yifanhu.net/PUB/cf.pdf). The job learns, for each customer, an order of products they have not bought yet. The SQL is how the pairs get into Postgres; the fit is how they become top-K. Caps, `log1p(quantity)`, and the 90-day half-life all run *before* any model: [interaction weighting](https://cicerone.dev/how-it-works/#interaction-weighting).
+
+**The map.** Each user and each item gets a short vector; how well they match is a dot product. Nearby means “show this.” This job uses **LightFM** ([Kula, *Metadata embeddings for user and item cold-start recommendations*, 2015](https://arxiv.org/abs/1507.08439)): hybrid matrix factorization, so tags such as `category` live in the *same* space. Two IPAs share a direction even if nobody bought both. A newly listed SKU can rank for someone who drinks IPA — the co-purchase graph has not seen it; the feature graph has. That helps cold items. It does not invent overlap.
+
+**The loss.** Imagine the model currently thinks you want the house lager more than the IPA you just bought. **WARP** ([Weston, Bengio & Usunier, IJCAI 2011](https://www.ijcai.org/Proceedings/11/Papers/460.pdf)) samples items you did not buy until it finds that violator, then pushes the embeddings apart. You are optimizing an order, not “predict 4.2 stars.” LightFM also implements [BPR](https://arxiv.org/abs/1205.2618) (Rendle et al., UAI 2009); Cicerone’s default is WARP.
+
+**When the map is empty.** If two customers never bought the same things, their vectors do not talk to each other, and the ranking collapses toward whatever is globally common. Sparse data, not a WARP bug.
+
+**Popular** is that global ranking: weighted interaction counts, no user vector. The `GROUP BY product_id` homepage, as a model, so the mixer has a list that is defined for everyone.
+
+**Mixing lists you cannot add.** A LightFM score and a sales count are not in the same units, so the mixer uses ranks: weighted [reciprocal rank fusion](https://dl.acm.org/doi/10.1145/1571941.1572114) (Cormack, Clarke & Büttcher, SIGIR 2009). Rank `i` contributes `weight / (60 + i)` — the `60` is the constant from that paper. LightFM’s weight is `min(1, n / 5)` (`n` is distinct products after weighting; five SKUs and you are fully on the hybrid). That curve is Cicerone’s, not Cormack’s. The remainder splits between popular and newest items by `created_at`. `source` records who voted: `personalized`, `popular_fallback`, `latest` (that date list), or `blended` if more than one list contributed that SKU. `__cold_start__` is the same mixer with `n = 0`.
+
+None of this runs in the request. The table is the fitted ranking. Item-kNN ([Sarwar et al., WWW 2001](https://files.grouplens.org/papers/www10_sarwar.pdf)) and SASRec ([Kang & McAuley, 2018](https://arxiv.org/abs/1808.09781)) are other jobs; this TOML does not train them. Combiners and the rest of the strategy list: [how it works](https://cicerone.dev/how-it-works/).
 
 ## Compare this with the in-house thing you would write anyway
 
@@ -59,19 +71,7 @@ Cicerone is worth it when you want that second row without becoming a recs team 
 
 **Keep the bestsellers query.** After the first job, look at `source`. If almost every signed-in user is `popular_fallback` (or `blended` that is still mostly popular), the fancy part is not earning its keep yet. That is a data problem, not a config problem.
 
-Other downsides, said plainly:
-
-- Each successful job **truncates then rewrites** the recommendations table. Point `recommendations_table` at anything you care about and you will empty it. Prefix the name.
-- Default input tables are `users` / `events` / `items`. Rails already has `users`, often with `email`, `encrypted_password`, and reset tokens. If you omit `users_query`, Cicerone will `SELECT * FROM users` and then look for a `user_id` column that is actually `id`. Always set a query that aliases `id` and selects nothing else:
-
-```sql
-SELECT id::text AS user_id FROM users
-```
-- IDs are strings. `42` and `"42"` are the same only if you `::text` in SQL and `id.to_s` in Ruby.
-- Output identifiers cannot be schema-qualified (`cicerone.recommendations` is rejected). Tables live in `public` with a prefix, or you use the same database role as the app.
-- The job needs `CREATE` (first run) and `TRUNCATE` on its output tables. A dedicated role that is `SELECT`-only on `orders` is the right idea; granting `CREATE` on `public` is the awkward part. Many small shops just use the app role and are careful with the table name. I would still not use the default name `recommendations`.
-- `docker-compose.yml` in the Cicerone repo is developer convenience, not a production deploy.
-- [Beerware](https://github.com/torbido-hq/cicerone/blob/main/LICENSE). You operate the box.
+One operational trap up front: each successful job **truncates then rewrites** the recommendations table. Point `recommendations_table` at anything you care about and you will empty it. Prefix the name. The rest of the gotchas sit next to the queries that trigger them.
 
 ## Map a Rails schema to the event contract
 
@@ -79,13 +79,13 @@ Cicerone wants **events** (required):
 
 | column | notes |
 | --- | --- |
-| `user_id` | stable string |
-| `item_id` | stable string |
+| `user_id` | stable string (`id::text` / `id.to_s`; `42` and `"42"` are not the same until you do) |
+| `item_id` | stable string (same rule) |
 | `event_type` | must appear in `[event_weights]` or the row is dropped |
 | `quantity` | optional; purchases can scale with `log1p(quantity)` |
 | `occurred_at` | UTC |
 
-Paid order lines are enough to start. Use the timestamp that means the money moved (`paid_at` if you have it). Product views help a bit; they will not rescue a catalog nobody has bought.
+Paid order lines are enough to start. Use the timestamp that means the money moved. The query below uses `paid_at`; if you have no such column, use `created_at`. Product views help a bit; they will not rescue a catalog nobody has bought. How those rows become training weights is [interaction weighting](https://cicerone.dev/how-it-works/#interaction-weighting).
 
 ```sql
 SELECT
@@ -93,33 +93,22 @@ SELECT
   oi.product_id::text AS item_id,
   'purchase'::text AS event_type,
   oi.quantity,
-  o.created_at AS occurred_at
+  o.paid_at AS occurred_at  -- no paid_at? use o.created_at
 FROM order_items oi
 INNER JOIN orders o ON o.id = oi.order_id
 WHERE o.status IN ('paid', 'complete', 'completed')
   AND o.user_id IS NOT NULL
 ```
 
-If you also store authenticated product views, fold them in. Same contract, a second `event_type` that the weights already know:
+If you also store authenticated product views, append this with `UNION ALL`. Same five columns, a second `event_type` that the weights already know:
 
 ```sql
 SELECT
-  o.user_id::text AS user_id,
-  oi.product_id::text AS item_id,
-  'purchase'::text AS event_type,
-  oi.quantity,
-  o.created_at AS occurred_at
-FROM order_items oi
-INNER JOIN orders o ON o.id = oi.order_id
-WHERE o.status IN ('paid', 'complete', 'completed')
-  AND o.user_id IS NOT NULL
-UNION ALL
-SELECT
-  v.user_id::text,
-  v.product_id::text,
-  'view',
+  v.user_id::text AS user_id,
+  v.product_id::text AS item_id,
+  'view'::text AS event_type,
   1,
-  v.created_at
+  v.created_at AS occurred_at
 FROM product_views v
 WHERE v.user_id IS NOT NULL
 ```
@@ -140,7 +129,11 @@ FROM products p
 
 Rename `published` / `in_stock` to whatever booleans you actually have (`active`, `inventory_count > 0`, …). If those columns do not exist, either add expressions or set `item_availability_filters = []` so Cicerone does not look for them. A missing filter column is skipped (fail-open), which is easy to miss in the logs.
 
-Users can be as small as that same query — `id` only, no `email` / `encrypted_password` / tokens. You do not need user features for this setup. The query is there so Cicerone does not `SELECT *` the Devise `users` table.
+Users can be as small as `id` only — no `email` / `encrypted_password` / tokens. You do not need user features for this setup. If you omit `users_query`, Cicerone will `SELECT * FROM users` (the Devise table) and then look for a `user_id` column that is actually `id`. Always alias `id` and select nothing else:
+
+```sql
+SELECT id::text AS user_id FROM users
+```
 
 ## Two TOML files
 
@@ -152,7 +145,9 @@ postgresql+psycopg://USER:PASS@HOST:5432/DBNAME
 
 That is not Rails’ `postgres://` URL. From Compose, `HOST` is the Postgres **service name** (`postgres`, `db`, …), not `localhost`.
 
-`cicerone.toml`:
+Output identifiers cannot be schema-qualified (`cicerone.recommendations` is rejected). Tables live in `public` with a prefix. The job needs `CREATE` (first run) and `TRUNCATE` on those tables. A dedicated role that is `SELECT`-only on `orders` is the right idea; granting `CREATE` on `public` is the awkward part. Many small shops just use the app role and are careful with the table name. Do not use the default name `recommendations`.
+
+The queries in `cicerone.toml` are the purchase / users / items SELECTs from the previous section (add the view `UNION ALL` if you have that table):
 
 ```toml
 [job]
@@ -174,7 +169,7 @@ SELECT
   oi.product_id::text AS item_id,
   'purchase'::text AS event_type,
   oi.quantity,
-  o.created_at AS occurred_at
+  o.paid_at AS occurred_at  -- no paid_at? use o.created_at
 FROM order_items oi
 INNER JOIN orders o ON o.id = oi.order_id
 WHERE o.status IN ('paid', 'complete', 'completed')
@@ -227,7 +222,9 @@ popular_share = 0.7
 latest_date_columns = ["created_at"]
 ```
 
-Blending is what writes `__cold_start__`. Linear `saturate_at = 5` means five distinct products is fully on LightFM; a single order stays mostly popular / latest. On a small shop that is the behavior you want. If `products` has no usable date column among `latest_date_columns`, latest is skipped and its weight moves to popular (you will see that in the job log).
+Blending is what writes `__cold_start__`. Linear `saturate_at = 5` means five distinct products is fully on LightFM; a single order stays mostly popular and newest-by-date. On a small shop that is the behavior you want.
+
+**Two “latest”s.** `latest_date_columns` ranks SKUs by an item timestamp (`created_at` here). `"latest"` in `[job].models` is windowed popularity on *events*. This walkthrough uses the date list only — do not add `"latest"` to `models` while blending is on, or the two fight. Both are spelled out in [how it works](https://cicerone.dev/how-it-works/). If `products` has no usable date column among those names, the date list is skipped and its weight moves to popular (you will see that in the job log). `half_life_days = 90` is exponential recency decay; the rest of the weight recipe is [interaction weighting](https://cicerone.dev/how-it-works/#interaction-weighting).
 
 A `view` weight with no view rows is harmless. An `event_type` in SQL that you forget to list under `[event_weights]` is dropped, with a warning.
 
@@ -353,7 +350,7 @@ enabled = true
 host = "0.0.0.0"
 port = 8090
 users_path = "/app/config/dashboard_users.toml"
-lookup_k = 20
+lookup_k = 10
 ```
 
 `cron_schedule` must match the batch job so the page can tell you the run looks overdue. `[input]` is required by the config loader and unused.
@@ -380,14 +377,14 @@ Open `http://127.0.0.1:8090/dashboard`, sign in, type a `user_id` (the string fo
 
 ## Read it from the app
 
-This is a `SELECT`, not an SDK. ActiveRecord is one way to do it; Eloquent, SQLAlchemy, Ecto, or `database/sql` would ask for the same columns. The table has no `id`. Set `primary_key` to `nil` so ActiveRecord does not assume one. Query it (`where` / `pluck`); do not `find`, `update`, or `belongs_to :product` (string `item_id` vs integer `products.id`):
+This is a `SELECT`, not an SDK. ActiveRecord is one way to do it; Eloquent, SQLAlchemy, Ecto, or `database/sql` would ask for the same columns. The table has no `id`. Set `primary_key` to `nil` so ActiveRecord does not assume one. `for_user` takes a string `user_id` (`current_user.id.to_s`); `cold_start` is the guest list. Query with `pluck`; do not `find`, `update`, or `belongs_to :product` (string `item_id` vs integer `products.id`):
 
 ```ruby
 class CiceroneRecommendation < ApplicationRecord
   self.table_name = "cicerone_recommendations"
   self.primary_key = nil
 
-  scope :for_user, ->(user) { where(user_id: user.id.to_s).order(:rank) }
+  scope :for_user, ->(user_id) { where(user_id: user_id.to_s).order(:rank) }
   scope :cold_start, -> { where(user_id: "__cold_start__").order(:rank) }
 
   def readonly?
@@ -396,15 +393,9 @@ class CiceroneRecommendation < ApplicationRecord
 
   class << self
     def product_ids_for(user, limit: 8)
-      ids = ids_for(user.id.to_s, limit) if user
-      ids = ids_for("__cold_start__", limit) if ids.blank?
+      ids = for_user(user.id.to_s).limit(limit).pluck(:item_id).map(&:to_i) if user
+      ids = cold_start.limit(limit).pluck(:item_id).map(&:to_i) if ids.blank?
       ids
-    end
-
-    private
-
-    def ids_for(user_id, limit)
-      where(user_id: user_id).order(:rank).limit(limit).pluck(:item_id).map(&:to_i)
     end
   end
 end
@@ -478,7 +469,7 @@ cicerone:
     - postgres
 ```
 
-No ports on the job. Batch mode does not listen. Disk is a couple of TOML files; CPU is a nightly LightFM fit. A shop-sized catalog fits on a small VM, not a GPU.
+No ports on the job. Batch mode does not listen. Disk is a couple of TOML files; CPU is a nightly LightFM fit. A shop-sized catalog fits on a small VM, not a GPU. The `docker-compose.yml` in the Cicerone repo is developer convenience, not this deploy.
 
 Optional: keep the dashboard up too. The config directory is read-write so `users add` can persist the bcrypt file:
 
@@ -497,18 +488,20 @@ cicerone-dashboard:
     - postgres
 ```
 
+[Beerware](https://github.com/torbido-hq/cicerone/blob/main/LICENSE). You operate the box.
+
 ## When this is the wrong tool
 
-- You need the list to change inside the same request as “add to cart”. That is a different product (Cicerone’s optional [serve API](https://cicerone.dev/openapi/) plus incremental events still do not retrain LightFM on the request path).
+- You need the list to change inside the same request as “add to cart”. That is a different product (Cicerone’s optional [serve API](https://cicerone.dev/openapi/) plus [incremental events](https://cicerone.dev/incremental-events/) still do not retrain LightFM on the request path).
 - You have almost no overlapping buyers. Ship bestsellers, collect events, come back.
-- You already enjoy operating a Python training stack and want SASRec, AutoML, eligibility rules. Those exist — they are not this article. See the [tutorial](https://cicerone.dev/tutorial/) and [how it works](https://cicerone.dev/how-it-works/).
+- You already enjoy operating a Python training stack and want SASRec, AutoML, eligibility rules. Those exist — they are not this article. See the [tutorial](https://cicerone.dev/tutorial/), [how it works](https://cicerone.dev/how-it-works/), and [architecture](https://cicerone.dev/architecture/).
 
 ## In the morning
 
-Run `job` once. Look at `source`. That column is the only metric that matters on day one.
+Last night’s cron already ran (or you ran `job` once). Look at `source`. That column is the only metric that matters on day one.
 
-If it is mostly `popular_fallback`, keep bestsellers on the homepage. You learned that overlap is still thin, for the price of a container. Come back when more customers have bought the same things. You are not behind. You are just early.
+If it is mostly `popular_fallback`, keep bestsellers on the homepage. Overlap is still thin. Come back when more customers have bought the same things. You are not behind. You are just early.
 
-If `personalized` and `blended` show up next to names you recognize, put the `SELECT` on the homepage and leave the cron in Compose. That is the whole product: a table your shop already knows how to read.
+If `personalized` and `blended` show up for people who actually buy, put the `SELECT` on the homepage and leave the cron in Compose. That is the product this walkthrough set up: a table your shop already knows how to read.
 
-[Torbido](https://torbido.co) still does this every night. The bottles were never the point. `user_id`, `item_id`, `event_type` — then sleep.
+The drink-related columns in the repo's default config were never part of the contract. `user_id`, `item_id`, `event_type`. After that it is a cron: write ranks, sleep, repeat.

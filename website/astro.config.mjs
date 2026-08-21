@@ -5,6 +5,7 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import starlightBlog from 'starlight-blog';
 import {
+	articleRedirects,
 	ARTICLES_PREFIX,
 	articlesContentDir,
 	hasPublishedArticles,
@@ -33,6 +34,7 @@ const articlesPlugin = hasPublishedArticles(articlesDir, { production })
 // https://astro.build/config
 export default defineConfig({
 	site: 'https://cicerone.dev',
+	redirects: articleRedirects,
 	integrations: [
 		starlight({
 			title: 'Cicerone',
