@@ -587,3 +587,67 @@ def test_blend_for_users_latest_by_user_normalizes_non_string_keys():
         latest_by_user={"1": [("b", 1, 2.0)]},
     )
     assert list(out_str_keys[Columns.Item]) == ["b"]
+
+
+def test_blend_for_users_golden_top_k_across_weight_groups():
+    config = _blending(curve="linear", saturate_at=10.0, popular_share=0.5, rrf_k=1.0)
+    personalized = pd.DataFrame(
+        [
+            {
+                Columns.User: "rich",
+                Columns.Item: "p1",
+                Columns.Rank: 1,
+                Columns.Score: 9.0,
+                "source": PERSONALIZED_SOURCE,
+            },
+            {
+                Columns.User: "mid",
+                Columns.Item: "p1",
+                Columns.Rank: 1,
+                Columns.Score: 9.0,
+                "source": PERSONALIZED_SOURCE,
+            },
+        ]
+    )
+    popular = pd.DataFrame(
+        [
+            {
+                Columns.User: "cold",
+                Columns.Item: "pop1",
+                Columns.Rank: 1,
+                Columns.Score: 1.0,
+                "source": POPULAR_SOURCE,
+            },
+            {
+                Columns.User: "mid",
+                Columns.Item: "pop1",
+                Columns.Rank: 1,
+                Columns.Score: 1.0,
+                "source": POPULAR_SOURCE,
+            },
+        ]
+    )
+    out = blend_for_users(
+        personalized=personalized,
+        popular=popular,
+        latest=None,
+        counts={"cold": 0, "mid": 5, "rich": 10},
+        target_users=["rich", "mid", "cold"],
+        config=config,
+        top_k=3,
+        latest_available=True,
+        shared_latest=[("lat1", 1, 2.0)],
+    )
+    by_user = {
+        user: list(zip(group[Columns.Item], group["source"], strict=True))
+        for user, group in out.groupby(Columns.User, sort=False)
+    }
+    assert by_user["cold"] == [("lat1", LATEST_SOURCE), ("pop1", POPULAR_SOURCE)]
+    assert by_user["mid"] == [
+        ("p1", PERSONALIZED_SOURCE),
+        ("lat1", LATEST_SOURCE),
+        ("pop1", POPULAR_SOURCE),
+    ]
+    assert by_user["rich"] == [("p1", PERSONALIZED_SOURCE)]
+    rich = out[out[Columns.User] == "rich"].iloc[0]
+    assert math.isclose(float(rich[Columns.Score]), 1.0 / 2.0)
