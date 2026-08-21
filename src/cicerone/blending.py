@@ -263,14 +263,19 @@ def blend_for_users(
     latest_index = (
         None if latest_by_user is None else {str(uid): ranking for uid, ranking in latest_by_user.items()}
     )
+    if use_indexed_latest and latest_available:
+        if shared_latest is not None:
+            latest_frame = expand_latest_ranking(shared_latest, unique_users)
+        else:
+            latest_frame = _latest_index_frame(latest_index or {}, unique_users)
+    elif latest is not None and latest_available:
+        latest_frame = _normalize_source_frame(latest, LATEST_SOURCE)
+    else:
+        latest_frame = _empty_recs()
     frames = {
         PERSONALIZED_SOURCE: _normalize_source_frame(personalized, PERSONALIZED_SOURCE),
         POPULAR_SOURCE: _normalize_source_frame(popular, POPULAR_SOURCE),
-        LATEST_SOURCE: (
-            _normalize_source_frame(latest, LATEST_SOURCE)
-            if not use_indexed_latest and latest is not None and latest_available
-            else _empty_recs()
-        ),
+        LATEST_SOURCE: latest_frame,
     }
     weight_map = {
         user_id: source_weights(counts_by_user.get(user_id, 0), config, latest_available=latest_available)
@@ -301,21 +306,6 @@ def blend_for_users(
             rrf_k=rrf_k,
         ),
     ]
-    if latest_available:
-        indexed_latest = _empty_recs()
-        if shared_latest is not None:
-            indexed_latest = expand_latest_ranking(shared_latest, unique_users)
-        elif latest_index is not None:
-            indexed_latest = _latest_index_frame(latest_index, unique_users)
-        contribs.append(
-            _weighted_rrf_frame(
-                indexed_latest,
-                source_label=LATEST_SOURCE,
-                user_weights=latest_w,
-                rrf_k=rrf_k,
-            )
-        )
-
     contribs = [frame for frame in contribs if not frame.empty]
     if not contribs:
         return _empty_recs()
