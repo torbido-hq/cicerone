@@ -89,6 +89,7 @@ def test_format_recommendation_rows_uses_placeholders():
             "item_id": "i1",
             "score": MISSING,
             "source": MISSING,
+            "reasons": MISSING,
             "category": MISSING,
         }
     ]
@@ -98,4 +99,31 @@ def test_format_recommendation_rows_formats_score():
     recs = pd.DataFrame([{"item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"}])
     rows = format_recommendation_rows(recs, category_column=None)
 
-    assert rows == [{"rank": "1", "item_id": "i1", "score": "0.9000", "source": "personalized"}]
+    assert rows == [
+        {
+            "rank": "1",
+            "item_id": "i1",
+            "score": "0.9000",
+            "source": "personalized",
+            "reasons": MISSING,
+        }
+    ]
+
+
+def test_format_recommendation_rows_summarizes_reasons():
+    recs = pd.DataFrame(
+        [
+            {
+                "item_id": "i1",
+                "rank": 1,
+                "score": 0.9,
+                "source": "blended",
+                "reasons": (
+                    '{"sources":[{"label":"personalized"},{"label":"popular_fallback"}],'
+                    '"similar_items":[{"item_id":"i9","score":0.5}]}'
+                ),
+            }
+        ]
+    )
+    rows = format_recommendation_rows(recs, category_column=None)
+    assert rows[0]["reasons"] == "personalized+popular_fallback · like i9"

@@ -3,6 +3,10 @@
 Options: database_url (required); optional table names / raw SQL overrides
 (events_query, users_query, items_query). Identifiers come from trusted
 deploy-time config only.
+
+NOTE: upgrading an existing recommendations table for optional ``reasons``
+needs ``ALTER TABLE … ADD COLUMN reasons TEXT``; pandas to_sql(append) will
+not add the column.
 """
 
 from __future__ import annotations

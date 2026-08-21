@@ -14,6 +14,8 @@ from cicerone.config.constants import (
     AUTOML_DEFAULT_PRIMARY_METRIC,
     AUTOML_DEFAULT_TEST_DAYS,
     DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS,
+    DEFAULT_EXPLAIN_MAX_ATTRIBUTES,
+    DEFAULT_EXPLAIN_MAX_SIMILAR_ITEMS,
     DEFAULT_ITEM_BASED_K_NEIGHBORS,
     DEFAULT_LOCK_KEY,
     DEFAULT_LOCK_TTL_SECONDS,
@@ -29,12 +31,14 @@ from cicerone.config.events import coerce_events_settings, load_events_settings
 from cicerone.config.settings import (
     AutomlSettings,
     DashboardSettings,
+    ExplainSettings,
     IOSettings,
     ServeSettings,
     Settings,
     TriggerSettings,
 )
 from cicerone.config.validation import (
+    require_non_negative_int,
     require_positive_float,
     require_positive_int,
     resolve_epoch_metrics,
@@ -169,6 +173,7 @@ def make_settings(**overrides: Any) -> Settings:
         trigger=trigger,
         dashboard=dashboard,
         events=events,
+        explain=ExplainSettings(),
     )
     base.update(overrides)
     if base.get("model_configs") is None:
@@ -195,6 +200,20 @@ def _load_io_settings(raw: dict[str, Any], section_name: str) -> IOSettings:
         raise ConfigError(f"Missing required config key: [{section_name}].kind")
     options = _resolve_env_placeholders(section.get("options", {}), f"{section_name}.options")
     return IOSettings(kind=str(section["kind"]).lower(), options=options)
+
+
+def _load_explain_settings(raw: dict[str, Any]) -> ExplainSettings:
+    return ExplainSettings(
+        enabled=bool(raw.get("enabled", True)),
+        max_similar_items=require_non_negative_int(
+            int(raw.get("max_similar_items", DEFAULT_EXPLAIN_MAX_SIMILAR_ITEMS)),
+            name="job.explain.max_similar_items",
+        ),
+        max_attributes=require_non_negative_int(
+            int(raw.get("max_attributes", DEFAULT_EXPLAIN_MAX_ATTRIBUTES)),
+            name="job.explain.max_attributes",
+        ),
+    )
 
 
 def load_settings(config_path: str | None = None) -> Settings:
@@ -376,6 +395,7 @@ def load_settings(config_path: str | None = None) -> Settings:
             int(sequential.get("min_median_interactions", DEFAULT_SEQUENTIAL_MIN_MEDIAN_INTERACTIONS)),
             name="job.sequential.min_median_interactions",
         ),
+        explain=_load_explain_settings(job.get("explain", {}) or {}),
         automl=AutomlSettings(
             enabled=bool(automl.get("enabled", False)),
             n_splits=require_positive_int(

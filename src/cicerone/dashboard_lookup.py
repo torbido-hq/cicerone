@@ -10,6 +10,7 @@ import pandas as pd
 from cicerone.config import Settings
 from cicerone.io.base import RecommendationReader
 from cicerone.io.recommendation_schema import ITEM_COLUMN, RANK_COLUMN, SCORE_COLUMN, SOURCE_COLUMN
+from cicerone.reasons import parse_reasons
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,7 @@ def empty_recommendations_context(
         "fallback": False,
         "queried": queried,
         "show_category": False,
+        "show_reasons": False,
         "error": error,
     }
 
@@ -64,14 +66,14 @@ def lookup_recommendations(
         if category_column not in recs.columns:
             recs = _join_category(recs, recommendation_reader.get_items(), category_column)
         show_category = category_column in recs.columns
+        items = format_recommendation_rows(recs, category_column=category_column if show_category else None)
         return {
             "user_id": user_id,
-            "items": format_recommendation_rows(
-                recs, category_column=category_column if show_category else None
-            ),
+            "items": items,
             "fallback": used_fallback,
             "queried": True,
             "show_category": show_category,
+            "show_reasons": any(row.get("reasons") and row["reasons"] != MISSING for row in items),
             "error": None,
         }
     except Exception:
@@ -87,11 +89,25 @@ def format_recommendation_rows(recs: pd.DataFrame, *, category_column: str | Non
             "item_id": str(record.get(ITEM_COLUMN, "")),
             "score": _format_score(record.get(SCORE_COLUMN)),
             "source": _format_text(record.get(SOURCE_COLUMN)),
+            "reasons": _format_reasons(record.get("reasons")),
         }
         if category_column is not None:
             item["category"] = _format_text(record.get(category_column))
         rows.append(item)
     return rows
+
+
+def _format_reasons(value: object) -> str:
+    parsed = parse_reasons(value)
+    if parsed is None:
+        return MISSING
+    parts: list[str] = []
+    labels = [item.label for item in parsed.sources]
+    if labels:
+        parts.append("+".join(labels))
+    if parsed.similar_items:
+        parts.append(f"like {parsed.similar_items[0].item_id}")
+    return " · ".join(parts) if parts else MISSING
 
 
 def _load_rows(

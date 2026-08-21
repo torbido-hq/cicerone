@@ -31,7 +31,7 @@ import LatestRelease from '../../components/LatestRelease.astro';
 
 - **Batch job** — cron-scheduled train and top-K write (dataset or DB I/O)
 - **Hybrid strategies** — LightFM, item KNN, optional SASRec/BERT4Rec, content cold-item fallback, popular, latest; priority, RRF, or per-user blending
-- **Serve mode** — read-only HTTP API over precomputed recommendations; OpenAPI at `/docs`
+- **Serve mode** — read-only HTTP API over precomputed recommendations, including optional `reasons` (why this item); OpenAPI at `/docs`
 - **Incremental events** — write-through of popular/latest between retrains
 - **Policies & AutoML** — eligibility filters, score boosts, time-fold backtests
 - **Ops** — retrain webhook, optional input poll, Prometheus metrics, Basic-Auth dashboard with user-id lookup

@@ -26,7 +26,9 @@ from cicerone.config import (
     validate_model_weights,
     validate_rrf_k,
 )
+from cicerone.config.settings import ExplainSettings
 from cicerone.dataset import BuiltDataset
+from cicerone.explain import attach_reasons
 from cicerone.feature_config import DEFAULT_BOOST_OVERFETCH_FACTOR, FeatureConfig
 from cicerone.ids import interacting_external_user_ids
 from cicerone.model.combine import combine_by_priority, combine_by_weighted_fusion
@@ -367,6 +369,7 @@ def recommend_with_models(
     weights: dict[str, float] | None = None,
     rrf_k: float | None = None,
     run_plan: ModelRunPlan | None = None,
+    explain: ExplainSettings | None = None,
 ) -> pd.DataFrame:
     """Recommend + combine on already-fitted strategies (no fit)."""
     blending = config.blending
@@ -425,7 +428,13 @@ def recommend_with_models(
     if cohort_plan.has_boosts:
         combined = apply_boosts(combined, built.items, config.boosts, top_k=top_k)
 
-    return combined.reset_index(drop=True)
+    return attach_reasons(
+        combined.reset_index(drop=True),
+        items=built.items,
+        interactions=built.interactions,
+        feature_columns=config.item_features,
+        settings=explain if explain is not None else ExplainSettings(),
+    )
 
 
 def train_and_recommend(
@@ -444,6 +453,7 @@ def train_and_recommend(
     content_fallback_enabled: bool | None = None,
     content_fallback_max_neighbors: int = DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS,
     run_plan: ModelRunPlan | None = None,
+    explain: ExplainSettings | None = None,
 ) -> pd.DataFrame:
     """Fit enabled strategies, then recommend + combine."""
     if run_plan is None:
@@ -475,4 +485,5 @@ def train_and_recommend(
         weights=weights,
         rrf_k=rrf_k,
         run_plan=run_plan,
+        explain=explain,
     )

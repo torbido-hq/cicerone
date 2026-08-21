@@ -13,6 +13,7 @@ import pandas as pd
 from rectools import Columns
 
 from cicerone.feature_config import BlendingConfig
+from cicerone.reasons import SOURCE_CONTRIBS_COLUMN
 
 SOURCE_COLUMN = "source"
 BLENDED_SOURCE = "blended"
@@ -24,6 +25,7 @@ COLD_START_USER_ID = "__cold_start__"
 _WEIGHT_EPS = 1e-9
 _SIGMOID_EXP_CLAMP = 50.0
 _EMPTY_COLS = [Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN]
+_SOURCE_ORDER = (PERSONALIZED_SOURCE, POPULAR_SOURCE, LATEST_SOURCE)
 
 
 def _empty_recs() -> pd.DataFrame:
@@ -202,6 +204,20 @@ def _rrf_contrib(rank: float, weight: float, rrf_k: float) -> float:
     return weight / (rrf_k + rank)
 
 
+def _source_contrib(label: str, rank: float, weight: float, rrf_k: float) -> dict[str, object]:
+    return {
+        "label": label,
+        "rank": int(rank),
+        "weight": float(weight),
+        "contribution": float(_rrf_contrib(rank, weight, rrf_k)),
+    }
+
+
+def _ordered_contribs(contribs: list[dict[str, object]]) -> list[dict[str, object]]:
+    order = {label: index for index, label in enumerate(_SOURCE_ORDER)}
+    return sorted(contribs, key=lambda item: order.get(str(item.get("label")), len(order)))
+
+
 def _rows_by_user(frame: pd.DataFrame) -> dict[str, list[tuple[str, float]]]:
     """Map user_id → [(item_id, rank), ...] for O(1) blend lookups."""
     if frame.empty:
@@ -249,7 +265,7 @@ def blend_for_users(
     }
     by_source_user = {label: _rows_by_user(frame) for label, frame in frames.items()}
 
-    by_user_item: dict[tuple[str, str], tuple[float, set[str]]] = {}
+    by_user_item: dict[tuple[str, str], tuple[float, list[dict[str, object]]]] = {}
     for user_id in dict.fromkeys(str(u) for u in target_users):
         weights = source_weights(
             counts.get(user_id, 0),
@@ -262,10 +278,10 @@ def blend_for_users(
                 continue
             for item_id, rank in user_index.get(user_id, ()):
                 key = (user_id, item_id)
-                score, sources = by_user_item.get(key, (0.0, set()))
+                score, contribs = by_user_item.get(key, (0.0, []))
                 score += _rrf_contrib(rank, weight, config.rrf_k)
-                sources.add(source_label)
-                by_user_item[key] = (score, sources)
+                contribs = [*contribs, _source_contrib(source_label, rank, weight, config.rrf_k)]
+                by_user_item[key] = (score, contribs)
 
         if latest_available:
             ranking: Sequence[tuple[str, int, float]] | None = None
@@ -278,22 +294,27 @@ def blend_for_users(
                 if weight > _WEIGHT_EPS:
                     for item_id, rank, _score in ranking:
                         key = (user_id, str(item_id))
-                        score, sources = by_user_item.get(key, (0.0, set()))
+                        score, contribs = by_user_item.get(key, (0.0, []))
                         score += _rrf_contrib(float(rank), weight, config.rrf_k)
-                        sources.add(LATEST_SOURCE)
-                        by_user_item[key] = (score, sources)
+                        contribs = [
+                            *contribs,
+                            _source_contrib(LATEST_SOURCE, float(rank), weight, config.rrf_k),
+                        ]
+                        by_user_item[key] = (score, contribs)
     if not by_user_item:
         return _empty_recs()
 
     rows = []
-    for (user_id, item_id), (score, sources) in by_user_item.items():
-        label = BLENDED_SOURCE if len(sources) > 1 else next(iter(sources))
+    for (user_id, item_id), (score, contribs) in by_user_item.items():
+        ordered = _ordered_contribs(contribs)
+        label = BLENDED_SOURCE if len(ordered) > 1 else str(ordered[0]["label"])
         rows.append(
             {
                 Columns.User: user_id,
                 Columns.Item: item_id,
                 Columns.Score: score,
                 SOURCE_COLUMN: label,
+                SOURCE_CONTRIBS_COLUMN: ordered,
             }
         )
 
@@ -303,9 +324,9 @@ def blend_for_users(
     )
     combined[Columns.Rank] = combined.groupby(Columns.User).cumcount() + 1
     combined = combined.groupby(Columns.User, as_index=False).head(top_k)
-    return combined[[Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN]].reset_index(
-        drop=True
-    )
+    return combined[
+        [Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN, SOURCE_CONTRIBS_COLUMN]
+    ].reset_index(drop=True)
 
 
 def append_cold_start_rows(

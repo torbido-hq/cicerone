@@ -133,8 +133,13 @@ print(json.dumps(json.load(open('/data/output/manifest.json')), indent=2))
 You should see up to `top_k` ranked `item_id`s per user, each tagged with
 the `source` strategy that produced it (`personalized` for the default
 `collaborative` model, `popular_fallback` for users without enough
-personalized results), plus a `manifest.json` with run metadata (event/user/
-item counts, the models/weights actually used, timestamps).
+personalized results). With `[job.explain]` on (default), each row also
+has a `reasons` JSON string: contributing sources, boost hits, and similar
+history items. Serve returns that as `item.reasons`. Disable with
+`[job.explain].enabled = false`. See
+[how-it-works.md](how-it-works.md#why-this-item). A `manifest.json` has
+run metadata (event/user/item counts, the models/weights actually used,
+timestamps).
 
 ## 5. Try different model strategies
 
@@ -438,6 +443,11 @@ print(pd.read_sql('SELECT status, models, artifact_written FROM recommendation_r
 "
 ```
 
+A fresh `recommendations` table includes `reasons`. An existing table from
+an older Cicerone needs `ALTER TABLE recommendations ADD COLUMN reasons TEXT`
+before the extra column will persist (`pandas` `to_sql(append)` will not
+add it).
+
 Input and output can be mixed (e.g. read from Postgres, write to S3, or
 vice versa), and raw SQL overrides (`events_query`/`users_query`/
 `items_query`) let you read straight from an existing application schema
@@ -499,7 +509,20 @@ The response is an object (not a bare list):
   "user_id": "alice",
   "fallback": false,
   "items": [
-    {"item_id": "lager-003", "rank": 1, "score": 0.91, "source": "blended"}
+    {
+      "item_id": "lager-003",
+      "rank": 1,
+      "score": 0.91,
+      "source": "blended",
+      "reasons": {
+        "sources": [
+          {"label": "personalized", "rank": 4, "weight": 0.72, "contribution": 0.0113}
+        ],
+        "boosts": [],
+        "similar_items": [{"item_id": "lager-001", "score": 0.67}],
+        "matched_attributes": [{"column": "style", "value": "lager"}]
+      }
+    }
   ]
 }
 ```
@@ -677,7 +700,9 @@ Then start the dashboard and open `http://localhost:8090/dashboard` in a
 browser (log in with the user just created), or
 `http://localhost:8090/dashboard?user_id=alice` to fill the inspector on
 load. The **Look up recommendations** form inspects a `user_id`'s current
-top-K from the same output store (including cold-start fallback). Row count
+top-K from the same output store (including cold-start fallback). When
+`reasons` is present, a Why column summarizes source labels and the top
+similar history item. Row count
 is `min(job.top_k, dashboard.lookup_k)` (default 20). If you enabled
 `[events]` in [step 13](#13-ingest-incremental-events-optional), an
 incremental-events panel appears once a flush is in the latest manifest
