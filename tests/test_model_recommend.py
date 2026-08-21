@@ -936,3 +936,44 @@ def test_recommend_cache_key_includes_allowlist_filter_and_dataset():
     assert same != _recommend_cache_key(
         "strategy", "als", None, 10, items, True, _dataset_fingerprint(other_ds)
     )
+
+
+def test_recommend_with_models_thread_pool_matches_serial(sample_items, feature_config):
+    from cicerone.model.fit import fit_strategies, plan_model_run
+    from cicerone.model.recommend import recommend_with_models
+
+    events = synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+    target_users = ["u1", "u2", "u3"]
+    plan = plan_model_run(
+        list(DEFAULT_MODELS),
+        blending_enabled=feature_config.blending.enabled,
+        content_fallback_enabled=None,
+    )
+    _, fitted = fit_strategies(
+        built,
+        target_users,
+        enabled_models=list(plan.recommend_models),
+        max_workers=1,
+    )
+    serial = recommend_with_models(
+        fitted,
+        built,
+        target_users,
+        feature_config,
+        top_k=2,
+        enabled_models=list(plan.enabled_models),
+        run_plan=plan,
+        max_workers=1,
+    )
+    parallel = recommend_with_models(
+        fitted,
+        built,
+        target_users,
+        feature_config,
+        top_k=2,
+        enabled_models=list(plan.enabled_models),
+        run_plan=plan,
+        max_workers=4,
+    )
+    pd.testing.assert_frame_equal(serial.reset_index(drop=True), parallel.reset_index(drop=True))
