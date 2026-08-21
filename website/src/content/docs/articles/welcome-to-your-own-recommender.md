@@ -93,7 +93,7 @@ SELECT
   oi.product_id::text AS item_id,
   'purchase'::text AS event_type,
   oi.quantity,
-  o.paid_at AS occurred_at
+  o.paid_at AS occurred_at  -- no paid_at? use o.created_at
 FROM order_items oi
 INNER JOIN orders o ON o.id = oi.order_id
 WHERE o.status IN ('paid', 'complete', 'completed')
@@ -169,7 +169,7 @@ SELECT
   oi.product_id::text AS item_id,
   'purchase'::text AS event_type,
   oi.quantity,
-  o.paid_at AS occurred_at
+  o.paid_at AS occurred_at  -- no paid_at? use o.created_at
 FROM order_items oi
 INNER JOIN orders o ON o.id = oi.order_id
 WHERE o.status IN ('paid', 'complete', 'completed')
@@ -375,12 +375,15 @@ Open `http://127.0.0.1:8090/dashboard`, sign in, type a `user_id` (the string fo
 
 ## Read it from the app
 
-This is a `SELECT`, not an SDK. ActiveRecord is one way to do it; Eloquent, SQLAlchemy, Ecto, or `database/sql` would ask for the same columns. The table has no `id`. Set `primary_key` to `nil` so ActiveRecord does not assume one. Query it (`where` / `pluck`); do not `find`, `update`, or `belongs_to :product` (string `item_id` vs integer `products.id`):
+This is a `SELECT`, not an SDK. ActiveRecord is one way to do it; Eloquent, SQLAlchemy, Ecto, or `database/sql` would ask for the same columns. The table has no `id`. Set `primary_key` to `nil` so ActiveRecord does not assume one. `for_user` / `cold_start` are the query API (`pluck`); do not `find`, `update`, or `belongs_to :product` (string `item_id` vs integer `products.id`):
 
 ```ruby
 class CiceroneRecommendation < ApplicationRecord
   self.table_name = "cicerone_recommendations"
   self.primary_key = nil
+
+  scope :for_user, ->(user) { where(user_id: user.id.to_s).order(:rank) }
+  scope :cold_start, -> { where(user_id: "__cold_start__").order(:rank) }
 
   def readonly?
     true
@@ -388,15 +391,9 @@ class CiceroneRecommendation < ApplicationRecord
 
   class << self
     def product_ids_for(user, limit: 8)
-      ids = ids_for(user.id.to_s, limit) if user
-      ids = ids_for("__cold_start__", limit) if ids.blank?
+      ids = for_user(user).limit(limit).pluck(:item_id).map(&:to_i) if user
+      ids = cold_start.limit(limit).pluck(:item_id).map(&:to_i) if ids.blank?
       ids
-    end
-
-    private
-
-    def ids_for(user_id, limit)
-      where(user_id: user_id).order(:rank).limit(limit).pluck(:item_id).map(&:to_i)
     end
   end
 end
