@@ -76,8 +76,13 @@ def build_interactions(events: pd.DataFrame, config: FeatureConfig, half_life_da
     """Weighted/aggregated interactions without building a rectools Dataset."""
     df = events.copy()
     df["occurred_at"] = pd.to_datetime(df["occurred_at"], utc=True)
-    df["quantity"] = df.get("quantity", 1)
-    df["quantity"] = df["quantity"].fillna(1).clip(lower=1)
+    if "quantity" not in df.columns:
+        df["quantity"] = 1.0
+    else:
+        original_qty = df["quantity"]
+        parsed_qty = pd.to_numeric(original_qty, errors="coerce")
+        parsed_qty = parsed_qty.mask(original_qty.isna(), 1)
+        df["quantity"] = parsed_qty.clip(lower=1)
 
     row_weight = event_row_weights(
         df["event_type"],
@@ -85,9 +90,16 @@ def build_interactions(events: pd.DataFrame, config: FeatureConfig, half_life_da
         event_weights=config.event_weights,
         quantity_scaled_events=config.quantity_scaled_events,
     )
-    unknown = df["event_type"][row_weight.isna()].unique()
+    unknown_type = ~df["event_type"].isin(set(config.event_weights))
+    unknown = df["event_type"][unknown_type].unique()
     if len(unknown):
         logger.warning("Dropping event_type values missing from event_weights config: %s", unknown)
+    bad_qty = df["event_type"][row_weight.isna() & ~unknown_type].unique()
+    if len(bad_qty):
+        logger.warning(
+            "Dropping quantity-scaled events with non-numeric quantity: %s",
+            bad_qty,
+        )
     df = df.assign(row_weight=row_weight).dropna(subset=["row_weight"])
 
     if config.event_caps:

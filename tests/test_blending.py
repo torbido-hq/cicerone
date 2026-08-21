@@ -536,6 +536,27 @@ def test_blend_for_users_shared_latest_avoids_cartesian_frame():
     assert "lat1" in set(out[Columns.Item])
 
 
+def test_blend_for_users_latest_by_user_ignores_index_users_not_in_targets():
+    config = _blending(curve="linear", saturate_at=1.0, popular_share=0.5)
+    empty = pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, "source"])
+    out = blend_for_users(
+        personalized=empty,
+        popular=empty,
+        latest=None,
+        counts={"u1": 0},
+        target_users=["u1"],
+        config=config,
+        top_k=2,
+        latest_available=True,
+        latest_by_user={
+            "u1": [("a", 1, 2.0)],
+            "extra": [("z", 1, 9.0)],
+        },
+    )
+    assert list(out[Columns.User]) == ["u1"]
+    assert list(out[Columns.Item]) == ["a"]
+
+
 def test_blend_for_users_latest_by_user_avoids_cartesian_frame():
     config = _blending(curve="linear", saturate_at=1.0, popular_share=0.5)
     empty = pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, "source"])

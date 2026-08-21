@@ -216,10 +216,10 @@ def _latest_index_frame(
     latest_index: Mapping[str, Sequence[tuple[str, int, float]]],
     target_users: Sequence[str],
 ) -> pd.DataFrame:
-    wanted = set(target_users)
     rows: list[dict[str, object]] = []
-    for user_id, ranking in latest_index.items():
-        if user_id not in wanted or not ranking:
+    for user_id in dict.fromkeys(target_users):
+        ranking = latest_index.get(user_id)
+        if not ranking:
             continue
         for item_id, rank, _score in ranking:
             rows.append(
