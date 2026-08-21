@@ -1,0 +1,67 @@
+---
+---
+
+<div
+	id="cicerone-consent"
+	class="cicerone-consent"
+	hidden
+	role="dialog"
+	aria-modal="false"
+	aria-labelledby="cicerone-consent-title"
+	aria-describedby="cicerone-consent-desc"
+>
+	<div class="cicerone-consent__inner">
+		<div class="cicerone-consent__copy">
+			<p id="cicerone-consent-title" class="cicerone-consent__title">Analytics cookies</p>
+			<p id="cicerone-consent-desc">
+				Google Analytics, only if you accept. No ads.{' '}
+				<a href="/privacy/">Privacy</a>
+			</p>
+		</div>
+		<div class="cicerone-consent__actions">
+			<button type="button" data-cicerone-consent="denied">Reject</button>
+			<button type="button" data-cicerone-consent="granted">Accept</button>
+		</div>
+	</div>
+</div>
+
+<script>
+	import {
+		CONSENT_ANALYTICS,
+		CONSENT_DENIED,
+		CONSENT_STORAGE_KEY,
+		parseStoredConsent,
+	} from '../lib/consent.mjs';
+
+	const root = document.getElementById('cicerone-consent');
+	const footer = document.querySelector('[data-cicerone-consent-footer]');
+	if (root && typeof window.gtag === 'function') {
+		if (footer instanceof HTMLElement) footer.hidden = false;
+
+		const apply = (state: Record<string, string>) => {
+			localStorage.setItem(CONSENT_STORAGE_KEY, JSON.stringify(state));
+			window.gtag?.('consent', 'update', state);
+			root.hidden = true;
+		};
+
+		root.querySelectorAll('[data-cicerone-consent]').forEach((button) => {
+			button.addEventListener('click', () => {
+				const granted = button.getAttribute('data-cicerone-consent') === 'granted';
+				apply(granted ? { ...CONSENT_ANALYTICS } : { ...CONSENT_DENIED });
+			});
+		});
+
+		document.addEventListener('click', (event) => {
+			const target = event.target;
+			if (!(target instanceof Element) || !target.closest('[data-cicerone-consent-open]')) {
+				return;
+			}
+			event.preventDefault();
+			root.hidden = false;
+		});
+
+		if (!parseStoredConsent(localStorage.getItem(CONSENT_STORAGE_KEY))) {
+			root.hidden = false;
+		}
+	}
+</script>

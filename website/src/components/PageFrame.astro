@@ -1,5 +1,6 @@
 ---
 import Default from '@astrojs/starlight/components/PageFrame.astro';
+import ConsentBanner from './ConsentBanner.astro';
 import { articlesLayoutKind } from '../lib/articles.mjs';
 
 const id = Astro.locals.starlightRoute?.id;
@@ -12,6 +13,7 @@ const kind = articlesLayoutKind(id);
 		<slot name="sidebar" slot="sidebar" />
 		<slot />
 	</Default>
+	<ConsentBanner />
 </div>
 
 <style>

@@ -39,6 +39,8 @@ jobs:
 
       - name: Install and build
         working-directory: website
+        env:
+          PUBLIC_GA_MEASUREMENT_ID: ${{ vars.PUBLIC_GA_MEASUREMENT_ID }}
         run: |
           npm ci
           npm test

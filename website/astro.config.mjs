@@ -10,6 +10,7 @@ import {
 	articlesContentDir,
 	hasPublishedArticles,
 } from './src/lib/articles.mjs';
+import { analyticsHead } from './src/lib/consent.mjs';
 
 const websiteRoot = dirname(fileURLToPath(import.meta.url));
 const articlesDir = articlesContentDir(websiteRoot);
@@ -57,6 +58,7 @@ export default defineConfig({
 			],
 			components: {
 				PageFrame: './src/components/PageFrame.astro',
+				Footer: './src/components/Footer.astro',
 			},
 			customCss: ['./src/styles/custom.css'],
 			sidebar: [
@@ -77,6 +79,7 @@ export default defineConfig({
 							label: 'Serve OpenAPI',
 							link: '/openapi/',
 						},
+						{ label: 'Privacy', slug: 'privacy' },
 						{
 							label: 'Changelog',
 							link: 'https://github.com/torbido-hq/cicerone/blob/main/CHANGELOG.md',
@@ -96,6 +99,7 @@ export default defineConfig({
 				},
 			],
 			head: [
+				...analyticsHead(),
 				{
 					tag: 'link',
 					attrs: { rel: 'preconnect', href: 'https://fonts.googleapis.com' },
