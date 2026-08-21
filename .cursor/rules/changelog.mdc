@@ -6,7 +6,11 @@ description: CHANGELOG is product-only; never date website work; freeze shipped 
 # Changelog (released versions are frozen)
 
 [CHANGELOG.md](CHANGELOG.md) follows Keep a Changelog. Dated `## [x.y.z]`
-sections are **immutable**.
+bullet text is **immutable** once tagged; do not rewrite or “clarify” it.
+
+`###` groups are **A–Z** in every version (Unreleased and dated, including
+past): Added, Changed, Deprecated, Fixed, Removed, Security. Do not use
+Keep a Changelog’s Removed-before-Fixed order. Omit unused groups.
 
 **CHANGELOG = product. Website ≠ product.** Do not add, date, or “complete
 a release” with website notes.
@@ -41,13 +45,17 @@ second copy of the split.
 ## Do
 
 - Put new notes only under `## [Unreleased]` on the train you are
-  targeting (patch on `main`, minor on `release/X.Y.0`).
+  targeting (patch on `main`, minor on `release/X.Y.0`), except when that
+  version is already dated on the open release PR — then add under that
+  dated section.
+- Keep `###` headings A–Z. Reorder existing groups to match; do not
+  rewrite their bullets.
 - Short bullets for **this** product change. Do not re-tell older releases.
 
 ## Do not
 
 - Changelog the website. Ever.
-- Edit, rewrite, move, or “clarify” any `## [x.y.z] - YYYY-MM-DD` section.
+- Rewrite, move, or “clarify” bullets in a tagged `## [x.y.z]` section.
 - Expand Unreleased bullets so they re-document a shipped version
   (e.g. do not narrate 0.5.0 lock behavior inside a later HA note).
 - Backport Unreleased items into an already-tagged release section.
