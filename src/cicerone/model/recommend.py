@@ -66,6 +66,24 @@ def _recommend_cache_key(*parts: object) -> tuple[Hashable, ...]:
     return tuple(_cache_key_part(p) for p in parts)
 
 
+def _items_fingerprint(allowed_items: Sequence | None) -> Hashable:
+    if not allowed_items:
+        return None
+    return frozenset(map(str, allowed_items))
+
+
+def _dataset_fingerprint(dataset: object) -> Hashable:
+    fingerprint = getattr(dataset, "fingerprint", None)
+    if callable(fingerprint):
+        fingerprint = fingerprint()
+    if fingerprint is not None:
+        return _cache_key_part(fingerprint)
+    version = getattr(dataset, "version", None)
+    if version is not None:
+        return _cache_key_part(version)
+    return id(dataset)
+
+
 def boost_overfetch_k(
     top_k: int, has_boosts: bool, overfetch_factor: int = DEFAULT_BOOST_OVERFETCH_FACTOR
 ) -> int:
@@ -223,7 +241,15 @@ def _recommend_per_strategy(
             else:
                 recommend_users = cohort_users
 
-            cache_key = _recommend_cache_key("strategy", name, cohort_key_value, cohort_plan.recommend_k)
+            cache_key = _recommend_cache_key(
+                "strategy",
+                name,
+                cohort_key_value,
+                cohort_plan.recommend_k,
+                _items_fingerprint(allowed_items),
+                bool(strategy.personalized),
+                _dataset_fingerprint(dataset),
+            )
             cached = recommend_cache.get(cache_key) if recommend_cache is not None else None
             if cached is not None:
                 recs = cached.copy()
@@ -256,7 +282,14 @@ def _recommend_per_strategy(
             allowed_items = cohort_plan.allowed_by_cohort[cohort_key]
             if not allowed_items:
                 continue
-            latest_key = _recommend_cache_key("latest", date_column, cohort_key, latest_k)
+            latest_key = _recommend_cache_key(
+                "latest",
+                date_column,
+                cohort_key,
+                latest_k,
+                _items_fingerprint(allowed_items),
+                _dataset_fingerprint(dataset),
+            )
             cached_latest = recommend_cache.get(latest_key) if recommend_cache is not None else None
             if cached_latest is not None:
                 latest_by_cohort[cohort_key] = list(cached_latest)
@@ -407,7 +440,11 @@ def recommend_with_models(
     run_plan: ModelRunPlan | None = None,
     recommend_cache: RecommendCache | None = None,
 ) -> pd.DataFrame:
-    """Recommend + combine on already-fitted strategies (no fit)."""
+    """Recommend + combine on already-fitted strategies (no fit).
+
+    ``recommend_cache`` keys include strategy, cohort, k, allowlist, filter_viewed,
+    and dataset identity so a shared dict is safe across differing inputs.
+    """
     blending = config.blending
     blending_enabled = blending.enabled
     if run_plan is None:
