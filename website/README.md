@@ -68,8 +68,8 @@ Serif at ~65ch; chrome stays IBM Plex Sans, dates IBM Plex Mono.
 `docs/**`. Only `main` deploys. Website-only PRs skip Docker lint/pytest;
 the `ci` job still succeeds so a required check is not left pending.
 
-Google Analytics is `G-E38EP8PJSR` in `src/lib/consent.mjs`. Override with
-`PUBLIC_GA_MEASUREMENT_ID` at build time if needed.
+Google Analytics is `G-E38EP8PJSR` in `src/lib/consent.mjs` and loads only after
+Accept. Override with `PUBLIC_GA_MEASUREMENT_ID` at build time if needed.
 
 **One-time:** Settings → Pages → Source = **GitHub Actions**, custom domain
 `cicerone.dev`. DNS notes for Gandi apex records are below.

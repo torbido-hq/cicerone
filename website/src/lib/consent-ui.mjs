@@ -2,6 +2,8 @@ import {
 	CONSENT_ANALYTICS,
 	CONSENT_DENIED,
 	CONSENT_STORAGE_KEY,
+	GA_MEASUREMENT_ID,
+	isGaMeasurementId,
 	parseStoredConsent,
 } from './consent.mjs';
 
@@ -36,13 +38,36 @@ export function updateGtagConsent(state) {
 	}
 }
 
-export function sendGtagPageView() {
+export function googleMeasurementId() {
+	const value = globalThis.__CICERONE_GA_ID;
+	if (typeof value === 'string' && isGaMeasurementId(value)) {
+		return value.trim().toUpperCase();
+	}
+	return GA_MEASUREMENT_ID;
+}
+
+export function loadGoogleTag() {
 	try {
+		const id = googleMeasurementId();
+		if (!isGaMeasurementId(id)) return;
 		const gtag = globalThis.gtag;
 		if (typeof gtag !== 'function') return;
-		gtag('event', 'page_view');
+		if (globalThis.__ciceroneGtagLoaded) {
+			gtag('event', 'page_view');
+			return;
+		}
+		globalThis.__ciceroneGtagLoaded = true;
+		const doc = globalThis.document;
+		if (doc?.createElement && doc.head?.appendChild) {
+			const script = doc.createElement('script');
+			script.async = true;
+			script.src = `https://www.googletagmanager.com/gtag/js?id=${id}`;
+			doc.head.appendChild(script);
+		}
+		gtag('js', new Date());
+		gtag('config', id);
 	} catch {
-		// gtag or window blocked
+		// gtag or DOM blocked
 	}
 }
 
@@ -50,7 +75,7 @@ export function applyConsentState(state) {
 	const previous = readStoredConsent();
 	writeStoredConsent(state);
 	updateGtagConsent(state);
-	if (analyticsStorageJustGranted(previous, state)) sendGtagPageView();
+	if (analyticsStorageJustGranted(previous, state)) loadGoogleTag();
 }
 
 export function dialogFocusables(root) {
@@ -103,6 +128,7 @@ export function initConsentBanner(doc = document) {
 
 	const footer = doc.querySelector('[data-cicerone-consent-footer]');
 	if (footer) footer.hidden = false;
+	if (readStoredConsent()?.analytics_storage === 'granted') loadGoogleTag();
 
 	/** @type {Element | null} */
 	let lastFocus = null;

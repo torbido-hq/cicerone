@@ -62,13 +62,15 @@ export function parseStoredConsent(raw) {
 	}
 }
 
-export function buildConsentInitScript() {
+export function buildConsentInitScript(measurementId = gaMeasurementId()) {
+	const id = String(measurementId || '').trim().toUpperCase();
 	return `(function(){
 var CONSENT_KEYS=${JSON.stringify(CONSENT_KEYS)};
 ${parseStoredConsent.toString()}
 try {
 window.dataLayer=window.dataLayer||[];
 window.gtag=window.gtag||function(){dataLayer.push(arguments);};
+window.__CICERONE_GA_ID=${JSON.stringify(id)};
 gtag('consent','default',${JSON.stringify({ ...CONSENT_DENIED, wait_for_update: 500 })});
 gtag('set','ads_data_redaction',true);
 var raw=null;
@@ -86,15 +88,5 @@ export function buildGtagConfigScript(measurementId) {
 export function analyticsHead(measurementId = gaMeasurementId()) {
 	const id = String(measurementId || '').trim().toUpperCase();
 	if (!isGaMeasurementId(id)) return [];
-	return [
-		{ tag: 'script', content: buildConsentInitScript() },
-		{
-			tag: 'script',
-			attrs: {
-				async: true,
-				src: `https://www.googletagmanager.com/gtag/js?id=${id}`,
-			},
-		},
-		{ tag: 'script', content: buildGtagConfigScript(id) },
-	];
+	return [{ tag: 'script', content: buildConsentInitScript(id) }];
 }

@@ -54,7 +54,7 @@ test('gaMeasurementId prefers a valid PUBLIC_GA_MEASUREMENT_ID from env', () => 
 });
 
 test('buildConsentInitScript sets denied defaults before any update', () => {
-	const script = buildConsentInitScript();
+	const script = buildConsentInitScript('G-ABC123');
 	assert.match(script, /consent','default'/);
 	assert.match(script, /"analytics_storage":"denied"/);
 	assert.match(script, /"ad_user_data":"denied"/);
@@ -63,6 +63,7 @@ test('buildConsentInitScript sets denied defaults before any update', () => {
 	assert.match(script, new RegExp(CONSENT_STORAGE_KEY));
 	assert.match(script, /try \{ raw=localStorage\.getItem/);
 	assert.match(script, /catch \(e\) \{\}/);
+	assert.match(script, /__CICERONE_GA_ID="G-ABC123"/);
 	const defaultAt = script.indexOf("consent','default'");
 	const updateAt = script.indexOf("consent','update'");
 	assert.ok(defaultAt >= 0 && updateAt > defaultAt);
@@ -81,24 +82,16 @@ test('analyticsHead is empty without a measurement id', () => {
 
 test('analyticsHead uses the default measurement id', () => {
 	const head = analyticsHead();
-	assert.equal(head.length, 3);
-	assert.equal(
-		head[1].attrs.src,
-		`https://www.googletagmanager.com/gtag/js?id=${GA_MEASUREMENT_ID}`,
-	);
+	assert.equal(head.length, 1);
+	assert.match(String(head[0].content), new RegExp(`__CICERONE_GA_ID="${GA_MEASUREMENT_ID}"`));
+	assert.equal(head[0].attrs, undefined);
 });
 
-test('analyticsHead emits consent defaults before gtag.js', () => {
+test('analyticsHead emits consent defaults without loading gtag.js', () => {
 	const head = analyticsHead('G-ABC123');
-	assert.equal(head.length, 3);
+	assert.equal(head.length, 1);
 	assert.match(String(head[0].content), /consent','default'/);
-	assert.equal(
-		head[1].attrs.src,
-		'https://www.googletagmanager.com/gtag/js?id=G-ABC123',
-	);
-	assert.match(String(head[2].content), /"G-ABC123"/);
-	assert.equal(
-		analyticsHead('g-abc123')[1].attrs.src,
-		'https://www.googletagmanager.com/gtag/js?id=G-ABC123',
-	);
+	assert.match(String(head[0].content), /__CICERONE_GA_ID="G-ABC123"/);
+	assert.doesNotMatch(JSON.stringify(head), /googletagmanager\.com\/gtag\/js/);
+	assert.match(String(analyticsHead('g-abc123')[0].content), /__CICERONE_GA_ID="G-ABC123"/);
 });
