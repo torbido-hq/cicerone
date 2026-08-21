@@ -34,7 +34,8 @@ For `[events]` ingest (webhook, backends, HA), see
 | `model/epoch_metrics.py` | Optional LightFM per-epoch Precision/Recall logging |
 | `model/constants.py` | `RRF_K`, `DEFAULT_MODELS`, source column names |
 | `model_config.py` | Default + TOML `[model.*]` RecTools `model_from_config` configs; sequential `architecture` → `cls`; legacy `job.item_based.k_neighbors` → `model.K` (no ML imports — safe for serve) |
-| `content_fallback.py` | Optional content-based cold-item strategy (one-hot item features + cosine vs user history) |
+| `explain.py` | After combine + boosts, persist `reasons` JSON (source contributions, boost hits, similar history items) |
+| `reasons.py` | Serve-safe serialize/parse for the optional `reasons` column |
 | `artifact.py` | Optional versioned fitted-model bundle (schema **v3**: RecTools `save`/`load_model` for library models + pickle envelope; `content_fallback` still pickle) |
 | `automl.py` | Optional: backtests candidate models/weights/`rrf_k` configs over time-based folds of event history and picks the best one |
 | `cli.py` | `cicerone` console script (`start` / `job` / `serve` / `dashboard` / `scheduler` / `users` / `export-openapi`; `--config`, `--log-level`) |
@@ -186,7 +187,9 @@ flowchart LR
    `FeatureConfig.boost_overfetch_factor` (default 3× `top_k`), scores are
    multiplied by the product of boost factors, and ranks are rewritten
    before truncating to `top_k`. Cohorts with an empty allowlist (eligibility
-   filtered out every item) are skipped.
+   filtered out every item) are skipped. `attach_reasons` then writes optional
+   `reasons` JSON (`Settings.explain` / `[job.explain]`) and drops internal
+   combiner/boost columns.
    An optional `strategy_cache` parameter (keyed by strategy name, caching
    the *fitted model* rather than its `recommend()` output) lets a caller
    who is evaluating multiple configs against the same `BuiltDataset` —

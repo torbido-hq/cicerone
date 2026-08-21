@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Serve recommendations include optional `reasons` (contributing sources,
+  boost hits, similar history items / matched attributes), persisted at
+  batch time when `[job.explain]` is enabled (default on). Existing DB
+  tables need `ALTER TABLE … ADD COLUMN reasons TEXT`.
+
 ## [0.6.0] - 2026-08-20
 
 ### Added

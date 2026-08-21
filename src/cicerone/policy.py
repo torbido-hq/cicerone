@@ -22,6 +22,7 @@ from rectools import Columns
 
 from cicerone.feature_config import BoostRule, EligibilityRule, FeatureConfig
 from cicerone.ids import items_id_column
+from cicerone.reasons import BOOST_HITS_COLUMN
 from cicerone.values import MISSING as _MISSING
 from cicerone.values import as_list as _as_list
 from cicerone.values import is_missing as _is_missing
@@ -309,31 +310,58 @@ def _numeric_factors(items: pd.DataFrame, column: str, weight: float) -> pd.Seri
     return 1.0 + weight * normalized.fillna(0.0)
 
 
-def item_boost_factors(items: pd.DataFrame | None, boosts: Sequence[BoostRule]) -> dict:
-    """item_id → product of configured boost factors."""
+def _boost_factor_series(items: pd.DataFrame, boost: BoostRule) -> pd.Series | None:
+    if boost.item_column not in items.columns:
+        _warn_missing_column("boost", boost.name, boost.item_column)
+        return None
+    col = items[boost.item_column]
+    if boost.kind == "boolean":
+        return col.map(lambda v, f=boost.factor: _boolean_factor(v, f)).astype(float)
+    if boost.kind == "value_map":
+        return col.map(lambda v, vf=boost.value_factors: _value_map_factor(v, vf)).astype(float)
+    if boost.kind == "numeric":
+        return _numeric_factors(items, boost.item_column, boost.weight).astype(float)
+    raise ValueError(f"Unknown boost kind {boost.kind!r} in rule {boost.name!r}")
+
+
+def item_boost_details(
+    items: pd.DataFrame | None, boosts: Sequence[BoostRule]
+) -> tuple[dict[str, float], dict[str, list[dict[str, object]]]]:
+    """item_id → (product of factors, hits where a rule factor was not 1.0)."""
     if not boosts:
-        return {}
+        return {}, {}
     if items is None or items.empty:
         _warn_boost_without_items()
-        return {}
+        return {}, {}
 
-    factors = pd.Series(1.0, index=items.index)
+    product = pd.Series(1.0, index=items.index)
+    rule_series: list[tuple[str, pd.Series]] = []
     for boost in boosts:
-        if boost.item_column not in items.columns:
-            _warn_missing_column("boost", boost.name, boost.item_column)
+        series = _boost_factor_series(items, boost)
+        if series is None:
             continue
-        col = items[boost.item_column]
-        if boost.kind == "boolean":
-            factors *= col.map(lambda v, f=boost.factor: _boolean_factor(v, f))
-        elif boost.kind == "value_map":
-            factors *= col.map(lambda v, vf=boost.value_factors: _value_map_factor(v, vf))
-        elif boost.kind == "numeric":
-            factors *= _numeric_factors(items, boost.item_column, boost.weight)
-        else:
-            raise ValueError(f"Unknown boost kind {boost.kind!r} in rule {boost.name!r}")
+        product *= series
+        rule_series.append((boost.name, series))
 
     id_col = items_id_column(items)
-    return dict(zip(items[id_col].astype(str), factors.astype(float), strict=True))
+    ids = items[id_col].astype(str)
+    factors = dict(zip(ids, product.astype(float), strict=True))
+    hits: dict[str, list[dict[str, object]]] = {}
+    for item_id, idx in zip(ids, items.index, strict=True):
+        item_hits = []
+        for name, series in rule_series:
+            factor = float(series.loc[idx])
+            if factor != 1.0:
+                item_hits.append({"name": name, "factor": factor})
+        if item_hits:
+            hits[str(item_id)] = item_hits
+    return factors, hits
+
+
+def item_boost_factors(items: pd.DataFrame | None, boosts: Sequence[BoostRule]) -> dict:
+    """item_id → product of configured boost factors."""
+    factors, _hits = item_boost_details(items, boosts)
+    return factors
 
 
 def apply_boosts(
@@ -348,10 +376,11 @@ def apply_boosts(
     if not boosts:
         return _truncate_recs(recs, top_k) if top_k is not None else recs
 
-    factor_by_item = item_boost_factors(items, boosts)
+    factor_by_item, hits_by_item = item_boost_details(items, boosts)
     out = recs.copy()
+    item_ids = out[Columns.Item].astype(str)
+    out[BOOST_HITS_COLUMN] = [hits_by_item.get(str(item_id), []) for item_id in item_ids]
     if factor_by_item:
-        item_ids = out[Columns.Item].astype(str)
         out[Columns.Score] = out[Columns.Score] * item_ids.map(factor_by_item).fillna(1.0)
         out = out.sort_values(
             [Columns.User, Columns.Score, Columns.Item],

@@ -16,6 +16,7 @@ from cicerone.policy import (
     item_boost_factors,
     resolve_eligibility,
 )
+from cicerone.reasons import BOOST_HITS_COLUMN
 
 
 def _items() -> pd.DataFrame:
@@ -530,6 +531,26 @@ def test_apply_boosts_reorders_and_truncates():
     assert list(out[Columns.Item]) == ["i1"]
     assert list(out[Columns.Rank]) == [1]
     assert out.iloc[0][Columns.Score] == pytest.approx(18.0)
+    assert out.iloc[0][BOOST_HITS_COLUMN] == [{"name": "paying", "factor": 2.0}]
+
+
+def test_apply_boosts_omits_identity_factors():
+    recs = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i2", "rank": 1, "score": 10.0, "source": "personalized"},
+        ]
+    )
+    boosts = [
+        BoostRule(name="paying", kind="boolean", item_column="is_paying_producer", factor=2.0),
+        BoostRule(
+            name="tier",
+            kind="value_map",
+            item_column="plan_tier",
+            value_factors={"premium": 1.5, "standard": 1.1, "free": 1.0},
+        ),
+    ]
+    out = apply_boosts(recs, _items(), boosts, top_k=1)
+    assert out.iloc[0][BOOST_HITS_COLUMN] == []
 
 
 def test_as_list_handles_missing_series_and_zero_dim_ndarray():

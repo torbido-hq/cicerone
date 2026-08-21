@@ -16,6 +16,8 @@ from cicerone.config.constants import (
     DEFAULT_EVENTS_BATCH_SIZE,
     DEFAULT_EVENTS_BATCH_WINDOW_SECONDS,
     DEFAULT_EVENTS_POLL_INTERVAL_SECONDS,
+    DEFAULT_EXPLAIN_MAX_ATTRIBUTES,
+    DEFAULT_EXPLAIN_MAX_SIMILAR_ITEMS,
     DEFAULT_LOCK_KEY,
     DEFAULT_LOCK_TTL_SECONDS,
     Mode,
@@ -98,6 +100,15 @@ class EventsSettings:
 
 
 @dataclass(frozen=True)
+class ExplainSettings:
+    """Batch-time recommendation reasons persisted on each output row."""
+
+    enabled: bool = True
+    max_similar_items: int = DEFAULT_EXPLAIN_MAX_SIMILAR_ITEMS
+    max_attributes: int = DEFAULT_EXPLAIN_MAX_ATTRIBUTES
+
+
+@dataclass(frozen=True)
 class IOSettings:
     kind: str
     options: dict[str, Any] = field(default_factory=dict)
@@ -128,6 +139,7 @@ class Settings:
     trigger: TriggerSettings
     dashboard: DashboardSettings
     events: EventsSettings
+    explain: ExplainSettings = field(default_factory=ExplainSettings)
 
     @property
     def serve_host(self) -> str:

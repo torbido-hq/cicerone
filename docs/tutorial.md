@@ -499,7 +499,20 @@ The response is an object (not a bare list):
   "user_id": "alice",
   "fallback": false,
   "items": [
-    {"item_id": "lager-003", "rank": 1, "score": 0.91, "source": "blended"}
+    {
+      "item_id": "lager-003",
+      "rank": 1,
+      "score": 0.91,
+      "source": "blended",
+      "reasons": {
+        "sources": [
+          {"label": "personalized", "rank": 4, "weight": 0.72, "contribution": 0.0113}
+        ],
+        "boosts": [],
+        "similar_items": [{"item_id": "lager-001", "score": 0.67}],
+        "matched_attributes": [{"column": "style", "value": "lager"}]
+      }
+    }
   ]
 }
 ```

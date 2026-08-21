@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from cicerone.config import ConfigError, resolve_epoch_metrics, validate_model_weights
+from cicerone.config.validation import require_non_negative_int
 
 
 def test_validate_model_weights_rejects_negative_and_allows_non_negative():
@@ -31,6 +32,7 @@ def test_validate_model_weights_no_op_when_none():
     validate_model_weights({"popular": 1.0})
 
 
-def test_validate_model_weights_rejects_negative():
-    with pytest.raises(ConfigError, match="non-negative"):
-        validate_model_weights({"popular": -1.0})
+def test_require_non_negative_int():
+    assert require_non_negative_int(0, name="job.explain.max_similar_items") == 0
+    with pytest.raises(ConfigError, match="job.explain.max_similar_items"):
+        require_non_negative_int(-1, name="job.explain.max_similar_items")
