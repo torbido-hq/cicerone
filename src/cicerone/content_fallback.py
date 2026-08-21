@@ -289,10 +289,13 @@ class ContentFallbackModel:
         else:
             user_rows = [_score_user(user) for user in users]
         rows = [row for part in user_rows for row in part]
-
         if not rows:
             return empty
-        return pd.DataFrame(rows)
+        return (
+            pd.DataFrame(rows)
+            .sort_values([Columns.User, Columns.Rank], kind="mergesort")
+            .reset_index(drop=True)
+        )
 
 
 def build_content_fallback_model(

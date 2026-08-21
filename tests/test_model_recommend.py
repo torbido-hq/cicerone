@@ -8,6 +8,7 @@ from support.model_events import synthetic_events
 from cicerone.config import ConfigError
 from cicerone.dataset import build_dataset
 from cicerone.model import DEFAULT_MODELS, train_and_recommend
+from cicerone.model.recommend import _recommend_cache_key
 from cicerone.policy import allowed_items_for_cohort, resolve_eligibility
 
 
@@ -877,3 +878,16 @@ def test_content_fallback_respects_availability_filters(feature_config):
     recommended_items = set(recommendations[Columns.Item])
     assert "i_new_ok" in recommended_items
     assert "i_new_blocked" not in recommended_items
+
+
+def test_recommend_cache_key_normalizes_unhashable_parts():
+    dict_key = _recommend_cache_key("strategy", "popular", {"region": "IT"}, 10)
+    list_key = _recommend_cache_key("latest", "published_at", [{"a": 1}], 5)
+    cache: dict[tuple, object] = {}
+    cache[dict_key] = "hit"
+    cache[list_key] = "latest"
+    assert cache[_recommend_cache_key("strategy", "popular", {"region": "IT"}, 10)] == "hit"
+    assert cache[_recommend_cache_key("latest", "published_at", [{"a": 1}], 5)] == "latest"
+    hash(_recommend_cache_key("strategy", "als", None, 10))
+    hash(_recommend_cache_key("strategy", "als", {"b": 1, "a": 2}, 10))
+    hash(_recommend_cache_key("strategy", "als", {1, 2}, 10))

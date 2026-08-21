@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Hashable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -45,7 +45,25 @@ from cicerone.policy import (
 
 logger = logging.getLogger(__name__)
 
-RecommendCache = dict[tuple[Any, ...], Any]
+RecommendCache = dict[tuple[Hashable, ...], Any]
+
+
+def _cache_key_part(value: object) -> Hashable:
+    try:
+        hash(value)
+    except TypeError:
+        if isinstance(value, Mapping):
+            return tuple(sorted((_cache_key_part(k), _cache_key_part(v)) for k, v in value.items()))
+        if isinstance(value, set):
+            return tuple(sorted((_cache_key_part(v) for v in value), key=repr))
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            return tuple(_cache_key_part(v) for v in value)
+        return str(value)
+    return value
+
+
+def _recommend_cache_key(*parts: object) -> tuple[Hashable, ...]:
+    return tuple(_cache_key_part(p) for p in parts)
 
 
 def boost_overfetch_k(
@@ -205,24 +223,26 @@ def _recommend_per_strategy(
             else:
                 recommend_users = cohort_users
 
-            cache_key = ("strategy", name, cohort_key_value, cohort_plan.recommend_k)
+            cache_key = _recommend_cache_key("strategy", name, cohort_key_value, cohort_plan.recommend_k)
             cached = recommend_cache.get(cache_key) if recommend_cache is not None else None
             if cached is not None:
-                recs = cached.copy()
+                recs = cached
             else:
-                recs = models[name].recommend(
-                    users=recommend_users,
-                    dataset=dataset,
-                    k=cohort_plan.recommend_k,
-                    filter_viewed=strategy.personalized,
-                    items_to_recommend=allowed_items,
+                recs = (
+                    models[name]
+                    .recommend(
+                        users=recommend_users,
+                        dataset=dataset,
+                        k=cohort_plan.recommend_k,
+                        filter_viewed=strategy.personalized,
+                        items_to_recommend=allowed_items,
+                    )
+                    .copy()
                 )
-                recs = recs.copy()
                 recs[SOURCE_COLUMN] = strategy.source_label
                 recs[WEIGHT_COLUMN] = 1.0
                 if recommend_cache is not None:
                     recommend_cache[cache_key] = recs
-                recs = recs.copy()
             frames.append(recs)
             if blending_enabled:
                 if strategy.personalized:
@@ -236,7 +256,7 @@ def _recommend_per_strategy(
             allowed_items = cohort_plan.allowed_by_cohort[cohort_key]
             if not allowed_items:
                 continue
-            latest_key = ("latest", date_column, cohort_key, latest_k)
+            latest_key = _recommend_cache_key("latest", date_column, cohort_key, latest_k)
             cached_latest = recommend_cache.get(latest_key) if recommend_cache is not None else None
             if cached_latest is not None:
                 latest_by_cohort[cohort_key] = list(cached_latest)
