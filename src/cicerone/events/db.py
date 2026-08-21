@@ -82,25 +82,25 @@ def _row_identity(payload: dict[str, Any]) -> str | None:
     return None
 
 
-def _identity_sort_key(event_id: str) -> tuple[str, tuple[object, ...]]:
-    """Numeric order for synthetic identities so ``id:9`` sorts before ``id:10``."""
+def _identity_sort_key(event_id: str) -> tuple[str, tuple[str, ...]]:
+    """Numeric order for synthetic identities; suffixes stay strings."""
     for prefix in ("id:", "rowid:"):
         if event_id.startswith(prefix):
             rest = event_id[len(prefix) :]
             try:
-                return (prefix, (int(rest),))
+                return (prefix, (f"{int(rest):020d}",))
             except ValueError:
                 return (prefix, (rest,))
     if event_id.startswith("ctid:"):
         rest = event_id[5:].replace(" ", "")
         match = _CTID_TUPLE.fullmatch(rest)
         if match:
-            return ("ctid:", (int(match.group(1)), int(match.group(2))))
-        return ("ctid:", (rest,))
+            return ("ctid:", (f"{int(match.group(1)):020d}", f"{int(match.group(2)):020d}"))
+        return ("ctid:", ("", rest))
     return ("", (event_id,))
 
 
-def _cursor_tuple(occurred_at: datetime, event_id: str) -> tuple[datetime, tuple[str, tuple[object, ...]]]:
+def _cursor_tuple(occurred_at: datetime, event_id: str) -> tuple[datetime, tuple[str, tuple[str, ...]]]:
     return (occurred_at, _identity_sort_key(event_id))
 
 
@@ -123,11 +123,11 @@ def _stable_event_id(payload: dict[str, Any], occurred_at: datetime) -> str:
     )
 
 
-def _cursor_key(event: NormalizedEvent) -> tuple[datetime, tuple[str, tuple[object, ...]]]:
+def _cursor_key(event: NormalizedEvent) -> tuple[datetime, tuple[str, tuple[str, ...]]]:
     return _cursor_tuple(event.occurred_at, event.event_id)
 
 
-def _cursor_key_from_payload(payload: dict[str, Any]) -> tuple[datetime, tuple[str, tuple[object, ...]]]:
+def _cursor_key_from_payload(payload: dict[str, Any]) -> tuple[datetime, tuple[str, tuple[str, ...]]]:
     """Lag path: parse occurred_at + stable id without full normalize_event."""
     occurred_at = _db_occurred_at(payload.get("occurred_at"))
     return _cursor_tuple(occurred_at, _stable_event_id(payload, occurred_at))

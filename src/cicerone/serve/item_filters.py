@@ -48,43 +48,47 @@ class ItemsFilterCache:
         self._reader = reader
         self._category_column = category_column
         self._availability_filters = list(availability_filters)
-        self._version: int | None = None
-        self._items: pd.DataFrame | None = None
-        self._available_ids: frozenset[str] | None = None
-        self._ids_by_category: dict[str, frozenset[str]] = {}
+        self._snapshot: (
+            tuple[object, pd.DataFrame | None, frozenset[str] | None, dict[str, frozenset[str]]] | None
+        ) = None
         self._lock = threading.Lock()
 
     def get(self) -> tuple[pd.DataFrame | None, frozenset[str] | None, dict[str, frozenset[str]]]:
-        with self._lock:
-            version = self._reader.items_version()
-            if version == self._version:
-                return self._items, self._available_ids, self._ids_by_category
+        version = self._reader.items_version()
+        cached = self._snapshot
+        if cached is not None and cached[0] == version:
+            return cached[1], cached[2], cached[3]
 
-            items = normalize_items_snapshot(
-                self._reader.get_items(),
-                category_column=self._category_column,
-                availability_filters=self._availability_filters,
-            )
-            available = (
-                available_item_ids(items, self._availability_filters)
-                if items is not None and not items.empty
-                else None
-            )
-            ids_by_category: dict[str, frozenset[str]] = {}
-            if (
-                items is not None
-                and not items.empty
-                and self._category_column in items.columns
-                and ITEM_COLUMN in items.columns
-            ):
-                item_ids = items[ITEM_COLUMN].astype(str)
-                for cat, idx in items.groupby(self._category_column, sort=False).groups.items():
-                    ids_by_category[str(cat)] = frozenset(item_ids.loc[idx].tolist())
-            self._version = version
-            self._items = items
-            self._available_ids = available
-            self._ids_by_category = ids_by_category
-            return items, available, ids_by_category
+        items = normalize_items_snapshot(
+            self._reader.get_items(),
+            category_column=self._category_column,
+            availability_filters=self._availability_filters,
+        )
+        available = (
+            available_item_ids(items, self._availability_filters)
+            if items is not None and not items.empty
+            else None
+        )
+        ids_by_category: dict[str, frozenset[str]] = {}
+        if (
+            items is not None
+            and not items.empty
+            and self._category_column in items.columns
+            and ITEM_COLUMN in items.columns
+        ):
+            item_ids = items[ITEM_COLUMN].astype(str)
+            for cat, idx in items.groupby(self._category_column, sort=False).groups.items():
+                ids_by_category[str(cat)] = frozenset(item_ids.loc[idx].tolist())
+        built = (version, items, available, ids_by_category)
+
+        with self._lock:
+            latest = self._reader.items_version()
+            cached = self._snapshot
+            if cached is not None and cached[0] == latest:
+                return cached[1], cached[2], cached[3]
+            if latest == version:
+                self._snapshot = built
+            return built[1], built[2], built[3]
 
 
 def filter_recommendations(

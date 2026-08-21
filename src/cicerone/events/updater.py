@@ -298,14 +298,14 @@ class IncrementalUpdater:
         scored = batch.loc[keep]
         if scored.empty:
             return scored
-        return scored.assign(_popular_weight=aligned.loc[keep])
+        return scored.assign(_signal_weight=aligned.loc[keep])
 
     def _popular_ranking(self, batch: pd.DataFrame, weights: pd.Series | None = None) -> pd.DataFrame:
         empty = pd.DataFrame(columns=[ITEM_COLUMN, SCORE_COLUMN, SOURCE_COLUMN])
         scored = self._signal_rows(batch, weights)
         if scored.empty:
             return empty
-        summed = scored.groupby(scored["item_id"].astype(str), sort=False)["_popular_weight"].sum()
+        summed = scored.groupby(scored["item_id"].astype(str), sort=False)["_signal_weight"].sum()
         summed = summed.loc[summed > 0]
         if summed.empty:
             return empty
