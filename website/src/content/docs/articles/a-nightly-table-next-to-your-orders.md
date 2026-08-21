@@ -31,9 +31,16 @@ On a cron (default 03:00 UTC) the job:
 
 Your app joins that table to `products`. A purchase this afternoon does not change tonight’s ranks. ([Incremental events](https://cicerone.dev/incremental-events/) can refresh the bestsellers list between jobs. LightFM still waits for the cron.)
 
-In config the bestsellers model is named `popular`. In the table it shows up as `source` = `popular_fallback` when it filled in for someone LightFM could not personalize. Same list.
+| Name | Where | Meaning |
+| --- | --- | --- |
+| `popular` | `[job].models` | Store-wide bestsellers. |
+| `personalized` | `source` | LightFM won this rank. |
+| `popular_fallback` | `source` | The `popular` list filling in. Same bestsellers, different label. |
+| `latest` | `source` | Newest by item date (`latest_date_columns`). Not the `"latest"` model. |
+| `blended` | `source` | More than one of those lists voted on this rank. |
+| `'__cold_start__'` | `user_id` | Guest / no-history list. |
 
-Guests and brand-new accounts have no `user_id` on an order line. The job still writes a list for them under `'__cold_start__'` — the mix with no personal history. Look that id up the same way you look up `'42'`.
+`'__cold_start__'` is a **string** in `user_id`, same type as `'42'`. Store that text in the database — not an integer, not `NULL`, not an unquoted identifier.
 
 ## What the job does
 
@@ -43,7 +50,7 @@ Each night:
 
 1. LightFM builds a personalized list (people with similar purchases; optional tags like `category` help brand-new SKUs). The second list is `popular`.
 2. Those two lists are mixed by **rank**, not by raw score. A LightFM number and a sales count are not the same unit. With little history, bestsellers win. With enough overlap, LightFM wins.
-3. The result is the table. `source` is one of `personalized`, `popular_fallback`, `latest`, or `blended`. `popular_fallback` is the bestsellers list filling in; `latest` is newest by item date; `blended` means more than one of those lists voted.
+3. The result is the table. `source` uses the labels above.
 
 If two customers never bought the same products, there is nothing to personalize. That is thin data, not a misconfigured job.
 
@@ -214,7 +221,7 @@ popular_share = 0.7
 latest_date_columns = ["created_at"]
 ```
 
-Blending is also how `'__cold_start__'` gets written. `saturate_at = 5` means five distinct products is fully on LightFM; a single order stays mostly `popular` and newest-by-date. On a small shop that is the behavior you want.
+Blending also writes `'__cold_start__'`. `saturate_at = 5` means five distinct products is fully on LightFM; a single order stays mostly `popular` and newest-by-date. On a small shop that is the behavior you want.
 
 **Two different “latest”s.** `latest_date_columns` ranks products by an item timestamp (`created_at` here). `"latest"` in `[job].models` is a recency-window sales list on *events* — a third model, not `popular`. This walkthrough uses the date list only. Do not add `"latest"` to `models` while blending is on — the two fight. Details: [how it works](https://cicerone.dev/how-it-works/). If `products` has no usable date column among those names, the date list is skipped and its weight moves to `popular` (you will see that in the job log).
 
@@ -314,7 +321,7 @@ ORDER BY r.rank;
     3 | popular_fallback |  0.31 | House Lager     | beer
 ```
 
-Illustrative rows — your catalog, your scores. `source` values are the four names above. Use `'__cold_start__'` in place of `'42'` for the guest list.
+Illustrative rows — your catalog, your scores. Use `'__cold_start__'` in place of `'42'` for the guest list.
 
 If you would rather click than query, Cicerone ships a small Basic-Auth **dashboard** that reads the same two tables: latest run (and history, because this is a db output), plus a user-id lookup of current top-K. It never loads LightFM. Put this next to the other TOML as `cicerone.dashboard.toml`:
 
@@ -363,7 +370,7 @@ docker run --rm --name cicerone-dashboard -p 127.0.0.1:8090:8090 \
   dashboard --config /app/config/cicerone.dashboard.toml
 ```
 
-Open `http://127.0.0.1:8090/dashboard`, sign in, type a `user_id` (`'42'` or `'__cold_start__'`). Bind only to localhost unless this sits behind your own auth.
+Open `http://127.0.0.1:8090/dashboard`, sign in, type `42` or `__cold_start__` (the stored strings; SQL writes them as `'42'` and `'__cold_start__'`). Bind only to localhost unless this sits behind your own auth.
 
 ![Cicerone dashboard: user lookup of current top-K, latest job status, and run history](https://cicerone.dev/images/docs/dashboard.png)
 
