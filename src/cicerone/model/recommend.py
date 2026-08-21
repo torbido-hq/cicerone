@@ -53,7 +53,8 @@ def _cache_key_part(value: object) -> Hashable:
         hash(value)
     except TypeError:
         if isinstance(value, Mapping):
-            return tuple(sorted((_cache_key_part(k), _cache_key_part(v)) for k, v in value.items()))
+            items = [(_cache_key_part(k), _cache_key_part(v)) for k, v in value.items()]
+            return tuple(sorted(items, key=repr))
         if isinstance(value, set):
             return tuple(sorted((_cache_key_part(v) for v in value), key=repr))
         if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):

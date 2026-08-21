@@ -891,6 +891,10 @@ def test_recommend_cache_key_normalizes_unhashable_parts():
     hash(_recommend_cache_key("strategy", "als", None, 10))
     hash(_recommend_cache_key("strategy", "als", {"b": 1, "a": 2}, 10))
     hash(_recommend_cache_key("strategy", "als", {1, 2}, 10))
+    mixed = {1: "a", "b": 2}
+    assert _recommend_cache_key("strategy", "als", mixed, 10) == _recommend_cache_key(
+        "strategy", "als", {"b": 2, 1: "a"}, 10
+    )
 
 
 def test_recommend_cache_key_includes_allowlist_filter_and_dataset():
