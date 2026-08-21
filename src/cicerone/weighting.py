@@ -17,13 +17,16 @@ def event_row_weights(
 ) -> pd.Series:
     """``event_weights[type]`` times ``log1p(qty)`` when the type is quantity-scaled.
 
-    Unknown types are NaN. Quantity is not clipped; callers normalize first.
+    Unknown types are NaN. Quantity is coerced to numeric; negatives clip to 0.
+    Non-numeric quantity is NaN, so a scaled type yields NaN (unscaled types
+    ignore quantity).
     """
     base = event_type.map(event_weights)
     qty = pd.to_numeric(quantity, errors="coerce")
+    scaled = set(quantity_scaled_events)
     multiplier = np.where(
-        event_type.isin(quantity_scaled_events),
-        np.log1p(qty.clip(lower=0).fillna(0)),
+        event_type.isin(scaled),
+        np.log1p(qty.clip(lower=0)),
         1.0,
     )
     return base * multiplier

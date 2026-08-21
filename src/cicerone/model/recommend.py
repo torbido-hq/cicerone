@@ -128,7 +128,7 @@ class _StrategyRecommendJob:
     source_label: str
     personalized: bool
     recommend_users: list
-    allowed_items: list
+    allowed_items: list[Any] | None
     cache_key: tuple[Hashable, ...]
 
 

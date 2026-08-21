@@ -62,7 +62,24 @@ def test_weighted_interactions_aggregates_multiple_events_for_same_pair(feature_
     assert result.iloc[0][Columns.Weight] == pytest.approx(expected, rel=1e-3)
 
 
-def test_weighted_interactions_drops_unknown_event_types(feature_config):
+def test_weighted_interactions_defaults_missing_quantity_column(feature_config):
+    now = pd.Timestamp.utcnow()
+    events = pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "event_type": "view",
+                "occurred_at": now,
+            },
+        ]
+    )
+    result = build_interactions(events, feature_config, half_life_days=90)
+    assert len(result) == 1
+    assert result.iloc[0][Columns.Weight] == pytest.approx(feature_config.event_weights["view"], rel=1e-3)
+
+
+def test_weighted_interactions_drops_unknown_event_types(feature_config, caplog):
     now = pd.Timestamp.utcnow()
     events = pd.DataFrame(
         [
@@ -75,8 +92,38 @@ def test_weighted_interactions_drops_unknown_event_types(feature_config):
             },
         ]
     )
-    result = build_interactions(events, feature_config, half_life_days=90)
+    with caplog.at_level("WARNING"):
+        result = build_interactions(events, feature_config, half_life_days=90)
     assert result.empty
+    assert "missing from event_weights" in caplog.text
+    assert "non-numeric quantity" not in caplog.text
+
+
+def test_weighted_interactions_drops_non_numeric_quantity_on_scaled_types(feature_config, caplog):
+    now = pd.Timestamp.utcnow()
+    events = pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "event_type": "purchase",
+                "quantity": "n/a",
+                "occurred_at": now,
+            },
+            {
+                "user_id": "u2",
+                "item_id": "i2",
+                "event_type": "view",
+                "quantity": "n/a",
+                "occurred_at": now,
+            },
+        ]
+    )
+    with caplog.at_level("WARNING"):
+        result = build_interactions(events, feature_config, half_life_days=90)
+    assert list(result[Columns.User]) == ["u2"]
+    assert "non-numeric quantity" in caplog.text
+    assert "missing from event_weights" not in caplog.text
 
 
 def test_weighted_interactions_caps_repeated_events(feature_config):
