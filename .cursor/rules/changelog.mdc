@@ -9,12 +9,19 @@ description: CHANGELOG is product-only; never date website work; freeze shipped 
 sections are **immutable**.
 
 **CHANGELOG = product. Website ≠ product.** Do not add, date, or “complete
-a release” with `website/**` notes (Pages, Starlight, cookies/consent,
-articles chrome, site CSS). Leave Unreleased empty if the train only
-has site work.
+a release” with website notes.
+
+Website is `website/**` (Astro/Starlight source and the npm package in that
+tree), `.github/workflows/pages.yml`, Pages artifacts (`website/dist/`,
+cicerone.dev chrome), and anything that exists only to publish
+cicerone.dev. `docs/*.md` is not website-only (see Borderline).
 
 Product is the `cicerone` package: job, serve, dashboard app, events, I/O,
 CLI, config, models.
+
+If a train has both product and site changes, Unreleased gets **only**
+the product bullets — no website bullet beside them. Site-only: leave
+Unreleased empty (no placeholder).
 
 Split lives only in this file. Keep the `changelog.mdc` line in
 [agent-policy-source.mdc](agent-policy-source.mdc) in sync; do not fork a
