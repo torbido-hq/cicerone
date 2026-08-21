@@ -10,7 +10,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - After fit, strategy×cohort `recommend()` calls run in a thread pool when
   `job.max_workers > 1` (default remains 1).
+- Blend RRF scores per-user source weights in pandas instead of a Python loop
+  over users (same top-K).
+- Incremental popular ranking and training interactions share vectorized
+  per-row event weights.
+- Dashboard lookup formats rank/score with Python coercion instead of
+  pandas scalars.
 - Dashboard lookup uses shared `is_missing` (empty source/category still "—").
+- Weighted fusion keeps source-label join as an O(groups) Python agg; a scale
+  test records the baseline.
 
 ## [0.6.1] - 2026-08-20
 
