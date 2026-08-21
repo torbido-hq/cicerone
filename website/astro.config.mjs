@@ -35,7 +35,9 @@ export default defineConfig({
 	site: 'https://cicerone.dev',
 	redirects: {
 		'/articles/welcome-to-your-own-recommender':
-			'/articles/a-nightly-table-next-to-your-orders',
+			'/articles/a-nightly-table-next-to-your-orders/',
+		'/articles/welcome-to-your-own-recommender/':
+			'/articles/a-nightly-table-next-to-your-orders/',
 	},
 	integrations: [
 		starlight({
