@@ -11,15 +11,12 @@ import {
 	articlesContentDir,
 	hasPublishedArticles,
 } from './src/lib/articles.mjs';
-import { analyticsHead, gaMeasurementId, isGaMeasurementId } from './src/lib/consent.mjs';
+import { analyticsHead, gaMeasurementId } from './src/lib/consent.mjs';
 
 const websiteRoot = dirname(fileURLToPath(import.meta.url));
 const articlesDir = articlesContentDir(websiteRoot);
 const production = process.env.NODE_ENV === 'production';
 const publicEnv = loadEnv(production ? 'production' : 'development', websiteRoot, 'PUBLIC_');
-const measurementId = isGaMeasurementId(publicEnv.PUBLIC_GA_MEASUREMENT_ID)
-	? publicEnv.PUBLIC_GA_MEASUREMENT_ID
-	: gaMeasurementId();
 
 const articlesPlugin = hasPublishedArticles(articlesDir, { production })
 	? [
@@ -104,7 +101,7 @@ export default defineConfig({
 				},
 			],
 			head: [
-				...analyticsHead(measurementId),
+				...analyticsHead(gaMeasurementId(publicEnv)),
 				{
 					tag: 'link',
 					attrs: { rel: 'preconnect', href: 'https://fonts.googleapis.com' },

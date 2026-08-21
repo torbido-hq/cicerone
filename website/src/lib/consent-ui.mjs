@@ -72,20 +72,16 @@ export function closeConsentDialog(root, previousFocus) {
 	}
 }
 
-function gtagAvailable() {
-	try {
-		return typeof globalThis.gtag === 'function';
-	} catch {
-		return false;
-	}
+function isElement(value) {
+	return typeof Element !== 'undefined' && value instanceof Element;
 }
 
 export function initConsentBanner(doc = document) {
 	const root = doc.getElementById('cicerone-consent');
-	const footer = doc.querySelector('[data-cicerone-consent-footer]');
-	if (!root || !gtagAvailable()) return;
+	if (!root) return;
 
-	if (footer instanceof HTMLElement) footer.hidden = false;
+	const footer = doc.querySelector('[data-cicerone-consent-footer]');
+	if (footer) footer.hidden = false;
 
 	/** @type {Element | null} */
 	let lastFocus = null;
@@ -98,7 +94,7 @@ export function initConsentBanner(doc = document) {
 	};
 
 	const open = () => {
-		lastFocus = doc.activeElement instanceof Element ? doc.activeElement : null;
+		lastFocus = isElement(doc.activeElement) ? doc.activeElement : null;
 		openConsentDialog(root);
 	};
 
@@ -121,7 +117,7 @@ export function initConsentBanner(doc = document) {
 
 	doc.addEventListener('click', (event) => {
 		const target = event.target;
-		if (!(target instanceof Element) || !target.closest('[data-cicerone-consent-open]')) {
+		if (!isElement(target) || !target.closest('[data-cicerone-consent-open]')) {
 			return;
 		}
 		event.preventDefault();

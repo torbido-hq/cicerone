@@ -42,6 +42,12 @@ test('gaMeasurementId defaults to the cicerone.dev tag', () => {
 	assert.equal(GA_MEASUREMENT_ID, 'G-E38EP8PJSR');
 });
 
+test('gaMeasurementId prefers a valid PUBLIC_GA_MEASUREMENT_ID from env', () => {
+	assert.equal(gaMeasurementId({ PUBLIC_GA_MEASUREMENT_ID: 'G-OVERRIDE1' }), 'G-OVERRIDE1');
+	assert.equal(gaMeasurementId({ PUBLIC_GA_MEASUREMENT_ID: 'nope' }), GA_MEASUREMENT_ID);
+	assert.equal(gaMeasurementId({}), GA_MEASUREMENT_ID);
+});
+
 test('buildConsentInitScript sets denied defaults before any update', () => {
 	const script = buildConsentInitScript();
 	assert.match(script, /consent','default'/);

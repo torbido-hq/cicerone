@@ -18,12 +18,22 @@ export function isGaMeasurementId(value) {
 
 export const GA_MEASUREMENT_ID = 'G-E38EP8PJSR';
 
-export function gaMeasurementId() {
-	try {
-		const fromEnv = String(import.meta.env.PUBLIC_GA_MEASUREMENT_ID ?? '').trim();
-		if (isGaMeasurementId(fromEnv)) return fromEnv;
-	} catch {
-		// Node has no Vite import.meta.env
+export function gaMeasurementId(env) {
+	const sources = env
+		? [env]
+		: [
+				(() => {
+					try {
+						return import.meta.env;
+					} catch {
+						return undefined;
+					}
+				})(),
+				typeof process !== 'undefined' ? process.env : undefined,
+			];
+	for (const source of sources) {
+		const value = String(source?.PUBLIC_GA_MEASUREMENT_ID ?? '').trim();
+		if (isGaMeasurementId(value)) return value;
 	}
 	return GA_MEASUREMENT_ID;
 }
