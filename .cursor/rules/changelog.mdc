@@ -21,7 +21,11 @@ CLI, config, models.
 
 If a train has both product and site changes, Unreleased gets **only**
 the product bullets — no website bullet beside them. Site-only: leave
-Unreleased empty (no placeholder).
+Unreleased empty (no placeholder). Empty Unreleased is expected, not an
+error: `website/src/lib/changelog.mjs` `parseLatestRelease` skips
+`## [Unreleased]` and uses the first dated `## [x.y.z] - YYYY-MM-DD`
+(`website/src/lib/changelog.test.mjs`). No pytest/CI/tag/`publish.yml`
+job requires Unreleased bullets; do not invent any.
 
 Split lives only in this file. Keep the `changelog.mdc` line in
 [agent-policy-source.mdc](agent-policy-source.mdc) in sync; do not fork a
@@ -29,10 +33,10 @@ second copy of the split.
 
 ## Borderline
 
-- Logo / dashboard CSS in `src/cicerone/static/`: product. The same asset
-  only under `website/`: not.
-- `docs/*.md` or OpenAPI copied onto the site: changelog the **package**
-  change. A site-only rewrite of those pages: not.
+- `src/cicerone/static/cicerone-logo.svg` (dashboard): product.
+  `website/src/assets/cicerone-logo.svg` only: not.
+- Regenerating `docs/openapi/serve.openapi.json` because serve changed:
+  product. Copy-only under `website/public/openapi/`: not.
 
 ## Do
 
