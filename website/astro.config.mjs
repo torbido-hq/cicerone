@@ -34,8 +34,7 @@ const articlesPlugin = hasPublishedArticles(articlesDir, { production })
 export default defineConfig({
 	site: 'https://cicerone.dev',
 	redirects: {
-		'/articles/welcome-to-your-own-recommender':
-			'/articles/a-nightly-table-next-to-your-orders/',
+		// One static route: slash variants collide. Trailing slash matches the site.
 		'/articles/welcome-to-your-own-recommender/':
 			'/articles/a-nightly-table-next-to-your-orders/',
 	},
