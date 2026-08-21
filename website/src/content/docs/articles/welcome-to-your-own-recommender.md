@@ -15,7 +15,7 @@ You already have `order_items`. What you do not have is a recs team — and you 
 
 [Cicerone](https://cicerone.dev) is how you go past it without a new request-path runtime: a self-hosted **batch** job that reads the interactions you already store, writes a top-K table, and stays out of the hot path. Most shops get there by hand — bestsellers, “customers who bought this also bought”, a weekend with [LightFM](https://making.lyst.com/lightfm/docs/home.html). The weekend is the model. The days are weights, cold-start, and a job that cannot overlap itself. Cicerone is that glue.
 
-The name is borrowed twice. In Italian a *cicerone* is a guide, after Cicero. In beer, a [Cicerone](https://www.cicerone.org) is the sommelier: styles, pairings, what to pour next. I needed the second one for [Torbido](https://torbido.co): once a bottle shop, now just a landing page. Checkout was not going to import `rectools`: a cron read `order_items`, fitted LightFM, wrote ranks, went back to sleep. The SKUs were drinks; the contract was `user_id`, `item_id`, `event_type`. Pull the drinks columns out and the same job still runs. The default `features.toml` in the repo did not get the memo:
+The name is borrowed twice. In Italian a *cicerone* is a guide, after Cicero. In beer, a [Cicerone](https://www.cicerone.org) is the sommelier: styles, pairings, what to pour next. I needed the second one for [Torbido](https://torbido.co): once a bottle shop, now just a landing page. Checkout was not going to import [RecTools](https://github.com/MobileTeleSystems/RecTools): a cron read `order_items`, fitted LightFM, wrote ranks, went back to sleep. The SKUs were drinks; the contract was `user_id`, `item_id`, `event_type`. Pull the drinks columns out and the same job still runs. The default `features.toml` in the repo did not get the memo:
 
 ```toml
 [[user_features]]
@@ -36,24 +36,26 @@ The engine does not care what language the shop is in. There is no Rails gem, no
 Cicerone trains **offline**. On a cron (default 03:00 UTC) it:
 
 1. Runs SQL you give it (`events`, optional `users` / `items`)
-2. Weighs those events, fits LightFM + popularity, blends the two lists
+2. Weighs those events, fits LightFM + popularity, blends the lists
 3. Writes `cicerone_recommendations` (`user_id`, `item_id`, `rank`, `score`, `source`)
 
-Your app `SELECT`s that table and joins `products`. Guests and brand-new accounts use a sentinel row set, `user_id = '__cold_start__'`. Nothing Cicerone-shaped loads in the web process. A purchase this afternoon does not change tonight’s ranks.
+Your app `SELECT`s that table and joins `products`. Guests and brand-new accounts use a sentinel row set, `user_id = '__cold_start__'`. Nothing Cicerone-shaped loads in the web process. A purchase this afternoon does not change tonight’s ranks. ([Incremental events](https://cicerone.dev/incremental-events/) can refresh popular / latest slices between jobs; LightFM still waits for the cron.)
 
 ## What the job actually does
 
-Checkout rows are implicit feedback: who bought what, not a star rating. That is a sparse user × item ranking problem. The SQL is how the pairs get into Postgres; the job turns them into a top-K order.
+You do not have 1–5 stars. You have purchases — a weak yes, and silence everywhere else. That is [implicit feedback (Hu, Koren & Volinsky, ICDM 2008)](https://yifanhu.net/PUB/cf.pdf). The job learns, for each customer, an order of products they have not bought yet. The SQL is how the pairs get into Postgres; the fit is how they become top-K. Caps, `log1p(quantity)`, and the 90-day half-life all run *before* any model: [interaction weighting](https://cicerone.dev/how-it-works/#interaction-weighting).
 
-**LightFM** ([Kula, 2015](https://arxiv.org/abs/1507.08439)) is hybrid matrix factorization. Each user and each item gets a vector; the score is a dot product. Training uses **WARP** ([Weston, Bengio & Usunier, IJCAI 2011](https://www.ijcai.org/Proceedings/11/Papers/460.pdf)): for a user who bought A, it samples items they did not buy until it finds a violator — something the model currently ranks above A — then it pushes those embeddings apart. You are optimizing an order, not “predict 4.2 stars.”
+**The map.** Each user and each item gets a short vector; how well they match is a dot product. Nearby means “show this.” This job uses **LightFM** ([Kula, *Metadata embeddings for user and item cold-start recommendations*, 2015](https://arxiv.org/abs/1507.08439)): hybrid matrix factorization, so tags such as `category` live in the *same* space. Two IPAs share a direction even if nobody bought both. A newly listed SKU can rank for someone who drinks IPA — the co-purchase graph has not seen it; the feature graph has. That helps cold items. It does not invent overlap.
 
-**`category` lives in the same space.** LightFM adds item features to the item vector, so two IPAs share a direction even if nobody has bought both. A newly listed SKU can rank for someone who drinks IPA: the co-purchase graph has not seen it; the feature graph has. That helps cold items. It does not invent overlap. If two customers never bought the same things, their user vectors do not talk to each other, and the ranking collapses toward whatever is globally common. Sparse implicit data, not a WARP bug.
+**The loss.** Imagine the model currently thinks you want the house lager more than the IPA you just bought. **WARP** ([Weston, Bengio & Usunier, IJCAI 2011](https://www.ijcai.org/Proceedings/11/Papers/460.pdf)) samples items you did not buy until it finds that violator, then pushes the embeddings apart. You are optimizing an order, not “predict 4.2 stars.” LightFM also implements [BPR](https://arxiv.org/abs/1205.2618) (Rendle et al., UAI 2009); Cicerone’s default is WARP.
+
+**When the map is empty.** If two customers never bought the same things, their vectors do not talk to each other, and the ranking collapses toward whatever is globally common. Sparse data, not a WARP bug.
 
 **Popular** is that global ranking: weighted interaction counts, no user vector. The `GROUP BY product_id` homepage, as a model, so the mixer has a list that is defined for everyone.
 
-**Blending** is weighted [reciprocal rank fusion](https://dl.acm.org/doi/10.1145/1571941.1572114) (Cormack, Clarke & Büttcher, SIGIR 2009). Rank `i` in a list contributes `weight / (60 + i)`. LightFM’s weight is `min(1, n / 5)` — `n` is distinct products that user touched; five SKUs and you are fully on the hybrid. The remainder splits between popular and latest-by-item-date (`created_at` in this TOML). `source` records who voted: `personalized`, `popular_fallback`, `latest`, or `blended` if more than one list contributed that SKU. `__cold_start__` is the same mixer with `n = 0`.
+**Mixing lists you cannot add.** A LightFM score and a sales count are not in the same units, so the mixer uses ranks: weighted [reciprocal rank fusion](https://dl.acm.org/doi/10.1145/1571941.1572114) (Cormack, Clarke & Büttcher, SIGIR 2009). Rank `i` contributes `weight / (60 + i)` — the `60` is the constant from that paper. LightFM’s weight is `min(1, n / 5)` (`n` is distinct products after weighting; five SKUs and you are fully on the hybrid). That curve is Cicerone’s, not Cormack’s. The remainder splits between popular and latest-by-item-date (`created_at` in this TOML). `source` records who voted: `personalized`, `popular_fallback`, `latest`, or `blended` if more than one list contributed that SKU. `__cold_start__` is the same mixer with `n = 0`.
 
-None of this runs in the request. The table is the fitted ranking. Item-kNN and SASRec are other jobs; see [how it works](https://cicerone.dev/how-it-works/).
+None of this runs in the request. The table is the fitted ranking. Item-kNN ([Sarwar et al., WWW 2001](https://files.grouplens.org/papers/www10_sarwar.pdf)) and SASRec ([Kang & McAuley, 2018](https://arxiv.org/abs/1808.09781)) are other jobs; this TOML does not train them. Combiners, other strategies, and the two different “latest” ideas: [how it works](https://cicerone.dev/how-it-works/).
 
 ## Compare this with the in-house thing you would write anyway
 
@@ -83,7 +85,7 @@ Cicerone wants **events** (required):
 | `quantity` | optional; purchases can scale with `log1p(quantity)` |
 | `occurred_at` | UTC |
 
-Paid order lines are enough to start. Use the timestamp that means the money moved. The query below uses `paid_at`; if you have no such column, use `created_at`. Product views help a bit; they will not rescue a catalog nobody has bought.
+Paid order lines are enough to start. Use the timestamp that means the money moved. The query below uses `paid_at`; if you have no such column, use `created_at`. Product views help a bit; they will not rescue a catalog nobody has bought. How those rows become training weights is [interaction weighting](https://cicerone.dev/how-it-works/#interaction-weighting).
 
 ```sql
 SELECT
@@ -220,7 +222,7 @@ popular_share = 0.7
 latest_date_columns = ["created_at"]
 ```
 
-Blending is what writes `__cold_start__`. Linear `saturate_at = 5` means five distinct products is fully on LightFM; a single order stays mostly popular / latest. On a small shop that is the behavior you want. You do not need `"latest"` in `[job].models` for this: blending reads `latest_date_columns` on items. If `products` has no usable date column among those names, latest is skipped and its weight moves to popular (you will see that in the job log).
+Blending is what writes `__cold_start__`. Linear `saturate_at = 5` means five distinct products is fully on LightFM; a single order stays mostly popular / latest. On a small shop that is the behavior you want. You do not need `"latest"` in `[job].models` for this: blending reads `latest_date_columns` on items (that is not the windowed-popularity `latest` *strategy* — [how it works](https://cicerone.dev/how-it-works/#combining-strategies) spells out both). If `products` has no usable date column among those names, latest is skipped and its weight moves to popular (you will see that in the job log). `half_life_days = 90` is exponential recency decay; the rest of the weight recipe is [interaction weighting](https://cicerone.dev/how-it-works/#interaction-weighting).
 
 A `view` weight with no view rows is harmless. An `event_type` in SQL that you forget to list under `[event_weights]` is dropped, with a warning.
 
@@ -491,9 +493,9 @@ cicerone-dashboard:
 
 ## When this is the wrong tool
 
-- You need the list to change inside the same request as “add to cart”. That is a different product (Cicerone’s optional [serve API](https://cicerone.dev/openapi/) plus incremental events still do not retrain LightFM on the request path).
+- You need the list to change inside the same request as “add to cart”. That is a different product (Cicerone’s optional [serve API](https://cicerone.dev/openapi/) plus [incremental events](https://cicerone.dev/incremental-events/) still do not retrain LightFM on the request path).
 - You have almost no overlapping buyers. Ship bestsellers, collect events, come back.
-- You already enjoy operating a Python training stack and want SASRec, AutoML, eligibility rules. Those exist — they are not this article. See the [tutorial](https://cicerone.dev/tutorial/) and [how it works](https://cicerone.dev/how-it-works/).
+- You already enjoy operating a Python training stack and want SASRec, AutoML, eligibility rules. Those exist — they are not this article. See the [tutorial](https://cicerone.dev/tutorial/), [how it works](https://cicerone.dev/how-it-works/), and [architecture](https://cicerone.dev/architecture/).
 
 ## In the morning
 

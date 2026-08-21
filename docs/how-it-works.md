@@ -45,6 +45,9 @@ Full `job.run()` is the drift backstop (cron or `POST /trigger/retrain`).
 ## Interaction weighting
 
 This runs **before** any model. Unknown `event_type`s are dropped.
+Purchases and views are [implicit feedback](https://yifanhu.net/PUB/cf.pdf)
+(Hu, Koren & Volinsky, 2008) — a weak yes, not a star rating. The table
+below is Cicerone's weight recipe, not that paper's ALS.
 
 | Step | Config | Effect |
 | --- | --- | --- |
@@ -86,6 +89,7 @@ interaction history) and vs `popular` (no user vector at all). Cicerone
 treats “warm” as *present in the dataset* — interactions **or** features.
 
 Paper: [Kula, *Metadata Embeddings for User and Item Cold-start Recommendations*, 2015](https://arxiv.org/abs/1507.08439).
+WARP loss: [Weston, Bengio & Usunier, IJCAI 2011](https://www.ijcai.org/Proceedings/11/Papers/460.pdf).
 
 ### `item_based` — item-item KNN
 
@@ -97,6 +101,10 @@ items (`model.item_based.model.K`, default 20).
 No latent factors, no time order, no item metadata. Independent of
 `content_fallback` (that one ranks **unseen catalog** items by features).
 Feature-only users skip this strategy.
+
+Paper: [Sarwar et al., *Item-Based Collaborative Filtering Recommendation Algorithms*, WWW 2001](https://files.grouplens.org/papers/www10_sarwar.pdf).
+Cicerone's neighbor model is TF-IDF item-item kNN, not that paper's cosine
+over raw co-purchase counts.
 
 ### `sequential` — SASRec or BERT4Rec
 
