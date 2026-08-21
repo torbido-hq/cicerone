@@ -10,8 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - After fit, strategy×cohort `recommend()` calls run in a thread pool when
   `job.max_workers > 1` (default remains 1).
-- Incremental popular ranking and training interactions share vectorized
-  per-row event weights.
+- Dashboard lookup formats rank/score with Python coercion instead of
+  pandas scalars.
 
 ## [0.6.1] - 2026-08-20
 
