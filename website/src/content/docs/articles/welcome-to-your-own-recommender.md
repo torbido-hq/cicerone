@@ -1,5 +1,5 @@
 ---
-title: Welcome to your own recommender
+title: A nightly table next to your orders
 description: A nightly top-K table next to your orders — LightFM without Python in the request. Rails is the walkthrough, not a dependency.
 date: 2026-08-20
 excerpt: You already have order_items. Join a ranked table. Honest about what sparse data will and will not do.
@@ -13,9 +13,9 @@ Canonical URL: [https://cicerone.dev/articles/welcome-to-your-own-recommender/](
 
 You already have `order_items`. What you do not have is a recs team — and you are not fitting LightFM inside the web process. The “Recommended for you” row is usually `ORDER BY sold_count DESC` with better copy. That query is honest. It is also a ceiling.
 
-[Cicerone](https://cicerone.dev) is how you go past it without a new request-path runtime: a self-hosted **batch** job that reads the interactions you already store, writes a top-K table, and stays out of the hot path. Most shops get there by hand — bestsellers, “customers who bought this also bought”, a weekend with [LightFM](https://making.lyst.com/lightfm/docs/home.html). This is that weekend, packaged.
+[Cicerone](https://cicerone.dev) is how you go past it without a new request-path runtime: a self-hosted **batch** job that reads the interactions you already store, writes a top-K table, and stays out of the hot path. Most shops get there by hand — bestsellers, “customers who bought this also bought”, a weekend with [LightFM](https://making.lyst.com/lightfm/docs/home.html). The weekend is the model. The days are weights, cold-start, and a job that cannot overlap itself. Cicerone is that glue.
 
-The name is borrowed twice. In Italian a *cicerone* is a guide, after Cicero. In beer, a [Cicerone](https://www.cicerone.org) is the sommelier: styles, pairings, what to pour next. I needed the second one for [Torbido](https://torbido.co): once a bottle shop, now just a landing page. Checkout was not going to import `rectools`. A cron read `order_items`, fitted LightFM, wrote ranks, went back to sleep. The SKUs were drinks; the contract was `user_id`, `item_id`, `event_type`. Pull the drinks columns out and the same job still runs. The default `features.toml` in the repo did not get the memo:
+The name is borrowed twice. In Italian a *cicerone* is a guide, after Cicero. In beer, a [Cicerone](https://www.cicerone.org) is the sommelier: styles, pairings, what to pour next. I needed the second one for [Torbido](https://torbido.co): once a bottle shop, now just a landing page. Checkout was not going to import `rectools`: a cron read `order_items`, fitted LightFM, wrote ranks, went back to sleep. The SKUs were drinks; the contract was `user_id`, `item_id`, `event_type`. Pull the drinks columns out and the same job still runs. The default `features.toml` in the repo did not get the memo:
 
 ```toml
 [[user_features]]
@@ -59,19 +59,7 @@ Cicerone is worth it when you want that second row without becoming a recs team 
 
 **Keep the bestsellers query.** After the first job, look at `source`. If almost every signed-in user is `popular_fallback` (or `blended` that is still mostly popular), the fancy part is not earning its keep yet. That is a data problem, not a config problem.
 
-Other downsides, said plainly:
-
-- Each successful job **truncates then rewrites** the recommendations table. Point `recommendations_table` at anything you care about and you will empty it. Prefix the name.
-- Default input tables are `users` / `events` / `items`. Rails already has `users`, often with `email`, `encrypted_password`, and reset tokens. If you omit `users_query`, Cicerone will `SELECT * FROM users` and then look for a `user_id` column that is actually `id`. Always set a query that aliases `id` and selects nothing else:
-
-```sql
-SELECT id::text AS user_id FROM users
-```
-- IDs are strings. `42` and `"42"` are the same only if you `::text` in SQL and `id.to_s` in Ruby.
-- Output identifiers cannot be schema-qualified (`cicerone.recommendations` is rejected). Tables live in `public` with a prefix, or you use the same database role as the app.
-- The job needs `CREATE` (first run) and `TRUNCATE` on its output tables. A dedicated role that is `SELECT`-only on `orders` is the right idea; granting `CREATE` on `public` is the awkward part. Many small shops just use the app role and are careful with the table name. I would still not use the default name `recommendations`.
-- `docker-compose.yml` in the Cicerone repo is developer convenience, not a production deploy.
-- [Beerware](https://github.com/torbido-hq/cicerone/blob/main/LICENSE). You operate the box.
+One operational trap up front: each successful job **truncates then rewrites** the recommendations table. Point `recommendations_table` at anything you care about and you will empty it. Prefix the name. The rest of the gotchas sit next to the queries that trigger them.
 
 ## Map a Rails schema to the event contract
 
@@ -79,13 +67,13 @@ Cicerone wants **events** (required):
 
 | column | notes |
 | --- | --- |
-| `user_id` | stable string |
-| `item_id` | stable string |
+| `user_id` | stable string (`id::text` / `id.to_s`; `42` and `"42"` are not the same until you do) |
+| `item_id` | stable string (same rule) |
 | `event_type` | must appear in `[event_weights]` or the row is dropped |
 | `quantity` | optional; purchases can scale with `log1p(quantity)` |
 | `occurred_at` | UTC |
 
-Paid order lines are enough to start. Use the timestamp that means the money moved (`paid_at` if you have it). Product views help a bit; they will not rescue a catalog nobody has bought.
+Paid order lines are enough to start. Use the timestamp that means the money moved. The query below uses `paid_at`; if you have no such column, use `created_at`. Product views help a bit; they will not rescue a catalog nobody has bought.
 
 ```sql
 SELECT
@@ -93,33 +81,22 @@ SELECT
   oi.product_id::text AS item_id,
   'purchase'::text AS event_type,
   oi.quantity,
-  o.created_at AS occurred_at
+  o.paid_at AS occurred_at
 FROM order_items oi
 INNER JOIN orders o ON o.id = oi.order_id
 WHERE o.status IN ('paid', 'complete', 'completed')
   AND o.user_id IS NOT NULL
 ```
 
-If you also store authenticated product views, fold them in. Same contract, a second `event_type` that the weights already know:
+If you also store authenticated product views, append this with `UNION ALL`. Same five columns, a second `event_type` that the weights already know:
 
 ```sql
 SELECT
-  o.user_id::text AS user_id,
-  oi.product_id::text AS item_id,
-  'purchase'::text AS event_type,
-  oi.quantity,
-  o.created_at AS occurred_at
-FROM order_items oi
-INNER JOIN orders o ON o.id = oi.order_id
-WHERE o.status IN ('paid', 'complete', 'completed')
-  AND o.user_id IS NOT NULL
-UNION ALL
-SELECT
-  v.user_id::text,
-  v.product_id::text,
-  'view',
+  v.user_id::text AS user_id,
+  v.product_id::text AS item_id,
+  'view'::text AS event_type,
   1,
-  v.created_at
+  v.created_at AS occurred_at
 FROM product_views v
 WHERE v.user_id IS NOT NULL
 ```
@@ -140,7 +117,11 @@ FROM products p
 
 Rename `published` / `in_stock` to whatever booleans you actually have (`active`, `inventory_count > 0`, …). If those columns do not exist, either add expressions or set `item_availability_filters = []` so Cicerone does not look for them. A missing filter column is skipped (fail-open), which is easy to miss in the logs.
 
-Users can be as small as that same query — `id` only, no `email` / `encrypted_password` / tokens. You do not need user features for this setup. The query is there so Cicerone does not `SELECT *` the Devise `users` table.
+Users can be as small as `id` only — no `email` / `encrypted_password` / tokens. You do not need user features for this setup. If you omit `users_query`, Cicerone will `SELECT * FROM users` (the Devise table) and then look for a `user_id` column that is actually `id`. Always alias `id` and select nothing else:
+
+```sql
+SELECT id::text AS user_id FROM users
+```
 
 ## Two TOML files
 
@@ -152,7 +133,9 @@ postgresql+psycopg://USER:PASS@HOST:5432/DBNAME
 
 That is not Rails’ `postgres://` URL. From Compose, `HOST` is the Postgres **service name** (`postgres`, `db`, …), not `localhost`.
 
-`cicerone.toml`:
+Output identifiers cannot be schema-qualified (`cicerone.recommendations` is rejected). Tables live in `public` with a prefix. The job needs `CREATE` (first run) and `TRUNCATE` on those tables. A dedicated role that is `SELECT`-only on `orders` is the right idea; granting `CREATE` on `public` is the awkward part. Many small shops just use the app role and are careful with the table name. Do not use the default name `recommendations`.
+
+The queries in `cicerone.toml` are the purchase / users / items SELECTs from the previous section (add the view `UNION ALL` if you have that table):
 
 ```toml
 [job]
@@ -174,7 +157,7 @@ SELECT
   oi.product_id::text AS item_id,
   'purchase'::text AS event_type,
   oi.quantity,
-  o.created_at AS occurred_at
+  o.paid_at AS occurred_at
 FROM order_items oi
 INNER JOIN orders o ON o.id = oi.order_id
 WHERE o.status IN ('paid', 'complete', 'completed')
@@ -227,7 +210,7 @@ popular_share = 0.7
 latest_date_columns = ["created_at"]
 ```
 
-Blending is what writes `__cold_start__`. Linear `saturate_at = 5` means five distinct products is fully on LightFM; a single order stays mostly popular / latest. On a small shop that is the behavior you want. If `products` has no usable date column among `latest_date_columns`, latest is skipped and its weight moves to popular (you will see that in the job log).
+Blending is what writes `__cold_start__`. Linear `saturate_at = 5` means five distinct products is fully on LightFM; a single order stays mostly popular / latest. On a small shop that is the behavior you want. You do not need `"latest"` in `[job].models` for this: blending reads `latest_date_columns` on items. If `products` has no usable date column among those names, latest is skipped and its weight moves to popular (you will see that in the job log).
 
 A `view` weight with no view rows is harmless. An `event_type` in SQL that you forget to list under `[event_weights]` is dropped, with a warning.
 
@@ -353,7 +336,7 @@ enabled = true
 host = "0.0.0.0"
 port = 8090
 users_path = "/app/config/dashboard_users.toml"
-lookup_k = 20
+lookup_k = 10
 ```
 
 `cron_schedule` must match the batch job so the page can tell you the run looks overdue. `[input]` is required by the config loader and unused.
@@ -386,9 +369,6 @@ This is a `SELECT`, not an SDK. ActiveRecord is one way to do it; Eloquent, SQLA
 class CiceroneRecommendation < ApplicationRecord
   self.table_name = "cicerone_recommendations"
   self.primary_key = nil
-
-  scope :for_user, ->(user) { where(user_id: user.id.to_s).order(:rank) }
-  scope :cold_start, -> { where(user_id: "__cold_start__").order(:rank) }
 
   def readonly?
     true
@@ -478,7 +458,7 @@ cicerone:
     - postgres
 ```
 
-No ports on the job. Batch mode does not listen. Disk is a couple of TOML files; CPU is a nightly LightFM fit. A shop-sized catalog fits on a small VM, not a GPU.
+No ports on the job. Batch mode does not listen. Disk is a couple of TOML files; CPU is a nightly LightFM fit. A shop-sized catalog fits on a small VM, not a GPU. The `docker-compose.yml` in the Cicerone repo is developer convenience, not this deploy.
 
 Optional: keep the dashboard up too. The config directory is read-write so `users add` can persist the bcrypt file:
 
@@ -497,6 +477,8 @@ cicerone-dashboard:
     - postgres
 ```
 
+[Beerware](https://github.com/torbido-hq/cicerone/blob/main/LICENSE). You operate the box.
+
 ## When this is the wrong tool
 
 - You need the list to change inside the same request as “add to cart”. That is a different product (Cicerone’s optional [serve API](https://cicerone.dev/openapi/) plus incremental events still do not retrain LightFM on the request path).
@@ -505,7 +487,7 @@ cicerone-dashboard:
 
 ## In the morning
 
-Run `job` once. Look at `source`. That column is the only metric that matters on day one.
+Last night’s cron already ran (or you ran `job` once). Look at `source`. That column is the only metric that matters on day one.
 
 If it is mostly `popular_fallback`, keep bestsellers on the homepage. Overlap is still thin. Come back when more customers have bought the same things. You are not behind. You are just early.
 
