@@ -272,30 +272,30 @@ class IncrementalUpdater:
                 protect=user_ids,
             )
 
-    def _known_event_type(self, event_type: str) -> bool:
+    def _row_signal_weights(self, batch: pd.DataFrame) -> pd.Series:
         if self._feature_config is None:
-            return True
-        return event_type in self._feature_config.event_weights
+            return pd.to_numeric(batch["quantity"], errors="coerce").fillna(0.0)
+        return event_row_weights(
+            batch["event_type"].astype(str),
+            batch["quantity"],
+            event_weights=self._feature_config.event_weights,
+            quantity_scaled_events=self._feature_config.quantity_scaled_events,
+        ).fillna(0.0)
+
+    def _signal_rows(self, batch: pd.DataFrame) -> pd.DataFrame:
+        if batch.empty:
+            return batch
+        return batch.loc[self._row_signal_weights(batch) > 0]
 
     def _popular_ranking(self, batch: pd.DataFrame) -> pd.DataFrame:
         empty = pd.DataFrame(columns=[ITEM_COLUMN, SCORE_COLUMN, SOURCE_COLUMN])
-        if batch.empty:
-            return empty
-        if self._feature_config is None:
-            weights = pd.to_numeric(batch["quantity"], errors="coerce").fillna(0.0)
-        else:
-            weights = event_row_weights(
-                batch["event_type"].astype(str),
-                batch["quantity"],
-                event_weights=self._feature_config.event_weights,
-                quantity_scaled_events=self._feature_config.quantity_scaled_events,
-            ).fillna(0.0)
-        scored = batch.assign(_popular_weight=weights)
-        scored = scored.loc[scored["_popular_weight"] != 0.0]
+        scored = self._signal_rows(batch)
         if scored.empty:
             return empty
+        weights = self._row_signal_weights(scored)
+        scored = scored.assign(_popular_weight=weights)
         summed = scored.groupby(scored["item_id"].astype(str), sort=False)["_popular_weight"].sum()
-        summed = summed.loc[summed != 0.0]
+        summed = summed.loc[summed > 0]
         if summed.empty:
             return empty
         ranked = summed.reset_index()
@@ -309,12 +309,11 @@ class IncrementalUpdater:
     def _latest_ranking(self, batch: pd.DataFrame) -> pd.DataFrame:
         if batch.empty:
             return pd.DataFrame(columns=[ITEM_COLUMN, SCORE_COLUMN, SOURCE_COLUMN])
-        frame = batch.copy()
+        frame = self._signal_rows(batch)
+        if frame.empty:
+            return pd.DataFrame(columns=[ITEM_COLUMN, SCORE_COLUMN, SOURCE_COLUMN])
+        frame = frame.copy()
         frame[ITEM_COLUMN] = frame[ITEM_COLUMN].astype(str)
-        if self._feature_config is not None:
-            frame = frame[frame["event_type"].astype(str).map(self._known_event_type)]
-            if frame.empty:
-                return pd.DataFrame(columns=[ITEM_COLUMN, SCORE_COLUMN, SOURCE_COLUMN])
         latest = (
             frame.sort_values("occurred_at", ascending=False)
             .drop_duplicates(subset=[ITEM_COLUMN], keep="first")
@@ -347,15 +346,14 @@ class IncrementalUpdater:
         else:
             preserved = prior.iloc[0:0] if not prior.empty else prior
 
-        user_batch = batch[batch[USER_COLUMN].astype(str) == user_id]
-        if self._feature_config is not None and not user_batch.empty:
-            user_batch = user_batch[user_batch["event_type"].astype(str).map(self._known_event_type)]
+        user_batch = self._signal_rows(batch[batch[USER_COLUMN].astype(str) == user_id])
+        has_signal = not user_batch.empty
         boost_items = (
             user_batch.sort_values("occurred_at", ascending=False)[ITEM_COLUMN]
             .astype(str)
             .drop_duplicates()
             .tolist()
-            if not user_batch.empty
+            if has_signal
             else []
         )
         boost_slots = max(1, int(self._top_k * _BOOST_SLOT_FRACTION)) if boost_items else 0
@@ -375,8 +373,13 @@ class IncrementalUpdater:
                 preserved = preserved.sort_values(RANK_COLUMN, kind="mergesort")
             preserved = preserved.head(preserve_cap)
 
-        # Boost first so reserved slots win; then preserved; then popular/latest fill.
-        parts = [frame for frame in (boost, preserved, popular, latest) if not frame.empty]
+        # Batch-global popular/latest only for users with signal or preserved rows
+        # (unknown/zero-weight events must not rewrite popular-only users).
+        use_global = has_signal or not preserved.empty
+        parts = [boost, preserved]
+        if use_global:
+            parts.extend((popular, latest))
+        parts = [frame for frame in parts if not frame.empty]
         combined = pd.concat(parts, ignore_index=True) if parts else empty_recommendations_frame()
         if combined.empty:
             return empty_recommendations_frame()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable, Sequence
 
 import pandas as pd
@@ -51,8 +52,13 @@ class ItemsFilterCache:
         self._items: pd.DataFrame | None = None
         self._available_ids: frozenset[str] | None = None
         self._ids_by_category: dict[str, frozenset[str]] = {}
+        self._lock = threading.Lock()
 
     def get(self) -> tuple[pd.DataFrame | None, frozenset[str] | None, dict[str, frozenset[str]]]:
+        with self._lock:
+            return self._get_unlocked()
+
+    def _get_unlocked(self) -> tuple[pd.DataFrame | None, frozenset[str] | None, dict[str, frozenset[str]]]:
         version = self._reader.items_version()
         if version == self._version:
             return self._items, self._available_ids, self._ids_by_category

@@ -938,6 +938,19 @@ def test_recommend_cache_key_includes_allowlist_filter_and_dataset():
     )
 
 
+def test_recommend_cache_key_includes_user_set():
+    items = _items_fingerprint(["i1"])
+    users_ab = _items_fingerprint(["u1", "u2"])
+    users_a = _items_fingerprint(["u1"])
+    ds = object()
+    fingerprint = _dataset_fingerprint(ds)
+    same = _recommend_cache_key("strategy", "als", None, 10, items, users_ab, True, fingerprint)
+    assert same == _recommend_cache_key(
+        "strategy", "als", None, 10, items, _items_fingerprint(["u2", "u1"]), True, fingerprint
+    )
+    assert same != _recommend_cache_key("strategy", "als", None, 10, items, users_a, True, fingerprint)
+
+
 def test_recommend_with_models_thread_pool_matches_serial(sample_items, feature_config):
     from cicerone.model.fit import fit_strategies, plan_model_run
     from cicerone.model.recommend import recommend_with_models

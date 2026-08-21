@@ -91,6 +91,7 @@ class DatasetOutputSink:
         self._write_bytes("recommendations.parquet", buffer.getvalue(), "application/octet-stream")
 
     def replace_recommendations_for_users(self, df: pd.DataFrame, *, user_ids: Sequence[str]) -> int:
+        # Read-modify-write; concurrent replicas need events.ha (DB sink is transactional).
         ids = normalize_replace_user_ids(df, user_ids)
         if not ids:
             return 0

@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Incremental popular/latest/boost ignore unknown, zero-weight, and negative events, and do not rewrite popular-only users in a mixed batch.
+- DB watermarks compare synthetic `id` / `ctid` numerically so same-timestamp `id:9` does not skip `id:10`.
+- Recommend cache keys include the user set; run manifest user counts omit `__cold_start__`.
+
 ## [0.6.2] - 2026-08-24
 
 ### Changed

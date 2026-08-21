@@ -153,9 +153,9 @@ def _resolve_cohort_plan(
     has_boosts = bool(config.boosts)
     recommend_k = boost_overfetch_k(top_k, has_boosts, config.boost_overfetch_factor)
 
-    known_users = set(dataset.user_id_map.external_ids)
+    known_users = {str(user_id) for user_id in dataset.user_id_map.external_ids}
     unique_target_users = list(dict.fromkeys(target_users))
-    has_any_warm_user = bool(known_users.intersection(unique_target_users))
+    has_any_warm_user = any(str(user_id) in known_users for user_id in unique_target_users)
     needs_interacting_users = any(
         STRATEGIES[name].requires_interactions for name in recommend_models if name in STRATEGIES
     )
@@ -250,9 +250,9 @@ def _recommend_per_strategy(
                 continue
 
             if strategy.personalized:
-                cohort_warm = [u for u in cohort_users if u in cohort_plan.known_users]
+                cohort_warm = [u for u in cohort_users if str(u) in cohort_plan.known_users]
                 if strategy.requires_interactions:
-                    cohort_warm = [u for u in cohort_warm if u in cohort_plan.interacting_users]
+                    cohort_warm = [u for u in cohort_warm if str(u) in cohort_plan.interacting_users]
                 if not cohort_warm:
                     continue
                 recommend_users = cohort_warm
@@ -265,6 +265,7 @@ def _recommend_per_strategy(
                 cohort_key_value,
                 cohort_plan.recommend_k,
                 _items_fingerprint(allowed_items),
+                _items_fingerprint(recommend_users),
                 bool(strategy.personalized),
                 _dataset_fingerprint(dataset),
             )
@@ -494,8 +495,9 @@ def recommend_with_models(
 ) -> pd.DataFrame:
     """Recommend + combine on already-fitted strategies (no fit).
 
-    ``recommend_cache`` keys include strategy, cohort, k, allowlist, filter_viewed,
-    and dataset identity so a shared dict is safe across differing inputs.
+    ``recommend_cache`` keys include strategy, cohort, k, allowlist, user set,
+    filter_viewed, and dataset identity so a shared dict is safe across
+    differing recommend() inputs.
     """
     blending = config.blending
     blending_enabled = blending.enabled
