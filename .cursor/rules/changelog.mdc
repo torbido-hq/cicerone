@@ -1,6 +1,6 @@
 ---
 alwaysApply: true
-description: Never edit changelog entries after a version is released
+description: CHANGELOG is product-only; never date website work; freeze shipped sections
 ---
 
 # Changelog (released versions are frozen)
@@ -8,14 +8,45 @@ description: Never edit changelog entries after a version is released
 [CHANGELOG.md](CHANGELOG.md) follows Keep a Changelog. Dated `## [x.y.z]`
 sections are **immutable**.
 
+**CHANGELOG = product. Website ≠ product.** Do not add, date, or “complete
+a release” with website notes.
+
+Website is `website/**` (Astro/Starlight source and the npm package in that
+tree), `.github/workflows/pages.yml`, Pages artifacts (`website/dist/`,
+cicerone.dev chrome), and anything that exists only to publish
+cicerone.dev. `docs/*.md` is not website-only (see Borderline).
+
+Product is the `cicerone` package: job, serve, dashboard app, events, I/O,
+CLI, config, models.
+
+If a train has both product and site changes, Unreleased gets **only**
+the product bullets — no website bullet beside them. Site-only: leave
+Unreleased empty (no placeholder). Empty Unreleased is expected, not an
+error: `website/src/lib/changelog.mjs` `parseLatestRelease` skips
+`## [Unreleased]` and uses the first dated `## [x.y.z] - YYYY-MM-DD`
+(`website/src/lib/changelog.test.mjs`). No pytest/CI/tag/`publish.yml`
+job requires Unreleased bullets; do not invent any.
+
+Split lives only in this file. Keep the `changelog.mdc` line in
+[agent-policy-source.mdc](agent-policy-source.mdc) in sync; do not fork a
+second copy of the split.
+
+## Borderline
+
+- `src/cicerone/static/cicerone-logo.svg` (dashboard): product.
+  `website/src/assets/cicerone-logo.svg` only: not.
+- Regenerating `docs/openapi/serve.openapi.json` because serve changed:
+  product. Copy-only under `website/public/openapi/`: not.
+
 ## Do
 
 - Put new notes only under `## [Unreleased]` on the train you are
   targeting (patch on `main`, minor on `release/X.Y.0`).
-- Short bullets for **this** change. Do not re-tell older releases.
+- Short bullets for **this** product change. Do not re-tell older releases.
 
 ## Do not
 
+- Changelog the website. Ever.
 - Edit, rewrite, move, or “clarify” any `## [x.y.z] - YYYY-MM-DD` section.
 - Expand Unreleased bullets so they re-document a shipped version
   (e.g. do not narrate 0.5.0 lock behavior inside a later HA note).
