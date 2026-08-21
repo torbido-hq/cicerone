@@ -3,7 +3,7 @@ title: Privacy
 description: How cicerone.dev handles analytics cookies and Google Consent Mode.
 ---
 
-cicerone.dev is a static docs site. There is no account, checkout, or server-side session.
+cicerone.dev is a static docs site. There are no accounts, checkouts, or server-side sessions.
 
 ## Analytics
 

@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import {
 	CONSENT_ANALYTICS,
 	CONSENT_DENIED,
+	CONSENT_KEYS,
 	CONSENT_STORAGE_KEY,
 	analyticsHead,
 	buildConsentInitScript,
@@ -17,6 +18,8 @@ import {
 test('isGaMeasurementId accepts G- and GT- ids', () => {
 	assert.equal(isGaMeasurementId('G-ABC123'), true);
 	assert.equal(isGaMeasurementId('GT-XYZ9'), true);
+	assert.equal(isGaMeasurementId('g-abc123'), true);
+	assert.equal(isGaMeasurementId('gt-xyz9'), true);
 	assert.equal(isGaMeasurementId(' G-ABC123 '), true);
 	assert.equal(isGaMeasurementId(''), false);
 	assert.equal(isGaMeasurementId('UA-123'), false);
@@ -35,6 +38,7 @@ test('parseStoredConsent requires all consent-mode v2 keys', () => {
 	assert.deepEqual(parseStoredConsent(JSON.stringify(CONSENT_DENIED)), {
 		...CONSENT_DENIED,
 	});
+	assert.deepEqual(Object.keys(CONSENT_DENIED), [...CONSENT_KEYS]);
 });
 
 test('gaMeasurementId defaults to the cicerone.dev tag', () => {
@@ -44,6 +48,7 @@ test('gaMeasurementId defaults to the cicerone.dev tag', () => {
 
 test('gaMeasurementId prefers a valid PUBLIC_GA_MEASUREMENT_ID from env', () => {
 	assert.equal(gaMeasurementId({ PUBLIC_GA_MEASUREMENT_ID: 'G-OVERRIDE1' }), 'G-OVERRIDE1');
+	assert.equal(gaMeasurementId({ PUBLIC_GA_MEASUREMENT_ID: 'g-override1' }), 'G-OVERRIDE1');
 	assert.equal(gaMeasurementId({ PUBLIC_GA_MEASUREMENT_ID: 'nope' }), GA_MEASUREMENT_ID);
 	assert.equal(gaMeasurementId({}), GA_MEASUREMENT_ID);
 });
@@ -54,6 +59,7 @@ test('buildConsentInitScript sets denied defaults before any update', () => {
 	assert.match(script, /"analytics_storage":"denied"/);
 	assert.match(script, /"ad_user_data":"denied"/);
 	assert.match(script, /ads_data_redaction/);
+	assert.match(script, /var CONSENT_KEYS=/);
 	assert.match(script, new RegExp(CONSENT_STORAGE_KEY));
 	assert.match(script, /try \{ raw=localStorage\.getItem/);
 	assert.match(script, /catch \(e\) \{\}/);
@@ -91,4 +97,8 @@ test('analyticsHead emits consent defaults before gtag.js', () => {
 		'https://www.googletagmanager.com/gtag/js?id=G-ABC123',
 	);
 	assert.match(String(head[2].content), /"G-ABC123"/);
+	assert.equal(
+		analyticsHead('g-abc123')[1].attrs.src,
+		'https://www.googletagmanager.com/gtag/js?id=G-ABC123',
+	);
 });

@@ -1,11 +1,15 @@
 export const CONSENT_STORAGE_KEY = 'cicerone-consent';
 
-export const CONSENT_DENIED = Object.freeze({
-	ad_storage: 'denied',
-	ad_user_data: 'denied',
-	ad_personalization: 'denied',
-	analytics_storage: 'denied',
-});
+export const CONSENT_KEYS = Object.freeze([
+	'ad_storage',
+	'ad_user_data',
+	'ad_personalization',
+	'analytics_storage',
+]);
+
+export const CONSENT_DENIED = Object.freeze(
+	Object.fromEntries(CONSENT_KEYS.map((key) => [key, 'denied'])),
+);
 
 export const CONSENT_ANALYTICS = Object.freeze({
 	...CONSENT_DENIED,
@@ -13,7 +17,7 @@ export const CONSENT_ANALYTICS = Object.freeze({
 });
 
 export function isGaMeasurementId(value) {
-	return /^(?:G|GT)-[A-Z0-9]+$/.test(String(value || '').trim());
+	return /^(?:G|GT)-[A-Z0-9]+$/.test(String(value || '').trim().toUpperCase());
 }
 
 export const GA_MEASUREMENT_ID = 'G-E38EP8PJSR';
@@ -33,7 +37,7 @@ export function gaMeasurementId(env) {
 			];
 	for (const source of sources) {
 		const value = String(source?.PUBLIC_GA_MEASUREMENT_ID ?? '').trim();
-		if (isGaMeasurementId(value)) return value;
+		if (isGaMeasurementId(value)) return value.toUpperCase();
 	}
 	return GA_MEASUREMENT_ID;
 }
@@ -45,15 +49,9 @@ export function parseStoredConsent(raw) {
 		if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) {
 			return null;
 		}
-		const keys = [
-			'ad_storage',
-			'ad_user_data',
-			'ad_personalization',
-			'analytics_storage',
-		];
 		/** @type {Record<string, string>} */
 		const out = {};
-		for (const key of keys) {
+		for (const key of CONSENT_KEYS) {
 			const value = parsed[key];
 			if (value !== 'granted' && value !== 'denied') return null;
 			out[key] = value;
@@ -66,6 +64,7 @@ export function parseStoredConsent(raw) {
 
 export function buildConsentInitScript() {
 	return `(function(){
+var CONSENT_KEYS=${JSON.stringify(CONSENT_KEYS)};
 ${parseStoredConsent.toString()}
 try {
 window.dataLayer=window.dataLayer||[];
@@ -85,16 +84,17 @@ export function buildGtagConfigScript(measurementId) {
 }
 
 export function analyticsHead(measurementId = gaMeasurementId()) {
-	if (!isGaMeasurementId(measurementId)) return [];
+	const id = String(measurementId || '').trim().toUpperCase();
+	if (!isGaMeasurementId(id)) return [];
 	return [
 		{ tag: 'script', content: buildConsentInitScript() },
 		{
 			tag: 'script',
 			attrs: {
 				async: true,
-				src: `https://www.googletagmanager.com/gtag/js?id=${measurementId}`,
+				src: `https://www.googletagmanager.com/gtag/js?id=${id}`,
 			},
 		},
-		{ tag: 'script', content: buildGtagConfigScript(measurementId) },
+		{ tag: 'script', content: buildGtagConfigScript(id) },
 	];
 }
