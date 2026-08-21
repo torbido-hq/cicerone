@@ -5,6 +5,7 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import starlightBlog from 'starlight-blog';
 import {
+	articleRedirects,
 	ARTICLES_PREFIX,
 	articlesContentDir,
 	hasPublishedArticles,
@@ -33,11 +34,7 @@ const articlesPlugin = hasPublishedArticles(articlesDir, { production })
 // https://astro.build/config
 export default defineConfig({
 	site: 'https://cicerone.dev',
-	redirects: {
-		// One static route: slash variants collide. Trailing slash matches the site.
-		'/articles/welcome-to-your-own-recommender/':
-			'/articles/a-nightly-table-next-to-your-orders/',
-	},
+	redirects: articleRedirects,
 	integrations: [
 		starlight({
 			title: 'Cicerone',
