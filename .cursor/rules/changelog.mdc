@@ -1,6 +1,6 @@
 ---
 alwaysApply: true
-description: Never edit changelog entries after a version is released
+description: CHANGELOG is product-only; never date website work; freeze shipped sections
 ---
 
 # Changelog (released versions are frozen)
@@ -8,14 +8,23 @@ description: Never edit changelog entries after a version is released
 [CHANGELOG.md](CHANGELOG.md) follows Keep a Changelog. Dated `## [x.y.z]`
 sections are **immutable**.
 
+**CHANGELOG = product. Website ≠ product.** Do not add, date, or “complete
+a release” with `website/**` notes (Pages, Starlight, cookies/consent,
+articles chrome, site CSS). Leave Unreleased empty if the train only
+has site work.
+
+Product is the `cicerone` package: job, serve, dashboard app, events, I/O,
+CLI, config, models.
+
 ## Do
 
 - Put new notes only under `## [Unreleased]` on the train you are
   targeting (patch on `main`, minor on `release/X.Y.0`).
-- Short bullets for **this** change. Do not re-tell older releases.
+- Short bullets for **this** product change. Do not re-tell older releases.
 
 ## Do not
 
+- Changelog the website. Ever.
 - Edit, rewrite, move, or “clarify” any `## [x.y.z] - YYYY-MM-DD` section.
 - Expand Unreleased bullets so they re-document a shipped version
   (e.g. do not narrate 0.5.0 lock behavior inside a later HA note).
