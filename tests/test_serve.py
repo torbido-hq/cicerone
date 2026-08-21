@@ -14,10 +14,9 @@ from cicerone.io.recommendation_reader import select_cold_start_fallback
 from cicerone.serve import create_app, main
 from cicerone.serve.app import (
     _GeneratedAtCache,
-    _ItemsFilterCache,
     _start_refresh_loop,
 )
-from cicerone.serve.item_filters import _available_item_ids
+from cicerone.serve.item_filters import ItemsFilterCache, available_item_ids
 
 
 def _settings(**overrides) -> Settings:
@@ -115,12 +114,12 @@ class _FakeManifest:
 
 def test_available_item_ids_missing_item_id_returns_none():
     items = pd.DataFrame([{"sku": "x", "published": True}])
-    assert _available_item_ids(items, ["published"]) is None
+    assert available_item_ids(items, ["published"]) is None
 
 
 def test_items_filter_cache_tolerates_snapshot_without_item_id():
     reader = _FakeReader(_recs_df(), pd.DataFrame([{"sku": "x", "published": True}]))
-    cache = _ItemsFilterCache(
+    cache = ItemsFilterCache(
         reader,
         category_column="category",
         availability_filters=["published"],
@@ -133,7 +132,7 @@ def test_items_filter_cache_tolerates_snapshot_without_item_id():
 
 def test_items_filter_cache_normalizes_once_per_refresh():
     reader = _FakeReader(_recs_df(), _items_df())
-    cache = _ItemsFilterCache(
+    cache = ItemsFilterCache(
         reader,
         category_column="category",
         availability_filters=["published", "in_stock"],
@@ -281,7 +280,7 @@ def test_recommendations_unknown_user_returns_cold_start_fallback():
 
 def test_items_filter_cache_stringifies_non_string_item_ids():
     """Category allowlists must be str so they match filtered recommendation ids."""
-    from cicerone.serve.app import _filter_recommendations
+    from cicerone.serve.item_filters import filter_recommendations
 
     recs = pd.DataFrame(
         [
@@ -296,14 +295,14 @@ def test_items_filter_cache_stringifies_non_string_item_ids():
         ]
     )
     reader = _FakeReader(recs, items)
-    cache = _ItemsFilterCache(
+    cache = ItemsFilterCache(
         reader,
         category_column="category",
         availability_filters=["published"],
     )
     cached_items, available, by_cat = cache.get()
     assert by_cat["beer"] == frozenset({"10"})
-    filtered = _filter_recommendations(
+    filtered = filter_recommendations(
         recs,
         items=cached_items,
         available_ids=available,

@@ -24,9 +24,9 @@ from cicerone.serve.bootstrap_events import start_events_runtime
 from cicerone.serve.code_samples import HEALTH_PATH, RECOMMENDATIONS_PATH, attach_code_samples
 from cicerone.serve.events_routes import attach_events_ingest_openapi, mount_events_routes
 from cicerone.serve.item_filters import (
-    _configure_reader_item_filters,
-    _filter_recommendations,
-    _ItemsFilterCache,
+    ItemsFilterCache,
+    configure_reader_item_filters,
+    filter_recommendations,
 )
 from cicerone.serve.metrics import (
     METRICS_TOKEN_HEADER,
@@ -133,7 +133,7 @@ def create_app(
     dependencies = optional_bearer_deps(settings.serve.auth_token)
     availability_filters = list(feature_config.item_availability_filters) if feature_config else []
     category_column = settings.serve.category_column
-    items_cache = _ItemsFilterCache(
+    items_cache = ItemsFilterCache(
         reader,
         category_column=category_column,
         availability_filters=availability_filters,
@@ -242,7 +242,7 @@ def create_app(
         if recs.empty:
             raise HTTPException(status_code=404, detail=f"No recommendations for user_id={user_id!r}")
 
-        filtered = _filter_recommendations(
+        filtered = filter_recommendations(
             recs,
             items=items,
             available_ids=available_ids,
@@ -330,7 +330,7 @@ def main() -> None:
         feature_config = None
 
     availability_filters = list(feature_config.item_availability_filters) if feature_config else []
-    _configure_reader_item_filters(
+    configure_reader_item_filters(
         reader,
         category_column=settings.serve.category_column,
         availability_filters=availability_filters,

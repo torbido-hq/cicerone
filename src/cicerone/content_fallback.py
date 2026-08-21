@@ -113,11 +113,11 @@ def _max_cosine_scores(cold_matrix, hist_matrix) -> np.ndarray:
     return scores
 
 
-def _recommend_thread_workers(n_users: int) -> int:
-    if n_users < _RECOMMEND_THREAD_MIN_USERS:
+def _recommend_thread_workers(n_users: int, *, min_users: int, max_workers: int) -> int:
+    if n_users < min_users:
         return 1
     cpus = os.cpu_count() or 1
-    return max(1, min(_RECOMMEND_THREAD_MAX_WORKERS, cpus, n_users))
+    return max(1, min(max_workers, cpus, n_users))
 
 
 class ContentFallbackModel:
@@ -129,11 +129,15 @@ class ContentFallbackModel:
         max_neighbors: int = 50,
         items: pd.DataFrame | None = None,
         interactions: pd.DataFrame | None = None,
+        recommend_thread_min_users: int = _RECOMMEND_THREAD_MIN_USERS,
+        recommend_thread_max_workers: int = _RECOMMEND_THREAD_MAX_WORKERS,
     ) -> None:
         self.feature_columns: list[FeatureColumn | tuple[str, str]] = list(feature_columns or [])
         self.max_neighbors = max_neighbors
         self.items = items
         self.interactions = interactions
+        self.recommend_thread_min_users = max(1, int(recommend_thread_min_users))
+        self.recommend_thread_max_workers = max(1, int(recommend_thread_max_workers))
         self._item_ids: list[Any] = []
         self._item_index: dict[Any, int] = {}
         self._matrix: csr_matrix | None = None
@@ -282,7 +286,11 @@ class ContentFallbackModel:
                 for rank, idx in enumerate(order, start=1)
             ]
 
-        workers = _recommend_thread_workers(len(users))
+        workers = _recommend_thread_workers(
+            len(users),
+            min_users=self.recommend_thread_min_users,
+            max_workers=self.recommend_thread_max_workers,
+        )
         if workers > 1:
             with ThreadPoolExecutor(max_workers=workers) as pool:
                 user_rows = list(pool.map(_score_user, users))

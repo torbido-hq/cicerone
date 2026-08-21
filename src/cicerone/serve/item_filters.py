@@ -119,10 +119,3 @@ def filter_recommendations(
         out = out[item_ids.isin(available_ids)]
 
     return out.reset_index(drop=True)
-
-
-# Private aliases so existing tests can keep importing from ``cicerone.serve.app``.
-_configure_reader_item_filters = configure_reader_item_filters
-_available_item_ids = available_item_ids
-_ItemsFilterCache = ItemsFilterCache
-_filter_recommendations = filter_recommendations
