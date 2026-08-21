@@ -16,12 +16,16 @@ export function isGaMeasurementId(value) {
 	return /^(?:G|GT)-[A-Z0-9]+$/.test(String(value || '').trim());
 }
 
+export const GA_MEASUREMENT_ID = 'G-E38EP8PJSR';
+
 export function gaMeasurementId() {
 	try {
-		return String(import.meta.env.PUBLIC_GA_MEASUREMENT_ID ?? '').trim();
+		const fromEnv = String(import.meta.env.PUBLIC_GA_MEASUREMENT_ID ?? '').trim();
+		if (isGaMeasurementId(fromEnv)) return fromEnv;
 	} catch {
-		return '';
+		// Node has no Vite import.meta.env
 	}
+	return GA_MEASUREMENT_ID;
 }
 
 export function parseStoredConsent(raw) {

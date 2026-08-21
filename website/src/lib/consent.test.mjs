@@ -8,6 +8,7 @@ import {
 	analyticsHead,
 	buildConsentInitScript,
 	buildGtagConfigScript,
+	GA_MEASUREMENT_ID,
 	gaMeasurementId,
 	isGaMeasurementId,
 	parseStoredConsent,
@@ -36,8 +37,9 @@ test('parseStoredConsent requires all consent-mode v2 keys', () => {
 	});
 });
 
-test('gaMeasurementId uses import.meta.env and is safe in Node', () => {
-	assert.equal(gaMeasurementId(), '');
+test('gaMeasurementId defaults to the cicerone.dev tag', () => {
+	assert.equal(gaMeasurementId(), GA_MEASUREMENT_ID);
+	assert.equal(GA_MEASUREMENT_ID, 'G-E38EP8PJSR');
 });
 
 test('buildConsentInitScript sets denied defaults before any update', () => {
@@ -63,7 +65,15 @@ test('buildGtagConfigScript quotes the measurement id', () => {
 
 test('analyticsHead is empty without a measurement id', () => {
 	assert.deepEqual(analyticsHead(''), []);
-	assert.deepEqual(analyticsHead(), []);
+});
+
+test('analyticsHead uses the default measurement id', () => {
+	const head = analyticsHead();
+	assert.equal(head.length, 3);
+	assert.equal(
+		head[1].attrs.src,
+		`https://www.googletagmanager.com/gtag/js?id=${GA_MEASUREMENT_ID}`,
+	);
 });
 
 test('analyticsHead emits consent defaults before gtag.js', () => {
