@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import math
 from collections import OrderedDict
 from collections.abc import Callable, Collection, Sequence
 from datetime import UTC, datetime
@@ -29,6 +28,7 @@ from cicerone.io.recommendation_reader import (
     USER_COLUMN,
 )
 from cicerone.locks import LockLostError
+from cicerone.weighting import event_row_weights
 
 logger = logging.getLogger(__name__)
 
@@ -272,39 +272,39 @@ class IncrementalUpdater:
                 protect=user_ids,
             )
 
-    def _event_weight(self, event_type: str, quantity: int) -> float:
-        if self._feature_config is None:
-            return float(quantity)
-        weights = self._feature_config.event_weights
-        if event_type not in weights:
-            return 0.0
-        weight = float(weights[event_type])
-        if event_type in self._feature_config.quantity_scaled_events:
-            weight *= math.log1p(max(quantity, 0))
-        return weight
-
     def _known_event_type(self, event_type: str) -> bool:
         if self._feature_config is None:
             return True
         return event_type in self._feature_config.event_weights
 
     def _popular_ranking(self, batch: pd.DataFrame) -> pd.DataFrame:
-        scores: dict[str, float] = {}
-        for row in batch.itertuples(index=False):
-            weight = self._event_weight(str(row.event_type), int(row.quantity))
-            if weight == 0.0:
-                continue
-            item_id = str(row.item_id)
-            scores[item_id] = scores.get(item_id, 0.0) + weight
-        if not scores:
-            return pd.DataFrame(columns=[ITEM_COLUMN, SCORE_COLUMN, SOURCE_COLUMN])
-        ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))[: self._top_k]
-        return pd.DataFrame(
-            [
-                {ITEM_COLUMN: item_id, SCORE_COLUMN: score, SOURCE_COLUMN: POPULAR_SOURCE}
-                for item_id, score in ranked
-            ]
-        )
+        empty = pd.DataFrame(columns=[ITEM_COLUMN, SCORE_COLUMN, SOURCE_COLUMN])
+        if batch.empty:
+            return empty
+        if self._feature_config is None:
+            weights = pd.to_numeric(batch["quantity"], errors="coerce").fillna(0.0)
+        else:
+            weights = event_row_weights(
+                batch["event_type"].astype(str),
+                batch["quantity"],
+                event_weights=self._feature_config.event_weights,
+                quantity_scaled_events=self._feature_config.quantity_scaled_events,
+            ).fillna(0.0)
+        scored = batch.assign(_popular_weight=weights)
+        scored = scored.loc[scored["_popular_weight"] != 0.0]
+        if scored.empty:
+            return empty
+        summed = scored.groupby(scored["item_id"].astype(str), sort=False)["_popular_weight"].sum()
+        summed = summed.loc[summed != 0.0]
+        if summed.empty:
+            return empty
+        ranked = summed.reset_index()
+        ranked.columns = [ITEM_COLUMN, SCORE_COLUMN]
+        ranked = ranked.sort_values(
+            [SCORE_COLUMN, ITEM_COLUMN], ascending=[False, True], kind="mergesort"
+        ).head(self._top_k)
+        ranked[SOURCE_COLUMN] = POPULAR_SOURCE
+        return ranked.reset_index(drop=True)
 
     def _latest_ranking(self, batch: pd.DataFrame) -> pd.DataFrame:
         if batch.empty:
