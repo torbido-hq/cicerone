@@ -99,7 +99,7 @@ Without `event_id`, table sources use `id`, SQLite `rowid`, or Postgres
 `ctid` so identical payloads at the same timestamp stay distinct.
 `events_query`, when set, must be a single read-only `SELECT` from
 **trusted deploy-time config** (same rule as `input.options.events_query`).
-It has no table identity: project `event_id` or `id`, or same-payload twins
+It has no table identity: project `event_id` or `id`; otherwise same-payload twins
 share a cursor.
 
 ### `s3`

@@ -7,7 +7,15 @@ import math
 import numpy as np
 import pandas as pd
 
-from cicerone.values import MISSING, as_list, coerce_item_true, is_missing, is_sequence_attr, str_set
+from cicerone.values import (
+    MISSING,
+    as_list,
+    coerce_item_true,
+    is_missing,
+    is_sequence_attr,
+    item_true_mask,
+    str_set,
+)
 
 
 def test_is_missing_scalars_and_containers():
@@ -59,3 +67,8 @@ def test_coerce_item_true_rejects_false_strings():
     assert coerce_item_true("") is False
     assert coerce_item_true(None) is False
     assert coerce_item_true("maybe") is False
+
+
+def test_item_true_mask_maps_series_without_string_true_coercion():
+    mask = item_true_mask(pd.Series([True, "false", "0", 1, "yes"]))
+    assert list(mask) == [True, False, False, True, True]

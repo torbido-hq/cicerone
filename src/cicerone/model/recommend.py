@@ -226,7 +226,7 @@ def _recommend_per_strategy(
             cache_key = _recommend_cache_key("strategy", name, cohort_key_value, cohort_plan.recommend_k)
             cached = recommend_cache.get(cache_key) if recommend_cache is not None else None
             if cached is not None:
-                recs = cached
+                recs = cached.copy()
             else:
                 recs = (
                     models[name]
@@ -242,7 +242,7 @@ def _recommend_per_strategy(
                 recs[SOURCE_COLUMN] = strategy.source_label
                 recs[WEIGHT_COLUMN] = 1.0
                 if recommend_cache is not None:
-                    recommend_cache[cache_key] = recs
+                    recommend_cache[cache_key] = recs.copy()
             frames.append(recs)
             if blending_enabled:
                 if strategy.personalized:
