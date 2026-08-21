@@ -115,6 +115,7 @@ class IncrementalUpdater:
             return 0
 
         batch = events_to_dataframe(events)
+        weights = self._row_signal_weights(batch)
         affected_users = sorted(set(batch[USER_COLUMN].astype(str)))
         affected_set = set(affected_users) | {COLD_START_USER_ID}
         existing = self._load_users(affected_set)
@@ -123,8 +124,8 @@ class IncrementalUpdater:
             existing = existing.copy()
             existing[USER_COLUMN] = existing[USER_COLUMN].astype(str)
 
-        popular_ranking = self._popular_ranking(batch)
-        latest_ranking = self._latest_ranking(batch)
+        popular_ranking = self._popular_ranking(batch, weights)
+        latest_ranking = self._latest_ranking(batch, weights)
 
         by_user = (
             {user_id: group for user_id, group in existing.groupby(USER_COLUMN, sort=False)}
@@ -146,7 +147,9 @@ class IncrementalUpdater:
         for user_id in affected_users:
             prior = by_user.get(user_id, empty_recommendations_frame())
             user_batch = batch_by_user.get(user_id, empty_user_batch)
-            merged_user = self._merge_user_rows(user_id, prior, popular_ranking, latest_ranking, user_batch)
+            merged_user = self._merge_user_rows(
+                user_id, prior, popular_ranking, latest_ranking, user_batch, weights
+            )
             if merged_user.empty:
                 continue
             frames.append(merged_user)
@@ -282,18 +285,25 @@ class IncrementalUpdater:
             quantity_scaled_events=self._feature_config.quantity_scaled_events,
         ).fillna(0.0)
 
-    def _signal_rows(self, batch: pd.DataFrame) -> pd.DataFrame:
+    def _aligned_weights(self, batch: pd.DataFrame, weights: pd.Series | None) -> pd.Series:
+        if weights is None:
+            return self._row_signal_weights(batch)
+        return weights.reindex(batch.index)
+
+    def _signal_rows(self, batch: pd.DataFrame, weights: pd.Series | None = None) -> pd.DataFrame:
         if batch.empty:
             return batch
-        return batch.loc[self._row_signal_weights(batch) > 0]
+        return batch.loc[self._aligned_weights(batch, weights) > 0]
 
-    def _popular_ranking(self, batch: pd.DataFrame) -> pd.DataFrame:
+    def _popular_ranking(self, batch: pd.DataFrame, weights: pd.Series | None = None) -> pd.DataFrame:
         empty = pd.DataFrame(columns=[ITEM_COLUMN, SCORE_COLUMN, SOURCE_COLUMN])
-        scored = self._signal_rows(batch)
+        if batch.empty:
+            return empty
+        aligned = self._aligned_weights(batch, weights)
+        scored = batch.loc[aligned > 0]
         if scored.empty:
             return empty
-        weights = self._row_signal_weights(scored)
-        scored = scored.assign(_popular_weight=weights)
+        scored = scored.assign(_popular_weight=aligned.loc[scored.index])
         summed = scored.groupby(scored["item_id"].astype(str), sort=False)["_popular_weight"].sum()
         summed = summed.loc[summed > 0]
         if summed.empty:
@@ -306,10 +316,10 @@ class IncrementalUpdater:
         ranked[SOURCE_COLUMN] = POPULAR_SOURCE
         return ranked.reset_index(drop=True)
 
-    def _latest_ranking(self, batch: pd.DataFrame) -> pd.DataFrame:
+    def _latest_ranking(self, batch: pd.DataFrame, weights: pd.Series | None = None) -> pd.DataFrame:
         if batch.empty:
             return pd.DataFrame(columns=[ITEM_COLUMN, SCORE_COLUMN, SOURCE_COLUMN])
-        frame = self._signal_rows(batch)
+        frame = self._signal_rows(batch, weights)
         if frame.empty:
             return pd.DataFrame(columns=[ITEM_COLUMN, SCORE_COLUMN, SOURCE_COLUMN])
         frame = frame.copy()
@@ -339,6 +349,7 @@ class IncrementalUpdater:
         popular: pd.DataFrame,
         latest: pd.DataFrame,
         batch: pd.DataFrame,
+        weights: pd.Series | None = None,
     ) -> pd.DataFrame:
         if not prior.empty and SOURCE_COLUMN in prior.columns:
             mask = prior[SOURCE_COLUMN].astype(str).map(_is_preserved_source)
@@ -346,7 +357,7 @@ class IncrementalUpdater:
         else:
             preserved = prior.iloc[0:0] if not prior.empty else prior
 
-        user_batch = self._signal_rows(batch[batch[USER_COLUMN].astype(str) == user_id])
+        user_batch = self._signal_rows(batch[batch[USER_COLUMN].astype(str) == user_id], weights)
         has_signal = not user_batch.empty
         boost_items = (
             user_batch.sort_values("occurred_at", ascending=False)[ITEM_COLUMN]

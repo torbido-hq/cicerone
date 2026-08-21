@@ -12,7 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - After fit, strategy×cohort `recommend()` calls run in a thread pool when
   `job.max_workers > 1` (default remains 1).
-- Blend RRF scores per-user source weights in pandas instead of a Python loop
+- Blend RRF scores with per-user source weights in pandas instead of a Python loop
   over users (same top-K).
 - Incremental popular ranking and training interactions share vectorized
   per-row event weights.
@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- Incremental popular/latest/boost ignore unknown, zero-weight, and negative events, and do not rewrite popular-only users in a mixed batch.
+- Incremental popular/latest/boost ignores unknown, zero-weight, and negative events, and does not rewrite popular-only users in a mixed batch.
 - DB watermarks compare synthetic `id` / `ctid` numerically so same-timestamp `id:9` does not skip `id:10`.
 - Recommend cache keys include the user set; run manifest user counts omit `__cold_start__`.
 

@@ -610,6 +610,34 @@ def test_blend_for_users_latest_by_user_normalizes_non_string_keys():
     assert list(out_str_keys[Columns.Item]) == ["b"]
 
 
+def test_blend_for_users_stringifies_int_users_and_count_keys():
+    config = _blending(curve="linear", saturate_at=10.0, popular_share=0.5)
+    empty = pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, "source"])
+    personalized = pd.DataFrame(
+        [
+            {
+                Columns.User: 1,
+                Columns.Item: "p1",
+                Columns.Rank: 1,
+                Columns.Score: 9.0,
+                "source": PERSONALIZED_SOURCE,
+            }
+        ]
+    )
+    out = blend_for_users(
+        personalized=personalized,
+        popular=empty,
+        latest=None,
+        counts={1: 10},
+        target_users=["1"],
+        config=config,
+        top_k=1,
+        latest_available=False,
+    )
+    assert list(out[Columns.User]) == ["1"]
+    assert list(out[Columns.Item]) == ["p1"]
+
+
 def test_blend_for_users_empty_target_users_returns_empty_frame():
     config = _blending(curve="linear", saturate_at=10.0)
     personalized = pd.DataFrame(
