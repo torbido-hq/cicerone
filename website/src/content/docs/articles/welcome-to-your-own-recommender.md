@@ -15,7 +15,7 @@ You already have `order_items`. What you do not have is a recs team — and you 
 
 [Cicerone](https://cicerone.dev) is how you go past it without a new request-path runtime: a self-hosted **batch** job that reads the interactions you already store, writes a top-K table, and stays out of the hot path. Most shops get there by hand — bestsellers, “customers who bought this also bought”, a weekend with [LightFM](https://making.lyst.com/lightfm/docs/home.html). This is that weekend, packaged.
 
-The name is borrowed twice. In Italian a *cicerone* is a guide, after Cicero. In beer, a [Cicerone](https://www.cicerone.org) is the sommelier: styles, pairings, what to pour next. I needed the second one for a bottle shop — [Torbido](https://torbido.it) — that was never going to import `rectools` into checkout. A cron read `order_items`, fitted LightFM, wrote ranks, went back to sleep. The SKUs were IPAs; the contract was `user_id`, `item_id`, `event_type`. Pull the drinks columns out and the same job still runs. The default `features.toml` in the repo did not get the memo:
+The name is borrowed twice. In Italian a *cicerone* is a guide, after Cicero. In beer, a [Cicerone](https://www.cicerone.org) is the sommelier: styles, pairings, what to pour next. I needed the second one for a bottle shop — [Torbido](https://torbido.co) — that was never going to import `rectools` into checkout. A cron read `order_items`, fitted LightFM, wrote ranks, went back to sleep. The SKUs were IPAs; the contract was `user_id`, `item_id`, `event_type`. Pull the drinks columns out and the same job still runs. The default `features.toml` in the repo did not get the memo:
 
 ```toml
 [[user_features]]
@@ -503,4 +503,12 @@ cicerone-dashboard:
 - You have almost no overlapping buyers. Ship bestsellers, collect events, come back.
 - You already enjoy operating a Python training stack and want SASRec, AutoML, eligibility rules. Those exist — they are not this article. See the [tutorial](https://cicerone.dev/tutorial/) and [how it works](https://cicerone.dev/how-it-works/).
 
-If you try this and `source` stays popular for everyone who matters, that is fine: keep bestsellers on the homepage, let events accumulate, and come back. You are not behind. You are just early. The honest win is skipping a quarter of glue around a model that, on today’s data, should mostly agree with `ORDER BY COUNT(*) DESC` — and still having a real table to grow into.
+## In the morning
+
+Run `job` once. Look at `source`. That column is the only metric that matters on day one.
+
+If it is mostly `popular_fallback`, keep bestsellers on the homepage. You learned that overlap is still thin, for the price of a container. Come back when more customers have bought the same things. You are not behind. You are just early.
+
+If `personalized` and `blended` show up next to names you recognize, put the `SELECT` on the homepage and leave the cron in Compose. That is the whole product: a table your shop already knows how to read.
+
+[Torbido](https://torbido.co) still does this every night. The bottles were never the point. `user_id`, `item_id`, `event_type` — then sleep.
