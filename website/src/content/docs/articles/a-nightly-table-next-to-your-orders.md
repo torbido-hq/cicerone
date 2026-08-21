@@ -17,7 +17,7 @@ The usual answer is `ORDER BY sold_count DESC` with nicer copy. That query is ho
 
 [Cicerone](https://cicerone.dev) is a Docker job you run at night. It reads the orders you already store, writes a ranked table, and goes back to sleep. The app only `SELECT`s that table. No gem, no SDK, nothing Cicerone-shaped in the request.
 
-I built it for [Torbido](https://torbido.co) — once a bottle shop, now a landing page. The SKUs were drinks. The job only cares about `user_id`, `item_id`, `event_type`. The repo default `features.toml` still has beer columns (`favorite_styles`, `abv_bucket`). Ignore them unless you have those fields.
+I built it for [Torbido](https://torbido.co) — once a bottle shop, now a landing page. The SKUs were drinks. The job only cares about `user_id`, `item_id`, `event_type`. The repo's default `features.toml` still has beer columns (`favorite_styles`, `abv_bucket`). Ignore them unless you have those fields.
 
 Rails is the example because a lot of small shops look like this. The same two TOML files work next to Laravel, Django, Phoenix, or a Go service. There is an optional HTTP API. This walkthrough does not use it.
 
@@ -26,14 +26,14 @@ Rails is the example because a lot of small shops look like this. The same two T
 On a cron (default 03:00 UTC) the job:
 
 1. Runs SQL you give it (`events`, optional `users` / `items`)
-2. Fits two lists — personalized ([LightFM](https://making.lyst.com/lightfm/docs/home.html)) and store-wide bestsellers — then mixes them
+2. Fits two lists — a personalized one ([LightFM](https://making.lyst.com/lightfm/docs/home.html)) and store-wide bestsellers — then mixes them
 3. Writes `cicerone_recommendations` (`user_id`, `item_id`, `rank`, `score`, `source`)
 
 Your app joins that table to `products`. A purchase this afternoon does not change tonight’s ranks. ([Incremental events](https://cicerone.dev/incremental-events/) can refresh the bestsellers list between jobs. LightFM still waits for the cron.)
 
 In config the bestsellers model is named `popular`. In the table it shows up as `source` = `popular_fallback` when it filled in for someone LightFM could not personalize. Same list.
 
-Guests and brand-new accounts have no `user_id` on an order line. The job still writes them a list under `'__cold_start__'` — the mix with no personal history. Look that id up the same way you look up `'42'`.
+Guests and brand-new accounts have no `user_id` on an order line. The job still writes a list for them under `'__cold_start__'` — the mix with no personal history. Look that id up the same way you look up `'42'`.
 
 ## What the job does
 
@@ -43,7 +43,7 @@ Each night:
 
 1. LightFM builds a personalized list (people with similar purchases; optional tags like `category` help brand-new SKUs). The second list is `popular`.
 2. Those two lists are mixed by **rank**, not by raw score. A LightFM number and a sales count are not the same unit. With little history, bestsellers win. With enough overlap, LightFM wins.
-3. The result is the table. `source` is one of `personalized`, `popular_fallback`, `latest`, or `blended`. `popular_fallback` is bestsellers filling in; `latest` is newest by item date; `blended` means more than one of those lists voted.
+3. The result is the table. `source` is one of `personalized`, `popular_fallback`, `latest`, or `blended`. `popular_fallback` is the bestsellers list filling in; `latest` is newest by item date; `blended` means more than one of those lists voted.
 
 If two customers never bought the same products, there is nothing to personalize. That is thin data, not a misconfigured job.
 
@@ -61,7 +61,7 @@ On a thin order log, “collaborative filtering” is mostly bestsellers with ex
 
 Use Cicerone if you want that second row without becoming a recs team, and without putting a Python model in the shop process. Fifty checkouts a week will not make LightFM “just know.”
 
-**Keep the bestsellers query.** After the first job, look at `source`. If almost every signed-in user is `popular_fallback` (or `blended` that is still mostly that), the fancy part is not earning its keep yet. That is a data problem, not a config problem.
+**Keep the bestsellers query.** After the first job, look at `source`. If almost every signed-in user is `popular_fallback` (or `blended` that is still mostly `popular_fallback`), the fancy part is not earning its keep yet. That is a data problem, not a config problem.
 
 Trap: each successful job **truncates then rewrites** the recommendations table. Point `recommendations_table` at anything you care about and you will empty it. Prefix the name.
 
@@ -105,7 +105,7 @@ FROM product_views v
 WHERE v.user_id IS NOT NULL
 ```
 
-Skip `user_id IS NULL` (guest checkouts, anonymous pageviews) — there is no one to personalize. A `view` weight with no view table yet is harmless; paste the `UNION ALL` when you have the rows.
+Skip `user_id IS NULL` (guest checkouts, anonymous pageviews) — there is nobody to personalize for. A `view` weight with no view table yet is harmless; paste the `UNION ALL` when you have the rows.
 
 Items (optional, but you want them so you can hide unpublished / out-of-stock and feed `category` into LightFM):
 
@@ -496,4 +496,4 @@ If it is mostly `popular_fallback`, the job is still serving bestsellers. Keep t
 
 If `personalized` and `blended` show up for people who actually buy, put the `SELECT` on the homepage and leave the cron in Compose. That is the product this walkthrough set up: a table your shop already knows how to read.
 
-The drink columns in the repo default config were never the contract. `user_id`, `item_id`, `event_type`. After that it is a cron: write ranks, sleep, repeat.
+The drink columns in the repo's default config were never part of the contract. `user_id`, `item_id`, `event_type`. After that it is a cron: write ranks, sleep, repeat.
