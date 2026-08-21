@@ -33,6 +33,10 @@ const articlesPlugin = hasPublishedArticles(articlesDir, { production })
 // https://astro.build/config
 export default defineConfig({
 	site: 'https://cicerone.dev',
+	redirects: {
+		'/articles/welcome-to-your-own-recommender':
+			'/articles/a-nightly-table-next-to-your-orders',
+	},
 	integrations: [
 		starlight({
 			title: 'Cicerone',

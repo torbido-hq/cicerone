@@ -9,7 +9,7 @@ authors:
 
 <img src="https://cicerone.dev/images/docs/cicerone-logo.svg" alt="Cicerone" width="200">
 
-Canonical URL: [https://cicerone.dev/articles/welcome-to-your-own-recommender/](https://cicerone.dev/articles/welcome-to-your-own-recommender/)
+Canonical URL: [https://cicerone.dev/articles/a-nightly-table-next-to-your-orders/](https://cicerone.dev/articles/a-nightly-table-next-to-your-orders/)
 
 You already have `order_items`. What you do not have is a recs team — and you are not fitting LightFM inside the web process. The “Recommended for you” row is usually `ORDER BY sold_count DESC` with better copy. That query is honest. It is also a ceiling.
 
