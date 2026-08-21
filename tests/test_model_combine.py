@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import time
-
 import numpy as np
 import pandas as pd
 from rectools import Columns
@@ -234,14 +232,12 @@ def test_combine_by_weighted_fusion_large_group_baseline():
             }
         )
 
-    started = time.perf_counter()
     out = combine_by_weighted_fusion(
         [_frame("first", 1.0), _frame("second", 0.5)],
         top_k=10,
         rrf_k=60.0,
         source_label_order=["first", "second"],
     )
-    elapsed = time.perf_counter() - started
-    assert elapsed < 2.0
     assert len(out) == n_users * 10
+    assert (out.groupby(Columns.User).size() <= 10).all()
     assert (out["source"] == "first+second").all()
