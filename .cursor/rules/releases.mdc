@@ -17,12 +17,16 @@ Checklist:
 4. **Merge-back** — after the patch tag, cherry-pick any remaining patch
    commits onto `release/X.Y.0`, merge it into `main`, then tag.
 
+<a id="current-trains" name="current-trains"></a>
+
 ## Current trains
 
 Concrete mapping (this line only):
 patch **0.6.1** on `main`; minor **0.7.0** on `release/0.7.0`.
 
 Update this line in the same PR that changes the split.
+
+<a id="cherry-picks" name="cherry-picks"></a>
 
 ## Cherry-picks
 
@@ -54,6 +58,8 @@ week:
 2. **Feature:** branch `feature/serve-filters` from `release/X.Y.0`, PR
    into `release/X.Y.0` (not `main`).
 
+<a id="hotfixes" name="hotfixes"></a>
+
 ## Hotfixes
 
 **Hotfixes that must ship on both trains** always land on `main` first
@@ -62,7 +68,12 @@ week:
 [Cherry-picks](#cherry-picks)) so the minor train does not wait for the
 next routine backport.
 
+<a id="merge-backs" name="merge-backs"></a>
+
 ## Merge-backs
+
+Feature work on `release/X.Y.0` flows to `main` only through this
+merge-back, after the patch is tagged.
 
 When merging `release/X.Y.0` into `main` (after the patch tag, before
 tagging the minor): if `main` has patch commits not yet on

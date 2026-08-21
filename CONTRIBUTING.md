@@ -190,7 +190,10 @@ and 0.7.0 are in flight, `X.Y.0` = `0.7.0`. While a **patch** and a
   patch train because a refactor is in the same diff.
 - If still ambiguous, use the patch train unless the change adds
   user-facing capability.
-- Never land minor-train features on `main` until the patch is tagged.
+- Do not open or merge feature PRs into `main` while the patch is in
+  flight. Feature work stays on `release/X.Y.0` and reaches `main` only
+  via [Merge-backs](.cursor/rules/releases.mdc#merge-backs) after the
+  patch is tagged (not by retargeting those PRs at `main`).
 - `## [Unreleased]` is per-branch (patch on `main`, minor on
   `release/X.Y.0`).
 - After the patch is tagged, follow
