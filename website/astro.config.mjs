@@ -4,16 +4,19 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import starlightBlog from 'starlight-blog';
+import { loadEnv } from 'vite';
 import {
 	articleRedirects,
 	ARTICLES_PREFIX,
 	articlesContentDir,
 	hasPublishedArticles,
 } from './src/lib/articles.mjs';
+import { analyticsHead, gaMeasurementId } from './src/lib/consent.mjs';
 
 const websiteRoot = dirname(fileURLToPath(import.meta.url));
 const articlesDir = articlesContentDir(websiteRoot);
 const production = process.env.NODE_ENV === 'production';
+const publicEnv = loadEnv(production ? 'production' : 'development', websiteRoot, 'PUBLIC_');
 
 const articlesPlugin = hasPublishedArticles(articlesDir, { production })
 	? [
@@ -57,6 +60,7 @@ export default defineConfig({
 			],
 			components: {
 				PageFrame: './src/components/PageFrame.astro',
+				Footer: './src/components/Footer.astro',
 			},
 			customCss: ['./src/styles/custom.css'],
 			sidebar: [
@@ -77,6 +81,7 @@ export default defineConfig({
 							label: 'Serve OpenAPI',
 							link: '/openapi/',
 						},
+						{ label: 'Privacy', slug: 'privacy' },
 						{
 							label: 'Changelog',
 							link: 'https://github.com/torbido-hq/cicerone/blob/main/CHANGELOG.md',
@@ -96,6 +101,7 @@ export default defineConfig({
 				},
 			],
 			head: [
+				...analyticsHead(gaMeasurementId(publicEnv)),
 				{
 					tag: 'link',
 					attrs: { rel: 'preconnect', href: 'https://fonts.googleapis.com' },

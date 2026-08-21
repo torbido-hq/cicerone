@@ -1,0 +1,33 @@
+---
+---
+
+<div
+	id="cicerone-consent"
+	class="cicerone-consent"
+	hidden
+	role="dialog"
+	aria-modal="false"
+	tabindex="-1"
+	aria-labelledby="cicerone-consent-title"
+	aria-describedby="cicerone-consent-desc"
+>
+	<div class="cicerone-consent__inner">
+		<div class="cicerone-consent__copy">
+			<p id="cicerone-consent-title" class="cicerone-consent__title">Analytics cookies</p>
+			<p id="cicerone-consent-desc">
+				Google Analytics, only if you accept. No ads.{' '}
+				<a href="/privacy/">Privacy</a>
+			</p>
+		</div>
+		<div class="cicerone-consent__actions">
+			<button type="button" data-cicerone-consent="denied">Reject</button>
+			<button type="button" data-cicerone-consent="granted">Accept</button>
+		</div>
+	</div>
+</div>
+
+<script>
+	import { initConsentBanner } from '../lib/consent-ui.mjs';
+
+	initConsentBanner();
+</script>

@@ -25,6 +25,7 @@ npm run preview  # serve dist/
 | `src/content/docs/articles/` | Articles (`title` + `date` frontmatter) → `/articles/` |
 | `scripts/sync-docs.mjs` | Copies `../docs/*.md` → `src/content/docs/` with frontmatter |
 | `astro.config.mjs` | Site URL, sidebar, logo, social, articles plugin |
+| `src/lib/consent.mjs` | Cookie banner + Consent Mode v2 (`G-E38EP8PJSR`) |
 | `public/CNAME` | Custom domain (`cicerone.dev`) |
 | `public/images/` | Site diagrams (`flow.svg`) |
 | `public/images/docs/` | Copied from `../docs/images/` at build time (gitignored) |
@@ -66,6 +67,9 @@ Serif at ~65ch; chrome stays IBM Plex Sans, dates IBM Plex Mono.
 `website/` on PRs and on pushes to `main` that touch `website/**` or
 `docs/**`. Only `main` deploys. Website-only PRs skip Docker lint/pytest;
 the `ci` job still succeeds so a required check is not left pending.
+
+Google Analytics is `G-E38EP8PJSR` in `src/lib/consent.mjs`. Override with
+`PUBLIC_GA_MEASUREMENT_ID` at build time if needed.
 
 **One-time:** Settings → Pages → Source = **GitHub Actions**, custom domain
 `cicerone.dev`. DNS notes for Gandi apex records are below.
