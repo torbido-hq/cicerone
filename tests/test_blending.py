@@ -536,6 +536,44 @@ def test_blend_for_users_shared_latest_avoids_cartesian_frame():
     assert "lat1" in set(out[Columns.Item])
 
 
+def test_blend_for_users_shared_latest_matches_cartesian_scores():
+    config = _blending(curve="linear", saturate_at=1.0, popular_share=0.5)
+    empty = pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, "source"])
+    latest = pd.DataFrame(
+        [
+            {
+                Columns.User: "u1",
+                Columns.Item: "lat1",
+                Columns.Rank: 1,
+                Columns.Score: 2.0,
+                "source": LATEST_SOURCE,
+            },
+            {
+                Columns.User: "u1",
+                Columns.Item: "lat2",
+                Columns.Rank: 2,
+                Columns.Score: 1.0,
+                "source": LATEST_SOURCE,
+            },
+        ]
+    )
+    kwargs = dict(
+        personalized=empty,
+        popular=empty,
+        counts={"u1": 0},
+        target_users=["u1"],
+        config=config,
+        top_k=2,
+        latest_available=True,
+    )
+    cartesian = blend_for_users(latest=latest, **kwargs)
+    indexed = blend_for_users(latest=None, shared_latest=[("lat1", 1, 2.0), ("lat2", 2, 1.0)], **kwargs)
+    pd.testing.assert_frame_equal(
+        cartesian.sort_values([Columns.Item]).reset_index(drop=True),
+        indexed.sort_values([Columns.Item]).reset_index(drop=True),
+    )
+
+
 def test_blend_for_users_latest_by_user_ignores_index_users_not_in_targets():
     config = _blending(curve="linear", saturate_at=1.0, popular_share=0.5)
     empty = pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, "source"])
