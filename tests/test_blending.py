@@ -498,8 +498,12 @@ def test_rank_latest_items_and_expand_latest_ranking():
     ranked = rank_latest_items(items, "published_at", ["old", "new"], top_k=2)
     assert [item for item, _rank, _score in ranked] == ["new", "old"]
     expanded = expand_latest_ranking(ranked, ["u1", "u2"])
-    assert set(expanded[Columns.User]) == {"u1", "u2"}
-    assert list(expanded[expanded[Columns.User] == "u1"][Columns.Item]) == ["new", "old"]
+    assert list(expanded[Columns.User]) == ["u1", "u1", "u2", "u2"]
+    assert list(expanded[Columns.Item]) == ["new", "old", "new", "old"]
+    assert expand_latest_ranking(ranked, []).empty
+    assert expand_latest_ranking([], ["u1"]).empty
+    dup = expand_latest_ranking(ranked, ["u1", "u1"])
+    assert list(dup[Columns.User]) == ["u1", "u1", "u1", "u1"]
 
 
 def test_blend_for_users_shared_latest_avoids_cartesian_frame():

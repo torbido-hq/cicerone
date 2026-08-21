@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 class _RunFn(Protocol):
-    def __call__(self, triggered_by: str) -> None: ...
+    def __call__(self, triggered_by: str, *, fence_check: Callable[[], bool] | None = None) -> None: ...
 
 
 class RunGuard:
@@ -69,7 +70,10 @@ class RunGuard:
 
     def _run(self, triggered_by: str) -> None:
         try:
-            self._run_fn(triggered_by=triggered_by)
+            if self._backend is None:
+                self._run_fn(triggered_by=triggered_by)
+            else:
+                self._run_fn(triggered_by=triggered_by, fence_check=self._backend.owned)
         except Exception:
             logger.exception("Triggered run (%s) failed", triggered_by)
         finally:

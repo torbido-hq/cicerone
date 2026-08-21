@@ -309,9 +309,9 @@ def test_eligible_item_mask_missing_item_column_fails_open(caplog):
 
 
 def test_missing_column_warnings_are_deduplicated(caplog):
-    import cicerone.policy as policy
+    from cicerone.policy.eligibility import _warned_missing_columns
 
-    policy._warned_missing_columns.clear()
+    _warned_missing_columns.clear()
     items = _items()
     rules = [EligibilityRule(name="x", op="item_true", item_column="not_a_column")]
     boosts = [BoostRule(name="y", kind="boolean", item_column="also_missing", factor=2.0)]
@@ -490,9 +490,9 @@ def test_apply_boosts_truncates_even_when_items_missing():
 
 
 def test_item_boost_factors_warns_once_when_items_missing(caplog):
-    import cicerone.policy as policy
+    import cicerone.policy.boosts as policy_boosts
 
-    policy._warned_boost_without_items = False
+    policy_boosts._warned_boost_without_items = False
     boosts = [BoostRule(name="paying", kind="boolean", item_column="is_paying_producer", factor=2.0)]
     assert item_boost_factors(None, boosts) == {}
     assert item_boost_factors(pd.DataFrame(), boosts) == {}
@@ -535,7 +535,8 @@ def test_apply_boosts_reorders_and_truncates():
 def test_as_list_handles_missing_series_and_zero_dim_ndarray():
     import numpy as np
 
-    from cicerone.policy import _MISSING, _as_list
+    from cicerone.values import MISSING as _MISSING
+    from cicerone.values import as_list as _as_list
 
     assert _as_list(None) == []
     assert _as_list(float("nan")) == []
@@ -581,7 +582,8 @@ def test_user_attr_missing_columns_and_empty_mask_edges():
 
 
 def test_numeric_factors_and_boost_without_top_k():
-    from cicerone.policy import _is_missing, _numeric_factors
+    from cicerone.policy.boosts import _numeric_factors
+    from cicerone.values import is_missing as _is_missing
 
     items = pd.DataFrame([{"item_id": "i1", "margin": 1.0}])
     # Missing column / empty frame short-circuit inside helper.

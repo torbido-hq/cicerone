@@ -30,7 +30,7 @@ from sqlalchemy.exc import OperationalError, ProgrammingError
 from cicerone.io.db_errors import is_missing_column_error
 from cicerone.io.options import require_option, sql_identifier
 from cicerone.io.recommendation_schema import recommendations_sql_names
-from cicerone.io.replace_users import normalize_replace_user_ids
+from cicerone.io.replace_users import RecommendationSchemaError, normalize_replace_user_ids
 
 logger = logging.getLogger(__name__)
 
@@ -177,7 +177,9 @@ class DatabaseOutputSink:
                 )
                 # Schema drift (e.g. missing user_id): do not append into a broken table.
                 if is_missing_column_error(exc):
-                    return 0
+                    raise RecommendationSchemaError(
+                        f"Recommendations schema mismatch for table {table!r}; refusing replace"
+                    ) from exc
             if not df.empty:
                 df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
             count_savepoint = conn.begin_nested()

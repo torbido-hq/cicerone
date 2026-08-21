@@ -188,6 +188,7 @@ feature_config_path = "/app/config/features.toml"
 # # redis_url = "${REDIS_URL}"             # required when lock_backend = "redis"
 # # lock_key = "cicerone:scheduler:run_guard"  # namespace Redis key / PG advisory hash
 # # lock_ttl_seconds = 86400                   # Redis lock TTL (refreshed while held)
+# # Cron/trigger pass owned() into job.run so a lost lock skips writes.
 
 [input]
 kind = "dataset"

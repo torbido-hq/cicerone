@@ -3,7 +3,8 @@ from __future__ import annotations
 import pandas as pd
 from rectools import Columns
 
-from cicerone.model.combine import combine_by_priority
+from cicerone.model.combine import combine_by_priority, combine_by_weighted_fusion
+from cicerone.model.constants import WEIGHT_COLUMN
 
 
 def test_combine_by_priority_fills_from_earlier_strategies_first():
@@ -182,3 +183,30 @@ def test_combine_by_priority_recomputes_ranks_per_user():
     for _, group in combined.groupby(Columns.User):
         ordered = group.sort_values(Columns.Rank)
         assert list(ordered[Columns.Rank]) == list(range(1, top_k + 1))
+
+
+def test_combine_by_weighted_fusion_ties_break_on_item_id():
+    frames = [
+        pd.DataFrame(
+            [
+                {
+                    "user_id": "u1",
+                    "item_id": "b",
+                    "rank": 1,
+                    "score": 1.0,
+                    "source": "first",
+                    WEIGHT_COLUMN: 1.0,
+                },
+                {
+                    "user_id": "u1",
+                    "item_id": "a",
+                    "rank": 1,
+                    "score": 1.0,
+                    "source": "second",
+                    WEIGHT_COLUMN: 1.0,
+                },
+            ]
+        ),
+    ]
+    out = combine_by_weighted_fusion(frames, top_k=2, rrf_k=60.0, source_label_order=["first", "second"])
+    assert list(out[Columns.Item]) == ["a", "b"]

@@ -8,6 +8,7 @@ from support.model_events import synthetic_events
 from cicerone.config import ConfigError
 from cicerone.dataset import build_dataset
 from cicerone.model import DEFAULT_MODELS, train_and_recommend
+from cicerone.model.recommend import _dataset_fingerprint, _items_fingerprint, _recommend_cache_key
 from cicerone.policy import allowed_items_for_cohort, resolve_eligibility
 
 
@@ -877,3 +878,61 @@ def test_content_fallback_respects_availability_filters(feature_config):
     recommended_items = set(recommendations[Columns.Item])
     assert "i_new_ok" in recommended_items
     assert "i_new_blocked" not in recommended_items
+
+
+def test_recommend_cache_key_normalizes_unhashable_parts():
+    dict_key = _recommend_cache_key("strategy", "popular", {"region": "IT"}, 10)
+    list_key = _recommend_cache_key("latest", "published_at", [{"a": 1}], 5)
+    cache: dict[tuple, object] = {}
+    cache[dict_key] = "hit"
+    cache[list_key] = "latest"
+    assert cache[_recommend_cache_key("strategy", "popular", {"region": "IT"}, 10)] == "hit"
+    assert cache[_recommend_cache_key("latest", "published_at", [{"a": 1}], 5)] == "latest"
+    hash(_recommend_cache_key("strategy", "als", None, 10))
+    hash(_recommend_cache_key("strategy", "als", {"b": 1, "a": 2}, 10))
+    hash(_recommend_cache_key("strategy", "als", {1, 2}, 10))
+    mixed = {1: "a", "b": 2}
+    assert _recommend_cache_key("strategy", "als", mixed, 10) == _recommend_cache_key(
+        "strategy", "als", {"b": 2, 1: "a"}, 10
+    )
+
+
+def test_recommend_cache_key_includes_allowlist_filter_and_dataset():
+    allow = ["i2", "i1"]
+    items = _items_fingerprint(allow)
+    assert items == _items_fingerprint(["i1", "i2"])
+    assert items != _items_fingerprint(["i1"])
+    assert _items_fingerprint([]) is None
+
+    class _Dataset:
+        def __init__(self, fingerprint: object | None = None, version: object | None = None) -> None:
+            self.fingerprint = fingerprint
+            self.version = version
+
+    left = _Dataset()
+    right = _Dataset()
+    assert _dataset_fingerprint(left) != _dataset_fingerprint(right)
+
+    class _Fingerprinted:
+        def fingerprint(self) -> str:
+            return "snap"
+
+    assert _dataset_fingerprint(_Fingerprinted()) == "snap"
+    assert _dataset_fingerprint(_Dataset(fingerprint="snap-a")) == _dataset_fingerprint(
+        _Dataset(fingerprint="snap-a")
+    )
+    assert _dataset_fingerprint(_Dataset(version=3)) == _dataset_fingerprint(_Dataset(version=3))
+
+    ds = object()
+    same = _recommend_cache_key("strategy", "als", None, 10, items, True, _dataset_fingerprint(ds))
+    assert same == _recommend_cache_key(
+        "strategy", "als", None, 10, _items_fingerprint(["i1", "i2"]), True, _dataset_fingerprint(ds)
+    )
+    assert same != _recommend_cache_key(
+        "strategy", "als", None, 10, _items_fingerprint(["i1"]), True, _dataset_fingerprint(ds)
+    )
+    assert same != _recommend_cache_key("strategy", "als", None, 10, items, False, _dataset_fingerprint(ds))
+    other_ds = object()
+    assert same != _recommend_cache_key(
+        "strategy", "als", None, 10, items, True, _dataset_fingerprint(other_ds)
+    )

@@ -131,21 +131,50 @@ class IncrementalUpdater:
             if not existing.empty
             else {}
         )
+        batch_by_user = (
+            {
+                str(user_id): group
+                for user_id, group in batch.groupby(batch[USER_COLUMN].astype(str), sort=False)
+            }
+            if not batch.empty
+            else {}
+        )
 
         frames: list[pd.DataFrame] = []
+        replace_ids: list[str] = []
+        empty_user_batch = batch.iloc[0:0]
         for user_id in affected_users:
             prior = by_user.get(user_id, empty_recommendations_frame())
-            frames.append(self._merge_user_rows(user_id, prior, popular_ranking, latest_ranking, batch))
+            user_batch = batch_by_user.get(user_id, empty_user_batch)
+            merged_user = self._merge_user_rows(user_id, prior, popular_ranking, latest_ranking, user_batch)
+            if merged_user.empty:
+                continue
+            frames.append(merged_user)
+            replace_ids.append(user_id)
         prior_cold = by_user.get(COLD_START_USER_ID, empty_recommendations_frame())
-        frames.append(self._cold_start_rows(prior_cold, popular_ranking, latest_ranking))
-        frames = [frame for frame in frames if frame is not None and not frame.empty]
+        cold = self._cold_start_rows(prior_cold, popular_ranking, latest_ranking)
+        if not cold.empty:
+            frames.append(cold)
+            replace_ids.append(COLD_START_USER_ID)
 
-        merged = pd.concat(frames, ignore_index=True) if frames else empty_recommendations_frame()
-        if not merged.empty:
-            merged = merged[list(RECOMMENDATION_COLUMNS)]
+        if not replace_ids:
+            now = datetime.now(UTC)
+            self._last_success_at = now
+            self._events_applied += len(events)
+            if self._on_success is not None:
+                self._on_success()
+            logger.info(
+                "Incremental update skipped write: %d event(s) had no ranking signal",
+                len(events),
+            )
+            return len(events)
+
+        merged = pd.concat(frames, ignore_index=True)
+        merged = merged[list(RECOMMENDATION_COLUMNS)]
         if not self._ensure_write_allowed():
             return 0
-        n_users = self._sink.replace_recommendations_for_users(merged, user_ids=sorted(affected_set))
+        self._ensure_fence()
+        n_users = self._sink.replace_recommendations_for_users(merged, user_ids=sorted(set(replace_ids)))
 
         now = datetime.now(UTC)
         manifest = {
@@ -162,14 +191,14 @@ class IncrementalUpdater:
         }
         self._ensure_fence()
         self._sink.write_manifest(manifest)
-        self._store_users_in_cache(affected_set, merged)
+        self._store_users_in_cache(set(replace_ids), merged)
         self._last_success_at = now
         self._events_applied += len(events)
         if self._on_success is not None:
             self._on_success()
         logger.info(
             "Incremental update wrote recommendations for %d user(s) from %d event(s)",
-            len(affected_users),
+            len(replace_ids),
             len(events),
         )
         return len(events)
@@ -342,6 +371,8 @@ class IncrementalUpdater:
         )
         preserve_cap = max(0, self._top_k - boost_slots)
         if not preserved.empty:
+            if RANK_COLUMN in preserved.columns:
+                preserved = preserved.sort_values(RANK_COLUMN, kind="mergesort")
             preserved = preserved.head(preserve_cap)
 
         # Boost first so reserved slots win; then preserved; then popular/latest fill.

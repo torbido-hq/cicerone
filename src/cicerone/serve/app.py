@@ -5,10 +5,8 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from collections.abc import Callable, Sequence
 from pathlib import Path
 
-import pandas as pd
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.openapi.utils import get_openapi
@@ -21,10 +19,15 @@ from cicerone.events.worker import EventWorker
 from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.io.base import ManifestReader, RecommendationReader
-from cicerone.io.recommendation_reader import ITEM_COLUMN, SOURCE_COLUMN, normalize_items_snapshot
+from cicerone.io.recommendation_reader import SOURCE_COLUMN
 from cicerone.serve.bootstrap_events import start_events_runtime
 from cicerone.serve.code_samples import HEALTH_PATH, RECOMMENDATIONS_PATH, attach_code_samples
 from cicerone.serve.events_routes import attach_events_ingest_openapi, mount_events_routes
+from cicerone.serve.item_filters import (
+    ItemsFilterCache,
+    configure_reader_item_filters,
+    filter_recommendations,
+)
 from cicerone.serve.metrics import (
     METRICS_TOKEN_HEADER,
     REQUEST_LATENCY_SECONDS,
@@ -106,121 +109,6 @@ class _GeneratedAtCache:
             return self._value
 
 
-def _configure_reader_item_filters(
-    reader: RecommendationReader,
-    *,
-    category_column: str | None,
-    availability_filters: Sequence[str],
-) -> None:
-    reader.configure_item_filters(
-        category_column=category_column,
-        availability_filters=availability_filters,
-    )
-
-
-def _available_item_ids(items: pd.DataFrame, availability_filters: Sequence[str]) -> frozenset[str] | None:
-    if not availability_filters or ITEM_COLUMN not in items.columns:
-        return None
-    mask = pd.Series(True, index=items.index)
-    for column in availability_filters:
-        if column not in items.columns:
-            continue
-        col = items[column]
-        if not pd.api.types.is_bool_dtype(col):
-            with pd.option_context("future.no_silent_downcasting", True):
-                col = col.fillna(False).infer_objects(copy=False).astype(bool)
-        mask &= col
-    return frozenset(items.loc[mask, ITEM_COLUMN].tolist())
-
-
-class _ItemsFilterCache:
-    """Reuse one normalized items snapshot between refreshes."""
-
-    def __init__(
-        self,
-        reader: RecommendationReader,
-        *,
-        category_column: str,
-        availability_filters: Sequence[str],
-    ) -> None:
-        self._reader = reader
-        self._category_column = category_column
-        self._availability_filters = list(availability_filters)
-        self._version: int | None = None
-        self._items: pd.DataFrame | None = None
-        self._available_ids: frozenset[str] | None = None
-        self._ids_by_category: dict[str, frozenset[str]] = {}
-
-    def get(self) -> tuple[pd.DataFrame | None, frozenset[str] | None, dict[str, frozenset[str]]]:
-        version = self._reader.items_version()
-        if version == self._version:
-            return self._items, self._available_ids, self._ids_by_category
-
-        items = normalize_items_snapshot(
-            self._reader.get_items(),
-            category_column=self._category_column,
-            availability_filters=self._availability_filters,
-        )
-        available = (
-            _available_item_ids(items, self._availability_filters)
-            if items is not None and not items.empty
-            else None
-        )
-        ids_by_category: dict[str, frozenset[str]] = {}
-        if (
-            items is not None
-            and not items.empty
-            and self._category_column in items.columns
-            and ITEM_COLUMN in items.columns
-        ):
-            # Normalize item ids once, then group — avoids per-group astype on refresh.
-            item_ids = items[ITEM_COLUMN].astype(str)
-            for cat, idx in items.groupby(self._category_column, sort=False).groups.items():
-                ids_by_category[str(cat)] = frozenset(item_ids.loc[idx].tolist())
-        self._version = version
-        self._items = items
-        self._available_ids = available
-        self._ids_by_category = ids_by_category
-        return items, available, ids_by_category
-
-
-def _filter_recommendations(
-    recs: pd.DataFrame,
-    *,
-    items: pd.DataFrame | None,
-    available_ids: frozenset[str] | None,
-    category: str | None,
-    category_column: str,
-    exclude_unavailable: bool,
-    ids_by_category: dict[str, frozenset[str]] | None = None,
-    on_missing_category_column: Callable[[], None] | None = None,
-) -> pd.DataFrame:
-    if recs.empty:
-        return recs
-    out = recs
-    if items is None or items.empty:
-        return out.reset_index(drop=True)
-
-    item_ids = out[ITEM_COLUMN].astype(str)
-
-    if category is not None:
-        if category_column not in items.columns:
-            if on_missing_category_column is not None:
-                on_missing_category_column()
-            return out.iloc[0:0].reset_index(drop=True)
-        if ids_by_category is not None:
-            allowed: set[str] | frozenset[str] = ids_by_category.get(str(category), frozenset())
-        else:
-            allowed = set(items.loc[items[category_column] == str(category), ITEM_COLUMN].astype(str))
-        out = out[item_ids.isin(allowed)]
-        item_ids = out[ITEM_COLUMN].astype(str)
-
-    if exclude_unavailable and available_ids is not None:
-        out = out[item_ids.isin(available_ids)]
-
-    return out.reset_index(drop=True)
-
-
 def _route_endpoint(request: Request) -> str:
     route = request.scope.get("route")
     if route is not None:
@@ -245,7 +133,7 @@ def create_app(
     dependencies = optional_bearer_deps(settings.serve.auth_token)
     availability_filters = list(feature_config.item_availability_filters) if feature_config else []
     category_column = settings.serve.category_column
-    items_cache = _ItemsFilterCache(
+    items_cache = ItemsFilterCache(
         reader,
         category_column=category_column,
         availability_filters=availability_filters,
@@ -354,7 +242,7 @@ def create_app(
         if recs.empty:
             raise HTTPException(status_code=404, detail=f"No recommendations for user_id={user_id!r}")
 
-        filtered = _filter_recommendations(
+        filtered = filter_recommendations(
             recs,
             items=items,
             available_ids=available_ids,
@@ -442,7 +330,7 @@ def main() -> None:
         feature_config = None
 
     availability_filters = list(feature_config.item_availability_filters) if feature_config else []
-    _configure_reader_item_filters(
+    configure_reader_item_filters(
         reader,
         category_column=settings.serve.category_column,
         availability_filters=availability_filters,

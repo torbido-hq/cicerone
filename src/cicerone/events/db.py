@@ -36,7 +36,9 @@ _FETCH_COLUMNS = (
     "occurred_at",
     "event_id",
     "idempotency_key",
+    "id",
 )
+_ROW_IDENTITY_KEYS = ("id", "rowid", "ctid")
 _EVENTS_QUERY_FORBIDDEN = re.compile(
     r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|"
     r"COPY|CALL|EXEC|EXECUTE|MERGE|REPLACE|ATTACH|DETACH)\b",
@@ -65,10 +67,27 @@ def _db_occurred_at(value: Any) -> datetime:
     return parse_occurred_at(value)
 
 
+def _row_identity(payload: dict[str, Any]) -> str | None:
+    for key in _ROW_IDENTITY_KEYS:
+        value = payload.get(key)
+        if value in (None, ""):
+            continue
+        if key == "rowid":
+            try:
+                return f"{key}:{int(value):020d}"
+            except (TypeError, ValueError):
+                return f"{key}:{value}"
+        return f"{key}:{value}"
+    return None
+
+
 def _stable_event_id(payload: dict[str, Any], occurred_at: datetime) -> str:
     existing = payload.get("event_id") or payload.get("idempotency_key")
     if existing not in (None, ""):
         return str(existing)
+    identity = _row_identity(payload)
+    if identity is not None:
+        return identity
     quantity = payload.get("quantity", 1)
     return "|".join(
         (
@@ -247,6 +266,15 @@ class DbEventSource(EventSource):
             )
         selected = [by_lower[name] for name in _FETCH_COLUMNS if name in by_lower]
         has_event_id = "event_id" in by_lower
+        if not has_event_id and not self._events_query:
+            dialect = engine.dialect.name
+            extra = None
+            if dialect == "sqlite" and "rowid" not in by_lower:
+                extra = "rowid"
+            elif dialect == "postgresql" and "ctid" not in by_lower:
+                extra = "ctid"
+            if extra is not None:
+                selected.append(extra)
         select_clause = ", ".join(f'"{name}"' for name in selected)
         with self._lock:
             if self._select_clause is None or self._has_event_id_column is None:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Hashable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -44,6 +44,45 @@ from cicerone.policy import (
 )
 
 logger = logging.getLogger(__name__)
+
+RecommendCache = dict[tuple[Hashable, ...], Any]
+
+
+def _cache_key_part(value: object) -> Hashable:
+    try:
+        hash(value)
+    except TypeError:
+        if isinstance(value, Mapping):
+            items = [(_cache_key_part(k), _cache_key_part(v)) for k, v in value.items()]
+            return tuple(sorted(items, key=repr))
+        if isinstance(value, set):
+            return tuple(sorted((_cache_key_part(v) for v in value), key=repr))
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            return tuple(_cache_key_part(v) for v in value)
+        return str(value)
+    return value
+
+
+def _recommend_cache_key(*parts: object) -> tuple[Hashable, ...]:
+    return tuple(_cache_key_part(p) for p in parts)
+
+
+def _items_fingerprint(allowed_items: Sequence | None) -> Hashable:
+    if not allowed_items:
+        return None
+    return frozenset(map(str, allowed_items))
+
+
+def _dataset_fingerprint(dataset: object) -> Hashable:
+    fingerprint = getattr(dataset, "fingerprint", None)
+    if callable(fingerprint):
+        fingerprint = fingerprint()
+    if fingerprint is not None:
+        return _cache_key_part(fingerprint)
+    version = getattr(dataset, "version", None)
+    if version is not None:
+        return _cache_key_part(version)
+    return id(dataset)
 
 
 def boost_overfetch_k(
@@ -162,6 +201,7 @@ def _recommend_per_strategy(
     blending_enabled: bool,
     blending_latest_date_columns: tuple[str, ...],
     top_k: int,
+    recommend_cache: RecommendCache | None = None,
 ) -> _StrategyFrames:
     frames: list[pd.DataFrame] = []
     personalized_frames: list[pd.DataFrame] = []
@@ -202,15 +242,34 @@ def _recommend_per_strategy(
             else:
                 recommend_users = cohort_users
 
-            recs = models[name].recommend(
-                users=recommend_users,
-                dataset=dataset,
-                k=cohort_plan.recommend_k,
-                filter_viewed=strategy.personalized,
-                items_to_recommend=allowed_items,
+            cache_key = _recommend_cache_key(
+                "strategy",
+                name,
+                cohort_key_value,
+                cohort_plan.recommend_k,
+                _items_fingerprint(allowed_items),
+                bool(strategy.personalized),
+                _dataset_fingerprint(dataset),
             )
-            recs[SOURCE_COLUMN] = strategy.source_label
-            recs[WEIGHT_COLUMN] = 1.0
+            cached = recommend_cache.get(cache_key) if recommend_cache is not None else None
+            if cached is not None:
+                recs = cached.copy()
+            else:
+                recs = (
+                    models[name]
+                    .recommend(
+                        users=recommend_users,
+                        dataset=dataset,
+                        k=cohort_plan.recommend_k,
+                        filter_viewed=strategy.personalized,
+                        items_to_recommend=allowed_items,
+                    )
+                    .copy()
+                )
+                recs[SOURCE_COLUMN] = strategy.source_label
+                recs[WEIGHT_COLUMN] = 1.0
+                if recommend_cache is not None:
+                    recommend_cache[cache_key] = recs.copy()
             frames.append(recs)
             if blending_enabled:
                 if strategy.personalized:
@@ -224,9 +283,22 @@ def _recommend_per_strategy(
             allowed_items = cohort_plan.allowed_by_cohort[cohort_key]
             if not allowed_items:
                 continue
-            latest_by_cohort[cohort_key] = rank_latest_items(
-                built.items, date_column, allowed_items, latest_k
+            latest_key = _recommend_cache_key(
+                "latest",
+                date_column,
+                cohort_key,
+                latest_k,
+                _items_fingerprint(allowed_items),
+                _dataset_fingerprint(dataset),
             )
+            cached_latest = recommend_cache.get(latest_key) if recommend_cache is not None else None
+            if cached_latest is not None:
+                latest_by_cohort[cohort_key] = list(cached_latest)
+            else:
+                ranked = rank_latest_items(built.items, date_column, allowed_items, latest_k)
+                latest_by_cohort[cohort_key] = ranked
+                if recommend_cache is not None:
+                    recommend_cache[latest_key] = list(ranked)
 
     return _StrategyFrames(
         frames=frames,
@@ -367,8 +439,13 @@ def recommend_with_models(
     weights: dict[str, float] | None = None,
     rrf_k: float | None = None,
     run_plan: ModelRunPlan | None = None,
+    recommend_cache: RecommendCache | None = None,
 ) -> pd.DataFrame:
-    """Recommend + combine on already-fitted strategies (no fit)."""
+    """Recommend + combine on already-fitted strategies (no fit).
+
+    ``recommend_cache`` keys include strategy, cohort, k, allowlist, filter_viewed,
+    and dataset identity so a shared dict is safe across differing inputs.
+    """
     blending = config.blending
     blending_enabled = blending.enabled
     if run_plan is None:
@@ -408,6 +485,7 @@ def recommend_with_models(
         blending_enabled=blending_enabled,
         blending_latest_date_columns=tuple(blending.latest_date_columns),
         top_k=top_k,
+        recommend_cache=recommend_cache,
     )
     combined = _combine_strategy_frames(
         models,
@@ -444,6 +522,7 @@ def train_and_recommend(
     content_fallback_enabled: bool | None = None,
     content_fallback_max_neighbors: int = DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS,
     run_plan: ModelRunPlan | None = None,
+    recommend_cache: RecommendCache | None = None,
 ) -> pd.DataFrame:
     """Fit enabled strategies, then recommend + combine."""
     if run_plan is None:
@@ -475,4 +554,5 @@ def train_and_recommend(
         weights=weights,
         rrf_k=rrf_k,
         run_plan=run_plan,
+        recommend_cache=recommend_cache,
     )

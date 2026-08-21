@@ -48,3 +48,29 @@ def as_list(value: object) -> list:
 
 def str_set(values: Iterable) -> set[str]:
     return {str(v) for v in values if not is_missing(v)}
+
+
+# ``item_true`` / availability string tokens only; avoid ``astype(bool)`` ("false" → True).
+ITEM_TRUE_STRINGS = frozenset({"1", "true", "True", "TRUE", "yes", "Yes", "YES"})
+ITEM_FALSE_STRINGS = frozenset({"0", "false", "False", "FALSE", "no", "No", "NO", ""})
+
+
+def coerce_item_true(value: object) -> bool:
+    """Return True only for explicit truthy tokens; unknowns are False."""
+    if is_missing(value):
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value != 0
+    token = str(value).strip()
+    if token in ITEM_TRUE_STRINGS:
+        return True
+    if token in ITEM_FALSE_STRINGS:
+        return False
+    return False
+
+
+def item_true_mask(item_values: pd.Series) -> pd.Series:
+    """Boolean mask for availability / ``item_true`` without silent string→True coercion."""
+    return item_values.map(coerce_item_true).astype(bool)

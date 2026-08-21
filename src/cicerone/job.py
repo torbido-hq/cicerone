@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from typing import Any
@@ -18,6 +19,7 @@ from cicerone.dataset import build_dataset
 from cicerone.feature_config import load_feature_config
 from cicerone.io.base import InputSource
 from cicerone.io.factory import build_input_source, build_output_sink
+from cicerone.locks import LockLostError
 from cicerone.model import (
     DEFAULT_MODELS,
     RRF_K,
@@ -60,7 +62,12 @@ def _read_input(source: InputSource) -> tuple[pd.DataFrame, pd.DataFrame | None,
         return events_future.result(), users_future.result(), items_future.result()
 
 
-def run(triggered_by: str = "manual") -> None:
+def _ensure_fence(fence_check: Callable[[], bool] | None) -> None:
+    if fence_check is not None and not fence_check():
+        raise LockLostError("retrain lock lost before write")
+
+
+def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None = None) -> None:
     settings = load_settings()
     feature_config = load_feature_config(settings.feature_config_path)
     sink = build_output_sink(settings.output)
@@ -164,6 +171,7 @@ def run(triggered_by: str = "manual") -> None:
 
         # Artifact → snapshot → recommendations; success only after all writes.
         outputs_written = False
+        _ensure_fence(fence_check)
         try:
             if artifact_bytes is not None:
                 sink.write_model_artifact(artifact_bytes)
@@ -176,6 +184,13 @@ def run(triggered_by: str = "manual") -> None:
             sink.write_recommendations(recommendations)
             outputs_written = True
         except Exception:
+            if outputs_written or manifest.get("artifact_written"):
+                manifest["partial_outputs"] = True
+            raise
+
+        try:
+            _ensure_fence(fence_check)
+        except LockLostError:
             if outputs_written or manifest.get("artifact_written"):
                 manifest["partial_outputs"] = True
             raise

@@ -43,7 +43,7 @@ def _cron_run_with_lock(backend: LockBackend) -> None:
         logger.info("Skipping cron run: distributed lock held by another instance")
         return
     try:
-        job.run(triggered_by="cron")
+        job.run(triggered_by="cron", fence_check=backend.owned)
     finally:
         backend.release()
 

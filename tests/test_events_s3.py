@@ -10,6 +10,7 @@ from support.events import event_payload
 from cicerone.config import ConfigError
 from cicerone.events.registry import build_event_source, registered_event_source_kinds
 from cicerone.events.s3 import (
+    _LOAD_FAILURE_SKIP_AFTER,
     _SQS_NACK_VISIBILITY_TIMEOUT_SECONDS,
     S3EventSource,
     _events_from_body,
@@ -72,6 +73,58 @@ def test_s3_list_poll_ack_advances_marker(tmp_path):
     source.ack([second[0].event_id])
     assert list(source.poll(10)) == []
     assert json.loads(marker.read_text())["key"] == "events/b.json"
+
+
+@mock_aws
+def test_s3_list_retries_transient_load_failures(tmp_path, monkeypatch):
+    client = boto3.client("s3", region_name="us-east-1")
+    client.create_bucket(Bucket="events-bucket")
+    _put_event(client, "events/a.json", event_payload(event_id="e1", item_id="i1"))
+    _put_event(client, "events/b.json", event_payload(event_id="e2", item_id="i2"))
+    marker = tmp_path / "marker.json"
+    source = S3EventSource(_creds(mode="list", prefix="events/", marker_path=str(marker)))
+    source.connect()
+    real_load = S3EventSource._load_object_events
+    calls = {"n": 0}
+
+    def flaky(self, s3, bucket, key, etag=""):  # type: ignore[no-untyped-def]
+        if str(key).endswith("a.json"):
+            calls["n"] += 1
+            if calls["n"] < _LOAD_FAILURE_SKIP_AFTER:
+                raise RuntimeError("transient s3 read")
+        return real_load(self, s3, bucket, key, etag=etag)
+
+    monkeypatch.setattr(S3EventSource, "_load_object_events", flaky)
+    for _ in range(_LOAD_FAILURE_SKIP_AFTER - 1):
+        assert list(source.poll(10)) == []
+        assert not marker.exists()
+    loaded = list(source.poll(1))
+    assert [event.event_id for event in loaded] == ["e1"]
+
+
+@mock_aws
+def test_s3_list_skips_after_repeated_transient_failures(tmp_path, monkeypatch):
+    client = boto3.client("s3", region_name="us-east-1")
+    client.create_bucket(Bucket="events-bucket")
+    _put_event(client, "events/a.json", event_payload(event_id="e1", item_id="i1"))
+    _put_event(client, "events/b.json", event_payload(event_id="e2", item_id="i2"))
+    marker = tmp_path / "marker.json"
+    source = S3EventSource(_creds(mode="list", prefix="events/", marker_path=str(marker)))
+    source.connect()
+    real_load = S3EventSource._load_object_events
+
+    def always_fail_a(self, s3, bucket, key, etag=""):  # type: ignore[no-untyped-def]
+        if str(key).endswith("a.json"):
+            raise RuntimeError("persistent s3 read")
+        return real_load(self, s3, bucket, key, etag=etag)
+
+    monkeypatch.setattr(S3EventSource, "_load_object_events", always_fail_a)
+    for _ in range(_LOAD_FAILURE_SKIP_AFTER - 1):
+        assert list(source.poll(10)) == []
+        assert not marker.exists()
+    loaded = list(source.poll(10))
+    assert [event.event_id for event in loaded] == ["e2"]
+    assert json.loads(marker.read_text())["key"] == "events/a.json"
 
 
 @mock_aws

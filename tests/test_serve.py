@@ -13,11 +13,10 @@ from cicerone.feature_config import FeatureConfig
 from cicerone.io.recommendation_reader import select_cold_start_fallback
 from cicerone.serve import create_app, main
 from cicerone.serve.app import (
-    _available_item_ids,
     _GeneratedAtCache,
-    _ItemsFilterCache,
     _start_refresh_loop,
 )
+from cicerone.serve.item_filters import ItemsFilterCache, available_item_ids
 
 
 def _settings(**overrides) -> Settings:
@@ -115,12 +114,12 @@ class _FakeManifest:
 
 def test_available_item_ids_missing_item_id_returns_none():
     items = pd.DataFrame([{"sku": "x", "published": True}])
-    assert _available_item_ids(items, ["published"]) is None
+    assert available_item_ids(items, ["published"]) is None
 
 
 def test_items_filter_cache_tolerates_snapshot_without_item_id():
     reader = _FakeReader(_recs_df(), pd.DataFrame([{"sku": "x", "published": True}]))
-    cache = _ItemsFilterCache(
+    cache = ItemsFilterCache(
         reader,
         category_column="category",
         availability_filters=["published"],
@@ -133,7 +132,7 @@ def test_items_filter_cache_tolerates_snapshot_without_item_id():
 
 def test_items_filter_cache_normalizes_once_per_refresh():
     reader = _FakeReader(_recs_df(), _items_df())
-    cache = _ItemsFilterCache(
+    cache = ItemsFilterCache(
         reader,
         category_column="category",
         availability_filters=["published", "in_stock"],
@@ -281,7 +280,7 @@ def test_recommendations_unknown_user_returns_cold_start_fallback():
 
 def test_items_filter_cache_stringifies_non_string_item_ids():
     """Category allowlists must be str so they match filtered recommendation ids."""
-    from cicerone.serve.app import _filter_recommendations
+    from cicerone.serve.item_filters import filter_recommendations
 
     recs = pd.DataFrame(
         [
@@ -296,14 +295,14 @@ def test_items_filter_cache_stringifies_non_string_item_ids():
         ]
     )
     reader = _FakeReader(recs, items)
-    cache = _ItemsFilterCache(
+    cache = ItemsFilterCache(
         reader,
         category_column="category",
         availability_filters=["published"],
     )
     cached_items, available, by_cat = cache.get()
     assert by_cat["beer"] == frozenset({"10"})
-    filtered = _filter_recommendations(
+    filtered = filter_recommendations(
         recs,
         items=cached_items,
         available_ids=available,
@@ -389,6 +388,34 @@ def test_recommendations_exclude_unavailable_false_keeps_unpublished():
         headers={"Authorization": "Bearer secret"},
     )
     assert [row["item_id"] for row in response.json()["items"]] == ["i1", "i2", "i3"]
+
+
+def test_recommendations_exclude_unavailable_treats_false_strings_as_unavailable():
+    items = pd.DataFrame(
+        [
+            {"item_id": "i1", "category": "beer", "published": "true", "in_stock": "1"},
+            {"item_id": "i2", "category": "wine", "published": "false", "in_stock": "true"},
+            {"item_id": "i3", "category": "beer", "published": "0", "in_stock": "yes"},
+        ]
+    )
+    recs = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"},
+            {"user_id": "u1", "item_id": "i2", "rank": 2, "score": 0.5, "source": "personalized"},
+            {"user_id": "u1", "item_id": "i3", "rank": 3, "score": 0.1, "source": "personalized"},
+        ]
+    )
+    app = create_app(
+        _settings(),
+        _FakeReader(recs, items),
+        feature_config=_feature_config(),
+    )
+    client = TestClient(app)
+    response = client.get(
+        "/recommendations/u1?exclude_unavailable=true&limit=3",
+        headers={"Authorization": "Bearer secret"},
+    )
+    assert [row["item_id"] for row in response.json()["items"]] == ["i1"]
 
 
 def test_recommendations_empty_everywhere_returns_404():

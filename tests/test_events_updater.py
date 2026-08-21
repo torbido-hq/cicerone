@@ -232,6 +232,67 @@ def test_incremental_updater_empty_and_unknown_event_type(tmp_path, feature_conf
     assert frame.empty or "ix" not in set(frame["item_id"].astype(str))
 
 
+def test_incremental_updater_unknown_event_keeps_popular_only_user(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "pop", "rank": 1, "score": 0.2, "source": "popular_fallback"},
+        ]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+    )
+    assert (
+        updater.apply(
+            [
+                normalize_event(
+                    event_payload(user_id="u1", event_type="unknown_type", event_id="u", item_id="ix")
+                )
+            ]
+        )
+        == 1
+    )
+    frame = load_recommendations_frame(settings.output)
+    u1 = frame[frame["user_id"] == "u1"]
+    assert list(u1["item_id"].astype(str)) == ["pop"]
+
+
+def test_incremental_updater_preserves_best_ranks_when_capping(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    # Unsorted ranks: head() without sort_values would keep p2 and drop p1.
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "p2", "rank": 2, "score": 0.5, "source": "personalized"},
+            {"user_id": "u1", "item_id": "p1", "rank": 1, "score": 1.0, "source": "personalized"},
+            {"user_id": "u1", "item_id": "p3", "rank": 3, "score": 0.1, "source": "personalized"},
+        ]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=2,
+    )
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=2,
+    )
+    event = normalize_event(event_payload(user_id="u1", item_id="boosted", event_id="b1"))
+    assert updater.apply([event]) == 1
+    u1 = load_recommendations_frame(settings.output)
+    u1 = u1[u1["user_id"] == "u1"].sort_values("rank")
+    assert list(u1["item_id"].astype(str)) == ["boosted", "p1"]
+
+
 def test_incremental_updater_no_feature_config(tmp_path):
     out = tmp_path / "out"
     out.mkdir()

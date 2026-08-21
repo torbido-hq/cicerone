@@ -267,3 +267,155 @@ def test_feature_dict_parses_list_like_strings():
     assert tokens["styles=lager"] == 1.0
     assert tokens["styles=pils"] == 1.0
     assert tokens["solo=single"] == 1.0
+
+
+def test_recommend_thread_pool_path_returns_rows_for_each_user():
+    items = pd.DataFrame(
+        [
+            {"item_id": "i1", "category": "beer"},
+            {"item_id": "i_new", "category": "beer"},
+        ]
+    )
+    interactions = pd.DataFrame(
+        {
+            Columns.User: ["u1", "u2"],
+            Columns.Item: ["i1", "i1"],
+            Columns.Weight: [1.0, 1.0],
+            Columns.Datetime: [pd.Timestamp.utcnow(), pd.Timestamp.utcnow()],
+        }
+    )
+    model = ContentFallbackModel(
+        feature_columns=[FeatureColumn(column="category", type="categorical")],
+        items=items,
+        interactions=interactions,
+        recommend_thread_min_users=1,
+    )
+    model.fit(_DummyDataset())
+    recs = model.recommend(
+        users=["u1", "u2"],
+        dataset=_DummyDataset(),
+        k=5,
+        filter_viewed=True,
+    )
+    assert set(recs[Columns.User].astype(str)) == {"u1", "u2"}
+
+
+def test_recommend_thread_pool_matches_serial_user_rank_order():
+    items = pd.DataFrame(
+        [
+            {"item_id": "i1", "category": "beer"},
+            {"item_id": "i_new", "category": "beer"},
+        ]
+    )
+    interactions = pd.DataFrame(
+        {
+            Columns.User: ["u1", "u2"],
+            Columns.Item: ["i1", "i1"],
+            Columns.Weight: [1.0, 1.0],
+            Columns.Datetime: [pd.Timestamp.utcnow(), pd.Timestamp.utcnow()],
+        }
+    )
+    model = ContentFallbackModel(
+        feature_columns=[FeatureColumn(column="category", type="categorical")],
+        items=items,
+        interactions=interactions,
+        recommend_thread_min_users=100,
+    )
+    model.fit(_DummyDataset())
+    serial = model.recommend(users=["u2", "u1"], dataset=_DummyDataset(), k=5, filter_viewed=True)
+    model.recommend_thread_min_users = 1
+    threaded = model.recommend(users=["u2", "u1"], dataset=_DummyDataset(), k=5, filter_viewed=True)
+    pd.testing.assert_frame_equal(serial.reset_index(drop=True), threaded.reset_index(drop=True))
+    assert list(serial[Columns.User].astype(str).drop_duplicates()) == ["u1", "u2"]
+
+
+def test_recommend_handles_mixed_non_string_ids():
+    items = pd.DataFrame(
+        [
+            {"item_id": 1, "category": "beer"},
+            {"item_id": "2", "category": "beer"},
+            {"item_id": 3, "category": "beer"},
+        ]
+    )
+    interactions = pd.DataFrame(
+        {
+            Columns.User: ["u1", "u1", "u2"],
+            Columns.Item: [1, "2", 1],
+            Columns.Weight: [1.0, 1.0, 1.0],
+            Columns.Datetime: [pd.Timestamp.utcnow()] * 3,
+        }
+    )
+    model = ContentFallbackModel(
+        feature_columns=[FeatureColumn(column="category", type="categorical")],
+        items=items,
+        interactions=interactions,
+        recommend_thread_min_users=1,
+    )
+    model.fit(_DummyDataset())
+    recs = model.recommend(
+        users=["u1", "u2"],
+        dataset=_DummyDataset(),
+        k=5,
+        filter_viewed=True,
+        items_to_recommend=[1, "2", 3],
+    )
+    assert set(recs[Columns.User].astype(str)) == {"u1", "u2"}
+    assert set(map(str, recs[Columns.Item])) <= {"1", "2", "3"}
+
+
+def test_recommend_single_user_path_does_not_use_thread_pool(monkeypatch):
+    class _ThreadPoolSpy:
+        def __init__(self, *_, **__):
+            raise AssertionError("ThreadPoolExecutor should not be used for single-user path")
+
+    monkeypatch.setattr("cicerone.content_fallback.ThreadPoolExecutor", _ThreadPoolSpy)
+    items = pd.DataFrame(
+        [
+            {"item_id": "i1", "category": "beer"},
+            {"item_id": "i_new", "category": "beer"},
+        ]
+    )
+    interactions = pd.DataFrame(
+        {
+            Columns.User: ["u1"],
+            Columns.Item: ["i1"],
+            Columns.Weight: [1.0],
+            Columns.Datetime: [pd.Timestamp.utcnow()],
+        }
+    )
+    model = ContentFallbackModel(
+        feature_columns=[FeatureColumn(column="category", type="categorical")],
+        items=items,
+        interactions=interactions,
+    )
+    model.fit(_DummyDataset())
+    recs = model.recommend(users=["u1"], dataset=_DummyDataset(), k=5, filter_viewed=True)
+    assert set(recs[Columns.User].astype(str)) == {"u1"}
+    assert (recs[Columns.Item] == "i_new").all()
+
+
+def test_recommend_skips_historyless_user_without_affecting_others():
+    items = pd.DataFrame(
+        [
+            {"item_id": "i1", "category": "beer"},
+            {"item_id": "i_new", "category": "beer"},
+        ]
+    )
+    interactions = pd.DataFrame(
+        {
+            Columns.User: ["u1"],
+            Columns.Item: ["i1"],
+            Columns.Weight: [1.0],
+            Columns.Datetime: [pd.Timestamp.utcnow()],
+        }
+    )
+    model = ContentFallbackModel(
+        feature_columns=[FeatureColumn(column="category", type="categorical")],
+        items=items,
+        interactions=interactions,
+        recommend_thread_min_users=1,
+    )
+    model.fit(_DummyDataset())
+    recs = model.recommend(users=["u1", "u2"], dataset=_DummyDataset(), k=5, filter_viewed=True)
+    assert set(recs[Columns.User].astype(str)) == {"u1"}
+    assert "u2" not in set(recs[Columns.User].astype(str))

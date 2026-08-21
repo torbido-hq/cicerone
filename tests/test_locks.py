@@ -214,11 +214,14 @@ def test_run_guard_debounce_with_distributed_lock_backend():
         def release(self) -> None:
             return None
 
+        def owned(self) -> bool:
+            return True
+
     calls: list[str] = []
     lock_backend = AlwaysAcquiringLock()
     done = threading.Event()
 
-    def fake_run(triggered_by: str) -> None:
+    def fake_run(triggered_by: str, **_kwargs) -> None:
         calls.append(triggered_by)
         done.set()
 
@@ -245,9 +248,12 @@ def test_run_guard_releases_backend_after_run():
         def release(self) -> None:
             events.append("release")
 
+        def owned(self) -> bool:
+            return True
+
     done = threading.Event()
 
-    def fake_run(triggered_by: str) -> None:
+    def fake_run(triggered_by: str, **_kwargs) -> None:
         events.append(f"run:{triggered_by}")
         done.set()
 
@@ -259,6 +265,39 @@ def test_run_guard_releases_backend_after_run():
             break
         time.sleep(0.05)
     assert events == ["acquire", "run:cron", "release"]
+
+
+def test_run_guard_passes_owned_as_fence_check():
+    owned_calls: list[bool] = []
+    received: dict[str, object] = {}
+    done = threading.Event()
+
+    class Lock:
+        def acquire(self) -> bool:
+            return True
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            owned_calls.append(True)
+            return True
+
+    lock = Lock()
+
+    def fake_run(triggered_by: str, *, fence_check=None) -> None:
+        received["triggered_by"] = triggered_by
+        received["fence_check"] = fence_check
+        assert fence_check is not None
+        assert fence_check() is True
+        done.set()
+
+    guard = RunGuard(debounce_seconds=0, run_fn=fake_run, lock_backend=lock)
+    assert guard.trigger("webhook") is True
+    _wait_for_event(done)
+    assert received["triggered_by"] == "webhook"
+    assert received["fence_check"] == lock.owned
+    assert owned_calls == [True]
 
 
 def test_build_redis_lock_backend(monkeypatch):
@@ -511,6 +550,7 @@ def test_cron_run_with_lock_runs_and_releases(monkeypatch):
     from cicerone import scheduler
 
     events: list[str] = []
+    captured: dict[str, object] = {}
 
     class Ok:
         def acquire(self) -> bool:
@@ -520,9 +560,19 @@ def test_cron_run_with_lock_runs_and_releases(monkeypatch):
         def release(self) -> None:
             events.append("release")
 
-    monkeypatch.setattr(scheduler.job, "run", lambda **kwargs: events.append(f"run:{kwargs['triggered_by']}"))
-    scheduler._cron_run_with_lock(Ok())
+        def owned(self) -> bool:
+            return True
+
+    lock = Ok()
+
+    def fake_run(**kwargs):
+        captured.update(kwargs)
+        events.append(f"run:{kwargs['triggered_by']}")
+
+    monkeypatch.setattr(scheduler.job, "run", fake_run)
+    scheduler._cron_run_with_lock(lock)
     assert events == ["acquire", "run:cron", "release"]
+    assert captured["fence_check"] == lock.owned
 
 
 def test_redis_owned_and_is_locked(monkeypatch):

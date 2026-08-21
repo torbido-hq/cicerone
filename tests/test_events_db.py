@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 from sqlalchemy import create_engine
 
-from cicerone.events.db import DbEventSource
+from cicerone.events.db import DbEventSource, _row_identity, _stable_event_id
 from cicerone.events.normalize import EventNormalizeError
 from cicerone.events.registry import build_event_source, registered_event_source_kinds
 
@@ -243,6 +243,150 @@ def test_db_events_query_and_stable_id_without_event_id(tmp_path):
     assert "|" in polled[0].event_id
     source.ack([polled[0].event_id])
     assert source.health().lag == 1
+
+
+def test_db_duplicate_payload_without_event_id_uses_rowid(tmp_path):
+    url = _sqlite_url(tmp_path)
+    row = {
+        "user_id": "u1",
+        "item_id": "i1",
+        "event_type": "purchase",
+        "quantity": 1,
+        "occurred_at": "2026-08-13T12:00:00+00:00",
+    }
+    _seed_events(url, [row, dict(row)])
+    source = DbEventSource({"database_url": url, "initial_watermark": "2026-08-01T00:00:00Z"})
+    source.connect()
+    polled = list(source.poll(10))
+    assert source._has_event_id_column is False
+    assert source._select_clause is not None
+    assert "rowid" in source._select_clause
+    assert len(polled) == 2
+    ids = [event.event_id for event in polled]
+    assert ids[0] != ids[1]
+    assert all(event_id.startswith("rowid:") for event_id in ids)
+    source.nack(polled)
+
+    seen: list[str] = []
+    for _ in range(2):
+        batch = list(source.poll(1))
+        assert len(batch) == 1
+        seen.append(batch[0].event_id)
+        source.ack([batch[0].event_id])
+    assert seen[0] != seen[1]
+    assert list(source.poll(1)) == []
+
+
+def test_db_rowid_watermark_survives_restart(tmp_path):
+    url = _sqlite_url(tmp_path)
+    watermark = tmp_path / "wm.json"
+    row = {
+        "user_id": "u1",
+        "item_id": "i1",
+        "event_type": "purchase",
+        "quantity": 1,
+        "occurred_at": "2026-08-13T12:00:00+00:00",
+    }
+    _seed_events(url, [row, dict(row)])
+    source = DbEventSource(
+        {
+            "database_url": url,
+            "watermark_path": str(watermark),
+            "initial_watermark": "2026-08-01T00:00:00Z",
+        }
+    )
+    source.connect()
+    first = list(source.poll(1))
+    assert len(first) == 1
+    assert first[0].event_id.startswith("rowid:")
+    source.ack([first[0].event_id])
+    source.close()
+
+    restarted = DbEventSource({"database_url": url, "watermark_path": str(watermark)})
+    restarted.connect()
+    left = list(restarted.poll(10))
+    assert len(left) == 1
+    assert left[0].event_id.startswith("rowid:")
+    assert left[0].event_id != first[0].event_id
+
+
+def test_db_duplicate_payload_prefers_id_column_over_rowid(tmp_path):
+    url = _sqlite_url(tmp_path)
+    row = {
+        "user_id": "u1",
+        "item_id": "i1",
+        "event_type": "purchase",
+        "quantity": 1,
+        "occurred_at": "2026-08-13T12:00:00+00:00",
+    }
+    _seed_events(url, [{**row, "id": 10}, {**row, "id": 20}])
+    source = DbEventSource({"database_url": url, "initial_watermark": "2026-08-01T00:00:00Z"})
+    source.connect()
+    polled = list(source.poll(10))
+    assert len(polled) == 2
+    ids = [event.event_id for event in polled]
+    assert ids[0] != ids[1]
+    assert set(ids) == {"id:10", "id:20"}
+
+
+def test_db_events_query_duplicate_payload_collides_without_id(tmp_path):
+    url = _sqlite_url(tmp_path)
+    engine = create_engine(url)
+    row = {
+        "user_id": "u1",
+        "item_id": "i1",
+        "event_type": "purchase",
+        "quantity": 1,
+        "occurred_at": "2026-08-13T12:00:00+00:00",
+    }
+    pd.DataFrame([row, dict(row)]).to_sql("raw_events", engine, if_exists="replace", index=False)
+    source = DbEventSource(
+        {
+            "database_url": url,
+            "events_query": "SELECT * FROM raw_events",
+            "initial_watermark": "2026-08-01T00:00:00Z",
+        }
+    )
+    source.connect()
+    polled = list(source.poll(10))
+    assert len(polled) == 1
+    assert "|" in polled[0].event_id
+
+
+def test_db_events_query_duplicate_payload_uses_projected_id(tmp_path):
+    url = _sqlite_url(tmp_path)
+    engine = create_engine(url)
+    row = {
+        "user_id": "u1",
+        "item_id": "i1",
+        "event_type": "purchase",
+        "quantity": 1,
+        "occurred_at": "2026-08-13T12:00:00+00:00",
+    }
+    pd.DataFrame([{**row, "id": 1}, {**row, "id": 2}]).to_sql(
+        "raw_events", engine, if_exists="replace", index=False
+    )
+    source = DbEventSource(
+        {
+            "database_url": url,
+            "events_query": "SELECT * FROM raw_events",
+            "initial_watermark": "2026-08-01T00:00:00Z",
+        }
+    )
+    source.connect()
+    polled = list(source.poll(10))
+    assert len(polled) == 2
+    assert {event.event_id for event in polled} == {"id:1", "id:2"}
+
+
+def test_row_identity_prefers_id_then_rowid_then_ctid():
+    occurred = datetime(2026, 8, 13, 12, 0, tzinfo=UTC)
+    assert _row_identity({"id": 7, "rowid": 1, "ctid": "(0,1)"}) == "id:7"
+    assert _row_identity({"rowid": 2}) == "rowid:00000000000000000002"
+    assert _row_identity({"rowid": "not-an-int"}) == "rowid:not-an-int"
+    assert _row_identity({"ctid": "(0,1)"}) == "ctid:(0,1)"
+    assert _stable_event_id({"idempotency_key": "ik", "id": 1}, occurred) == "ik"
+    assert _stable_event_id({"id": 9}, occurred) == "id:9"
 
 
 def test_db_health_lag_none_when_scan_hits_cap(tmp_path, monkeypatch):

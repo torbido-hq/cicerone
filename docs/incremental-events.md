@@ -95,8 +95,12 @@ Required: `events.options.database_url`. Optional durable `watermark_path`
 and `initial_watermark`. The watermark advances only after a successful
 flush `ack`. When an `event_id` column exists, poll orders by
 `(occurred_at, event_id)` so same-timestamp pages cannot skip rows.
+Without `event_id`, table sources use `id`, SQLite `rowid`, or Postgres
+`ctid` so identical payloads at the same timestamp stay distinct.
 `events_query`, when set, must be a single read-only `SELECT` from
 **trusted deploy-time config** (same rule as `input.options.events_query`).
+It has no table identity: project `event_id` or `id`; otherwise same-payload twins
+share a cursor.
 
 ### `s3`
 
@@ -134,7 +138,9 @@ to flush; db / s3-list still take the lease to poll (single consumer). On
 lock busy the flush nacks so lag stays honest. Redis `owned()` fences
 writes if the lease expires mid-apply; Postgres `owned()` checks `pg_locks`
 for this session. A dead Postgres lock probe **fails closed** (logged and
-re-raised), not “lock free”.
+re-raised), not “lock free”. The same `owned()` callback is passed into
+full `job.run()` (cron and `RunGuard` trigger) so a lost retrain lock skips
+artifact and recommendation writes.
 
 | Source | Multi-replica |
 | --- | --- |

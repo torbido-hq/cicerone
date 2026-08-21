@@ -40,7 +40,11 @@ def combine_by_weighted_fusion(
             SOURCE_COLUMN: (SOURCE_COLUMN, _join_labels_in_order),
         }
     )
-    fused = fused.sort_values([Columns.User, Columns.Score], ascending=[True, False])
+    fused = fused.sort_values(
+        [Columns.User, Columns.Score, Columns.Item],
+        ascending=[True, False, True],
+        kind="mergesort",
+    )
     fused[Columns.Rank] = fused.groupby(Columns.User).cumcount() + 1
     fused = fused.groupby(Columns.User, as_index=False).head(top_k)
     return fused[[Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN]]
