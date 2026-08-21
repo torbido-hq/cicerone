@@ -26,7 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - AutoML reuses per-strategy recommend frames across candidates in a fold.
 - Content-fallback scoring parallelizes across users; incremental merge groups events
-  by user once; latest ranking expansion uses numpy repeat/tile.
+  by user once; latest ranking expansion uses NumPy repeat/tile.
 - Split `locks`, `policy`, and serve item-filter helpers into smaller modules
   (public imports unchanged).
 
