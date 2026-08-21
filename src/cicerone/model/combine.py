@@ -10,15 +10,19 @@ from cicerone.reasons import SOURCE_CONTRIBS_COLUMN
 
 
 def _as_rank(value: object) -> int:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return int(float(str(value)))
-    return int(value)
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return int(value)
+    return int(float(str(value)))
 
 
 def _as_float(value: object) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return float(str(value))
-    return float(value)
+    if isinstance(value, bool):
+        return float(value)
+    if isinstance(value, (int, float)):
+        return float(value)
+    return float(str(value))
 
 
 def _priority_contrib(label: object, rank: object) -> list[dict[str, object]]:

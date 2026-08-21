@@ -250,8 +250,12 @@ def test_combine_by_weighted_fusion_keeps_per_source_contribs():
     assert contribs[1]["contribution"] == pytest.approx(0.5 / 4.0)
 
 
-def test_as_rank_and_float_parse_strings():
+def test_as_rank_and_float_parse_strings_and_bools():
     from cicerone.model.combine import _as_float, _as_rank
 
     assert _as_rank("3") == 3
     assert _as_float("0.5") == pytest.approx(0.5)
+    assert _as_rank(True) == 1
+    assert _as_rank(False) == 0
+    assert _as_float(True) == pytest.approx(1.0)
+    assert _as_float(False) == pytest.approx(0.0)
