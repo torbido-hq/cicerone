@@ -96,6 +96,9 @@ test('googleMeasurementId canonicalizes the runtime id once', () => {
 	const harness = installGtagHarness({ measurementId: ' g-abc123 ' });
 	try {
 		assert.equal(googleMeasurementId(), 'G-ABC123');
+		assert.equal(googleMeasurementId(), 'G-ABC123');
+		globalThis.__CICERONE_GA_ID = 'GT-XYZ9';
+		assert.equal(googleMeasurementId(), 'GT-XYZ9');
 	} finally {
 		harness.restore();
 	}

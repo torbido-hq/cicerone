@@ -87,7 +87,9 @@ if(stored)gtag('consent','update',stored);
 }
 
 export function buildGtagConfigScript(measurementId) {
-	return `gtag('js',new Date());gtag('config',${JSON.stringify(canonicalGaMeasurementId(measurementId))});`;
+	const id = canonicalGaMeasurementId(measurementId);
+	if (!id) return '';
+	return `gtag('js',new Date());gtag('config',${JSON.stringify(id)});`;
 }
 
 export function analyticsHead(measurementId = gaMeasurementId()) {

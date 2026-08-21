@@ -38,8 +38,17 @@ export function updateGtagConsent(state) {
 	}
 }
 
+const UNSET_GA_ID = Symbol('ga-id');
+let cachedRawMeasurementId = UNSET_GA_ID;
+let cachedCanonicalMeasurementId = '';
+
 export function googleMeasurementId() {
-	return canonicalGaMeasurementId(globalThis.__CICERONE_GA_ID) || GA_MEASUREMENT_ID;
+	const raw = globalThis.__CICERONE_GA_ID;
+	if (raw !== cachedRawMeasurementId) {
+		cachedRawMeasurementId = raw;
+		cachedCanonicalMeasurementId = canonicalGaMeasurementId(raw);
+	}
+	return cachedCanonicalMeasurementId || GA_MEASUREMENT_ID;
 }
 
 export function loadGoogleTag() {

@@ -87,6 +87,8 @@ test('buildGtagConfigScript quotes the measurement id', () => {
 		buildGtagConfigScript(' g-abc123 '),
 		`gtag('js',new Date());gtag('config',"G-ABC123");`,
 	);
+	assert.equal(buildGtagConfigScript(''), '');
+	assert.equal(buildGtagConfigScript('UA-123'), '');
 });
 
 test('analyticsHead is empty without a measurement id', () => {
