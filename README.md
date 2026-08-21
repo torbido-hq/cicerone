@@ -96,7 +96,7 @@ lightfm/rectools/implicit/torch, never trains or imports):
 | Method | Path | Description |
 | --- | --- | --- |
 | `GET` | `/health` | Liveness probe (no auth) |
-| `GET` | `/recommendations/{user_id}` | Precomputed top-K for that user |
+| `GET` | `/recommendations/{user_id}` | Precomputed top-K for that user (optional `reasons`) |
 | `GET` | `/metrics` | Prometheus text format (no bearer token; optional `X-Metrics-Token`) |
 | `POST` | `/events` | Incremental ingest when `[events]` `kind = "webhook"` |
 | `GET` | `/docs` / `/redoc` | Interactive OpenAPI docs (Swagger / ReDoc) |

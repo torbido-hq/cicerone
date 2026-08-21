@@ -38,7 +38,9 @@ flowchart LR
    or per-user blending.
 5. Apply eligibility (hard allowlist) and boosts (soft re-rank).
 6. Write `recommendations` + a run `manifest` (and an items snapshot so
-   serve can filter by category / availability).
+   serve can filter by category / availability). After boosts,
+   `[job.explain]` (default on) persists a `reasons` JSON column — see
+   [Why this item](#why-this-item).
 
 Full `job.run()` is the drift backstop (cron or `POST /trigger/retrain`).
 

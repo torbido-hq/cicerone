@@ -258,9 +258,12 @@ rectools/lightfm/implicit/torch needed in that process or its request path):
   `GET /recommendations/{user_id}` (`limit`/`k`, `category`,
   `exclude_unavailable`) behind `http_auth.require_bearer_token`. Unknown
   users fall back to the precomputed `__cold_start__` list rather than 404.
-  Responses include `generated_at` from the run manifest. Pydantic models in
+  Responses include `generated_at` from the run manifest. Each item may
+  include `reasons` (contributing sources, boost hits, similar history
+  items) when the batch job wrote the optional column. Pydantic models in
   `serve_schemas.py` populate `/openapi.json` (and `/docs` / `/redoc`);
-  `export_serve_openapi` writes the checked-in copy under `docs/openapi/`.
+  `export_serve_openapi` writes the checked-in copy under `docs/openapi/`
+  (the docs site copies it to `website/public/openapi/` at build time).
   Integrators can call the same contract via `serve_client.ServeClient`, the
   snippets in `examples/serve/`, or the `x-codeSamples` embedded in OpenAPI /
   ReDoc (Ruby, Python, JavaScript, Shell).
@@ -326,7 +329,9 @@ never imports `cicerone.model`/`dataset`/`automl`.
   Lookup reads the output store directly (no serve hop). `k` is
   `min(job.top_k, dashboard.lookup_k)` (default 20). Missing users fall
   back to `__cold_start__` / popular-latest rows with a badge; `category`
-  is joined from the items snapshot when that column exists.
+  is joined from the items snapshot when that column exists. When `reasons`
+  is present, the table shows a short Why summary (source labels, top
+  similar item).
 - `job.run()` writes exactly one manifest per run via a `try`/`finally`,
   with a consistent key set (`status: "success"|"failed"`, `error`) on both
   the success and failure paths, so a failed run is no longer silently
