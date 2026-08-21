@@ -127,18 +127,28 @@ def _is_missing(value: object) -> bool:
     return bool(result) if isinstance(result, bool) else False
 
 
+def _coerce_float(value: object) -> float | None:
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if number != number:
+        return None
+    return number
+
+
 def _format_rank(value: object) -> str:
-    number = pd.to_numeric(value, errors="coerce")
-    if _is_missing(number):
+    number = _coerce_float(value)
+    if number is None:
         return MISSING
     return str(int(number))
 
 
 def _format_score(value: object) -> str:
-    number = pd.to_numeric(value, errors="coerce")
-    if _is_missing(number):
+    number = _coerce_float(value)
+    if number is None:
         return MISSING
-    return f"{float(number):.4f}"
+    return f"{number:.4f}"
 
 
 def _format_text(value: object) -> str:
