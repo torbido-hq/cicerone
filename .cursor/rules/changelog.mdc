@@ -16,6 +16,17 @@ has site work.
 Product is the `cicerone` package: job, serve, dashboard app, events, I/O,
 CLI, config, models.
 
+Split lives only in this file. Keep the `changelog.mdc` line in
+[agent-policy-source.mdc](agent-policy-source.mdc) in sync; do not fork a
+second copy of the split.
+
+## Borderline
+
+- Logo / dashboard CSS in `src/cicerone/static/`: product. The same asset
+  only under `website/`: not.
+- `docs/*.md` or OpenAPI copied onto the site: changelog the **package**
+  change. A site-only rewrite of those pages: not.
+
 ## Do
 
 - Put new notes only under `## [Unreleased]` on the train you are
