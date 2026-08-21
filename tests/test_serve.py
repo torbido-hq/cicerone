@@ -29,6 +29,7 @@ class _FakeReader:
         self._items = items
         self._items_version = 0
         self.refresh_calls = 0
+        self.get_items_calls = 0
 
     def refresh(self) -> None:
         self.refresh_calls += 1
@@ -39,6 +40,7 @@ class _FakeReader:
         return rows.head(k).reset_index(drop=True)
 
     def get_items(self) -> pd.DataFrame | None:
+        self.get_items_calls += 1
         return self._items
 
     def items_version(self) -> int:
@@ -139,6 +141,7 @@ def test_items_filter_cache_normalizes_once_per_refresh():
     )
     items_a, available_a, by_cat_a = cache.get()
     items_b, available_b, by_cat_b = cache.get()
+    assert reader.get_items_calls == 1
     assert items_a is items_b
     assert available_a is available_b
     assert by_cat_a is by_cat_b

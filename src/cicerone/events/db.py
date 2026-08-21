@@ -39,6 +39,7 @@ _FETCH_COLUMNS = (
     "id",
 )
 _ROW_IDENTITY_KEYS = ("id", "rowid", "ctid")
+_CTID_TUPLE = re.compile(r"\((\d+),(\d+)\)")
 _EVENTS_QUERY_FORBIDDEN = re.compile(
     r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|"
     r"COPY|CALL|EXEC|EXECUTE|MERGE|REPLACE|ATTACH|DETACH)\b",
@@ -81,6 +82,28 @@ def _row_identity(payload: dict[str, Any]) -> str | None:
     return None
 
 
+def _identity_sort_key(event_id: str) -> tuple[str, tuple[str, ...]]:
+    """Numeric order for synthetic identities; suffixes stay strings."""
+    for prefix in ("id:", "rowid:"):
+        if event_id.startswith(prefix):
+            rest = event_id[len(prefix) :]
+            try:
+                return (prefix, (f"{int(rest):020d}",))
+            except ValueError:
+                return (prefix, (rest,))
+    if event_id.startswith("ctid:"):
+        rest = event_id[5:].replace(" ", "")
+        match = _CTID_TUPLE.fullmatch(rest)
+        if match:
+            return ("ctid:", (f"{int(match.group(1)):020d}", f"{int(match.group(2)):020d}"))
+        return ("ctid:", ("", rest))
+    return ("", (event_id,))
+
+
+def _cursor_tuple(occurred_at: datetime, event_id: str) -> tuple[datetime, tuple[str, tuple[str, ...]]]:
+    return (occurred_at, _identity_sort_key(event_id))
+
+
 def _stable_event_id(payload: dict[str, Any], occurred_at: datetime) -> str:
     existing = payload.get("event_id") or payload.get("idempotency_key")
     if existing not in (None, ""):
@@ -100,14 +123,14 @@ def _stable_event_id(payload: dict[str, Any], occurred_at: datetime) -> str:
     )
 
 
-def _cursor_key(event: NormalizedEvent) -> tuple[datetime, str]:
-    return (event.occurred_at, event.event_id)
+def _cursor_key(event: NormalizedEvent) -> tuple[datetime, tuple[str, tuple[str, ...]]]:
+    return _cursor_tuple(event.occurred_at, event.event_id)
 
 
-def _cursor_key_from_payload(payload: dict[str, Any]) -> tuple[datetime, str]:
+def _cursor_key_from_payload(payload: dict[str, Any]) -> tuple[datetime, tuple[str, tuple[str, ...]]]:
     """Lag path: parse occurred_at + stable id without full normalize_event."""
     occurred_at = _db_occurred_at(payload.get("occurred_at"))
-    return (occurred_at, _stable_event_id(payload, occurred_at))
+    return _cursor_tuple(occurred_at, _stable_event_id(payload, occurred_at))
 
 
 def _row_to_event(payload: dict[str, Any]) -> NormalizedEvent:
@@ -191,7 +214,7 @@ class DbEventSource(EventSource):
 
         out: list[NormalizedEvent] = []
         with self._lock:
-            cursor = (self._watermark_at, self._watermark_event_id)
+            cursor = _cursor_tuple(self._watermark_at, self._watermark_event_id)
             for event in candidates:
                 if len(out) >= max_events:
                     break
@@ -217,8 +240,9 @@ class DbEventSource(EventSource):
                 if event is None:
                     continue
                 key = _cursor_key(event)
-                if key > (self._watermark_at, self._watermark_event_id):
-                    self._watermark_at, self._watermark_event_id = key
+                if key > _cursor_tuple(self._watermark_at, self._watermark_event_id):
+                    self._watermark_at = event.occurred_at
+                    self._watermark_event_id = event.event_id
                     advanced = True
             if advanced:
                 self._persist_watermark_unlocked()
@@ -346,7 +370,7 @@ class DbEventSource(EventSource):
         self, engine: Engine, watermark_at: datetime, watermark_event_id: str
     ) -> int | None:
         # Same synthetic-id path as poll. Cap the scan; None = unknown / too large.
-        cursor = (watermark_at, watermark_event_id)
+        cursor = _cursor_tuple(watermark_at, watermark_event_id)
         rows = self._fetch_rows(engine, watermark_at, watermark_event_id, limit=_LAG_SCAN_LIMIT)
         count = sum(1 for payload in rows if _cursor_key_from_payload(payload) > cursor)
         if len(rows) >= _LAG_SCAN_LIMIT:

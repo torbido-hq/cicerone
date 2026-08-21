@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 from sqlalchemy import create_engine
 
-from cicerone.events.db import DbEventSource, _row_identity, _stable_event_id
+from cicerone.events.db import DbEventSource, _identity_sort_key, _row_identity, _stable_event_id
 from cicerone.events.normalize import EventNormalizeError
 from cicerone.events.registry import build_event_source, registered_event_source_kinds
 
@@ -377,6 +377,41 @@ def test_db_events_query_duplicate_payload_uses_projected_id(tmp_path):
     polled = list(source.poll(10))
     assert len(polled) == 2
     assert {event.event_id for event in polled} == {"id:1", "id:2"}
+
+
+def test_db_numeric_id_cursor_orders_nine_before_ten(tmp_path):
+    url = _sqlite_url(tmp_path)
+    row = {
+        "user_id": "u1",
+        "item_id": "i1",
+        "event_type": "purchase",
+        "quantity": 1,
+        "occurred_at": "2026-08-13T12:00:00+00:00",
+    }
+    _seed_events(url, [{**row, "id": 9}, {**row, "id": 10}, {**row, "id": 11}])
+    source = DbEventSource({"database_url": url, "initial_watermark": "2026-08-01T00:00:00Z"})
+    source.connect()
+    first = list(source.poll(1))
+    assert len(first) == 1
+    assert first[0].event_id == "id:9"
+    source.ack([first[0].event_id])
+    rest = list(source.poll(10))
+    assert {event.event_id for event in rest} == {"id:10", "id:11"}
+
+
+def test_identity_sort_key_orders_numeric_ids_and_ctid():
+    assert _identity_sort_key("id:9") < _identity_sort_key("id:10")
+    assert _identity_sort_key("id:9") < _identity_sort_key("id:11")
+    assert _identity_sort_key("rowid:00000000000000000009") < _identity_sort_key("rowid:00000000000000000010")
+    assert _identity_sort_key("ctid:(0,9)") < _identity_sort_key("ctid:(0,10)")
+    parsed = _identity_sort_key("ctid:(0,9)")
+    junk = _identity_sort_key("ctid:not-a-tuple")
+    assert parsed != junk
+    assert parsed < junk or junk < parsed
+    numeric = _identity_sort_key("id:9")
+    raw = _identity_sort_key("id:not-an-int")
+    assert numeric != raw
+    assert numeric < raw or raw < numeric
 
 
 def test_row_identity_prefers_id_then_rowid_then_ctid():

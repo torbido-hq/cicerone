@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Hashable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
@@ -119,6 +121,17 @@ class _StrategyFrames:
     latest_available: bool
 
 
+@dataclass(frozen=True)
+class _StrategyRecommendJob:
+    slot: int
+    name: str
+    source_label: str
+    personalized: bool
+    recommend_users: list
+    allowed_items: list[Any] | None
+    cache_key: tuple[Hashable, ...]
+
+
 def _resolve_cohort_plan(
     built: BuiltDataset,
     config: FeatureConfig,
@@ -140,9 +153,9 @@ def _resolve_cohort_plan(
     has_boosts = bool(config.boosts)
     recommend_k = boost_overfetch_k(top_k, has_boosts, config.boost_overfetch_factor)
 
-    known_users = set(dataset.user_id_map.external_ids)
+    known_users = {str(user_id) for user_id in dataset.user_id_map.external_ids}
     unique_target_users = list(dict.fromkeys(target_users))
-    has_any_warm_user = bool(known_users.intersection(unique_target_users))
+    has_any_warm_user = any(str(user_id) in known_users for user_id in unique_target_users)
     needs_interacting_users = any(
         STRATEGIES[name].requires_interactions for name in recommend_models if name in STRATEGIES
     )
@@ -202,6 +215,7 @@ def _recommend_per_strategy(
     blending_latest_date_columns: tuple[str, ...],
     top_k: int,
     recommend_cache: RecommendCache | None = None,
+    max_workers: int = 1,
 ) -> _StrategyFrames:
     frames: list[pd.DataFrame] = []
     personalized_frames: list[pd.DataFrame] = []
@@ -220,6 +234,9 @@ def _recommend_per_strategy(
         )
 
     dataset = built.dataset
+    slots: list[pd.DataFrame | None] = []
+    slot_meta: list[tuple[bool, bool]] = []
+    jobs: list[_StrategyRecommendJob] = []
     for name in recommend_models:
         strategy = STRATEGIES[name]
         if strategy.personalized and not cohort_plan.has_any_warm_user:
@@ -233,9 +250,9 @@ def _recommend_per_strategy(
                 continue
 
             if strategy.personalized:
-                cohort_warm = [u for u in cohort_users if u in cohort_plan.known_users]
+                cohort_warm = [u for u in cohort_users if str(u) in cohort_plan.known_users]
                 if strategy.requires_interactions:
-                    cohort_warm = [u for u in cohort_warm if u in cohort_plan.interacting_users]
+                    cohort_warm = [u for u in cohort_warm if str(u) in cohort_plan.interacting_users]
                 if not cohort_warm:
                     continue
                 recommend_users = cohort_warm
@@ -248,34 +265,68 @@ def _recommend_per_strategy(
                 cohort_key_value,
                 cohort_plan.recommend_k,
                 _items_fingerprint(allowed_items),
+                _items_fingerprint(recommend_users),
                 bool(strategy.personalized),
                 _dataset_fingerprint(dataset),
             )
             cached = recommend_cache.get(cache_key) if recommend_cache is not None else None
             if cached is not None:
-                recs = cached.copy()
+                slots.append(cached.copy())
             else:
+                jobs.append(
+                    _StrategyRecommendJob(
+                        slot=len(slots),
+                        name=name,
+                        source_label=strategy.source_label,
+                        personalized=strategy.personalized,
+                        recommend_users=recommend_users,
+                        allowed_items=allowed_items,
+                        cache_key=cache_key,
+                    )
+                )
+                slots.append(None)
+            slot_meta.append((strategy.personalized, name == "popular"))
+
+    if jobs:
+        model_locks = {name: threading.Lock() for name in {job.name for job in jobs}}
+
+        def _run_job(job: _StrategyRecommendJob) -> tuple[int, pd.DataFrame]:
+            with model_locks[job.name]:
                 recs = (
-                    models[name]
+                    models[job.name]
                     .recommend(
-                        users=recommend_users,
+                        users=job.recommend_users,
                         dataset=dataset,
                         k=cohort_plan.recommend_k,
-                        filter_viewed=strategy.personalized,
-                        items_to_recommend=allowed_items,
+                        filter_viewed=job.personalized,
+                        items_to_recommend=job.allowed_items,
                     )
                     .copy()
                 )
-                recs[SOURCE_COLUMN] = strategy.source_label
-                recs[WEIGHT_COLUMN] = 1.0
-                if recommend_cache is not None:
-                    recommend_cache[cache_key] = recs.copy()
-            frames.append(recs)
-            if blending_enabled:
-                if strategy.personalized:
-                    personalized_frames.append(recs)
-                elif name == "popular":
-                    popular_frames.append(recs)
+            recs[SOURCE_COLUMN] = job.source_label
+            recs[WEIGHT_COLUMN] = 1.0
+            return job.slot, recs
+
+        workers = max(1, int(max_workers))
+        if workers > 1 and len(jobs) > 1:
+            with ThreadPoolExecutor(max_workers=min(workers, len(jobs))) as pool:
+                filled = list(pool.map(_run_job, jobs))
+        else:
+            filled = [_run_job(job) for job in jobs]
+        for job, (slot, recs) in zip(jobs, filled, strict=True):
+            slots[slot] = recs
+            if recommend_cache is not None:
+                recommend_cache[job.cache_key] = recs.copy()
+
+    for recs, (personalized, is_popular) in zip(slots, slot_meta, strict=True):
+        if recs is None:
+            raise RuntimeError("strategy recommend slot was not filled")
+        frames.append(recs)
+        if blending_enabled:
+            if personalized:
+                personalized_frames.append(recs)
+            elif is_popular:
+                popular_frames.append(recs)
 
     if blending_enabled and latest_available and date_column is not None and built.items is not None:
         latest_k = cohort_plan.recommend_k if cohort_plan.has_boosts else top_k
@@ -440,11 +491,13 @@ def recommend_with_models(
     rrf_k: float | None = None,
     run_plan: ModelRunPlan | None = None,
     recommend_cache: RecommendCache | None = None,
+    max_workers: int = 1,
 ) -> pd.DataFrame:
     """Recommend + combine on already-fitted strategies (no fit).
 
-    ``recommend_cache`` keys include strategy, cohort, k, allowlist, filter_viewed,
-    and dataset identity so a shared dict is safe across differing inputs.
+    ``recommend_cache`` keys include strategy, cohort, k, allowlist, user set,
+    filter_viewed, and dataset identity so a shared dict is safe across
+    differing recommend() inputs.
     """
     blending = config.blending
     blending_enabled = blending.enabled
@@ -486,6 +539,7 @@ def recommend_with_models(
         blending_latest_date_columns=tuple(blending.latest_date_columns),
         top_k=top_k,
         recommend_cache=recommend_cache,
+        max_workers=max_workers,
     )
     combined = _combine_strategy_frames(
         models,
@@ -555,4 +609,5 @@ def train_and_recommend(
         rrf_k=rrf_k,
         run_plan=run_plan,
         recommend_cache=recommend_cache,
+        max_workers=max_workers,
     )

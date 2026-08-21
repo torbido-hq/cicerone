@@ -99,3 +99,10 @@ def test_format_recommendation_rows_formats_score():
     rows = format_recommendation_rows(recs, category_column=None)
 
     assert rows == [{"rank": "1", "item_id": "i1", "score": "0.9000", "source": "personalized"}]
+
+
+def test_format_recommendation_rows_empty_text_is_placeholder():
+    recs = pd.DataFrame([{"item_id": "i1", "rank": 1, "score": 0.1, "source": "", "category": ""}])
+    rows = format_recommendation_rows(recs, category_column="category")
+    assert rows[0]["source"] == MISSING
+    assert rows[0]["category"] == MISSING

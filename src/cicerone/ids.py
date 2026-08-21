@@ -49,4 +49,4 @@ def interacting_external_user_ids(built: BuiltDataset) -> set[Hashable]:
     if interactions is None or interactions.empty:
         return set()
     user_col = interactions_user_column(interactions)
-    return set(interactions[user_col].unique())
+    return set(interactions[user_col].astype(str).unique())

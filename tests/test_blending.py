@@ -536,6 +536,65 @@ def test_blend_for_users_shared_latest_avoids_cartesian_frame():
     assert "lat1" in set(out[Columns.Item])
 
 
+def test_blend_for_users_shared_latest_matches_cartesian_scores():
+    config = _blending(curve="linear", saturate_at=1.0, popular_share=0.5)
+    empty = pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, "source"])
+    latest = pd.DataFrame(
+        [
+            {
+                Columns.User: "u1",
+                Columns.Item: "lat1",
+                Columns.Rank: 1,
+                Columns.Score: 2.0,
+                "source": LATEST_SOURCE,
+            },
+            {
+                Columns.User: "u1",
+                Columns.Item: "lat2",
+                Columns.Rank: 2,
+                Columns.Score: 1.0,
+                "source": LATEST_SOURCE,
+            },
+        ]
+    )
+    kwargs = dict(
+        personalized=empty,
+        popular=empty,
+        counts={"u1": 0},
+        target_users=["u1"],
+        config=config,
+        top_k=2,
+        latest_available=True,
+    )
+    cartesian = blend_for_users(latest=latest, **kwargs)
+    indexed = blend_for_users(latest=None, shared_latest=[("lat1", 1, 2.0), ("lat2", 2, 1.0)], **kwargs)
+    pd.testing.assert_frame_equal(
+        cartesian.sort_values([Columns.Item]).reset_index(drop=True),
+        indexed.sort_values([Columns.Item]).reset_index(drop=True),
+    )
+
+
+def test_blend_for_users_latest_by_user_ignores_index_users_not_in_targets():
+    config = _blending(curve="linear", saturate_at=1.0, popular_share=0.5)
+    empty = pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, "source"])
+    out = blend_for_users(
+        personalized=empty,
+        popular=empty,
+        latest=None,
+        counts={"u1": 0},
+        target_users=["u1"],
+        config=config,
+        top_k=2,
+        latest_available=True,
+        latest_by_user={
+            "u1": [("a", 1, 2.0)],
+            "extra": [("z", 1, 9.0)],
+        },
+    )
+    assert list(out[Columns.User]) == ["u1"]
+    assert list(out[Columns.Item]) == ["a"]
+
+
 def test_blend_for_users_latest_by_user_avoids_cartesian_frame():
     config = _blending(curve="linear", saturate_at=1.0, popular_share=0.5)
     empty = pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, "source"])
@@ -587,3 +646,178 @@ def test_blend_for_users_latest_by_user_normalizes_non_string_keys():
         latest_by_user={"1": [("b", 1, 2.0)]},
     )
     assert list(out_str_keys[Columns.Item]) == ["b"]
+
+
+def test_blend_for_users_stringifies_int_users_and_count_keys():
+    config = _blending(curve="linear", saturate_at=10.0, popular_share=0.5)
+    empty = pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, "source"])
+    personalized = pd.DataFrame(
+        [
+            {
+                Columns.User: 1,
+                Columns.Item: "p1",
+                Columns.Rank: 1,
+                Columns.Score: 9.0,
+                "source": PERSONALIZED_SOURCE,
+            }
+        ]
+    )
+    out = blend_for_users(
+        personalized=personalized,
+        popular=empty,
+        latest=None,
+        counts={1: 10},
+        target_users=["1"],
+        config=config,
+        top_k=1,
+        latest_available=False,
+    )
+    assert list(out[Columns.User]) == ["1"]
+    assert list(out[Columns.Item]) == ["p1"]
+
+
+def test_blend_for_users_empty_target_users_returns_empty_frame():
+    config = _blending(curve="linear", saturate_at=10.0)
+    personalized = pd.DataFrame(
+        [
+            {
+                Columns.User: "u1",
+                Columns.Item: "i1",
+                Columns.Rank: 1,
+                Columns.Score: 1.0,
+                "source": PERSONALIZED_SOURCE,
+            }
+        ]
+    )
+    popular = pd.DataFrame(
+        [
+            {
+                Columns.User: "u1",
+                Columns.Item: "pop1",
+                Columns.Rank: 1,
+                Columns.Score: 1.0,
+                "source": POPULAR_SOURCE,
+            }
+        ]
+    )
+    out = blend_for_users(
+        personalized=personalized,
+        popular=popular,
+        latest=None,
+        counts={"u1": 10},
+        config=config,
+        top_k=3,
+        latest_available=False,
+        target_users=[],
+    )
+    assert out.empty
+    assert list(out.columns) == [Columns.User, Columns.Item, Columns.Rank, Columns.Score, "source"]
+
+
+def test_blend_for_users_zero_personalized_weight_skips_user_without_other_sources():
+    config = _blending(curve="linear", saturate_at=10.0, popular_share=0.5)
+    assert source_weights(0, config, latest_available=False)[PERSONALIZED_SOURCE] == 0.0
+    personalized = pd.DataFrame(
+        [
+            {
+                Columns.User: "rich",
+                Columns.Item: "p1",
+                Columns.Rank: 1,
+                Columns.Score: 9.0,
+                "source": PERSONALIZED_SOURCE,
+            },
+            {
+                Columns.User: "zero",
+                Columns.Item: "pz1",
+                Columns.Rank: 1,
+                Columns.Score: 5.0,
+                "source": PERSONALIZED_SOURCE,
+            },
+        ]
+    )
+    popular = pd.DataFrame(
+        [
+            {
+                Columns.User: "rich",
+                Columns.Item: "pop1",
+                Columns.Rank: 1,
+                Columns.Score: 1.0,
+                "source": POPULAR_SOURCE,
+            }
+        ]
+    )
+    out = blend_for_users(
+        personalized=personalized,
+        popular=popular,
+        latest=None,
+        counts={"rich": 10, "zero": 0},
+        target_users=["rich", "zero"],
+        config=config,
+        top_k=3,
+        latest_available=False,
+    )
+    assert set(out[Columns.User]) == {"rich"}
+
+
+def test_blend_for_users_golden_top_k_across_weight_groups():
+    config = _blending(curve="linear", saturate_at=10.0, popular_share=0.5, rrf_k=1.0)
+    personalized = pd.DataFrame(
+        [
+            {
+                Columns.User: "rich",
+                Columns.Item: "p1",
+                Columns.Rank: 1,
+                Columns.Score: 9.0,
+                "source": PERSONALIZED_SOURCE,
+            },
+            {
+                Columns.User: "mid",
+                Columns.Item: "p1",
+                Columns.Rank: 1,
+                Columns.Score: 9.0,
+                "source": PERSONALIZED_SOURCE,
+            },
+        ]
+    )
+    popular = pd.DataFrame(
+        [
+            {
+                Columns.User: "cold",
+                Columns.Item: "pop1",
+                Columns.Rank: 1,
+                Columns.Score: 1.0,
+                "source": POPULAR_SOURCE,
+            },
+            {
+                Columns.User: "mid",
+                Columns.Item: "pop1",
+                Columns.Rank: 1,
+                Columns.Score: 1.0,
+                "source": POPULAR_SOURCE,
+            },
+        ]
+    )
+    out = blend_for_users(
+        personalized=personalized,
+        popular=popular,
+        latest=None,
+        counts={"cold": 0, "mid": 5, "rich": 10},
+        target_users=["rich", "mid", "cold"],
+        config=config,
+        top_k=3,
+        latest_available=True,
+        shared_latest=[("lat1", 1, 2.0)],
+    )
+    by_user = {
+        user: list(zip(group[Columns.Item], group["source"], strict=True))
+        for user, group in out.groupby(Columns.User, sort=False)
+    }
+    assert by_user["cold"] == [("lat1", LATEST_SOURCE), ("pop1", POPULAR_SOURCE)]
+    assert by_user["mid"] == [
+        ("p1", PERSONALIZED_SOURCE),
+        ("lat1", LATEST_SOURCE),
+        ("pop1", POPULAR_SOURCE),
+    ]
+    assert by_user["rich"] == [("p1", PERSONALIZED_SOURCE)]
+    rich = out[out[Columns.User] == "rich"].iloc[0]
+    assert math.isclose(float(rich[Columns.Score]), 1.0 / 2.0)

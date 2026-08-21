@@ -14,6 +14,7 @@ import pandas as pd
 
 from cicerone.artifact import ARTIFACT_SCHEMA_VERSION, build_artifact, dumps_artifact
 from cicerone.automl import evaluate_candidates, select_best_candidate
+from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import load_settings
 from cicerone.dataset import build_dataset
 from cicerone.feature_config import load_feature_config
@@ -65,6 +66,13 @@ def _read_input(source: InputSource) -> tuple[pd.DataFrame, pd.DataFrame | None,
 def _ensure_fence(fence_check: Callable[[], bool] | None) -> None:
     if fence_check is not None and not fence_check():
         raise LockLostError("retrain lock lost before write")
+
+
+def _recommendation_user_count(recommendations: pd.DataFrame) -> int:
+    if recommendations.empty or "user_id" not in recommendations.columns:
+        return 0
+    user_ids = recommendations["user_id"].astype(str)
+    return int(user_ids[user_ids != COLD_START_USER_ID].nunique())
 
 
 def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None = None) -> None:
@@ -174,13 +182,16 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
         _ensure_fence(fence_check)
         try:
             if artifact_bytes is not None:
+                _ensure_fence(fence_check)
                 sink.write_model_artifact(artifact_bytes)
                 manifest["artifact_written"] = True
                 manifest["artifact_schema_version"] = ARTIFACT_SCHEMA_VERSION
 
             if items is not None and not items.empty:
+                _ensure_fence(fence_check)
                 sink.write_items_snapshot(items)
 
+            _ensure_fence(fence_check)
             sink.write_recommendations(recommendations)
             outputs_written = True
         except Exception:
@@ -200,7 +211,7 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
                 "status": "success",
                 "n_events": int(len(events)),
                 "n_target_users": len(target_users),
-                "n_users_with_recommendations": int(recommendations["user_id"].nunique()),
+                "n_users_with_recommendations": _recommendation_user_count(recommendations),
                 "n_items": int(built.dataset.item_id_map.external_ids.shape[0]),
                 "models": ",".join(run_models),
                 "model_weights": model_weights_str,

@@ -8,6 +8,8 @@ import pandas as pd
 import pytest
 
 from cicerone import job
+from cicerone.blending import COLD_START_USER_ID
+from cicerone.job import _recommendation_user_count
 from cicerone.model import RRF_K
 
 REPO_FEATURES_CONFIG = Path(__file__).resolve().parents[1] / "config" / "features.toml"
@@ -88,6 +90,18 @@ def test_job_run_end_to_end_with_local_dataset_backend(tmp_path, monkeypatch):
     assert manifest["artifact_written"] is False
     assert manifest["artifact_schema_version"] is None
     assert not (output_dir / "model.artifact").exists()
+
+
+def test_recommendation_user_count_excludes_cold_start():
+    frame = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1"},
+            {"user_id": COLD_START_USER_ID, "item_id": "c1"},
+            {"user_id": "u1", "item_id": "i2"},
+        ]
+    )
+    assert _recommendation_user_count(frame) == 1
+    assert _recommendation_user_count(pd.DataFrame()) == 0
 
 
 def test_job_run_writes_model_artifact_when_enabled(tmp_path, monkeypatch):
@@ -584,7 +598,7 @@ def test_job_marks_partial_outputs_when_fence_lost_after_write(tmp_path, monkeyp
 
     def fence() -> bool:
         calls["n"] += 1
-        return calls["n"] < 2
+        return not (output_dir / "recommendations.parquet").exists()
 
     with pytest.raises(LockLostError, match="retrain lock lost before write"):
         job.run(fence_check=fence)
@@ -593,7 +607,7 @@ def test_job_marks_partial_outputs_when_fence_lost_after_write(tmp_path, monkeyp
     manifest = json.loads((output_dir / "manifest.json").read_text())
     assert manifest["status"] == "failed"
     assert manifest["partial_outputs"] is True
-    assert calls["n"] == 2
+    assert calls["n"] >= 2
 
 
 def test_run_guard_skips_job_writes_when_owned_is_false(tmp_path, monkeypatch):
