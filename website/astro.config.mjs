@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import starlightBlog from 'starlight-blog';
+import { loadEnv } from 'vite';
 import {
 	articleRedirects,
 	ARTICLES_PREFIX,
@@ -15,6 +16,7 @@ import { analyticsHead } from './src/lib/consent.mjs';
 const websiteRoot = dirname(fileURLToPath(import.meta.url));
 const articlesDir = articlesContentDir(websiteRoot);
 const production = process.env.NODE_ENV === 'production';
+const publicEnv = loadEnv(production ? 'production' : 'development', websiteRoot, 'PUBLIC_');
 
 const articlesPlugin = hasPublishedArticles(articlesDir, { production })
 	? [
@@ -99,7 +101,7 @@ export default defineConfig({
 				},
 			],
 			head: [
-				...analyticsHead(),
+				...analyticsHead(publicEnv.PUBLIC_GA_MEASUREMENT_ID),
 				{
 					tag: 'link',
 					attrs: { rel: 'preconnect', href: 'https://fonts.googleapis.com' },

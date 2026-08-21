@@ -8,6 +8,7 @@ import {
 	analyticsHead,
 	buildConsentInitScript,
 	buildGtagConfigScript,
+	gaMeasurementId,
 	isGaMeasurementId,
 	parseStoredConsent,
 } from './consent.mjs';
@@ -35,6 +36,10 @@ test('parseStoredConsent requires all consent-mode v2 keys', () => {
 	});
 });
 
+test('gaMeasurementId uses import.meta.env and is safe in Node', () => {
+	assert.equal(gaMeasurementId(), '');
+});
+
 test('buildConsentInitScript sets denied defaults before any update', () => {
 	const script = buildConsentInitScript();
 	assert.match(script, /consent','default'/);
@@ -42,6 +47,8 @@ test('buildConsentInitScript sets denied defaults before any update', () => {
 	assert.match(script, /"ad_user_data":"denied"/);
 	assert.match(script, /ads_data_redaction/);
 	assert.match(script, new RegExp(CONSENT_STORAGE_KEY));
+	assert.match(script, /try \{ raw=localStorage\.getItem/);
+	assert.match(script, /catch \(e\) \{\}/);
 	const defaultAt = script.indexOf("consent','default'");
 	const updateAt = script.indexOf("consent','update'");
 	assert.ok(defaultAt >= 0 && updateAt > defaultAt);

@@ -17,7 +17,11 @@ export function isGaMeasurementId(value) {
 }
 
 export function gaMeasurementId() {
-	return String(process.env.PUBLIC_GA_MEASUREMENT_ID || '').trim();
+	try {
+		return String(import.meta.env.PUBLIC_GA_MEASUREMENT_ID ?? '').trim();
+	} catch {
+		return '';
+	}
 }
 
 export function parseStoredConsent(raw) {
@@ -49,12 +53,16 @@ export function parseStoredConsent(raw) {
 export function buildConsentInitScript() {
 	return `(function(){
 ${parseStoredConsent.toString()}
+try {
 window.dataLayer=window.dataLayer||[];
 window.gtag=window.gtag||function(){dataLayer.push(arguments);};
 gtag('consent','default',${JSON.stringify({ ...CONSENT_DENIED, wait_for_update: 500 })});
 gtag('set','ads_data_redaction',true);
-var stored=parseStoredConsent(localStorage.getItem(${JSON.stringify(CONSENT_STORAGE_KEY)}));
+var raw=null;
+try { raw=localStorage.getItem(${JSON.stringify(CONSENT_STORAGE_KEY)}); } catch (e) {}
+var stored=parseStoredConsent(raw);
 if(stored)gtag('consent','update',stored);
+} catch (e) {}
 })();`;
 }
 
