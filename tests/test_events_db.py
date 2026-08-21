@@ -404,6 +404,14 @@ def test_identity_sort_key_orders_numeric_ids_and_ctid():
     assert _identity_sort_key("id:9") < _identity_sort_key("id:11")
     assert _identity_sort_key("rowid:00000000000000000009") < _identity_sort_key("rowid:00000000000000000010")
     assert _identity_sort_key("ctid:(0,9)") < _identity_sort_key("ctid:(0,10)")
+    parsed = _identity_sort_key("ctid:(0,9)")
+    junk = _identity_sort_key("ctid:not-a-tuple")
+    assert parsed != junk
+    assert parsed < junk or junk < parsed
+    numeric = _identity_sort_key("id:9")
+    raw = _identity_sort_key("id:not-an-int")
+    assert numeric != raw
+    assert numeric < raw or raw < numeric
 
 
 def test_row_identity_prefers_id_then_rowid_then_ctid():
