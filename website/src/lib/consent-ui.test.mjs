@@ -7,6 +7,7 @@ import {
 	applyConsentState,
 	initConsentBanner,
 	loadGoogleTag,
+	googleMeasurementId,
 	readStoredConsent,
 	tabWrapTarget,
 	updateGtagConsent,
@@ -89,6 +90,26 @@ test('updateGtagConsent no-ops when gtag is missing', () => {
 
 test('loadGoogleTag no-ops when gtag is missing', () => {
 	assert.doesNotThrow(() => loadGoogleTag());
+});
+
+test('googleMeasurementId canonicalizes the runtime id once', () => {
+	const harness = installGtagHarness({ measurementId: ' g-abc123 ' });
+	try {
+		assert.equal(googleMeasurementId(), 'G-ABC123');
+	} finally {
+		harness.restore();
+	}
+});
+
+test('loadGoogleTag leaves unloaded when document cannot inject a script', () => {
+	const harness = installGtagHarness({ document: { createElement: () => ({}) } });
+	try {
+		loadGoogleTag();
+		assert.equal(globalThis.__ciceroneGtagLoaded, false);
+		assert.equal(harness.calls.length, 0);
+	} finally {
+		harness.restore();
+	}
 });
 
 test('analyticsStorageJustGranted is only true on the denied-to-granted edge', () => {

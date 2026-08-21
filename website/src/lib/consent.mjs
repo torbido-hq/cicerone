@@ -16,8 +16,13 @@ export const CONSENT_ANALYTICS = Object.freeze({
 	analytics_storage: 'granted',
 });
 
+export function canonicalGaMeasurementId(value) {
+	const id = String(value ?? '').trim().toUpperCase();
+	return /^(?:G|GT)-[A-Z0-9]+$/.test(id) ? id : '';
+}
+
 export function isGaMeasurementId(value) {
-	return /^(?:G|GT)-[A-Z0-9]+$/.test(String(value || '').trim().toUpperCase());
+	return canonicalGaMeasurementId(value) !== '';
 }
 
 export const GA_MEASUREMENT_ID = 'G-E38EP8PJSR';
@@ -36,8 +41,8 @@ export function gaMeasurementId(env) {
 				typeof process !== 'undefined' ? process.env : undefined,
 			];
 	for (const source of sources) {
-		const value = String(source?.PUBLIC_GA_MEASUREMENT_ID ?? '').trim();
-		if (isGaMeasurementId(value)) return value.toUpperCase();
+		const id = canonicalGaMeasurementId(source?.PUBLIC_GA_MEASUREMENT_ID);
+		if (id) return id;
 	}
 	return GA_MEASUREMENT_ID;
 }
@@ -63,7 +68,7 @@ export function parseStoredConsent(raw) {
 }
 
 export function buildConsentInitScript(measurementId = gaMeasurementId()) {
-	const id = String(measurementId || '').trim().toUpperCase();
+	const id = canonicalGaMeasurementId(measurementId);
 	return `(function(){
 var CONSENT_KEYS=${JSON.stringify(CONSENT_KEYS)};
 ${parseStoredConsent.toString()}
@@ -82,11 +87,11 @@ if(stored)gtag('consent','update',stored);
 }
 
 export function buildGtagConfigScript(measurementId) {
-	return `gtag('js',new Date());gtag('config',${JSON.stringify(String(measurementId || '').trim())});`;
+	return `gtag('js',new Date());gtag('config',${JSON.stringify(canonicalGaMeasurementId(measurementId))});`;
 }
 
 export function analyticsHead(measurementId = gaMeasurementId()) {
-	const id = String(measurementId || '').trim().toUpperCase();
-	if (!isGaMeasurementId(id)) return [];
+	const id = canonicalGaMeasurementId(measurementId);
+	if (!id) return [];
 	return [{ tag: 'script', content: buildConsentInitScript(id) }];
 }

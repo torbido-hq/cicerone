@@ -9,11 +9,20 @@ import {
 	analyticsHead,
 	buildConsentInitScript,
 	buildGtagConfigScript,
+	canonicalGaMeasurementId,
 	GA_MEASUREMENT_ID,
 	gaMeasurementId,
 	isGaMeasurementId,
 	parseStoredConsent,
 } from './consent.mjs';
+
+test('canonicalGaMeasurementId trims and uppercases valid ids', () => {
+	assert.equal(canonicalGaMeasurementId('G-ABC123'), 'G-ABC123');
+	assert.equal(canonicalGaMeasurementId(' gt-xyz9 '), 'GT-XYZ9');
+	assert.equal(canonicalGaMeasurementId(''), '');
+	assert.equal(canonicalGaMeasurementId('UA-123'), '');
+	assert.equal(canonicalGaMeasurementId('G-'), '');
+});
 
 test('isGaMeasurementId accepts G- and GT- ids', () => {
 	assert.equal(isGaMeasurementId('G-ABC123'), true);
@@ -72,6 +81,10 @@ test('buildConsentInitScript sets denied defaults before any update', () => {
 test('buildGtagConfigScript quotes the measurement id', () => {
 	assert.equal(
 		buildGtagConfigScript('G-ABC123'),
+		`gtag('js',new Date());gtag('config',"G-ABC123");`,
+	);
+	assert.equal(
+		buildGtagConfigScript(' g-abc123 '),
 		`gtag('js',new Date());gtag('config',"G-ABC123");`,
 	);
 });

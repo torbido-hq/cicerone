@@ -3,7 +3,7 @@ import {
 	CONSENT_DENIED,
 	CONSENT_STORAGE_KEY,
 	GA_MEASUREMENT_ID,
-	isGaMeasurementId,
+	canonicalGaMeasurementId,
 	parseStoredConsent,
 } from './consent.mjs';
 
@@ -39,17 +39,13 @@ export function updateGtagConsent(state) {
 }
 
 export function googleMeasurementId() {
-	const value = globalThis.__CICERONE_GA_ID;
-	if (typeof value === 'string' && isGaMeasurementId(value)) {
-		return value.trim().toUpperCase();
-	}
-	return GA_MEASUREMENT_ID;
+	return canonicalGaMeasurementId(globalThis.__CICERONE_GA_ID) || GA_MEASUREMENT_ID;
 }
 
 export function loadGoogleTag() {
 	try {
 		const id = googleMeasurementId();
-		if (!isGaMeasurementId(id)) return;
+		if (!id) return;
 		const gtag = globalThis.gtag;
 		if (typeof gtag !== 'function') return;
 		if (globalThis.__ciceroneGtagLoaded) {
@@ -57,12 +53,13 @@ export function loadGoogleTag() {
 			return;
 		}
 		const doc = globalThis.document;
-		if (doc?.createElement && doc.head?.appendChild) {
-			const script = doc.createElement('script');
-			script.async = true;
-			script.src = `https://www.googletagmanager.com/gtag/js?id=${id}`;
-			doc.head.appendChild(script);
+		if (typeof doc?.createElement !== 'function' || typeof doc.head?.appendChild !== 'function') {
+			return;
 		}
+		const script = doc.createElement('script');
+		script.async = true;
+		script.src = `https://www.googletagmanager.com/gtag/js?id=${id}`;
+		doc.head.appendChild(script);
 		gtag('js', new Date());
 		gtag('config', id);
 		globalThis.__ciceroneGtagLoaded = true;
