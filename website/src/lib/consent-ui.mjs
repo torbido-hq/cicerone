@@ -23,6 +23,10 @@ export function writeStoredConsent(state) {
 	}
 }
 
+export function analyticsStorageJustGranted(previous, next) {
+	return next.analytics_storage === 'granted' && previous?.analytics_storage !== 'granted';
+}
+
 export function updateGtagConsent(state) {
 	try {
 		const gtag = globalThis.gtag;
@@ -30,6 +34,23 @@ export function updateGtagConsent(state) {
 	} catch {
 		// gtag or window blocked
 	}
+}
+
+export function sendGtagPageView() {
+	try {
+		const gtag = globalThis.gtag;
+		if (typeof gtag !== 'function') return;
+		gtag('event', 'page_view');
+	} catch {
+		// gtag or window blocked
+	}
+}
+
+export function applyConsentState(state) {
+	const previous = readStoredConsent();
+	writeStoredConsent(state);
+	updateGtagConsent(state);
+	if (analyticsStorageJustGranted(previous, state)) sendGtagPageView();
 }
 
 export function dialogFocusables(root) {
@@ -87,8 +108,7 @@ export function initConsentBanner(doc = document) {
 	let lastFocus = null;
 
 	const apply = (state) => {
-		writeStoredConsent(state);
-		updateGtagConsent(state);
+		applyConsentState(state);
 		closeConsentDialog(root, lastFocus);
 		lastFocus = null;
 	};
