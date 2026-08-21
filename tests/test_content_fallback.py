@@ -363,6 +363,40 @@ def test_recommend_handles_mixed_non_string_ids():
     assert set(map(str, recs[Columns.Item])) <= {"1", "2", "3"}
 
 
+def test_recommend_matches_int_and_str_user_ids():
+    items = pd.DataFrame(
+        [
+            {"item_id": 1, "category": "beer"},
+            {"item_id": 2, "category": "beer"},
+        ]
+    )
+    interactions = pd.DataFrame(
+        {
+            Columns.User: [1],
+            Columns.Item: [1],
+            Columns.Weight: [1.0],
+            Columns.Datetime: [pd.Timestamp.utcnow()],
+        }
+    )
+    model = ContentFallbackModel(
+        feature_columns=[FeatureColumn(column="category", type="categorical")],
+        items=items,
+        interactions=interactions,
+        recommend_thread_min_users=1,
+    )
+    model.fit(_DummyDataset())
+    recs = model.recommend(
+        users=["1"],
+        dataset=_DummyDataset(),
+        k=5,
+        filter_viewed=True,
+        items_to_recommend=[1, 2],
+    )
+    assert not recs.empty
+    assert set(recs[Columns.User].astype(str)) == {"1"}
+    assert set(map(str, recs[Columns.Item])) == {"2"}
+
+
 def test_recommend_single_user_path_does_not_use_thread_pool(monkeypatch):
     class _ThreadPoolSpy:
         def __init__(self, *_, **__):
