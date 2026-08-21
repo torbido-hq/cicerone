@@ -56,7 +56,6 @@ export function loadGoogleTag() {
 			gtag('event', 'page_view');
 			return;
 		}
-		globalThis.__ciceroneGtagLoaded = true;
 		const doc = globalThis.document;
 		if (doc?.createElement && doc.head?.appendChild) {
 			const script = doc.createElement('script');
@@ -66,8 +65,9 @@ export function loadGoogleTag() {
 		}
 		gtag('js', new Date());
 		gtag('config', id);
+		globalThis.__ciceroneGtagLoaded = true;
 	} catch {
-		// gtag or DOM blocked
+		// gtag or DOM blocked; leave unloaded so a later call can retry
 	}
 }
 
