@@ -6,12 +6,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Fixed
-
-- Incremental popular/latest/boost ignore unknown, zero-weight, and negative events, and do not rewrite popular-only users in a mixed batch.
-- DB watermarks compare synthetic `id` / `ctid` numerically so same-timestamp `id:9` does not skip `id:10`.
-- Recommend cache keys include the user set; run manifest user counts omit `__cold_start__`.
-
 ## [0.6.2] - 2026-08-24
 
 ### Changed
@@ -28,7 +22,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Weighted fusion keeps source-label join as an O(groups) Python agg; a scale
   test records the baseline.
 
+### Fixed
+
+- Incremental popular/latest/boost ignore unknown, zero-weight, and negative events, and do not rewrite popular-only users in a mixed batch.
+- DB watermarks compare synthetic `id` / `ctid` numerically so same-timestamp `id:9` does not skip `id:10`.
+- Recommend cache keys include the user set; run manifest user counts omit `__cold_start__`.
+
 ## [0.6.1] - 2026-08-20
+
+### Changed
+
+- AutoML reuses per-strategy recommend frames across candidates in a fold.
+- Content-fallback scoring parallelizes across users; incremental merge groups events
+  by user once; latest ranking expansion uses NumPy repeat/tile.
+- Split `locks`, `policy`, and serve item-filter helpers into smaller modules
+  (public imports unchanged).
 
 ### Fixed
 
@@ -43,14 +51,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   before write (cron and trigger paths pass `owned()` as a fence).
 - DB event source distinguishes same-payload rows at one timestamp via table identity
   (`id` / SQLite `rowid` / Postgres `ctid`) so the watermark cannot skip a twin.
-
-### Changed
-
-- AutoML reuses per-strategy recommend frames across candidates in a fold.
-- Content-fallback scoring parallelizes across users; incremental merge groups events
-  by user once; latest ranking expansion uses NumPy repeat/tile.
-- Split `locks`, `policy`, and serve item-filter helpers into smaller modules
-  (public imports unchanged).
 
 ## [0.6.0] - 2026-08-20
 
@@ -192,16 +192,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Serve OpenAPI / ReDoc ``x-codeSamples`` (Ruby, Python, JavaScript, Shell)
   for `/health` and `/recommendations/{user_id}`.
 
-### Fixed
-
-- Redis lock `release()` joins the refresher (≤250ms) and ignores in-flight
-  refresh failures after an intentional stop, avoiding a `_mark_lost` race.
-- Retrain Prometheus labels use the real trigger source (`cron`, `s3-poll`,
-  `webhook`, …) instead of collapsing non-webhook to `poll`.
-- Serve fails closed when `features.toml` cannot be loaded (no silent disable
-  of availability filters).
-- Input poller treats local `stat` errors like S3 failures (log and continue).
-
 ### Changed
 
 - Blending warm path uses per-user / shared latest rankings without building
@@ -215,6 +205,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `io.options.read_parquet` / `validate_storage_options`, and
   `MISSING_TABLE_ERRORS`.
 - `cicerone.serve` package `__all__` exports only the public API.
+
+### Fixed
+
+- Redis lock `release()` joins the refresher (≤250ms) and ignores in-flight
+  refresh failures after an intentional stop, avoiding a `_mark_lost` race.
+- Retrain Prometheus labels use the real trigger source (`cron`, `s3-poll`,
+  `webhook`, …) instead of collapsing non-webhook to `poll`.
+- Serve fails closed when `features.toml` cannot be loaded (no silent disable
+  of availability filters).
+- Input poller treats local `stat` errors like S3 failures (log and continue).
 
 ## [0.5.0] - 2026-08-11
 
