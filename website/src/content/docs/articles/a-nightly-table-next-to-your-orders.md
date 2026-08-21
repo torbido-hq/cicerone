@@ -31,19 +31,19 @@ On a cron (default 03:00 UTC) the job:
 
 Your app joins that table to `products`. A purchase this afternoon does not change tonight’s ranks. ([Incremental events](https://cicerone.dev/incremental-events/) can refresh the bestsellers list between jobs. LightFM still waits for the cron.)
 
-In config the bestsellers model is named `popular`. In the table it shows up as `source = popular_fallback` when it filled in for someone LightFM could not personalize. Same list.
+In config the bestsellers model is named `popular`. In the table it shows up as `source` = `popular_fallback` when it filled in for someone LightFM could not personalize. Same list.
 
-Guests and brand-new accounts have no `user_id` on an order line. The job still writes them a list under the id `__cold_start__` — the mix with no personal history. Look that id up the same way you look up `'42'`.
+Guests and brand-new accounts have no `user_id` on an order line. The job still writes them a list under `'__cold_start__'` — the mix with no personal history. Look that id up the same way you look up `'42'`.
 
 ## What the job does
 
-You do not have 1–5 star ratings. You have purchases: a weak yes, and silence for everything else. Before any model, those rows become training weights: recent purchases count more; caps and `log1p(quantity)` apply. That recipe is [interaction weighting](https://cicerone.dev/how-it-works/#interaction-weighting). This walkthrough does not retell it.
+You do not have 1–5 star ratings. You have purchases: a weak yes, and silence for everything else. Before any model, those rows become training weights: recent purchases count more; caps and `log1p(quantity)` apply. The recipe is [interaction weighting](https://cicerone.dev/how-it-works/#interaction-weighting).
 
 Each night:
 
-1. LightFM builds a personalized list (people with similar purchases; optional tags like `category` help brand-new SKUs). The second list is weighted sales counts — the homepage bestsellers query, as the `popular` model.
+1. LightFM builds a personalized list (people with similar purchases; optional tags like `category` help brand-new SKUs). The second list is `popular`.
 2. Those two lists are mixed by **rank**, not by raw score. A LightFM number and a sales count are not the same unit. With little history, bestsellers win. With enough overlap, LightFM wins.
-3. The result is the table. `source` says who voted: `personalized`, `popular_fallback` (bestsellers filled in), `latest` (newest by item date), or `blended` if more than one list contributed that SKU.
+3. The result is the table. `source` is one of `personalized`, `popular_fallback`, `latest`, or `blended`. `popular_fallback` is bestsellers filling in; `latest` is newest by item date; `blended` means more than one of those lists voted.
 
 If two customers never bought the same products, there is nothing to personalize. That is thin data, not a misconfigured job.
 
@@ -214,7 +214,7 @@ popular_share = 0.7
 latest_date_columns = ["created_at"]
 ```
 
-Blending is also how `__cold_start__` gets written. `saturate_at = 5` means five distinct products is fully on LightFM; a single order stays mostly `popular` and newest-by-date. On a small shop that is the behavior you want.
+Blending is also how `'__cold_start__'` gets written. `saturate_at = 5` means five distinct products is fully on LightFM; a single order stays mostly `popular` and newest-by-date. On a small shop that is the behavior you want.
 
 **Two different “latest”s.** `latest_date_columns` ranks products by an item timestamp (`created_at` here). `"latest"` in `[job].models` is a recency-window sales list on *events* — a third model, not `popular`. This walkthrough uses the date list only. Do not add `"latest"` to `models` while blending is on — the two fight. Details: [how it works](https://cicerone.dev/how-it-works/). If `products` has no usable date column among those names, the date list is skipped and its weight moves to `popular` (you will see that in the job log).
 
@@ -303,7 +303,7 @@ Then look at a real person, with names:
 SELECT r.rank, r.source, r.score, p.name, p.category
 FROM cicerone_recommendations r
 INNER JOIN products p ON p.id::text = r.item_id
-WHERE r.user_id = '42'
+WHERE r.user_id = '42'   -- or '__cold_start__'
 ORDER BY r.rank;
 ```
 
@@ -314,7 +314,7 @@ ORDER BY r.rank;
     3 | popular_fallback |  0.31 | House Lager     | beer
 ```
 
-Illustrative rows — your catalog, your scores. `blended` means LightFM and `popular` both voted; `personalized` is LightFM on its own. Swap `'42'` for `__cold_start__` to see the guest list.
+Illustrative rows — your catalog, your scores. `source` values are the four names above. Use `'__cold_start__'` in place of `'42'` for the guest list.
 
 If you would rather click than query, Cicerone ships a small Basic-Auth **dashboard** that reads the same two tables: latest run (and history, because this is a db output), plus a user-id lookup of current top-K. It never loads LightFM. Put this next to the other TOML as `cicerone.dashboard.toml`:
 
@@ -363,13 +363,13 @@ docker run --rm --name cicerone-dashboard -p 127.0.0.1:8090:8090 \
   dashboard --config /app/config/cicerone.dashboard.toml
 ```
 
-Open `http://127.0.0.1:8090/dashboard`, sign in, type a `user_id` (the string form, `'42'`). Bind only to localhost unless this sits behind your own auth.
+Open `http://127.0.0.1:8090/dashboard`, sign in, type a `user_id` (`'42'` or `'__cold_start__'`). Bind only to localhost unless this sits behind your own auth.
 
 ![Cicerone dashboard: user lookup of current top-K, latest job status, and run history](https://cicerone.dev/images/docs/dashboard.png)
 
 ## Read it from the app
 
-This is a `SELECT`, not an SDK. ActiveRecord is one way to do it; Eloquent, SQLAlchemy, Ecto, or `database/sql` would ask for the same columns. The table has no `id`. Set `primary_key` to `nil` so ActiveRecord does not assume one. `for_user` takes a string `user_id` (`current_user.id.to_s`); `cold_start` is `__cold_start__`. Query with `pluck`; do not `find`, `update`, or `belongs_to :product` (string `item_id` vs integer `products.id`):
+This is a `SELECT`, not an SDK. ActiveRecord is one way to do it; Eloquent, SQLAlchemy, Ecto, or `database/sql` would ask for the same columns. The table has no `id`. Set `primary_key` to `nil` so ActiveRecord does not assume one. `for_user` takes a string `user_id` (`current_user.id.to_s`); `cold_start` is `'__cold_start__'`. Query with `pluck`; do not `find`, `update`, or `belongs_to :product` (string `item_id` vs integer `products.id`):
 
 ```ruby
 class CiceroneRecommendation < ApplicationRecord
@@ -377,7 +377,7 @@ class CiceroneRecommendation < ApplicationRecord
   self.primary_key = nil
 
   scope :for_user, ->(user_id) { where(user_id: user_id.to_s).order(:rank) }
-  scope :cold_start, -> { where(user_id: "__cold_start__").order(:rank) }
+  scope :cold_start, -> { where(user_id: '__cold_start__').order(:rank) }
 
   def readonly?
     true
@@ -417,27 +417,27 @@ end
 
 If the job has never succeeded, `@recommended` is empty — hide the section, or fall back to your old bestsellers partial. Empty is better than inventing a failure UI. Integer `products.id` is the usual Rails case; if your primary keys are UUIDs, skip `.map(&:to_i)` and pass the strings through.
 
-Same table, no Rails. A Python worker or a Node renderer is the same `SELECT` — including `__cold_start__` when a signed-in user has no rows yet:
+Same table, no Rails. A Python worker or a Node renderer is the same `SELECT` — including `'__cold_start__'` when a signed-in user has no rows yet:
 
 ```python
 sql = """
 SELECT item_id FROM cicerone_recommendations
 WHERE user_id = %s ORDER BY rank LIMIT 8
 """
-user_key = str(user_id) if user_id else "__cold_start__"
+user_key = str(user_id) if user_id else '__cold_start__'
 rows = conn.execute(sql, (user_key,)).fetchall()
 if user_id and not rows:
-    rows = conn.execute(sql, ("__cold_start__",)).fetchall()
+    rows = conn.execute(sql, ('__cold_start__',)).fetchall()
 ids = [int(item_id) for (item_id,) in rows]
 ```
 
 ```js
 const sql = `SELECT item_id FROM cicerone_recommendations
  WHERE user_id = $1 ORDER BY rank LIMIT 8`;
-const userKey = userId != null ? String(userId) : "__cold_start__";
+const userKey = userId != null ? String(userId) : '__cold_start__';
 let { rows } = await pool.query(sql, [userKey]);
 if (userId != null && rows.length === 0) {
-  ({ rows } = await pool.query(sql, ["__cold_start__"]));
+  ({ rows } = await pool.query(sql, ['__cold_start__']));
 }
 const ids = rows.map((row) => Number(row.item_id));
 ```
