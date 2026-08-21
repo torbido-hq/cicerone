@@ -36,14 +36,28 @@ The engine does not care what language the shop is in. There is no Rails gem, no
 Cicerone trains **offline**. On a cron (default 03:00 UTC) it:
 
 1. Runs SQL you give it (`events`, optional `users` / `items`)
-2. Weighs those events, fits a couple of strategies (here: LightFM + popularity)
+2. Weighs those events, fits LightFM + popularity, blends the two lists
 3. Writes `cicerone_recommendations` (`user_id`, `item_id`, `rank`, `score`, `source`)
 
-Your app `SELECT`s that table and joins `products`. Guests and brand-new accounts use a sentinel row set, `user_id = '__cold_start__'`, which is why we turn on per-user blending below.
+Your app `SELECT`s that table and joins `products`. Guests and brand-new accounts use a sentinel row set, `user_id = '__cold_start__'`. Nothing Cicerone-shaped loads in the web process. A purchase this afternoon does not change tonight’s ranks.
 
-Nothing Cicerone-shaped loads in the web process. A purchase this afternoon does not change tonight’s ranks. Personalized LightFM only moves on a full retrain.
+## What the job actually does
 
-That is the trick worth getting excited about: **Netflix-shaped math on a shop-sized catalog**, without putting a Python model on the hot path. [LightFM](https://arxiv.org/abs/1507.08439) (WARP) embeds users, items, and side features — here, `category` — in one latent space, so a newly listed IPA can sit near other IPAs before it has a sales history. Popularity covers people with one order. Per-user blending mixes those ranks so you do not fall off a cliff from “personalized” to “everyone sees the same ten SKUs”. You get that as a table. The storefront never imports `rectools`.
+The SQL is not what LightFM fits. First every event becomes a weight, then one row per `(user_id, item_id)`:
+
+1. Drop any `event_type` missing from `[event_weights]` (logged as a warning).
+2. `purchase` is `4.0 × log1p(quantity)`; a `view` is `0.3`, and only the five most recent views per pair count.
+3. Recency: multiply by `0.5 ** (age_days / 90)`.
+4. Sum. Non-positive aggregates are dropped — LightFM will not take them.
+
+That frame, plus `category` on items, is a RecTools dataset. Two strategies fit:
+
+- **collaborative** — [LightFM](https://arxiv.org/abs/1507.08439) with WARP loss. Users, items, and side features share one latent space, so a newly listed IPA can sit near other IPAs before it has sales.
+- **popular** — global interaction counts. No user vector.
+
+Then blending, not a coin flip. For each user the two ranked lists are mixed with weighted reciprocal rank fusion (`weight / (60 + rank)`). Linear `saturate_at = 5` means five distinct products is all LightFM; a single order is mostly popular. The `source` column is `personalized` or `popular_fallback` if only one list voted, `blended` if both did. Guests get `__cold_start__` from the same mixer with zero interactions. Unpublished / out-of-stock items never enter the lists (a missing filter column is skipped, fail-open).
+
+None of that runs in the request. The table is the model. The [how it works](https://cicerone.dev/how-it-works/) page has the other strategies (item-KNN, SASRec, …). This walkthrough does not need them.
 
 ## Compare this with the in-house thing you would write anyway
 
