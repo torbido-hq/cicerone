@@ -38,9 +38,18 @@ Your app joins that table to `products`. A purchase this afternoon does not chan
 | `popular_fallback` | `source` | The `popular` list filling in. Same bestsellers, different label. |
 | `latest` | `source` | Newest by item date (`latest_date_columns`). Not the `"latest"` model. |
 | `blended` | `source` | More than one of those lists voted on this rank. |
-| `'__cold_start__'` | `user_id` | Guest / no-history list. |
 
-`'__cold_start__'` is a **string** in `user_id`, same type as `'42'`. Store that text in the database — not an integer, not `NULL`, not an unquoted identifier.
+**Model names vs `source`.** `[job].models` is what you train (`collaborative`, `popular`). `source` is what the job stamped on the row (`personalized`, `popular_fallback`, `latest`, `blended`). Same bestsellers: `popular` in config, `popular_fallback` in the column.
+
+### Guest list: `'__cold_start__'`
+
+The job writes a no-history list under this `user_id`. The stored value is `__cold_start__`. Quotes are SQL syntax, not part of the string. Not an integer, not `NULL`, not an identifier.
+
+| Place | Literal |
+| --- | --- |
+| Database (`user_id` text) | `__cold_start__` |
+| SQL | `'__cold_start__'` |
+| Dashboard lookup | `__cold_start__` (no quotes) |
 
 ## What the job does
 
@@ -370,7 +379,7 @@ docker run --rm --name cicerone-dashboard -p 127.0.0.1:8090:8090 \
   dashboard --config /app/config/cicerone.dashboard.toml
 ```
 
-Open `http://127.0.0.1:8090/dashboard`, sign in, type `42` or `__cold_start__` (the stored strings; SQL writes them as `'42'` and `'__cold_start__'`). Bind only to localhost unless this sits behind your own auth.
+Open `http://127.0.0.1:8090/dashboard`, sign in, type `42` or `__cold_start__`. Bind only to localhost unless this sits behind your own auth.
 
 ![Cicerone dashboard: user lookup of current top-K, latest job status, and run history](https://cicerone.dev/images/docs/dashboard.png)
 
