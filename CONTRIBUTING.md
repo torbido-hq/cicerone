@@ -167,20 +167,17 @@ and/or `examples/serve/` when request/response fields change.
 
 ## Release trains
 
-[`.cursor/rules/releases.mdc`](.cursor/rules/releases.mdc#current-trains)
-is the **single source of truth** for current train versions. Any change
+[Current trains](.cursor/rules/releases.mdc#current-trains) is the
+**single source of truth** for current train versions. Any change
 to branch ownership must update that file in the same PR.
 
-`release/X.Y.0` below is a **placeholder** for the in-flight minor
-branch — substitute the version from **Current trains**. While 0.6.1
-and 0.7.0 are in flight, `X.Y.0` = `0.7.0`. While a **patch** and a
-**minor** are in flight together, `main` is the patch train and
-`release/X.Y.0` is the minor train.
+While a **patch** and a **minor** are in flight together, `main` is the
+patch train and `release/X.Y.0` is the minor train.
 
 | Train | Branch | What lands |
 |---|---|---|
 | **Patch** | `main` | Bug fixes, small refactors, improvements (perf/docs/DX), dependency bumps, tests for existing behavior. No new user-facing capability, config keys, models, or I/O `kind`s. |
-| **Minor** | `release/X.Y.0` (long-lived; PRs target this branch, not `main`). While 0.6.1 and 0.7.0 are in flight, `X.Y.0` = `0.7.0`. | New features and new public surface. |
+| **Minor** | `release/X.Y.0` (long-lived; PRs target this branch, not `main`; see [Current trains](.cursor/rules/releases.mdc#current-trains)) | New features and new public surface. |
 
 - Fixes, refactors, improvements → patch (`main`). Features → minor
   (`release/X.Y.0`).
@@ -199,6 +196,8 @@ and 0.7.0 are in flight, `X.Y.0` = `0.7.0`. While a **patch** and a
 - After the patch is tagged, follow
   [Merge-backs](.cursor/rules/releases.mdc#merge-backs) and update
   **Current trains** in that same PR.
+- After dual-train ends, see
+  [Single train](.cursor/rules/releases.mdc#single-train).
 
 Procedures:
 [Cherry-picks](.cursor/rules/releases.mdc#cherry-picks),
