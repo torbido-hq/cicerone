@@ -10,6 +10,7 @@ import pandas as pd
 from cicerone.config import Settings
 from cicerone.io.base import RecommendationReader
 from cicerone.io.recommendation_schema import ITEM_COLUMN, RANK_COLUMN, SCORE_COLUMN, SOURCE_COLUMN
+from cicerone.values import is_missing
 
 logger = logging.getLogger(__name__)
 
@@ -120,13 +121,6 @@ def _join_category(recs: pd.DataFrame, items: pd.DataFrame | None, category_colu
     return recs.merge(extra, on=ITEM_COLUMN, how="left")
 
 
-def _is_missing(value: object) -> bool:
-    if value is None or value == "":
-        return True
-    result = pd.isna(value)
-    return bool(result) if isinstance(result, bool) else False
-
-
 def _coerce_float(value: object) -> float | None:
     try:
         number = float(value)  # type: ignore[arg-type]
@@ -152,6 +146,6 @@ def _format_score(value: object) -> str:
 
 
 def _format_text(value: object) -> str:
-    if _is_missing(value):
+    if value == "" or is_missing(value):
         return MISSING
     return str(value)
