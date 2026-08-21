@@ -21,12 +21,12 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-import numpy as np
 import pandas as pd
 from rectools import Columns
 from rectools.dataset import Dataset
 
 from cicerone.feature_config import FeatureColumn, FeatureConfig
+from cicerone.weighting import event_row_weights
 
 logger = logging.getLogger(__name__)
 
@@ -79,15 +79,16 @@ def build_interactions(events: pd.DataFrame, config: FeatureConfig, half_life_da
     df["quantity"] = df.get("quantity", 1)
     df["quantity"] = df["quantity"].fillna(1).clip(lower=1)
 
-    base = df["event_type"].map(config.event_weights)
-    unknown = df["event_type"][base.isna()].unique()
+    row_weight = event_row_weights(
+        df["event_type"],
+        df["quantity"],
+        event_weights=config.event_weights,
+        quantity_scaled_events=config.quantity_scaled_events,
+    )
+    unknown = df["event_type"][row_weight.isna()].unique()
     if len(unknown):
         logger.warning("Dropping event_type values missing from event_weights config: %s", unknown)
-    df = df.assign(base_weight=base).dropna(subset=["base_weight"])
-
-    df["_qty_multiplier"] = np.where(
-        df["event_type"].isin(config.quantity_scaled_events), np.log1p(df["quantity"]), 1.0
-    )
+    df = df.assign(row_weight=row_weight).dropna(subset=["row_weight"])
 
     if config.event_caps:
         capped_types = set(config.event_caps)
@@ -101,7 +102,7 @@ def build_interactions(events: pd.DataFrame, config: FeatureConfig, half_life_da
             df = df.drop(index=capped.index[rank >= limits])
 
     decay = _time_decay_multiplier(df["occurred_at"], half_life_days)
-    df["weight"] = df["base_weight"] * df["_qty_multiplier"] * decay
+    df["weight"] = df["row_weight"] * decay
 
     aggregated = df.groupby(["user_id", "item_id"], as_index=False).agg(
         weight=("weight", "sum"), datetime=("occurred_at", "max")

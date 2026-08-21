@@ -457,3 +457,27 @@ def test_incremental_updater_rejects_non_positive_cache_size(tmp_path, feature_c
             top_k=3,
             user_cache_max_size=0,
         )
+
+
+def test_popular_ranking_drops_zero_weight_and_breaks_item_ties(tmp_path, feature_config: FeatureConfig):
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        top_k=2,
+    )
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=2,
+    )
+    batch = pd.DataFrame(
+        [
+            {"event_type": "view", "quantity": 1, "item_id": "b"},
+            {"event_type": "view", "quantity": 1, "item_id": "a"},
+            {"event_type": "unknown_type", "quantity": 9, "item_id": "z"},
+        ]
+    )
+    ranked = updater._popular_ranking(batch)
+    assert list(ranked["item_id"]) == ["a", "b"]
+    assert list(ranked["source"]) == ["popular_fallback", "popular_fallback"]
+    assert ranked.iloc[0]["score"] == pytest.approx(ranked.iloc[1]["score"])

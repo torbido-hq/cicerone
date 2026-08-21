@@ -10,8 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - After fit, strategy×cohort `recommend()` calls run in a thread pool when
   `job.max_workers > 1` (default remains 1).
-- Blend RRF scores per-user source weights in pandas instead of a Python loop
-  over users (same top-K).
+- Incremental popular ranking and training interactions share vectorized
+  per-row event weights.
 
 ## [0.6.1] - 2026-08-20
 
