@@ -144,7 +144,10 @@ and/or `examples/serve/` when request/response fields change.
 
 ## Pull requests
 
-- Branch off `main`, keep PRs focused on one change.
+- Branch off the train you are targeting
+  ([Release trains](#release-trains);
+  [Current trains](.cursor/rules/releases.mdc#current-trains)).
+  Keep PRs focused on one change.
 - **Branch names (required):** short and human-readable only —
   `feature/…`, `fix/…`, `release/0.3.1`, `docs/…`, `chore/…`.
   **Never** use `cursor/<slug>-<id>` (or any other opaque agent/id suffix).
@@ -162,6 +165,45 @@ and/or `examples/serve/` when request/response fields change.
   Docker jobs; `ci` still succeeds. The Pages workflow builds the Starlight
   site (`cd website && npm ci && npm run build`).
 
+## Release trains
+
+[Current trains](.cursor/rules/releases.mdc#current-trains) is the
+**single source of truth** for current train versions. Any change
+to branch ownership must update that file in the same PR.
+
+While a **patch** and a **minor** are in flight together, `main` is the
+patch train and `release/X.Y.0` is the minor train.
+
+| Train | Branch | What lands |
+|---|---|---|
+| **Patch** | `main` | Bug fixes, small refactors, improvements (perf/docs/DX), dependency bumps, tests for existing behavior. No new user-facing capability, config keys, models, or I/O `kind`s. |
+| **Minor** | `release/X.Y.0` (long-lived; PRs target this branch, not `main`; see [Current trains](.cursor/rules/releases.mdc#current-trains)) | New features and new public surface. |
+
+- Fixes, refactors, improvements → patch (`main`). Features → minor
+  (`release/X.Y.0`).
+- Split mixed work (refactor + feature) into two PRs: patch first, then
+  feature on the minor train. If the refactor has no value without the
+  feature, keep both on the minor train. Never land a feature on the
+  patch train because a refactor is in the same diff.
+- If still ambiguous, use the patch train unless the change adds
+  user-facing capability.
+- Do not open or merge feature PRs into `main` while the patch is in
+  flight. Feature work stays on `release/X.Y.0` and reaches `main` only
+  via [Merge-backs](.cursor/rules/releases.mdc#merge-backs) after the
+  patch is tagged (not by retargeting those PRs at `main`).
+- `## [Unreleased]` is per-branch (patch on `main`, minor on
+  `release/X.Y.0`).
+- After the patch is tagged, follow
+  [Merge-backs](.cursor/rules/releases.mdc#merge-backs) and update
+  **Current trains** in that same PR.
+- After dual-train ends, see
+  [Single train](.cursor/rules/releases.mdc#single-train).
+
+Procedures:
+[Cherry-picks](.cursor/rules/releases.mdc#cherry-picks),
+[Hotfixes](.cursor/rules/releases.mdc#hotfixes),
+[Merge-backs](.cursor/rules/releases.mdc#merge-backs).
+
 ## Releasing
 
 `main` requires one approving review (including code owners) on every PR.
@@ -178,16 +220,23 @@ named `pypi`, then a [pending trusted publisher](https://docs.pypi.org/trusted-p
 for `cicerone-recommender` — owner `torbido-hq`, repo `cicerone`, workflow
 `publish.yml`, environment `pypi`. No API token.
 
-1. On the feature PR that completes the version, move `## [Unreleased]`
-   notes into `## [X.Y.Z] - YYYY-MM-DD` (today's date) in the same branch
+1. On the PR that completes the version, move `## [Unreleased]` notes
+   into `## [X.Y.Z] - YYYY-MM-DD` (today's date) in the same branch
    before merge, and set `cicerone.__version__`
    (`src/cicerone/__init__.py`) to the same `X.Y.Z` (serve OpenAPI
    metadata uses it via `SERVE_API_VERSION` — regenerate
    `docs/openapi/serve.openapi.json` if the version string changed).
-2. Merge that PR to `main`.
-3. Tag the merge commit: `git tag -a vX.Y.Z <sha> -m "…"` and
-   `git push origin vX.Y.Z`.
-4. Publish the GitHub release from that tag (notes can mirror the
+2. Tagging always happens from `main`, even when the completing PR
+   lands on the minor train. Never tag `release/X.Y.0`.
+   - **Patch:** merge the completing PR to `main`. Tag that commit on
+     `main`: `git tag -a vX.Y.Z <sha> -m "…"` and
+     `git push origin vX.Y.Z`.
+   - **Minor:** merge the completing PR to `release/X.Y.0`. Merge
+     `release/X.Y.0` into `main`
+     ([Merge-backs](.cursor/rules/releases.mdc#merge-backs)). Tag
+     that commit on `main`: `git tag -a vX.Y.Z <sha> -m "…"` and
+     `git push origin vX.Y.Z`.
+3. Publish the GitHub release from that tag (notes can mirror the
    changelog section). `.github/workflows/publish.yml` builds the sdist and
    wheel (including dashboard CSS) and uploads them to PyPI.
 

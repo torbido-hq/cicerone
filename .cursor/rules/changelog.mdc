@@ -10,7 +10,8 @@ sections are **immutable**.
 
 ## Do
 
-- Put new notes only under `## [Unreleased]`.
+- Put new notes only under `## [Unreleased]` on the train you are
+  targeting (patch on `main`, minor on `release/X.Y.0`).
 - Short bullets for **this** change. Do not re-tell older releases.
 
 ## Do not
