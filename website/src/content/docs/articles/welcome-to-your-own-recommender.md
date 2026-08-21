@@ -43,21 +43,17 @@ Your app `SELECT`s that table and joins `products`. Guests and brand-new account
 
 ## What the job actually does
 
-The SQL is not what LightFM fits. First every event becomes a weight, then one row per `(user_id, item_id)`:
+Checkout rows are implicit feedback: who bought what, not a star rating. That is a sparse user × item ranking problem. The SQL is how the pairs get into Postgres; the job turns them into a top-K order.
 
-1. Drop any `event_type` missing from `[event_weights]` (logged as a warning).
-2. `purchase` is `4.0 × log1p(quantity)`; a `view` is `0.3`, and only the five most recent views per pair count.
-3. Recency: multiply by `0.5 ** (age_days / 90)`.
-4. Sum. Non-positive aggregates are dropped — LightFM will not take them.
+**LightFM** ([Kula, 2015](https://arxiv.org/abs/1507.08439)) is hybrid matrix factorization. Each user and each item gets a vector; the score is a dot product. Training uses **WARP** ([Weston, Bengio & Usunier, IJCAI 2011](https://www.ijcai.org/Proceedings/11/Papers/460.pdf)): for a user who bought A, it samples items they did not buy until it finds a violator — something the model currently ranks above A — then it pushes those embeddings apart. You are optimizing an order, not “predict 4.2 stars.”
 
-That frame, plus `category` on items, is a RecTools dataset. Two strategies fit:
+**`category` lives in the same space.** LightFM adds item features to the item vector, so two IPAs share a direction even if nobody has bought both. A newly listed SKU can rank for someone who drinks IPA: the co-purchase graph has not seen it; the feature graph has. That helps cold items. It does not invent overlap. If two customers never bought the same things, their user vectors do not talk to each other, and the ranking collapses toward whatever is globally common. Sparse implicit data, not a WARP bug.
 
-- **collaborative** — [LightFM](https://arxiv.org/abs/1507.08439) with WARP loss. Users, items, and side features share one latent space, so a newly listed IPA can sit near other IPAs before it has sales.
-- **popular** — global interaction counts. No user vector.
+**Popular** is that global ranking: weighted interaction counts, no user vector. The `GROUP BY product_id` homepage, as a model, so the mixer has a list that is defined for everyone.
 
-Then blending, not a coin flip. For each user the two ranked lists are mixed with weighted reciprocal rank fusion (`weight / (60 + rank)`). Linear `saturate_at = 5` means five distinct products is all LightFM; a single order is mostly popular. The `source` column is `personalized` or `popular_fallback` if only one list voted, `blended` if both did. Guests get `__cold_start__` from the same mixer with zero interactions. Unpublished / out-of-stock items never enter the lists (a missing filter column is skipped, fail-open).
+**Blending** is weighted [reciprocal rank fusion](https://dl.acm.org/doi/10.1145/1571941.1572114) (Cormack, Clarke & Büttcher, SIGIR 2009). Rank `i` in a list contributes `weight / (60 + i)`. LightFM’s weight is `min(1, n / 5)` — `n` is distinct products that user touched; five SKUs and you are fully on the hybrid. The remainder splits between popular and latest-by-item-date (`created_at` in this TOML). `source` records who voted: `personalized`, `popular_fallback`, `latest`, or `blended` if more than one list contributed that SKU. `__cold_start__` is the same mixer with `n = 0`.
 
-None of that runs in the request. The table is the model. The [how it works](https://cicerone.dev/how-it-works/) page has the other strategies (item-KNN, SASRec, …). This walkthrough does not need them.
+None of this runs in the request. The table is the fitted ranking. Item-kNN and SASRec are other jobs; see [how it works](https://cicerone.dev/how-it-works/).
 
 ## Compare this with the in-house thing you would write anyway
 
