@@ -53,9 +53,9 @@ You do not have 1–5 stars. You have purchases — a weak yes, and silence ever
 
 **Popular** is that global ranking: weighted interaction counts, no user vector. The `GROUP BY product_id` homepage, as a model, so the mixer has a list that is defined for everyone.
 
-**Mixing lists you cannot add.** A LightFM score and a sales count are not in the same units, so the mixer uses ranks: weighted [reciprocal rank fusion](https://dl.acm.org/doi/10.1145/1571941.1572114) (Cormack, Clarke & Büttcher, SIGIR 2009). Rank `i` contributes `weight / (60 + i)` — the `60` is the constant from that paper. LightFM’s weight is `min(1, n / 5)` (`n` is distinct products after weighting; five SKUs and you are fully on the hybrid). That curve is Cicerone’s, not Cormack’s. The remainder splits between popular and latest-by-item-date (`created_at` in this TOML). `source` records who voted: `personalized`, `popular_fallback`, `latest`, or `blended` if more than one list contributed that SKU. `__cold_start__` is the same mixer with `n = 0`.
+**Mixing lists you cannot add.** A LightFM score and a sales count are not in the same units, so the mixer uses ranks: weighted [reciprocal rank fusion](https://dl.acm.org/doi/10.1145/1571941.1572114) (Cormack, Clarke & Büttcher, SIGIR 2009). Rank `i` contributes `weight / (60 + i)` — the `60` is the constant from that paper. LightFM’s weight is `min(1, n / 5)` (`n` is distinct products after weighting; five SKUs and you are fully on the hybrid). That curve is Cicerone’s, not Cormack’s. The remainder splits between popular and newest items by `created_at`. `source` records who voted: `personalized`, `popular_fallback`, `latest` (that date list), or `blended` if more than one list contributed that SKU. `__cold_start__` is the same mixer with `n = 0`.
 
-None of this runs in the request. The table is the fitted ranking. Item-kNN ([Sarwar et al., WWW 2001](https://files.grouplens.org/papers/www10_sarwar.pdf)) and SASRec ([Kang & McAuley, 2018](https://arxiv.org/abs/1808.09781)) are other jobs; this TOML does not train them. Combiners, other strategies, and the two different “latest” ideas: [how it works](https://cicerone.dev/how-it-works/).
+None of this runs in the request. The table is the fitted ranking. Item-kNN ([Sarwar et al., WWW 2001](https://files.grouplens.org/papers/www10_sarwar.pdf)) and SASRec ([Kang & McAuley, 2018](https://arxiv.org/abs/1808.09781)) are other jobs; this TOML does not train them. Combiners and the rest of the strategy list: [how it works](https://cicerone.dev/how-it-works/).
 
 ## Compare this with the in-house thing you would write anyway
 
@@ -222,7 +222,9 @@ popular_share = 0.7
 latest_date_columns = ["created_at"]
 ```
 
-Blending is what writes `__cold_start__`. Linear `saturate_at = 5` means five distinct products is fully on LightFM; a single order stays mostly popular / latest. On a small shop that is the behavior you want. You do not need `"latest"` in `[job].models` for this: blending reads `latest_date_columns` on items (that is not the windowed-popularity `latest` *strategy* — [how it works](https://cicerone.dev/how-it-works/#combining-strategies) spells out both). If `products` has no usable date column among those names, latest is skipped and its weight moves to popular (you will see that in the job log). `half_life_days = 90` is exponential recency decay; the rest of the weight recipe is [interaction weighting](https://cicerone.dev/how-it-works/#interaction-weighting).
+Blending is what writes `__cold_start__`. Linear `saturate_at = 5` means five distinct products is fully on LightFM; a single order stays mostly popular and newest-by-date. On a small shop that is the behavior you want.
+
+**Two “latest”s.** `latest_date_columns` ranks SKUs by an item timestamp (`created_at` here). `"latest"` in `[job].models` is windowed popularity on *events*. This walkthrough uses the date list only — do not add `"latest"` to `models` while blending is on, or the two fight. Both are spelled out in [how it works](https://cicerone.dev/how-it-works/). If `products` has no usable date column among those names, the date list is skipped and its weight moves to popular (you will see that in the job log). `half_life_days = 90` is exponential recency decay; the rest of the weight recipe is [interaction weighting](https://cicerone.dev/how-it-works/#interaction-weighting).
 
 A `view` weight with no view rows is harmless. An `event_type` in SQL that you forget to list under `[event_weights]` is dropped, with a warning.
 
@@ -375,14 +377,14 @@ Open `http://127.0.0.1:8090/dashboard`, sign in, type a `user_id` (the string fo
 
 ## Read it from the app
 
-This is a `SELECT`, not an SDK. ActiveRecord is one way to do it; Eloquent, SQLAlchemy, Ecto, or `database/sql` would ask for the same columns. The table has no `id`. Set `primary_key` to `nil` so ActiveRecord does not assume one. `for_user` / `cold_start` are the query API (`pluck`); do not `find`, `update`, or `belongs_to :product` (string `item_id` vs integer `products.id`):
+This is a `SELECT`, not an SDK. ActiveRecord is one way to do it; Eloquent, SQLAlchemy, Ecto, or `database/sql` would ask for the same columns. The table has no `id`. Set `primary_key` to `nil` so ActiveRecord does not assume one. `for_user` takes a string `user_id` (`current_user.id.to_s`); `cold_start` is the guest list. Query with `pluck`; do not `find`, `update`, or `belongs_to :product` (string `item_id` vs integer `products.id`):
 
 ```ruby
 class CiceroneRecommendation < ApplicationRecord
   self.table_name = "cicerone_recommendations"
   self.primary_key = nil
 
-  scope :for_user, ->(user) { where(user_id: user.id.to_s).order(:rank) }
+  scope :for_user, ->(user_id) { where(user_id: user_id.to_s).order(:rank) }
   scope :cold_start, -> { where(user_id: "__cold_start__").order(:rank) }
 
   def readonly?
@@ -391,7 +393,7 @@ class CiceroneRecommendation < ApplicationRecord
 
   class << self
     def product_ids_for(user, limit: 8)
-      ids = for_user(user).limit(limit).pluck(:item_id).map(&:to_i) if user
+      ids = for_user(user.id.to_s).limit(limit).pluck(:item_id).map(&:to_i) if user
       ids = cold_start.limit(limit).pluck(:item_id).map(&:to_i) if ids.blank?
       ids
     end
