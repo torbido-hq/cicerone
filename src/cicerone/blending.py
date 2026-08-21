@@ -196,7 +196,7 @@ def _weighted_rrf_frame(
 ) -> pd.DataFrame:
     if frame.empty:
         return pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Score, SOURCE_COLUMN])
-    weights = frame[Columns.User].map(user_weights)
+    weights = frame[Columns.User].astype(str).map(user_weights.rename(index=str))
     keep = weights.notna() & (weights > _WEIGHT_EPS)
     if not bool(keep.any()):
         return pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Score, SOURCE_COLUMN])
@@ -257,6 +257,8 @@ def blend_for_users(
     if not unique_users:
         return _empty_recs()
 
+    counts_by_user = {str(user_id): int(n) for user_id, n in counts.items()}
+
     use_indexed_latest = shared_latest is not None or latest_by_user is not None
     latest_index = (
         None if latest_by_user is None else {str(uid): ranking for uid, ranking in latest_by_user.items()}
@@ -271,7 +273,7 @@ def blend_for_users(
         ),
     }
     weight_map = {
-        user_id: source_weights(counts.get(user_id, 0), config, latest_available=latest_available)
+        user_id: source_weights(counts_by_user.get(user_id, 0), config, latest_available=latest_available)
         for user_id in unique_users
     }
     personalized_w = pd.Series({u: w[PERSONALIZED_SOURCE] for u, w in weight_map.items()})

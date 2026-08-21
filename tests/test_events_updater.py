@@ -581,3 +581,5 @@ def test_popular_ranking_drops_negative_weights(tmp_path, feature_config: Featur
     )
     ranked = updater._popular_ranking(batch)
     assert list(ranked["item_id"]) == ["ok"]
+    reused = updater._popular_ranking(batch, updater._row_signal_weights(batch))
+    assert list(reused["item_id"]) == ["ok"]
