@@ -283,7 +283,7 @@ def blend_for_users(
     }
     personalized_w = pd.Series({u: w[PERSONALIZED_SOURCE] for u, w in weight_map.items()})
     popular_w = pd.Series({u: w[POPULAR_SOURCE] for u, w in weight_map.items()})
-    latest_w = pd.Series({u: w[LATEST_SOURCE] for u, w in weight_map.items()})
+    latest_w = pd.Series({u: w.get(LATEST_SOURCE, 0.0) for u, w in weight_map.items()})
     rrf_k = config.rrf_k
 
     contribs = [

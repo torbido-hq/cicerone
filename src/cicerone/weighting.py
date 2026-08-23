@@ -23,7 +23,11 @@ def event_row_weights(
     """
     base = event_type.map(event_weights)
     qty = pd.to_numeric(quantity, errors="coerce")
-    scaled = set(quantity_scaled_events)
+    scaled = (
+        quantity_scaled_events
+        if isinstance(quantity_scaled_events, (set, frozenset))
+        else set(quantity_scaled_events)
+    )
     multiplier = np.where(
         event_type.isin(scaled),
         np.log1p(qty.clip(lower=0)),

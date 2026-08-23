@@ -77,6 +77,41 @@ def test_source_weights_redistribute_when_latest_unavailable():
     assert math.isclose(without[POPULAR_SOURCE], 1.0)
 
 
+def test_blend_for_users_tolerates_source_weights_without_latest_key(monkeypatch):
+    original = source_weights
+
+    def omit_latest(n_interactions, config, *, latest_available):
+        weights = original(n_interactions, config, latest_available=latest_available)
+        weights.pop(LATEST_SOURCE, None)
+        return weights
+
+    monkeypatch.setattr("cicerone.blending.source_weights", omit_latest)
+    config = _blending(curve="linear", saturate_at=1.0, popular_share=0.5)
+    empty = pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, "source"])
+    popular = pd.DataFrame(
+        [
+            {
+                Columns.User: "u1",
+                Columns.Item: "pop1",
+                Columns.Rank: 1,
+                Columns.Score: 1.0,
+                "source": POPULAR_SOURCE,
+            }
+        ]
+    )
+    out = blend_for_users(
+        personalized=empty,
+        popular=popular,
+        latest=None,
+        counts={"u1": 0},
+        target_users=["u1"],
+        config=config,
+        top_k=1,
+        latest_available=False,
+    )
+    assert list(out[Columns.Item]) == ["pop1"]
+
+
 def test_resolve_latest_date_column_picks_first_usable():
     items = pd.DataFrame(
         [

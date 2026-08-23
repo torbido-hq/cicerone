@@ -41,3 +41,14 @@ def test_event_row_weights_non_numeric_quantity_is_nan_only_when_scaled():
     )
     assert pd.isna(weights.iloc[0])
     assert weights.iloc[1] == pytest.approx(0.3)
+
+
+def test_event_row_weights_accepts_set_without_copying_semantics():
+    weights = event_row_weights(
+        pd.Series(["purchase", "view"]),
+        pd.Series([3, 1]),
+        event_weights={"purchase": 4.0, "view": 0.3},
+        quantity_scaled_events={"purchase"},
+    )
+    assert weights.iloc[0] == pytest.approx(4.0 * math.log1p(3))
+    assert weights.iloc[1] == pytest.approx(0.3)
