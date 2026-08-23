@@ -90,7 +90,8 @@ By default (`[job].mode = "batch"`), the container only runs the batch job
 on its cron schedule — no HTTP surface at all. Setting `[job].mode = "serve"`
 switches `cicerone start` / `cicerone serve` to instead run a small FastAPI **read**
 API over the lookup table the batch job already wrote (never loads
-lightfm/rectools/implicit/torch, never trains or imports):
+lightfm/implicit/torch and never trains; `rectools` itself is imported for
+`Columns`, so it stays in a serve-only image):
 
 | Method | Path | Description |
 | --- | --- | --- |
@@ -125,7 +126,7 @@ Response JSON:
 `generated_at` comes from the last run's `manifest` (also mirrored as the
 `X-Generated-At` response header). If `user_id` is missing from the lookup
 table, the API returns the precomputed cold-start fallback
-(`popular` / `latest` / `blended` for `__cold_start__`) with
+(`popular_fallback` / `latest` / `blended` for `__cold_start__`) with
 `"fallback": true` — not a bare 404.
 
 - For a `dataset` output, the whole recommendations file (+ optional
@@ -155,8 +156,8 @@ While serve is running, FastAPI exposes interactive docs at `/docs` and
 copy (for codegen / offline review without a live process) lives at
 [`docs/openapi/serve.openapi.json`](docs/openapi/serve.openapi.json); refresh
 it with `cicerone export-openapi -o docs/openapi/serve.openapi.json`.
-The test image does not install the wheel, so that path still needs
-`PYTHONPATH=/app/src`:
+The test image does install the wheel, and already sets
+`PYTHONPATH=/app/src` so the mounted tree shadows it:
 
 ```sh
 docker run --rm -v "$PWD":/app -w /app -e PYTHONPATH=/app/src cicerone-test \
@@ -231,7 +232,8 @@ between full retrains (not request-path ranking). Guide:
 A lightweight, standalone web dashboard for checking whether the last job
 run succeeded and inspecting a user's current top-K — `cicerone dashboard`
 (compose maps port `8090`), regardless of `[job].mode` (batch or
-serve). Like serve mode, it never loads lightfm/rectools/implicit.
+serve). Like serve mode, it never loads lightfm/implicit/torch (it does
+import `rectools`).
 
 ![Cicerone dashboard with a user recommendation lookup, latest job status, and history including a failed run](docs/images/dashboard.png)
 
@@ -242,7 +244,8 @@ serve). Like serve mode, it never loads lightfm/rectools/implicit.
   load. Enter a `user_id` to inspect that user's current
   precomputed top-K from the same output store (cold-start fallback when
   they have no personal rows). The inspector shows
-  `min(job.top_k, dashboard.lookup_k)` rows (default 20). When `[events]` is
+  `min(job.top_k, dashboard.lookup_k)` rows (`lookup_k` defaults to 20, so 10
+  with the default `top_k`). When `[events]` is
   enabled, a panel shows the latest incremental flush from recent manifests
   (dataset outputs may clear it on the next full retrain). The status block
   auto-refreshes via
@@ -518,8 +521,9 @@ not loadable.
 
 `recommendations`: `user_id, item_id, rank, score, source` (`source` is the
 label of whichever strategy produced that row: `personalized`, `item_based`,
-`content_fallback`, `popular_fallback`, `latest`, or `blended` when
-multi-source blending combined more than one).
+`sequential`, `content_fallback`, `popular_fallback`, `latest`, or `blended`
+when multi-source blending combined more than one; rows rewritten by
+`[events]` carry `incremental`).
 
 `manifest`: metadata about the latest run (counts, timestamps,
 `triggered_by`, effective models, optional AutoML metrics, and
