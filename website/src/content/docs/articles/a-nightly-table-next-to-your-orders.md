@@ -17,7 +17,7 @@ The usual answer is `ORDER BY sold_count DESC` under a friendlier heading. There
 
 [Cicerone](https://cicerone.dev) is a Docker job that runs at night: it reads the orders you already store, writes a ranked table, and goes back to sleep. Your app only ever `SELECT`s from that table, so there is no gem to install and nothing Cicerone-shaped anywhere in the request path.
 
-I built it for Torbido, a bottle shop that has not opened yet, so [torbido.co](https://torbido.co) is a landing page for now. Its catalog is drinks, which is why the repo’s default `features.toml` carries beer columns like `favorite_styles` and `abv_bucket`; ignore them unless you happen to have those fields. The job itself only cares about `user_id`, `item_id`, and `event_type`.
+I built it for Torbido, a bottle shop that has not opened yet, so [torbido.co](https://torbido.co) is a landing page for now. Its catalog is drinks, which is why the repo’s default `features.toml` carries beer columns like `favorite_styles` and `abv_bucket`; ignore them unless you happen to have those fields. What the job actually needs is who bought what and when: `user_id`, `item_id`, `event_type`, and `occurred_at`, plus `quantity` if you want order size to count for anything.
 
 Rails is the example because a lot of small shops look like this, but the same two TOML files work just as well next to Laravel, Django, Phoenix, or a Go service. There is an optional HTTP API too, which this walkthrough does not use.
 
@@ -91,7 +91,7 @@ The events query is the only required one:
 | `item_id` | stable string (same rule) |
 | `event_type` | must appear in `[event_weights]` or the row is dropped |
 | `quantity` | optional; purchases can scale with `log1p(quantity)` |
-| `occurred_at` | UTC |
+| `occurred_at` | UTC; required, and what `half_life_days` decays against |
 
 Paid order lines are enough to start with, using whichever timestamp means the money actually moved. The query below assumes `paid_at`, so fall back to `created_at` if you have no such column. Product views help a little, but they will not rescue a catalog nobody has bought from.
 
@@ -512,4 +512,4 @@ If it is mostly `popular_fallback`, the job is still serving bestsellers, so kee
 
 If `personalized` and `blended` are showing up for people who actually buy, put the `SELECT` on the homepage and leave the cron running in Compose. That is the whole product this walkthrough set up: a table your shop already knows how to read.
 
-The drink columns in the repo’s default config were never part of the contract. It only ever asked for `user_id`, `item_id`, and `event_type`. Everything after that is a cron job writing ranks and going back to sleep.
+The drink columns in the repo’s default config were never part of the contract. It only ever asked who bought what, and when. Everything after that is a cron job writing ranks and going back to sleep.
