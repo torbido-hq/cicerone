@@ -524,8 +524,12 @@ not loadable.
 `recommendations`: `user_id, item_id, rank, score, source` (`source` is the
 label of whichever strategy produced that row: `personalized`, `item_based`,
 `sequential`, `content_fallback`, `popular_fallback`, `latest`, or `blended`
-when multi-source blending combined more than one; rows rewritten by
-`[events]` carry `incremental`).
+when multi-source blending combined more than one). An incremental flush
+rewrites a whole user's rows, but only the event-derived boost rows carry
+`incremental`: preserved personalized rows keep their original label, and the
+refilled slices stay `popular_fallback` / `latest`. Use the manifest's
+`incremental_events_applied` / `last_incremental_at` to see that a flush
+happened — `source` will not tell you.
 
 `manifest`: metadata about the latest run (counts, timestamps,
 `triggered_by`, effective models, optional AutoML metrics, and
