@@ -513,7 +513,8 @@ Try a few filters (same auth header):
 curl -s -H "Authorization: Bearer $SERVE_TOKEN" \
   "http://localhost:8000/recommendations/alice?limit=5&category=beer"
 
-# Unknown user → cold-start fallback (popular/latest/blended), not a bare 404
+# Unknown user → cold-start fallback (popular_fallback/latest/blended);
+# 404 only when the table has no sentinel and no popular/latest rows
 curl -s -H "Authorization: Bearer $SERVE_TOKEN" \
   "http://localhost:8000/recommendations/nobody?limit=5"
 
@@ -680,7 +681,8 @@ browser (log in with the user just created), or
 `http://localhost:8090/dashboard?user_id=alice` to fill the inspector on
 load. The **Look up recommendations** form inspects a `user_id`'s current
 top-K from the same output store (including cold-start fallback). Row count
-is `min(job.top_k, dashboard.lookup_k)` (default 20). The
+is `min(job.top_k, dashboard.lookup_k)` (`lookup_k` defaults to 20, so 10
+with the default `top_k`). The
 incremental-events panel is gated on the `[events]` block of the config the
 **dashboard** was started with, not the one from
 [step 13](#13-ingest-incremental-events-optional): copy `enabled = true` into

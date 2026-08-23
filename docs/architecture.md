@@ -271,7 +271,8 @@ serve-only image.
 - `serve.create_app()` exposes `GET /health` and
   `GET /recommendations/{user_id}` (`limit`/`k`, `category`,
   `exclude_unavailable`) behind `http_auth.require_bearer_token`. Unknown
-  users fall back to the precomputed `__cold_start__` list rather than 404.
+  users fall back to the `__cold_start__` list when blending wrote one, else
+  to one `popular_fallback` / `latest` user's top-K; with neither, they 404.
   Responses include `generated_at` from the run manifest. Pydantic models in
   `serve_schemas.py` populate `/openapi.json` (and `/docs` / `/redoc`);
   `export_serve_openapi` writes the checked-in copy under `docs/openapi/`.
@@ -340,7 +341,8 @@ never imports `cicerone.model`/`dataset`/`automl`.
 - `io.factory.build_recommendation_reader(settings.output)` builds a
   `RecommendationReader` for the user-id inspector (`dashboard_lookup.py`).
   Lookup reads the output store directly (no serve hop). `k` is
-  `min(job.top_k, dashboard.lookup_k)` (default 20). Missing users fall
+  `min(job.top_k, dashboard.lookup_k)` (`lookup_k` defaults to 20, so 10 with
+  the default `top_k`). Missing users fall
   back to `__cold_start__` / popular-latest rows with a badge; `category`
   is joined from the items snapshot when that column exists.
 - `job.run()` writes exactly one manifest per run via a `try`/`finally`,

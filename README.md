@@ -125,9 +125,11 @@ Response JSON:
 
 `generated_at` comes from the last run's `manifest` (also mirrored as the
 `X-Generated-At` response header). If `user_id` is missing from the lookup
-table, the API returns the precomputed cold-start fallback
+table, the API returns the cold-start fallback
 (`popular_fallback` / `latest` / `blended` for `__cold_start__`) with
-`"fallback": true` — not a bare 404.
+`"fallback": true`. That sentinel is written only under blending; with
+priority or RRF the reader substitutes one `popular_fallback` / `latest`
+user's top-K instead, and 404s when the table has neither.
 
 - For a `dataset` output, the whole recommendations file (+ optional
   `items_snapshot.parquet`) is cached in memory and refreshed on a
