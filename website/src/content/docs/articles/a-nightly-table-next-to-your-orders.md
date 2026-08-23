@@ -17,7 +17,7 @@ The usual answer is `ORDER BY sold_count DESC` under a friendlier heading. There
 
 [Cicerone](https://cicerone.dev) is a Docker job that runs at night: it reads the orders you already store, writes a ranked table, and goes back to sleep. Your app only ever `SELECT`s from that table, so there is no gem to install and nothing Cicerone-shaped anywhere in the request path.
 
-I built it for Torbido, a bottle shop that has not opened yet, so [torbido.co](https://torbido.co) is a landing page for now. The catalog is drinks, which is why the repo’s default `features.toml` carries beer columns like `favorite_styles` and `abv_bucket`; ignore them unless you happen to have those fields. The job itself only cares about `user_id`, `item_id`, and `event_type`.
+I built it for Torbido, a bottle shop that has not opened yet, so [torbido.co](https://torbido.co) is a landing page for now. Its catalog is drinks, which is why the repo’s default `features.toml` carries beer columns like `favorite_styles` and `abv_bucket`; ignore them unless you happen to have those fields. The job itself only cares about `user_id`, `item_id`, and `event_type`.
 
 Rails is the example because a lot of small shops look like this, but the same two TOML files work just as well next to Laravel, Django, Phoenix, or a Go service. There is an optional HTTP API too, which this walkthrough does not use.
 
@@ -230,9 +230,9 @@ popular_share = 0.7
 latest_date_columns = ["created_at"]
 ```
 
-Blending is also what writes the `'__cold_start__'` rows. Setting `saturate_at = 5` means a customer with five distinct products is scored entirely by LightFM, while someone with a single order stays mostly on bestsellers and newest-by-date. On a small shop that is the behavior you want.
+Blending is also what writes the `'__cold_start__'` rows. Setting `saturate_at = 5.0` means a customer with five distinct products is scored entirely by LightFM, while someone with a single order stays mostly on bestsellers and newest-by-date. On a small shop that is the behavior you want.
 
-**Two things are called “latest.”** The `latest_date_columns` setting ranks products by an item timestamp, `created_at` in this config. The `"latest"` you can list in `[job].models` is something else: a recency-window sales list built from events, a third model rather than a flavor of `popular`. This walkthrough uses the date list only, and you should not add `"latest"` to `models` while blending is on, because the two rankings fight each other; [how it works](https://cicerone.dev/how-it-works/) has the details. If `products` has no usable date column among the names you gave, the date list is skipped and its weight moves to `popular`, which the job log will tell you.
+**Two things are called “latest.”** The `latest_date_columns` setting ranks products by an item timestamp, `created_at` in this config. The `"latest"` you can list in `[job].models` is something else: a recency-window sales list built from events, a third model rather than a flavor of `popular`. This walkthrough uses the date list only. Adding `"latest"` to `models` while blending is on gains you nothing, because Cicerone skips that strategy for the run and warns that it did; [how it works](https://cicerone.dev/how-it-works/) has the details. If `products` has no usable date column among the names you gave, the date list is skipped and its weight moves to `popular`, which the job log will tell you.
 
 A `view` weight with no view rows behind it is harmless, but an `event_type` that appears in your SQL and not in `[event_weights]` is dropped with a warning.
 
@@ -291,7 +291,7 @@ If the process cannot see Postgres, the cause is almost always the hostname, whe
 
 ## See what it did
 
-Every run writes two things: a **manifest row** recording whether the job succeeded, how much data it saw, and which models it trained, and the **recommendations table** itself. Dataset and parquet output overwrite the manifest each time, while a db output appends to it, which is one of the reasons to share Postgres.
+Every run records a **manifest row** — whether the job succeeded, how much data it saw, which models it trained — and a run that succeeds also rewrites the **recommendations table**. Dataset and parquet output overwrite the manifest each time, while a db output appends to it, which is one of the reasons to share Postgres.
 
 The job container’s stdout is the first place to look, for a `Job finished: {…}` line plus any `WARN` about dropped `event_type`s or missing feature columns. After that, SQL:
 
