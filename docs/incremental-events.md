@@ -150,8 +150,13 @@ artifact and recommendation writes.
 | s3 sqs | Delivery fan-out OK; apply still under the lease |
 | redis_streams | Consumer groups + unique `consumer_name`; apply is leader-only |
 
-Same-process full `job.run()` passes `busy_check` so incremental flushes
-skip while a retrain holds `RunGuard`.
+The retrain interlock only engages when something supplies a busy check.
+`start_events_runtime` builds the retrain probe solely when
+`[events].ha = true`, and its optional `busy_check` argument is left unset by
+the only caller in shipped code (`serve.app`) — no batch path starts the
+events runtime at all. So with `ha = false` a flush is never deferred while a
+full retrain writes, and `cicerone_events_apply_busy_total{reason="retrain"}`
+stays at zero unless you embed the worker yourself and pass a check.
 
 ## Ops
 
