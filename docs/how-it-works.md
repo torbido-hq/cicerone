@@ -21,11 +21,13 @@ flowchart LR
   weigh[features.toml weights]
   dataset[RecTools Dataset]
   fit[fit strategies]
+  allow[eligibility allowlist]
+  score[score allowed items]
   combine[priority or RRF or blending]
-  policy[eligibility and boosts]
+  boost[boosts re-rank]
   out[recommendations plus manifest]
   events[optional events ingest]
-  input --> weigh --> dataset --> fit --> combine --> policy --> out
+  input --> weigh --> dataset --> fit --> allow --> score --> combine --> boost --> out
   events -->|"popular/latest write-through"| out
 ```
 
@@ -34,10 +36,13 @@ flowchart LR
    `[job].half_life_days`).
 3. Fit every name in `[job].models` (RecTools `model_from_config`, plus
    in-repo `content_fallback`).
-4. Combine with **one** of: priority order, weighted reciprocal rank fusion,
+4. Resolve eligibility into a per-cohort allowlist **before** scoring: each
+   strategy fills top-K from allowed items only, and a cohort whose allowlist
+   is empty produces no rows at all.
+5. Combine with **one** of: priority order, weighted reciprocal rank fusion,
    or per-user blending.
-5. Apply eligibility (hard allowlist) and boosts (soft re-rank).
-6. Write `recommendations` + a run `manifest` (and an items snapshot so
+6. Apply boosts (soft re-rank) to the combined list.
+7. Write `recommendations` + a run `manifest` (and an items snapshot so
    serve can filter by category / availability).
 
 Full `job.run()` is the drift backstop (cron or `POST /trigger/retrain`).
@@ -196,8 +201,9 @@ Recipes: `config/features.toml` and the README Business policies section.
 `[job.automl]` backtests candidate `models` / `weights` / `rrf_k` over
 time folds of your events (`MAP` / `NDCG` / `Recall` via RecTools metrics)
 and picks the winner for that run. It is not a neural architecture search.
-Fitted models are reused across candidates **within a fold**; `recommend()`
-still runs fresh. Sequential skip rules above still apply.
+Fitted models **and** per-strategy `recommend()` frames are reused across
+candidates within a fold; only the combination step is recomputed. Sequential
+skip rules above still apply.
 
 ## Incremental vs full retrain
 
@@ -211,5 +217,9 @@ no clean online `partial_fit` on this path. Operator guide:
 
 A user is truly cold only if they are **absent** from the dataset (no
 interactions **and** no features). Feature-only users are warm for LightFM.
-Serve / dashboard unknown `user_id`s return the precomputed
-`__cold_start__` list with `fallback: true`, not a bare 404.
+Serve / dashboard answer an unknown `user_id` with `fallback: true` rather
+than a bare 404 — when there is something to fall back to. The job writes the
+`__cold_start__` set **only under blending**; incremental events then keep it
+fresh. Under priority or RRF that sentinel is absent, so the reader
+substitutes one `popular_fallback` / `latest` user's top-K, and 404s if the
+table has neither.

@@ -22,9 +22,12 @@ For `[events]` ingest (webhook, backends, HA), see
 | `io/factory.py` | kind→backend registry (`"dataset"` or `"db"`) |
 | `io/dataset_store.py` | Backend: parquet files (S3-compatible or local disk) |
 | `io/db_store.py` | Backend: SQLAlchemy-backed database tables/queries |
-| `io/recommendation_reader.py` | Read-only lookup of precomputed recs for serve mode (no rectools/lightfm import); dataset path indexes by `user_id` at refresh; shared cold-start selection rule |
+| `io/recommendation_reader.py` | Read-only lookup of precomputed recs for serve mode (pulls `rectools` for `Columns` via `blending.py`, but no lightfm/implicit/torch); dataset path indexes by `user_id` at refresh; shared cold-start selection rule |
 | `io/manifest_reader.py` | Read-only lookup of job-run manifests for the dashboard (no rectools/lightfm import) |
 | `io/options.py` | Shared `require_option` / `build_s3_client` helpers |
+| `io/replace_users.py` | Shared helpers for user-scoped recommendation replaces |
+| `ids.py` | External user/item id column resolution shared by dataset frames, policy, and recommend paths |
+| `values.py` | Shared missing-value / list-coercion helpers for policy and content features |
 | `dataset.py` | Raw events/users/items → weighted rectools Dataset (`BuiltDataset`; keeps users+items frames for policy evaluation; caps keep most recent N) |
 | `model/` | `BuiltDataset` → `STRATEGIES` registry → fit / recommend / combine |
 | `model/strategies.py` | `RecommenderModel` protocol, `Strategy`, `STRATEGIES`, `build_strategy_model` |
@@ -47,12 +50,15 @@ For `[events]` ingest (webhook, backends, HA), see
 | `serve/events_routes.py` | Optional `POST /events` webhook mount when `[events]` webhook is enabled |
 | `serve/bootstrap_events.py` | Start/stop the serve-process event worker (micro-batch → write-through) |
 | `serve/metrics.py` | Prometheus metric objects + helpers (default in-process registry) |
+| `serve/code_samples.py` | OpenAPI `x-codeSamples` snippets for serve mode (ReDoc / exported schema) |
 | `serve_schemas.py` | Pydantic models that drive the serve OpenAPI schema |
 | `serve_client.py` | Thin stdlib HTTP client for the serve read API |
 | `export_serve_openapi.py` | `cicerone export-openapi` — dump FastAPI OpenAPI JSON (`docs/openapi/…`) |
 | `events/` | EventSource registry, micro-batch write-through — [incremental-events.md](incremental-events.md) |
+| `events/ha.py` | Leader-only apply helpers for horizontally scaled incremental-events ingest |
 | `trigger.py` | Event-driven retrain trigger: webhook + optional input-bucket poll, debounce guard (`RunGuard`) shared with the cron loop; increments `cicerone_retrain_trigger_total` (per replica) |
 | `locks/` | Optional lock backends (`postgres.py` / `redis.py`) for `RunGuard` and the events apply lease; Redis `owned()` checks the fencing token, Postgres `owned()` checks `pg_locks` for this backend pid |
+| `locks/keys.py` | Lock key helpers shared by the Postgres and Redis backends |
 | `config/lock_url.py` | Postgres lock URL resolution for config load + lock builder |
 | `http_auth.py` | Shared bearer-token (serve/trigger) and HTTP Basic Auth (dashboard) dependencies |
 | `dashboard.py` | Standalone FastAPI dashboard: job status/history plus user-id lookup (`cicerone dashboard`) |
@@ -128,8 +134,9 @@ flowchart LR
    `InputSource`/`OutputSink` via `io.factory`, and reads `events`
    (required) plus `users`/`items` (optional).
 2. `dataset.build_dataset()` turns raw events into weighted interactions
-   (event-type weights, quantity scaling, per-pair caps, exponential time
-   decay — all driven by `FeatureConfig`) and explodes user/item feature
+   (event-type weights, quantity scaling and per-pair caps from
+   `FeatureConfig`; exponential time decay from `Settings.half_life_days`,
+   i.e. `[job].half_life_days` — not `features.toml`) and explodes user/item feature
    columns into rectools' long format, then constructs a
    `rectools.dataset.Dataset`.
 3. `model.train_and_recommend()` fits every strategy listed in
@@ -141,8 +148,11 @@ flowchart LR
    `content_fallback` is inserted before the first non-personalized
    strategy if not already listed. Personalized strategies
    (`collaborative`, `item_based`, `sequential`, `content_fallback`) only run for "warm"
-   users (any user present in the dataset, with or without interactions — see
-   the cold-start note below); non-personalized strategies (`popular`,
+   users, but they do not agree on what warm means: `collaborative` scores any
+   user present in the dataset, including feature-only users with no
+   interactions, while `item_based`, `sequential`, and `content_fallback` set
+   `requires_interactions` and are filtered down to users who actually
+   interacted (see the cold-start note below); non-personalized strategies (`popular`,
    `latest`) run for every target user and backfill any warm user who didn't
    get enough personalized results after eligibility filtering. Before
    `recommend()`, `policy.resolve_eligibility()` merges
@@ -226,7 +236,9 @@ flowchart LR
    a versioned fitted-model artifact (`model.artifact` for the dataset
    backend, `model_artifacts` table for db) via
    `OutputSink.write_model_artifact`. Serve mode never loads this artifact.
-6. For batch, `cicerone start` runs `scheduler.main()`: it
+6. For batch, `cicerone start` runs one job immediately (`job.run()`, so the
+   manifest records `triggered_by = "manual"`) and aborts if it fails; only
+   then does it enter `scheduler.main()`, which
    computes the next run time from `cron_schedule` with `croniter`, sleeps,
    calls `job.run(triggered_by="cron")` (with `fence_check=backend.owned` when a
    distributed lock is held), and loops forever — a failed run is
@@ -240,9 +252,12 @@ flowchart LR
 ## Serve mode and the retrain trigger
 
 Selected via `[job].mode = "serve"`, `cicerone.serve` is a separate entrypoint
-(`cicerone serve`) from the batch scheduler — a serve-only
-deployment never imports `cicerone.model`/`dataset`/`automl` (no
-rectools/lightfm/implicit/torch needed in that process or its request path):
+(`cicerone serve`) from the batch scheduler — a serve-only deployment never
+imports `cicerone.model`/`dataset`/`automl`, and needs no
+lightfm/implicit/torch in that process or its request path. It does import
+`rectools` at startup: `serve/app.py` → `events/worker.py` → `blending.py` →
+`from rectools import Columns`, so `rectools` cannot be dropped from a
+serve-only image.
 
 - `io.factory.build_recommendation_reader(settings.output)` builds a
   `RecommendationReader` (`io/recommendation_reader.py`) matching the
@@ -400,8 +415,10 @@ keys a given backend requires. To add a new backend (e.g. a message queue):
 1. Add a module under `src/cicerone/io/` implementing the `InputSource`
    and/or `OutputSink` protocol (`io/base.py`) — read `options` yourself,
    validating required keys with `io.options.require_option`.
-2. Register the new `kind` string in `io/factory.py`'s
-   `build_input_source`/`build_output_sink`.
+2. Register the new `kind` string in the `io/factory.py` registries:
+   `_INPUT_SOURCES` / `_OUTPUT_SINKS` for the batch job, plus
+   `_RECOMMENDATION_READERS` / `_MANIFEST_READERS` or serve and the dashboard
+   raise `Unknown recommendation kind` for it.
 3. Document the new `kind` and its `options` in `config/cicerone.toml`.
 
 Nothing in `config/`, `job.py`, `dataset.py`, or `model/` needs to
