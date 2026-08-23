@@ -17,19 +17,53 @@ The usual answer is `ORDER BY sold_count DESC` under a friendlier heading. There
 
 [Cicerone](https://cicerone.dev) is a Docker job that runs at night: it reads the orders you already store, writes a ranked table, and goes back to sleep. Your app only ever `SELECT`s from that table, so there is no gem to install and nothing Cicerone-shaped anywhere in the request path.
 
-I built it for Torbido, a bottle shop that has not opened yet, so [torbido.co](https://torbido.co) is a landing page for now. Its catalog is drinks, which is why the repo’s default `features.toml` carries beer columns like `favorite_styles` and `abv_bucket`; ignore them unless you happen to have those fields. What the job actually needs is who bought what and when: `user_id`, `item_id`, `event_type`, and `occurred_at`, plus `quantity` if you want order size to count for anything.
+I built it for Torbido, a bottle shop that has not opened yet, so [torbido.co](https://torbido.co) is a landing page for now. Its catalog is drinks, which is why the repo’s default `features.toml` carries beer columns like `favorite_styles` and `abv_bucket`. Ignore them unless you happen to have those fields. What the job actually needs is who bought what and when: `user_id`, `item_id`, `event_type`, and `occurred_at`, plus `quantity` if you want order size to count for anything.
 
 Rails is the example because a lot of small shops look like this, but the same two TOML files work just as well next to Laravel, Django, Phoenix, or a Go service. There is an optional HTTP API too, which this walkthrough does not use.
 
+The whole shape of it:
+
+```text
+cron, 03:00 UTC by default
+  │
+  ├─ SELECT from order_items            (SQL you write)
+  ├─ weigh events, fit LightFM + popular
+  ├─ blend the two lists by rank
+  └─ TRUNCATE + write cicerone_recommendations
+                        │
+                        └─ your app: SELECT ... ORDER BY rank, JOIN products
+```
+
 ## What you get
 
-On a cron (default 03:00 UTC) the job:
+The same three steps, with the details that matter:
 
 1. Runs SQL you give it (`events`, optional `users` / `items`)
 2. Fits two lists — a personalized one ([LightFM](https://making.lyst.com/lightfm/docs/home.html)) and store-wide bestsellers — then mixes them
 3. Writes `cicerone_recommendations` (`user_id`, `item_id`, `rank`, `score`, `source`)
 
-Your app joins that table to `products`. This walkthrough configures no `[events]` block, so the ranks change only when the job runs and a purchase this afternoon surfaces tomorrow. Turning on [incremental events](https://cicerone.dev/incremental-events/) refreshes the bestsellers and newest-by-date rows between runs, but the personalized half always waits for the cron.
+That table is the entire interface. For one customer it looks like this:
+
+```sql
+SELECT item_id, rank, score, source
+FROM cicerone_recommendations
+WHERE user_id = '42'
+ORDER BY rank
+LIMIT 3;
+```
+
+```text
+ item_id | rank | score | source
+ 8842    |    1 |  0.81 | blended
+ 1207    |    2 |  0.44 | personalized
+ 3391    |    3 |  0.31 | popular_fallback
+```
+
+Your app joins that to `products` and renders the row. The numbers are illustrative; the shape is exact — one row per recommendation, ranked, carrying the label of whatever produced it.
+
+This walkthrough configures no `[events]` block, so the ranks change only when the job runs. A purchase this afternoon surfaces tomorrow. Turning on [incremental events](https://cicerone.dev/incremental-events/) refreshes the bestsellers and newest-by-date rows between runs, but the personalized half always waits for the cron.
+
+What those labels mean, and the one config name that shadows them:
 
 | Name | Where | Meaning |
 | --- | --- | --- |
@@ -53,7 +87,7 @@ Guests and brand-new accounts have no purchase history, so the job writes one sh
 
 ## What the job does
 
-You do not have 1–5 star ratings to work with. You have purchases, which are a weak yes, and silence for everything else. Before any model sees them, those rows become training weights: recent purchases count for more, `log1p(quantity)` stops one bulk order from dominating, and `[event_caps]` keeps only the N most recent repeats of an event type per `(user, item)` pair. The full recipe is [interaction weighting](https://cicerone.dev/how-it-works/#interaction-weighting).
+You do not have 1–5 star ratings to work with. You have purchases, which are a weak yes, and silence for everything else. Before any model sees them, those rows become training weights. Recent purchases count for more, `log1p(quantity)` stops one bulk order from dominating, and `[event_caps]` keeps only the N most recent repeats of an event type per `(user, item)` pair. The full recipe is [interaction weighting](https://cicerone.dev/how-it-works/#interaction-weighting).
 
 Each night:
 
@@ -77,9 +111,9 @@ On a thin order log, collaborative filtering is mostly bestsellers with extra st
 
 Cicerone earns its place if you want that second row without becoming a recommendations team and without running a Python model inside the shop process. It will not work miracles, though: fifty checkouts a week is not enough history for LightFM to “just know.”
 
-**Keep the bestsellers query.** Once the first job has run, look at `source`. If almost every signed-in user comes back as `popular_fallback`, or as `blended` rows that are still mostly bestsellers, the personalized half is not earning its keep yet, and no amount of config will change that.
+**Keep the bestsellers query.** Once the first job has run, look at `source`. If almost every signed-in user comes back as `popular_fallback`, or as `blended` rows that are still mostly bestsellers, the personalized half is not earning its keep yet. No amount of config will change that.
 
-One trap is worth knowing before you run anything: every successful job truncates the recommendations table and rewrites it. Point `recommendations_table` at something you care about and the first run will empty it, so give the name a prefix you would never use elsewhere.
+One trap is worth knowing before you run anything: every successful job truncates the recommendations table and rewrites it. Point `recommendations_table` at something you care about and the first run will empty it. Give the name a prefix you would never use elsewhere.
 
 ## Map a Rails schema to the event contract
 
@@ -137,7 +171,7 @@ FROM products p
 
 Rename `published` and `in_stock` to whatever booleans you actually have, such as `active` or `inventory_count > 0`. If nothing matches, either write the expressions yourself or set `item_availability_filters = []` so Cicerone stops looking for them. A filter column that is missing gets skipped rather than raising, which is easy to overlook in the logs.
 
-The users query can be a single column, since this setup needs no user features and has no business reading `email`, `encrypted_password`, or session tokens. Omit `users_query` entirely and Cicerone will `SELECT * FROM users` — your whole Devise table — and then look for a `user_id` column that is really called `id`. Alias it and select nothing else:
+The users query can be a single column. This setup needs no user features, and it has no business reading `email`, `encrypted_password`, or session tokens. Omit `users_query` entirely and Cicerone will `SELECT * FROM users` — your whole Devise table — then look for a `user_id` column that is really called `id`. Alias it and select nothing else:
 
 ```sql
 SELECT id::text AS user_id FROM users
@@ -145,7 +179,7 @@ SELECT id::text AS user_id FROM users
 
 ## Two TOML files
 
-Put these next to the Rails app, or in a small `cicerone/` directory you mount into the container. Secrets stay in the environment, since the TOML only refers to `${INPUT_DATABASE_URL}` and `${OUTPUT_DATABASE_URL}`, and both should point at the same database with the SQLAlchemy driver prefix:
+Put these next to the Rails app, or in a small `cicerone/` directory you mount into the container. Secrets stay in the environment: the TOML only refers to `${INPUT_DATABASE_URL}` and `${OUTPUT_DATABASE_URL}`. Both should point at the same database, with the SQLAlchemy driver prefix:
 
 ```text
 postgresql+psycopg://USER:PASS@HOST:5432/DBNAME
@@ -153,7 +187,7 @@ postgresql+psycopg://USER:PASS@HOST:5432/DBNAME
 
 That is not the `postgres://` URL Rails uses. From Compose, `HOST` is the Postgres **service name** — `postgres`, `db`, and so on — rather than `localhost`.
 
-Output identifiers cannot be schema-qualified, so `cicerone.recommendations` is rejected and the tables live in `public` behind a prefix. The job needs `CREATE` on its first run and `TRUNCATE` from then on. A dedicated role with `SELECT`-only access to `orders` is the right instinct, though granting it `CREATE` on `public` is the awkward part; plenty of small shops use the app role instead and stay careful about the table name. Either way, do not leave it as the default `recommendations`.
+Output identifiers cannot be schema-qualified, so `cicerone.recommendations` is rejected and the tables live in `public` behind a prefix. The job needs `CREATE` on its first run and `TRUNCATE` from then on. A dedicated role with `SELECT`-only access to `orders` is the right instinct, though granting it `CREATE` on `public` is the awkward part. Plenty of small shops use the app role instead and stay careful about the table name. Either way, do not leave it as the default `recommendations`.
 
 The queries in `cicerone.toml` are the purchase, users, and items SELECTs from the previous section, plus the view `UNION ALL` if you have that table:
 
@@ -230,15 +264,15 @@ popular_share = 0.7
 latest_date_columns = ["created_at"]
 ```
 
-Blending is also the only thing that writes the `'__cold_start__'` rows: set `enabled = false` and the guest list is never written, so the `cold_start` scope further down comes back empty. Setting `saturate_at = 5.0` means a customer with five distinct products is scored entirely by LightFM, while someone with a single order stays mostly on bestsellers and newest-by-date. On a small shop that is the behavior you want.
+Blending is also the only thing that writes the [guest list](#guest-list-__cold_start__). Set `enabled = false` and those rows are never written, so the `cold_start` scope further down comes back empty. Setting `saturate_at = 5.0` means a customer with five distinct products is scored entirely by LightFM, while someone with a single order stays mostly on bestsellers and newest-by-date. On a small shop that is the behavior you want.
 
-**Two things are called “latest.”** The `latest_date_columns` setting ranks products by an item timestamp, `created_at` in this config. The `"latest"` you can list in `[job].models` is something else: a recency-window sales list built from events, a third model rather than a flavor of `popular`. This walkthrough uses the date list only. Adding `"latest"` to `models` while blending is on gains you nothing, because Cicerone skips that strategy for the run and warns that it did; [how it works](https://cicerone.dev/how-it-works/) has the details. If `products` has no usable date column among the names you gave, the date list is skipped and its weight moves to `popular`, which the job log will tell you.
+**Two things are called “latest.”** The `latest_date_columns` setting ranks products by an item timestamp, `created_at` in this config. The `"latest"` you can list in `[job].models` is something else: a recency-window sales list built from events, a third model rather than a flavor of `popular`. This walkthrough uses the date list only. Adding `"latest"` to `models` while blending is on gains you nothing, because Cicerone skips that strategy for the run and warns that it did — [how it works](https://cicerone.dev/how-it-works/) has the details. If `products` has no usable date column among the names you gave, the date list is skipped and its weight moves to `popular`. The job log will tell you.
 
 A `view` weight with no view rows behind it is harmless, but an `event_type` that appears in your SQL and not in `[event_weights]` is dropped with a warning.
 
 ## Own the output table in Rails
 
-Cicerone will `CREATE TABLE` on the first write if the table is missing, courtesy of pandas `to_sql`. I still write the migration myself, so that `schema.rb` or `structure.sql` knows the name and nobody discovers the column types by accident:
+Cicerone will `CREATE TABLE` on the first write if the table is missing, courtesy of pandas `to_sql`. I still write the migration myself. That way `schema.rb` or `structure.sql` knows the name, and nobody discovers the column types by accident:
 
 ```ruby
 class CreateCiceroneRecommendations < ActiveRecord::Migration[7.1]
@@ -285,13 +319,13 @@ docker run --rm \
   job --config /app/config/cicerone.toml
 ```
 
-The image is tagged `cicerone` and its `ENTRYPOINT` is already the CLI, so what follows the image name is only the subcommand: `job`, `users`, or `dashboard`, never a second `cicerone`. The same goes for `command:` in Compose.
+The image is tagged `cicerone` and its `ENTRYPOINT` is already the CLI. What follows the image name is only the subcommand: `job`, `users`, or `dashboard`, never a second `cicerone`. The same goes for `command:` in Compose.
 
-If the process cannot see Postgres, the cause is almost always the hostname, where container DNS and `localhost` disagree, or the URL scheme, where `postgres://` should have been `postgresql+psycopg://`.
+If the process cannot see Postgres, the cause is almost always one of two things. Either the hostname, where container DNS and `localhost` disagree, or the URL scheme, where `postgres://` should have been `postgresql+psycopg://`.
 
 ## See what it did
 
-Every run records a **manifest row** — whether the job succeeded, how much data it saw, which models it trained — and a run that succeeds also rewrites the **recommendations table**. Dataset and parquet output overwrite the manifest each time, while a db output appends to it, which is one of the reasons to share Postgres.
+Every run records a **manifest row**: whether the job succeeded, how much data it saw, which models it trained. A run that succeeds also rewrites the **recommendations table**. Dataset and parquet output overwrite the manifest each time, while a db output appends to it. That is one of the reasons to share Postgres.
 
 The job container’s stdout is the first place to look, for a `Job finished: {…}` line plus any `WARN` about dropped `event_type`s or missing feature columns. After that, SQL:
 
@@ -330,7 +364,7 @@ ORDER BY r.rank;
     3 | popular_fallback |  0.31 | House Lager     | beer
 ```
 
-Those rows are illustrative; your catalog and your scores will differ. Swap `'42'` for `'__cold_start__'` to read the guest list.
+Those rows are illustrative; your catalog and your scores will differ. Swap `'42'` for `'__cold_start__'` to read the [guest list](#guest-list-__cold_start__).
 
 If you would rather click than query, Cicerone ships a small Basic-Auth **dashboard** that reads those same two tables: the latest run, the history a db output gives you, and a lookup of the current top-K for any user id. It never loads LightFM. Put its config next to the other TOML as `cicerone.dashboard.toml`:
 
@@ -379,13 +413,13 @@ docker run --rm --name cicerone-dashboard -p 127.0.0.1:8090:8090 \
   dashboard --config /app/config/cicerone.dashboard.toml
 ```
 
-Open `http://127.0.0.1:8090/dashboard`, sign in, and type `42` or `__cold_start__` into the lookup. Keep it bound to localhost unless it sits behind your own auth.
+Open `http://127.0.0.1:8090/dashboard`, sign in, and type a `user_id` into the lookup — `42`, or `__cold_start__` for the [guest list](#guest-list-__cold_start__). Keep it bound to localhost unless it sits behind your own auth.
 
 ![Cicerone dashboard: user lookup of current top-K, latest job status, and run history](https://cicerone.dev/images/docs/dashboard.png)
 
 ## Read it from the app
 
-Reading the table is a `SELECT`, not an SDK call. ActiveRecord is one way to write it, and Eloquent, SQLAlchemy, Ecto, or `database/sql` would ask for the same columns. Because the table has no `id`, set `primary_key` to `nil` so ActiveRecord stops assuming one. `for_user` takes a string, so pass `current_user.id.to_s`, and `cold_start` covers the guest rows. Read with `pluck` rather than `find` or `update`, and resist `belongs_to :product`, since `item_id` is text while `products.id` is an integer:
+Reading the table is a `SELECT`, not an SDK call. ActiveRecord is one way to write it, and Eloquent, SQLAlchemy, Ecto, or `database/sql` would ask for the same columns. Because the table has no `id`, set `primary_key` to `nil` so ActiveRecord stops assuming one. `for_user` takes a string, so pass `current_user.id.to_s`; `cold_start` reads the [guest list](#guest-list-__cold_start__). Read with `pluck` rather than `find` or `update`. Resist `belongs_to :product` too, since `item_id` is text while `products.id` is an integer:
 
 ```ruby
 class CiceroneRecommendation < ApplicationRecord
@@ -431,9 +465,9 @@ end
 <% end %>
 ```
 
-If the job has never succeeded, `@recommended` comes back empty, so hide the section or fall back to your old bestsellers partial rather than inventing a failure state for it. The `.map(&:to_i)` assumes the usual integer `products.id`; drop it and pass the strings straight through if your primary keys are UUIDs.
+If the job has never succeeded, `@recommended` comes back empty. Hide the section or fall back to your old bestsellers partial rather than inventing a failure state for it. The `.map(&:to_i)` assumes the usual integer `products.id`; drop it and pass the strings straight through if your primary keys are UUIDs.
 
-None of this is specific to Rails. A Python worker or a Node renderer runs the same `SELECT`, falling back to `'__cold_start__'` when a signed-in user has no rows yet:
+None of this is specific to Rails. A Python worker or a Node renderer runs the same `SELECT`, with the same fallback to `'__cold_start__'` when a signed-in user has no rows yet:
 
 ```python
 sql = """
@@ -477,7 +511,9 @@ cicerone:
     - postgres
 ```
 
-The job needs no ports, because batch mode never listens. It costs you two TOML files on disk and one nightly LightFM fit of CPU, which a shop-sized catalog will manage on a small VM without a GPU. The `docker-compose.yml` in the Cicerone repo is developer convenience, not this deployment.
+The job needs no ports, because batch mode never listens. It costs you two TOML files on disk and one nightly LightFM fit of CPU. A shop-sized catalog will manage that on a small VM without a GPU. The `docker-compose.yml` in the Cicerone repo is developer convenience, not this deployment.
+
+For a sense of scale: on a 2 vCPU / 4 GB VM, a catalog of roughly 5,000 products and 200,000 purchase lines finishes in single-digit minutes and peaks a few hundred MB of RSS, most of it sparse matrices and pandas frames rather than model weights. Treat that as an order of magnitude and not a benchmark — I have not measured it, and LightFM cost scales with interactions and epochs rather than catalog size alone. The `Job finished: {…}` line and `docker stats` will give you the real numbers after one night.
 
 You can keep the dashboard up alongside it. Its config directory is mounted read-write so that `users add` can persist the bcrypt file:
 
@@ -511,5 +547,7 @@ Last night’s cron has run, or you ran `job` yourself. Either way, look at `sou
 If it is mostly `popular_fallback`, the job is still serving bestsellers, so keep that query on the homepage until more customers have bought the same things. That is not a failure. It is what a young order log looks like.
 
 If `personalized` and `blended` are showing up for people who actually buy, put the `SELECT` on the homepage and leave the cron running in Compose. That is the whole product this walkthrough set up: a table your shop already knows how to read.
+
+Even then, `source` only tells you which list won, not whether anyone clicked. You still have the bestsellers query, so serve both — personalized to half your signed-in traffic, the old query to the other half — and compare click-through per impression over a couple of weeks. If personalized does not win, keep serving bestsellers and let the table keep filling. You will have measured it instead of guessing.
 
 The drink columns in the repo’s default config were never part of the contract. It only ever asked who bought what, and when. Everything after that is a cron job writing ranks and going back to sleep.
