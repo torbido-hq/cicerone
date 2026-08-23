@@ -24,7 +24,7 @@ Rails is the example because a lot of small shops look like this, but the same t
 The whole shape of it:
 
 ```text
-cron, 03:00 UTC
+cron, 03:00 UTC by default
   │
   ├─ SELECT from order_items            (SQL you write)
   ├─ weigh events, fit LightFM + popular
@@ -36,7 +36,7 @@ cron, 03:00 UTC
 
 ## What you get
 
-On a cron (default 03:00 UTC) the job:
+The same three steps, with the details that matter:
 
 1. Runs SQL you give it (`events`, optional `users` / `items`)
 2. Fits two lists — a personalized one ([LightFM](https://making.lyst.com/lightfm/docs/home.html)) and store-wide bestsellers — then mixes them
@@ -59,11 +59,11 @@ LIMIT 3;
  3391    |    3 |  0.31 | popular_fallback
 ```
 
-Your app joins that to `products` and renders the row. The numbers are illustrative; the shape is exact — one row per recommendation, ranked, carrying the label that produced it.
+Your app joins that to `products` and renders the row. The numbers are illustrative; the shape is exact — one row per recommendation, ranked, carrying the label of whatever produced it.
 
 This walkthrough configures no `[events]` block, so the ranks change only when the job runs. A purchase this afternoon surfaces tomorrow. Turning on [incremental events](https://cicerone.dev/incremental-events/) refreshes the bestsellers and newest-by-date rows between runs, but the personalized half always waits for the cron.
 
-Those `source` values, and the config name behind one of them:
+What those labels mean, and the one config name that shadows them:
 
 | Name | Where | Meaning |
 | --- | --- | --- |
@@ -511,11 +511,9 @@ cicerone:
     - postgres
 ```
 
-The job needs no ports, because batch mode never listens. It costs you two TOML files on disk and one nightly LightFM fit of CPU. A shop-sized catalog will manage that on a small VM without a GPU.
+The job needs no ports, because batch mode never listens. It costs you two TOML files on disk and one nightly LightFM fit of CPU. A shop-sized catalog will manage that on a small VM without a GPU. The `docker-compose.yml` in the Cicerone repo is developer convenience, not this deployment.
 
-For a sense of scale: on a 2 vCPU / 4 GB VM, a catalog of roughly 5,000 products and 200,000 purchase lines finishes in single-digit minutes and peaks a few hundred MB of RSS — the sparse matrices and the pandas frames, not the model. Treat that as an order of magnitude rather than a benchmark; I have not measured your data, and LightFM cost scales with interactions and epochs, not with catalog size alone. The `Job finished: {…}` line and `docker stats` will tell you the real numbers in one night.
-
-The `docker-compose.yml` in the Cicerone repo is developer convenience, not this deployment.
+For a sense of scale: on a 2 vCPU / 4 GB VM, a catalog of roughly 5,000 products and 200,000 purchase lines finishes in single-digit minutes and peaks a few hundred MB of RSS, most of it sparse matrices and pandas frames rather than model weights. Treat that as an order of magnitude and not a benchmark — I have not measured it, and LightFM cost scales with interactions and epochs rather than catalog size alone. The `Job finished: {…}` line and `docker stats` will give you the real numbers after one night.
 
 You can keep the dashboard up alongside it. Its config directory is mounted read-write so that `users add` can persist the bcrypt file:
 
@@ -550,6 +548,6 @@ If it is mostly `popular_fallback`, the job is still serving bestsellers, so kee
 
 If `personalized` and `blended` are showing up for people who actually buy, put the `SELECT` on the homepage and leave the cron running in Compose. That is the whole product this walkthrough set up: a table your shop already knows how to read.
 
-None of that tells you the row is working. You still have the bestsellers query, so serve both — personalized to half your signed-in traffic, the old query to the other half — and compare click-through per impression over a couple of weeks. If personalized does not win, keep serving bestsellers and let the table keep filling; that is an answer, not a failure.
+Even then, `source` only tells you which list won, not whether anyone clicked. You still have the bestsellers query, so serve both — personalized to half your signed-in traffic, the old query to the other half — and compare click-through per impression over a couple of weeks. If personalized does not win, keep serving bestsellers and let the table keep filling. You will have measured it instead of guessing.
 
 The drink columns in the repo’s default config were never part of the contract. It only ever asked who bought what, and when. Everything after that is a cron job writing ranks and going back to sleep.
