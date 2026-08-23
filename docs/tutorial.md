@@ -258,11 +258,13 @@ days, so use small `n_splits`/`test_days` values to get at least one valid
 fold (production configs typically use the defaults, `n_splits = 2` /
 `test_days = 14`, over months of real history). By default AutoML tries
 every strategy alone, the default priority combo, and one all-strategy
-weighted-fusion blend — with a catalog this tiny, `item_based`'s candidates
-can end up being asked to recommend for a user it never saw interact in
-that fold, which `ImplicitItemKNNWrapperModel` doesn't support, so override
-the search space with `[[job.automl.candidates]]` to a couple of
-`item_based`-free options instead:
+weighted-fusion blend. On a catalog this tiny that mostly wastes folds:
+`item_based` is left with a couple of training interactions and no usable
+neighbours, so its candidates score zero on every metric while the
+non-personalized ones actually rank something. It does not fail — test users
+with no interactions in that fold are dropped before `recommend()` rather
+than raising — it just has nothing to say. Override the search space with
+`[[job.automl.candidates]]` to a couple of `item_based`-free options instead:
 
 ```toml
 [job]
@@ -464,8 +466,13 @@ for `Columns`, so that one stays in a serve-only image.) Reuse the local `data/o
 cp config/cicerone.serve.toml config/cicerone.serve.local.toml
 ```
 
-Edit `config/cicerone.serve.local.toml`'s `[output.options]` to point at the
-same local directory the batch job wrote to, and set an `auth_token`:
+In `config/cicerone.serve.local.toml`, **replace** the `[output.options]` and
+`[serve]` tables the copy already ships with — do not append these, because a
+second `[output.options]` or `[serve]` header is a duplicate table and TOML
+parsing fails. Replacing `[output.options]` also drops the `${OUTPUT_S3_*}`
+placeholders, which would otherwise resolve against environment variables you
+have not set. Everything omitted from `[serve]` keeps its default (`host`
+`0.0.0.0`, `port` 8000, `default_k` 10, `refresh_interval_seconds` 60):
 
 ```toml
 [output.options]
