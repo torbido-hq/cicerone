@@ -6,7 +6,13 @@ import pandas as pd
 import pytest
 from sqlalchemy import create_engine
 
-from cicerone.events.db import DbEventSource, _identity_sort_key, _row_identity, _stable_event_id
+from cicerone.events.db import (
+    DbEventSource,
+    _identity_sort_key,
+    _is_numeric_identity,
+    _row_identity,
+    _stable_event_id,
+)
 from cicerone.events.normalize import EventNormalizeError
 from cicerone.events.registry import build_event_source, registered_event_source_kinds
 
@@ -399,6 +405,34 @@ def test_db_numeric_id_cursor_orders_nine_before_ten(tmp_path):
     assert {event.event_id for event in rest} == {"id:10", "id:11"}
 
 
+def test_db_event_id_column_numeric_identity_does_not_skip_id_10(tmp_path):
+    url = _sqlite_url(tmp_path)
+    ts = "2026-08-13T12:00:00+00:00"
+    _seed_events(
+        url,
+        [
+            {
+                "user_id": "u1",
+                "item_id": f"i{n}",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": ts,
+                "event_id": f"id:{n}",
+            }
+            for n in (9, 10, 11)
+        ],
+    )
+    source = DbEventSource({"database_url": url, "initial_watermark": "2026-08-01T00:00:00Z"})
+    source.connect()
+    first = list(source.poll(1))
+    assert source._has_event_id_column is True
+    assert first[0].event_id == "id:9"
+    source.ack([first[0].event_id])
+    assert source.health().lag == 2
+    rest = list(source.poll(10))
+    assert {event.event_id for event in rest} == {"id:10", "id:11"}
+
+
 def test_identity_sort_key_orders_numeric_ids_and_ctid():
     assert _identity_sort_key("id:9") < _identity_sort_key("id:10")
     assert _identity_sort_key("id:9") < _identity_sort_key("id:11")
@@ -412,6 +446,12 @@ def test_identity_sort_key_orders_numeric_ids_and_ctid():
     raw = _identity_sort_key("id:not-an-int")
     assert numeric != raw
     assert numeric < raw or raw < numeric
+    assert _is_numeric_identity("id:9")
+    assert _is_numeric_identity("rowid:00000000000000000010")
+    assert _is_numeric_identity("ctid:(0,10)")
+    assert not _is_numeric_identity("e1")
+    assert not _is_numeric_identity("id:not-an-int")
+    assert not _is_numeric_identity("ctid:not-a-tuple")
 
 
 def test_row_identity_prefers_id_then_rowid_then_ctid():

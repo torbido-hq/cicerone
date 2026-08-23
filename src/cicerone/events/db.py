@@ -100,6 +100,20 @@ def _identity_sort_key(event_id: str) -> tuple[str, tuple[str, ...]]:
     return ("", (event_id,))
 
 
+def _is_numeric_identity(event_id: str) -> bool:
+    """True when SQL text order would disagree with `_identity_sort_key`."""
+    prefix, _parts = _identity_sort_key(event_id)
+    if prefix in ("id:", "rowid:"):
+        try:
+            int(event_id[len(prefix) :])
+        except ValueError:
+            return False
+        return True
+    if prefix == "ctid:":
+        return _CTID_TUPLE.fullmatch(event_id[5:].replace(" ", "")) is not None
+    return False
+
+
 def _cursor_tuple(occurred_at: datetime, event_id: str) -> tuple[datetime, tuple[str, tuple[str, ...]]]:
     return (occurred_at, _identity_sort_key(event_id))
 
@@ -318,6 +332,28 @@ class DbEventSource(EventSource):
         limit: int,
     ) -> list[dict[str, Any]]:
         select_clause, has_event_id = self._ensure_source_schema(engine)
+        if has_event_id and _is_numeric_identity(watermark_event_id):
+            # SQL text order is id:10 < id:9; Python _identity_sort_key is numeric.
+            same_sql = text(
+                f"SELECT {select_clause} FROM {self._from_clause()} WHERE occurred_at = :watermark_at"
+            )
+            later_sql = text(
+                f"SELECT {select_clause} FROM {self._from_clause()} "
+                "WHERE occurred_at > :watermark_at "
+                "ORDER BY occurred_at ASC "
+                "LIMIT :limit"
+            )
+            with engine.connect() as conn:
+                same = [
+                    dict(row) for row in conn.execute(same_sql, {"watermark_at": watermark_at}).mappings()
+                ]
+                later = [
+                    dict(row)
+                    for row in conn.execute(
+                        later_sql, {"watermark_at": watermark_at, "limit": max(limit, 1)}
+                    ).mappings()
+                ]
+            return same + later
         if has_event_id:
             # Match ack cursor (occurred_at, event_id) so same-timestamp pages cannot skip rows.
             sql = text(
@@ -327,7 +363,7 @@ class DbEventSource(EventSource):
                 "ORDER BY occurred_at ASC, event_id ASC "
                 "LIMIT :limit"
             )
-            params: dict[str, Any] = {
+            params = {
                 "watermark_at": watermark_at,
                 "watermark_event_id": watermark_event_id,
                 "limit": max(limit, 1),
@@ -348,7 +384,7 @@ class DbEventSource(EventSource):
         _select_clause, has_event_id = self._ensure_source_schema(engine)
         # Prefer SQL COUNT when event_id exists. SQLite text/datetime binding makes
         # equality unreliable, so scan rows there (still on the narrow projection).
-        if has_event_id and engine.dialect.name != "sqlite":
+        if has_event_id and engine.dialect.name != "sqlite" and not _is_numeric_identity(watermark_event_id):
             try:
                 return self._count_after_sql(engine, watermark_at, watermark_event_id)
             except Exception:
