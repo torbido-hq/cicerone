@@ -230,7 +230,7 @@ popular_share = 0.7
 latest_date_columns = ["created_at"]
 ```
 
-Blending is also what writes the `'__cold_start__'` rows. Setting `saturate_at = 5.0` means a customer with five distinct products is scored entirely by LightFM, while someone with a single order stays mostly on bestsellers and newest-by-date. On a small shop that is the behavior you want.
+Blending is also the only thing that writes the `'__cold_start__'` rows: set `enabled = false` and the guest list is never written, so the `cold_start` scope further down comes back empty. Setting `saturate_at = 5.0` means a customer with five distinct products is scored entirely by LightFM, while someone with a single order stays mostly on bestsellers and newest-by-date. On a small shop that is the behavior you want.
 
 **Two things are called “latest.”** The `latest_date_columns` setting ranks products by an item timestamp, `created_at` in this config. The `"latest"` you can list in `[job].models` is something else: a recency-window sales list built from events, a third model rather than a flavor of `popular`. This walkthrough uses the date list only. Adding `"latest"` to `models` while blending is on gains you nothing, because Cicerone skips that strategy for the run and warns that it did; [how it works](https://cicerone.dev/how-it-works/) has the details. If `products` has no usable date column among the names you gave, the date list is skipped and its weight moves to `popular`, which the job log will tell you.
 
