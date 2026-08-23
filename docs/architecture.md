@@ -37,7 +37,7 @@ For `[events]` ingest (webhook, backends, HA), see
 | `content_fallback.py` | Optional content-based cold-item strategy (one-hot item features + cosine vs user history) |
 | `artifact.py` | Optional versioned fitted-model bundle (schema **v3**: RecTools `save`/`load_model` for library models + pickle envelope; `content_fallback` still pickle) |
 | `automl.py` | Optional: backtests candidate models/weights/`rrf_k` configs over time-based folds of event history and picks the best one |
-| `cli.py` | `cicerone` console script (`start` / `job` / `serve` / `dashboard` / `scheduler` / `users` / `export-openapi`; `--config`, `--log-level`) |
+| `cli.py` | `cicerone` console script (`start` (alias `run`) / `job` / `serve` / `dashboard` / `scheduler` / `users` / `export-openapi`; `--config`, `--log-level`, `--log-format`) |
 | `packaging.py` | Wheel checks for the Docker `package` stage (`python -m cicerone.packaging`) |
 | `job.py` | Orchestrates one end-to-end run (source → dataset → model → sink) |
 | `scheduler.py` | In-process cron loop that calls `job.run()`; when `[job.trigger]` is enabled, also hosts the retrain-trigger HTTP server (`trigger.py`) |
@@ -94,7 +94,7 @@ Test modules mirror the packages (same pattern as `tests/test_io_*.py`):
 | `tests/support/model_events.py` | Shared synthetic events helper |
 | `tests/support/toml_config.py` | Shared `write_toml` helper |
 | `tests/support/events.py` | Shared event payload helper for `test_events_*` |
-| `tests/test_events_*.py` | EventSource registry / normalize / webhook / db / s3 / redis_streams / buffer / store / updater / worker |
+| `tests/test_events_*.py` | EventSource registry / normalize / webhook / db / db_postgres / s3 / redis_streams / buffer / store / updater / worker / ha |
 | `tests/test_config_events.py` | `[events]` coerce + TOML load |
 | `tests/test_serve_events_routes.py` / `test_serve_bootstrap_events.py` | Serve webhook mount + worker bootstrap |
 
@@ -189,13 +189,16 @@ flowchart LR
    before truncating to `top_k`. Cohorts with an empty allowlist (eligibility
    filtered out every item) are skipped.
    An optional `strategy_cache` parameter (keyed by strategy name, caching
-   the *fitted model* rather than its `recommend()` output) lets a caller
-   who is evaluating multiple configs against the same `BuiltDataset` —
-   namely `automl.evaluate_candidates()` — skip re-fitting a strategy shared
-   by more than one candidate; a cache hit still calls `recommend()` fresh, so
-   it works even across candidates with different `top_k`/`weights`. The
-   batch job also passes a cache when `[job].save_model_artifact = true` so
-   fitted weights can be serialized without a second fit.
+   the *fitted model*) lets a caller who is evaluating multiple configs
+   against the same `BuiltDataset` — namely `automl.evaluate_candidates()` —
+   skip re-fitting a strategy shared by more than one candidate. A separate
+   `recommend_cache` memoizes per-strategy `recommend()` frames, keyed by
+   strategy, cohort, `recommend_k`, allowlist and dataset fingerprint;
+   AutoML passes one per fold, so candidates that differ only in how they
+   combine strategies reuse the scored frames and recompute just the
+   combination. The batch job also passes a `strategy_cache` when
+   `[job].save_model_artifact = true` so fitted weights can be serialized
+   without a second fit.
 4. If `Settings.automl_enabled` (`[job.automl].enabled`), before step 3
    `automl.evaluate_candidates()` backtests a list of candidate
    `models`/`weights`/`rrf_k` configs (defaults to `automl.DEFAULT_CANDIDATES`,
