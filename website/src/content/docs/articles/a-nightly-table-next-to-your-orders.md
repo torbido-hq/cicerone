@@ -17,7 +17,7 @@ The usual answer is `ORDER BY sold_count DESC` under a friendlier heading. There
 
 [Cicerone](https://cicerone.dev) is a Docker job that runs at night: it reads the orders you already store, writes a ranked table, and goes back to sleep. Your app only ever `SELECT`s from that table, so there is no gem to install and nothing Cicerone-shaped anywhere in the request path.
 
-I built it for Torbido, a bottle shop that no longer trades; [torbido.co](https://torbido.co) is a landing page these days. The SKUs there were drinks, which is why the repo’s default `features.toml` still carries beer columns like `favorite_styles` and `abv_bucket`; ignore them unless you happen to have those fields. The job itself only cares about `user_id`, `item_id`, and `event_type`.
+I built it for Torbido, a bottle shop that has not opened yet, so [torbido.co](https://torbido.co) is a landing page for now. The catalog is drinks, which is why the repo’s default `features.toml` carries beer columns like `favorite_styles` and `abv_bucket`; ignore them unless you happen to have those fields. The job itself only cares about `user_id`, `item_id`, and `event_type`.
 
 Rails is the example because a lot of small shops look like this, but the same two TOML files work just as well next to Laravel, Django, Phoenix, or a Go service. There is an optional HTTP API too, which this walkthrough does not use.
 
