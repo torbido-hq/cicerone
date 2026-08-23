@@ -667,6 +667,7 @@ code is structured. See [CHANGELOG.md](CHANGELOG.md) for release notes.
 ## License
 
 [Beerware](LICENSE) — if we meet someday and you find this useful, buy me a
-beer (or, even better, one straight from [Torbido](https://torbido.it)).
+beer (or, even better, one straight from [Torbido](https://torbido.co) once
+it opens).
 
 
