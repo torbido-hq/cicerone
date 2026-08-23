@@ -106,3 +106,10 @@ def test_format_recommendation_rows_empty_text_is_placeholder():
     rows = format_recommendation_rows(recs, category_column="category")
     assert rows[0]["source"] == MISSING
     assert rows[0]["category"] == MISSING
+
+
+def test_format_recommendation_rows_pd_na_text_is_placeholder():
+    recs = pd.DataFrame([{"item_id": "i1", "rank": 1, "score": 0.1, "source": pd.NA, "category": pd.NA}])
+    rows = format_recommendation_rows(recs, category_column="category")
+    assert rows[0]["source"] == MISSING
+    assert rows[0]["category"] == MISSING

@@ -146,6 +146,6 @@ def _format_score(value: object) -> str:
 
 
 def _format_text(value: object) -> str:
-    if value == "" or is_missing(value):
+    if is_missing(value) or value == "":
         return MISSING
     return str(value)
