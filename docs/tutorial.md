@@ -210,8 +210,8 @@ label (e.g. `"popular_fallback+latest"`) joined in `models`' configured
 order, and `score` is the summed `weight / (rrf_k + rank)` across every
 strategy that recommended that pair. Tune the fusion constant with
 `rrf_k = 60` (the default; must be a positive number, placed *above*
-`[job.model_weights]` — see the TOML gotcha note in the README) if you want
-top ranks to matter more or less relative to lower ones.
+`[job.model_weights]` — see the TOML gotcha note in `config/cicerone.toml`)
+if you want top ranks to matter more or less relative to lower ones.
 
 ## 7. Per-user weighted blending
 
@@ -288,8 +288,9 @@ popular = 0.3
 Re-run the job — the log output (`docker logs`, or just watch stdout) will
 show a line per candidate like `AutoML candidate 'collaborative+popular'
 scored {...} over 1 fold(s)`, followed by `AutoML selected '...' (metrics=...,
-over 1 fold(s))`, and the manifest's `automl_enabled`/`automl_metrics` fields
-record what was picked and how it scored. See `config/cicerone.toml` for the
+over 1 fold(s))`. In the manifest, `automl_enabled` is only the config flag
+and `automl_metrics` is how the winner scored; what was actually picked lands
+in `models` / `model_weights` / `rrf_k`. See `config/cicerone.toml` for the
 full annotated example of the default search space (safe to use as-is once
 your dataset has enough history for every strategy to see every backtested
 user).
@@ -444,7 +445,7 @@ Input and output can be mixed (e.g. read from Postgres, write to S3, or
 vice versa), and raw SQL overrides (`events_query`/`users_query`/
 `items_query`) let you read straight from an existing application schema
 instead of requiring materialized tables — see the README's
-[Configuration section](../README.md#configuration-config-cicerone-toml).
+[Configuration section](../README.md#configuration-configciceronetoml).
 
 Clean up when you're done:
 
@@ -456,8 +457,9 @@ docker compose --profile db down   # or: docker compose --profile db stop postgr
 
 Everything so far has run the batch job directly. `[job].mode = "serve"`
 switches to a separate, lightweight **read** API over whatever the batch job
-last wrote to `[output]` — it never imports rectools/lightfm/implicit, never
-trains, and never loads a model artifact. Reuse the local `data/output/` from
+last wrote to `[output]` — it never imports lightfm/implicit/torch, never
+trains, and never loads a model artifact. (It does import `rectools` itself,
+for `Columns`, so that one stays in a serve-only image.) Reuse the local `data/output/` from
 [step 3](#3-run-the-job-once):
 
 ```sh
@@ -518,7 +520,8 @@ Try a few filters (same auth header):
 curl -s -H "Authorization: Bearer $SERVE_TOKEN" \
   "http://localhost:8000/recommendations/alice?limit=5&category=beer"
 
-# Unknown user → cold-start fallback (popular/latest/blended), not a bare 404
+# Unknown user → cold-start fallback (popular_fallback/latest/blended);
+# 404 only when the table has no sentinel and no popular/latest rows
 curl -s -H "Authorization: Bearer $SERVE_TOKEN" \
   "http://localhost:8000/recommendations/nobody?limit=5"
 
@@ -685,10 +688,15 @@ browser (log in with the user just created), or
 `http://localhost:8090/dashboard?user_id=alice` to fill the inspector on
 load. The **Look up recommendations** form inspects a `user_id`'s current
 top-K from the same output store (including cold-start fallback). Row count
-is `min(job.top_k, dashboard.lookup_k)` (default 20). If you enabled
-`[events]` in [step 13](#13-ingest-incremental-events-optional), an
-incremental-events panel appears once a flush is in the latest manifest
-(dataset `manifest.json` is overwritten by the next full job run).
+is `min(job.top_k, dashboard.lookup_k)` (`lookup_k` defaults to 20, so 10
+with the default `top_k`). The
+incremental-events panel is gated on the `[events]` block of the config the
+**dashboard** was started with, not the one from
+[step 13](#13-ingest-incremental-events-optional): copy `enabled = true` into
+`config/cicerone.dashboard.local.toml` too, or the panel never renders. Once
+it does render, it shows the last flush from the latest manifest, or "no
+incremental flushes recorded" until one lands (dataset `manifest.json` is
+overwritten by the next full job run).
 
 ```sh
 docker run --rm -d --name cicerone-tutorial-dashboard -p 8090:8090 \
@@ -736,7 +744,7 @@ docker compose up --build
   [model artifacts](../README.md#model-artifacts) reference for every
   tunable knob covered above.
 - Point input/output at S3-compatible object storage (R2, AWS S3, MinIO) —
-  see the README's [Configuration](../README.md#configuration-config-cicerone-toml)
+  see the README's [Configuration](../README.md#configuration-configciceronetoml)
   section.
 - Production incremental ingest (db / s3 / Redis Streams, HA):
   [incremental-events.md](incremental-events.md).
