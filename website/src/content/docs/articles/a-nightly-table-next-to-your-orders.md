@@ -29,7 +29,7 @@ On a cron (default 03:00 UTC) the job:
 2. Fits two lists — a personalized one ([LightFM](https://making.lyst.com/lightfm/docs/home.html)) and store-wide bestsellers — then mixes them
 3. Writes `cicerone_recommendations` (`user_id`, `item_id`, `rank`, `score`, `source`)
 
-Your app joins that table to `products`. Because the ranks are written once a night, a purchase this afternoon will not move them until the next run. ([Incremental events](https://cicerone.dev/incremental-events/) can refresh the bestsellers list between jobs, but LightFM still waits for the cron.)
+Your app joins that table to `products`. This walkthrough configures no `[events]` block, so the ranks change only when the job runs and a purchase this afternoon surfaces tomorrow. Turning on [incremental events](https://cicerone.dev/incremental-events/) refreshes the bestsellers and newest-by-date rows between runs, but the personalized half always waits for the cron.
 
 | Name | Where | Meaning |
 | --- | --- | --- |
