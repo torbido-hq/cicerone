@@ -53,7 +53,7 @@ Guests and brand-new accounts have no purchase history, so the job writes one sh
 
 ## What the job does
 
-You do not have 1–5 star ratings to work with. You have purchases, which are a weak yes, and silence for everything else. Before any model sees them, those rows become training weights: recent purchases count for more, `log1p(quantity)` stops one bulk order from dominating, and `[event_caps]` limits how many repeats of an event type count at all. The full recipe is [interaction weighting](https://cicerone.dev/how-it-works/#interaction-weighting).
+You do not have 1–5 star ratings to work with. You have purchases, which are a weak yes, and silence for everything else. Before any model sees them, those rows become training weights: recent purchases count for more, `log1p(quantity)` stops one bulk order from dominating, and `[event_caps]` keeps only the N most recent repeats of an event type per `(user, item)` pair. The full recipe is [interaction weighting](https://cicerone.dev/how-it-works/#interaction-weighting).
 
 Each night:
 
