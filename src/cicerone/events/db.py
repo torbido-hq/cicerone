@@ -41,14 +41,20 @@ _FETCH_COLUMNS = (
 _ROW_IDENTITY_KEYS = ("id", "rowid", "ctid")
 _CTID_TUPLE = re.compile(r"\((\d+),(\d+)\)")
 _IDENTITY_SORT_SEP = "\x1f"
-# SQLite/Postgres expression matching `_identity_sort_key` (padded id/rowid/ctid).
+_SQLITE_OCCURRED_AT = "strftime('%Y-%m-%d %H:%M:%f', occurred_at)"
+_SQLITE_WATERMARK_AT = "strftime('%Y-%m-%d %H:%M:%f', :watermark_at)"
+# SQLite/Postgres expression matching `_identity_bind_sort_key`.
 _SQLITE_CTID_INNER = "replace(replace(replace(event_id, ' ', ''), 'ctid:(', ''), ')', '')"
 _SQLITE_IDENTITY_SORT = (
     "CASE"
     " WHEN event_id GLOB 'id:[0-9]*' AND substr(event_id, 4) NOT GLOB '*[^0-9]*'"
     " THEN 'id:' || char(31) || printf('%020d', CAST(substr(event_id, 4) AS INTEGER))"
+    " WHEN event_id LIKE 'id:%'"
+    " THEN 'id:' || char(31) || substr(event_id, 4)"
     " WHEN event_id GLOB 'rowid:[0-9]*' AND substr(event_id, 7) NOT GLOB '*[^0-9]*'"
     " THEN 'rowid:' || char(31) || printf('%020d', CAST(substr(event_id, 7) AS INTEGER))"
+    " WHEN event_id LIKE 'rowid:%'"
+    " THEN 'rowid:' || char(31) || substr(event_id, 7)"
     f" WHEN replace(event_id, ' ', '') LIKE 'ctid:(%,%)'"
     f" THEN 'ctid:' || char(31)"
     f" || printf('%020d', CAST(substr({_SQLITE_CTID_INNER}, 1, instr({_SQLITE_CTID_INNER}, ',') - 1)"
@@ -56,14 +62,20 @@ _SQLITE_IDENTITY_SORT = (
     f" || char(31)"
     f" || printf('%020d', CAST(substr({_SQLITE_CTID_INNER}, instr({_SQLITE_CTID_INNER}, ',') + 1)"
     f" AS INTEGER))"
+    " WHEN event_id LIKE 'ctid:%'"
+    " THEN 'ctid:' || char(31) || char(31) || replace(substr(event_id, 6), ' ', '')"
     " ELSE char(31) || event_id END"
 )
 _POSTGRES_IDENTITY_SORT = (
     "CASE"
     " WHEN event_id ~ '^id:[0-9]+$'"
     " THEN 'id:' || chr(31) || lpad(substring(event_id from 4), 20, '0')"
+    " WHEN event_id LIKE 'id:%'"
+    " THEN 'id:' || chr(31) || substring(event_id from 4)"
     " WHEN event_id ~ '^rowid:[0-9]+$'"
     " THEN 'rowid:' || chr(31) || lpad(substring(event_id from 7), 20, '0')"
+    " WHEN event_id LIKE 'rowid:%'"
+    " THEN 'rowid:' || chr(31) || substring(event_id from 7)"
     " WHEN replace(event_id, ' ', '') ~ '^ctid:\\([0-9]+,[0-9]+\\)$'"
     " THEN 'ctid:' || chr(31)"
     " || lpad((regexp_match(replace(event_id, ' ', ''),"
@@ -71,6 +83,8 @@ _POSTGRES_IDENTITY_SORT = (
     " || chr(31)"
     " || lpad((regexp_match(replace(event_id, ' ', ''),"
     " '^ctid:\\(([0-9]+),([0-9]+)\\)$'))[2], 20, '0')"
+    " WHEN event_id LIKE 'ctid:%'"
+    " THEN 'ctid:' || chr(31) || chr(31) || replace(substring(event_id from 6), ' ', '')"
     " ELSE chr(31) || event_id END"
 )
 _EVENTS_QUERY_FORBIDDEN = re.compile(
@@ -164,9 +178,9 @@ def _occurred_at_predicates(dialect: str) -> tuple[str, str, str]:
     """SQL fragments: later-than watermark, same watermark, order-by occurred_at."""
     if dialect == "sqlite":
         return (
-            "datetime(occurred_at) > datetime(:watermark_at)",
-            "datetime(occurred_at) = datetime(:watermark_at)",
-            "datetime(occurred_at) ASC",
+            f"{_SQLITE_OCCURRED_AT} > {_SQLITE_WATERMARK_AT}",
+            f"{_SQLITE_OCCURRED_AT} = {_SQLITE_WATERMARK_AT}",
+            f"{_SQLITE_OCCURRED_AT} ASC",
         )
     return ("occurred_at > :watermark_at", "occurred_at = :watermark_at", "occurred_at ASC")
 

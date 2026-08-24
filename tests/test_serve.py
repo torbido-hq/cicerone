@@ -163,6 +163,29 @@ def test_items_filter_cache_normalizes_once_per_refresh():
     assert by_cat_c is not by_cat_a
 
 
+def test_items_filter_cache_retries_when_version_moves_during_rebuild():
+    class _BumpOnce(_FakeReader):
+        def get_items(self) -> pd.DataFrame | None:
+            self.get_items_calls += 1
+            if self.get_items_calls == 1:
+                self._items_version += 1
+            return self._items
+
+    reader = _BumpOnce(_recs_df(), _items_df())
+    cache = ItemsFilterCache(
+        reader,
+        category_column="category",
+        availability_filters=["published"],
+    )
+    items, available, by_cat = cache.get()
+    assert reader.get_items_calls == 2
+    assert cache._snapshot is not None
+    assert cache._snapshot[0] == reader.items_version()
+    assert items is not None
+    assert available == frozenset({"i1", "i2"})
+    assert by_cat["beer"] == frozenset({"i1", "i3"})
+
+
 def test_health_requires_no_auth():
     app = create_app(_settings(), _FakeReader(_recs_df()))
     client = TestClient(app)

@@ -28,6 +28,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - DB watermarks compare synthetic `id` / `ctid` numerically so same-timestamp `id:9` does not skip `id:10`.
 - DB poll/lag skip lexical `event_id >` when the watermark is a synthetic numeric identity (`id:9` vs `id:10` in the `event_id` column).
 - DB same-timestamp numeric-identity pages use a padded SQL sort key and LIMIT.
+- SQLite event watermarks compare fractional seconds; SQL identity keys keep the `id:` / `rowid:` / `ctid:` prefix for non-numeric suffixes.
+- Items filter cache retries when the items version moves during rebuild.
 - Recommend cache keys include the user set; run manifest user counts omit `__cold_start__`.
 - Dashboard lookup treats `pd.NA` source/category as missing instead of failing the lookup.
 
