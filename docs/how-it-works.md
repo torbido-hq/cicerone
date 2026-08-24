@@ -92,7 +92,8 @@ Paper: [Kula, *Metadata Embeddings for User and Item Cold-start Recommendations*
 ### `item_based` — item-item KNN
 
 RecTools [`ImplicitItemKNNWrapperModel`](https://rectools.readthedocs.io/en/stable/api/rectools.models.implicit_knn.ImplicitItemKNNWrapperModel.html)
-wrapping [`implicit`](https://github.com/benfred/implicit) `TFIDFRecommender`.
+wrapping [`pm-implicit`](https://github.com/chezou/pm-implicit) `TFIDFRecommender`
+(CUDA 12 fork of [`implicit`](https://github.com/benfred/implicit); import name is still `implicit`).
 Each item is a vector of who interacted with it; neighbors are similar
 items (`model.item_based.model.K`, default 20).
 

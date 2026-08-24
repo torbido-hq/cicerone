@@ -21,6 +21,9 @@ updates:
       # aiobotocore 3.9 pins botocore<1.43.57; boto3 must stay compatible.
       - dependency-name: "boto3"
         versions: [">=1.43.57"]
+      # scipy>=1.18 needs Python>=3.12 and numpy>=2. Stay on 1.17.x for 3.11 CI.
+      - dependency-name: "scipy"
+        versions: [">=1.18.0"]
 
   - package-ecosystem: "docker"
     directory: "/docker"
@@ -33,8 +36,8 @@ updates:
     ignore:
       # Major Python version bumps require re-validating compiled ML deps
       # (rectools/lightfm/scipy pins) against the new interpreter first —
-      # see PR #5, closed because rectools==0.13.0 has no 3.14 wheel/sdist
-      # support. Bump these manually alongside the pinned deps in
+      # see PR #5, closed because rectools==0.19.0 requires Python<3.14.
+      # Bump these manually alongside the pinned deps in
       # requirements.txt instead of accepting an automated PR.
       - dependency-name: "python"
         update-types: ["version-update:semver-major"]
