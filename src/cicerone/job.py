@@ -153,6 +153,7 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
             model_configs=settings.model_configs,
             content_fallback_max_neighbors=settings.content_fallback_max_neighbors,
             run_plan=run_plan,
+            explain=settings.explain,
         )
 
         run_models = list(run_plan.recommend_models)

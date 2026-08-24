@@ -227,7 +227,37 @@ def test_recommendations_returns_records_with_valid_token():
     assert body["generated_at"] == "2026-08-04T12:00:00+00:00"
     assert body["fallback"] is False
     assert [row["item_id"] for row in body["items"]] == ["i1", "i2"]
+    assert all(row["reasons"] is None for row in body["items"])
     assert response.headers["X-Generated-At"] == "2026-08-04T12:00:00+00:00"
+
+
+def test_recommendations_returns_parsed_reasons():
+    recs = _recs_df().copy()
+    recs["reasons"] = [
+        (
+            '{"sources":[{"label":"personalized","rank":1,"weight":1.0,"contribution":null}],'
+            '"boosts":[],"similar_items":[{"item_id":"i9","score":0.5}],'
+            '"matched_attributes":[{"column":"style","value":"lager"}]}'
+        ),
+        None,
+        None,
+        None,
+        None,
+    ]
+    app = create_app(
+        _settings(),
+        _FakeReader(recs, _items_df()),
+        feature_config=_feature_config(),
+    )
+    client = TestClient(app)
+
+    response = client.get("/recommendations/u1", headers={"Authorization": "Bearer secret"})
+
+    assert response.status_code == 200
+    first = response.json()["items"][0]
+    assert first["reasons"]["sources"][0]["label"] == "personalized"
+    assert first["reasons"]["similar_items"][0]["item_id"] == "i9"
+    assert response.json()["items"][1]["reasons"] is None
 
 
 def test_recommendations_respects_limit_query_param():

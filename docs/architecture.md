@@ -37,7 +37,8 @@ For `[events]` ingest (webhook, backends, HA), see
 | `model/epoch_metrics.py` | Optional LightFM per-epoch Precision/Recall logging |
 | `model/constants.py` | `RRF_K`, `DEFAULT_MODELS`, source column names |
 | `model_config.py` | Default + TOML `[model.*]` RecTools `model_from_config` configs; sequential `architecture` → `cls`; legacy `job.item_based.k_neighbors` → `model.K` (no ML imports — safe for serve) |
-| `content_fallback.py` | Optional content-based cold-item strategy (one-hot item features + cosine vs user history) |
+| `explain.py` | After combine + boosts, persist `reasons` JSON (source contributions, boost hits, similar history items) |
+| `reasons.py` | Serve-safe serialize/parse for the optional `reasons` column |
 | `artifact.py` | Optional versioned fitted-model bundle (schema **v3**: RecTools `save`/`load_model` for library models + pickle envelope; `content_fallback` still pickle) |
 | `automl.py` | Optional: backtests candidate models/weights/`rrf_k` configs over time-based folds of event history and picks the best one |
 | `cli.py` | `cicerone` console script (`start` (alias `run`) / `job` / `serve` / `dashboard` / `scheduler` / `users` / `export-openapi`; `--config`, `--log-level`, `--log-format`) |
@@ -197,7 +198,9 @@ flowchart LR
    `FeatureConfig.boost_overfetch_factor` (default 3× `top_k`), scores are
    multiplied by the product of boost factors, and ranks are rewritten
    before truncating to `top_k`. Cohorts with an empty allowlist (eligibility
-   filtered out every item) are skipped.
+   filtered out every item) are skipped. `attach_reasons` then writes optional
+   `reasons` JSON (`Settings.explain` / `[job.explain]`) and drops internal
+   combiner/boost columns.
    An optional `strategy_cache` parameter (keyed by strategy name, caching
    the *fitted model*) lets a caller who is evaluating multiple configs
    against the same `BuiltDataset` — namely `automl.evaluate_candidates()` —
@@ -276,9 +279,12 @@ serve-only image.
   `exclude_unavailable`) behind `http_auth.require_bearer_token`. Unknown
   users fall back to the `__cold_start__` list when blending wrote one, else
   to one `popular_fallback` / `latest` user's top-K; with neither, they 404.
-  Responses include `generated_at` from the run manifest. Pydantic models in
+  Responses include `generated_at` from the run manifest. Each item may
+  include `reasons` (contributing sources, boost hits, similar history
+  items) when the batch job wrote the optional column. Pydantic models in
   `serve_schemas.py` populate `/openapi.json` (and `/docs` / `/redoc`);
-  `export_serve_openapi` writes the checked-in copy under `docs/openapi/`.
+  `export_serve_openapi` writes the checked-in copy under `docs/openapi/`
+  (the docs site copies it to `website/public/openapi/` at build time).
   Integrators can call the same contract via `serve_client.ServeClient`, the
   snippets in `examples/serve/`, or the `x-codeSamples` embedded in OpenAPI /
   ReDoc (Ruby, Python, JavaScript, Shell).
@@ -347,7 +353,9 @@ never imports `cicerone.model`/`dataset`/`automl`.
   `min(job.top_k, dashboard.lookup_k)` (`lookup_k` defaults to 20, so 10 with
   the default `top_k`). Missing users fall
   back to `__cold_start__` / popular-latest rows with a badge; `category`
-  is joined from the items snapshot when that column exists.
+  is joined from the items snapshot when that column exists. When `reasons`
+  is present, the table shows a short Why summary (source labels, top
+  similar item).
 - `job.run()` writes exactly one manifest per run via a `try`/`finally`,
   with a consistent key set (`status: "success"|"failed"`, `error`) on both
   the success and failure paths, so a failed run is no longer silently

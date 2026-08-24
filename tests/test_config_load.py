@@ -60,6 +60,9 @@ def test_load_settings_dataset_backends(tmp_path):
     assert settings.content_fallback_enabled is False
     assert settings.content_fallback_max_neighbors == 50
     assert settings.sequential_min_median_interactions == 5
+    assert settings.explain.enabled is True
+    assert settings.explain.max_similar_items == 3
+    assert settings.explain.max_attributes == 5
     assert settings.automl_enabled is False
     assert settings.automl_n_splits == 2
     assert settings.automl_test_days == 14
@@ -123,6 +126,63 @@ def test_load_settings_item_based_and_content_fallback(tmp_path):
     assert settings.item_based_k_neighbors == 15
     assert settings.content_fallback_enabled is True
     assert settings.content_fallback_max_neighbors == 25
+
+
+def test_load_settings_explain(tmp_path):
+    config_path = write_toml(
+        tmp_path,
+        """
+        [job]
+        [job.explain]
+        enabled = false
+        max_similar_items = 0
+        max_attributes = 2
+
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+
+    settings = load_settings(config_path)
+
+    assert settings.explain.enabled is False
+    assert settings.explain.max_similar_items == 0
+    assert settings.explain.max_attributes == 2
+
+
+def test_load_settings_explain_rejects_negative(tmp_path):
+    config_path = write_toml(
+        tmp_path,
+        """
+        [job]
+        [job.explain]
+        max_similar_items = -1
+
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+
+    with pytest.raises(ConfigError, match="job.explain.max_similar_items"):
+        load_settings(config_path)
 
 
 def test_load_settings_sequential_min_median_interactions(tmp_path):

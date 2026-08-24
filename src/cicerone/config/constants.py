@@ -31,6 +31,8 @@ DEFAULT_ITEM_BASED_K_NEIGHBORS = 20
 DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS = 50
 # AutoML skip: median distinct items/user below this excludes sequential.
 DEFAULT_SEQUENTIAL_MIN_MEDIAN_INTERACTIONS = 5
+DEFAULT_EXPLAIN_MAX_SIMILAR_ITEMS = 3
+DEFAULT_EXPLAIN_MAX_ATTRIBUTES = 5
 
 Mode = Literal["batch", "serve"]
 # Strategy names stay as ``str`` and are validated against STRATEGY_NAMES at load.

@@ -22,12 +22,13 @@ from cicerone.io.base import OutputSink
 from cicerone.io.recommendation_reader import (
     ITEM_COLUMN,
     RANK_COLUMN,
-    RECOMMENDATION_COLUMNS,
     SCORE_COLUMN,
     SOURCE_COLUMN,
     USER_COLUMN,
 )
+from cicerone.io.recommendation_schema import REASONS_COLUMN, recommendation_output_columns
 from cicerone.locks import LockLostError
+from cicerone.reasons import dump_source_reasons
 from cicerone.weighting import event_row_weights
 
 logger = logging.getLogger(__name__)
@@ -173,7 +174,7 @@ class IncrementalUpdater:
             return len(events)
 
         merged = pd.concat(frames, ignore_index=True)
-        merged = merged[list(RECOMMENDATION_COLUMNS)]
+        merged = merged[recommendation_output_columns(merged)]
         if not self._ensure_write_allowed():
             return 0
         self._ensure_fence()
@@ -315,6 +316,9 @@ class IncrementalUpdater:
             [SCORE_COLUMN, ITEM_COLUMN], ascending=[False, True], kind="mergesort"
         ).head(self._top_k)
         ranked[SOURCE_COLUMN] = POPULAR_SOURCE
+        ranked[REASONS_COLUMN] = [
+            dump_source_reasons(POPULAR_SOURCE, rank=rank) for rank in range(1, len(ranked) + 1)
+        ]
         return ranked.reset_index(drop=True)
 
     def _latest_ranking(self, batch: pd.DataFrame, weights: pd.Series | None = None) -> pd.DataFrame:
@@ -337,6 +341,7 @@ class IncrementalUpdater:
                     ITEM_COLUMN: str(row.item_id),
                     SCORE_COLUMN: float(self._top_k - rank + 1),
                     SOURCE_COLUMN: LATEST_SOURCE,
+                    REASONS_COLUMN: dump_source_reasons(LATEST_SOURCE, rank=rank),
                 }
             )
         return (
@@ -375,6 +380,7 @@ class IncrementalUpdater:
                     ITEM_COLUMN: item_id,
                     SCORE_COLUMN: float(len(boost_items) - index),
                     SOURCE_COLUMN: INCREMENTAL_SOURCE,
+                    REASONS_COLUMN: dump_source_reasons(INCREMENTAL_SOURCE, rank=index + 1),
                 }
                 for index, item_id in enumerate(boost_items[:boost_slots])
             ]
@@ -399,9 +405,7 @@ class IncrementalUpdater:
         combined[ITEM_COLUMN] = combined[ITEM_COLUMN].astype(str)
         combined = combined.drop_duplicates(subset=[ITEM_COLUMN], keep="first").head(self._top_k)
         combined[RANK_COLUMN] = range(1, len(combined) + 1)
-        return combined[[USER_COLUMN, ITEM_COLUMN, RANK_COLUMN, SCORE_COLUMN, SOURCE_COLUMN]].reset_index(
-            drop=True
-        )
+        return combined[recommendation_output_columns(combined)].reset_index(drop=True)
 
     def _cold_start_rows(
         self,
@@ -418,6 +422,4 @@ class IncrementalUpdater:
             combined = combined.drop_duplicates(subset=[ITEM_COLUMN], keep="first").head(self._top_k)
         combined[USER_COLUMN] = COLD_START_USER_ID
         combined[RANK_COLUMN] = range(1, len(combined) + 1)
-        return combined[[USER_COLUMN, ITEM_COLUMN, RANK_COLUMN, SCORE_COLUMN, SOURCE_COLUMN]].reset_index(
-            drop=True
-        )
+        return combined[recommendation_output_columns(combined)].reset_index(drop=True)

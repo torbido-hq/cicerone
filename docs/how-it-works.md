@@ -43,7 +43,9 @@ flowchart LR
    or per-user blending.
 6. Apply boosts (soft re-rank) to the combined list.
 7. Write `recommendations` + a run `manifest` (and an items snapshot so
-   serve can filter by category / availability).
+   serve can filter by category / availability). After boosts,
+   `[job.explain]` (default on) persists a `reasons` JSON column — see
+   [Why this item](#why-this-item).
 
 Full `job.run()` is the drift backstop (cron or `POST /trigger/retrain`).
 
@@ -195,6 +197,16 @@ boosts (it can still filter the items snapshot with `?category=` and
   Commercial overlay; `source` stays a strategy name.
 
 Recipes: `config/features.toml` and the README Business policies section.
+
+## Why this item
+
+Serve cannot reconstruct a model-level explanation on the request path.
+When `[job.explain]` is on (default), the batch job writes a `reasons`
+JSON column: contributing sources (rank / weight / RRF term), boost rules
+that changed the score, and similar history items plus shared catalog
+attributes (Jaccard over the same item-feature tokens as content fallback).
+`source` is unchanged. Disable with `[job.explain].enabled = false`.
+Existing DB recommendation tables need `ALTER TABLE … ADD COLUMN reasons TEXT`.
 
 ## AutoML
 
