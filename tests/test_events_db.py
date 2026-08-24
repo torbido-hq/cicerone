@@ -8,6 +8,7 @@ from sqlalchemy import create_engine
 
 from cicerone.events.db import (
     DbEventSource,
+    _identity_bind_sort_key,
     _identity_sort_key,
     _is_numeric_identity,
     _row_identity,
@@ -431,6 +432,51 @@ def test_db_event_id_column_numeric_identity_does_not_skip_id_10(tmp_path):
     assert source.health().lag == 2
     rest = list(source.poll(10))
     assert {event.event_id for event in rest} == {"id:10", "id:11"}
+
+
+def test_db_numeric_identity_same_timestamp_fetch_is_bounded(tmp_path):
+    url = _sqlite_url(tmp_path)
+    ts = "2026-08-13T12:00:00+00:00"
+    _seed_events(
+        url,
+        [
+            {
+                "user_id": "u1",
+                "item_id": f"i{n}",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": ts,
+                "event_id": f"id:{n}",
+            }
+            for n in range(1, 41)
+        ],
+    )
+    source = DbEventSource({"database_url": url, "initial_watermark": "2026-08-01T00:00:00Z"})
+    source.connect()
+    first = list(source.poll(1))
+    assert first[0].event_id == "id:1"
+    source.ack([first[0].event_id])
+    for _ in range(8):
+        batch = list(source.poll(1))
+        source.ack([batch[0].event_id])
+    assert source._watermark_event_id == "id:9"
+    assert source._engine is not None
+    rows = source._fetch_rows(source._engine, source._watermark_at, source._watermark_event_id, limit=5)
+    assert len(rows) == 5
+    assert [row["event_id"] for row in rows] == [f"id:{n}" for n in range(10, 15)]
+
+
+def test_identity_bind_sort_key_matches_identity_sort_order():
+    ids = [
+        "e1",
+        "id:9",
+        "id:10",
+        "id:11",
+        "rowid:00000000000000000002",
+        "ctid:(0,9)",
+        "ctid:(0,10)",
+    ]
+    assert sorted(ids, key=_identity_sort_key) == sorted(ids, key=_identity_bind_sort_key)
 
 
 def test_identity_sort_key_orders_numeric_ids_and_ctid():
