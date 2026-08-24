@@ -30,6 +30,7 @@ def combine_by_weighted_fusion(
     combined = pd.concat(frames, ignore_index=True)
     combined[Columns.Score] = combined[WEIGHT_COLUMN] / (rrf_k + combined[Columns.Rank])
 
+    # O(groups) Python agg; label order is source_label_order, not group appearance.
     def _join_labels_in_order(labels: pd.Series) -> str:
         present = set(labels)
         return "+".join(label for label in source_label_order if label in present)

@@ -265,6 +265,85 @@ def test_incremental_updater_unknown_event_keeps_popular_only_user(tmp_path, fea
     assert list(u1["item_id"].astype(str)) == ["pop"]
 
 
+def test_incremental_updater_mixed_batch_unknown_keeps_popular_only_user(
+    tmp_path, feature_config: FeatureConfig
+):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "pop", "rank": 1, "score": 0.2, "source": "popular_fallback"},
+        ]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+    )
+    assert (
+        updater.apply(
+            [
+                normalize_event(
+                    event_payload(user_id="u1", event_type="unknown_type", event_id="u", item_id="ix")
+                ),
+                normalize_event(
+                    event_payload(user_id="u2", event_type="purchase", event_id="p", item_id="bought")
+                ),
+            ]
+        )
+        == 2
+    )
+    frame = load_recommendations_frame(settings.output)
+    u1 = frame[frame["user_id"] == "u1"]
+    assert list(u1["item_id"].astype(str)) == ["pop"]
+    u2 = frame[frame["user_id"] == "u2"]
+    assert "bought" in set(u2["item_id"].astype(str))
+
+
+def test_incremental_updater_zero_weight_event_keeps_popular_only_user(
+    tmp_path, feature_config: FeatureConfig
+):
+    from dataclasses import replace
+
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "pop", "rank": 1, "score": 0.2, "source": "popular_fallback"},
+        ]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    zero_weight = replace(
+        feature_config,
+        event_weights={**feature_config.event_weights, "view": 0.0},
+    )
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=zero_weight,
+        top_k=5,
+    )
+    assert (
+        updater.apply(
+            [
+                normalize_event(event_payload(user_id="u1", event_type="view", event_id="z", item_id="ix")),
+            ]
+        )
+        == 1
+    )
+    frame = load_recommendations_frame(settings.output)
+    u1 = frame[frame["user_id"] == "u1"]
+    assert list(u1["item_id"].astype(str)) == ["pop"]
+
+
 def test_incremental_updater_preserves_best_ranks_when_capping(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()
@@ -457,3 +536,50 @@ def test_incremental_updater_rejects_non_positive_cache_size(tmp_path, feature_c
             top_k=3,
             user_cache_max_size=0,
         )
+
+
+def test_popular_ranking_drops_zero_weight_and_breaks_item_ties(tmp_path, feature_config: FeatureConfig):
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        top_k=2,
+    )
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=2,
+    )
+    batch = pd.DataFrame(
+        [
+            {"event_type": "view", "quantity": 1, "item_id": "b"},
+            {"event_type": "view", "quantity": 1, "item_id": "a"},
+            {"event_type": "unknown_type", "quantity": 9, "item_id": "z"},
+        ]
+    )
+    ranked = updater._popular_ranking(batch)
+    assert list(ranked["item_id"]) == ["a", "b"]
+    assert list(ranked["source"]) == ["popular_fallback", "popular_fallback"]
+    assert ranked.iloc[0]["score"] == pytest.approx(ranked.iloc[1]["score"])
+
+
+def test_popular_ranking_drops_negative_weights(tmp_path, feature_config: FeatureConfig):
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        top_k=2,
+    )
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=2,
+    )
+    batch = pd.DataFrame(
+        [
+            {"event_type": "review_negative", "quantity": 1, "item_id": "hate"},
+            {"event_type": "view", "quantity": 1, "item_id": "ok"},
+        ]
+    )
+    ranked = updater._popular_ranking(batch)
+    assert list(ranked["item_id"]) == ["ok"]
+    reused = updater._popular_ranking(batch, updater._row_signal_weights(batch))
+    assert list(reused["item_id"]) == ["ok"]

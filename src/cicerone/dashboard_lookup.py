@@ -10,6 +10,7 @@ import pandas as pd
 from cicerone.config import Settings
 from cicerone.io.base import RecommendationReader
 from cicerone.io.recommendation_schema import ITEM_COLUMN, RANK_COLUMN, SCORE_COLUMN, SOURCE_COLUMN
+from cicerone.values import is_missing
 
 logger = logging.getLogger(__name__)
 
@@ -120,28 +121,31 @@ def _join_category(recs: pd.DataFrame, items: pd.DataFrame | None, category_colu
     return recs.merge(extra, on=ITEM_COLUMN, how="left")
 
 
-def _is_missing(value: object) -> bool:
-    if value is None or value == "":
-        return True
-    result = pd.isna(value)
-    return bool(result) if isinstance(result, bool) else False
+def _coerce_float(value: object) -> float | None:
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if number != number:
+        return None
+    return number
 
 
 def _format_rank(value: object) -> str:
-    number = pd.to_numeric(value, errors="coerce")
-    if _is_missing(number):
+    number = _coerce_float(value)
+    if number is None:
         return MISSING
     return str(int(number))
 
 
 def _format_score(value: object) -> str:
-    number = pd.to_numeric(value, errors="coerce")
-    if _is_missing(number):
+    number = _coerce_float(value)
+    if number is None:
         return MISSING
-    return f"{float(number):.4f}"
+    return f"{number:.4f}"
 
 
 def _format_text(value: object) -> str:
-    if _is_missing(value):
+    if is_missing(value) or value == "":
         return MISSING
     return str(value)

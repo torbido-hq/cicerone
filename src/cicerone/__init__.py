@@ -3,4 +3,4 @@
 from __future__ import annotations
 
 # Single release version: bump here when dating CHANGELOG.md for a release.
-__version__ = "0.6.1"
+__version__ = "0.6.2"

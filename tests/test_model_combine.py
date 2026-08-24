@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 from rectools import Columns
 
@@ -210,3 +211,33 @@ def test_combine_by_weighted_fusion_ties_break_on_item_id():
     ]
     out = combine_by_weighted_fusion(frames, top_k=2, rrf_k=60.0, source_label_order=["first", "second"])
     assert list(out[Columns.Item]) == ["a", "b"]
+
+
+def test_combine_by_weighted_fusion_large_group_baseline():
+    n_users = 200
+    n_items = 20
+    users = np.repeat([f"u{u:04d}" for u in range(n_users)], n_items)
+    items = np.tile([f"i{i:03d}" for i in range(n_items)], n_users)
+    ranks = np.tile(np.arange(1, n_items + 1), n_users)
+
+    def _frame(source: str, weight: float) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                Columns.User: users,
+                Columns.Item: items,
+                Columns.Rank: ranks,
+                Columns.Score: 1.0,
+                "source": source,
+                WEIGHT_COLUMN: weight,
+            }
+        )
+
+    out = combine_by_weighted_fusion(
+        [_frame("first", 1.0), _frame("second", 0.5)],
+        top_k=10,
+        rrf_k=60.0,
+        source_label_order=["first", "second"],
+    )
+    assert len(out) == n_users * 10
+    assert (out.groupby(Columns.User).size() <= 10).all()
+    assert (out["source"] == "first+second").all()

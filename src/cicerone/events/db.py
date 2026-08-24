@@ -39,6 +39,54 @@ _FETCH_COLUMNS = (
     "id",
 )
 _ROW_IDENTITY_KEYS = ("id", "rowid", "ctid")
+_CTID_TUPLE = re.compile(r"\((\d+),(\d+)\)")
+_IDENTITY_SORT_SEP = "\x1f"
+_SQLITE_OCCURRED_AT = "strftime('%Y-%m-%d %H:%M:%f', occurred_at)"
+_SQLITE_WATERMARK_AT = "strftime('%Y-%m-%d %H:%M:%f', :watermark_at)"
+# SQLite/Postgres expression matching `_identity_bind_sort_key`.
+_SQLITE_CTID_INNER = "replace(replace(replace(event_id, ' ', ''), 'ctid:(', ''), ')', '')"
+_SQLITE_IDENTITY_SORT = (
+    "CASE"
+    " WHEN event_id GLOB 'id:[0-9]*' AND substr(event_id, 4) NOT GLOB '*[^0-9]*'"
+    " THEN 'id:' || char(31) || printf('%020d', CAST(substr(event_id, 4) AS INTEGER))"
+    " WHEN event_id LIKE 'id:%'"
+    " THEN 'id:' || char(31) || substr(event_id, 4)"
+    " WHEN event_id GLOB 'rowid:[0-9]*' AND substr(event_id, 7) NOT GLOB '*[^0-9]*'"
+    " THEN 'rowid:' || char(31) || printf('%020d', CAST(substr(event_id, 7) AS INTEGER))"
+    " WHEN event_id LIKE 'rowid:%'"
+    " THEN 'rowid:' || char(31) || substr(event_id, 7)"
+    f" WHEN replace(event_id, ' ', '') LIKE 'ctid:(%,%)'"
+    f" THEN 'ctid:' || char(31)"
+    f" || printf('%020d', CAST(substr({_SQLITE_CTID_INNER}, 1, instr({_SQLITE_CTID_INNER}, ',') - 1)"
+    f" AS INTEGER))"
+    f" || char(31)"
+    f" || printf('%020d', CAST(substr({_SQLITE_CTID_INNER}, instr({_SQLITE_CTID_INNER}, ',') + 1)"
+    f" AS INTEGER))"
+    " WHEN event_id LIKE 'ctid:%'"
+    " THEN 'ctid:' || char(31) || char(31) || replace(substr(event_id, 6), ' ', '')"
+    " ELSE char(31) || event_id END"
+)
+_POSTGRES_IDENTITY_SORT = (
+    "CASE"
+    " WHEN event_id ~ '^id:[0-9]+$'"
+    " THEN 'id:' || chr(31) || lpad(substring(event_id from 4), 20, '0')"
+    " WHEN event_id LIKE 'id:%'"
+    " THEN 'id:' || chr(31) || substring(event_id from 4)"
+    " WHEN event_id ~ '^rowid:[0-9]+$'"
+    " THEN 'rowid:' || chr(31) || lpad(substring(event_id from 7), 20, '0')"
+    " WHEN event_id LIKE 'rowid:%'"
+    " THEN 'rowid:' || chr(31) || substring(event_id from 7)"
+    " WHEN replace(event_id, ' ', '') ~ '^ctid:\\([0-9]+,[0-9]+\\)$'"
+    " THEN 'ctid:' || chr(31)"
+    " || lpad((regexp_match(replace(event_id, ' ', ''),"
+    " '^ctid:\\(([0-9]+),([0-9]+)\\)$'))[1], 20, '0')"
+    " || chr(31)"
+    " || lpad((regexp_match(replace(event_id, ' ', ''),"
+    " '^ctid:\\(([0-9]+),([0-9]+)\\)$'))[2], 20, '0')"
+    " WHEN event_id LIKE 'ctid:%'"
+    " THEN 'ctid:' || chr(31) || chr(31) || replace(substring(event_id from 6), ' ', '')"
+    " ELSE chr(31) || event_id END"
+)
 _EVENTS_QUERY_FORBIDDEN = re.compile(
     r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|"
     r"COPY|CALL|EXEC|EXECUTE|MERGE|REPLACE|ATTACH|DETACH)\b",
@@ -81,6 +129,66 @@ def _row_identity(payload: dict[str, Any]) -> str | None:
     return None
 
 
+def _identity_sort_key(event_id: str) -> tuple[str, tuple[str, ...]]:
+    """Numeric order for synthetic identities; suffixes stay strings."""
+    for prefix in ("id:", "rowid:"):
+        if event_id.startswith(prefix):
+            rest = event_id[len(prefix) :]
+            try:
+                return (prefix, (f"{int(rest):020d}",))
+            except ValueError:
+                return (prefix, (rest,))
+    if event_id.startswith("ctid:"):
+        rest = event_id[5:].replace(" ", "")
+        match = _CTID_TUPLE.fullmatch(rest)
+        if match:
+            return ("ctid:", (f"{int(match.group(1)):020d}", f"{int(match.group(2)):020d}"))
+        return ("ctid:", ("", rest))
+    return ("", (event_id,))
+
+
+def _is_numeric_identity(event_id: str) -> bool:
+    """True when SQL text order would disagree with `_identity_sort_key`."""
+    prefix, _parts = _identity_sort_key(event_id)
+    if prefix in ("id:", "rowid:"):
+        try:
+            int(event_id[len(prefix) :])
+        except ValueError:
+            return False
+        return True
+    if prefix == "ctid:":
+        return _CTID_TUPLE.fullmatch(event_id[5:].replace(" ", "")) is not None
+    return False
+
+
+def _identity_bind_sort_key(event_id: str) -> str:
+    prefix, parts = _identity_sort_key(event_id)
+    return prefix + _IDENTITY_SORT_SEP + _IDENTITY_SORT_SEP.join(parts)
+
+
+def _identity_sql_sort_expr(dialect: str) -> str | None:
+    if dialect == "sqlite":
+        return _SQLITE_IDENTITY_SORT
+    if dialect == "postgresql":
+        return _POSTGRES_IDENTITY_SORT
+    return None
+
+
+def _occurred_at_predicates(dialect: str) -> tuple[str, str, str]:
+    """SQL fragments: later-than watermark, same watermark, order-by occurred_at."""
+    if dialect == "sqlite":
+        return (
+            f"{_SQLITE_OCCURRED_AT} > {_SQLITE_WATERMARK_AT}",
+            f"{_SQLITE_OCCURRED_AT} = {_SQLITE_WATERMARK_AT}",
+            f"{_SQLITE_OCCURRED_AT} ASC",
+        )
+    return ("occurred_at > :watermark_at", "occurred_at = :watermark_at", "occurred_at ASC")
+
+
+def _cursor_tuple(occurred_at: datetime, event_id: str) -> tuple[datetime, tuple[str, tuple[str, ...]]]:
+    return (occurred_at, _identity_sort_key(event_id))
+
+
 def _stable_event_id(payload: dict[str, Any], occurred_at: datetime) -> str:
     existing = payload.get("event_id") or payload.get("idempotency_key")
     if existing not in (None, ""):
@@ -100,14 +208,14 @@ def _stable_event_id(payload: dict[str, Any], occurred_at: datetime) -> str:
     )
 
 
-def _cursor_key(event: NormalizedEvent) -> tuple[datetime, str]:
-    return (event.occurred_at, event.event_id)
+def _cursor_key(event: NormalizedEvent) -> tuple[datetime, tuple[str, tuple[str, ...]]]:
+    return _cursor_tuple(event.occurred_at, event.event_id)
 
 
-def _cursor_key_from_payload(payload: dict[str, Any]) -> tuple[datetime, str]:
+def _cursor_key_from_payload(payload: dict[str, Any]) -> tuple[datetime, tuple[str, tuple[str, ...]]]:
     """Lag path: parse occurred_at + stable id without full normalize_event."""
     occurred_at = _db_occurred_at(payload.get("occurred_at"))
-    return (occurred_at, _stable_event_id(payload, occurred_at))
+    return _cursor_tuple(occurred_at, _stable_event_id(payload, occurred_at))
 
 
 def _row_to_event(payload: dict[str, Any]) -> NormalizedEvent:
@@ -191,7 +299,7 @@ class DbEventSource(EventSource):
 
         out: list[NormalizedEvent] = []
         with self._lock:
-            cursor = (self._watermark_at, self._watermark_event_id)
+            cursor = _cursor_tuple(self._watermark_at, self._watermark_event_id)
             for event in candidates:
                 if len(out) >= max_events:
                     break
@@ -217,8 +325,9 @@ class DbEventSource(EventSource):
                 if event is None:
                     continue
                 key = _cursor_key(event)
-                if key > (self._watermark_at, self._watermark_event_id):
-                    self._watermark_at, self._watermark_event_id = key
+                if key > _cursor_tuple(self._watermark_at, self._watermark_event_id):
+                    self._watermark_at = event.occurred_at
+                    self._watermark_event_id = event.event_id
                     advanced = True
             if advanced:
                 self._persist_watermark_unlocked()
@@ -294,7 +403,23 @@ class DbEventSource(EventSource):
         limit: int,
     ) -> list[dict[str, Any]]:
         select_clause, has_event_id = self._ensure_source_schema(engine)
-        if has_event_id:
+        dialect = engine.dialect.name
+        identity_sort = _identity_sql_sort_expr(dialect) if has_event_id else None
+        if identity_sort is not None:
+            later, same, occurred_order = _occurred_at_predicates(dialect)
+            sql = text(
+                f"SELECT {select_clause} FROM {self._from_clause()} WHERE "
+                f"{later} OR "
+                f"({same} AND ({identity_sort}) > :watermark_sort) "
+                f"ORDER BY {occurred_order}, ({identity_sort}) ASC "
+                "LIMIT :limit"
+            )
+            params: dict[str, Any] = {
+                "watermark_at": watermark_at,
+                "watermark_sort": _identity_bind_sort_key(watermark_event_id),
+                "limit": max(limit, 1),
+            }
+        elif has_event_id:
             # Match ack cursor (occurred_at, event_id) so same-timestamp pages cannot skip rows.
             sql = text(
                 f"SELECT {select_clause} FROM {self._from_clause()} WHERE "
@@ -303,7 +428,7 @@ class DbEventSource(EventSource):
                 "ORDER BY occurred_at ASC, event_id ASC "
                 "LIMIT :limit"
             )
-            params: dict[str, Any] = {
+            params = {
                 "watermark_at": watermark_at,
                 "watermark_event_id": watermark_event_id,
                 "limit": max(limit, 1),
@@ -333,12 +458,25 @@ class DbEventSource(EventSource):
 
     def _count_after_sql(self, engine: Engine, watermark_at: datetime, watermark_event_id: str) -> int:
         # Match poll cursor (occurred_at, event_id), including empty event_id watermark.
-        sql = text(
-            f"SELECT COUNT(*) AS n FROM {self._from_clause()} WHERE "
-            "occurred_at > :watermark_at OR "
-            "(occurred_at = :watermark_at AND event_id > :watermark_event_id)"
-        )
-        params = {"watermark_at": watermark_at, "watermark_event_id": watermark_event_id}
+        identity_sort = _identity_sql_sort_expr(engine.dialect.name)
+        if identity_sort is not None:
+            later, same, _occurred_order = _occurred_at_predicates(engine.dialect.name)
+            sql = text(
+                f"SELECT COUNT(*) AS n FROM {self._from_clause()} WHERE "
+                f"{later} OR "
+                f"({same} AND ({identity_sort}) > :watermark_sort)"
+            )
+            params: dict[str, Any] = {
+                "watermark_at": watermark_at,
+                "watermark_sort": _identity_bind_sort_key(watermark_event_id),
+            }
+        else:
+            sql = text(
+                f"SELECT COUNT(*) AS n FROM {self._from_clause()} WHERE "
+                "occurred_at > :watermark_at OR "
+                "(occurred_at = :watermark_at AND event_id > :watermark_event_id)"
+            )
+            params = {"watermark_at": watermark_at, "watermark_event_id": watermark_event_id}
         with engine.connect() as conn:
             return int(conn.execute(sql, params).scalar() or 0)
 
@@ -346,7 +484,7 @@ class DbEventSource(EventSource):
         self, engine: Engine, watermark_at: datetime, watermark_event_id: str
     ) -> int | None:
         # Same synthetic-id path as poll. Cap the scan; None = unknown / too large.
-        cursor = (watermark_at, watermark_event_id)
+        cursor = _cursor_tuple(watermark_at, watermark_event_id)
         rows = self._fetch_rows(engine, watermark_at, watermark_event_id, limit=_LAG_SCAN_LIMIT)
         count = sum(1 for payload in rows if _cursor_key_from_payload(payload) > cursor)
         if len(rows) >= _LAG_SCAN_LIMIT:

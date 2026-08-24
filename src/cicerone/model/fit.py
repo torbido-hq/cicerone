@@ -221,9 +221,9 @@ def fit_strategies(
     enabled_models = _resolve_enabled_models(enabled_models)
     resolved_configs = _resolve_model_configs_for_fit(model_configs, item_based_k_neighbors)
 
-    known_users = set(dataset.user_id_map.external_ids)
-    warm_users = [u for u in target_users if u in known_users]
-    cold_users = [u for u in target_users if u not in known_users]
+    known_users = {str(user_id) for user_id in dataset.user_id_map.external_ids}
+    warm_users = [user_id for user_id in target_users if str(user_id) in known_users]
+    cold_users = [user_id for user_id in target_users if str(user_id) not in known_users]
     if cold_users:
         if any(not STRATEGIES[name].personalized for name in enabled_models):
             logger.info(

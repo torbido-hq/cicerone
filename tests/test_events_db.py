@@ -4,9 +4,16 @@ from datetime import UTC, datetime
 
 import pandas as pd
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 
-from cicerone.events.db import DbEventSource, _row_identity, _stable_event_id
+from cicerone.events.db import (
+    DbEventSource,
+    _identity_bind_sort_key,
+    _identity_sort_key,
+    _is_numeric_identity,
+    _row_identity,
+    _stable_event_id,
+)
 from cicerone.events.normalize import EventNormalizeError
 from cicerone.events.registry import build_event_source, registered_event_source_kinds
 
@@ -377,6 +384,207 @@ def test_db_events_query_duplicate_payload_uses_projected_id(tmp_path):
     polled = list(source.poll(10))
     assert len(polled) == 2
     assert {event.event_id for event in polled} == {"id:1", "id:2"}
+
+
+def test_db_numeric_id_cursor_orders_nine_before_ten(tmp_path):
+    url = _sqlite_url(tmp_path)
+    row = {
+        "user_id": "u1",
+        "item_id": "i1",
+        "event_type": "purchase",
+        "quantity": 1,
+        "occurred_at": "2026-08-13T12:00:00+00:00",
+    }
+    _seed_events(url, [{**row, "id": 9}, {**row, "id": 10}, {**row, "id": 11}])
+    source = DbEventSource({"database_url": url, "initial_watermark": "2026-08-01T00:00:00Z"})
+    source.connect()
+    first = list(source.poll(1))
+    assert len(first) == 1
+    assert first[0].event_id == "id:9"
+    source.ack([first[0].event_id])
+    rest = list(source.poll(10))
+    assert {event.event_id for event in rest} == {"id:10", "id:11"}
+
+
+def test_db_event_id_column_numeric_identity_does_not_skip_id_10(tmp_path):
+    url = _sqlite_url(tmp_path)
+    ts = "2026-08-13T12:00:00+00:00"
+    _seed_events(
+        url,
+        [
+            {
+                "user_id": "u1",
+                "item_id": f"i{n}",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": ts,
+                "event_id": f"id:{n}",
+            }
+            for n in (9, 10, 11)
+        ],
+    )
+    source = DbEventSource({"database_url": url, "initial_watermark": "2026-08-01T00:00:00Z"})
+    source.connect()
+    first = list(source.poll(1))
+    assert source._has_event_id_column is True
+    assert first[0].event_id == "id:9"
+    source.ack([first[0].event_id])
+    assert source.health().lag == 2
+    rest = list(source.poll(10))
+    assert {event.event_id for event in rest} == {"id:10", "id:11"}
+
+
+def test_db_numeric_identity_same_timestamp_fetch_is_bounded(tmp_path):
+    url = _sqlite_url(tmp_path)
+    ts = "2026-08-13T12:00:00+00:00"
+    _seed_events(
+        url,
+        [
+            {
+                "user_id": "u1",
+                "item_id": f"i{n}",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": ts,
+                "event_id": f"id:{n}",
+            }
+            for n in range(1, 41)
+        ],
+    )
+    source = DbEventSource({"database_url": url, "initial_watermark": "2026-08-01T00:00:00Z"})
+    source.connect()
+    first = list(source.poll(1))
+    assert first[0].event_id == "id:1"
+    source.ack([first[0].event_id])
+    for _ in range(8):
+        batch = list(source.poll(1))
+        source.ack([batch[0].event_id])
+    assert source._watermark_event_id == "id:9"
+    assert source._engine is not None
+    rows = source._fetch_rows(source._engine, source._watermark_at, source._watermark_event_id, limit=5)
+    assert len(rows) == 5
+    assert [row["event_id"] for row in rows] == [f"id:{n}" for n in range(10, 15)]
+
+
+def test_identity_bind_sort_key_matches_identity_sort_order():
+    ids = [
+        "e1",
+        "id:9",
+        "id:10",
+        "id:11",
+        "rowid:00000000000000000002",
+        "ctid:(0,9)",
+        "ctid:(0,10)",
+    ]
+    assert sorted(ids, key=_identity_sort_key) == sorted(ids, key=_identity_bind_sort_key)
+
+
+def test_sqlite_identity_sql_matches_bind_key_for_prefixed_non_numeric_ids(tmp_path):
+    from cicerone.events.db import _SQLITE_IDENTITY_SORT
+
+    ids = [
+        "e1",
+        "id:9",
+        "id:10",
+        "id:order-123",
+        "id:550e8400-e29b",
+        "rowid:not-an-int",
+        "ctid:(0,9)",
+        "ctid:not-a-tuple",
+    ]
+    url = _sqlite_url(tmp_path)
+    engine = create_engine(url)
+    pd.DataFrame({"event_id": ids}).to_sql("events", engine, if_exists="replace", index=False)
+    with engine.connect() as conn:
+        rows = conn.execute(text(f"SELECT event_id, ({_SQLITE_IDENTITY_SORT}) AS sort_key FROM events"))
+        got = {row.event_id: row.sort_key for row in rows}
+    assert got == {event_id: _identity_bind_sort_key(event_id) for event_id in ids}
+
+
+def test_db_subsecond_timestamps_do_not_skip_later_event(tmp_path):
+    url = _sqlite_url(tmp_path)
+    _seed_events(
+        url,
+        [
+            {
+                "user_id": "u1",
+                "item_id": "i2",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": "2026-08-13T12:00:00.100000+00:00",
+                "event_id": "id:2",
+            },
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": "2026-08-13T12:00:00.200000+00:00",
+                "event_id": "id:1",
+            },
+        ],
+    )
+    source = DbEventSource({"database_url": url, "initial_watermark": "2026-08-01T00:00:00Z"})
+    source.connect()
+    first = list(source.poll(1))
+    assert first[0].event_id == "id:2"
+    source.ack([first[0].event_id])
+    rest = list(source.poll(10))
+    assert [event.event_id for event in rest] == ["id:1"]
+
+
+def test_db_prefixed_non_numeric_event_id_does_not_skip_later_row(tmp_path):
+    url = _sqlite_url(tmp_path)
+    ts = "2026-08-13T12:00:00+00:00"
+    _seed_events(
+        url,
+        [
+            {
+                "user_id": "u1",
+                "item_id": "ia",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": ts,
+                "event_id": "id:order-123",
+            },
+            {
+                "user_id": "u1",
+                "item_id": "ib",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": ts,
+                "event_id": "id:zzz",
+            },
+        ],
+    )
+    source = DbEventSource({"database_url": url, "initial_watermark": "2026-08-01T00:00:00Z"})
+    source.connect()
+    first = list(source.poll(1))
+    assert first[0].event_id == "id:order-123"
+    source.ack([first[0].event_id])
+    rest = list(source.poll(10))
+    assert [event.event_id for event in rest] == ["id:zzz"]
+
+
+def test_identity_sort_key_orders_numeric_ids_and_ctid():
+    assert _identity_sort_key("id:9") < _identity_sort_key("id:10")
+    assert _identity_sort_key("id:9") < _identity_sort_key("id:11")
+    assert _identity_sort_key("rowid:00000000000000000009") < _identity_sort_key("rowid:00000000000000000010")
+    assert _identity_sort_key("ctid:(0,9)") < _identity_sort_key("ctid:(0,10)")
+    parsed = _identity_sort_key("ctid:(0,9)")
+    junk = _identity_sort_key("ctid:not-a-tuple")
+    assert parsed != junk
+    assert parsed < junk or junk < parsed
+    numeric = _identity_sort_key("id:9")
+    raw = _identity_sort_key("id:not-an-int")
+    assert numeric != raw
+    assert numeric < raw or raw < numeric
+    assert _is_numeric_identity("id:9")
+    assert _is_numeric_identity("rowid:00000000000000000010")
+    assert _is_numeric_identity("ctid:(0,10)")
+    assert not _is_numeric_identity("e1")
+    assert not _is_numeric_identity("id:not-an-int")
+    assert not _is_numeric_identity("ctid:not-a-tuple")
 
 
 def test_row_identity_prefers_id_then_rowid_then_ctid():

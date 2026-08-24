@@ -187,21 +187,51 @@ def _normalize_source_frame(frame: pd.DataFrame, source_label: str) -> pd.DataFr
     return out[[Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN]]
 
 
-def _rrf_contrib(rank: float, weight: float, rrf_k: float) -> float:
-    return weight / (rrf_k + rank)
-
-
-def _rows_by_user(frame: pd.DataFrame) -> dict[str, list[tuple[str, float]]]:
-    """Map user_id → [(item_id, rank), ...] for O(1) blend lookups."""
+def _weighted_rrf_frame(
+    frame: pd.DataFrame,
+    *,
+    source_label: str,
+    user_weights: pd.Series,
+    rrf_k: float,
+) -> pd.DataFrame:
     if frame.empty:
-        return {}
-    grouped: dict[str, list[tuple[str, float]]] = {}
-    for row in frame.itertuples(index=False):
-        user_id = str(getattr(row, Columns.User))
-        item_id = str(getattr(row, Columns.Item))
-        rank = float(getattr(row, Columns.Rank))
-        grouped.setdefault(user_id, []).append((item_id, rank))
-    return grouped
+        return pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Score, SOURCE_COLUMN])
+    weights = frame[Columns.User].astype(str).map(user_weights.rename(index=str))
+    keep = weights.notna() & (weights > _WEIGHT_EPS)
+    if not bool(keep.any()):
+        return pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Score, SOURCE_COLUMN])
+    out = frame.loc[keep, [Columns.User, Columns.Item, Columns.Rank]].copy()
+    ranks = out[Columns.Rank].to_numpy(dtype=float)
+    out[Columns.Score] = weights.loc[keep].to_numpy(dtype=float) / (rrf_k + ranks)
+    out[SOURCE_COLUMN] = source_label
+    return out[[Columns.User, Columns.Item, Columns.Score, SOURCE_COLUMN]]
+
+
+def _source_label_from_parts(labels: pd.Series) -> str:
+    uniq = list(dict.fromkeys(labels.tolist()))
+    return BLENDED_SOURCE if len(uniq) > 1 else uniq[0]
+
+
+def _latest_index_frame(
+    latest_index: Mapping[str, Sequence[tuple[str, int, float]]],
+    target_users: Sequence[str],
+) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    for user_id in dict.fromkeys(target_users):
+        ranking = latest_index.get(user_id)
+        if not ranking:
+            continue
+        for item_id, rank, _score in ranking:
+            rows.append(
+                {
+                    Columns.User: user_id,
+                    Columns.Item: str(item_id),
+                    Columns.Rank: float(rank),
+                    Columns.Score: 0.0,
+                    SOURCE_COLUMN: LATEST_SOURCE,
+                }
+            )
+    return pd.DataFrame(rows) if rows else _empty_recs()
 
 
 def blend_for_users(
@@ -223,70 +253,70 @@ def blend_for_users(
     (per-user / per-cohort rankings; keys must be ``str`` user ids) over a
     Cartesian ``latest`` frame.
     """
+    unique_users = list(dict.fromkeys(str(u) for u in target_users))
+    if not unique_users:
+        return _empty_recs()
+
+    counts_by_user = {str(user_id): int(n) for user_id, n in counts.items()}
+
     use_indexed_latest = shared_latest is not None or latest_by_user is not None
     latest_index = (
         None if latest_by_user is None else {str(uid): ranking for uid, ranking in latest_by_user.items()}
     )
+    if use_indexed_latest and latest_available:
+        if shared_latest is not None:
+            latest_frame = expand_latest_ranking(shared_latest, unique_users)
+        else:
+            latest_frame = _latest_index_frame(latest_index or {}, unique_users)
+    elif latest is not None and latest_available:
+        latest_frame = _normalize_source_frame(latest, LATEST_SOURCE)
+    else:
+        latest_frame = _empty_recs()
     frames = {
         PERSONALIZED_SOURCE: _normalize_source_frame(personalized, PERSONALIZED_SOURCE),
         POPULAR_SOURCE: _normalize_source_frame(popular, POPULAR_SOURCE),
-        LATEST_SOURCE: (
-            _normalize_source_frame(latest, LATEST_SOURCE)
-            if not use_indexed_latest and latest is not None and latest_available
-            else _empty_recs()
-        ),
+        LATEST_SOURCE: latest_frame,
     }
-    by_source_user = {label: _rows_by_user(frame) for label, frame in frames.items()}
+    weight_map = {
+        user_id: source_weights(counts_by_user.get(user_id, 0), config, latest_available=latest_available)
+        for user_id in unique_users
+    }
+    personalized_w = pd.Series({u: w[PERSONALIZED_SOURCE] for u, w in weight_map.items()})
+    popular_w = pd.Series({u: w[POPULAR_SOURCE] for u, w in weight_map.items()})
+    latest_w = pd.Series({u: w.get(LATEST_SOURCE, 0.0) for u, w in weight_map.items()})
+    rrf_k = config.rrf_k
 
-    by_user_item: dict[tuple[str, str], tuple[float, set[str]]] = {}
-    for user_id in dict.fromkeys(str(u) for u in target_users):
-        weights = source_weights(
-            counts.get(user_id, 0),
-            config,
-            latest_available=latest_available,
-        )
-        for source_label, user_index in by_source_user.items():
-            weight = weights.get(source_label, 0.0)
-            if weight <= _WEIGHT_EPS:
-                continue
-            for item_id, rank in user_index.get(user_id, ()):
-                key = (user_id, item_id)
-                score, sources = by_user_item.get(key, (0.0, set()))
-                score += _rrf_contrib(rank, weight, config.rrf_k)
-                sources.add(source_label)
-                by_user_item[key] = (score, sources)
-
-        if latest_available:
-            ranking: Sequence[tuple[str, int, float]] | None = None
-            if shared_latest is not None:
-                ranking = shared_latest
-            elif latest_index is not None:
-                ranking = latest_index.get(str(user_id))
-            if ranking:
-                weight = weights.get(LATEST_SOURCE, 0.0)
-                if weight > _WEIGHT_EPS:
-                    for item_id, rank, _score in ranking:
-                        key = (user_id, str(item_id))
-                        score, sources = by_user_item.get(key, (0.0, set()))
-                        score += _rrf_contrib(float(rank), weight, config.rrf_k)
-                        sources.add(LATEST_SOURCE)
-                        by_user_item[key] = (score, sources)
-    if not by_user_item:
+    contribs = [
+        _weighted_rrf_frame(
+            frames[PERSONALIZED_SOURCE],
+            source_label=PERSONALIZED_SOURCE,
+            user_weights=personalized_w,
+            rrf_k=rrf_k,
+        ),
+        _weighted_rrf_frame(
+            frames[POPULAR_SOURCE],
+            source_label=POPULAR_SOURCE,
+            user_weights=popular_w,
+            rrf_k=rrf_k,
+        ),
+        _weighted_rrf_frame(
+            frames[LATEST_SOURCE],
+            source_label=LATEST_SOURCE,
+            user_weights=latest_w,
+            rrf_k=rrf_k,
+        ),
+    ]
+    contribs = [frame for frame in contribs if not frame.empty]
+    if not contribs:
         return _empty_recs()
+    stacked = pd.concat(contribs, ignore_index=True)
 
-    rows = []
-    for (user_id, item_id), (score, sources) in by_user_item.items():
-        label = BLENDED_SOURCE if len(sources) > 1 else next(iter(sources))
-        rows.append(
-            {
-                Columns.User: user_id,
-                Columns.Item: item_id,
-                Columns.Score: score,
-                SOURCE_COLUMN: label,
-            }
-        )
-
-    combined = pd.DataFrame(rows)
+    combined = stacked.groupby([Columns.User, Columns.Item], as_index=False, sort=False).agg(
+        **{
+            Columns.Score: (Columns.Score, "sum"),
+            SOURCE_COLUMN: (SOURCE_COLUMN, _source_label_from_parts),
+        }
+    )
     combined = combined.sort_values(
         [Columns.User, Columns.Score, Columns.Item], ascending=[True, False, True]
     )

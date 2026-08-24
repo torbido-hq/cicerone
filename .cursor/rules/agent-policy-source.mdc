@@ -25,6 +25,7 @@ enforcement. Do not re‑create a giant `AGENTS.md` in git.
 - `git-workflow.mdc` — branch / PR naming
 - `releases.mdc` — **Current trains** mapping; cherry-pick / merge-back procedures
 - `coding-standards.mdc` — no essay comments
-- `changelog.mdc` — product only (not website); never edit dated sections.
-  That file is the split; do not restate or drift from it here.
+- `changelog.mdc` — product only (not website); A–Z `###` groups; do not
+  rewrite tagged bullets. That file is the split; do not restate or drift
+  from it here.
 - `verification.mdc` — always run ruff / mypy / pytest

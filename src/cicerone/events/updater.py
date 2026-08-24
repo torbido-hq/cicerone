@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import math
 from collections import OrderedDict
 from collections.abc import Callable, Collection, Sequence
 from datetime import UTC, datetime
@@ -29,6 +28,7 @@ from cicerone.io.recommendation_reader import (
     USER_COLUMN,
 )
 from cicerone.locks import LockLostError
+from cicerone.weighting import event_row_weights
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +115,7 @@ class IncrementalUpdater:
             return 0
 
         batch = events_to_dataframe(events)
+        weights = self._row_signal_weights(batch)
         affected_users = sorted(set(batch[USER_COLUMN].astype(str)))
         affected_set = set(affected_users) | {COLD_START_USER_ID}
         existing = self._load_users(affected_set)
@@ -123,8 +124,8 @@ class IncrementalUpdater:
             existing = existing.copy()
             existing[USER_COLUMN] = existing[USER_COLUMN].astype(str)
 
-        popular_ranking = self._popular_ranking(batch)
-        latest_ranking = self._latest_ranking(batch)
+        popular_ranking = self._popular_ranking(batch, weights)
+        latest_ranking = self._latest_ranking(batch, weights)
 
         by_user = (
             {user_id: group for user_id, group in existing.groupby(USER_COLUMN, sort=False)}
@@ -146,7 +147,9 @@ class IncrementalUpdater:
         for user_id in affected_users:
             prior = by_user.get(user_id, empty_recommendations_frame())
             user_batch = batch_by_user.get(user_id, empty_user_batch)
-            merged_user = self._merge_user_rows(user_id, prior, popular_ranking, latest_ranking, user_batch)
+            merged_user = self._merge_user_rows(
+                user_id, prior, popular_ranking, latest_ranking, user_batch, weights
+            )
             if merged_user.empty:
                 continue
             frames.append(merged_user)
@@ -272,49 +275,56 @@ class IncrementalUpdater:
                 protect=user_ids,
             )
 
-    def _event_weight(self, event_type: str, quantity: int) -> float:
+    def _row_signal_weights(self, batch: pd.DataFrame) -> pd.Series:
         if self._feature_config is None:
-            return float(quantity)
-        weights = self._feature_config.event_weights
-        if event_type not in weights:
-            return 0.0
-        weight = float(weights[event_type])
-        if event_type in self._feature_config.quantity_scaled_events:
-            weight *= math.log1p(max(quantity, 0))
-        return weight
+            return pd.to_numeric(batch["quantity"], errors="coerce").fillna(0.0)
+        return event_row_weights(
+            batch["event_type"].astype(str),
+            batch["quantity"],
+            event_weights=self._feature_config.event_weights,
+            quantity_scaled_events=self._feature_config.quantity_scaled_events,
+        ).fillna(0.0)
 
-    def _known_event_type(self, event_type: str) -> bool:
-        if self._feature_config is None:
-            return True
-        return event_type in self._feature_config.event_weights
+    def _aligned_weights(self, batch: pd.DataFrame, weights: pd.Series | None) -> pd.Series:
+        if weights is None:
+            return self._row_signal_weights(batch)
+        return weights.reindex(batch.index)
 
-    def _popular_ranking(self, batch: pd.DataFrame) -> pd.DataFrame:
-        scores: dict[str, float] = {}
-        for row in batch.itertuples(index=False):
-            weight = self._event_weight(str(row.event_type), int(row.quantity))
-            if weight == 0.0:
-                continue
-            item_id = str(row.item_id)
-            scores[item_id] = scores.get(item_id, 0.0) + weight
-        if not scores:
-            return pd.DataFrame(columns=[ITEM_COLUMN, SCORE_COLUMN, SOURCE_COLUMN])
-        ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))[: self._top_k]
-        return pd.DataFrame(
-            [
-                {ITEM_COLUMN: item_id, SCORE_COLUMN: score, SOURCE_COLUMN: POPULAR_SOURCE}
-                for item_id, score in ranked
-            ]
-        )
+    def _signal_rows(self, batch: pd.DataFrame, weights: pd.Series | None = None) -> pd.DataFrame:
+        if batch.empty:
+            return batch
+        aligned = self._aligned_weights(batch, weights)
+        keep = aligned > 0
+        scored = batch.loc[keep]
+        if scored.empty:
+            return scored
+        return scored.assign(_signal_weight=aligned.loc[keep])
 
-    def _latest_ranking(self, batch: pd.DataFrame) -> pd.DataFrame:
+    def _popular_ranking(self, batch: pd.DataFrame, weights: pd.Series | None = None) -> pd.DataFrame:
+        empty = pd.DataFrame(columns=[ITEM_COLUMN, SCORE_COLUMN, SOURCE_COLUMN])
+        scored = self._signal_rows(batch, weights)
+        if scored.empty:
+            return empty
+        summed = scored.groupby(scored["item_id"].astype(str), sort=False)["_signal_weight"].sum()
+        summed = summed.loc[summed > 0]
+        if summed.empty:
+            return empty
+        ranked = summed.reset_index()
+        ranked.columns = [ITEM_COLUMN, SCORE_COLUMN]
+        ranked = ranked.sort_values(
+            [SCORE_COLUMN, ITEM_COLUMN], ascending=[False, True], kind="mergesort"
+        ).head(self._top_k)
+        ranked[SOURCE_COLUMN] = POPULAR_SOURCE
+        return ranked.reset_index(drop=True)
+
+    def _latest_ranking(self, batch: pd.DataFrame, weights: pd.Series | None = None) -> pd.DataFrame:
         if batch.empty:
             return pd.DataFrame(columns=[ITEM_COLUMN, SCORE_COLUMN, SOURCE_COLUMN])
-        frame = batch.copy()
+        frame = self._signal_rows(batch, weights)
+        if frame.empty:
+            return pd.DataFrame(columns=[ITEM_COLUMN, SCORE_COLUMN, SOURCE_COLUMN])
+        frame = frame.copy()
         frame[ITEM_COLUMN] = frame[ITEM_COLUMN].astype(str)
-        if self._feature_config is not None:
-            frame = frame[frame["event_type"].astype(str).map(self._known_event_type)]
-            if frame.empty:
-                return pd.DataFrame(columns=[ITEM_COLUMN, SCORE_COLUMN, SOURCE_COLUMN])
         latest = (
             frame.sort_values("occurred_at", ascending=False)
             .drop_duplicates(subset=[ITEM_COLUMN], keep="first")
@@ -340,6 +350,7 @@ class IncrementalUpdater:
         popular: pd.DataFrame,
         latest: pd.DataFrame,
         batch: pd.DataFrame,
+        weights: pd.Series | None = None,
     ) -> pd.DataFrame:
         if not prior.empty and SOURCE_COLUMN in prior.columns:
             mask = prior[SOURCE_COLUMN].astype(str).map(_is_preserved_source)
@@ -347,15 +358,14 @@ class IncrementalUpdater:
         else:
             preserved = prior.iloc[0:0] if not prior.empty else prior
 
-        user_batch = batch[batch[USER_COLUMN].astype(str) == user_id]
-        if self._feature_config is not None and not user_batch.empty:
-            user_batch = user_batch[user_batch["event_type"].astype(str).map(self._known_event_type)]
+        user_batch = self._signal_rows(batch[batch[USER_COLUMN].astype(str) == user_id], weights)
+        has_signal = not user_batch.empty
         boost_items = (
             user_batch.sort_values("occurred_at", ascending=False)[ITEM_COLUMN]
             .astype(str)
             .drop_duplicates()
             .tolist()
-            if not user_batch.empty
+            if has_signal
             else []
         )
         boost_slots = max(1, int(self._top_k * _BOOST_SLOT_FRACTION)) if boost_items else 0
@@ -375,8 +385,13 @@ class IncrementalUpdater:
                 preserved = preserved.sort_values(RANK_COLUMN, kind="mergesort")
             preserved = preserved.head(preserve_cap)
 
-        # Boost first so reserved slots win; then preserved; then popular/latest fill.
-        parts = [frame for frame in (boost, preserved, popular, latest) if not frame.empty]
+        # Batch-global popular/latest only for users with signal or preserved rows
+        # (unknown/zero-weight events must not rewrite popular-only users).
+        use_global = has_signal or not preserved.empty
+        parts = [boost, preserved]
+        if use_global:
+            parts.extend((popular, latest))
+        parts = [frame for frame in parts if not frame.empty]
         combined = pd.concat(parts, ignore_index=True) if parts else empty_recommendations_frame()
         if combined.empty:
             return empty_recommendations_frame()

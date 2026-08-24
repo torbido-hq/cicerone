@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable, Sequence
 
 import pandas as pd
@@ -9,6 +10,8 @@ import pandas as pd
 from cicerone.io.base import RecommendationReader
 from cicerone.io.recommendation_reader import ITEM_COLUMN, normalize_items_snapshot
 from cicerone.values import item_true_mask
+
+_FILTER_CACHE_REBUILDS = 8
 
 
 def configure_reader_item_filters(
@@ -47,16 +50,40 @@ class ItemsFilterCache:
         self._reader = reader
         self._category_column = category_column
         self._availability_filters = list(availability_filters)
-        self._version: int | None = None
-        self._items: pd.DataFrame | None = None
-        self._available_ids: frozenset[str] | None = None
-        self._ids_by_category: dict[str, frozenset[str]] = {}
+        self._snapshot: (
+            tuple[object, pd.DataFrame | None, frozenset[str] | None, dict[str, frozenset[str]]] | None
+        ) = None
+        self._lock = threading.Lock()
 
     def get(self) -> tuple[pd.DataFrame | None, frozenset[str] | None, dict[str, frozenset[str]]]:
+        for _ in range(_FILTER_CACHE_REBUILDS):
+            version = self._reader.items_version()
+            cached = self._snapshot
+            if cached is not None and cached[0] == version:
+                return cached[1], cached[2], cached[3]
+            built = self._rebuild(version)
+            with self._lock:
+                latest = self._reader.items_version()
+                cached = self._snapshot
+                if cached is not None and cached[0] == latest:
+                    return cached[1], cached[2], cached[3]
+                if latest == version:
+                    self._snapshot = built
+                    return built[1], built[2], built[3]
         version = self._reader.items_version()
-        if version == self._version:
-            return self._items, self._available_ids, self._ids_by_category
+        built = self._rebuild(version)
+        with self._lock:
+            latest = self._reader.items_version()
+            cached = self._snapshot
+            if cached is not None and cached[0] == latest:
+                return cached[1], cached[2], cached[3]
+            if latest == version:
+                self._snapshot = built
+            return built[1], built[2], built[3]
 
+    def _rebuild(
+        self, version: object
+    ) -> tuple[object, pd.DataFrame | None, frozenset[str] | None, dict[str, frozenset[str]]]:
         items = normalize_items_snapshot(
             self._reader.get_items(),
             category_column=self._category_column,
@@ -77,11 +104,7 @@ class ItemsFilterCache:
             item_ids = items[ITEM_COLUMN].astype(str)
             for cat, idx in items.groupby(self._category_column, sort=False).groups.items():
                 ids_by_category[str(cat)] = frozenset(item_ids.loc[idx].tolist())
-        self._version = version
-        self._items = items
-        self._available_ids = available
-        self._ids_by_category = ids_by_category
-        return items, available, ids_by_category
+        return (version, items, available, ids_by_category)
 
 
 def filter_recommendations(

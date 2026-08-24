@@ -169,7 +169,7 @@ class ContentFallbackModel:
                 self.interactions[item_col].tolist(),
                 strict=True,
             ):
-                self._user_history[user_id].append(item_id)
+                self._user_history[str(user_id)].append(str(item_id))
 
         if self.items is None or self.items.empty or not self.feature_columns:
             logger.info("Content fallback: no items/features — strategy will emit no rows")
@@ -181,7 +181,7 @@ class ContentFallbackModel:
         interacted = set()
         if self.interactions is not None and not self.interactions.empty:
             item_col = interactions_item_column(self.interactions)
-            interacted = set(self.interactions[item_col].tolist())
+            interacted = {str(item_id) for item_id in self.interactions[item_col].tolist()}
 
         feature_names = []
         for spec in self.feature_columns:
@@ -194,7 +194,7 @@ class ContentFallbackModel:
         dicts = []
         item_ids = []
         for row in records:
-            item_id = row[id_col]
+            item_id = str(row[id_col])
             tokens = _feature_dict(row, self.feature_columns)
             if not tokens:
                 continue
@@ -253,7 +253,7 @@ class ContentFallbackModel:
         cold_ids_arr = np.asarray(cold_ids_filtered, dtype=object)
 
         def _score_user(user: object) -> list[dict]:
-            history = self._user_history.get(user, [])
+            history = self._user_history.get(str(user), [])
             if not history:
                 return []
             recent_history = history[-_MAX_HISTORY_ITEMS:]

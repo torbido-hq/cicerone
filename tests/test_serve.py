@@ -29,6 +29,7 @@ class _FakeReader:
         self._items = items
         self._items_version = 0
         self.refresh_calls = 0
+        self.get_items_calls = 0
 
     def refresh(self) -> None:
         self.refresh_calls += 1
@@ -39,6 +40,7 @@ class _FakeReader:
         return rows.head(k).reset_index(drop=True)
 
     def get_items(self) -> pd.DataFrame | None:
+        self.get_items_calls += 1
         return self._items
 
     def items_version(self) -> int:
@@ -139,6 +141,7 @@ def test_items_filter_cache_normalizes_once_per_refresh():
     )
     items_a, available_a, by_cat_a = cache.get()
     items_b, available_b, by_cat_b = cache.get()
+    assert reader.get_items_calls == 1
     assert items_a is items_b
     assert available_a is available_b
     assert by_cat_a is by_cat_b
@@ -158,6 +161,29 @@ def test_items_filter_cache_normalizes_once_per_refresh():
     assert items_c is not items_a
     assert available_c == frozenset({"i1", "i2", "i3"})
     assert by_cat_c is not by_cat_a
+
+
+def test_items_filter_cache_retries_when_version_moves_during_rebuild():
+    class _BumpOnce(_FakeReader):
+        def get_items(self) -> pd.DataFrame | None:
+            self.get_items_calls += 1
+            if self.get_items_calls == 1:
+                self._items_version += 1
+            return self._items
+
+    reader = _BumpOnce(_recs_df(), _items_df())
+    cache = ItemsFilterCache(
+        reader,
+        category_column="category",
+        availability_filters=["published"],
+    )
+    items, available, by_cat = cache.get()
+    assert reader.get_items_calls == 2
+    assert cache._snapshot is not None
+    assert cache._snapshot[0] == reader.items_version()
+    assert items is not None
+    assert available == frozenset({"i1", "i2"})
+    assert by_cat["beer"] == frozenset({"i1", "i3"})
 
 
 def test_health_requires_no_auth():
