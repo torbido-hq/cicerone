@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Optional sequential architecture `hstu` (`HSTUModel`). Sequences are still
+  last-touch aggregated `(user, item)` pairs, so HSTU relative-time bias is
+  weak on Cicerone data.
+- Opt-in AutoML `[job.automl].debias` (RecTools `DebiasConfig` on MAP/NDCG/Recall;
+  default off).
+- Sequential per-epoch Precision/Recall logs when `[job].log_epoch_metrics`
+  is on (same knobs as collaborative).
 - Serve recommendations include optional `reasons` (contributing sources,
   boost hits, similar history items / matched attributes), persisted at
   batch time when `[job.explain]` is enabled (default on). Existing DB
@@ -15,6 +22,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Sequential SASRec defaults to the eSASRec recipe (`sampled_softmax`,
+  `n_negatives = 256`, LiGR layers).
 - Bump `rectools` 0.13.0 → 0.19.0, `scipy` 1.12.0 → 1.17.0, and switch the
   implicit pin to `pm-implicit` 0.7.3 (RecTools 0.18+ on Python 3.11).
 - Bump `uvicorn` 0.52.3 → 0.52.4, `ruff` 0.16.3 → 0.16.4, `mypy` 2.3.0 → 2.3.1,

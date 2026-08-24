@@ -26,7 +26,7 @@ from cicerone.config.constants import (
 
 @dataclass(frozen=True)
 class EpochMetricsSettings:
-    """Tunables for optional LightFM per-epoch metric logging."""
+    """Tunables for optional collaborative/sequential per-epoch metric logging."""
 
     every: int
     max_users: int = DEFAULT_EPOCH_METRICS_MAX_USERS
@@ -81,6 +81,7 @@ class AutomlSettings:
     test_days: int = AUTOML_DEFAULT_TEST_DAYS
     primary_metric: str = AUTOML_DEFAULT_PRIMARY_METRIC
     candidates: list[dict[str, Any]] | None = None
+    debias: bool = False
 
 
 @dataclass(frozen=True)
@@ -268,6 +269,10 @@ class Settings:
     @property
     def automl_candidates(self) -> list[dict[str, Any]] | None:
         return self.automl.candidates
+
+    @property
+    def automl_debias(self) -> bool:
+        return self.automl.debias
 
     @property
     def events_enabled(self) -> bool:

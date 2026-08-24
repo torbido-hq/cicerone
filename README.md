@@ -16,7 +16,7 @@ guides synced from [`docs/`](docs/). Articles are static Markdown in
 
 A generic, self-hosted batch recommender system. It reads your interaction
 data, trains a hybrid [rectools](https://github.com/MobileTeleSystems/RecTools)
-+ LightFM model (optional item-KNN, SASRec/BERT4Rec, popular/latest), and
++ LightFM model (optional item-KNN, SASRec/BERT4Rec/HSTU, popular/latest), and
 writes out top-K recommendations per user. An optional lightweight "serve"
 mode can then expose those precomputed recommendations over a small
 read-only HTTP API — there's still no live inference, no model loaded in the
@@ -40,7 +40,7 @@ up to your own data doesn't require touching any code.
 ## Features
 
 - **Batch recommender** — cron-scheduled train + top-K write (dataset or DB I/O)
-- **Hybrid strategies** — collaborative (LightFM), item-based KNN, optional SASRec/BERT4Rec, optional content cold-item fallback, popular, latest
+- **Hybrid strategies** — collaborative (LightFM), item-based KNN, optional SASRec/BERT4Rec/HSTU, optional content cold-item fallback, popular, latest
 - **Priority, RRF, or blending** — combine strategies by order, weighted ranks, or per-user mix
 - **AutoML** — time-fold backtest to pick models/weights per run
 - **Business policies** — TOML eligibility filters and score boosts
@@ -397,17 +397,18 @@ if omitted:
   similarity (`TFIDFRecommender`). Personalized, warm users only. Neighbor
   count is RecTools `model.item_based.model.K` (default `20`); the legacy
   `[job.item_based].k_neighbors` key is still accepted and translated.
-- `sequential`: RecTools `SASRecModel` (default) or `BERT4RecModel` —
-  transformer next-item model. Personalized, interacting users only. Opt-in
-  (`job.models`); not in the default chain. Requires
+- `sequential`: RecTools `SASRecModel` (default), `BERT4RecModel`, or
+  `HSTUModel` — transformer next-item model. Personalized, interacting users
+  only. Opt-in (`job.models`); not in the default chain. Requires
   `pip install 'cicerone-recommender[sequential]'` or
   `pip install -r requirements-sequential.txt`. Hyperparameters via
-  `[model.sequential]` (`architecture = "sasrec"` | `"bert4rec"`, plus RecTools
-  keys such as `n_factors`, `epochs`, `loss`, `session_max_len`,
-  `train_min_user_interactions`). Sequences are **unique items ordered by
-  last interaction time** (Cicerone aggregates `(user, item)` before
-  `Dataset.construct`). AutoML skips this strategy when the extra is missing
-  or median distinct items/user is below
+  `[model.sequential]` (`architecture = "sasrec"` | `"bert4rec"` | `"hstu"`,
+  plus RecTools keys such as `n_factors`, `epochs`, `loss`, `session_max_len`,
+  `train_min_user_interactions`). SASRec defaults are eSASRec
+  (`sampled_softmax` + LiGR). Sequences are **unique items ordered by last
+  interaction time** (Cicerone aggregates `(user, item)` before
+  `Dataset.construct`), so HSTU relative-time bias is weak. AutoML skips this
+  strategy when the extra is missing or median distinct items/user is below
   `[job.sequential].min_median_interactions` (default `5`).
 - `content_fallback`: feature-similarity recommendations for **zero-interaction
   items** (one-hot over `item_features`, cosine vs user history). Personalized,
@@ -448,11 +449,11 @@ of how the underlying strategy labels happen to sort.
 `[job].max_workers` (default `1`, sequential) controls ProcessPool size for
 strategy fitting and AutoML fold evaluation. Set `>1` to opt into parallelism.
 
-To watch LightFM's training trajectory, set `[job].log_epoch_metrics = true`
-(default off). The collaborative strategy then fits epoch-by-epoch and logs
-in-sample Precision@K/Recall@K every `[job].epoch_metrics_every` epochs
-(default `5`) over a seeded random user sample. Significant regression or
-plateau emits a WARN. Optional tunables:
+To watch collaborative or sequential training, set
+`[job].log_epoch_metrics = true` (default off). Those strategies then fit
+epoch-by-epoch and log in-sample Precision@K/Recall@K every
+`[job].epoch_metrics_every` epochs (default `5`) over a seeded random user
+sample. Significant regression or plateau emits a WARN. Optional tunables:
 `epoch_metrics_max_users`, `epoch_metrics_regression_drop`,
 `epoch_metrics_plateau_eps`, `epoch_metrics_plateau_window` — see
 `config/cicerone.toml`.
@@ -468,6 +469,7 @@ enabled = true
 n_splits = 2       # time-based folds to backtest each candidate over
 test_days = 14     # size of each fold's held-out window, in days
 primary_metric = "MAP" # exact name, or a unique NAME@k (e.g. "MAP" → "MAP@10")
+# debias = false         # RecTools DebiasConfig; default off
 ```
 
 Each run, `cicerone.automl.evaluate_candidates()` splits your event history

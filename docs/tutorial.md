@@ -297,10 +297,10 @@ full annotated example of the default search space (safe to use as-is once
 your dataset has enough history for every strategy to see every backtested
 user).
 
-To watch LightFM's own training trajectory (separate from AutoML's fold
-scores), set `log_epoch_metrics = true` under `[job]` and re-run with
-`collaborative` enabled — you'll see per-epoch Precision@K/Recall@K lines,
-plus a WARN if metrics regress or plateau. Off by default; details in the
+To watch collaborative or sequential training (separate from AutoML's fold
+scores), set `log_epoch_metrics = true` under `[job]` — you'll see per-epoch
+Precision@K/Recall@K lines, plus a WARN if metrics regress or plateau. Off
+by default; details in the
 [README model strategies](../README.md#model-strategies) section.
 
 ## 9. Tune interaction weights & features

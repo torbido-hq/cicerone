@@ -68,6 +68,7 @@ def test_load_settings_dataset_backends(tmp_path):
     assert settings.automl_test_days == 14
     assert settings.automl_primary_metric == "MAP"
     assert settings.automl_candidates is None
+    assert settings.automl_debias is False
 
 
 def test_load_settings_with_explicit_models(tmp_path):
@@ -442,6 +443,7 @@ def test_load_settings_with_explicit_automl(tmp_path):
         n_splits = 3
         test_days = 7
         primary_metric = "NDCG"
+        debias = true
 
         [[job.automl.candidates]]
         models = ["popular"]
@@ -472,6 +474,7 @@ def test_load_settings_with_explicit_automl(tmp_path):
     assert settings.automl_n_splits == 3
     assert settings.automl_test_days == 7
     assert settings.automl_primary_metric == "NDCG"
+    assert settings.automl_debias is True
     assert settings.automl_candidates == [
         {"models": ["popular"]},
         {"models": ["popular", "latest"], "weights": {"popular": 1.0, "latest": 0.5}},
@@ -513,6 +516,7 @@ def test_load_settings_defaults_when_job_section_missing(tmp_path):
     assert settings.automl_test_days == 14
     assert settings.automl_primary_metric == "MAP"
     assert settings.automl_candidates is None
+    assert settings.automl_debias is False
 
 
 def test_load_settings_save_model_artifact(tmp_path):

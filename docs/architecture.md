@@ -31,7 +31,7 @@ For `[events]` ingest (webhook, backends, HA), see
 | `model/fit.py` | `fit_strategies`, `plan_model_run`, ProcessPool workers |
 | `model/recommend.py` | `recommend_with_models`, cohort plan, `train_and_recommend` |
 | `model/combine.py` | Priority + weighted RRF combiners |
-| `model/epoch_metrics.py` | Optional LightFM per-epoch Precision/Recall logging |
+| `model/epoch_metrics.py` | Optional collaborative/sequential per-epoch Precision/Recall logging |
 | `model/constants.py` | `RRF_K`, `DEFAULT_MODELS`, source column names |
 | `model_config.py` | Default + TOML `[model.*]` RecTools `model_from_config` configs; sequential `architecture` → `cls`; legacy `job.item_based.k_neighbors` → `model.K` (no ML imports — safe for serve) |
 | `explain.py` | After combine + boosts, persist `reasons` JSON (source contributions, boost hits, similar history items) |
@@ -88,9 +88,9 @@ Test modules mirror the packages (same pattern as `tests/test_io_*.py`):
 | `tests/test_model_fit.py` | Fit cache, parallel fit, `resolve_run_models` |
 | `tests/test_model_recommend.py` | `train_and_recommend` / boosts / `content_fallback` |
 | `tests/test_model_combine.py` | Priority combiner unit tests |
-| `tests/test_model_epoch_metrics.py` | LightFM per-epoch metric helpers |
+| `tests/test_model_epoch_metrics.py` | Per-epoch metric helpers |
 | `tests/test_model_config.py` | RecTools `[model.*]` + save/load round trips |
-| `tests/test_model_sequential.py` | SASRec/BERT4Rec TOML mapping, AutoML skip, serve no-torch |
+| `tests/test_model_sequential.py` | SASRec/BERT4Rec/HSTU TOML mapping, AutoML skip, serve no-torch |
 | `tests/support/model_events.py` | Shared synthetic events helper |
 | `tests/support/toml_config.py` | Shared `write_toml` helper |
 | `tests/support/events.py` | Shared event payload helper for `test_events_*` |
@@ -178,8 +178,8 @@ flowchart LR
    when set `>1`. Per-strategy top-K is rectools-native
    (`ModelBase.recommend()` maps external↔internal IDs via the Dataset's
    id maps — Cicerone does not hand-roll that conversion). When
-   `[job].log_epoch_metrics = true`, the collaborative LightFM strategy is
-   fitted epoch-by-epoch via `fit_partial` and logs in-sample
+   `[job].log_epoch_metrics = true`, collaborative LightFM and sequential
+   strategies are fitted epoch-by-epoch via `fit_partial` and log in-sample
    Precision@K/Recall@K every `[job].epoch_metrics_every` epochs over a
    seeded random user sample (default off). Tunables are grouped in
    `EpochMetricsSettings`.

@@ -178,3 +178,18 @@ def test_train_and_recommend_skips_epoch_metrics_by_default(sample_items, featur
         )
 
     assert "Collaborative epoch" not in caplog.text
+
+
+def test_warn_on_epoch_metric_trajectory_uses_label(caplog):
+    settings = EpochMetricsSettings(every=5)
+    with caplog.at_level("WARNING"):
+        warn_on_epoch_metric_trajectory(
+            [
+                (1, {"Precision@2": 0.8}),
+                (5, {"Precision@2": 0.1}),
+            ],
+            settings,
+            label="Sequential",
+        )
+    assert "Sequential epoch metrics:" in caplog.text
+    assert "Collaborative epoch metrics:" not in caplog.text

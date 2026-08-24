@@ -21,7 +21,7 @@ from cicerone.model.constants import (
     LIGHTFM_NUM_THREADS_SEQUENTIAL,
 )
 from cicerone.model.epoch_metrics import (
-    fit_lightfm_with_epoch_metrics,
+    fit_with_epoch_metrics,
     interactions_for_epoch_metrics,
 )
 from cicerone.model.strategies import (
@@ -30,7 +30,7 @@ from cicerone.model.strategies import (
     as_recommender_model,
     build_strategy_model,
 )
-from cicerone.model_config import default_model_configs, resolve_model_configs
+from cicerone.model_config import SEQUENTIAL_STRATEGY, default_model_configs, resolve_model_configs
 
 logger = logging.getLogger(__name__)
 
@@ -95,15 +95,16 @@ def _fit_strategy(
             model_configs=model_configs,
             lightfm_num_threads=_FIT_POOL_LIGHTFM_THREADS,
         )
-    if name == "collaborative" and epoch_metrics is not None:
+    if name in {"collaborative", SEQUENTIAL_STRATEGY} and epoch_metrics is not None:
         if epoch_interactions is None:
             raise ValueError("epoch_interactions is required when epoch metric logging is enabled")
-        fit_lightfm_with_epoch_metrics(
+        fit_with_epoch_metrics(
             model,
             dataset,
             epoch_interactions,  # type: ignore[arg-type]
             settings=epoch_metrics,
             top_k=epoch_metrics_top_k,
+            label="Collaborative" if name == "collaborative" else "Sequential",
         )
     else:
         model.fit(dataset)
@@ -255,7 +256,7 @@ def fit_strategies(
     # Pre-slice interactions in the parent to shrink ProcessPool pickles.
     epoch_interactions = (
         interactions_for_epoch_metrics(dataset, built.interactions, epoch_metrics.max_users)
-        if epoch_metrics is not None and "collaborative" in to_fit
+        if epoch_metrics is not None and ("collaborative" in to_fit or SEQUENTIAL_STRATEGY in to_fit)
         else None
     )
     content_cols = list(content_feature_columns or [])

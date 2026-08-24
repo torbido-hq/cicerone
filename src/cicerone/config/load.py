@@ -88,6 +88,7 @@ _AUTOML_FLAT_KEYS = (
     ("automl_test_days", "test_days"),
     ("automl_primary_metric", "primary_metric"),
     ("automl_candidates", "candidates"),
+    ("automl_debias", "debias"),
 )
 
 
@@ -408,6 +409,7 @@ def load_settings(config_path: str | None = None) -> Settings:
             candidates=(
                 [dict(candidate) for candidate in automl["candidates"]] if "candidates" in automl else None
             ),
+            debias=bool(automl.get("debias", False)),
         ),
         mode=cast(Mode, mode),
         serve=ServeSettings(

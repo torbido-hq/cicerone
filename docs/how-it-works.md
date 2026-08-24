@@ -101,27 +101,28 @@ No latent factors, no time order, no item metadata. Independent of
 `content_fallback` (that one ranks **unseen catalog** items by features).
 Feature-only users skip this strategy.
 
-### `sequential` — SASRec or BERT4Rec
+### `sequential` — SASRec, BERT4Rec, or HSTU
 
 Opt-in (`job.models`); not in the default chain. RecTools
 [`SASRecModel`](https://rectools.readthedocs.io/en/stable/api/rectools.models.nn.transformers.sasrec.SASRecModel.html)
-(default) or `BERT4RecModel` via `[model.sequential].architecture`. Needs
-`pip install 'cicerone-recommender[sequential]'` or
+(default), `BERT4RecModel`, or `HSTUModel` via `[model.sequential].architecture`.
+Needs `pip install 'cicerone-recommender[sequential]'` or
 `pip install -r requirements-sequential.txt`. The default Docker image does
 **not** install torch; serve never imports it.
 
-Both models take a per-user item sequence. In Cicerone that sequence is
-**distinct items sorted by last-touch time** after aggregation — not a
-click stream with repeats.
+SASRec defaults follow RecTools eSASRec (`sampled_softmax` + LiGR layers).
+Sequences are **distinct items sorted by last-touch time** after aggregation —
+not a click stream with repeats — so HSTU relative-time bias is weak here.
 
-| | SASRec | BERT4Rec |
-| --- | --- | --- |
-| Attention | Unidirectional (causal) | Bidirectional |
-| Training | Shifted sequence: predict the next item | Cloze / item masking (MLM) |
-| Typical use | Next-item from left context | Fill-in from both sides of the sequence |
+| | SASRec | BERT4Rec | HSTU |
+| --- | --- | --- | --- |
+| Attention | Unidirectional (causal) | Bidirectional | Pointwise; optional relative time/position |
+| Training | Shifted sequence: predict the next item | Cloze / item masking (MLM) | Shifted sequence (SASRec-style) |
+| Typical use | Next-item from left context | Fill-in from both sides | Next-item; time bias needs raw event order |
 
 Papers: [Kang & McAuley, SASRec, 2018](https://arxiv.org/abs/1808.09781);
-[Sun et al., BERT4Rec, 2019](https://arxiv.org/abs/1904.06690). RecTools
+[Sun et al., BERT4Rec, 2019](https://arxiv.org/abs/1904.06690);
+[Zhai et al., HSTU, 2024](https://arxiv.org/abs/2402.17152). RecTools
 walkthrough:
 [transformer tutorial](https://rectools.readthedocs.io/en/stable/examples/tutorials/transformers_tutorial.html).
 
@@ -200,7 +201,9 @@ Existing DB recommendation tables need `ALTER TABLE … ADD COLUMN reasons TEXT`
 
 `[job.automl]` backtests candidate `models` / `weights` / `rrf_k` over
 time folds of your events (`MAP` / `NDCG` / `Recall` via RecTools metrics)
-and picks the winner for that run. It is not a neural architecture search.
+and picks the winner for that run. Set `[job.automl].debias = true` to pass
+RecTools `DebiasConfig` into those metrics (default off). It is not a neural
+architecture search.
 Fitted models are reused across candidates **within a fold**; `recommend()`
 still runs fresh. Sequential skip rules above still apply.
 

@@ -67,14 +67,18 @@ feature_config_path = "/app/config/features.toml"
 # popularity = "n_interactions"
 # period = { days = 14 }
 #
-# Optional sequential strategy (SASRec default; BERT4Rec via architecture).
+# Optional sequential strategy (SASRec default; BERT4Rec / HSTU via architecture).
 # Requires: pip install 'cicerone-recommender[sequential]'
 # (or pip install -r requirements-sequential.txt from a checkout)
+# Defaults follow RecTools eSASRec (sampled softmax + LiGR layers).
+# HSTU relative-time bias is weak here: sequences are last-touch (user, item).
 # [model.sequential]
-# architecture = "sasrec"  # or "bert4rec"
+# architecture = "sasrec"  # or "bert4rec" or "hstu"
 # n_factors = 64
 # epochs = 3
-# loss = "softmax"
+# loss = "sampled_softmax"
+# n_negatives = 256
+# transformer_layers_type = "LiGRLayers"
 # session_max_len = 50
 # train_min_user_interactions = 2
 # batch_size = 128
@@ -105,11 +109,12 @@ feature_config_path = "/app/config/features.toml"
 # never loads this — it still reads precomputed recommendation rows only.
 # save_model_artifact = false
 
-# Optional: log in-sample Precision@K/Recall@K every N LightFM epochs while
-# fitting the collaborative strategy (uses fit_partial epoch-by-epoch instead
-# of a single fit). Adds training time — default off. Significant regression
-# or plateau across logged epochs emits a WARN. The knobs below are ignored
-# unless log_epoch_metrics is true (scored users are a seeded random sample).
+# Optional: log in-sample Precision@K/Recall@K every N epochs while fitting
+# collaborative (LightFM) or sequential (SASRec/BERT4Rec/HSTU) via fit_partial
+# instead of a single fit. Adds training time — default off. Significant
+# regression or plateau across logged epochs emits a WARN. The knobs below
+# are ignored unless log_epoch_metrics is true (scored users are a seeded
+# random sample).
 # log_epoch_metrics = false
 # epoch_metrics_every = 5
 # epoch_metrics_max_users = 500
@@ -150,6 +155,7 @@ feature_config_path = "/app/config/features.toml"
 # n_splits = 2       # number of time-based folds to backtest each candidate over
 # test_days = 14     # size of each fold's held-out window, in days
 # primary_metric = "MAP" # exact name, or a unique NAME@k (e.g. "MAP" → "MAP@10")
+# debias = false         # RecTools DebiasConfig on MAP/NDCG/Recall; default off
 #
 # Optional: override the default candidate search space (every strategy
 # alone, the default priority combo, and a weighted-fusion blend). Each
