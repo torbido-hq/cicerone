@@ -137,7 +137,8 @@ class DatabaseInputSource:
 
     def _select_user_rows(self, query: str | None, table: str, user_id: str) -> pd.DataFrame:
         if query:
-            sql = f'SELECT * FROM ({query}) AS _cicerone_user_rows WHERE "user_id" = :user_id'
+            wrapped = query.strip().rstrip(";").strip()
+            sql = f'SELECT * FROM ({wrapped}) AS _cicerone_user_rows WHERE "user_id" = :user_id'
         else:
             sql = f'SELECT * FROM "{table}" WHERE "user_id" = :user_id'
         logger.info("Reading from database: user-filtered %s", "query" if query else f'table "{table}"')
