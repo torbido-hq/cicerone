@@ -12,6 +12,7 @@ from cicerone.events.updater import INCREMENTAL_SOURCE, IncrementalUpdater
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.factory import build_output_sink
 from cicerone.io.recommendation_reader import RECOMMENDATION_COLUMNS
+from cicerone.reasons import dump_source_reasons, parse_reasons
 
 
 def test_incremental_updater_write_through(tmp_path, feature_config: FeatureConfig):
@@ -121,6 +122,41 @@ def test_incremental_updater_preserves_compound_sources(tmp_path, feature_config
     updater.apply([normalize_event(event_payload(user_id="u1", item_id="new", event_id="c1"))])
     u1 = load_recommendations_frame(settings.output)
     assert "compound" in set(u1[u1["user_id"] == "u1"]["item_id"].astype(str))
+
+
+def test_incremental_updater_preserves_reasons_on_personalized_rows(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    kept = dump_source_reasons("personalized", rank=1)
+    pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "old",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                "reasons": kept,
+            }
+        ]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+    )
+    updater.apply([normalize_event(event_payload(user_id="u1", item_id="new", event_id="r1"))])
+    frame = load_recommendations_frame(settings.output)
+    u1 = frame[frame["user_id"] == "u1"]
+    old = u1[u1["item_id"] == "old"].iloc[0]
+    assert parse_reasons(old["reasons"]).sources[0].label == "personalized"
+    fresh = u1[u1["item_id"] == "new"].iloc[0]
+    assert parse_reasons(fresh["reasons"]).sources[0].label == INCREMENTAL_SOURCE
 
 
 def test_incremental_updater_skips_when_busy(tmp_path, feature_config: FeatureConfig):

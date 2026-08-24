@@ -14,7 +14,12 @@ from cicerone.config import IOSettings
 from cicerone.io.db_errors import is_missing_column_error, is_missing_table_error
 from cicerone.io.db_store import DEFAULT_RECOMMENDATIONS_TABLE, MISSING_TABLE_ERRORS
 from cicerone.io.options import is_s3_not_found, read_parquet, require_option
-from cicerone.io.recommendation_schema import RECOMMENDATION_COLUMNS, USER_COLUMN, recommendations_sql_names
+from cicerone.io.recommendation_schema import (
+    RECOMMENDATION_COLUMNS,
+    USER_COLUMN,
+    recommendation_output_columns,
+    recommendations_sql_names,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +59,7 @@ def _normalize_recommendation_columns(frame: pd.DataFrame) -> pd.DataFrame:
     missing = [column for column in RECOMMENDATION_COLUMNS if column not in frame.columns]
     if missing:
         raise ValueError(f"recommendations frame missing columns: {missing}")
-    return frame.loc[:, list(RECOMMENDATION_COLUMNS)]
+    return frame.loc[:, recommendation_output_columns(frame)]
 
 
 def _empty_on_schema_mismatch(frame: pd.DataFrame) -> pd.DataFrame:
@@ -136,16 +141,16 @@ def _load_dataset_recommendations_for_users(output: IOSettings, user_ids: list[s
 
 
 def _load_db_recommendations(output: IOSettings, *, user_ids: Collection[str] | None = None) -> pd.DataFrame:
-    table, columns, user_col = _db_table_and_columns(output)
+    table, _required_columns, user_col = _db_table_and_columns(output)
     engine = _engine_for(require_option(output.options, "database_url", "db"))
     try:
         if user_ids is None:
-            frame = pd.read_sql_query(text(f"SELECT {columns} FROM {table}"), engine)
+            frame = pd.read_sql_query(text(f"SELECT * FROM {table}"), engine)
         else:
             ids = sorted({str(user_id) for user_id in user_ids})
             if not ids:
                 return empty_recommendations_frame()
-            stmt = text(f"SELECT {columns} FROM {table} WHERE {user_col} IN :user_ids").bindparams(
+            stmt = text(f"SELECT * FROM {table} WHERE {user_col} IN :user_ids").bindparams(
                 bindparam("user_ids", expanding=True)
             )
             frame = pd.read_sql_query(stmt, engine, params={"user_ids": ids})

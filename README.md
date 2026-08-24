@@ -96,7 +96,7 @@ lightfm/rectools/implicit/torch, never trains or imports):
 | Method | Path | Description |
 | --- | --- | --- |
 | `GET` | `/health` | Liveness probe (no auth) |
-| `GET` | `/recommendations/{user_id}` | Precomputed top-K for that user |
+| `GET` | `/recommendations/{user_id}` | Precomputed top-K for that user (optional `reasons`) |
 | `GET` | `/metrics` | Prometheus text format (no bearer token; optional `X-Metrics-Token`) |
 | `POST` | `/events` | Incremental ingest when `[events]` `kind = "webhook"` |
 | `GET` | `/docs` / `/redoc` | Interactive OpenAPI docs (Swagger / ReDoc) |
@@ -118,7 +118,20 @@ Response JSON:
   "user_id": "u1",
   "fallback": false,
   "items": [
-    {"item_id": "i1", "rank": 1, "score": 0.91, "source": "blended"}
+    {
+      "item_id": "i1",
+      "rank": 1,
+      "score": 0.91,
+      "source": "blended",
+      "reasons": {
+        "sources": [
+          {"label": "personalized", "rank": 2, "weight": 0.8, "contribution": 0.0129}
+        ],
+        "boosts": [],
+        "similar_items": [{"item_id": "i9", "score": 0.5}],
+        "matched_attributes": [{"column": "style", "value": "lager"}]
+      }
+    }
   ]
 }
 ```
@@ -515,10 +528,12 @@ not loadable.
 
 ## Output
 
-`recommendations`: `user_id, item_id, rank, score, source` (`source` is the
-label of whichever strategy produced that row: `personalized`, `item_based`,
+`recommendations`: `user_id, item_id, rank, score, source` plus optional
+`reasons` JSON (`[job.explain]`, default on). `source` is the label of
+whichever strategy produced that row: `personalized`, `item_based`,
 `content_fallback`, `popular_fallback`, `latest`, or `blended` when
-multi-source blending combined more than one).
+multi-source blending combined more than one. Existing DB tables need
+`ALTER TABLE … ADD COLUMN reasons TEXT` before the extra column will persist.
 
 `manifest`: metadata about the latest run (counts, timestamps,
 `triggered_by`, effective models, optional AutoML metrics, and

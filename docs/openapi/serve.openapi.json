@@ -10,6 +10,26 @@
       }
     },
     "schemas": {
+      "BoostHit": {
+        "properties": {
+          "factor": {
+            "description": "Multiplier applied by this rule",
+            "title": "Factor",
+            "type": "number"
+          },
+          "name": {
+            "description": "Boost rule name from features.toml",
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "factor"
+        ],
+        "title": "BoostHit",
+        "type": "object"
+      },
       "ErrorDetail": {
         "properties": {
           "detail": {
@@ -171,6 +191,26 @@
         "title": "InteractionEvent",
         "type": "object"
       },
+      "MatchedAttribute": {
+        "properties": {
+          "column": {
+            "description": "Item feature column",
+            "title": "Column",
+            "type": "string"
+          },
+          "value": {
+            "description": "Shared feature value",
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "column",
+          "value"
+        ],
+        "title": "MatchedAttribute",
+        "type": "object"
+      },
       "RecommendationItem": {
         "properties": {
           "item_id": {
@@ -183,6 +223,17 @@
             "minimum": 1.0,
             "title": "Rank",
             "type": "integer"
+          },
+          "reasons": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RecommendationReasons"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why this item was ranked: contributing sources, boosts, similar history items"
           },
           "score": {
             "description": "Score from the batch job (strategy- or blend-specific)",
@@ -205,6 +256,40 @@
           "source"
         ],
         "title": "RecommendationItem",
+        "type": "object"
+      },
+      "RecommendationReasons": {
+        "properties": {
+          "boosts": {
+            "items": {
+              "$ref": "#/components/schemas/BoostHit"
+            },
+            "title": "Boosts",
+            "type": "array"
+          },
+          "matched_attributes": {
+            "items": {
+              "$ref": "#/components/schemas/MatchedAttribute"
+            },
+            "title": "Matched Attributes",
+            "type": "array"
+          },
+          "similar_items": {
+            "items": {
+              "$ref": "#/components/schemas/SimilarItem"
+            },
+            "title": "Similar Items",
+            "type": "array"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/SourceContribution"
+            },
+            "title": "Sources",
+            "type": "array"
+          }
+        },
+        "title": "RecommendationReasons",
         "type": "object"
       },
       "RecommendationsResponse": {
@@ -249,6 +334,80 @@
           "items"
         ],
         "title": "RecommendationsResponse",
+        "type": "object"
+      },
+      "SimilarItem": {
+        "properties": {
+          "item_id": {
+            "description": "History item that shares catalog attributes",
+            "title": "Item Id",
+            "type": "string"
+          },
+          "score": {
+            "description": "Jaccard overlap of item feature tokens",
+            "title": "Score",
+            "type": "number"
+          }
+        },
+        "required": [
+          "item_id",
+          "score"
+        ],
+        "title": "SimilarItem",
+        "type": "object"
+      },
+      "SourceContribution": {
+        "properties": {
+          "contribution": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "RRF term weight/(rrf_k+rank); null under priority combine",
+            "title": "Contribution"
+          },
+          "label": {
+            "description": "Strategy source label",
+            "examples": [
+              "personalized"
+            ],
+            "title": "Label",
+            "type": "string"
+          },
+          "rank": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Rank of this item within that strategy",
+            "title": "Rank"
+          },
+          "weight": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Combiner weight for this source",
+            "title": "Weight"
+          }
+        },
+        "required": [
+          "label"
+        ],
+        "title": "SourceContribution",
         "type": "object"
       },
       "ValidationError": {

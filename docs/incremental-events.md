@@ -15,6 +15,11 @@ boosts) for affected users plus `__cold_start__`.
 [how-it-works.md](how-it-works.md) explains why LightFM, item-KNN, and
 sequential wait for a full retrain.
 
+Preserved personalized / `item_based` / `sequential` / `content_fallback`
+/ `blended` rows keep their batch `reasons`. New popular, latest, and
+`incremental` rows get a minimal `{sources:[{label}]}` payload — no
+history-overlap `similar_items` on this path.
+
 Batch I/O and serve packages: [architecture.md](architecture.md).
 
 ## What it does not do

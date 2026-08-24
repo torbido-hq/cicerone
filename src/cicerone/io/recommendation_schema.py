@@ -12,6 +12,7 @@ ITEM_COLUMN = "item_id"
 RANK_COLUMN = "rank"
 SCORE_COLUMN = "score"
 SOURCE_COLUMN = "source"
+REASONS_COLUMN = "reasons"
 RECOMMENDATION_COLUMNS: tuple[str, ...] = (
     USER_COLUMN,
     ITEM_COLUMN,
@@ -36,3 +37,11 @@ def recommendations_sql_names(
     )
     user_col = sql_identifier(USER_COLUMN, option="recommendations_column")
     return table, columns, user_col
+
+
+def recommendation_output_columns(frame: Any) -> list[str]:
+    """Required columns plus optional ``reasons`` when present."""
+    columns = list(RECOMMENDATION_COLUMNS)
+    if hasattr(frame, "columns") and REASONS_COLUMN in frame.columns:
+        columns.append(REASONS_COLUMN)
+    return columns

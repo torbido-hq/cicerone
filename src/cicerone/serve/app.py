@@ -22,6 +22,7 @@ from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.io.base import ManifestReader, RecommendationReader
 from cicerone.io.recommendation_reader import ITEM_COLUMN, SOURCE_COLUMN, normalize_items_snapshot
+from cicerone.reasons import parse_reasons
 from cicerone.serve.bootstrap_events import start_events_runtime
 from cicerone.serve.code_samples import HEALTH_PATH, RECOMMENDATIONS_PATH, attach_code_samples
 from cicerone.serve.events_routes import attach_events_ingest_openapi, mount_events_routes
@@ -382,6 +383,7 @@ def create_app(
                     rank=int(row.rank),
                     score=float(row.score),
                     source=str(row.source),
+                    reasons=parse_reasons(getattr(row, "reasons", None)),
                 )
                 for row in filtered.itertuples(index=False)
             ],

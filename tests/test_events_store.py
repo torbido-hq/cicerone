@@ -42,6 +42,28 @@ def test_load_recommendations_schema_mismatch_treated_as_empty(tmp_path):
     assert frame.empty
 
 
+def test_load_recommendations_keeps_optional_reasons(tmp_path):
+    path = tmp_path / "recommendations.parquet"
+    pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                "reasons": '{"sources":[{"label":"personalized"}]}',
+            }
+        ]
+    ).to_parquet(path, index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    )
+    frame = load_recommendations_frame(settings.output)
+    assert list(frame.columns) == [*list(empty_recommendations_frame().columns), "reasons"]
+    assert "personalized" in str(frame.iloc[0]["reasons"])
+
+
 def test_load_recommendations_db_missing_table_treated_as_empty(tmp_path, caplog):
     db_path = tmp_path / "recommendations.db"
     sqlite3.connect(db_path).close()

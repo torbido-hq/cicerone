@@ -210,22 +210,30 @@ def load_rectools_model(path: Path | str) -> RecommenderModel:
     return load_model(Path(path))  # type: ignore[return-value]
 
 
+def _interactions_from_dataset(dataset: Dataset) -> pd.DataFrame:
+    """External-id interaction table already stored inside the RecTools Dataset."""
+    frame = dataset.get_raw_interactions()
+    if frame is None or frame.empty:
+        return pd.DataFrame()
+    return frame
+
+
 def recommend_from_artifact(
     artifact: ModelArtifact,
     target_users: list[str],
     top_k: int,
 ) -> pd.DataFrame:
-    # Artifacts omit interactions → blending sees n=0 for every user.
+    interactions = _interactions_from_dataset(artifact.dataset)
     built = BuiltDataset(
         dataset=artifact.dataset,
-        interactions=pd.DataFrame(),
+        interactions=interactions,
         items=artifact.items,
         users=artifact.users,
     )
-    if artifact.feature_config.blending.enabled:
+    if artifact.feature_config.blending.enabled and interactions.empty:
         logger.warning(
-            "recommend_from_artifact with blending.enabled: interactions are not stored in the "
-            "artifact, so the blend curve sees n_interactions=0 for every user"
+            "recommend_from_artifact with blending.enabled: stored Dataset has no "
+            "interactions, so the blend curve sees n_interactions=0 for every user"
         )
     weights = dict(artifact.model_weights) if artifact.model_weights is not None else None
     return recommend_with_models(

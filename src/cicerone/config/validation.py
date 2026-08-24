@@ -81,6 +81,12 @@ def require_positive_int(value: int, *, name: str) -> int:
     return value
 
 
+def require_non_negative_int(value: int, *, name: str) -> int:
+    if value < 0:
+        raise ConfigError(f"{name} must be >= 0, got {value}")
+    return value
+
+
 def require_positive_float(value: float, *, name: str) -> float:
     if value <= 0:
         raise ConfigError(f"{name} must be > 0, got {value}")
