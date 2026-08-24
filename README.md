@@ -250,7 +250,7 @@ run succeeded and inspecting a user's current top-K — `cicerone dashboard`
 serve). Like serve mode, it never loads lightfm/implicit/torch (it does
 import `rectools`).
 
-![Cicerone dashboard with a user recommendation lookup, latest job status, and history including a failed run](docs/images/dashboard.png)
+![Cicerone dashboard inspecting alice: recent events beside current top-K with amber overlap, latest job success, and history including a failed S3 run](docs/images/dashboard.png)
 
 - `GET /dashboard` shows the latest run's status (success/failed), counts,
   effective models, and (for a `db` output only — a `dataset` output's
