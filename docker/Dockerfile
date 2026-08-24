@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Pin pip/setuptools/wheel so the LightFM build is reproducible.
-RUN pip install --no-cache-dir --upgrade pip==24.2 setuptools==74.1.2 wheel==0.44.0
+RUN pip install --no-cache-dir --upgrade pip==24.2 setuptools==74.1.2 wheel==0.48.0
 
 COPY requirements.txt ./
 RUN pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt
