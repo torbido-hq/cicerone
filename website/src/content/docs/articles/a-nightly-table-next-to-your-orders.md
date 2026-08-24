@@ -548,6 +548,6 @@ If it is mostly `popular_fallback`, the job is still serving bestsellers, so kee
 
 If `personalized` and `blended` are showing up for people who actually buy, put the `SELECT` on the homepage and leave the cron running in Compose. That is the whole product this walkthrough set up: a table your shop already knows how to read.
 
-Even then, `source` only tells you which list won, not whether anyone clicked. You still have the bestsellers query, so serve both — personalized to half your signed-in traffic, the old query to the other half — and compare click-through per impression over a couple of weeks. If personalized does not win, keep serving bestsellers and let the table keep filling. You will have measured it instead of guessing.
+Even then, `source` only tells you which list won, not whether anyone clicked. You still have the bestsellers query, so serve both — personalized to half your signed-in traffic, the old query to the other half — and compare click-through per impression over a couple of weeks. Make that split a stable per-user assignment — a hash of `user_id`, or a cookie — not a per-request coin flip, which drops the same visitor into both arms across sessions and leaves you comparing noise. If personalized does not win, keep serving bestsellers and let the table keep filling. You will have measured it instead of guessing.
 
 The drink columns in the repo’s default config were never part of the contract. It only ever asked who bought what, and when. Everything after that is a cron job writing ranks and going back to sleep.
