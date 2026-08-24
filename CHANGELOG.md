@@ -19,6 +19,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   boost hits, similar history items / matched attributes), persisted at
   batch time when `[job.explain]` is enabled (default on). Existing DB
   tables need `ALTER TABLE … ADD COLUMN reasons TEXT`.
+- Dashboard user lookup shows recent `[input]` events next to current top-K
+  (overlap highlighting, source mix, optional user attributes).
+  `dashboard.lookup_events` defaults to 20; history failures do not hide recs.
 
 ### Changed
 

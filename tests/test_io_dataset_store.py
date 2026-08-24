@@ -136,6 +136,52 @@ def test_local_backend_optional_inputs_missing_return_none(tmp_path):
     assert source.read_items() is None
 
 
+def test_local_backend_get_events_for_user_filters_and_limits(tmp_path):
+    options = {"storage_backend": "local", "path": str(tmp_path)}
+    events = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "old", "event_type": "view", "occurred_at": "2026-08-01T00:00:00Z"},
+            {
+                "user_id": "u1",
+                "item_id": "new",
+                "event_type": "purchase",
+                "occurred_at": "2026-08-21T00:00:00Z",
+            },
+            {
+                "user_id": "u2",
+                "item_id": "other",
+                "event_type": "view",
+                "occurred_at": "2026-08-21T00:00:00Z",
+            },
+        ]
+    )
+    events.to_parquet(tmp_path / "events.parquet", index=False)
+    source = DatasetInputSource(options)
+
+    rows = source.get_events_for_user("u1", limit=1)
+
+    assert list(rows["item_id"]) == ["new"]
+    assert list(source.get_events_for_user("ghost", limit=5)["item_id"]) == []
+
+
+def test_local_backend_get_user_returns_row_or_none(tmp_path):
+    options = {"storage_backend": "local", "path": str(tmp_path)}
+    source = DatasetInputSource(options)
+    assert source.get_user("u1") is None
+
+    pd.DataFrame(
+        [{"user_id": "u1", "region_slug": "lazio"}, {"user_id": "u2", "region_slug": "toscana"}]
+    ).to_parquet(tmp_path / "users.parquet", index=False)
+    assert source.get_user("u1")["region_slug"] == "lazio"
+    assert source.get_user("ghost") is None
+
+
+def test_local_backend_get_events_for_user_missing_file_raises(tmp_path):
+    source = DatasetInputSource({"storage_backend": "local", "path": str(tmp_path)})
+    with pytest.raises(FileNotFoundError):
+        source.get_events_for_user("u1", 5)
+
+
 def test_local_backend_optional_inputs_propagate_corrupt_file_errors(tmp_path):
     options = {"storage_backend": "local", "path": str(tmp_path)}
     (tmp_path / "users.parquet").write_bytes(b"not-a-parquet-file")

@@ -1097,6 +1097,43 @@ def test_load_settings_rejects_non_positive_dashboard_lookup_k(tmp_path):
         load_settings(config_path)
 
 
+def test_load_settings_dashboard_lookup_events(tmp_path):
+    config_path = write_toml(
+        tmp_path,
+        f"""
+        [dashboard]
+        enabled = true
+        lookup_events = 8
+        {_base_io_toml()}
+        """,
+    )
+
+    settings = load_settings(config_path)
+
+    assert settings.dashboard.lookup_events == 8
+    assert settings.dashboard_lookup_events == 8
+
+
+def test_load_settings_dashboard_lookup_events_defaults_to_20(tmp_path):
+    settings = load_settings(write_toml(tmp_path, _base_io_toml()))
+
+    assert settings.dashboard.lookup_events == 20
+
+
+def test_load_settings_rejects_non_positive_dashboard_lookup_events(tmp_path):
+    config_path = write_toml(
+        tmp_path,
+        f"""
+        [dashboard]
+        lookup_events = 0
+        {_base_io_toml()}
+        """,
+    )
+
+    with pytest.raises(ConfigError, match="dashboard.lookup_events must be >= 1"):
+        load_settings(config_path)
+
+
 def test_load_settings_mode_defaults_to_batch(tmp_path):
     config_path = write_toml(tmp_path, _base_io_toml())
 

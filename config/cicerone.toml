@@ -316,7 +316,8 @@ prefix = "recommendations/latest"
 # users_path = "/app/config/dashboard_users.toml"
 # refresh_interval_seconds = 30 # how often the page polls /partials/status
 # history_limit = 20 # recent runs shown (only meaningful for [output].kind = "db")
-# lookup_k = 20 # inspector rows (capped at job.top_k)
+# lookup_k = 20 # inspector recommendation rows (capped at job.top_k)
+# lookup_events = 20 # inspector event rows (from [input], newest first)
 
 # --- "db" kind example (commented out) ----------------------------------
 # [input]

@@ -349,13 +349,16 @@ never imports `cicerone.model`/`dataset`/`automl`.
   `recommendation_runs` table for real history (`read_recent(limit)`).
 - `io.factory.build_recommendation_reader(settings.output)` builds a
   `RecommendationReader` for the user-id inspector (`dashboard_lookup.py`).
-  Lookup reads the output store directly (no serve hop). `k` is
-  `min(job.top_k, dashboard.lookup_k)` (`lookup_k` defaults to 20, so 10 with
-  the default `top_k`). Missing users fall
-  back to `__cold_start__` / popular-latest rows with a badge; `category`
-  is joined from the items snapshot when that column exists. When `reasons`
-  is present, the table shows a short Why summary (source labels, top
-  similar item).
+  `io.factory.build_user_history_reader(settings.input)` builds a
+  `UserHistoryReader` (`get_events_for_user` / `get_user` on the input
+  source) for the events pane. Lookup reads those stores directly (no serve
+  hop). Recs `k` is `min(job.top_k, dashboard.lookup_k)` (`lookup_k`
+  defaults to 20, so 10 with the default `top_k`); events use
+  `dashboard.lookup_events` (default 20). Missing users fall back to
+  `__cold_start__` / popular-latest rows with a badge; `category` is joined
+  from the items snapshot when that column exists. When `reasons` is
+  present, the recs table shows a short Why summary (source labels, top
+  similar item). History load failures keep the recs pane.
 - `job.run()` writes exactly one manifest per run via a `try`/`finally`,
   with a consistent key set (`status: "success"|"failed"`, `error`) on both
   the success and failure paths, so a failed run is no longer silently
