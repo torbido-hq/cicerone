@@ -1,7 +1,9 @@
 // @ts-check
-import { dirname } from 'node:path';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'astro/config';
+import sitemap from '@astrojs/sitemap';
 import starlight from '@astrojs/starlight';
 import starlightBlog from 'starlight-blog';
 import { loadEnv } from 'vite';
@@ -12,11 +14,14 @@ import {
 	hasPublishedArticles,
 } from './src/lib/articles.mjs';
 import { analyticsHead, gaMeasurementId } from './src/lib/consent.mjs';
+import { latestArticleLastmod, stampRssUpdated } from './src/lib/rss.mjs';
+import { applySitemapLastmod, articleSitemapLastmods } from './src/lib/sitemap.mjs';
 
 const websiteRoot = dirname(fileURLToPath(import.meta.url));
 const articlesDir = articlesContentDir(websiteRoot);
 const production = process.env.NODE_ENV === 'production';
 const publicEnv = loadEnv(production ? 'production' : 'development', websiteRoot, 'PUBLIC_');
+const articleLastmods = articleSitemapLastmods(articlesDir);
 
 const articlesPlugin = hasPublishedArticles(articlesDir, { production })
 	? [
@@ -39,6 +44,28 @@ export default defineConfig({
 	site: 'https://cicerone.dev',
 	redirects: articleRedirects,
 	integrations: [
+		// Before Starlight so it does not inject a second @astrojs/sitemap.
+		sitemap({
+			serialize(item) {
+				return applySitemapLastmod(item, articleLastmods);
+			},
+		}),
+		{
+			name: 'cicerone-rss-updated',
+			hooks: {
+				'astro:build:done': ({ dir }) => {
+					const rssPath = join(fileURLToPath(dir), 'articles/rss.xml');
+					if (!existsSync(rssPath)) return;
+					writeFileSync(
+						rssPath,
+						stampRssUpdated(readFileSync(rssPath, 'utf8'), {
+							lastBuildDate: latestArticleLastmod(articleLastmods),
+							itemUpdatedByLink: articleLastmods,
+						}),
+					);
+				},
+			},
+		},
 		starlight({
 			title: 'Cicerone',
 			description:

@@ -2,6 +2,7 @@
 title: A nightly table next to your orders
 description: Nightly product recs as a Postgres table. Rails walkthrough; no Python in the request.
 date: 2026-08-20
+lastUpdated: 2026-08-24
 excerpt: Cron reads order_items, writes a ranked table, Rails JOINs it. Honest when the data is too thin to personalize.
 authors:
   - nicholas
