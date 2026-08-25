@@ -64,6 +64,8 @@ jobs:
           docker compose --env-file docker/postgres/defaults.env \
             -f docker-compose.ci.yml up \
             --build --abort-on-container-exit --exit-code-from test
+          docker compose --env-file docker/postgres/defaults.env \
+            -f docker-compose.ci.yml run --rm --build test-sequential
 
       - name: Tear down
         if: always()
