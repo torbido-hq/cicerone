@@ -14,11 +14,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from cicerone.config import Settings, load_settings
-from cicerone.dashboard_lookup import lookup_recommendations
+from cicerone.dashboard_lookup import lookup_inspector
 from cicerone.dashboard_users import load_users
 from cicerone.http_auth import require_basic_auth
-from cicerone.io.base import ManifestReader, RecommendationReader
-from cicerone.io.factory import build_manifest_reader, build_recommendation_reader
+from cicerone.io.base import ManifestReader, RecommendationReader, UserHistoryReader
+from cicerone.io.factory import build_manifest_reader, build_recommendation_reader, build_user_history_reader
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -76,6 +76,7 @@ def create_app(
     reader: ManifestReader,
     users: dict[str, str],
     recommendation_reader: RecommendationReader | None = None,
+    history_reader: UserHistoryReader | None = None,
 ) -> FastAPI:
     app = FastAPI(title="cicerone-dashboard")
     app.mount("/static", StaticFiles(directory=str(_PACKAGE_DIR / "static")), name="static")
@@ -107,14 +108,14 @@ def create_app(
         return _TEMPLATES.TemplateResponse(
             request,
             "_recommendations.html",
-            lookup_recommendations(settings, recommendation_reader, user_id),
+            lookup_inspector(settings, recommendation_reader, history_reader, user_id),
         )
 
     @app.get("/dashboard", dependencies=[Depends(auth)])
     def dashboard(request: Request, user_id: str = Query(default="")):
         context = _status_context()
         context["refresh_interval_seconds"] = settings.dashboard.refresh_interval_seconds
-        context.update(lookup_recommendations(settings, recommendation_reader, user_id))
+        context.update(lookup_inspector(settings, recommendation_reader, history_reader, user_id))
         return _TEMPLATES.TemplateResponse(request, "dashboard.html", context)
 
     return app
@@ -138,7 +139,12 @@ def main() -> None:
     except Exception:
         logger.exception("Recommendation store is not available; dashboard lookup will be disabled")
         rec_reader = None
-    app = create_app(settings, reader, users, rec_reader)
+    try:
+        history_reader = build_user_history_reader(settings.input)
+    except Exception:
+        logger.exception("Event store is not available; dashboard history pane will be disabled")
+        history_reader = None
+    app = create_app(settings, reader, users, rec_reader, history_reader)
     uvicorn.run(app, host=settings.dashboard.host, port=settings.dashboard.port)
 
 

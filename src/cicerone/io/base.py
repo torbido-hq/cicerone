@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
-from typing import Protocol
+from typing import Any, Protocol
 
 import pandas as pd
 
@@ -15,6 +15,18 @@ class InputSource(Protocol):
     def read_users(self) -> pd.DataFrame | None: ...
 
     def read_items(self) -> pd.DataFrame | None: ...
+
+    def get_events_for_user(self, user_id: str, limit: int) -> pd.DataFrame: ...
+
+    def get_user(self, user_id: str) -> dict[str, Any] | None: ...
+
+
+class UserHistoryReader(Protocol):
+    """Per-user slices of input events/users for the dashboard inspector."""
+
+    def get_events_for_user(self, user_id: str, limit: int) -> pd.DataFrame: ...
+
+    def get_user(self, user_id: str) -> dict[str, Any] | None: ...
 
 
 class OutputSink(Protocol):

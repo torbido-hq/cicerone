@@ -35,6 +35,7 @@ from cicerone.io.db_errors import is_missing_column_error
 from cicerone.io.options import require_option, sql_identifier
 from cicerone.io.recommendation_schema import recommendations_sql_names
 from cicerone.io.replace_users import RecommendationSchemaError, normalize_replace_user_ids
+from cicerone.io.user_lookup import filter_rows_for_user, newest_events
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +134,36 @@ class DatabaseInputSource:
             sql_identifier(self._options.get("items_table", DEFAULT_ITEMS_TABLE), option="items_table"),
             "items",
         )
+
+    def _select_user_rows(self, query: str | None, table: str, user_id: str) -> pd.DataFrame:
+        if query:
+            sql = f'SELECT * FROM ({query}) AS _cicerone_user_rows WHERE "user_id" = :user_id'
+        else:
+            sql = f'SELECT * FROM "{table}" WHERE "user_id" = :user_id'
+        logger.info("Reading from database: user-filtered %s", "query" if query else f'table "{table}"')
+        return pd.read_sql(text(sql), self._engine, params={"user_id": user_id})
+
+    def get_events_for_user(self, user_id: str, limit: int) -> pd.DataFrame:
+        frame = self._select_user_rows(
+            self._options.get("events_query"),
+            sql_identifier(self._options.get("events_table", DEFAULT_EVENTS_TABLE), option="events_table"),
+            user_id,
+        )
+        return newest_events(filter_rows_for_user(frame, user_id), limit)
+
+    def get_user(self, user_id: str) -> dict[str, Any] | None:
+        query = self._options.get("users_query")
+        table = sql_identifier(self._options.get("users_table", DEFAULT_USERS_TABLE), option="users_table")
+        if query is None and not inspect(self._engine).has_table(table):
+            return None
+        try:
+            frame = self._select_user_rows(query, table, user_id)
+        except _MISSING_TABLE_ERRORS:
+            return None
+        matched = filter_rows_for_user(frame, user_id)
+        if matched.empty:
+            return None
+        return matched.iloc[0].to_dict()
 
 
 class DatabaseOutputSink:

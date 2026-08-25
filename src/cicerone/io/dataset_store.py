@@ -28,6 +28,7 @@ from cicerone.io.options import (
 )
 from cicerone.io.recommendation_schema import USER_COLUMN
 from cicerone.io.replace_users import RecommendationSchemaError, normalize_replace_user_ids
+from cicerone.io.user_lookup import filter_rows_for_user, newest_events
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,38 @@ class DatasetInputSource:
 
     def read_items(self) -> pd.DataFrame | None:
         return self._read_optional("items.parquet", "item")
+
+    def _read_for_user(self, filename: str, user_id: str) -> pd.DataFrame:
+        try:
+            frame = read_parquet(self._options, filename, filters=[("user_id", "==", user_id)])
+        except FileNotFoundError:
+            raise
+        except Exception as exc:
+            if is_s3_not_found(exc):
+                raise
+            message = str(exc).lower()
+            if "user_id" in message or "fieldref" in message or "filter" in message:
+                logger.warning("Filtered %s read failed; falling back to full-file load: %s", filename, exc)
+                frame = read_parquet(self._options, filename)
+            else:
+                raise
+        return filter_rows_for_user(frame, user_id)
+
+    def get_events_for_user(self, user_id: str, limit: int) -> pd.DataFrame:
+        return newest_events(self._read_for_user("events.parquet", user_id), limit)
+
+    def get_user(self, user_id: str) -> dict[str, Any] | None:
+        try:
+            frame = self._read_for_user("users.parquet", user_id)
+        except FileNotFoundError:
+            return None
+        except Exception as exc:
+            if is_s3_not_found(exc):
+                return None
+            raise
+        if frame.empty:
+            return None
+        return frame.iloc[0].to_dict()
 
 
 class DatasetOutputSink:
