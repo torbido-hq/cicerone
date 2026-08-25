@@ -25,6 +25,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- S3 parquet reads with row filters use ranged `GetObject`, so dataset
+  dashboard lookup does not download whole `events.parquet` / `users.parquet`.
 - Sequential SASRec defaults to the eSASRec recipe (`sampled_softmax`,
   `n_negatives = 256`, LiGR layers).
 - Bump `rectools` 0.13.0 → 0.19.0, `scipy` 1.12.0 → 1.17.0, and switch the

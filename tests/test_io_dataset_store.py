@@ -1,15 +1,22 @@
 from __future__ import annotations
 
+import io
 import json
+import logging
+import os
 
 import boto3
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from botocore.exceptions import ClientError
 from moto import mock_aws
 
 from cicerone.config import ConfigError
 from cicerone.io.dataset_store import DatasetInputSource, DatasetOutputSink
+from cicerone.io.options import build_s3_client as real_build_s3_client
+from cicerone.io.options import read_parquet
 from cicerone.io.replace_users import RecommendationSchemaError
 
 # --- local backend -----------------------------------------------------------
@@ -281,6 +288,136 @@ def test_s3_backend_optional_items_not_found_logs_warning_and_returns_none(s3_op
 
     assert result is None
     assert any("items" in record.getMessage().lower() for record in caplog.records)
+
+
+def _parquet_row_groups(*tables: pa.Table) -> bytes:
+    buf = io.BytesIO()
+    with pq.ParquetWriter(buf, tables[0].schema, compression="none") as writer:
+        for table in tables:
+            writer.write_table(table)
+    return buf.getvalue()
+
+
+def _unique_range_bytes(calls: list[dict[str, object]]) -> int:
+    intervals: list[tuple[int, int]] = []
+    for call in calls:
+        spec = str(call["range"]).removeprefix("bytes=")
+        start_s, end_s = spec.split("-", 1)
+        intervals.append((int(start_s), int(end_s)))
+    merged: list[list[int]] = []
+    for start, end in sorted(intervals):
+        if not merged or start > merged[-1][1] + 1:
+            merged.append([start, end])
+        else:
+            merged[-1][1] = max(merged[-1][1], end)
+    return sum(end - start + 1 for start, end in merged)
+
+
+def _track_s3_get_object(monkeypatch) -> list[dict[str, object]]:
+    calls: list[dict[str, object]] = []
+
+    def tracking_build(options):
+        client = real_build_s3_client(options)
+        orig = client.get_object
+
+        def tracked_get_object(*args, **kwargs):
+            resp = orig(*args, **kwargs)
+            payload = resp["Body"].read()
+            calls.append({"range": kwargs.get("Range"), "n": len(payload), "key": kwargs["Key"]})
+            resp["Body"] = io.BytesIO(payload)
+            return resp
+
+        client.get_object = tracked_get_object
+        return client
+
+    monkeypatch.setattr("cicerone.io.options.build_s3_client", tracking_build)
+    return calls
+
+
+def test_s3_user_lookup_does_not_get_object_full_body(s3_options, monkeypatch):
+    blob = os.urandom(8192)
+    events = _parquet_row_groups(
+        pa.table(
+            {
+                "user_id": ["u1", "u1"],
+                "item_id": ["old", "new"],
+                "occurred_at": ["2026-08-01T00:00:00Z", "2026-08-21T00:00:00Z"],
+                "blob": [blob, blob],
+            }
+        ),
+        pa.table(
+            {
+                "user_id": ["u2"] * 40,
+                "item_id": [f"i{i}" for i in range(40)],
+                "occurred_at": ["2026-08-21T00:00:00Z"] * 40,
+                "blob": [os.urandom(8192) for _ in range(40)],
+            }
+        ),
+    )
+    users = _parquet_row_groups(
+        pa.table({"user_id": ["u1"], "region_slug": ["lazio"], "blob": [blob]}),
+        pa.table(
+            {
+                "user_id": ["u2"] * 40,
+                "region_slug": ["other"] * 40,
+                "blob": [os.urandom(8192) for _ in range(40)],
+            }
+        ),
+    )
+    client = boto3.client("s3", region_name="us-east-1")
+    bucket = s3_options["bucket"]
+    events_key = "datasets/latest/events.parquet"
+    users_key = "datasets/latest/users.parquet"
+    client.put_object(Bucket=bucket, Key=events_key, Body=events)
+    client.put_object(Bucket=bucket, Key=users_key, Body=users)
+    events_size = client.head_object(Bucket=bucket, Key=events_key)["ContentLength"]
+    users_size = client.head_object(Bucket=bucket, Key=users_key)["ContentLength"]
+
+    calls = _track_s3_get_object(monkeypatch)
+    source = DatasetInputSource(s3_options)
+    rows = source.get_events_for_user("u1", 1)
+    user = source.get_user("u1")
+
+    assert list(rows["item_id"]) == ["new"]
+    assert user is not None
+    assert user["region_slug"] == "lazio"
+
+    event_gets = [call for call in calls if call["key"] == events_key]
+    user_gets = [call for call in calls if call["key"] == users_key]
+    assert event_gets and all(call["range"] for call in event_gets)
+    assert user_gets and all(call["range"] for call in user_gets)
+    assert _unique_range_bytes(event_gets) < int(events_size)
+    assert _unique_range_bytes(user_gets) < int(users_size)
+
+
+def test_s3_read_parquet_filter_projects_columns(s3_options):
+    client = boto3.client("s3", region_name="us-east-1")
+    buf = io.BytesIO()
+    pd.DataFrame([{"user_id": "u1", "item_id": "i1"}, {"user_id": "u2", "item_id": "i2"}]).to_parquet(
+        buf, index=False
+    )
+    client.put_object(Bucket=s3_options["bucket"], Key="datasets/latest/events.parquet", Body=buf.getvalue())
+    frame = read_parquet(s3_options, "events.parquet", columns=["item_id"], filters=[("user_id", "==", "u1")])
+    assert list(frame["item_id"]) == ["i1"]
+    assert list(frame.columns) == ["item_id"]
+
+
+def test_s3_get_user_missing_returns_none(s3_options):
+    source = DatasetInputSource(s3_options)
+    assert source.get_user("u1") is None
+
+
+def test_s3_get_events_for_user_filter_fallback(s3_options, caplog):
+    client = boto3.client("s3", region_name="us-east-1")
+    buf = io.BytesIO()
+    pd.DataFrame([{"item_id": "i1", "occurred_at": "2026-08-21T00:00:00Z"}]).to_parquet(buf, index=False)
+    client.put_object(Bucket=s3_options["bucket"], Key="datasets/latest/events.parquet", Body=buf.getvalue())
+
+    source = DatasetInputSource(s3_options)
+    with caplog.at_level(logging.WARNING, logger="cicerone.io.dataset_store"):
+        rows = source.get_events_for_user("u1", 1)
+    assert rows.empty
+    assert any("falling back to full-file load" in record.getMessage() for record in caplog.records)
 
 
 def test_s3_backend_no_prefix_writes_flat_key(s3_options):

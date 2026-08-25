@@ -11,6 +11,7 @@ from typing import Any
 
 import boto3
 import pandas as pd
+import pyarrow.parquet as pq
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
@@ -89,6 +90,88 @@ def validate_storage_options(options: dict[str, Any], backend: str | None = None
     return resolved
 
 
+class _S3RangeFile(io.RawIOBase):
+    """Random-access S3 object that issues Range GETs instead of downloading the body."""
+
+    def __init__(self, client: Any, bucket: str, key: str, size: int) -> None:
+        super().__init__()
+        self._client = client
+        self._bucket = bucket
+        self._key = key
+        self._size = size
+        self._pos = 0
+
+    def seekable(self) -> bool:
+        return True
+
+    def readable(self) -> bool:
+        return True
+
+    def writable(self) -> bool:
+        return False
+
+    def seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
+        if whence == io.SEEK_SET:
+            pos = offset
+        elif whence == io.SEEK_CUR:
+            pos = self._pos + offset
+        elif whence == io.SEEK_END:
+            pos = self._size + offset
+        else:
+            raise ValueError(f"invalid whence: {whence}")
+        if pos < 0:
+            raise ValueError(f"negative seek value {pos}")
+        self._pos = pos
+        return self._pos
+
+    def tell(self) -> int:
+        return self._pos
+
+    def read(self, size: int | None = -1) -> bytes:
+        if self.closed:
+            raise ValueError("read of closed file")
+        if size is not None and size < 0:
+            size = -1
+        if self._pos >= self._size or size == 0:
+            return b""
+        remaining = self._size - self._pos
+        length = remaining if size is None or size < 0 else min(size, remaining)
+        start = self._pos
+        end = start + length - 1
+        obj = self._client.get_object(
+            Bucket=self._bucket,
+            Key=self._key,
+            Range=f"bytes={start}-{end}",
+        )
+        data = obj["Body"].read()
+        self._pos += len(data)
+        return data
+
+    def readinto(self, buffer: Any) -> int:
+        data = self.read(len(buffer))
+        n = len(data)
+        buffer[:n] = data
+        return n
+
+
+def _read_s3_parquet_filtered(
+    client: Any,
+    bucket: str,
+    key: str,
+    *,
+    columns: Sequence[str] | None,
+    filters: Sequence[Any],
+) -> pd.DataFrame:
+    size = int(client.head_object(Bucket=bucket, Key=key)["ContentLength"])
+    table = pq.read_table(
+        _S3RangeFile(client, bucket, key, size),
+        columns=list(columns) if columns is not None else None,
+        filters=list(filters),
+        pre_buffer=False,
+    )
+    return table.to_pandas()
+
+
 def read_parquet(
     options: dict[str, Any],
     filename: str,
@@ -100,8 +183,8 @@ def read_parquet(
     """Read a parquet object from local path or S3 using ``storage_backend`` options.
 
     When ``columns`` is set, only those columns are loaded (projection pushdown
-    where the parquet engine supports it). ``filters`` are passed through to
-    pandas/pyarrow for row-group predicate pushdown when available.
+    where the parquet engine supports it). ``filters`` use row-group predicate
+    pushdown; on S3 that is ranged ``GetObject``, not a full body download.
     """
     backend = validate_storage_options(options)
     read_kwargs: dict[str, Any] = {}
@@ -118,5 +201,7 @@ def read_parquet(
     key = object_key(options, filename)
     logger.info("Reading s3://%s/%s", bucket, key)
     client = s3_client if s3_client is not None else build_s3_client(options)
+    if filters is not None:
+        return _read_s3_parquet_filtered(client, bucket, key, columns=columns, filters=filters)
     obj = client.get_object(Bucket=bucket, Key=key)
     return pd.read_parquet(io.BytesIO(obj["Body"].read()), **read_kwargs)
