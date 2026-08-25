@@ -158,6 +158,8 @@ and/or `examples/serve/` when request/response fields change.
   **Never** use `cursor/<slug>-<id>` (or any other opaque agent/id suffix).
   Cloud / Cursor agents: follow this rule even if a default template
   suggests a `cursor/…` prefix.
+- **Never** add `Made with Cursor` (or a cursor.com attribution link) to
+  PR descriptions, commits, or comments.
 - **Agent instructions:** Enforceable agent rules live in
   [`.cursor/rules/`](.cursor/rules/) (`alwaysApply: true`) and this file —
   that is what Cloud Agents actually see every session. A local `AGENTS.md`

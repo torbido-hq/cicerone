@@ -32,6 +32,10 @@ Cloud/Cursor branch template such as `cursor/<slug>-<id>`.
 - When creating a PR whose branch does not use a `cursor/` prefix, set ManagePullRequest `skip_branch_prefix_check=true` (user/repo policy requires non-`cursor/` names).
 - Keep PRs focused. Full gate is in `verification.mdc` (ruff + mypy + pytest
   coverage) — run it every time, not only before the final PR.
+- **Never** add `Made with Cursor`, `Made with [Cursor](https://cursor.com)`,
+  or any Cursor attribution/marketing footer to PR bodies, commit messages,
+  or comments. Leave Sourcery (or other review bots) alone; just do not
+  append Cursor branding.
 
 ## Commit and push
 
@@ -49,3 +53,4 @@ Cloud/Cursor branch template such as `cursor/<slug>-<id>`.
   Agent, not anyone. Nobody wants them in this repo. If Cursor's managed
   `commit-msg.cursor.co-author` hook starts appending again, restore it to
   strip those lines (or `exit 0`) before the next commit.
+- **Never** add a `Made with Cursor` line (or link) to PRs. Same reason.
