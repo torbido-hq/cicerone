@@ -774,6 +774,6 @@ docker compose up --build
 - Production incremental ingest (db / s3 / Redis Streams, HA):
   [incremental-events.md](incremental-events.md).
 - Run the test suite (`docker compose -f docker-compose.ci.yml up --build
-  --abort-on-container-exit --exit-code-from test`) if you're contributing
+  --abort-on-container-exit --exit-code-from test test`) if you're contributing
   code — see [CONTRIBUTING.md](../CONTRIBUTING.md). That suite includes a
   system-style Postgres end-to-end check (`tests/test_system_db.py`).

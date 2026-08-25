@@ -111,3 +111,11 @@ RUN chown -R cicerone:cicerone /app
 USER cicerone
 ENTRYPOINT []
 CMD ["pytest", "--cov=cicerone", "--cov-report=term-missing", "--cov-report=xml"]
+
+# Sequential extra tests only. RecTools imports torch NN models whenever
+# torch is installed, so the main suite stays torch-free (and runtime-like).
+FROM test AS test-sequential
+USER root
+RUN pip install --no-cache-dir -r requirements-sequential.txt
+USER cicerone
+CMD ["pytest", "tests/test_model_sequential.py", "tests/test_model_strategies.py", "--no-cov"]

@@ -11,16 +11,21 @@ way risks testing against a different environment than CI/production.
 
 ```sh
 docker compose -f docker-compose.ci.yml --env-file docker/postgres/defaults.env \
-  up --build --abort-on-container-exit --exit-code-from test
+  up --build --abort-on-container-exit --exit-code-from test test
+docker compose -f docker-compose.ci.yml --env-file docker/postgres/defaults.env \
+  run --rm --build test-sequential
 docker compose -f docker-compose.ci.yml --env-file docker/postgres/defaults.env down -v
 ```
 
 This runs the full pytest suite, including the Postgres-backed `db` I/O
 tests and the system-style end-to-end check in `tests/test_system_db.py`,
 and enforces the 95% coverage gate (`pyproject.toml`,
-`[tool.coverage.report].fail_under`). Model/config tests mirror the
-packages (`tests/test_model_*.py`, `tests/test_config_*.py`; shared helpers
-under `tests/support/`). A plain `docker run --rm cicerone-test`
+`[tool.coverage.report].fail_under`). `test-sequential` then runs the
+SASRec/BERT4Rec/HSTU extra tests (`rectools[torch]`) in a separate image —
+the main `test` and runtime images stay torch-free, because RecTools
+imports its NN stack whenever torch is installed. Model/config tests
+mirror the packages (`tests/test_model_*.py`, `tests/test_config_*.py`;
+shared helpers under `tests/support/`). A plain `docker run --rm cicerone-test`
 (after `docker build --target test -t cicerone-test -f docker/Dockerfile .`)
 skips the `db` tests (no `TEST_DATABASE_URL`) and will under-report coverage
 — always validate with the compose file above before opening a PR.

@@ -411,6 +411,8 @@ def test_sequential_fit_recommend_top_k_shape(feature_config):
     from cicerone.model import train_and_recommend
 
     events = _sequence_events()
+    # Personalized sequential uses filter_viewed; leave one unseen item per user.
+    events = events[events["item_id"] != events["user_id"].map(lambda u: f"i{int(u[1:]) % 6}")]
     built = build_dataset(events, None, None, feature_config, half_life_days=90)
     configs = default_model_configs()
     configs["sequential"].update(
@@ -421,6 +423,7 @@ def test_sequential_fit_recommend_top_k_shape(feature_config):
             "n_blocks": 1,
             "batch_size": 4,
             "session_max_len": 8,
+            "n_negatives": 4,
         }
     )
     recs = train_and_recommend(
