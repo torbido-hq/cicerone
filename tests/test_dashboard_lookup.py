@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 from conftest import make_settings
 
@@ -173,6 +174,50 @@ def test_format_user_attrs_skips_user_id_and_missing():
     assert rows == [
         {"name": "region_slug", "value": "lazio"},
         {"name": "favorite_styles", "value": "ipa, stout"},
+    ]
+
+
+def test_format_user_attrs_accepts_series_and_ndarray():
+    rows = format_user_attrs(
+        {
+            "user_id": "u1",
+            "tags": pd.Series(["ipa", "stout"]),
+            "codes": np.array(["a", "b"]),
+            "blank": "",
+        }
+    )
+
+    assert rows == [
+        {"name": "tags", "value": "ipa, stout"},
+        {"name": "codes", "value": "a, b"},
+    ]
+
+
+def test_lookup_inspector_keeps_recommendations_when_user_attrs_are_sequences():
+    events = pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "view", "quantity": 1, "occurred_at": None}]
+    )
+    result = lookup_inspector(
+        make_settings(dashboard_enabled=True),
+        _KReader(),
+        _History(
+            events,
+            {
+                "user_id": "u1",
+                "favorite_styles": ["ipa", "stout"],
+                "tags": pd.Series(["session"]),
+                "tag_ids": np.array([1, 2]),
+            },
+        ),
+        "u1",
+    )
+
+    assert result["error"] is None
+    assert result["events"]
+    assert result["user_attrs"] == [
+        {"name": "favorite_styles", "value": "ipa, stout"},
+        {"name": "tags", "value": "session"},
+        {"name": "tag_ids", "value": "1, 2"},
     ]
 
 

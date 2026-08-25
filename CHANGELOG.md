@@ -23,6 +23,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (overlap highlighting, source mix, optional user attributes).
   `dashboard.lookup_events` defaults to 20; history failures do not hide recs.
 
+### Fixed
+
+- Dashboard lookup keeps recommendations when a user attribute is a list,
+  Series, or array.
+
 ### Changed
 
 - Sequential SASRec defaults to the eSASRec recipe (`sampled_softmax`,

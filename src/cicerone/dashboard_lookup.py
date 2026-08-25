@@ -149,10 +149,9 @@ def lookup_history(
 
     try:
         user = history_reader.get_user(user_id)
+        empty["user_attrs"] = format_user_attrs(user)
     except Exception:
         logger.exception("Failed to look up user attributes for user_id=%r", user_id)
-        user = None
-    empty["user_attrs"] = format_user_attrs(user)
     return empty
 
 
@@ -269,10 +268,14 @@ def _history_unavailable(exc: BaseException) -> bool:
 
 
 def _is_missing(value: object) -> bool:
-    if value is None or value == "":
+    if is_sequence_attr(value):
+        return False
+    if is_missing(value):
         return True
-    result = pd.isna(value)
-    return bool(result) if isinstance(result, bool) else False
+    try:
+        return value == ""
+    except (ValueError, TypeError):
+        return False
 
 
 
