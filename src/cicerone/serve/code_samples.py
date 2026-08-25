@@ -104,7 +104,7 @@ body = client.recommendations(
     os.environ.get("{ENV_USER_ID}", "{DEFAULT_USER_ID}"),
     limit={DEFAULT_LIMIT},
 )
-print(body.user_id, body.fallback, body.generated_at)
+print(body.user_id, body.fallback, body.generated_at, body.experiment_id, body.variant)
 for row in body.items:
     print(f"  #{{row.rank}} {{row.item_id}} score={{row.score}}")
 """
@@ -131,7 +131,7 @@ async function main() {{
   }});
   if (!response.ok) throw new Error(`${{response.status}} ${{await response.text()}}`);
   const body = await response.json();
-  console.log(body.user_id, body.fallback, body.generated_at);
+  console.log(body.user_id, body.fallback, body.generated_at, body.experiment_id, body.variant);
   for (const row of body.items) {{
     console.log(`  #${{row.rank}} ${{row.item_id}} score=${{row.score}}`);
   }}

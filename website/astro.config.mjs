@@ -99,6 +99,7 @@ export default defineConfig({
 						{ label: 'Tutorial', slug: 'tutorial' },
 						{ label: 'Architecture', slug: 'architecture' },
 						{ label: 'Incremental events', slug: 'incremental-events' },
+						{ label: 'Experiments', slug: 'experiments' },
 					],
 				},
 				{

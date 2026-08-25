@@ -14,6 +14,7 @@ from cicerone.config.constants import (
     AUTOML_DEFAULT_PRIMARY_METRIC,
     AUTOML_DEFAULT_TEST_DAYS,
     DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS,
+    DEFAULT_EXPERIMENT_ALPHA,
     DEFAULT_EXPLAIN_MAX_ATTRIBUTES,
     DEFAULT_EXPLAIN_MAX_SIMILAR_ITEMS,
     DEFAULT_ITEM_BASED_K_NEIGHBORS,
@@ -21,6 +22,7 @@ from cicerone.config.constants import (
     DEFAULT_LOCK_TTL_SECONDS,
     DEFAULT_MAX_WORKERS,
     DEFAULT_SEQUENTIAL_MIN_MEDIAN_INTERACTIONS,
+    EXPERIMENT_COMBINERS,
     LOCK_BACKENDS,
     MODES,
     STRATEGY_NAMES,
@@ -31,14 +33,17 @@ from cicerone.config.events import coerce_events_settings, load_events_settings
 from cicerone.config.settings import (
     AutomlSettings,
     DashboardSettings,
+    ExperimentSettings,
     ExplainSettings,
     IOSettings,
     ServeSettings,
     Settings,
     TriggerSettings,
+    VariantSettings,
 )
 from cicerone.config.validation import (
     require_non_negative_int,
+    require_open_unit_interval,
     require_positive_float,
     require_positive_int,
     resolve_epoch_metrics,
@@ -151,6 +156,7 @@ def make_settings(**overrides: Any) -> Settings:
     )
     automl = _coerce_nested(AutomlSettings, overrides.pop("automl", None), _AUTOML_FLAT_KEYS, overrides)
     events = coerce_events_settings(overrides.pop("events", None))
+    experiment = _coerce_experiment(overrides.pop("experiment", None))
 
     base: dict[str, Any] = dict(
         input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": "/tmp/in"}),
@@ -177,6 +183,7 @@ def make_settings(**overrides: Any) -> Settings:
         dashboard=dashboard,
         events=events,
         explain=ExplainSettings(),
+        experiment=experiment,
     )
     base.update(overrides)
     if base.get("model_configs") is None:
@@ -211,6 +218,102 @@ def _load_lookup_user_attrs(raw: object) -> tuple[str, ...]:
     if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
         raise ConfigError("dashboard.lookup_user_attrs must be a list of strings")
     return tuple(dict.fromkeys(item.strip() for item in raw if item.strip() and item.strip() != "user_id"))
+
+
+def _coerce_experiment(value: Any) -> ExperimentSettings:
+    if value is None:
+        return ExperimentSettings()
+    if isinstance(value, ExperimentSettings):
+        return value
+    if isinstance(value, dict):
+        return load_experiment_settings(value)
+    raise TypeError(f"Expected ExperimentSettings, dict, or None; got {type(value).__name__}")
+
+
+def load_experiment_settings(raw: dict[str, Any] | None) -> ExperimentSettings:
+    data = raw or {}
+    enabled = bool(data.get("enabled", False))
+    variants_raw = data.get("variants") or []
+    variants = tuple(_load_variant(item, index) for index, item in enumerate(variants_raw))
+    experiment_id = str(data.get("id") or "").strip()
+    primary_metric = str(data.get("primary_metric") or "weighted").strip() or "weighted"
+    alpha = float(data.get("alpha", DEFAULT_EXPERIMENT_ALPHA))
+    automl_challenger = bool(data.get("automl_challenger", False))
+    if enabled:
+        if not experiment_id:
+            raise ConfigError("experiment.id is required when experiment.enabled = true")
+        if not automl_challenger and len(variants) < 2:
+            raise ConfigError("experiment requires at least two [[experiment.variants]] tables")
+        if automl_challenger and variants and len(variants) < 2:
+            raise ConfigError("experiment.automl_challenger with variants still needs at least two variants")
+        names = [variant.name for variant in variants]
+        if len(names) != len(set(names)):
+            raise ConfigError(f"experiment.variants names must be unique, got {names}")
+        variants = _normalize_traffic(variants)
+        require_open_unit_interval(alpha, name="experiment.alpha")
+        if not primary_metric:
+            raise ConfigError("experiment.primary_metric must be a non-empty string")
+    return ExperimentSettings(
+        enabled=enabled,
+        id=experiment_id,
+        primary_metric=primary_metric,
+        variants=variants,
+        log_exposures=bool(data.get("log_exposures", False)),
+        automl_challenger=automl_challenger,
+        alpha=alpha,
+    )
+
+
+def _load_variant(raw: Any, index: int) -> VariantSettings:
+    if not isinstance(raw, dict):
+        raise ConfigError(f"experiment.variants[{index}] must be a table")
+    name = str(raw.get("name") or "").strip()
+    if not name:
+        raise ConfigError(f"experiment.variants[{index}].name is required")
+    traffic = float(raw.get("traffic", 0.0))
+    if traffic < 0:
+        raise ConfigError(f"experiment.variants[{name}].traffic must be >= 0, got {traffic}")
+    models = list(raw["models"]) if "models" in raw else None
+    if models is not None:
+        from cicerone.experiment.recipes import validate_variant_models
+
+        validate_variant_models(models, variant_name=name)
+    weights = {str(key): float(value) for key, value in raw["weights"].items()} if "weights" in raw else None
+    if weights is None and "model_weights" in raw:
+        weights = {str(key): float(value) for key, value in raw["model_weights"].items()}
+    validate_model_weights(weights, context=f"experiment.variants[{name}].weights")
+    rrf_k = float(raw["rrf_k"]) if "rrf_k" in raw else None
+    validate_rrf_k(rrf_k, context=f"experiment.variants[{name}].rrf_k")
+    combiner = str(raw["combiner"]).lower() if "combiner" in raw else None
+    if combiner is not None and combiner not in EXPERIMENT_COMBINERS:
+        raise ConfigError(
+            f"experiment.variants[{name}].combiner must be one of {list(EXPERIMENT_COMBINERS)}, "
+            f"got {combiner!r}"
+        )
+    blending = dict(raw["blending"]) if isinstance(raw.get("blending"), dict) else None
+    return VariantSettings(
+        name=name,
+        traffic=traffic,
+        models=models,
+        model_weights=weights,
+        rrf_k=rrf_k,
+        combiner=combiner,
+        blending=blending,
+        boosts=bool(raw.get("boosts", True)),
+        eligibility=bool(raw.get("eligibility", True)),
+    )
+
+
+def _normalize_traffic(variants: tuple[VariantSettings, ...]) -> tuple[VariantSettings, ...]:
+    if not variants:
+        return variants
+    total = sum(variant.traffic for variant in variants)
+    if total > 1.0 + 1e-9:
+        raise ConfigError(f"experiment.variants traffic sums to {total}, which exceeds 1")
+    remainder = max(0.0, 1.0 - total)
+    last = variants[-1]
+    adjusted = replace(last, traffic=last.traffic + remainder)
+    return (*variants[:-1], adjusted)
 
 
 def _load_explain_settings(raw: dict[str, Any]) -> ExplainSettings:
@@ -474,4 +577,5 @@ def load_settings(config_path: str | None = None) -> Settings:
             lookup_user_attrs=_load_lookup_user_attrs(dashboard_raw.get("lookup_user_attrs")),
         ),
         events=events,
+        experiment=load_experiment_settings(raw.get("experiment") or {}),
     )

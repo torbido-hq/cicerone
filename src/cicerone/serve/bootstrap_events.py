@@ -130,6 +130,9 @@ def start_events_runtime(
         write_busy_check=combined_busy,
         fence_check=(apply_lock.owned if apply_lock is not None else None),
         on_success=reader.refresh,
+        variant_names=tuple(variant.name for variant in settings.experiment.variants)
+        if settings.experiment.enabled
+        else (),
     )
     buffer = MicroBatchBuffer(
         batch_size=settings.events.incremental.batch_size,

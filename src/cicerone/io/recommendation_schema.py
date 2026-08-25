@@ -13,6 +13,7 @@ RANK_COLUMN = "rank"
 SCORE_COLUMN = "score"
 SOURCE_COLUMN = "source"
 REASONS_COLUMN = "reasons"
+VARIANT_COLUMN = "variant"
 RECOMMENDATION_COLUMNS: tuple[str, ...] = (
     USER_COLUMN,
     ITEM_COLUMN,
@@ -20,6 +21,7 @@ RECOMMENDATION_COLUMNS: tuple[str, ...] = (
     SCORE_COLUMN,
     SOURCE_COLUMN,
 )
+_OPTIONAL_OUTPUT_COLUMNS: tuple[str, ...] = (REASONS_COLUMN, VARIANT_COLUMN)
 
 
 def recommendations_sql_names(
@@ -40,8 +42,20 @@ def recommendations_sql_names(
 
 
 def recommendation_output_columns(frame: Any) -> list[str]:
-    """Required columns plus optional ``reasons`` when present."""
+    """Required columns plus optional ``reasons`` / ``variant`` when present."""
     columns = list(RECOMMENDATION_COLUMNS)
-    if hasattr(frame, "columns") and REASONS_COLUMN in frame.columns:
-        columns.append(REASONS_COLUMN)
+    if not hasattr(frame, "columns"):
+        return columns
+    for column in _OPTIONAL_OUTPUT_COLUMNS:
+        if column in frame.columns:
+            columns.append(column)
     return columns
+
+
+def filter_variant_rows(frame: Any, variant: str | None) -> Any:
+    """Keep rows for ``variant``. Missing column or ``None`` variant is a no-op."""
+    if variant is None or not hasattr(frame, "columns") or VARIANT_COLUMN not in frame.columns:
+        return frame
+    if getattr(frame, "empty", False):
+        return frame
+    return frame[frame[VARIANT_COLUMN].astype(str) == str(variant)]

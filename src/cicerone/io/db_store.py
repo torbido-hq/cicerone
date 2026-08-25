@@ -6,7 +6,7 @@ deploy-time config only.
 
 NOTE: upgrading an existing recommendations table for optional ``reasons``
 needs ``ALTER TABLE … ADD COLUMN reasons TEXT``; pandas to_sql(append) will
-not add the column.
+not add the column. Experiments similarly need ``ALTER TABLE … ADD COLUMN variant TEXT``.
 """
 
 from __future__ import annotations
@@ -54,6 +54,8 @@ DEFAULT_MANIFEST_TABLE = "recommendation_runs"
 DEFAULT_MODEL_ARTIFACT_TABLE = "model_artifacts"
 # Separate from DEFAULT_ITEMS_TABLE so shared in/out DBs do not clobber source items.
 DEFAULT_RECOMMENDATION_ITEMS_TABLE = "recommendation_items"
+DEFAULT_EXPOSURES_TABLE = "recommendation_exposures"
+DEFAULT_EXPERIMENT_STATE_TABLE = "experiment_state"
 
 DEFAULT_DB_TABLES = frozenset(
     {
@@ -64,6 +66,8 @@ DEFAULT_DB_TABLES = frozenset(
         DEFAULT_MANIFEST_TABLE,
         DEFAULT_MODEL_ARTIFACT_TABLE,
         DEFAULT_RECOMMENDATION_ITEMS_TABLE,
+        DEFAULT_EXPOSURES_TABLE,
+        DEFAULT_EXPERIMENT_STATE_TABLE,
     }
 )
 

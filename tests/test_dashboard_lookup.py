@@ -22,13 +22,13 @@ class _BoomReader:
     def refresh(self) -> None:
         return
 
-    def get_recommendations(self, user_id: str, k: int) -> pd.DataFrame:
+    def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame:
         raise RuntimeError("dsn=postgres://secret@host/db")
 
     def get_items(self) -> pd.DataFrame | None:
         return None
 
-    def get_cold_start_fallback(self, k: int) -> pd.DataFrame:
+    def get_cold_start_fallback(self, k: int, *, variant: str | None = None) -> pd.DataFrame:
         return pd.DataFrame()
 
 
@@ -36,7 +36,7 @@ class _KReader:
     def refresh(self) -> None:
         return
 
-    def get_recommendations(self, user_id: str, k: int) -> pd.DataFrame:
+    def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame:
         return pd.DataFrame(
             [
                 {
@@ -53,7 +53,7 @@ class _KReader:
     def get_items(self) -> pd.DataFrame | None:
         return None
 
-    def get_cold_start_fallback(self, k: int) -> pd.DataFrame:
+    def get_cold_start_fallback(self, k: int, *, variant: str | None = None) -> pd.DataFrame:
         return pd.DataFrame()
 
 

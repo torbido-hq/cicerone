@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en" class="h-full bg-slate-50">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cicerone — Experiments</title>
+  <link rel="icon" type="image/svg+xml" href="/static/cicerone-icon.svg">
+  <link rel="stylesheet" href="/static/tailwind.css">
+</head>
+<body class="h-full">
+  <a href="#main" class="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-10 focus:rounded focus:bg-white focus:px-3 focus:py-2 focus:text-sm focus:text-slate-800">
+    Skip to content
+  </a>
+  <header class="border-b border-slate-200 bg-white">
+    <div class="mx-auto max-w-6xl px-4 py-3 flex items-center gap-4">
+      <h1><img src="/static/cicerone-logo.svg" alt="Cicerone" class="h-12 w-auto"></h1>
+      <p class="text-sm text-slate-600 border-l border-slate-200 pl-4">Experiments</p>
+      <nav class="ml-auto flex items-center gap-3 text-sm">
+        <a href="/dashboard" class="text-slate-700 hover:text-slate-900">Status</a>
+        <a href="/dashboard/experiments" class="text-slate-700 hover:text-slate-900">Experiments</a>
+      </nav>
+    </div>
+  </header>
+  <main id="main" class="mx-auto max-w-6xl px-4 py-6">
+    {% if message %}
+    <div class="mb-4 rounded-lg border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-800" role="status">{{ message }}</div>
+    {% endif %}
+    {% if promote_error %}
+    <div class="mb-4 rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800" role="alert">{{ promote_error }}</div>
+    {% endif %}
+    {% if not enabled %}
+    <p class="text-sm text-slate-700">No experiment is enabled in the loaded config.</p>
+    {% elif error %}
+    <div class="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800" role="status">{{ error }}</div>
+    {% elif report %}
+    <section class="rounded-lg border border-slate-200 bg-white p-4 mb-4">
+      <h2 class="text-sm font-medium text-slate-800 mb-2">{{ experiment.id }}</h2>
+      <p class="text-sm text-slate-600 mb-3">
+        Primary metric: <span class="font-medium text-slate-800">{{ report.primary_metric }}</span>
+        · Assigned users: {{ report.n_assigned }}
+        · {% if report.exposure_conditional %}exposure-conditional{% else %}ITT on users with events{% endif %}
+        · α={{ experiment.alpha }}
+      </p>
+      {% if promoted_variant %}
+      <p class="text-sm text-sky-800 mb-3">Promoted variant: <span class="font-medium">{{ promoted_variant }}</span> (100% traffic at serve).</p>
+      {% endif %}
+      <table class="w-full text-sm border-collapse mb-4">
+        <caption class="sr-only">Variant comparison</caption>
+        <thead>
+          <tr class="text-left text-slate-600 border-b border-slate-200">
+            <th scope="col" class="py-2 px-2">Treatment</th>
+            <th scope="col" class="py-2 px-2">Δ mean</th>
+            <th scope="col" class="py-2 px-2">Always-valid CI</th>
+            <th scope="col" class="py-2 px-2">Users</th>
+            <th scope="col" class="py-2 px-2">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in report.comparisons %}
+          <tr class="border-b border-slate-100">
+            <th scope="row" class="py-2 px-2 text-left font-medium text-slate-800">{{ item.treatment.name }} vs {{ item.control.name }}</th>
+            <td class="py-2 px-2 text-slate-700">{{ "%.4f"|format(item.difference) }}</td>
+            <td class="py-2 px-2 text-slate-700">[{{ "%.4f"|format(item.ci_low) }}, {{ "%.4f"|format(item.ci_high) }}]</td>
+            <td class="py-2 px-2 text-slate-700">{{ item.treatment.n_users }} / {{ item.control.n_users }}</td>
+            <td class="py-2 px-2 text-slate-700">{% if item.decided %}{{ item.winner }}{% else %}undecided{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% if report.guardrails %}
+      <h3 class="text-sm font-medium text-slate-800 mb-2">Guardrails</h3>
+      <table class="w-full text-sm border-collapse mb-4">
+        <thead>
+          <tr class="text-left text-slate-600 border-b border-slate-200">
+            <th scope="col" class="py-2 px-2">Variant</th>
+            <th scope="col" class="py-2 px-2">Fallback rate</th>
+            <th scope="col" class="py-2 px-2">Top-item share</th>
+            <th scope="col" class="py-2 px-2">Distinct items</th>
+            <th scope="col" class="py-2 px-2">OK</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in report.guardrails %}
+          <tr class="border-b border-slate-100">
+            <th scope="row" class="py-2 px-2 text-left font-medium text-slate-800">{{ item.variant }}</th>
+            <td class="py-2 px-2 text-slate-700">{{ "%.3f"|format(item.fallback_rate) }}</td>
+            <td class="py-2 px-2 text-slate-700">{{ "%.3f"|format(item.top_item_share) }}</td>
+            <td class="py-2 px-2 text-slate-700">{{ item.distinct_items }}</td>
+            <td class="py-2 px-2 text-slate-700">{% if item.ok %}yes{% else %}{{ item.failures|join(", ") }}{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+      {% if report.can_promote and report.winner and not promoted_variant %}
+      <form action="/dashboard/experiments/promote" method="post">
+        <input type="hidden" name="variant" value="{{ report.winner }}">
+        <button type="submit" class="rounded bg-slate-800 px-3 py-1.5 text-sm text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2">
+          Promote {{ report.winner }}
+        </button>
+      </form>
+      {% elif not report.can_promote %}
+      <p class="text-sm text-slate-600">Promote blocked: {{ report.promote_blocked_by|join(", ") }}.</p>
+      {% endif %}
+    </section>
+    {% endif %}
+  </main>
+</body>
+</html>

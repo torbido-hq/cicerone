@@ -169,6 +169,39 @@ def test_dataset_reader_returns_top_k_sorted_by_rank(tmp_path):
     assert list(recs["rank"]) == [1, 2]
 
 
+def test_dataset_reader_filters_variant_and_ignores_missing_column(tmp_path):
+    _write_recommendations(
+        tmp_path,
+        [
+            {
+                "user_id": "u1",
+                "item_id": "control-item",
+                "rank": 1,
+                "score": 0.9,
+                "source": "personalized",
+                "variant": "control",
+            },
+            {
+                "user_id": "u1",
+                "item_id": "treatment-item",
+                "rank": 1,
+                "score": 0.8,
+                "source": "personalized",
+                "variant": "treatment",
+            },
+        ],
+    )
+    reader = DatasetRecommendationReader({"storage_backend": "local", "path": str(tmp_path)})
+    assert list(reader.get_recommendations("u1", k=10, variant="treatment")["item_id"]) == ["treatment-item"]
+
+    _write_recommendations(
+        tmp_path,
+        [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"}],
+    )
+    reader.refresh()
+    assert list(reader.get_recommendations("u1", k=10, variant="treatment")["item_id"]) == ["i1"]
+
+
 def test_dataset_reader_unknown_user_returns_empty(tmp_path):
     _write_recommendations(tmp_path, [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9}])
 

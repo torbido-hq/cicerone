@@ -93,6 +93,13 @@ def require_positive_float(value: float, *, name: str) -> float:
     return value
 
 
+def require_open_unit_interval(value: float, *, name: str) -> float:
+    """Require a relative fraction in ``(0, 1)``."""
+    if value <= 0 or value >= 1:
+        raise ConfigError(f"{name} must be in (0, 1), got {value}")
+    return value
+
+
 def require_unit_interval(value: float, *, name: str) -> float:
     """Require a relative fraction in (0, 1]."""
     if value <= 0 or value > 1:

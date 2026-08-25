@@ -155,3 +155,42 @@ def test_sqlite_replace_recommendations_schema_mismatch(tmp_path, caplog):
     assert any("delete skipped" in record.getMessage().lower() for record in caplog.records)
     stored = pd.read_sql(text("SELECT item_id FROM recommendations"), engine)
     assert list(stored["item_id"]) == ["old"]
+
+
+def test_sqlite_db_reader_filters_variant(tmp_path):
+    url = _sqlite_url(tmp_path)
+    sink = DatabaseOutputSink({"database_url": url})
+    sink.write_recommendations(
+        pd.DataFrame(
+            [
+                {
+                    "user_id": "u1",
+                    "item_id": "control-item",
+                    "rank": 1,
+                    "score": 0.9,
+                    "source": "personalized",
+                    "variant": "control",
+                },
+                {
+                    "user_id": "u1",
+                    "item_id": "treatment-item",
+                    "rank": 1,
+                    "score": 0.8,
+                    "source": "personalized",
+                    "variant": "treatment",
+                },
+            ]
+        )
+    )
+    reader = DbRecommendationReader({"database_url": url})
+    assert list(reader.get_recommendations("u1", k=10, variant="treatment")["item_id"]) == ["treatment-item"]
+
+
+def test_sqlite_db_reader_missing_variant_column_falls_back(tmp_path):
+    url = _sqlite_url(tmp_path)
+    engine = create_engine(url)
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"}]
+    ).to_sql("recommendations", engine, index=False, if_exists="replace")
+    reader = DbRecommendationReader({"database_url": url})
+    assert list(reader.get_recommendations("u1", k=10, variant="treatment")["item_id"]) == ["i1"]

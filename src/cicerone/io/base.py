@@ -46,7 +46,7 @@ class OutputSink(Protocol):
 
 
 class RecommendationReader(Protocol):
-    def get_recommendations(self, user_id: str, k: int) -> pd.DataFrame: ...
+    def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame: ...
 
     def refresh(self) -> None:
         """Reload caches. No-op for live backends."""
@@ -60,7 +60,7 @@ class RecommendationReader(Protocol):
         """Monotonic token bumped when the items snapshot changes."""
         ...
 
-    def get_cold_start_fallback(self, k: int) -> pd.DataFrame:
+    def get_cold_start_fallback(self, k: int, *, variant: str | None = None) -> pd.DataFrame:
         """``__cold_start__`` rows, else a popular/latest heuristic for unknown users."""
         ...
 
@@ -91,8 +91,8 @@ class BaseRecommendationReader(ABC):
     def items_version(self) -> int:
         return 0
 
-    def get_cold_start_fallback(self, k: int) -> pd.DataFrame:
-        del k
+    def get_cold_start_fallback(self, k: int, *, variant: str | None = None) -> pd.DataFrame:
+        del k, variant
         return pd.DataFrame()
 
     def configure_item_filters(
@@ -104,7 +104,7 @@ class BaseRecommendationReader(ABC):
         del category_column, availability_filters
 
     @abstractmethod
-    def get_recommendations(self, user_id: str, k: int) -> pd.DataFrame: ...
+    def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame: ...
 
 
 class ManifestReader(Protocol):

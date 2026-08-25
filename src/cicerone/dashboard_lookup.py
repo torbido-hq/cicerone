@@ -11,6 +11,8 @@ from typing import Any
 import pandas as pd
 
 from cicerone.config import Settings
+from cicerone.experiment.assignment import resolve_assignment
+from cicerone.experiment.store import ExperimentStore
 from cicerone.io.base import RecommendationReader, UserHistoryReader
 from cicerone.io.options import is_s3_not_found
 from cicerone.io.recommendation_schema import ITEM_COLUMN, RANK_COLUMN, SCORE_COLUMN, SOURCE_COLUMN
@@ -54,6 +56,8 @@ def empty_recommendations_context(
         "queried": queried,
         "show_category": False,
         "show_reasons": False,
+        "experiment_id": None,
+        "variant": None,
         "error": error,
         **empty_history_fields(),
     }
@@ -102,8 +106,19 @@ def lookup_recommendations(
         logger.exception("Failed to refresh recommendation reader for dashboard lookup")
 
     k = lookup_k(settings.top_k, settings.dashboard.lookup_k)
+    experiment_id, variant = None, None
+    if settings.experiment.enabled:
+        promoted = None
+        try:
+            state = ExperimentStore(settings.output).read_state()
+            if state and state.get("experiment_id") == settings.experiment.id:
+                promoted = state.get("promoted_variant")
+                promoted = str(promoted) if promoted else None
+        except Exception:
+            logger.exception("Failed to read experiment state for dashboard lookup")
+        experiment_id, variant = resolve_assignment(settings, user_id, promoted_variant=promoted)
     try:
-        recs, used_fallback = _load_rows(recommendation_reader, user_id, k)
+        recs, used_fallback = _load_rows(recommendation_reader, user_id, k, variant=variant)
         category_column = settings.serve.category_column
         if category_column not in recs.columns:
             recs = _join_category(recs, recommendation_reader.get_items(), category_column)
@@ -116,6 +131,8 @@ def lookup_recommendations(
             "queried": True,
             "show_category": show_category,
             "show_reasons": any(row.get("reasons") and row["reasons"] != MISSING for row in items),
+            "experiment_id": experiment_id,
+            "variant": variant,
             "error": None,
             **empty_history_fields(),
         }
@@ -219,12 +236,12 @@ def format_user_attrs(user: dict[str, Any] | None, *, allowed: Sequence[str] = (
 
 
 def _load_rows(
-    recommendation_reader: RecommendationReader, user_id: str, k: int
+    recommendation_reader: RecommendationReader, user_id: str, k: int, *, variant: str | None = None
 ) -> tuple[pd.DataFrame, bool]:
-    recs = recommendation_reader.get_recommendations(user_id, k)
+    recs = recommendation_reader.get_recommendations(user_id, k, variant=variant)
     if not recs.empty:
         return recs, False
-    fallback = recommendation_reader.get_cold_start_fallback(k)
+    fallback = recommendation_reader.get_cold_start_fallback(k, variant=variant)
     if fallback.empty:
         return recs, False
     return fallback, True

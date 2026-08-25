@@ -71,6 +71,16 @@ class RecommendationsResponse(BaseModel):
         description="True when the cold-start list was used because the user had no personal rows",
     )
     items: list[RecommendationItem] = Field(description="Ordered top-K recommendations")
+    experiment_id: str | None = Field(
+        default=None,
+        description="Active experiment id when [experiment] is enabled; null otherwise",
+        examples=["rrf-vs-blend-2026-08"],
+    )
+    variant: str | None = Field(
+        default=None,
+        description="Sticky assignment for this user_id when an experiment is active; null otherwise",
+        examples=["control"],
+    )
 
 
 class ErrorDetail(BaseModel):
