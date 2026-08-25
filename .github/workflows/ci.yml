@@ -63,7 +63,7 @@ jobs:
         run: |
           docker compose --env-file docker/postgres/defaults.env \
             -f docker-compose.ci.yml up \
-            --build --abort-on-container-exit --exit-code-from test
+            --build --abort-on-container-exit --exit-code-from test test
           docker compose --env-file docker/postgres/defaults.env \
             -f docker-compose.ci.yml run --rm --build test-sequential
 

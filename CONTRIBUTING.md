@@ -11,7 +11,7 @@ way risks testing against a different environment than CI/production.
 
 ```sh
 docker compose -f docker-compose.ci.yml --env-file docker/postgres/defaults.env \
-  up --build --abort-on-container-exit --exit-code-from test
+  up --build --abort-on-container-exit --exit-code-from test test
 docker compose -f docker-compose.ci.yml --env-file docker/postgres/defaults.env \
   run --rm --build test-sequential
 docker compose -f docker-compose.ci.yml --env-file docker/postgres/defaults.env down -v

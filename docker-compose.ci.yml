@@ -45,6 +45,7 @@ services:
         condition: service_healthy
 
   test-sequential:
+    profiles: ["sequential"]
     build:
       context: .
       dockerfile: docker/Dockerfile
