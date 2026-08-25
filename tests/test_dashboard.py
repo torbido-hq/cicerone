@@ -727,6 +727,7 @@ def test_recommendations_partial_renders_events_and_overlap():
     response = _recs_client(
         _FakeRecReader(_recs_df()),
         _FakeHistory(_events_df(), {"user_id": "u1", "region_slug": "lazio"}),
+        dashboard_lookup_user_attrs=("region_slug",),
     ).get(
         "/partials/recommendations",
         params={"user_id": "u1"},
@@ -741,7 +742,9 @@ def test_recommendations_partial_renders_events_and_overlap():
     assert "personalized 2" in response.text
     assert "lazio" in response.text
     assert "bg-amber-50" in response.text
-    assert "Amber rows appear in both events and recommendations." in response.text
+    assert "Also in recommendations" in response.text
+    assert "Also in recent events" in response.text
+    assert "Highlighted rows appear in both events and recommendations." in response.text
 
 
 def test_recommendations_partial_no_events_badge():

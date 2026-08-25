@@ -70,6 +70,7 @@ class _History:
         self._user = user
         self._events_error = events_error
         self._user_error = user_error
+        self.get_user_calls = 0
 
     def get_events_for_user(self, user_id: str, limit: int) -> pd.DataFrame:
         if self._events_error is not None:
@@ -78,6 +79,7 @@ class _History:
         return rows.head(limit).reset_index(drop=True)
 
     def get_user(self, user_id: str) -> dict | None:
+        self.get_user_calls += 1
         if self._user_error is not None:
             raise self._user_error
         if self._user is None or str(self._user.get("user_id")) != user_id:
@@ -166,9 +168,35 @@ def test_format_event_rows_formats_quantity_and_timestamp():
     assert rows[0]["occurred_at"].startswith("2026-08-21")
 
 
+def test_format_event_rows_treats_naive_datetime_as_utc():
+    from datetime import datetime
+
+    rows = format_event_rows(
+        pd.DataFrame(
+            [
+                {
+                    "item_id": "i1",
+                    "event_type": "view",
+                    "quantity": 1,
+                    "occurred_at": datetime(2026, 8, 21, 12, 0, 0),
+                }
+            ]
+        )
+    )
+
+    assert rows[0]["occurred_at"] == "2026-08-21T12:00:00+00:00"
+
+
+def test_format_user_attrs_requires_allowlist():
+    user = {"user_id": "u1", "region_slug": "lazio", "email": "a@example.com"}
+    assert format_user_attrs(user) == []
+    assert format_user_attrs(user, allowed=("region_slug",)) == [{"name": "region_slug", "value": "lazio"}]
+
+
 def test_format_user_attrs_skips_user_id_and_missing():
     rows = format_user_attrs(
-        {"user_id": "u1", "region_slug": "lazio", "favorite_styles": ["ipa", "stout"], "empty": None}
+        {"user_id": "u1", "region_slug": "lazio", "favorite_styles": ["ipa", "stout"], "empty": None},
+        allowed=("region_slug", "favorite_styles", "empty"),
     )
 
     assert rows == [
@@ -184,7 +212,8 @@ def test_format_user_attrs_accepts_series_and_ndarray():
             "tags": pd.Series(["ipa", "stout"]),
             "codes": np.array(["a", "b"]),
             "blank": "",
-        }
+        },
+        allowed=("tags", "codes", "blank"),
     )
 
     assert rows == [
@@ -198,7 +227,10 @@ def test_lookup_inspector_keeps_recommendations_when_user_attrs_are_sequences():
         [{"user_id": "u1", "item_id": "i1", "event_type": "view", "quantity": 1, "occurred_at": None}]
     )
     result = lookup_inspector(
-        make_settings(dashboard_enabled=True),
+        make_settings(
+            dashboard_enabled=True,
+            dashboard_lookup_user_attrs=("favorite_styles", "tags", "tag_ids"),
+        ),
         _KReader(),
         _History(
             events,
@@ -250,7 +282,12 @@ def test_lookup_inspector_marks_overlap_and_source_mix():
         ]
     )
     result = lookup_inspector(
-        make_settings(dashboard_enabled=True, top_k=50, dashboard_lookup_k=2),
+        make_settings(
+            dashboard_enabled=True,
+            top_k=50,
+            dashboard_lookup_k=2,
+            dashboard_lookup_user_attrs=("region_slug",),
+        ),
         _KReader(),
         _History(events, {"user_id": "u1", "region_slug": "lazio"}),
         "u1",
@@ -335,13 +372,57 @@ def test_lookup_inspector_user_attr_error_still_returns_events():
         [{"user_id": "u1", "item_id": "i1", "event_type": "view", "quantity": 1, "occurred_at": None}]
     )
     result = lookup_inspector(
-        make_settings(dashboard_enabled=True),
+        make_settings(dashboard_enabled=True, dashboard_lookup_user_attrs=("region_slug",)),
         _KReader(),
         _History(events, user_error=RuntimeError("users boom")),
         "u1",
     )
 
     assert result["events"]
+    assert result["user_attrs"] == []
+
+
+def test_lookup_inspector_trims_user_id_for_history():
+    events = pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "view", "quantity": 1, "occurred_at": None}]
+    )
+    result = lookup_inspector(
+        make_settings(dashboard_enabled=True, dashboard_lookup_user_attrs=("region_slug",)),
+        _KReader(),
+        _History(events, {"user_id": "u1", "region_slug": "lazio"}),
+        "  u1  ",
+    )
+
+    assert result["user_id"] == "u1"
+    assert result["events"]
+    assert result["user_attrs"] == [{"name": "region_slug", "value": "lazio"}]
+
+
+def test_lookup_inspector_event_error_still_loads_user_attrs():
+    result = lookup_inspector(
+        make_settings(dashboard_enabled=True, dashboard_lookup_user_attrs=("region_slug",)),
+        _KReader(),
+        _History(
+            pd.DataFrame(),
+            {"user_id": "u1", "region_slug": "lazio"},
+            events_error=FileNotFoundError("events.parquet"),
+        ),
+        "u1",
+    )
+
+    assert result["events_error"] == HISTORY_UNAVAILABLE
+    assert result["items"]
+    assert result["user_attrs"] == [{"name": "region_slug", "value": "lazio"}]
+
+
+def test_lookup_inspector_skips_get_user_when_allowlist_empty():
+    events = pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "view", "quantity": 1, "occurred_at": None}]
+    )
+    history = _History(events, {"user_id": "u1", "region_slug": "lazio", "email": "a@example.com"})
+    result = lookup_inspector(make_settings(dashboard_enabled=True), _KReader(), history, "u1")
+
+    assert history.get_user_calls == 0
     assert result["user_attrs"] == []
 
 

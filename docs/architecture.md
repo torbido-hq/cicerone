@@ -354,7 +354,8 @@ never imports `cicerone.model`/`dataset`/`automl`.
   source) for the events pane. Lookup reads those stores directly (no serve
   hop). Recs `k` is `min(job.top_k, dashboard.lookup_k)` (`lookup_k`
   defaults to 20, so 10 with the default `top_k`); events use
-  `dashboard.lookup_events` (default 20). Missing users fall back to
+  `dashboard.lookup_events` (default 20). User attributes use
+  `dashboard.lookup_user_attrs` (default none). Missing users fall back to
   `__cold_start__` / popular-latest rows with a badge; `category` is joined
   from the items snapshot when that column exists. When `reasons` is
   present, the recs table shows a short Why summary (source labels, top

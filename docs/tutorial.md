@@ -715,7 +715,8 @@ ids are highlighted. When `reasons` is present, a Why column summarizes
 source labels and the top similar history item. Recs row count is
 `min(job.top_k, dashboard.lookup_k)` (`lookup_k` defaults to 20, so 10
 with the default `top_k`); events use `dashboard.lookup_events` (default
-20). The
+20). User attributes show only when `dashboard.lookup_user_attrs` lists
+columns. The
 incremental-events panel is gated on the `[events]` block of the config the
 **dashboard** was started with, not the one from
 [step 13](#13-ingest-incremental-events-optional): copy `enabled = true` into

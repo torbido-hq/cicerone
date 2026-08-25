@@ -318,6 +318,7 @@ prefix = "recommendations/latest"
 # history_limit = 20 # recent runs shown (only meaningful for [output].kind = "db")
 # lookup_k = 20 # inspector recommendation rows (capped at job.top_k)
 # lookup_events = 20 # inspector event rows (from [input], newest first)
+# lookup_user_attrs = ["region_slug"] # allowlisted user columns; default none
 
 # --- "db" kind example (commented out) ----------------------------------
 # [input]

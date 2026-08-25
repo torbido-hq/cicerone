@@ -1134,6 +1134,42 @@ def test_load_settings_rejects_non_positive_dashboard_lookup_events(tmp_path):
         load_settings(config_path)
 
 
+def test_load_settings_dashboard_lookup_user_attrs(tmp_path):
+    config_path = write_toml(
+        tmp_path,
+        f"""
+        [dashboard]
+        enabled = true
+        lookup_user_attrs = ["region_slug", "user_id", " favorite_styles "]
+        {_base_io_toml()}
+        """,
+    )
+
+    settings = load_settings(config_path)
+
+    assert settings.dashboard.lookup_user_attrs == ("region_slug", "favorite_styles")
+
+
+def test_load_settings_dashboard_lookup_user_attrs_defaults_empty(tmp_path):
+    settings = load_settings(write_toml(tmp_path, _base_io_toml()))
+
+    assert settings.dashboard.lookup_user_attrs == ()
+
+
+def test_load_settings_rejects_non_list_dashboard_lookup_user_attrs(tmp_path):
+    config_path = write_toml(
+        tmp_path,
+        f"""
+        [dashboard]
+        lookup_user_attrs = "region_slug"
+        {_base_io_toml()}
+        """,
+    )
+
+    with pytest.raises(ConfigError, match="dashboard.lookup_user_attrs must be a list of strings"):
+        load_settings(config_path)
+
+
 def test_load_settings_mode_defaults_to_batch(tmp_path):
     config_path = write_toml(tmp_path, _base_io_toml())
 

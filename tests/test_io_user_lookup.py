@@ -77,6 +77,32 @@ def test_sqlite_get_events_for_user_and_get_user(tmp_path):
     engine.dispose()
 
 
+def test_sqlite_get_events_for_user_utc_order_beats_lexical_limit(tmp_path):
+    url = f"sqlite:///{tmp_path / 'input.db'}"
+    engine = create_engine(url)
+    pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "lexical_new",
+                "event_type": "view",
+                "occurred_at": "2026-08-21T00:00:00+02:00",
+            },
+            {
+                "user_id": "u1",
+                "item_id": "utc_new",
+                "event_type": "view",
+                "occurred_at": "2026-08-20T23:30:00+00:00",
+            },
+        ]
+    ).to_sql("events", engine, index=False)
+
+    source = DatabaseInputSource({"database_url": url})
+    rows = source.get_events_for_user("u1", limit=1)
+    assert list(rows["item_id"]) == ["utc_new"]
+    engine.dispose()
+
+
 def test_sqlite_custom_query_trailing_semicolon(tmp_path):
     url = f"sqlite:///{tmp_path / 'input.db'}"
     engine = create_engine(url)

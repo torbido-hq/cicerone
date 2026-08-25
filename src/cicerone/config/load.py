@@ -82,6 +82,7 @@ _DASHBOARD_FLAT_KEYS = (
     ("dashboard_history_limit", "history_limit"),
     ("dashboard_lookup_k", "lookup_k"),
     ("dashboard_lookup_events", "lookup_events"),
+    ("dashboard_lookup_user_attrs", "lookup_user_attrs"),
 )
 _AUTOML_FLAT_KEYS = (
     ("automl_enabled", "enabled"),
@@ -202,6 +203,14 @@ def _load_io_settings(raw: dict[str, Any], section_name: str) -> IOSettings:
         raise ConfigError(f"Missing required config key: [{section_name}].kind")
     options = _resolve_env_placeholders(section.get("options", {}), f"{section_name}.options")
     return IOSettings(kind=str(section["kind"]).lower(), options=options)
+
+
+def _load_lookup_user_attrs(raw: object) -> tuple[str, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+        raise ConfigError("dashboard.lookup_user_attrs must be a list of strings")
+    return tuple(item.strip() for item in raw if item.strip() and item.strip() != "user_id")
 
 
 def _load_explain_settings(raw: dict[str, Any]) -> ExplainSettings:
@@ -462,6 +471,7 @@ def load_settings(config_path: str | None = None) -> Settings:
             lookup_events=require_positive_int(
                 int(dashboard_raw.get("lookup_events", 20)), name="dashboard.lookup_events"
             ),
+            lookup_user_attrs=_load_lookup_user_attrs(dashboard_raw.get("lookup_user_attrs")),
         ),
         events=events,
     )

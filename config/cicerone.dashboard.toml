@@ -37,6 +37,7 @@ refresh_interval_seconds = 30 # how often the page polls /partials/status
 history_limit = 20 # recent runs shown (only meaningful for [output].kind = "db")
 lookup_k = 20 # inspector recommendation rows (capped at job.top_k)
 lookup_events = 20 # inspector event rows (from [input], newest first)
+# lookup_user_attrs = ["region_slug"] # allowlisted user columns to show; default none
 
 # [job] is required by config.load_settings() even though the dashboard
 # never trains anything -- kept generic/simple rather than special-casing

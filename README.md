@@ -259,7 +259,7 @@ import `rectools`).
   load. Enter a `user_id` to inspect that user's recent `[input]` events
   beside their current precomputed top-K (cold-start fallback when they
   have no personal rows). Shared item ids are highlighted; a source-mix
-  badge and optional user attributes sit above the two panes. Recs show
+  badge and optional user attributes (`dashboard.lookup_user_attrs`) sit above the two panes. Recs show
   `min(job.top_k, dashboard.lookup_k)` rows (`lookup_k` defaults to 20, so
   10 with the default `top_k`); events show `dashboard.lookup_events`
   (default 20). A missing event store does not hide recommendations. When `[events]` is

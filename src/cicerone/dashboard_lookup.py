@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import logging
 from collections import Counter
-from datetime import datetime
+from collections.abc import Sequence
+from datetime import UTC, datetime
 from typing import Any
 
 import pandas as pd
@@ -71,7 +72,7 @@ def lookup_inspector(
     recs = lookup_recommendations(settings, recommendation_reader, user_id)
     if not recs["queried"]:
         return recs
-    recs.update(lookup_history(settings, history_reader, user_id))
+    recs.update(lookup_history(settings, history_reader, recs["user_id"]))
     rec_ids = {row["item_id"] for row in recs["items"] if row["item_id"] and row["item_id"] != MISSING}
     event_ids = {row["item_id"] for row in recs["events"] if row["item_id"] and row["item_id"] != MISSING}
     recs["overlap_item_ids"] = sorted(rec_ids & event_ids)
@@ -138,20 +139,20 @@ def lookup_history(
     except Exception as exc:
         if _history_unavailable(exc):
             empty["events_error"] = HISTORY_UNAVAILABLE
-            return empty
-        logger.exception("Failed to look up events for user_id=%r", user_id)
-        empty["events_error"] = HISTORY_FAILED
-        return empty
+        else:
+            logger.exception("Failed to look up events for user_id=%r", user_id)
+            empty["events_error"] = HISTORY_FAILED
+    else:
+        rows = format_event_rows(events)
+        empty["events"] = rows
+        empty["show_quantity"] = any(row["quantity"] != MISSING for row in rows)
 
-    rows = format_event_rows(events)
-    empty["events"] = rows
-    empty["show_quantity"] = any(row["quantity"] != MISSING for row in rows)
-
-    try:
-        user = history_reader.get_user(user_id)
-        empty["user_attrs"] = format_user_attrs(user)
-    except Exception:
-        logger.exception("Failed to look up user attributes for user_id=%r", user_id)
+    if settings.dashboard.lookup_user_attrs:
+        try:
+            user = history_reader.get_user(user_id)
+            empty["user_attrs"] = format_user_attrs(user, allowed=settings.dashboard.lookup_user_attrs)
+        except Exception:
+            logger.exception("Failed to look up user attributes for user_id=%r", user_id)
     return empty
 
 
@@ -198,12 +199,15 @@ def format_event_rows(events: pd.DataFrame) -> list[dict[str, str]]:
     return rows
 
 
-def format_user_attrs(user: dict[str, Any] | None) -> list[dict[str, str]]:
-    if not user:
+def format_user_attrs(user: dict[str, Any] | None, *, allowed: Sequence[str] = ()) -> list[dict[str, str]]:
+    if not user or not allowed:
         return []
     rows: list[dict[str, str]] = []
-    for key, value in user.items():
-        if key == "user_id" or _is_missing(value):
+    for key in allowed:
+        if key == "user_id" or key not in user:
+            continue
+        value = user[key]
+        if _is_missing(value):
             continue
         rendered = _format_attr_value(value)
         if rendered == MISSING:
@@ -278,7 +282,6 @@ def _is_missing(value: object) -> bool:
         return False
 
 
-
 def _format_rank(value: object) -> str:
     number = _coerce_float(value)
     if number is None:
@@ -310,7 +313,8 @@ def _format_occurred_at(value: object) -> str:
         ts = value.tz_localize("UTC") if value.tzinfo is None else value
         return ts.isoformat()
     if isinstance(value, datetime):
-        return value.isoformat()
+        ts = value.replace(tzinfo=UTC) if value.tzinfo is None else value
+        return ts.isoformat()
     return str(value)
 
 
