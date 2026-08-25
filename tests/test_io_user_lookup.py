@@ -14,7 +14,9 @@ def test_filter_rows_for_user_stringifies_ids():
 
 
 def test_filter_rows_for_user_empty_without_column():
-    assert filter_rows_for_user(pd.DataFrame({"item_id": ["i1"]}), "u1").empty
+    matched = filter_rows_for_user(pd.DataFrame({"item_id": ["i1"]}), "u1")
+    assert matched.empty
+    assert list(matched.columns) == ["item_id"]
 
 
 def test_filter_rows_for_user_preserves_columns_when_empty():
@@ -45,6 +47,18 @@ def test_newest_events_sorts_and_limits():
 def test_newest_events_without_timestamp_keeps_order():
     frame = pd.DataFrame([{"item_id": "a"}, {"item_id": "b"}, {"item_id": "c"}])
     assert list(newest_events(frame, 2)["item_id"]) == ["a", "b"]
+
+
+def test_newest_events_does_not_drop_existing_sort_column():
+    frame = pd.DataFrame(
+        [
+            {"item_id": "old", "occurred_at": "2026-08-01T00:00:00Z", "_sort": "keep"},
+            {"item_id": "new", "occurred_at": "2026-08-21T00:00:00Z", "_sort": "keep"},
+        ]
+    )
+    out = newest_events(frame, 1)
+    assert list(out["item_id"]) == ["new"]
+    assert list(out["_sort"]) == ["keep"]
 
 
 def test_sqlite_get_events_for_user_and_get_user(tmp_path):

@@ -210,7 +210,7 @@ def _load_lookup_user_attrs(raw: object) -> tuple[str, ...]:
         return ()
     if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
         raise ConfigError("dashboard.lookup_user_attrs must be a list of strings")
-    return tuple(item.strip() for item in raw if item.strip() and item.strip() != "user_id")
+    return tuple(dict.fromkeys(item.strip() for item in raw if item.strip() and item.strip() != "user_id"))
 
 
 def _load_explain_settings(raw: dict[str, Any]) -> ExplainSettings:

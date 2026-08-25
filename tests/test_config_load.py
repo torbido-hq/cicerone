@@ -1140,7 +1140,7 @@ def test_load_settings_dashboard_lookup_user_attrs(tmp_path):
         f"""
         [dashboard]
         enabled = true
-        lookup_user_attrs = ["region_slug", "user_id", " favorite_styles "]
+        lookup_user_attrs = ["region_slug", "user_id", " favorite_styles ", "region_slug"]
         {_base_io_toml()}
         """,
     )
