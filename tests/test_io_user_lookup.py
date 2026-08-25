@@ -66,3 +66,23 @@ def test_sqlite_get_events_for_user_and_get_user(tmp_path):
     assert source.get_user("u1")["region_slug"] == "lazio"
     assert source.get_user("ghost") is None
     engine.dispose()
+
+
+def test_sqlite_get_events_for_user_strips_trailing_semicolon(tmp_path):
+    url = f"sqlite:///{tmp_path / 'input.db'}"
+    engine = create_engine(url)
+    pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "new",
+                "event_type": "purchase",
+                "occurred_at": "2026-08-21T00:00:00Z",
+            }
+        ]
+    ).to_sql("events", engine, index=False)
+
+    source = DatabaseInputSource({"database_url": url, "events_query": "SELECT * FROM events;"})
+    rows = source.get_events_for_user("u1", limit=1)
+    assert list(rows["item_id"]) == ["new"]
+    engine.dispose()

@@ -73,6 +73,7 @@ class DashboardSettings:
     history_limit: int = 20
     lookup_k: int = 20
     lookup_events: int = 20
+    lookup_user_attrs: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

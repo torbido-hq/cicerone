@@ -8,8 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- Dashboard user inspector shows recent input events and user attributes
-  beside the current top-K, with overlap highlighting and source mix.
+- Dashboard user inspector shows recent `[input]` events beside the current
+  top-K (`dashboard.lookup_events`). User attributes render only when
+  `dashboard.lookup_user_attrs` lists them. Overlap is highlighted.
 - Optional sequential architecture `hstu` (`HSTUModel`). Sequences are still
   last-touch aggregated `(user, item)` pairs, so HSTU relative-time bias is
   weak on Cicerone data.

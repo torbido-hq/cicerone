@@ -259,8 +259,11 @@ import `rectools`).
   load. Enter a `user_id` to inspect that user's current
   precomputed top-K from the same output store (cold-start fallback when
   they have no personal rows). The inspector shows
-  `min(job.top_k, dashboard.lookup_k)` rows (`lookup_k` defaults to 20, so 10
-  with the default `top_k`). When `[events]` is
+  `min(job.top_k, dashboard.lookup_k)` recommendation rows (`lookup_k`
+  defaults to 20, so 10 with the default `top_k`) and, when `[input]` points
+  at the job's event store, up to `dashboard.lookup_events` recent events
+  (default 20). User attributes from that store are shown only for names in
+  `dashboard.lookup_user_attrs` (default none). When `[events]` is
   enabled, a panel shows the latest incremental flush from recent manifests
   (dataset outputs may clear it on the next full retrain). The status block
   auto-refreshes via

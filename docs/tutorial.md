@@ -709,14 +709,16 @@ docker run --rm -it \
 Then start the dashboard and open `http://localhost:8090/dashboard` in a
 browser (log in with the user just created), or
 `http://localhost:8090/dashboard?user_id=alice` to fill the inspector on
-load. The **Look up recommendations** form inspects a `user_id`'s current
-top-K from the same output store (including cold-start fallback). When
-`reasons` is present, a Why column summarizes source labels and the top
-similar history item. Row count
+load. The **Look up** form inspects a `user_id`'s current top-K from the
+same output store (including cold-start fallback) and, when `[input]`
+points at the job event store, recent events beside it. Set
+`dashboard.lookup_user_attrs` to an allowlist of user columns to display
+(default: none). When `reasons` is present, a Why column summarizes source
+labels and the top similar history item. Recommendation row count
 is `min(job.top_k, dashboard.lookup_k)` (`lookup_k` defaults to 20, so 10
-with the default `top_k`). The
-incremental-events panel is gated on the `[events]` block of the config the
-**dashboard** was started with, not the one from
+with the default `top_k`); event rows are `dashboard.lookup_events`
+(default 20). The incremental-events panel is gated on the `[events]` block
+of the config the **dashboard** was started with, not the one from
 [step 13](#13-ingest-incremental-events-optional): copy `enabled = true` into
 `config/cicerone.dashboard.local.toml` too, or the panel never renders. Once
 it does render, it shows the last flush from the latest manifest, or "no

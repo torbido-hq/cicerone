@@ -38,6 +38,33 @@ def test_local_backend_round_trip(tmp_path):
     assert list(items_snap["item_id"]) == ["i1"]
 
 
+def test_local_get_events_for_user_and_get_user(tmp_path):
+    options = {"storage_backend": "local", "path": str(tmp_path)}
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "old", "occurred_at": "2026-08-01T00:00:00Z"},
+            {"user_id": "u1", "item_id": "new", "occurred_at": "2026-08-21T00:00:00Z"},
+            {"user_id": "u2", "item_id": "other", "occurred_at": "2026-08-21T00:00:00Z"},
+        ]
+    ).to_parquet(tmp_path / "events.parquet", index=False)
+    pd.DataFrame([{"user_id": "u1", "region_slug": "lazio"}]).to_parquet(
+        tmp_path / "users.parquet", index=False
+    )
+
+    source = DatasetInputSource(options)
+    rows = source.get_events_for_user("u1", 1)
+    assert list(rows["item_id"]) == ["new"]
+    assert source.get_user("u1")["region_slug"] == "lazio"
+    assert source.get_user("ghost") is None
+
+
+def test_local_get_events_for_user_missing_file(tmp_path):
+    source = DatasetInputSource({"storage_backend": "local", "path": str(tmp_path)})
+    with pytest.raises(FileNotFoundError):
+        source.get_events_for_user("u1", 1)
+    assert source.get_user("u1") is None
+
+
 def test_local_replace_recommendations_for_users_preserves_others(tmp_path):
     options = {"storage_backend": "local", "path": str(tmp_path)}
     sink = DatasetOutputSink(options)

@@ -71,7 +71,7 @@
               {{ event.occurred_at }}
               {% endif %}
             </td>
-            <th scope="row" class="py-2 px-2 text-left font-medium text-slate-800">{{ event.item_id }}</th>
+            <th scope="row" class="py-2 px-2 text-left font-medium text-slate-800">{{ event.item_id }}{% if event.item_id in overlap_item_ids %}<span class="sr-only"> Also in recommendations</span>{% endif %}</th>
             <td class="py-2 px-2 text-slate-700">{{ event.event_type }}</td>
             {% if show_quantity %}
             <td class="py-2 px-2 text-slate-700">{{ event.quantity }}</td>
@@ -111,7 +111,7 @@
           {% for item in items %}
           <tr class="border-b border-slate-100{% if item.item_id in overlap_item_ids %} bg-amber-50{% endif %}">
             <td class="py-2 px-2 text-slate-700">{{ item.rank }}</td>
-            <th scope="row" class="py-2 px-2 text-left font-medium text-slate-800">{{ item.item_id }}</th>
+            <th scope="row" class="py-2 px-2 text-left font-medium text-slate-800">{{ item.item_id }}{% if item.item_id in overlap_item_ids %}<span class="sr-only"> Also in recent events</span>{% endif %}</th>
             {% if show_category %}
             <td class="py-2 px-2 text-slate-700">{{ item.category }}</td>
             {% endif %}
@@ -128,6 +128,6 @@
     </section>
   </div>
   {% if overlap_item_ids %}
-  <p class="mt-2 text-xs text-slate-600">Amber rows appear in both events and recommendations.</p>
+  <p class="mt-2 text-xs text-slate-600">Highlighted rows appear in both events and recommendations.</p>
   {% endif %}
 {% endif %}

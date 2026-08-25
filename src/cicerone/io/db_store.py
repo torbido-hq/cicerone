@@ -35,7 +35,7 @@ from cicerone.io.db_errors import is_missing_column_error
 from cicerone.io.options import require_option, sql_identifier
 from cicerone.io.recommendation_schema import recommendations_sql_names
 from cicerone.io.replace_users import RecommendationSchemaError, normalize_replace_user_ids
-from cicerone.io.user_lookup import filter_rows_for_user, newest_events
+from cicerone.io.user_lookup import OCCURRED_AT_COLUMN, filter_rows_for_user, newest_events
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +90,12 @@ def _clear_table_for_replace(conn, table: str) -> None:
         savepoint.rollback()
 
 
+def _sql_user_source(query: str | None, table: str) -> str:
+    if not query:
+        return f'"{table}"'
+    return f"({query.strip().rstrip(';').strip()}) AS _cicerone_user_rows"
+
+
 class DatabaseInputSource:
     def __init__(self, options: dict[str, Any]):
         self._options = options
@@ -135,20 +141,33 @@ class DatabaseInputSource:
             "items",
         )
 
-    def _select_user_rows(self, query: str | None, table: str, user_id: str) -> pd.DataFrame:
-        if query:
-            sql = f'SELECT * FROM ({query}) AS _cicerone_user_rows WHERE "user_id" = :user_id'
-        else:
-            sql = f'SELECT * FROM "{table}" WHERE "user_id" = :user_id'
+    def _select_user_rows(
+        self,
+        query: str | None,
+        table: str,
+        user_id: str,
+        *,
+        limit: int | None = None,
+        order_occurred_at: bool = False,
+    ) -> pd.DataFrame:
+        source = _sql_user_source(query, table)
+        sql = f'SELECT * FROM {source} WHERE "user_id" = :user_id'
+        params: dict[str, Any] = {"user_id": user_id}
+        if order_occurred_at:
+            sql += f' ORDER BY "{OCCURRED_AT_COLUMN}" DESC NULLS LAST'
+        if limit is not None:
+            sql += " LIMIT :limit"
+            params["limit"] = int(limit)
         logger.info("Reading from database: user-filtered %s", "query" if query else f'table "{table}"')
-        return pd.read_sql(text(sql), self._engine, params={"user_id": user_id})
+        return pd.read_sql(text(sql), self._engine, params=params)
 
     def get_events_for_user(self, user_id: str, limit: int) -> pd.DataFrame:
-        frame = self._select_user_rows(
-            self._options.get("events_query"),
-            sql_identifier(self._options.get("events_table", DEFAULT_EVENTS_TABLE), option="events_table"),
-            user_id,
-        )
+        table = sql_identifier(self._options.get("events_table", DEFAULT_EVENTS_TABLE), option="events_table")
+        query = self._options.get("events_query")
+        try:
+            frame = self._select_user_rows(query, table, user_id, limit=limit, order_occurred_at=True)
+        except _MISSING_TABLE_ERRORS:
+            frame = self._select_user_rows(query, table, user_id, limit=limit)
         return newest_events(filter_rows_for_user(frame, user_id), limit)
 
     def get_user(self, user_id: str) -> dict[str, Any] | None:
