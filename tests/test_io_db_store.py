@@ -263,3 +263,57 @@ def test_database_input_custom_table_names_are_used():
     users = source.read_users()
 
     assert list(users["user_id"]) == ["u1"]
+
+
+def test_database_get_events_for_user_filters_and_limits():
+    engine = create_engine(TEST_DATABASE_URL)
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "old", "event_type": "view", "occurred_at": "2026-08-01T00:00:00Z"},
+            {
+                "user_id": "u1",
+                "item_id": "new",
+                "event_type": "purchase",
+                "occurred_at": "2026-08-21T00:00:00Z",
+            },
+            {
+                "user_id": "u2",
+                "item_id": "other",
+                "event_type": "view",
+                "occurred_at": "2026-08-21T00:00:00Z",
+            },
+        ]
+    ).to_sql("events", engine, index=False)
+
+    source = DatabaseInputSource({"database_url": TEST_DATABASE_URL})
+    rows = source.get_events_for_user("u1", limit=1)
+
+    assert list(rows["item_id"]) == ["new"]
+    assert source.get_user("u1") is None
+
+
+def test_database_get_events_for_user_custom_query():
+    engine = create_engine(TEST_DATABASE_URL)
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "event_type": "view", "occurred_at": "2026-08-21T00:00:00Z"},
+            {"user_id": "u2", "item_id": "i2", "event_type": "view", "occurred_at": "2026-08-21T00:00:00Z"},
+        ]
+    ).to_sql("custom_events", engine, index=False)
+
+    source = DatabaseInputSource(
+        {"database_url": TEST_DATABASE_URL, "events_query": 'SELECT * FROM "custom_events"'}
+    )
+    rows = source.get_events_for_user("u1", limit=10)
+
+    assert list(rows["item_id"]) == ["i1"]
+
+
+def test_database_get_user_from_table():
+    engine = create_engine(TEST_DATABASE_URL)
+    pd.DataFrame([{"user_id": "u1", "region_slug": "lazio"}]).to_sql("users", engine, index=False)
+
+    source = DatabaseInputSource({"database_url": TEST_DATABASE_URL})
+
+    assert source.get_user("u1")["region_slug"] == "lazio"
+    assert source.get_user("ghost") is None

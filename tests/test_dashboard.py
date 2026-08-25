@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from cicerone.config import Settings
 from cicerone.dashboard import create_app, main
-from cicerone.dashboard_lookup import LOOKUP_FAILED, MISSING
+from cicerone.dashboard_lookup import HISTORY_UNAVAILABLE, LOOKUP_FAILED, MISSING
 from cicerone.http_auth import require_basic_auth
 
 
@@ -79,8 +79,8 @@ def test_dashboard_page_renders_with_valid_credentials():
     assert response.status_code == 200
     assert "Cicerone" in response.text
     assert "No job runs recorded yet." in response.text
-    assert "Look up recommendations" in response.text
-    assert "Enter a user id to inspect their current top-K." in response.text
+    assert "Inspect user" in response.text
+    assert "Enter a user id to inspect their recent events and current top-K." in response.text
     assert 'for="user-id"' in response.text
     assert 'aria-live="polite"' in response.text
     assert 'href="#main"' in response.text
@@ -235,8 +235,9 @@ def test_main_raises_when_no_users_configured(tmp_path, monkeypatch):
 def test_main_starts_when_recommendation_reader_fails(monkeypatch):
     captured: dict[str, object] = {}
 
-    def fake_create_app(settings, reader, users, rec_reader=None):
+    def fake_create_app(settings, reader, users, rec_reader=None, history_reader=None):
         captured["rec_reader"] = rec_reader
+        captured["history_reader"] = history_reader
         return object()
 
     def boom(_output):
@@ -255,6 +256,32 @@ def test_main_starts_when_recommendation_reader_fails(monkeypatch):
     main()
 
     assert captured["rec_reader"] is None
+
+
+def test_main_starts_when_history_reader_fails(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_create_app(settings, reader, users, rec_reader=None, history_reader=None):
+        captured["history_reader"] = history_reader
+        return object()
+
+    def boom(_input):
+        raise RuntimeError("bad events")
+
+    monkeypatch.setattr("cicerone.dashboard.load_settings", lambda: _settings())
+    monkeypatch.setattr("cicerone.dashboard.load_users", lambda _path: {"alice": "hash"})
+    monkeypatch.setattr("cicerone.dashboard.build_manifest_reader", lambda _output: _FakeReader(None))
+    monkeypatch.setattr("cicerone.dashboard.build_recommendation_reader", lambda _output: object())
+    monkeypatch.setattr("cicerone.dashboard.build_user_history_reader", boom)
+    monkeypatch.setattr("cicerone.dashboard.create_app", fake_create_app)
+    monkeypatch.setattr(
+        "cicerone.dashboard.uvicorn",
+        type("_Uvicorn", (), {"run": staticmethod(lambda *_a, **_k: None)}),
+    )
+
+    main()
+
+    assert captured["history_reader"] is None
 
 
 def test_require_basic_auth_used_directly_rejects_unknown_user():
@@ -386,12 +413,17 @@ def _recs_df() -> pd.DataFrame:
     )
 
 
-def _recs_client(rec_reader: _FakeRecReader | None = None, **settings_overrides: object) -> TestClient:
+def _recs_client(
+    rec_reader: _FakeRecReader | None = None,
+    history_reader: object | None = None,
+    **settings_overrides: object,
+) -> TestClient:
     app = create_app(
         _settings(**settings_overrides),
         _FakeReader(None),
         _users_with("alice", "s3cret"),
         rec_reader,
+        history_reader,
     )
     return TestClient(app)
 
@@ -408,7 +440,7 @@ def test_recommendations_partial_empty_user_id_prompts():
     )
 
     assert response.status_code == 200
-    assert "Enter a user id to inspect their current top-K." in response.text
+    assert "Enter a user id to inspect their recent events and current top-K." in response.text
 
 
 def test_recommendations_partial_whitespace_user_id_prompts():
@@ -418,7 +450,7 @@ def test_recommendations_partial_whitespace_user_id_prompts():
         auth=("alice", "s3cret"),
     )
 
-    assert "Enter a user id to inspect their current top-K." in response.text
+    assert "Enter a user id to inspect their recent events and current top-K." in response.text
 
 
 def test_recommendations_partial_renders_known_user():
@@ -450,7 +482,7 @@ def test_dashboard_page_user_id_query_renders_lookup_results():
     assert response.status_code == 200
     assert 'value="u1"' in response.text
     assert ">i1<" in response.text
-    assert "Look up recommendations" in response.text
+    assert "Inspect user" in response.text
     assert "Current top-K recommendations for u1" in response.text
     assert 'scope="col"' in response.text
 
@@ -642,3 +674,87 @@ def test_recommendations_partial_missing_rank_score_source_render_dashes():
     assert response.text.count(f">{MISSING}<") == 3
     assert "None" not in response.text
     assert "nan" not in response.text
+
+
+class _FakeHistory:
+    def __init__(self, events: pd.DataFrame, user: dict | None = None):
+        self._events = events
+        self._user = user
+
+    def get_events_for_user(self, user_id: str, limit: int) -> pd.DataFrame:
+        rows = self._events[self._events["user_id"] == user_id]
+        return rows.head(limit).reset_index(drop=True)
+
+    def get_user(self, user_id: str) -> dict | None:
+        if self._user is None or self._user.get("user_id") != user_id:
+            return None
+        return self._user
+
+
+def _events_df() -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "event_type": "purchase",
+                "quantity": 2,
+                "occurred_at": "2026-08-21T12:00:00+00:00",
+            },
+            {
+                "user_id": "u1",
+                "item_id": "i9",
+                "event_type": "view",
+                "quantity": 1,
+                "occurred_at": "2026-08-20T12:00:00+00:00",
+            },
+        ]
+    )
+
+
+def test_recommendations_partial_without_history_reader_shows_unavailable():
+    response = _recs_client(_FakeRecReader(_recs_df())).get(
+        "/partials/recommendations",
+        params={"user_id": "u1"},
+        auth=("alice", "s3cret"),
+    )
+
+    assert HISTORY_UNAVAILABLE in response.text
+    assert ">i1<" in response.text
+
+
+def test_recommendations_partial_renders_events_and_overlap():
+    response = _recs_client(
+        _FakeRecReader(_recs_df()),
+        _FakeHistory(_events_df(), {"user_id": "u1", "region_slug": "lazio"}),
+        dashboard_lookup_user_attrs=("region_slug",),
+    ).get(
+        "/partials/recommendations",
+        params={"user_id": "u1"},
+        auth=("alice", "s3cret"),
+    )
+
+    assert response.status_code == 200
+    assert "Recent events" in response.text
+    assert "purchase" in response.text
+    assert ">i9<" in response.text
+    assert "warm" in response.text
+    assert "personalized 2" in response.text
+    assert "lazio" in response.text
+    assert "bg-amber-50" in response.text
+    assert "Also in recommendations" in response.text
+    assert "Also in recent events" in response.text
+    assert "Highlighted rows appear in both events and recommendations." in response.text
+
+
+def test_recommendations_partial_no_events_badge():
+    empty = pd.DataFrame(columns=["user_id", "item_id", "event_type", "quantity", "occurred_at"])
+    response = _recs_client(_FakeRecReader(_recs_df()), _FakeHistory(empty)).get(
+        "/partials/recommendations",
+        params={"user_id": "u1"},
+        auth=("alice", "s3cret"),
+    )
+
+    assert "no events" in response.text
+    assert "No events for user_id=u1." in response.text
+    assert HISTORY_UNAVAILABLE not in response.text

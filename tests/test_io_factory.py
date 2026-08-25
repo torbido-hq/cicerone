@@ -10,6 +10,7 @@ from cicerone.io.factory import (
     build_manifest_reader,
     build_output_sink,
     build_recommendation_reader,
+    build_user_history_reader,
 )
 from cicerone.io.manifest_reader import DatasetManifestReader, DbManifestReader
 from cicerone.io.recommendation_reader import DatasetRecommendationReader, DbRecommendationReader
@@ -18,6 +19,7 @@ from cicerone.io.recommendation_reader import DatasetRecommendationReader, DbRec
 def test_build_input_source_dataset(tmp_path):
     settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     assert isinstance(build_input_source(settings), DatasetInputSource)
+    assert isinstance(build_user_history_reader(settings), DatasetInputSource)
 
 
 def test_build_output_sink_dataset(tmp_path):
@@ -28,6 +30,7 @@ def test_build_output_sink_dataset(tmp_path):
 def test_build_input_source_db():
     settings = IOSettings(kind="db", options={"database_url": "postgresql+psycopg://u:p@h/d"})
     assert isinstance(build_input_source(settings), DatabaseInputSource)
+    assert isinstance(build_user_history_reader(settings), DatabaseInputSource)
 
 
 def test_build_output_sink_db():

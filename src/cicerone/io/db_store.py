@@ -35,10 +35,12 @@ from cicerone.io.db_errors import is_missing_column_error
 from cicerone.io.options import require_option, sql_identifier
 from cicerone.io.recommendation_schema import recommendations_sql_names
 from cicerone.io.replace_users import RecommendationSchemaError, normalize_replace_user_ids
+from cicerone.io.user_lookup import OCCURRED_AT_COLUMN, filter_rows_for_user, newest_events
 
 logger = logging.getLogger(__name__)
 
 _MISSING_TABLE_ERRORS = (ProgrammingError, OperationalError)
+_SQL_HISTORY_OVERFETCH = 8
 
 # Prefer the public alias used by readers and writers.
 MISSING_TABLE_ERRORS = _MISSING_TABLE_ERRORS
@@ -89,6 +91,12 @@ def _clear_table_for_replace(conn, table: str) -> None:
         savepoint.rollback()
 
 
+def _sql_user_source(query: str | None, table: str) -> str:
+    if not query:
+        return f'"{table}"'
+    return f"({query.strip().rstrip(';').strip()}) AS _cicerone_user_rows"
+
+
 class DatabaseInputSource:
     def __init__(self, options: dict[str, Any]):
         self._options = options
@@ -133,6 +141,50 @@ class DatabaseInputSource:
             sql_identifier(self._options.get("items_table", DEFAULT_ITEMS_TABLE), option="items_table"),
             "items",
         )
+
+    def _select_user_rows(
+        self,
+        query: str | None,
+        table: str,
+        user_id: str,
+        *,
+        limit: int | None = None,
+        order_occurred_at: bool = False,
+    ) -> pd.DataFrame:
+        source = _sql_user_source(query, table)
+        sql = f'SELECT * FROM {source} WHERE "user_id" = :user_id'
+        params: dict[str, Any] = {"user_id": user_id}
+        if order_occurred_at:
+            sql += f' ORDER BY "{OCCURRED_AT_COLUMN}" DESC NULLS LAST'
+        if limit is not None:
+            sql += " LIMIT :limit"
+            params["limit"] = int(limit)
+        logger.info("Reading from database: user-filtered %s", "query" if query else f'table "{table}"')
+        return pd.read_sql(text(sql), self._engine, params=params)
+
+    def get_events_for_user(self, user_id: str, limit: int) -> pd.DataFrame:
+        table = sql_identifier(self._options.get("events_table", DEFAULT_EVENTS_TABLE), option="events_table")
+        query = self._options.get("events_query")
+        sql_limit = max(int(limit) * _SQL_HISTORY_OVERFETCH, int(limit))
+        try:
+            frame = self._select_user_rows(query, table, user_id, limit=sql_limit, order_occurred_at=True)
+        except _MISSING_TABLE_ERRORS:
+            frame = self._select_user_rows(query, table, user_id, limit=sql_limit)
+        return newest_events(filter_rows_for_user(frame, user_id), limit)
+
+    def get_user(self, user_id: str) -> dict[str, Any] | None:
+        query = self._options.get("users_query")
+        table = sql_identifier(self._options.get("users_table", DEFAULT_USERS_TABLE), option="users_table")
+        if query is None and not inspect(self._engine).has_table(table):
+            return None
+        try:
+            frame = self._select_user_rows(query, table, user_id)
+        except _MISSING_TABLE_ERRORS:
+            return None
+        matched = filter_rows_for_user(frame, user_id)
+        if matched.empty:
+            return None
+        return matched.iloc[0].to_dict()
 
 
 class DatabaseOutputSink:

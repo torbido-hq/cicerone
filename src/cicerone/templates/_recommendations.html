@@ -1,51 +1,133 @@
-{% if error %}
-  <div class="rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800" role="alert">
-    {{ error }}
-  </div>
-{% elif not queried %}
-  <p class="text-sm text-slate-600">Enter a user id to inspect their current top-K.</p>
-{% elif not items %}
-  <p class="text-sm text-slate-700" role="status">No recommendations for user_id={{ user_id }}.</p>
+{% if not queried %}
+  <p class="text-sm text-slate-600">Enter a user id to inspect their recent events and current top-K.</p>
 {% else %}
-  <div class="flex items-center justify-between mb-2">
+  <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
     <p class="text-sm text-slate-700">user_id=<span class="font-medium">{{ user_id }}</span></p>
-    {% if fallback %}
+    <div class="flex flex-wrap items-center gap-1.5">
+      {% if events and not events_error %}
+      <span class="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">
+        warm
+      </span>
+      {% elif not events_error %}
+      <span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
+        no events
+      </span>
+      {% endif %}
+      {% if fallback %}
       <span class="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
         cold-start fallback
       </span>
-    {% endif %}
-  </div>
-  <table class="w-full text-sm border-collapse">
-    <caption class="sr-only">Current top-K recommendations for {{ user_id }}{% if fallback %}, using cold-start fallback{% endif %}</caption>
-    <thead>
-      <tr class="text-left text-slate-600 border-b border-slate-200">
-        <th scope="col" class="py-2 px-2">Rank</th>
-        <th scope="col" class="py-2 px-2">Item</th>
-        {% if show_category %}
-        <th scope="col" class="py-2 px-2">Category</th>
-        {% endif %}
-        <th scope="col" class="py-2 px-2">Score</th>
-        <th scope="col" class="py-2 px-2">Source</th>
-        {% if show_reasons %}
-        <th scope="col" class="py-2 px-2">Why</th>
-        {% endif %}
-      </tr>
-    </thead>
-    <tbody>
-      {% for item in items %}
-      <tr class="border-b border-slate-100">
-        <td class="py-2 px-2 text-slate-700">{{ item.rank }}</td>
-        <th scope="row" class="py-2 px-2 text-left font-medium text-slate-800">{{ item.item_id }}</th>
-        {% if show_category %}
-        <td class="py-2 px-2 text-slate-700">{{ item.category }}</td>
-        {% endif %}
-        <td class="py-2 px-2 text-slate-700">{{ item.score }}</td>
-        <td class="py-2 px-2 text-slate-700">{{ item.source }}</td>
-        {% if show_reasons %}
-        <td class="py-2 px-2 text-slate-700">{{ item.reasons }}</td>
-        {% endif %}
-      </tr>
+      {% endif %}
+      {% for mix in source_mix %}
+      <span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
+        {{ mix.source }} {{ mix.count }}
+      </span>
       {% endfor %}
-    </tbody>
-  </table>
+    </div>
+  </div>
+  {% if user_attrs %}
+  <dl class="mb-3 grid grid-cols-2 gap-x-4 gap-y-1 text-sm text-slate-700 sm:grid-cols-3">
+    {% for attr in user_attrs %}
+    <div>
+      <dt class="text-slate-600">{{ attr.name }}</dt>
+      <dd class="font-medium text-slate-800">{{ attr.value }}</dd>
+    </div>
+    {% endfor %}
+  </dl>
+  {% endif %}
+  <div class="grid gap-4 md:grid-cols-2">
+    <section aria-labelledby="events-heading">
+      <h3 id="events-heading" class="text-sm font-medium text-slate-800 mb-2">Recent events</h3>
+      {% if events_error %}
+      <div class="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800" role="status">
+        {{ events_error }}
+      </div>
+      {% elif not events %}
+      <p class="text-sm text-slate-700" role="status">No events for user_id={{ user_id }}.</p>
+      {% else %}
+      <table class="w-full text-sm border-collapse">
+        <caption class="sr-only">Recent events for {{ user_id }}</caption>
+        <thead>
+          <tr class="text-left text-slate-600 border-b border-slate-200">
+            <th scope="col" class="py-2 px-2">When</th>
+            <th scope="col" class="py-2 px-2">Item</th>
+            <th scope="col" class="py-2 px-2">Type</th>
+            {% if show_quantity %}
+            <th scope="col" class="py-2 px-2">Qty</th>
+            {% endif %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for event in events %}
+          <tr class="border-b border-slate-100{% if event.item_id in overlap_item_ids %} bg-amber-50{% endif %}">
+            <td class="py-2 px-2 text-slate-700 whitespace-nowrap">
+              {% if event.occurred_at != "—" %}
+              <time
+                datetime="{{ event.occurred_at }}"
+                data-controller="time-ago"
+                data-time-ago-value="{{ event.occurred_at }}"
+              >{{ event.occurred_at }}</time>
+              {% else %}
+              {{ event.occurred_at }}
+              {% endif %}
+            </td>
+            <th scope="row" class="py-2 px-2 text-left font-medium text-slate-800">{{ event.item_id }}{% if event.item_id in overlap_item_ids %}<span class="sr-only"> Also in recommendations</span>{% endif %}</th>
+            <td class="py-2 px-2 text-slate-700">{{ event.event_type }}</td>
+            {% if show_quantity %}
+            <td class="py-2 px-2 text-slate-700">{{ event.quantity }}</td>
+            {% endif %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+    </section>
+    <section aria-labelledby="recs-heading">
+      <h3 id="recs-heading" class="text-sm font-medium text-slate-800 mb-2">Current top-K</h3>
+      {% if error %}
+      <div class="rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800" role="alert">
+        {{ error }}
+      </div>
+      {% elif not items %}
+      <p class="text-sm text-slate-700" role="status">No recommendations for user_id={{ user_id }}.</p>
+      {% else %}
+      <table class="w-full text-sm border-collapse">
+        <caption class="sr-only">Current top-K recommendations for {{ user_id }}{% if fallback %}, using cold-start fallback{% endif %}</caption>
+        <thead>
+          <tr class="text-left text-slate-600 border-b border-slate-200">
+            <th scope="col" class="py-2 px-2">Rank</th>
+            <th scope="col" class="py-2 px-2">Item</th>
+            {% if show_category %}
+            <th scope="col" class="py-2 px-2">Category</th>
+            {% endif %}
+            <th scope="col" class="py-2 px-2">Score</th>
+            <th scope="col" class="py-2 px-2">Source</th>
+            {% if show_reasons %}
+            <th scope="col" class="py-2 px-2">Why</th>
+            {% endif %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in items %}
+          <tr class="border-b border-slate-100{% if item.item_id in overlap_item_ids %} bg-amber-50{% endif %}">
+            <td class="py-2 px-2 text-slate-700">{{ item.rank }}</td>
+            <th scope="row" class="py-2 px-2 text-left font-medium text-slate-800">{{ item.item_id }}{% if item.item_id in overlap_item_ids %}<span class="sr-only"> Also in recent events</span>{% endif %}</th>
+            {% if show_category %}
+            <td class="py-2 px-2 text-slate-700">{{ item.category }}</td>
+            {% endif %}
+            <td class="py-2 px-2 text-slate-700">{{ item.score }}</td>
+            <td class="py-2 px-2 text-slate-700">{{ item.source }}</td>
+            {% if show_reasons %}
+            <td class="py-2 px-2 text-slate-700">{{ item.reasons }}</td>
+            {% endif %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+    </section>
+  </div>
+  {% if overlap_item_ids %}
+  <p class="mt-2 text-xs text-slate-600">Highlighted rows appear in both events and recommendations.</p>
+  {% endif %}
 {% endif %}

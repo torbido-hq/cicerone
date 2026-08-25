@@ -72,6 +72,8 @@ class DashboardSettings:
     refresh_interval_seconds: float = 30.0
     history_limit: int = 20
     lookup_k: int = 20
+    lookup_events: int = 20
+    lookup_user_attrs: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -249,6 +251,10 @@ class Settings:
     @property
     def dashboard_lookup_k(self) -> int:
         return self.dashboard.lookup_k
+
+    @property
+    def dashboard_lookup_events(self) -> int:
+        return self.dashboard.lookup_events
 
     @property
     def automl_enabled(self) -> bool:
