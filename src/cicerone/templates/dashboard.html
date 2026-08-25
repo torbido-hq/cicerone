@@ -90,7 +90,7 @@
       <div
         id="status"
         hx-get="/partials/status"
-        hx-trigger="load, refresh, every {{ refresh_interval_seconds|int }}s"
+        hx-trigger="refresh"
         hx-swap="innerHTML show:none"
         hx-indicator="[data-status-indicator]"
         data-refresh-interval="{{ refresh_interval_seconds|int }}"

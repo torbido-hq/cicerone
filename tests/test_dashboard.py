@@ -90,7 +90,8 @@ def test_dashboard_page_renders_with_valid_credentials():
     assert "Pause updates" in response.text
     assert "Refresh" in response.text
     assert ">Job status<" in response.text
-    assert 'hx-trigger="load, refresh, every' in response.text
+    assert 'hx-trigger="refresh"' in response.text
+    assert 'hx-trigger="load, refresh, every' not in response.text
     assert "<title>Cicerone dashboard</title>" in response.text
     assert 'id="recommendation-results" class="mt-3"' in response.text
 

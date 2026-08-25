@@ -278,6 +278,11 @@
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
       reducedMotionPause = true;
       setPaused(true);
+    } else {
+      // Markup is refresh-only so htmx cannot start a poll before this.
+      setPaused(false);
+      const status = qs("#status");
+      if (status && window.htmx) window.htmx.trigger(status, "refresh");
     }
   }
 
