@@ -56,6 +56,25 @@ def _compute_staleness(manifest: dict[str, Any] | None, cron_schedule: str, now:
     return {"is_stale": is_stale, "expected_next_run": expected_next_run.isoformat(), "error": None}
 
 
+def page_title(
+    *,
+    user_id: str = "",
+    manifest: dict[str, Any] | None = None,
+    staleness: dict[str, Any] | None = None,
+) -> str:
+    parts: list[str] = []
+    if manifest is not None:
+        if manifest.get("status") == "failed":
+            parts.append("failed")
+        elif staleness is not None and staleness.get("is_stale"):
+            parts.append("stale")
+    cleaned = user_id.strip()
+    if cleaned:
+        parts.append(cleaned)
+    parts.append("Cicerone dashboard")
+    return " · ".join(parts)
+
+
 def _incremental_status(history: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Most recent incremental write-through run from manifest history (newest first)."""
     for run in history:
@@ -116,6 +135,11 @@ def create_app(
         context = _status_context()
         context["refresh_interval_seconds"] = settings.dashboard.refresh_interval_seconds
         context.update(lookup_inspector(settings, recommendation_reader, history_reader, user_id))
+        context["page_title"] = page_title(
+            user_id=str(context.get("user_id") or ""),
+            manifest=context["manifest"],
+            staleness=context["staleness"],
+        )
         return _TEMPLATES.TemplateResponse(request, "dashboard.html", context)
 
     return app

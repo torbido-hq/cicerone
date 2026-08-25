@@ -22,6 +22,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Dashboard user lookup shows recent `[input]` events next to current top-K
   (overlap highlighting, source mix). `dashboard.lookup_events` defaults to 20.
   User attributes render only when `dashboard.lookup_user_attrs` is set.
+- Dashboard Pause updates / Resume updates and Refresh for the status poll
+  (starts paused when `prefers-reduced-motion` is set).
 
 ### Changed
 
@@ -34,9 +36,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Bump `uvicorn` 0.52.3 → 0.52.4, `ruff` 0.16.3 → 0.16.4, `mypy` 2.3.0 → 2.3.1,
   `wheel` 0.44.0 → 0.48.0.
 - Bump `actions/upload-artifact` v4 → v7 and `actions/download-artifact` v4 → v8.
+- Dashboard latest-run card shows stale on the card, visible Latest run /
+  Recent runs headings, relative times in history, and plainer operator copy.
 
 ### Fixed
 
+- Dashboard no longer paints unknown or overdue latest runs as success.
+- Dashboard history no longer styles empty errors as failures.
 - Dashboard lookup keeps recommendations when a user attribute is a list,
   Series, or array.
 

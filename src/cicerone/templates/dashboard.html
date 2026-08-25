@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Cicerone — Dashboard</title>
+  <title>{{ page_title }}</title>
   <link rel="icon" type="image/svg+xml" href="/static/cicerone-icon.svg">
   <link rel="stylesheet" href="/static/tailwind.css">
   <script src="/static/vendor/htmx.min.js"></script>
@@ -31,6 +31,7 @@
         hx-get="/partials/recommendations"
         hx-target="#recommendation-results"
         hx-swap="innerHTML show:none"
+        hx-indicator="[data-lookup-indicator]"
         hx-disabled-elt="button[type='submit']"
       >
         <div class="flex min-w-0 flex-1 flex-col gap-1">
@@ -44,32 +45,55 @@
             required
             autocomplete="off"
             spellcheck="false"
-            class="w-full rounded border border-slate-300 px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2"
+            class="min-h-10 w-full rounded border border-slate-300 px-4 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2"
           >
         </div>
         <button
           type="submit"
-          class="rounded bg-slate-800 px-3 py-1.5 text-sm text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2 disabled:opacity-50"
+          class="min-h-10 rounded bg-slate-800 px-4 py-2 text-sm text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2 disabled:opacity-50"
         >
           Look up
         </button>
+        <span data-lookup-indicator class="htmx-indicator text-sm text-slate-600" role="status">Looking up…</span>
       </form>
-      <div
-        id="recommendation-results"
-        class="mt-3"
-        aria-live="polite"
-        aria-atomic="true"
-      >
+      <div data-lookup-error class="mt-3 rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800" role="alert" hidden></div>
+      <p id="recommendation-announcer" class="sr-only" aria-live="polite" aria-atomic="true"></p>
+      <div id="recommendation-results" class="mt-3">
         {% include "_recommendations.html" %}
       </div>
     </section>
     <section aria-labelledby="status-heading">
-      <h2 id="status-heading" class="sr-only">Job status</h2>
+      <div class="mb-3 flex flex-wrap items-center gap-2">
+        <h2 id="status-heading" class="text-sm font-medium text-slate-800">Job status</h2>
+        <button
+          type="button"
+          data-status-pause
+          aria-pressed="false"
+          aria-controls="status"
+          class="min-h-10 rounded border border-slate-300 bg-white px-4 py-2 text-sm text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2"
+        >
+          Pause updates
+        </button>
+        <button
+          type="button"
+          data-status-refresh
+          aria-controls="status"
+          class="min-h-10 rounded border border-slate-300 bg-white px-4 py-2 text-sm text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2"
+        >
+          Refresh
+        </button>
+        <span data-status-indicator class="htmx-indicator text-sm text-slate-600" role="status">Refreshing…</span>
+        <span data-poll-hint class="text-sm text-slate-600" hidden>Updates paused (reduced motion).</span>
+      </div>
+      <div data-status-error class="mb-3 rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800" role="alert" hidden></div>
+      <p id="status-announcer" class="sr-only" aria-live="polite" aria-atomic="true"></p>
       <div
         id="status"
         hx-get="/partials/status"
-        hx-trigger="load, every {{ refresh_interval_seconds|int }}s"
+        hx-trigger="load, refresh, every {{ refresh_interval_seconds|int }}s"
         hx-swap="innerHTML show:none"
+        hx-indicator="[data-status-indicator]"
+        data-refresh-interval="{{ refresh_interval_seconds|int }}"
       >
         {% include "_status.html" %}
       </div>

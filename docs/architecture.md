@@ -376,10 +376,12 @@ never imports `cicerone.model`/`dataset`/`automl`.
   `templates/_status.html`), `GET /partials/recommendations` (Basic Auth,
   user-id lookup fragment — see `templates/_recommendations.html`), and
   `GET /dashboard` (Basic Auth, the full page). The page polls
-  `/partials/status` via `hx-trigger="load, every Ns"`
+  `/partials/status` via `hx-trigger="load, refresh, every Ns"`
   (`Settings.dashboard_refresh_interval_seconds`) instead of a websocket or
-  client-side JS framework. The lookup form is outside that poll target so
-  a status refresh does not wipe results.
+  client-side JS framework. Pause updates / Resume updates and Refresh sit
+  outside that poll target (`prefers-reduced-motion` starts paused). The
+  lookup form is also outside the poll target so a status refresh does not
+  wipe results.
 - Frontend stack: server-rendered Jinja2 templates + htmx (polling) +
   Stimulus (a small `time-ago` controller for relative timestamps) +
   Tailwind CSS, all vendored under `src/cicerone/static/` — no CDN at

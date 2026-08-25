@@ -2,29 +2,39 @@
   <p class="text-sm text-slate-600">Enter a user id to inspect their recent events and current top-K.</p>
 {% else %}
   <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
-    <p class="text-sm text-slate-700">user_id=<span class="font-medium">{{ user_id }}</span></p>
+    <p
+      class="text-sm text-slate-700"
+      data-lookup-summary
+      data-user-id="{{ user_id }}"
+      data-fallback="{{ 'true' if fallback else 'false' }}"
+      data-recs="{{ items|length }}"
+      data-events="{{ events|length }}"
+    >Recommendations for <span class="font-medium">{{ user_id }}</span></p>
     <div class="flex flex-wrap items-center gap-1.5">
       {% if events and not events_error %}
-      <span class="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">
+      <span data-status-badge class="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">
         warm
       </span>
       {% elif not events_error %}
-      <span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
+      <span data-status-badge class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
         no events
       </span>
       {% endif %}
       {% if fallback %}
-      <span class="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
+      <span data-status-badge class="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
         cold-start fallback
       </span>
       {% endif %}
       {% for mix in source_mix %}
-      <span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
+      <span data-status-badge class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
         {{ mix.source }} {{ mix.count }}
       </span>
       {% endfor %}
     </div>
   </div>
+  {% if fallback %}
+    <p class="mb-3 text-xs text-slate-600">These are popular-item stand-ins, not this user's personalized ranking.</p>
+  {% endif %}
   {% if user_attrs %}
   <dl class="mb-3 grid grid-cols-2 gap-x-4 gap-y-1 text-sm text-slate-700 sm:grid-cols-3">
     {% for attr in user_attrs %}
@@ -43,8 +53,9 @@
         {{ events_error }}
       </div>
       {% elif not events %}
-      <p class="text-sm text-slate-700" role="status">No events for user_id={{ user_id }}.</p>
+      <p class="text-sm text-slate-700" role="status">No events for {{ user_id }}.</p>
       {% else %}
+      <div class="overflow-x-auto">
       <table class="w-full text-sm border-collapse">
         <caption class="sr-only">Recent events for {{ user_id }}</caption>
         <thead>
@@ -80,6 +91,7 @@
           {% endfor %}
         </tbody>
       </table>
+      </div>
       {% endif %}
     </section>
     <section aria-labelledby="recs-heading">
@@ -89,8 +101,9 @@
         {{ error }}
       </div>
       {% elif not items %}
-      <p class="text-sm text-slate-700" role="status">No recommendations for user_id={{ user_id }}.</p>
+      <p class="text-sm text-slate-700" role="status">No recommendations for {{ user_id }}.</p>
       {% else %}
+      <div class="overflow-x-auto">
       <table class="w-full text-sm border-collapse">
         <caption class="sr-only">Current top-K recommendations for {{ user_id }}{% if fallback %}, using cold-start fallback{% endif %}</caption>
         <thead>
@@ -124,6 +137,7 @@
           {% endfor %}
         </tbody>
       </table>
+      </div>
       {% endif %}
     </section>
   </div>
