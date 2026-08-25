@@ -16,6 +16,7 @@ SEQUENTIAL_STRATEGY = "sequential"
 SEQUENTIAL_ARCHITECTURES: dict[str, str] = {
     "sasrec": "SASRecModel",
     "bert4rec": "BERT4RecModel",
+    "hstu": "HSTUModel",
 }
 _SEQUENTIAL_CLS_TO_ARCHITECTURE = {cls: name for name, cls in SEQUENTIAL_ARCHITECTURES.items()}
 # Cicerone-only keys; strip before RecTools model_from_config.
@@ -62,6 +63,7 @@ DEFAULT_LATEST_CONFIG: dict[str, Any] = {
     "period": {"days": LATEST_WINDOW_DAYS},
 }
 
+# eSASRec: SASRec objective + LiGR layers + sampled softmax (RecTools 0.17+).
 DEFAULT_SEQUENTIAL_CONFIG: dict[str, Any] = {
     "cls": "SASRecModel",
     "architecture": "sasrec",
@@ -69,7 +71,9 @@ DEFAULT_SEQUENTIAL_CONFIG: dict[str, Any] = {
     "n_blocks": 2,
     "n_heads": 4,
     "epochs": 3,
-    "loss": "softmax",
+    "loss": "sampled_softmax",
+    "n_negatives": 256,
+    "transformer_layers_type": "LiGRLayers",
     "session_max_len": 50,
     "train_min_user_interactions": 2,
     "batch_size": 128,
@@ -88,11 +92,17 @@ def sequential_extra_available() -> bool:
     )
 
 
+_LIGR_LAYERS = "rectools.models.nn.transformers.ligr.LiGRLayers"
+
+
 def rectools_model_config(config: dict[str, Any]) -> dict[str, Any]:
     """Copy a strategy config with Cicerone-only keys removed."""
     result = deepcopy(config)
     for key in _CICERONE_MODEL_KEYS:
         result.pop(key, None)
+    # RecTools import_object needs a dotted path, not the short class name.
+    if result.get("transformer_layers_type") == "LiGRLayers":
+        result["transformer_layers_type"] = _LIGR_LAYERS
     return result
 
 
@@ -123,20 +133,27 @@ def apply_sequential_architecture(
         if architecture_explicit and cls_explicit and cls is not None and cls != expected_cls:
             raise ConfigError(
                 f"Conflicting sequential settings: architecture={architecture!r} vs cls={cls!r}. "
-                'Use only one (prefer architecture = "sasrec" or "bert4rec").'
+                'Use only one (prefer architecture = "sasrec", "bert4rec", or "hstu").'
             )
         if architecture_explicit or not cls_explicit:
             result["architecture"] = key
             result["cls"] = expected_cls
-            return result
+            return _constrain_sequential_architecture(result)
     if isinstance(cls, str) and cls in _SEQUENTIAL_CLS_TO_ARCHITECTURE:
         result["architecture"] = _SEQUENTIAL_CLS_TO_ARCHITECTURE[cls]
-        return result
+        return _constrain_sequential_architecture(result)
     if cls is None:
         result["architecture"] = "sasrec"
         result["cls"] = SEQUENTIAL_ARCHITECTURES["sasrec"]
-        return result
-    raise ConfigError(f"model.sequential.cls must be SASRecModel or BERT4RecModel, got {cls!r}")
+        return _constrain_sequential_architecture(result)
+    raise ConfigError(f"model.sequential.cls must be SASRecModel, BERT4RecModel, or HSTUModel, got {cls!r}")
+
+
+def _constrain_sequential_architecture(config: dict[str, Any]) -> dict[str, Any]:
+    # HSTU uses its own encoder; LiGR layers are SASRec/BERT4Rec-only.
+    if config.get("architecture") == "hstu":
+        config.pop("transformer_layers_type", None)
+    return config
 
 
 def default_model_configs() -> dict[str, dict[str, Any]]:
