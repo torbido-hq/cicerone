@@ -27,6 +27,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Sequential SASRec defaults to the eSASRec recipe (`sampled_softmax`,
   `n_negatives = 256`, LiGR layers).
+- CI compose runs sequential extra tests in a separate `test-sequential`
+  image with `rectools[torch]` (main test and runtime images stay torch-free).
 - Bump `rectools` 0.13.0 → 0.19.0, `scipy` 1.12.0 → 1.17.0, and switch the
   implicit pin to `pm-implicit` 0.7.3 (RecTools 0.18+ on Python 3.11).
 - Bump `uvicorn` 0.52.3 → 0.52.4, `ruff` 0.16.3 → 0.16.4, `mypy` 2.3.0 → 2.3.1,

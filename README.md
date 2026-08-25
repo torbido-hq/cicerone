@@ -636,7 +636,7 @@ The app services do **not** depend on Postgres, so a dataset/S3-only
 
 ```sh
 docker compose -f docker-compose.ci.yml --env-file docker/postgres/defaults.env \
-  up --build --abort-on-container-exit --exit-code-from test
+  up --build --abort-on-container-exit --exit-code-from test test
 ```
 
 Runs the whole pytest suite (with an ephemeral Postgres for the `db`
