@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import create_engine, text
+from sqlalchemy import Engine, create_engine, text
 
 from cicerone.config.constants import ConfigError
 from cicerone.config.settings import IOSettings
@@ -75,6 +75,14 @@ class ExperimentStore:
         self._output = output
         self._kind = output.kind
         self._options = output.options
+        self._engine: Engine | None = None
+
+    def _db_engine(self) -> Engine:
+        if self._engine is None:
+            self._engine = create_engine(
+                require_option(self._options, "database_url", "db"), pool_pre_ping=True
+            )
+        return self._engine
 
     def read_state(self) -> dict[str, Any] | None:
         if self._kind == "db":
@@ -119,7 +127,7 @@ class ExperimentStore:
             self._options.get("experiment_state_table", DEFAULT_STATE_TABLE),
             option="experiment_state_table",
         )
-        engine = create_engine(require_option(self._options, "database_url", "db"), pool_pre_ping=True)
+        engine = self._db_engine()
         try:
             frame = pd.read_sql(text(f'SELECT * FROM "{table}" ORDER BY rowid DESC LIMIT 1'), engine)
         except MISSING_TABLE_ERRORS:
@@ -142,7 +150,7 @@ class ExperimentStore:
             self._options.get("experiment_state_table", DEFAULT_STATE_TABLE),
             option="experiment_state_table",
         )
-        engine = create_engine(require_option(self._options, "database_url", "db"), pool_pre_ping=True)
+        engine = self._db_engine()
         frame = pd.DataFrame([state])
         with engine.begin() as conn:
             conn.execute(text(f'DROP TABLE IF EXISTS "{table}"'))
@@ -153,7 +161,7 @@ class ExperimentStore:
             self._options.get("exposures_table", DEFAULT_EXPOSURES_TABLE),
             option="exposures_table",
         )
-        engine = create_engine(require_option(self._options, "database_url", "db"), pool_pre_ping=True)
+        engine = self._db_engine()
         pd.DataFrame(list(rows)).to_sql(table, engine, if_exists="append", index=False)
 
     def _read_exposures_db(self) -> list[dict[str, Any]]:
@@ -161,7 +169,7 @@ class ExperimentStore:
             self._options.get("exposures_table", DEFAULT_EXPOSURES_TABLE),
             option="exposures_table",
         )
-        engine = create_engine(require_option(self._options, "database_url", "db"), pool_pre_ping=True)
+        engine = self._db_engine()
         try:
             frame = pd.read_sql(text(f'SELECT * FROM "{table}"'), engine)
         except MISSING_TABLE_ERRORS:

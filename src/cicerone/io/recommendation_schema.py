@@ -54,8 +54,13 @@ def recommendation_output_columns(frame: Any) -> list[str]:
 
 def filter_variant_rows(frame: Any, variant: str | None) -> Any:
     """Keep rows for ``variant``. Missing column or ``None`` variant is a no-op."""
-    if variant is None or not hasattr(frame, "columns") or VARIANT_COLUMN not in frame.columns:
+    if variant is None or not has_variant_column(frame):
         return frame
     if getattr(frame, "empty", False):
         return frame
     return frame[frame[VARIANT_COLUMN].astype(str) == str(variant)]
+
+
+def has_variant_column(frame: Any) -> bool:
+    columns = getattr(frame, "columns", None)
+    return columns is not None and VARIANT_COLUMN in columns

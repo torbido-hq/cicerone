@@ -66,6 +66,21 @@ def test_experiment_store_roundtrip_sqlite(tmp_path) -> None:
         ]
     )
     assert store.read_exposures()[0]["user_id"] == "u1"
+    engine = store._db_engine()
+    store.read_state()
+    store.append_exposures(
+        [
+            {
+                "user_id": "u2",
+                "experiment_id": "exp",
+                "variant": "treatment",
+                "generated_at": None,
+                "exposed_at": "t2",
+            }
+        ]
+    )
+    assert store._db_engine() is engine
+    assert [row["user_id"] for row in store.read_exposures()] == ["u1", "u2"]
 
 
 def test_append_exposures_rejects_object_store() -> None:

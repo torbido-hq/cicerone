@@ -15,7 +15,13 @@ from cicerone.experiment.assignment import resolve_assignment
 from cicerone.experiment.store import ExperimentStore
 from cicerone.io.base import RecommendationReader, UserHistoryReader
 from cicerone.io.options import is_s3_not_found
-from cicerone.io.recommendation_schema import ITEM_COLUMN, RANK_COLUMN, SCORE_COLUMN, SOURCE_COLUMN
+from cicerone.io.recommendation_schema import (
+    ITEM_COLUMN,
+    RANK_COLUMN,
+    SCORE_COLUMN,
+    SOURCE_COLUMN,
+    has_variant_column,
+)
 from cicerone.io.user_lookup import OCCURRED_AT_COLUMN
 from cicerone.reasons import parse_reasons
 from cicerone.values import as_list, is_missing, is_sequence_attr
@@ -119,6 +125,8 @@ def lookup_recommendations(
         experiment_id, variant = resolve_assignment(settings, user_id, promoted_variant=promoted)
     try:
         recs, used_fallback = _load_rows(recommendation_reader, user_id, k, variant=variant)
+        if not has_variant_column(recs):
+            experiment_id, variant = None, None
         category_column = settings.serve.category_column
         if category_column not in recs.columns:
             recs = _join_category(recs, recommendation_reader.get_items(), category_column)

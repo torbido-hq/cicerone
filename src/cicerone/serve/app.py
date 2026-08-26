@@ -23,6 +23,7 @@ from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.io.base import ManifestReader, RecommendationReader
 from cicerone.io.recommendation_reader import SOURCE_COLUMN
+from cicerone.io.recommendation_schema import has_variant_column
 from cicerone.reasons import parse_reasons
 from cicerone.serve.bootstrap_events import start_events_runtime
 from cicerone.serve.code_samples import HEALTH_PATH, RECOMMENDATIONS_PATH, attach_code_samples
@@ -264,6 +265,8 @@ def create_app(
             recs = reader.get_cold_start_fallback(fetch_k, variant=variant)
         if recs.empty:
             raise HTTPException(status_code=404, detail=f"No recommendations for user_id={user_id!r}")
+        if not has_variant_column(recs):
+            experiment_id, variant = None, None
 
         filtered = filter_recommendations(
             recs,

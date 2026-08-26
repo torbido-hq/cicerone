@@ -62,8 +62,9 @@ the column to an existing DB table is `ALTER TABLE … ADD COLUMN variant TEXT`.
 ## Serve
 
 `GET /recommendations/{user_id}` hashes the user, filters rows, and returns
-`experiment_id` + `variant` (`null` when experiments are off). Cold-start uses
-that variant’s `__cold_start__` rows. Prometheus
+`experiment_id` + `variant` (`null` when experiments are off, or when the
+recommendations table has no `variant` column). Cold-start uses that
+variant’s `__cold_start__` rows. Prometheus
 `cicerone_recommendations_experiment_total{experiment_id,variant}` counts
 lookups.
 

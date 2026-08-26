@@ -92,6 +92,22 @@ def test_recommendations_filter_assigned_variant(tmp_path):
     assert [row["item_id"] for row in body["items"]] == [f"{assigned}-item"]
 
 
+def test_recommendations_omit_experiment_fields_without_variant_column(tmp_path):
+    recs = _variant_recs().drop(columns=["variant"])
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    app = create_app(
+        _settings(experiment=_experiment_settings(log_exposures=True), output=output),
+        _FakeReader(recs),
+        manifest_reader=_FakeManifest(),
+        feature_config=_feature_config(),
+    )
+    body = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
+    assert body["experiment_id"] is None
+    assert body["variant"] is None
+    assert {row["item_id"] for row in body["items"]} == {"control-item", "treatment-item"}
+    assert not (tmp_path / "exposures.jsonl").exists()
+
+
 def test_recommendations_filter_automl_challenger_without_variants(tmp_path):
     assigned = assign_variant("auto", "u1", (("control", 0.5), ("treatment", 0.5)))
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})

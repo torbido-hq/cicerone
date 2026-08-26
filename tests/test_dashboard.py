@@ -895,6 +895,46 @@ def test_dashboard_lookup_shows_assigned_variant():
     assert f">{other}-item<" not in response.text
 
 
+def test_dashboard_lookup_omits_variant_without_column():
+    recs = pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "control-item",
+                "rank": 1,
+                "score": 0.9,
+                "source": "personalized",
+            },
+            {
+                "user_id": "u1",
+                "item_id": "treatment-item",
+                "rank": 2,
+                "score": 0.8,
+                "source": "personalized",
+            },
+        ]
+    )
+    from cicerone.config.settings import ExperimentSettings, VariantSettings
+
+    experiment = ExperimentSettings(
+        enabled=True,
+        id="exp-1",
+        variants=(
+            VariantSettings(name="control", traffic=0.5),
+            VariantSettings(name="treatment", traffic=0.5),
+        ),
+    )
+    response = _recs_client(_FakeRecReader(recs), experiment=experiment).get(
+        "/partials/recommendations",
+        params={"user_id": "u1"},
+        auth=("alice", "s3cret"),
+    )
+    assert response.status_code == 200
+    assert "exp-1 /" not in response.text
+    assert ">control-item<" in response.text
+    assert ">treatment-item<" in response.text
+
+
 def test_dashboard_promote_unknown_variant_redirects():
     from cicerone.config.settings import ExperimentSettings, VariantSettings
 
