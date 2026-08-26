@@ -227,11 +227,13 @@ skip rules above still apply.
 
 ## Incremental vs full retrain
 
-`[events]` refreshes **popular / latest slices** (and recency boosts) for
-affected users plus `__cold_start__`. Collaborative, item-KNN, sequential,
-and content-fallback rows wait for the next full `job.run()` — LightFM has
-no clean online `partial_fit` on this path. Operator guide:
-[incremental-events.md](incremental-events.md).
+`[events]` always refreshes **popular / latest slices** (and recency boosts)
+for affected users plus `__cold_start__`. With `[events.online]`, the serve
+events worker also continues LightFM (`fit_partial`) on IDs already in the
+last model artifact and rewrites those users' personalized / item-KNN /
+content-fallback rows — still write-through, not request-path inference.
+New catalog IDs and sequential models wait for the next full `job.run()`.
+Operator guide: [incremental-events.md](incremental-events.md).
 
 ## Cold-start
 

@@ -283,6 +283,19 @@ class DatabaseOutputSink:
             conn.execute(artifacts.delete())
             conn.execute(insert(artifacts).values(payload=payload, written_at=datetime.now(UTC)))
 
+    def read_model_artifact(self) -> bytes | None:
+        table_name = sql_identifier(
+            self._options.get("model_artifact_table", DEFAULT_MODEL_ARTIFACT_TABLE),
+            option="model_artifact_table",
+        )
+        if not inspect(self._engine).has_table(table_name):
+            return None
+        with self._engine.connect() as conn:
+            row = conn.execute(text(f'SELECT payload FROM "{table_name}" LIMIT 1')).first()
+        if row is None or row[0] is None:
+            return None
+        return bytes(row[0])
+
     def write_items_snapshot(self, df: pd.DataFrame) -> None:
         table = sql_identifier(
             self._options.get("recommendation_items_table", DEFAULT_RECOMMENDATION_ITEMS_TABLE),

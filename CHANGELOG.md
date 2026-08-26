@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Optional `[events.online]`: the serve events worker continues LightFM
+  (`fit_partial`) on IDs already in the last model artifact and rewrites
+  personalized rows for affected users. `GET /recommendations` stays a lookup.
+  New catalog IDs and sequential models still wait for `job.run()`.
+
 - Optional sequential architecture `hstu` (`HSTUModel`). Sequences are still
   last-touch aggregated `(user, item)` pairs, so HSTU relative-time bias is
   weak on Cicerone data.

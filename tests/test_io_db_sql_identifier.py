@@ -64,6 +64,22 @@ def test_write_model_artifact_rejects_unsafe_table_name_before_db(bad_name):
         "has space",
     ],
 )
+def test_read_model_artifact_rejects_unsafe_table_name_before_db(bad_name):
+    sink = DatabaseOutputSink(
+        {"database_url": "postgresql+psycopg://u:p@localhost/db", "model_artifact_table": bad_name}
+    )
+    with pytest.raises(ValueError, match="SQL identifier"):
+        sink.read_model_artifact()
+
+
+@pytest.mark.parametrize(
+    "bad_name",
+    [
+        'evil"; DROP TABLE recommendations; --',
+        "has-dash",
+        "has space",
+    ],
+)
 def test_write_recommendations_rejects_unsafe_table_name_before_db(bad_name):
     sink = DatabaseOutputSink(
         {"database_url": "postgresql+psycopg://u:p@localhost/db", "recommendations_table": bad_name}

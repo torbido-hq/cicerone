@@ -370,10 +370,11 @@ print(recommend_from_artifact(artifact, ['alice', 'bob'], top_k=3))
 "
 ```
 
-Serve mode never loads this file — it still only reads precomputed
-recommendation rows. Artifacts are for offline reload / a future thin
-inference layer; only load ones your own batch job wrote (pickle is not
-safe on untrusted bytes). See the README's
+Serve mode never loads this file on `GET /recommendations` — it still
+only reads precomputed recommendation rows. With `[events.online]` the
+events worker loads it between retrains. Artifacts are for offline reload /
+that write-through path; only load ones your own batch job wrote (pickle is
+not safe on untrusted bytes). See the README's
 [Model artifacts](../README.md#model-artifacts) section.
 
 ## 11. Try the database backend (optional)
@@ -467,9 +468,10 @@ docker compose --profile db down   # or: docker compose --profile db stop postgr
 
 Everything so far has run the batch job directly. `[job].mode = "serve"`
 switches to a separate, lightweight **read** API over whatever the batch job
-last wrote to `[output]` — it never imports lightfm/implicit/torch, never
-trains, and never loads a model artifact. (It does import `rectools` itself,
-for `Columns`, so that one stays in a serve-only image.) Reuse the local `data/output/` from
+last wrote to `[output]` — `GET` never imports lightfm/implicit/torch, never
+trains, and never loads a model artifact. With `[events.online]` the events
+worker does load the artifact for write-through. (It does import `rectools`
+itself, for `Columns`, so that one stays in a serve-only image.) Reuse the local `data/output/` from
 [step 3](#3-run-the-job-once):
 
 ```sh

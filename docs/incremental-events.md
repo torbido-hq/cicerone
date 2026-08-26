@@ -8,17 +8,21 @@ full batch retrains. Enable `[events]` on the **serve** process
 event contract, micro-batch, then write-through to the same `[output]`
 store serve already reads.
 
-This is not live ranking. LightFM, item-KNN, sequential, and content
-fallback wait for the next `job.run()` (cron or `POST /trigger/retrain`).
-The incremental path refreshes **popular / latest slices** (and recency
+This is not live ranking on `GET /recommendations`. LightFM / item-KNN /
+content-fallback rows wait for the next `job.run()` **unless**
+`[events.online]` is enabled: the serve events worker then continues LightFM
+(`fit_partial`) on IDs already in the last model artifact and rewrites
+personalized rows for affected users. Sequential stays batch (runtime image
+is torch-free). New catalog IDs still wait for a full retrain.
+The incremental path always refreshes **popular / latest slices** (and recency
 boosts) for affected users plus `__cold_start__`. When `[experiment]` is
-on, that refresh runs **in every variant**; personalized rows still wait.
-[how-it-works.md](how-it-works.md) explains why LightFM, item-KNN, and
-sequential wait for a full retrain. Experiments:
+on, that refresh (and online personalized rewrite) runs **in every variant**.
+[how-it-works.md](how-it-works.md) explains the split. Experiments:
 [experiments.md](experiments.md).
 
 Preserved personalized / `item_based` / `sequential` / `content_fallback`
-/ `blended` rows keep their batch `reasons`. New popular, latest, and
+/ `blended` rows keep their batch `reasons` unless `[events.online]` replaced
+them. New popular, latest, and
 `incremental` rows get a minimal `{sources:[{label}]}` payload — no
 history-overlap `similar_items` on this path.
 
@@ -26,8 +30,9 @@ Batch I/O and serve packages: [architecture.md](architecture.md).
 
 ## What it does not do
 
-- Request-path LightFM / SASRec inference
-- Updating personalized / `item_based` / `sequential` rows between retrains
+- Request-path LightFM / SASRec inference (`GET` stays a lookup)
+- Growing LightFM embeddings for brand-new user/item IDs (those wait for `job.run()`)
+- Sequential `fit_partial` (SASRec/BERT4Rec/HSTU stay batch)
 - A public plugin API (`EventSource` is internal, same spirit as `io/` kinds)
 
 ## Event contract
@@ -66,6 +71,28 @@ batch_size = 100
 batch_window_seconds = 60
 poll_interval_seconds = 1
 ```
+
+### Online collaborative refresh
+
+Optional `[events.online]` continues LightFM on the last model artifact and
+rewrites personalized / item-KNN / content-fallback rows for **affected
+users only**. `GET /recommendations` is still a lookup.
+
+```toml
+[events.online]
+enabled = true
+fit_partial_epochs = 1          # 0 = frozen weights + history refresh only
+fit_min_events = 100            # skip SGD until this many known-ID events
+```
+
+Startup fails if the `[output]` store has no artifact — the batch job must
+set `[job].save_model_artifact = true`. Only `(user_id, item_id)` pairs that
+already appear in that artifact's interaction matrix are trained; unknown
+IDs still get popular / latest / `incremental` boosts and wait for the next
+`job.run()`. After `fit_partial`, item factors move globally but only the
+flush's users are rewritten (same class of staleness as Gorse's cache
+between worker passes). Sequential rows are preserved unless the sequential
+extra is installed.
 
 `POST /events` uses Bearer auth (`events.options.auth_token` or
 `serve.auth_token`). Body: one event object, a JSON array, or

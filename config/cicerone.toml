@@ -260,6 +260,13 @@ prefix = "recommendations/latest"
 # batch_size = 100
 # batch_window_seconds = 60
 # poll_interval_seconds = 1
+# Optional: continue LightFM on known IDs and rewrite personalized rows
+# for affected users. Requires a model artifact in [output]
+# (batch job: save_model_artifact = true). GET /recommendations stays a lookup.
+# [events.online]
+# enabled = true
+# fit_partial_epochs = 1          # 0 = frozen weights + history refresh only
+# fit_min_events = 100            # skip SGD until this many known-ID events
 
 # DB watermark source (no POST /events). Advances cursor only after a successful flush.
 # [events]

@@ -162,7 +162,30 @@ class DatasetOutputSink:
     def write_manifest(self, manifest: dict) -> None:
         self._write_bytes("manifest.json", json.dumps(manifest, indent=2).encode("utf-8"), "application/json")
 
+    def _read_bytes(self, filename: str) -> bytes | None:
+        if self._backend == "local":
+            path = Path(require_option(self._options, "path", "local")) / filename
+            try:
+                return path.read_bytes()
+            except FileNotFoundError:
+                return None
+
+        bucket = require_option(self._options, "bucket", "s3")
+        key = object_key(self._options, filename)
+        client = build_s3_client(self._options)
+        try:
+            return client.get_object(Bucket=bucket, Key=key)["Body"].read()
+        except Exception as exc:
+            if is_s3_not_found(exc):
+                return None
+            raise
+
     def write_model_artifact(self, payload: bytes) -> None:
         from cicerone.artifact import ARTIFACT_FILENAME
 
         self._write_bytes(ARTIFACT_FILENAME, payload, "application/octet-stream")
+
+    def read_model_artifact(self) -> bytes | None:
+        from cicerone.artifact import ARTIFACT_FILENAME
+
+        return self._read_bytes(ARTIFACT_FILENAME)

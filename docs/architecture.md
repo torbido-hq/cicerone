@@ -58,6 +58,7 @@ ranking recipes, see [experiments.md](experiments.md).
 | `serve_client.py` | Thin stdlib HTTP client for the serve read API |
 | `export_serve_openapi.py` | `cicerone export-openapi` — dump FastAPI OpenAPI JSON (`docs/openapi/…`) |
 | `events/` | EventSource registry, micro-batch write-through — [incremental-events.md](incremental-events.md) |
+| `events/online.py` | Optional LightFM `fit_partial` + user-scoped recommend from the last artifact |
 | `events/ha.py` | Leader-only apply helpers for horizontally scaled incremental-events ingest |
 | `trigger.py` | Event-driven retrain trigger: webhook + optional input-bucket poll, debounce guard (`RunGuard`) shared with the cron loop; increments `cicerone_retrain_trigger_total` (per replica) |
 | `locks/` | Optional lock backends (`postgres.py` / `redis.py`) for `RunGuard` and the events apply lease; Redis `owned()` checks the fencing token, Postgres `owned()` checks `pg_locks` for this backend pid |
@@ -104,7 +105,7 @@ Test modules mirror the packages (same pattern as `tests/test_io_*.py`):
 | `tests/support/model_events.py` | Shared synthetic events helper |
 | `tests/support/toml_config.py` | Shared `write_toml` helper |
 | `tests/support/events.py` | Shared event payload helper for `test_events_*` |
-| `tests/test_events_*.py` | EventSource registry / normalize / webhook / db / db_postgres / s3 / redis_streams / buffer / store / updater / worker / ha |
+| `tests/test_events_*.py` | EventSource registry / normalize / webhook / db / db_postgres / s3 / redis_streams / buffer / store / updater / worker / ha / online |
 | `tests/test_config_events.py` | `[events]` coerce + TOML load |
 | `tests/test_serve_events_routes.py` / `test_serve_bootstrap_events.py` | Serve webhook mount + worker bootstrap |
 
@@ -129,8 +130,8 @@ flowchart LR
     end
     J -->|OutputSink| S3O
     J -->|OutputSink| DB2
-    Ev["optional EventSource"] -->|"write-through popular/latest"| S3O
-    Ev -->|"write-through popular/latest"| DB2
+    Ev["optional EventSource"] -->|"write-through popular/latest/online"| S3O
+    Ev -->|"write-through popular/latest/online"| DB2
 ```
 
 1. `job.run()` loads `Settings` (`config.load_settings`) and `FeatureConfig`
@@ -244,7 +245,9 @@ flowchart LR
    store. When `Settings.save_model_artifact` is true, it also writes
    a versioned fitted-model artifact (`model.artifact` for the dataset
    backend, `model_artifacts` table for db) via
-   `OutputSink.write_model_artifact`. Serve mode never loads this artifact.
+   `OutputSink.write_model_artifact`. The request path never loads this
+   artifact. When `[events.online]` is enabled, the serve **events worker**
+   loads it to continue LightFM and rewrite affected users (not `GET`).
 6. For batch, `cicerone start` runs one job immediately (`job.run()`, so the
    manifest records `triggered_by = "manual"`) and aborts if it fails; only
    then does it enter `scheduler.main()`, which
@@ -262,8 +265,10 @@ flowchart LR
 
 Selected via `[job].mode = "serve"`, `cicerone.serve` is a separate entrypoint
 (`cicerone serve`) from the batch scheduler — a serve-only deployment never
-imports `cicerone.model`/`dataset`/`automl`, and needs no
-lightfm/implicit/torch in that process or its request path. It does import
+imports `cicerone.model`/`dataset`/`automl` on the **request path**, and
+needs no lightfm/implicit/torch there. With `[events.online]`, the events
+worker lazy-imports the artifact stack (LightFM) for write-through only.
+It does import
 `rectools` at startup: `serve/app.py` → `events/worker.py` → `blending.py` →
 `from rectools import Columns`, so `rectools` cannot be dropped from a
 serve-only image.
@@ -451,7 +456,8 @@ generic `IOSettings`.
 ## Incremental events
 
 Serve-process ingest lives in `events/` plus `serve/events_routes.py` and
-`serve/bootstrap_events.py`. Operator guide:
+`serve/bootstrap_events.py`. Optional `[events.online]` loads the model
+artifact in the events worker (not on `GET`). Operator guide:
 [incremental-events.md](incremental-events.md).
 
 ## Cold-start behavior

@@ -118,6 +118,24 @@ def start_events_runtime(
     )
 
     sink = build_output_sink(settings.output)
+    online = None
+    if settings.events.online.enabled:
+        from cicerone.events.online import OnlineTrainer
+
+        online = OnlineTrainer(
+            sink=sink,
+            top_k=settings.top_k,
+            half_life_days=settings.half_life_days,
+            fit_partial_epochs=settings.events.online.fit_partial_epochs,
+            fit_min_events=settings.events.online.fit_min_events,
+            fence_check=(apply_lock.owned if apply_lock is not None else None),
+        )
+        online.ensure_loaded()
+        logger.info(
+            "Online collaborative refresh enabled (fit_partial_epochs=%d, fit_min_events=%d)",
+            settings.events.online.fit_partial_epochs,
+            settings.events.online.fit_min_events,
+        )
     updater = IncrementalUpdater(
         sink=sink,
         output_settings=settings.output,
@@ -130,6 +148,7 @@ def start_events_runtime(
         write_busy_check=combined_busy,
         fence_check=(apply_lock.owned if apply_lock is not None else None),
         on_success=reader.refresh,
+        online=online,
         variant_names=tuple(variant.name for variant in settings.experiment.variants)
         if settings.experiment.enabled
         else (),
