@@ -8,3 +8,21 @@
    comment -- a bare "star-slash" sequence closes a CSS comment early,
    even inside a glob pattern, which silently truncates everything below. */
 @import "tailwindcss";
+
+.htmx-indicator {
+  display: none;
+}
+.htmx-request.htmx-indicator,
+.htmx-request .htmx-indicator {
+  display: inline;
+}
+
+@media (forced-colors: active) {
+  [data-status-badge],
+  button,
+  input,
+  summary {
+    outline: 1px solid CanvasText;
+    outline-offset: 2px;
+  }
+}

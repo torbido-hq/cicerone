@@ -83,8 +83,17 @@ def test_dashboard_page_renders_with_valid_credentials():
     assert "Enter a user id to inspect their recent events and current top-K." in response.text
     assert 'for="user-id"' in response.text
     assert 'aria-live="polite"' in response.text
+    assert 'id="recommendation-announcer"' in response.text
+    assert 'id="status-announcer"' in response.text
     assert 'href="#main"' in response.text
     assert "hx-disabled-elt=\"button[type='submit']\"" in response.text
+    assert "Pause updates" in response.text
+    assert "Refresh" in response.text
+    assert ">Job status<" in response.text
+    assert 'hx-trigger="refresh"' in response.text
+    assert 'hx-trigger="load, refresh, every' not in response.text
+    assert "<title>Cicerone dashboard</title>" in response.text
+    assert 'id="recommendation-results" class="mt-3"' in response.text
 
 
 def test_status_partial_renders_latest_manifest():
@@ -106,6 +115,14 @@ def test_status_partial_renders_latest_manifest():
     assert "success" in response.text
     assert "cron" in response.text
     assert "42" in response.text
+    assert "Users with recommendations" in response.text
+    assert "Latest run" in response.text
+    assert "Recent runs" in response.text
+    assert 'data-run-status="success"' in response.text
+    assert "overflow-x-auto" in response.text
+    assert '<span class="text-slate-500">—</span>' in response.text
+    assert "current" in response.text
+    assert 'data-controller="time-ago"' in response.text
 
 
 def test_status_partial_shows_incremental_panel_when_events_enabled():
@@ -137,7 +154,7 @@ def test_status_partial_shows_incremental_panel_when_events_enabled():
     response = TestClient(app).get("/partials/status", auth=("alice", "s3cret"))
     assert response.status_code == 200
     assert "Incremental events" in response.text
-    assert "kind=webhook" in response.text
+    assert "Source: webhook" in response.text
     assert "3" in response.text
     assert "cicerone_events_source_lag" in response.text
 
@@ -186,6 +203,9 @@ def test_status_partial_marks_stale_run_as_stale():
     response = client.get("/partials/status", auth=("alice", "s3cret"))
 
     assert "Stale" in response.text
+    assert 'data-run-stale="true"' in response.text
+    assert "border-amber-300 bg-amber-50" in response.text
+    assert "border-emerald-300 bg-emerald-50" not in response.text
 
 
 def test_status_partial_history_limited_to_a_single_run_shows_dataset_backend_note():
@@ -367,6 +387,65 @@ def test_status_partial_shows_unknown_staleness_for_invalid_cron_schedule():
     assert "misconfigured" in response.text
 
 
+def test_page_title_orders_status_then_user():
+    from cicerone.dashboard import page_title
+
+    assert page_title() == "Cicerone dashboard"
+    assert page_title(user_id=" alice ") == "alice · Cicerone dashboard"
+    assert page_title(manifest={"status": "failed"}, user_id="alice") == "failed · alice · Cicerone dashboard"
+    assert (
+        page_title(manifest={"status": "success"}, staleness={"is_stale": True})
+        == "stale · Cicerone dashboard"
+    )
+    assert page_title(staleness={"is_stale": True}) == "Cicerone dashboard"
+
+
+def test_status_partial_unknown_status_is_not_success_green():
+    manifest = {"status": None, "generated_at": datetime.now(UTC).isoformat()}
+    app = create_app(_settings(), _FakeReader(manifest), _users_with("alice", "s3cret"))
+    response = TestClient(app).get("/partials/status", auth=("alice", "s3cret"))
+
+    assert response.status_code == 200
+    assert "unknown" in response.text
+    assert 'data-run-status="unknown"' in response.text
+    assert "bg-amber-100" in response.text
+    assert "text-amber-800" in response.text
+    assert "bg-emerald-100" not in response.text
+    assert "border-emerald-300 bg-emerald-50" not in response.text
+
+
+def test_dashboard_page_failed_run_title():
+    manifest = {
+        "status": "failed",
+        "generated_at": datetime.now(UTC).isoformat(),
+        "error": "boom",
+    }
+    app = create_app(_settings(), _FakeReader(manifest), _users_with("alice", "s3cret"))
+    response = TestClient(app).get("/dashboard", auth=("alice", "s3cret"))
+
+    assert "<title>failed · Cicerone dashboard</title>" in response.text
+    assert "border-red-300 bg-red-50" in response.text
+
+
+def test_status_partial_history_error_uses_disclosure_not_red_dash():
+    manifest = {"status": "success", "generated_at": "2026-07-28T00:00:00+00:00"}
+    older = {
+        "status": "failed",
+        "generated_at": "2026-07-27T00:00:00+00:00",
+        "error": "S3 bucket unreachable",
+    }
+    app = create_app(
+        _settings(),
+        _FakeReader(manifest, history=[manifest, older]),
+        _users_with("alice", "s3cret"),
+    )
+    response = TestClient(app).get("/partials/status", auth=("alice", "s3cret"))
+
+    assert "<details" in response.text
+    assert "S3 bucket unreachable" in response.text
+    assert response.text.count('<span class="text-slate-500">—</span>') == 1
+
+
 class _FakeRecReader:
     def __init__(
         self,
@@ -463,7 +542,7 @@ def test_recommendations_partial_renders_known_user():
 
     assert response.status_code == 200
     assert rec_reader.refresh_calls == 1
-    assert "user_id=" in response.text
+    assert "Recommendations for" in response.text
     assert ">i1<" in response.text
     assert ">i2<" in response.text
     assert "0.9000" in response.text
@@ -485,6 +564,7 @@ def test_dashboard_page_user_id_query_renders_lookup_results():
     assert "Inspect user" in response.text
     assert "Current top-K recommendations for u1" in response.text
     assert 'scope="col"' in response.text
+    assert "<title>u1 · Cicerone dashboard</title>" in response.text
 
 
 def test_recommendations_partial_unknown_user_uses_fallback():
@@ -507,6 +587,7 @@ def test_recommendations_partial_unknown_user_uses_fallback():
 
     assert response.status_code == 200
     assert "cold-start fallback" in response.text
+    assert "popular-item stand-ins" in response.text
     assert ">i9<" in response.text
     assert "popular_fallback" in response.text
 
@@ -518,7 +599,7 @@ def test_recommendations_partial_unknown_user_without_fallback():
         auth=("alice", "s3cret"),
     )
 
-    assert "No recommendations for user_id=ghost." in response.text
+    assert "No recommendations for ghost." in response.text
     assert "cold-start fallback" not in response.text
 
 
@@ -756,5 +837,5 @@ def test_recommendations_partial_no_events_badge():
     )
 
     assert "no events" in response.text
-    assert "No events for user_id=u1." in response.text
+    assert "No events for u1." in response.text
     assert HISTORY_UNAVAILABLE not in response.text

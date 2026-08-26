@@ -250,7 +250,7 @@ run succeeded and inspecting a user's current top-K — `cicerone dashboard`
 serve). Like serve mode, it never loads lightfm/implicit/torch (it does
 import `rectools`).
 
-![Cicerone dashboard inspecting alice: recent events beside current top-K with amber overlap, latest job success, and history including a failed S3 run](docs/images/dashboard.png)
+![Cicerone dashboard inspecting alice: recent events beside current top-K with amber overlap, Pause updates and Refresh, latest job success, and history including a failed S3 run](docs/images/dashboard.png)
 
 - `GET /dashboard` shows the latest run's status (success/failed), counts,
   effective models, and (for a `db` output only — a `dataset` output's
@@ -266,7 +266,9 @@ import `rectools`).
   enabled, a panel shows the latest incremental flush from recent manifests
   (dataset outputs may clear it on the next full retrain). The status block
   auto-refreshes via
-  [htmx](https://htmx.org) polling, so no page reload is needed.
+  [htmx](https://htmx.org) polling (Pause updates / Refresh on the page), so
+  no page reload is needed. HTTP Basic credentials persist until the
+  browser forgets them for the origin.
 - Protected by HTTP Basic Auth rather than a bearer token, since it's meant
   to be opened directly in a browser (a login prompt, not a header a human
   has to attach manually). Manage its small user list (a handful of named

@@ -416,7 +416,7 @@ docker run --rm --name cicerone-dashboard -p 127.0.0.1:8090:8090 \
 
 Open `http://127.0.0.1:8090/dashboard`, sign in, and type a `user_id` into the lookup — `42`, or `__cold_start__` for the [guest list](#guest-list-__cold_start__). Keep it bound to localhost unless it sits behind your own auth.
 
-![Cicerone dashboard: user lookup of current top-K, latest job status, and run history](https://cicerone.dev/images/docs/dashboard.png)
+![Cicerone dashboard: inspect user next to current top-K, Pause updates and Refresh, latest job status, and run history](https://cicerone.dev/images/docs/dashboard.png)
 
 ## Read it from the app
 
