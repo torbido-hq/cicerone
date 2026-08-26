@@ -281,6 +281,7 @@ def create_app(
             filtered["rank"] = range(1, len(filtered) + 1)
             if SOURCE_COLUMN in filtered.columns:
                 record_recommendations_served(set(filtered[SOURCE_COLUMN].astype(str)))
+        generated_at = generated_at_cache.get()
         if experiment_id and variant:
             record_experiment_served(experiment_id, variant)
             if settings.experiment.log_exposures and experiment_store is not None:
@@ -291,14 +292,13 @@ def create_app(
                                 user_id=user_id,
                                 experiment_id=experiment_id,
                                 variant=variant,
-                                generated_at=generated_at_cache.get(),
+                                generated_at=generated_at,
                             )
                         ]
                     )
                 except Exception:
                     logger.exception("Failed to append experiment exposure for user_id=%r", user_id)
 
-        generated_at = generated_at_cache.get()
         body = RecommendationsResponse(
             generated_at=generated_at,
             user_id=user_id,

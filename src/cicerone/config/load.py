@@ -199,7 +199,9 @@ def make_settings(**overrides: Any) -> Settings:
         k_from_cfg = item_based_k_from_config(configs["item_based"])
         if k_from_cfg is not None:
             base["item_based_k_neighbors"] = k_from_cfg
-    return Settings(**base)
+    settings = Settings(**base)
+    _require_exposure_log_backend(settings)
+    return settings
 
 
 def _load_io_settings(raw: dict[str, Any], section_name: str) -> IOSettings:
@@ -218,6 +220,14 @@ def _load_lookup_user_attrs(raw: object) -> tuple[str, ...]:
     if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
         raise ConfigError("dashboard.lookup_user_attrs must be a list of strings")
     return tuple(dict.fromkeys(item.strip() for item in raw if item.strip() and item.strip() != "user_id"))
+
+
+def _require_exposure_log_backend(settings: Settings) -> None:
+    if not settings.experiment.log_exposures:
+        return
+    from cicerone.experiment.store import require_appendable_exposure_log
+
+    require_appendable_exposure_log(settings.output)
 
 
 def _coerce_experiment(value: Any) -> ExperimentSettings:
@@ -476,7 +486,7 @@ def load_settings(config_path: str | None = None) -> Settings:
             "(leader-only incremental apply)"
         )
 
-    return Settings(
+    settings = Settings(
         input=input_settings,
         output=output_settings,
         feature_config_path=job.get("feature_config_path", "/app/config/features.toml"),
@@ -579,3 +589,5 @@ def load_settings(config_path: str | None = None) -> Settings:
         events=events,
         experiment=load_experiment_settings(raw.get("experiment") or {}),
     )
+    _require_exposure_log_backend(settings)
+    return settings

@@ -12,7 +12,8 @@ from typing import Any
 import pandas as pd
 from sqlalchemy import create_engine, text
 
-from cicerone.config import IOSettings
+from cicerone.config.constants import ConfigError
+from cicerone.config.settings import IOSettings
 from cicerone.io.db_errors import is_missing_table_error
 from cicerone.io.db_store import MISSING_TABLE_ERRORS
 from cicerone.io.options import (
@@ -21,6 +22,7 @@ from cicerone.io.options import (
     object_key,
     require_option,
     sql_identifier,
+    storage_backend,
     validate_storage_options,
 )
 
@@ -30,6 +32,10 @@ STATE_FILENAME = "experiment_state.json"
 EXPOSURES_FILENAME = "exposures.jsonl"
 DEFAULT_EXPOSURES_TABLE = "recommendation_exposures"
 DEFAULT_STATE_TABLE = "experiment_state"
+EXPOSURE_LOG_BACKEND_ERROR = (
+    'experiment.log_exposures requires output kind = "db" or a local dataset path; '
+    "object-store JSONL append is not atomic"
+)
 
 EXPOSURE_COLUMNS: tuple[str, ...] = (
     "user_id",
@@ -38,6 +44,15 @@ EXPOSURE_COLUMNS: tuple[str, ...] = (
     "generated_at",
     "exposed_at",
 )
+
+
+def require_appendable_exposure_log(output: IOSettings) -> None:
+    """Reject object-store JSONL append (read-modify-write is racy)."""
+    if output.kind == "db":
+        return
+    if output.kind == "dataset" and storage_backend(output.options) == "local":
+        return
+    raise ConfigError(EXPOSURE_LOG_BACKEND_ERROR)
 
 
 def experiment_state(
@@ -79,6 +94,7 @@ class ExperimentStore:
         if self._kind == "db":
             self._append_exposures_db(rows)
             return
+        require_appendable_exposure_log(self._output)
         payload = "".join(json.dumps(dict(row), separators=(",", ":")) + "\n" for row in rows).encode("utf-8")
         self._append_bytes(EXPOSURES_FILENAME, payload)
 
@@ -210,15 +226,10 @@ class ExperimentStore:
         client.put_object(Bucket=bucket, Key=key, Body=payload, ContentType=content_type)
 
     def _append_bytes(self, filename: str, payload: bytes) -> None:
-        backend = validate_storage_options(self._options)
-        if backend == "local":
-            path = Path(require_option(self._options, "path", "local")) / filename
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with path.open("ab") as handle:
-                handle.write(payload)
-            return
-        existing = self._read_bytes(filename) or b""
-        self._write_bytes(filename, existing + payload, "application/x-ndjson")
+        path = Path(require_option(self._options, "path", "local")) / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("ab") as handle:
+            handle.write(payload)
 
 
 def _jsonish(value: Any) -> Any:

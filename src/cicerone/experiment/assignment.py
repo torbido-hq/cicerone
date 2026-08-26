@@ -6,6 +6,7 @@ import hashlib
 from collections.abc import Sequence
 
 from cicerone.config.settings import Settings
+from cicerone.experiment.recipes import CONTROL_NAME, TREATMENT_NAME
 
 _DIGEST_BYTES = 8
 _DIGEST_SPAN = float(1 << (8 * _DIGEST_BYTES))
@@ -49,12 +50,17 @@ def resolve_assignment(
 ) -> tuple[str | None, str | None]:
     """Return ``(experiment_id, variant)`` or ``(None, None)`` when experiments are off."""
     experiment = settings.experiment
-    if not experiment.enabled or not experiment.variants:
+    if not experiment.enabled:
+        return None, None
+    variants = [(item.name, item.traffic) for item in experiment.variants]
+    if not variants and experiment.automl_challenger:
+        variants = [(CONTROL_NAME, 0.5), (TREATMENT_NAME, 0.5)]
+    if not variants:
         return None, None
     variant = assign_variant(
         experiment.id,
         user_id,
-        [(item.name, item.traffic) for item in experiment.variants],
+        variants,
         promoted_variant=promoted_variant,
     )
     return experiment.id, variant

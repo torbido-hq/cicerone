@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from conftest import make_settings
 
 from cicerone.config.settings import ExperimentSettings, VariantSettings
@@ -34,6 +35,11 @@ def test_remainder_traffic_lands_on_last_variant() -> None:
     assert assign_variant("exp", "anyone", variants) == "b"
 
 
+def test_assign_variant_requires_variants() -> None:
+    with pytest.raises(ValueError, match="at least one"):
+        assign_variant("exp", "u1", ())
+
+
 def test_resolve_assignment_disabled() -> None:
     settings = make_settings(experiment=ExperimentSettings())
     assert resolve_assignment(settings, "u1") == (None, None)
@@ -57,3 +63,16 @@ def test_resolve_assignment_promoted_wins() -> None:
     assigned = resolve_assignment(settings, "u1", promoted_variant="unknown")
     assert assigned[0] == "exp"
     assert assigned[1] in {"control", "treatment"}
+
+
+def test_resolve_assignment_automl_challenger_without_variants() -> None:
+    settings = make_settings(experiment=ExperimentSettings(enabled=True, id="auto", automl_challenger=True))
+    experiment_id, variant = resolve_assignment(settings, "u1")
+    assert experiment_id == "auto"
+    assert variant in {"control", "treatment"}
+    assert resolve_assignment(settings, "u1", promoted_variant="treatment") == ("auto", "treatment")
+
+
+def test_resolve_assignment_enabled_without_variants_is_off() -> None:
+    settings = make_settings(experiment=ExperimentSettings(enabled=True, id="exp"))
+    assert resolve_assignment(settings, "u1") == (None, None)

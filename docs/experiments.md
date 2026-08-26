@@ -67,8 +67,10 @@ that variant’s `__cold_start__` rows. Prometheus
 `cicerone_recommendations_experiment_total{experiment_id,variant}` counts
 lookups.
 
-`[experiment].log_exposures = true` appends JSONL (`exposures.jsonl`) or a
-`recommendation_exposures` DB table. Default off: serve stays read-only.
+`[experiment].log_exposures = true` appends JSONL (`exposures.jsonl`) on a
+**local** dataset path, or a `recommendation_exposures` DB table. Object-store
+(S3) JSONL append is refused: it is not atomic. Default off: serve stays
+read-only.
 
 ## Incremental events
 

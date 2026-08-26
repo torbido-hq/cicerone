@@ -92,6 +92,28 @@ def test_recommendations_filter_assigned_variant(tmp_path):
     assert [row["item_id"] for row in body["items"]] == [f"{assigned}-item"]
 
 
+def test_recommendations_filter_automl_challenger_without_variants(tmp_path):
+    assigned = assign_variant("auto", "u1", (("control", 0.5), ("treatment", 0.5)))
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    app = create_app(
+        _settings(
+            experiment=_experiment_settings(
+                id="auto",
+                automl_challenger=True,
+                variants=(),
+            ),
+            output=output,
+        ),
+        _FakeReader(_variant_recs()),
+        manifest_reader=_FakeManifest(),
+        feature_config=_feature_config(),
+    )
+    body = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
+    assert body["experiment_id"] == "auto"
+    assert body["variant"] == assigned
+    assert [row["item_id"] for row in body["items"]] == [f"{assigned}-item"]
+
+
 def test_recommendations_log_exposures_when_enabled(tmp_path):
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     app = create_app(
@@ -107,3 +129,17 @@ def test_recommendations_log_exposures_when_enabled(tmp_path):
     assert row["user_id"] == "u1"
     assert row["experiment_id"] == "rrf-vs-blend"
     assert row["variant"] in {"control", "treatment"}
+
+
+def test_recommendations_exposure_generated_at_matches_response(tmp_path):
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    app = create_app(
+        _settings(experiment=_experiment_settings(log_exposures=True), output=output),
+        _FakeReader(_variant_recs()),
+        manifest_reader=_FakeManifest(),
+        feature_config=_feature_config(),
+    )
+    body = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
+    row = json.loads((tmp_path / "exposures.jsonl").read_text().strip().splitlines()[0])
+    assert row["generated_at"] == body["generated_at"]
+    assert body["generated_at"] == "2026-08-04T12:00:00+00:00"

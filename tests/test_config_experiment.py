@@ -131,3 +131,37 @@ def test_load_experiment_automl_challenger_allows_empty_variants():
     settings = load_experiment_settings({"enabled": True, "id": "auto", "automl_challenger": True})
     assert settings.automl_challenger is True
     assert settings.variants == ()
+
+
+def test_load_settings_rejects_log_exposures_on_object_store(tmp_path):
+    with pytest.raises(ConfigError, match="not atomic"):
+        load_settings(
+            write_toml(
+                tmp_path,
+                """
+                [job]
+                [input]
+                kind = "dataset"
+                [input.options]
+                storage_backend = "local"
+                path = "/tmp/in"
+                [output]
+                kind = "dataset"
+                [output.options]
+                storage_backend = "s3"
+                bucket = "recs"
+                access_key_id = "id"
+                secret_access_key = "secret"
+                [experiment]
+                enabled = true
+                id = "exp"
+                log_exposures = true
+                [[experiment.variants]]
+                name = "control"
+                traffic = 0.5
+                [[experiment.variants]]
+                name = "treatment"
+                traffic = 0.5
+                """,
+            )
+        )
