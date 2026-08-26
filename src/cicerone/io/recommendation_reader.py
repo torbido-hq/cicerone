@@ -15,7 +15,7 @@ from sqlalchemy import create_engine, inspect, text
 from cicerone.blending import COLD_START_USER_ID, LATEST_SOURCE, POPULAR_SOURCE
 from cicerone.io import recommendation_schema as _rec
 from cicerone.io.base import BaseRecommendationReader
-from cicerone.io.db_errors import is_missing_column_error
+from cicerone.io.db_errors import db_error_message, is_missing_column_error
 from cicerone.io.db_store import (
     DEFAULT_RECOMMENDATION_ITEMS_TABLE,
     DEFAULT_RECOMMENDATIONS_TABLE,
@@ -368,7 +368,10 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
         return supported
 
     def _remember_missing_variant_column(self, exc: BaseException) -> bool:
-        if not (is_missing_column_error(exc) or "no such column" in str(exc).lower()):
+        message = db_error_message(exc)
+        if VARIANT_COLUMN not in message:
+            return False
+        if not is_missing_column_error(exc) and "no such column" not in message:
             return False
         self._variant_supported = False
         return True
