@@ -223,7 +223,7 @@ def _load_lookup_user_attrs(raw: object) -> tuple[str, ...]:
 
 
 def _require_exposure_log_backend(settings: Settings) -> None:
-    if not settings.experiment.log_exposures:
+    if not settings.experiment.enabled or not settings.experiment.log_exposures:
         return
     from cicerone.experiment.store import require_appendable_exposure_log
 

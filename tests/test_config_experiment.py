@@ -165,3 +165,31 @@ def test_load_settings_rejects_log_exposures_on_object_store(tmp_path):
                 """,
             )
         )
+
+
+def test_load_settings_allows_log_exposures_on_s3_when_experiment_disabled(tmp_path):
+    settings = load_settings(
+        write_toml(
+            tmp_path,
+            """
+            [job]
+            [input]
+            kind = "dataset"
+            [input.options]
+            storage_backend = "local"
+            path = "/tmp/in"
+            [output]
+            kind = "dataset"
+            [output.options]
+            storage_backend = "s3"
+            bucket = "recs"
+            access_key_id = "id"
+            secret_access_key = "secret"
+            [experiment]
+            enabled = false
+            log_exposures = true
+            """,
+        )
+    )
+    assert settings.experiment.enabled is False
+    assert settings.experiment.log_exposures is True
