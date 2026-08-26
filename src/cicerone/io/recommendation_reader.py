@@ -367,6 +367,12 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
         self._variant_supported = supported
         return supported
 
+    def _remember_missing_variant_column(self, exc: BaseException) -> bool:
+        if not (is_missing_column_error(exc) or "no such column" in str(exc).lower()):
+            return False
+        self._variant_supported = False
+        return True
+
     def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame:
         if variant is not None and not self._supports_variant_column():
             variant = None
@@ -388,9 +394,9 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
         except Exception as exc:
             if variant is None:
                 raise
-            if is_missing_column_error(exc) or "no such column" in str(exc).lower():
-                return self.get_recommendations(user_id, k)
-            raise
+            if not self._remember_missing_variant_column(exc):
+                raise
+            return self.get_recommendations(user_id, k)
         if rows.empty:
             record_cache_miss()
         else:
@@ -403,6 +409,8 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
         sentinel = self.get_recommendations(COLD_START_USER_ID, k, variant=variant)
         if not sentinel.empty:
             return sentinel
+        if variant is not None and not self._supports_variant_column():
+            variant = None
         # Same popular→latest→user_id priority as the in-memory path; full top-k fetch.
         variant_clause = f'AND "{VARIANT_COLUMN}" = :variant ' if variant is not None else ""
         pick_sql = text(
@@ -420,7 +428,7 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
         try:
             picked = pd.read_sql(pick_sql, self._engine, params=params)
         except Exception as exc:
-            if variant is not None and (is_missing_column_error(exc) or "no such column" in str(exc).lower()):
+            if variant is not None and self._remember_missing_variant_column(exc):
                 return self.get_cold_start_fallback(k)
             return sentinel
         if picked.empty:
