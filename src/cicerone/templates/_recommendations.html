@@ -25,6 +25,11 @@
         cold-start fallback
       </span>
       {% endif %}
+      {% if variant %}
+      <span class="inline-flex items-center rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-800">
+        {{ experiment_id }} / {{ variant }}
+      </span>
+      {% endif %}
       {% for mix in source_mix %}
       <span data-status-badge class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
         {{ mix.source }} {{ mix.count }}

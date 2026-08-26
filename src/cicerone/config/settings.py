@@ -16,6 +16,7 @@ from cicerone.config.constants import (
     DEFAULT_EVENTS_BATCH_SIZE,
     DEFAULT_EVENTS_BATCH_WINDOW_SECONDS,
     DEFAULT_EVENTS_POLL_INTERVAL_SECONDS,
+    DEFAULT_EXPERIMENT_ALPHA,
     DEFAULT_EXPLAIN_MAX_ATTRIBUTES,
     DEFAULT_EXPLAIN_MAX_SIMILAR_ITEMS,
     DEFAULT_LOCK_KEY,
@@ -103,6 +104,32 @@ class EventsSettings:
 
 
 @dataclass(frozen=True)
+class VariantSettings:
+    """One ranking recipe in an ``[experiment]`` block."""
+
+    name: str
+    traffic: float
+    models: list[str] | None = None
+    model_weights: dict[str, float] | None = None
+    rrf_k: float | None = None
+    combiner: str | None = None
+    blending: dict[str, Any] | None = None
+    boosts: bool = True
+    eligibility: bool = True
+
+
+@dataclass(frozen=True)
+class ExperimentSettings:
+    enabled: bool = False
+    id: str = ""
+    primary_metric: str = "weighted"
+    variants: tuple[VariantSettings, ...] = ()
+    log_exposures: bool = False
+    automl_challenger: bool = False
+    alpha: float = DEFAULT_EXPERIMENT_ALPHA
+
+
+@dataclass(frozen=True)
 class ExplainSettings:
     """Batch-time recommendation reasons persisted on each output row."""
 
@@ -143,6 +170,7 @@ class Settings:
     dashboard: DashboardSettings
     events: EventsSettings
     explain: ExplainSettings = field(default_factory=ExplainSettings)
+    experiment: ExperimentSettings = field(default_factory=ExperimentSettings)
 
     @property
     def serve_host(self) -> str:

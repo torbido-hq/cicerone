@@ -468,10 +468,12 @@ class _FakeRecReader:
         if self._refresh_error is not None:
             raise self._refresh_error
 
-    def get_recommendations(self, user_id: str, k: int) -> pd.DataFrame:
+    def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame:
         if self._lookup_error is not None:
             raise self._lookup_error
         rows = self._recs[self._recs["user_id"] == user_id]
+        if variant is not None and "variant" in rows.columns:
+            rows = rows[rows["variant"].astype(str) == str(variant)]
         if "rank" in rows.columns:
             rows = rows.sort_values("rank")
         return rows.head(k).reset_index(drop=True)
@@ -479,7 +481,7 @@ class _FakeRecReader:
     def get_items(self) -> pd.DataFrame | None:
         return self._items
 
-    def get_cold_start_fallback(self, k: int) -> pd.DataFrame:
+    def get_cold_start_fallback(self, k: int, *, variant: str | None = None) -> pd.DataFrame:
         return self._fallback.head(k).reset_index(drop=True)
 
 
@@ -839,3 +841,116 @@ def test_recommendations_partial_no_events_badge():
     assert "no events" in response.text
     assert "No events for u1." in response.text
     assert HISTORY_UNAVAILABLE not in response.text
+
+
+def test_dashboard_experiments_page_disabled():
+    response = _recs_client().get("/dashboard/experiments", auth=("alice", "s3cret"))
+    assert response.status_code == 200
+    assert "No experiment is enabled" in response.text
+    assert 'href="/dashboard/experiments"' in response.text
+
+
+def test_dashboard_lookup_shows_assigned_variant():
+    recs = pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "control-item",
+                "rank": 1,
+                "score": 0.9,
+                "source": "personalized",
+                "variant": "control",
+            },
+            {
+                "user_id": "u1",
+                "item_id": "treatment-item",
+                "rank": 1,
+                "score": 0.8,
+                "source": "personalized",
+                "variant": "treatment",
+            },
+        ]
+    )
+    from cicerone.config.settings import ExperimentSettings, VariantSettings
+    from cicerone.experiment.assignment import assign_variant
+
+    experiment = ExperimentSettings(
+        enabled=True,
+        id="exp-1",
+        variants=(
+            VariantSettings(name="control", traffic=0.5),
+            VariantSettings(name="treatment", traffic=0.5),
+        ),
+    )
+    assigned = assign_variant("exp-1", "u1", (("control", 0.5), ("treatment", 0.5)))
+    response = _recs_client(_FakeRecReader(recs), experiment=experiment).get(
+        "/partials/recommendations",
+        params={"user_id": "u1"},
+        auth=("alice", "s3cret"),
+    )
+    assert response.status_code == 200
+    assert f"exp-1 / {assigned}" in response.text
+    assert f">{assigned}-item<" in response.text
+    other = "treatment" if assigned == "control" else "control"
+    assert f">{other}-item<" not in response.text
+
+
+def test_dashboard_lookup_omits_variant_without_column():
+    recs = pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "control-item",
+                "rank": 1,
+                "score": 0.9,
+                "source": "personalized",
+            },
+            {
+                "user_id": "u1",
+                "item_id": "treatment-item",
+                "rank": 2,
+                "score": 0.8,
+                "source": "personalized",
+            },
+        ]
+    )
+    from cicerone.config.settings import ExperimentSettings, VariantSettings
+
+    experiment = ExperimentSettings(
+        enabled=True,
+        id="exp-1",
+        variants=(
+            VariantSettings(name="control", traffic=0.5),
+            VariantSettings(name="treatment", traffic=0.5),
+        ),
+    )
+    response = _recs_client(_FakeRecReader(recs), experiment=experiment).get(
+        "/partials/recommendations",
+        params={"user_id": "u1"},
+        auth=("alice", "s3cret"),
+    )
+    assert response.status_code == 200
+    assert "exp-1 /" not in response.text
+    assert ">control-item<" in response.text
+    assert ">treatment-item<" in response.text
+
+
+def test_dashboard_promote_unknown_variant_redirects():
+    from cicerone.config.settings import ExperimentSettings, VariantSettings
+
+    experiment = ExperimentSettings(
+        enabled=True,
+        id="exp-1",
+        variants=(
+            VariantSettings(name="control", traffic=0.5),
+            VariantSettings(name="treatment", traffic=0.5),
+        ),
+    )
+    response = _recs_client(experiment=experiment).post(
+        "/dashboard/experiments/promote",
+        data={"variant": "ghost"},
+        auth=("alice", "s3cret"),
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert "promote_error=" in response.headers["location"]

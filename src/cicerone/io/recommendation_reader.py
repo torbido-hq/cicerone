@@ -10,11 +10,12 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 
 from cicerone.blending import COLD_START_USER_ID, LATEST_SOURCE, POPULAR_SOURCE
 from cicerone.io import recommendation_schema as _rec
 from cicerone.io.base import BaseRecommendationReader
+from cicerone.io.db_errors import is_missing_column_error
 from cicerone.io.db_store import (
     DEFAULT_RECOMMENDATION_ITEMS_TABLE,
     DEFAULT_RECOMMENDATIONS_TABLE,
@@ -38,6 +39,7 @@ ITEM_COLUMN = _rec.ITEM_COLUMN
 RANK_COLUMN = _rec.RANK_COLUMN
 SCORE_COLUMN = _rec.SCORE_COLUMN
 SOURCE_COLUMN = _rec.SOURCE_COLUMN
+VARIANT_COLUMN = _rec.VARIANT_COLUMN
 RECOMMENDATION_COLUMNS = _rec.RECOMMENDATION_COLUMNS
 ITEMS_SNAPSHOT_FILENAME = "items_snapshot.parquet"
 
@@ -284,25 +286,30 @@ class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             logger.exception("Failed to refresh items snapshot; keeping previous data")
         observe_cache_refresh(duration_seconds=time.perf_counter() - started, success=recommendations_ok)
 
-    def get_recommendations(self, user_id: str, k: int) -> pd.DataFrame:
+    def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame:
         with self._lock:
             rows = self._by_user.get(str(user_id))
             if rows is None:
                 record_cache_miss()
                 return self._cache.iloc[0:0]
             record_cache_hit()
-            return rows.head(k).reset_index(drop=True)
+            return _rec.filter_variant_rows(rows, variant).head(k).reset_index(drop=True)
 
-    def get_cold_start_fallback(self, k: int) -> pd.DataFrame:
+    def get_cold_start_fallback(self, k: int, *, variant: str | None = None) -> pd.DataFrame:
         with self._lock:
             sentinel = self._by_user.get(COLD_START_USER_ID)
+            if sentinel is not None:
+                sentinel = _rec.filter_variant_rows(sentinel, variant)
             if sentinel is not None and not sentinel.empty:
                 return sentinel.head(k).reset_index(drop=True)
+            cache = _rec.filter_variant_rows(self._cache, variant)
             if self._fallback_user_id is not None:
                 rows = self._by_user.get(self._fallback_user_id)
                 if rows is not None and not rows.empty:
-                    return rows.head(k).reset_index(drop=True)
-            return select_cold_start_fallback(self._cache, k, sentinel=sentinel)
+                    filtered = _rec.filter_variant_rows(rows, variant)
+                    if not filtered.empty:
+                        return filtered.head(k).reset_index(drop=True)
+            return select_cold_start_fallback(cache, k, sentinel=sentinel)
 
 
 class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
@@ -317,6 +324,7 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             option="recommendation_items_table",
         )
         self._engine = create_engine(require_option(options, "database_url", "db"), pool_pre_ping=True)
+        self._variant_supported: bool | None = None
         self._init_item_filter_state()
         self.refresh()
 
@@ -347,42 +355,75 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             logger.exception("Failed to refresh recommendation items snapshot; keeping previous data")
         observe_cache_refresh(duration_seconds=time.perf_counter() - started, success=items_ok)
 
-    def get_recommendations(self, user_id: str, k: int) -> pd.DataFrame:
-        sql = text(
-            f'SELECT * FROM "{self._table}" WHERE "{USER_COLUMN}" = :user_id '
-            f'ORDER BY "{RANK_COLUMN}" ASC LIMIT :k'
-        )
-        rows = pd.read_sql(sql, self._engine, params={"user_id": user_id, "k": k})
+    def _supports_variant_column(self) -> bool:
+        cached = self._variant_supported
+        if cached is not None:
+            return cached
+        try:
+            columns = {col["name"] for col in inspect(self._engine).get_columns(self._table)}
+            supported = VARIANT_COLUMN in columns
+        except Exception:
+            supported = False
+        self._variant_supported = supported
+        return supported
+
+    def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame:
+        if variant is not None and not self._supports_variant_column():
+            variant = None
+        if variant is None:
+            sql = text(
+                f'SELECT * FROM "{self._table}" WHERE "{USER_COLUMN}" = :user_id '
+                f'ORDER BY "{RANK_COLUMN}" ASC LIMIT :k'
+            )
+            params: dict[str, Any] = {"user_id": user_id, "k": k}
+        else:
+            sql = text(
+                f'SELECT * FROM "{self._table}" WHERE "{USER_COLUMN}" = :user_id '
+                f'AND "{VARIANT_COLUMN}" = :variant '
+                f'ORDER BY "{RANK_COLUMN}" ASC LIMIT :k'
+            )
+            params = {"user_id": user_id, "k": k, "variant": variant}
+        try:
+            rows = pd.read_sql(sql, self._engine, params=params)
+        except Exception as exc:
+            if variant is None:
+                raise
+            if is_missing_column_error(exc) or "no such column" in str(exc).lower():
+                return self.get_recommendations(user_id, k)
+            raise
         if rows.empty:
             record_cache_miss()
         else:
             record_cache_hit()
         return rows
 
-    def get_cold_start_fallback(self, k: int) -> pd.DataFrame:
-        sentinel = self.get_recommendations(COLD_START_USER_ID, k)
+    def get_cold_start_fallback(self, k: int, *, variant: str | None = None) -> pd.DataFrame:
+        if variant is not None and not self._supports_variant_column():
+            variant = None
+        sentinel = self.get_recommendations(COLD_START_USER_ID, k, variant=variant)
         if not sentinel.empty:
             return sentinel
         # Same popular→latest→user_id priority as the in-memory path; full top-k fetch.
+        variant_clause = f'AND "{VARIANT_COLUMN}" = :variant ' if variant is not None else ""
         pick_sql = text(
             f'SELECT "{USER_COLUMN}", "{SOURCE_COLUMN}" FROM "{self._table}" '
-            f'WHERE "{SOURCE_COLUMN}" IN (:popular, :latest) '
+            f'WHERE "{SOURCE_COLUMN}" IN (:popular, :latest) {variant_clause}'
             f"ORDER BY "
             f'CASE "{SOURCE_COLUMN}" '
             f"WHEN :popular THEN 0 WHEN :latest THEN 1 ELSE 99 END, "
             f'"{USER_COLUMN}" ASC '
             f"LIMIT 1"
         )
+        params: dict[str, Any] = {"popular": POPULAR_SOURCE, "latest": LATEST_SOURCE}
+        if variant is not None:
+            params["variant"] = variant
         try:
-            picked = pd.read_sql(
-                pick_sql,
-                self._engine,
-                params={"popular": POPULAR_SOURCE, "latest": LATEST_SOURCE},
-            )
-        except MISSING_TABLE_ERRORS:
-            # Missing table/source column → empty fallback candidates.
+            picked = pd.read_sql(pick_sql, self._engine, params=params)
+        except Exception as exc:
+            if variant is not None and (is_missing_column_error(exc) or "no such column" in str(exc).lower()):
+                return self.get_cold_start_fallback(k)
             return sentinel
         if picked.empty:
             return sentinel
         sample_user = str(picked.iloc[0][USER_COLUMN])
-        return self.get_recommendations(sample_user, k)
+        return self.get_recommendations(sample_user, k, variant=variant)

@@ -6,14 +6,17 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import uvicorn
 from croniter import CroniterError, croniter
-from fastapi import Depends, FastAPI, Query, Request
+from fastapi import Depends, FastAPI, Form, Query, Request
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from cicerone.config import Settings, load_settings
+from cicerone.dashboard_experiments import experiment_context, promote_winner
 from cicerone.dashboard_lookup import lookup_inspector
 from cicerone.dashboard_users import load_users
 from cicerone.http_auth import require_basic_auth
@@ -141,6 +144,28 @@ def create_app(
             staleness=context["staleness"],
         )
         return _TEMPLATES.TemplateResponse(request, "dashboard.html", context)
+
+    @app.get("/dashboard/experiments", dependencies=[Depends(auth)])
+    def experiments(
+        request: Request, message: str = Query(default=""), promote_error: str = Query(default="")
+    ):
+        context = experiment_context(settings)
+        context["message"] = message or None
+        context["promote_error"] = promote_error or None
+        return _TEMPLATES.TemplateResponse(request, "experiments.html", context)
+
+    @app.post("/dashboard/experiments/promote", dependencies=[Depends(auth)])
+    def experiments_promote(variant: str = Form(...)):
+        error = promote_winner(settings, variant.strip())
+        if error:
+            return RedirectResponse(
+                url=f"/dashboard/experiments?promote_error={quote(error)}",
+                status_code=303,
+            )
+        return RedirectResponse(
+            url=f"/dashboard/experiments?message={quote('Promoted ' + variant.strip())}",
+            status_code=303,
+        )
 
     return app
 

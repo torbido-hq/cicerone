@@ -26,7 +26,7 @@ from cicerone.io.recommendation_reader import (
     SOURCE_COLUMN,
     USER_COLUMN,
 )
-from cicerone.io.recommendation_schema import REASONS_COLUMN, recommendation_output_columns
+from cicerone.io.recommendation_schema import REASONS_COLUMN, VARIANT_COLUMN, recommendation_output_columns
 from cicerone.locks import LockLostError
 from cicerone.reasons import dump_source_reasons
 from cicerone.weighting import event_row_weights
@@ -71,6 +71,7 @@ class IncrementalUpdater:
         on_success: Callable[[], None] | None = None,
         fence_check: Callable[[], bool] | None = None,
         user_cache_max_size: int = DEFAULT_USER_CACHE_MAX_SIZE,
+        variant_names: Sequence[str] = (),
     ):
         if user_cache_max_size < 1:
             raise ValueError("user_cache_max_size must be >= 1")
@@ -86,6 +87,7 @@ class IncrementalUpdater:
         self._events_applied = 0
         self._user_cache_max_size = user_cache_max_size
         self._cached_by_user: OrderedDict[str, pd.DataFrame] = OrderedDict()
+        self._variant_names = tuple(str(name) for name in variant_names)
 
     @property
     def last_success_at(self) -> datetime | None:
@@ -357,6 +359,43 @@ class IncrementalUpdater:
         batch: pd.DataFrame,
         weights: pd.Series | None = None,
     ) -> pd.DataFrame:
+        variants = self._variants_for(prior)
+        if not variants:
+            return self._merge_one_list(user_id, prior, popular, latest, batch, weights)
+        parts = []
+        for variant in variants:
+            prior_slice = (
+                prior[prior[VARIANT_COLUMN].astype(str) == variant]
+                if VARIANT_COLUMN in prior.columns and not prior.empty
+                else prior
+            )
+            merged = self._merge_one_list(user_id, prior_slice, popular, latest, batch, weights)
+            if merged.empty:
+                continue
+            merged = merged.copy()
+            merged[VARIANT_COLUMN] = variant
+            parts.append(merged)
+        if not parts:
+            return empty_recommendations_frame()
+        return pd.concat(parts, ignore_index=True)
+
+    def _variants_for(self, prior: pd.DataFrame) -> tuple[str, ...]:
+        if self._variant_names:
+            return self._variant_names
+        if prior.empty or VARIANT_COLUMN not in prior.columns:
+            return ()
+        names = tuple(dict.fromkeys(prior[VARIANT_COLUMN].astype(str).tolist()))
+        return names
+
+    def _merge_one_list(
+        self,
+        user_id: str,
+        prior: pd.DataFrame,
+        popular: pd.DataFrame,
+        latest: pd.DataFrame,
+        batch: pd.DataFrame,
+        weights: pd.Series | None = None,
+    ) -> pd.DataFrame:
         if not prior.empty and SOURCE_COLUMN in prior.columns:
             mask = prior[SOURCE_COLUMN].astype(str).map(_is_preserved_source)
             preserved = prior.loc[mask].copy()
@@ -408,6 +447,32 @@ class IncrementalUpdater:
         return combined[recommendation_output_columns(combined)].reset_index(drop=True)
 
     def _cold_start_rows(
+        self,
+        prior: pd.DataFrame,
+        popular: pd.DataFrame,
+        latest: pd.DataFrame,
+    ) -> pd.DataFrame:
+        variants = self._variants_for(prior)
+        if not variants:
+            return self._cold_start_one_list(prior, popular, latest)
+        parts = []
+        for variant in variants:
+            prior_slice = (
+                prior[prior[VARIANT_COLUMN].astype(str) == variant]
+                if VARIANT_COLUMN in prior.columns and not prior.empty
+                else prior
+            )
+            merged = self._cold_start_one_list(prior_slice, popular, latest)
+            if merged.empty:
+                continue
+            merged = merged.copy()
+            merged[VARIANT_COLUMN] = variant
+            parts.append(merged)
+        if not parts:
+            return empty_recommendations_frame()
+        return pd.concat(parts, ignore_index=True)
+
+    def _cold_start_one_list(
         self,
         prior: pd.DataFrame,
         popular: pd.DataFrame,

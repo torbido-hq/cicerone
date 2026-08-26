@@ -24,6 +24,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   User attributes render only when `dashboard.lookup_user_attrs` is set.
 - Dashboard Pause updates / Resume updates and Refresh for the status poll
   (starts paused when `prefers-reduced-motion` is set).
+- `[experiment]` sticky A/B tests of whole ranking recipes (models + combiner +
+  blending knobs). The job fits the union once, writes a `variant` column, and
+  serve hashes `user_id` onto one list. Dashboard Experiments page: always-valid
+  CIs, catalog guardrails, optional exposure log, AutoML challenger, promote
+  winner to 100% traffic.
 
 ### Changed
 

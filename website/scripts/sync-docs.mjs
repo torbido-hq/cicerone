@@ -52,6 +52,13 @@ const PAGES = [
     description:
       "EventSource backends, micro-batch incremental updates, and write-through to serve.",
   },
+  {
+    source: "experiments.md",
+    out: "experiments.md",
+    title: "Experiments",
+    description:
+      "Sticky A/B tests of ranking recipes, sequential stats, guardrails, and promote.",
+  },
 ];
 
 function rewrite(source) {

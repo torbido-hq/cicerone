@@ -41,6 +41,7 @@ up to your own data doesn't require touching any code.
 - **Batch recommender** — cron-scheduled train + top-K write (dataset or DB I/O)
 - **Hybrid strategies** — collaborative (LightFM), item-based KNN, optional SASRec/BERT4Rec/HSTU, optional content cold-item fallback, popular, latest
 - **Priority, RRF, or blending** — combine strategies by order, weighted ranks, or per-user mix
+- **A/B experiments** — sticky user assignment across whole ranking recipes; sequential CIs, catalog guardrails, optional AutoML challenger, dashboard promote
 - **AutoML** — time-fold backtest to pick models/weights per run
 - **Business policies** — TOML eligibility filters and score boosts
 - **Serve mode** — read-only HTTP API over precomputed recommendations
@@ -132,7 +133,9 @@ Response JSON:
         "matched_attributes": [{"column": "style", "value": "lager"}]
       }
     }
-  ]
+  ],
+  "experiment_id": "rrf-vs-blend-2026-08",
+  "variant": "control"
 }
 ```
 
@@ -142,7 +145,10 @@ table, the API returns the cold-start fallback
 (`popular_fallback` / `latest` / `blended` for `__cold_start__`) with
 `"fallback": true`. That sentinel is written only under blending; with
 priority or RRF the reader substitutes one `popular_fallback` / `latest`
-user's top-K instead, and 404s when the table has neither.
+user's top-K instead, and 404s when the table has neither. When
+`[experiment]` is enabled, the response also includes `experiment_id` and
+the sticky `variant`; both fields are `null` when experiments are off.
+See [docs/experiments.md](docs/experiments.md).
 
 - For a `dataset` output, the whole recommendations file (+ optional
   `items_snapshot.parquet`) is cached in memory and refreshed on a
@@ -262,7 +268,10 @@ import `rectools`).
   badge and optional user attributes (`dashboard.lookup_user_attrs`) sit above the two panes. Recs show
   `min(job.top_k, dashboard.lookup_k)` rows (`lookup_k` defaults to 20, so
   10 with the default `top_k`); events show `dashboard.lookup_events`
-  (default 20). A missing event store does not hide recommendations. When `[events]` is
+  (default 20). When `[experiment]` is enabled, lookup shows the assigned
+  variant (what serve would return). `GET /dashboard/experiments` compares
+  recipes with always-valid CIs and catalog guardrails, and can **Promote**
+  a winner to 100% traffic. A missing event store does not hide recommendations. When `[events]` is
   enabled, a panel shows the latest incremental flush from recent manifests
   (dataset outputs may clear it on the next full retrain). The status block
   auto-refreshes via
@@ -512,6 +521,35 @@ already-fitted model instead of re-fitting it per candidate — fitting still
 happens once per fold per distinct strategy, and `recommend()` still runs
 fresh for every candidate, so this is purely a training-cost optimization
 and doesn't change scoring.
+
+## Experiments
+
+`[experiment]` runs a sticky A/B test of whole ranking recipes (models +
+combiner + blending knobs), not per-source CTR of a mixed cascade. The job
+fits the union of variant models once, writes extra `variant` rows, and
+serve hashes `user_id` onto one list. The dashboard Experiments page shows
+always-valid CIs and catalog guardrails, and can promote a winner to 100%
+traffic. Optional `automl_challenger` uses the last successful manifest as
+control and this run’s AutoML pick as treatment.
+
+```toml
+[experiment]
+enabled = true
+id = "rrf-vs-blend-2026-08"
+primary_metric = "purchase"
+
+[[experiment.variants]]
+name = "control"
+traffic = 0.5
+
+[[experiment.variants]]
+name = "treatment"
+traffic = 0.5
+combiner = "blend"
+```
+
+Full assignment, schema, sequential stats, and promote rules:
+[docs/experiments.md](docs/experiments.md).
 
 ## Model artifacts
 

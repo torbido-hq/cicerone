@@ -21,7 +21,7 @@ def main() -> int:
     except ServeClientError as exc:
         print(f"recommendations failed: {exc}", file=sys.stderr)
         return 1
-    print(f"user={body.user_id} fallback={body.fallback} generated_at={body.generated_at}")
+    print(f"user={body.user_id} fallback={body.fallback} generated_at={body.generated_at} experiment={body.experiment_id} variant={body.variant}")
     for row in body.items:
         print(f"  #{row.rank} {row.item_id} score={row.score:.4f} source={row.source}")
     return 0

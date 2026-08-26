@@ -320,6 +320,26 @@ prefix = "recommendations/latest"
 # lookup_events = 20 # inspector event rows (from [input], newest first)
 # lookup_user_attrs = ["region_slug"] # allowlisted user columns; default none
 
+# Sticky A/B test of whole ranking recipes (not per-source CTR). Serve hashes
+# user_id onto one variant list. See docs/experiments.md.
+# [experiment]
+# enabled = true
+# id = "rrf-vs-blend-2026-08"
+# primary_metric = "purchase"  # event_type, or "weighted"
+# # log_exposures = false
+# # automl_challenger = false
+# # alpha = 0.05
+# [[experiment.variants]]
+# name = "control"
+# traffic = 0.5
+# [[experiment.variants]]
+# name = "treatment"
+# traffic = 0.5
+# combiner = "blend"  # priority | rrf | blend
+# # models = ["collaborative", "item_based", "popular", "latest"]
+# # boosts = true
+# # eligibility = true
+
 # --- "db" kind example (commented out) ----------------------------------
 # [input]
 # kind = "db"

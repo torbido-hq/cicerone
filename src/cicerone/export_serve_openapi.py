@@ -24,8 +24,8 @@ from cicerone.serve import create_app
 class _SchemaReader(BaseRecommendationReader):
     """Empty recommendation reader used only to instantiate the FastAPI app for schema export."""
 
-    def get_recommendations(self, user_id: str, k: int) -> pd.DataFrame:
-        del user_id, k
+    def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame:
+        del user_id, k, variant
         return pd.DataFrame(columns=list(RECOMMENDATION_COLUMNS))
 
 

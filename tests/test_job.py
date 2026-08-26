@@ -15,7 +15,9 @@ from cicerone.model import RRF_K
 REPO_FEATURES_CONFIG = Path(__file__).resolve().parents[1] / "config" / "features.toml"
 
 
-def _write_config(tmp_path, input_dir, output_dir, top_k: int = 10, extra_job: str = "") -> str:
+def _write_config(
+    tmp_path, input_dir, output_dir, top_k: int = 10, extra_job: str = "", extra: str = ""
+) -> str:
     config_path = tmp_path / "cicerone.toml"
     config_path.write_text(
         f"""
@@ -35,6 +37,8 @@ def _write_config(tmp_path, input_dir, output_dir, top_k: int = 10, extra_job: s
         [output.options]
         storage_backend = "local"
         path = "{output_dir}"
+
+        {extra}
         """
     )
     return str(config_path)
@@ -650,3 +654,66 @@ def test_run_guard_skips_job_writes_when_owned_is_false(tmp_path, monkeypatch):
     manifest = json.loads((output_dir / "manifest.json").read_text())
     assert manifest["status"] == "failed"
     assert "retrain lock lost" in manifest["error"]
+
+
+def test_job_run_writes_both_experiment_variants(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+
+    now = pd.Timestamp.utcnow()
+    events = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 2, "occurred_at": now},
+            {"user_id": "u1", "item_id": "i2", "event_type": "view", "quantity": 1, "occurred_at": now},
+            {
+                "user_id": "u2",
+                "item_id": "i1",
+                "event_type": "review_positive",
+                "quantity": 1,
+                "occurred_at": now,
+            },
+            {"user_id": "u2", "item_id": "i3", "event_type": "saved", "quantity": 1, "occurred_at": now},
+        ]
+    )
+    items = pd.DataFrame(
+        [
+            {"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True},
+            {"item_id": "i2", "category": "beer", "producer_id": "p2", "published": True, "in_stock": True},
+            {"item_id": "i3", "category": "wine", "producer_id": "p1", "published": True, "in_stock": True},
+        ]
+    )
+    events.to_parquet(input_dir / "events.parquet", index=False)
+    items.to_parquet(input_dir / "items.parquet", index=False)
+
+    extra = """
+        [experiment]
+        enabled = true
+        id = "rrf-vs-priority"
+
+        [[experiment.variants]]
+        name = "control"
+        traffic = 0.5
+
+        [[experiment.variants]]
+        name = "treatment"
+        traffic = 0.5
+        combiner = "rrf"
+        """
+    config_path = _write_config(tmp_path, input_dir, output_dir, top_k=2, extra=extra)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
+
+    job.run()
+
+    recommendations = pd.read_parquet(output_dir / "recommendations.parquet")
+    assert "variant" in recommendations.columns
+    assert set(recommendations["variant"].astype(str)) == {"control", "treatment"}
+    for variant in ("control", "treatment"):
+        users = set(recommendations.loc[recommendations["variant"] == variant, "user_id"].astype(str))
+        assert {"u1", "u2"} <= users
+
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    assert manifest["experiment_id"] == "rrf-vs-priority"
+    variants = json.loads(manifest["experiment_variants"])
+    assert [item["name"] for item in variants] == ["control", "treatment"]

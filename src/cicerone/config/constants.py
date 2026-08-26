@@ -15,6 +15,9 @@ STRATEGY_NAMES: tuple[str, ...] = (
     "popular",
     "latest",
 )
+DEFAULT_MODELS: list[str] = ["collaborative", "item_based", "popular"]
+# Reciprocal rank fusion constant (Cormack et al., 2009); default for rrf_k.
+RRF_K = 60
 
 AUTOML_DEFAULT_N_SPLITS = 2
 AUTOML_DEFAULT_TEST_DAYS = 14
@@ -50,6 +53,9 @@ DEFAULT_EVENTS_BATCH_SIZE = 100
 DEFAULT_EVENTS_BATCH_WINDOW_SECONDS = 60.0
 DEFAULT_EVENTS_POLL_INTERVAL_SECONDS = 1.0
 DEFAULT_EVENTS_WEBHOOK_MAX_PENDING = 10_000
+EXPERIMENT_COMBINERS: tuple[str, ...] = ("priority", "rrf", "blend")
+DEFAULT_EXPERIMENT_ALPHA = 0.05
+PRIMARY_METRIC_WEIGHTED = "weighted"
 
 
 class ConfigError(ValueError):

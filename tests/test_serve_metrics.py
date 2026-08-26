@@ -27,8 +27,10 @@ class _FakeReader:
     def refresh(self) -> None:
         pass
 
-    def get_recommendations(self, user_id: str, k: int) -> pd.DataFrame:
+    def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame:
         rows = self._recs[self._recs["user_id"] == user_id].sort_values("rank")
+        if variant is not None and "variant" in rows.columns:
+            rows = rows[rows["variant"].astype(str) == str(variant)]
         return rows.head(k).reset_index(drop=True)
 
     def get_items(self):
@@ -37,7 +39,7 @@ class _FakeReader:
     def items_version(self) -> int:
         return 0
 
-    def get_cold_start_fallback(self, k: int) -> pd.DataFrame:
+    def get_cold_start_fallback(self, k: int, *, variant: str | None = None) -> pd.DataFrame:
         return self._recs.iloc[0:0]
 
     def configure_item_filters(self, *, category_column=None, availability_filters=()) -> None:

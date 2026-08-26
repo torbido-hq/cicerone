@@ -185,6 +185,10 @@ the remainder splits between `popular` and date-based `latest`. Cold /
 low-history users lean non-personalized without a hard cutoff. If both RRF
 and blending are set, blending wins and the job logs a warning.
 
+To compare two combiners (or two model lists) on live traffic, use
+`[experiment]` — a sticky user hash onto whole recipes, not a post-hoc
+source attribution chart. See [experiments.md](experiments.md).
+
 ## Policies
 
 Evaluated at **batch recommend time**. Serve does not re-run eligibility or

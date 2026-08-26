@@ -11,9 +11,11 @@ store serve already reads.
 This is not live ranking. LightFM, item-KNN, sequential, and content
 fallback wait for the next `job.run()` (cron or `POST /trigger/retrain`).
 The incremental path refreshes **popular / latest slices** (and recency
-boosts) for affected users plus `__cold_start__`.
+boosts) for affected users plus `__cold_start__`. When `[experiment]` is
+on, that refresh runs **in every variant**; personalized rows still wait.
 [how-it-works.md](how-it-works.md) explains why LightFM, item-KNN, and
-sequential wait for a full retrain.
+sequential wait for a full retrain. Experiments:
+[experiments.md](experiments.md).
 
 Preserved personalized / `item_based` / `sequential` / `content_fallback`
 / `blended` rows keep their batch `reasons`. New popular, latest, and
