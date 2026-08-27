@@ -92,8 +92,8 @@ fit_min_events = 100            # skip SGD until this many known-ID events
 
 Startup fails if the `[output]` store has no artifact — the batch job must
 set `[job].save_model_artifact = true`. An event is trained only when both
-its `user_id` and `item_id` already exist in that artifact. A new pair of
-known IDs is included; unknown IDs still get popular / latest /
+its `user_id` and `item_id` already exist in that artifact (including a new
+interaction between two known IDs). Unknown IDs still get popular / latest /
 `incremental` boosts and wait for the next `job.run()`. After
 `fit_partial`, item factors move globally but only the flush's users are
 rewritten (same class of staleness as Gorse's cache between worker

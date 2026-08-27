@@ -249,7 +249,7 @@ flowchart LR
    store. When `Settings.save_model_artifact` is true, it also writes
    a versioned fitted-model artifact (`model.artifact` for the dataset
    backend, `model_artifacts` table for db) via
-   `OutputSink.write_model_artifact`.    The request path never loads this
+   `OutputSink.write_model_artifact`. The request path never loads this
    artifact. When `[events.online]` is enabled, the serve **events worker**
    loads it to continue LightFM and rewrite affected users (not `GET`);
    that rewrite is skipped while `[experiment]` is on.
