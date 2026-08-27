@@ -67,7 +67,7 @@ ranking recipes, see [experiments.md](experiments.md).
 | `http_auth.py` | Shared bearer-token (serve/trigger) and HTTP Basic Auth (dashboard) dependencies |
 | `dashboard.py` | Standalone FastAPI dashboard: job status/history plus user-id lookup (`cicerone dashboard`) |
 | `dashboard_lookup.py` | Dashboard inspector: recs lookup, `[input]` event history, allowlisted user attrs, assigned experiment variant |
-| `dashboard_experiments.py` | Experiments page: sequential metrics, guardrails, promote winner |
+| `dashboard_experiments.py` | Experiments page: always-valid CIs, guardrails, promote winner |
 | `dashboard_users.py` | Load/save the dashboard's Basic Auth users file (TOML, username → bcrypt hash) |
 | `manage_dashboard_users.py` | CLI to add/remove/list dashboard users |
 | `templates/`, `static/` | Jinja2 templates + vendored htmx/Stimulus/Tailwind assets for the dashboard |
@@ -108,6 +108,8 @@ Test modules mirror the packages (same pattern as `tests/test_io_*.py`):
 | `tests/test_events_*.py` | EventSource registry / normalize / webhook / db / db_postgres / s3 / redis_streams / buffer / store / updater / worker / ha / online |
 | `tests/test_config_events.py` | `[events]` coerce + TOML load |
 | `tests/test_serve_events_routes.py` / `test_serve_bootstrap_events.py` | Serve webhook mount + worker bootstrap |
+| `tests/test_experiment_*.py` | Sticky assignment, per-variant recipes, sequential stats, store, serve lookup |
+| `tests/test_explain.py` / `test_reasons.py` | Batch `reasons` JSON + serve-safe parse |
 
 ## Data flow
 
@@ -239,7 +241,8 @@ flowchart LR
 5. `job.run()` writes the combined recommendations and a small run manifest
    (counts, timestamp, effective `models`/`model_weights`/`rrf_k`,
    `artifact_written` / `artifact_schema_version` when a model artifact was
-   saved, and `automl_metrics` when AutoML ran) back out via the configured
+   saved, `experiment_id` / `experiment_variants` when `[experiment]` is on,
+   and `automl_metrics` when AutoML ran) back out via the configured
    `OutputSink`. When items were loaded, it also writes an items snapshot
    (`items_snapshot.parquet` / `recommendation_items`) so serve mode can
    apply `?category=` and `exclude_unavailable` without reading the input
@@ -288,8 +291,10 @@ serve-only image.
   `exclude_unavailable`) behind `http_auth.require_bearer_token`. Unknown
   users fall back to the `__cold_start__` list when blending wrote one, else
   to one `popular_fallback` / `latest` user's top-K; with neither, they 404.
-  Responses include `generated_at` from the run manifest. Each item may
-  include `reasons` (contributing sources, boost hits, similar history
+  Responses include `generated_at` from the run manifest, plus
+  `experiment_id` and the sticky `variant` (`null` when experiments are off
+  or the table has no `variant` column). Each item
+  may include `reasons` (contributing sources, boost hits, similar history
   items) when the batch job wrote the optional column. Pydantic models in
   `serve_schemas.py` populate `/openapi.json` (and `/docs` / `/redoc`);
   `export_serve_openapi` writes the checked-in copy under `docs/openapi/`
@@ -371,8 +376,7 @@ never imports `cicerone.model`/`dataset`/`automl`.
   similar item). History load failures keep the recs pane.
 - `job.run()` writes exactly one manifest per run via a `try`/`finally`,
   with a consistent key set (`status: "success"|"failed"`, `error`) on both
-  the success and failure paths, so a failed run is no longer silently
-  invisible to the dashboard.
+  the success and failure paths, so a failed run is visible on the dashboard.
 - Auth is HTTP Basic (`http_auth.require_basic_auth`), not the bearer-token
   pattern used by serve/trigger — a browser-navigable page needs a login
   prompt, since a human can't attach a custom `Authorization` header to a
@@ -383,8 +387,11 @@ never imports `cicerone.model`/`dataset`/`automl`.
 - `dashboard.create_app()` exposes `GET /health` (no auth), `GET
   /partials/status` (Basic Auth, an htmx-polled fragment — see
   `templates/_status.html`), `GET /partials/recommendations` (Basic Auth,
-  user-id lookup fragment — see `templates/_recommendations.html`), and
-  `GET /dashboard` (Basic Auth, the full page). The page polls
+  user-id lookup fragment — see `templates/_recommendations.html`),
+  `GET /dashboard` (Basic Auth, the full page), `GET /dashboard/experiments`
+  (Basic Auth, always-valid CIs / catalog guardrails), and
+  `POST /dashboard/experiments/promote` (Basic Auth, 100% traffic to a
+  winner). The page polls
   `/partials/status` (`Settings.dashboard_refresh_interval_seconds`)
   instead of a websocket or client-side JS framework. Initial markup is
   `hx-trigger="refresh"`; dashboard.js adds `every Ns` and the first request
@@ -445,9 +452,10 @@ keys a given backend requires. To add a new backend (e.g. a message queue):
    and/or `OutputSink` protocol (`io/base.py`) — read `options` yourself,
    validating required keys with `io.options.require_option`.
 2. Register the new `kind` string in the `io/factory.py` registries:
-   `_INPUT_SOURCES` / `_OUTPUT_SINKS` for the batch job, plus
-   `_RECOMMENDATION_READERS` / `_MANIFEST_READERS` or serve and the dashboard
-   raise `Unknown recommendation kind` for it.
+   `_INPUT_SOURCES` / `_OUTPUT_SINKS` for the batch job, and
+   `_RECOMMENDATION_READERS` / `_MANIFEST_READERS` for serve and the
+   dashboard (otherwise they raise `Unknown recommendation kind` /
+   `Unknown manifest kind`).
 3. Document the new `kind` and its `options` in `config/cicerone.toml`.
 
 Nothing in `config/`, `job.py`, `dataset.py`, or `model/` needs to

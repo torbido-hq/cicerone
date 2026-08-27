@@ -592,8 +592,9 @@ docker stop cicerone-tutorial-serve
 
 ## 13. Ingest incremental events (optional)
 
-Enable webhook `[events]` on serve and POST one interaction. Other backends
-and HA: [incremental-events.md](incremental-events.md).
+Enable webhook `[events]` on serve and POST one interaction. Other backends,
+HA, and optional `[events.online]` LightFM `fit_partial`:
+[incremental-events.md](incremental-events.md).
 
 Add this to `config/cicerone.serve.local.toml` (keep the `[output]` /
 `[serve]` edits from [step 12](#12-serve-recommendations-over-an-http-api)):
@@ -778,8 +779,9 @@ docker compose up --build
 - Point input/output at S3-compatible object storage (R2, AWS S3, MinIO) —
   see the README's [Configuration](../README.md#configuration-configciceronetoml)
   section.
-- Production incremental ingest (db / s3 / Redis Streams, HA):
-  [incremental-events.md](incremental-events.md).
+- Sticky A/B tests of ranking recipes: [experiments.md](experiments.md).
+- Production incremental ingest (db / s3 / Redis Streams, HA, online
+  LightFM): [incremental-events.md](incremental-events.md).
 - Run the test suite (`docker compose -f docker-compose.ci.yml up --build
   --abort-on-container-exit --exit-code-from test test`) if you're contributing
   code — see [CONTRIBUTING.md](../CONTRIBUTING.md). That suite includes a

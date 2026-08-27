@@ -26,7 +26,7 @@ feature_config_path = "/app/config/features.toml"
 # entries win ties for the same user/item pair). Defaults to
 # ["collaborative", "item_based", "popular"] if omitted. Available:
 # "collaborative" (LightFM, hybrid CF), "item_based" (item-item KNN),
-# "sequential" (SASRec / BERT4Rec; pip install 'cicerone-recommender[sequential]'
+# "sequential" (SASRec / BERT4Rec / HSTU; pip install 'cicerone-recommender[sequential]'
 # or requirements-sequential.txt), "content_fallback" (feature similarity for
 # zero-interaction items; also gated by [job.content_fallback].enabled),
 # "popular" (global popularity fallback), "latest" (trending in the last two

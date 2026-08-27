@@ -54,7 +54,7 @@ up to your own data doesn't require touching any code.
 - **CLI / PyPI** — `cicerone` console script; `pip install cicerone-recommender`
   (import name `cicerone`; the PyPI name `cicerone` is a different project)
 - **Retrain trigger** — webhook (+ optional input poll) alongside cron
-- **Dashboard** — Basic-Auth status page for run success/failure, history, and user-id lookup
+- **Dashboard** — Basic-Auth status page for run success/failure, history, user-id lookup, and experiment promote
 - **Model artifacts** — optional versioned fitted-model bundle for offline reload
 
 > **Why "Cicerone"?** In the world of beer, a [Cicerone](https://www.cicerone.org)

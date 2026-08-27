@@ -200,6 +200,21 @@ def test_online_trainer_unknown_ids_dropped(
     assert calls["n"] == 0
 
 
+def test_online_trainer_new_pair_of_known_ids_is_trained(
+    tmp_path, feature_config, sample_events, sample_users, sample_items, monkeypatch
+):
+    sink, _enabled = _write_artifact(tmp_path, feature_config, sample_events, sample_users, sample_items)
+    trainer = _trainer(sink)
+    calls = _spy_fit_partial(monkeypatch, trainer._artifact.fitted["collaborative"])
+    result = trainer.refresh(
+        [normalize_event(event_payload(user_id="u2", item_id="i2", event_id="new-pair"))]
+    )
+    assert result.events_known == 1
+    assert result.events_dropped_unknown == 0
+    assert result.fit_partial_epochs == 1
+    assert calls["n"] == 1
+
+
 def test_online_trainer_epochs_zero_skips_sgd(
     tmp_path, feature_config, sample_events, sample_users, sample_items, monkeypatch
 ):
