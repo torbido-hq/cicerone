@@ -196,6 +196,27 @@ class RedisStreamsEventSource(EventSource):
                 self._pending.appendleft(event)
                 self._pending_ids.add(event.event_id)
 
+    def heartbeat(self, events: Sequence[NormalizedEvent]) -> None:
+        if not events:
+            return
+        client = self._require_client()
+        with self._lock:
+            entry_ids = [
+                self._entry_ids[event.event_id] for event in events if event.event_id in self._entry_ids
+            ]
+        if not entry_ids:
+            return
+        try:
+            client.xclaim(
+                self._stream,
+                self._group,
+                self._consumer,
+                min_idle_time=0,
+                message_ids=entry_ids,
+            )
+        except Exception:
+            logger.exception("Redis Streams heartbeat XCLAIM failed")
+
     def health(self) -> EventSourceHealth:
         with self._lock:
             connected = self._connected

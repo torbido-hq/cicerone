@@ -116,6 +116,18 @@ def test_lookup_recommendations_uses_dashboard_lookup_k():
     assert [row["item_id"] for row in result["items"]] == ["i1", "i2", "i3", "i4", "i5"]
 
 
+def test_lookup_recommendations_refresh_ttl_tracks_one_reader():
+    import cicerone.dashboard_lookup as lookup_mod
+
+    settings = make_settings(dashboard_enabled=True, top_k=3, dashboard_lookup_k=3)
+    readers = [_KReader() for _ in range(8)]
+    for reader in readers:
+        lookup_recommendations(settings, reader, "u1")
+    last = lookup_mod._last_lookup_refresh
+    assert last is not None
+    assert last[0] == id(readers[-1])
+
+
 def test_format_recommendation_rows_uses_placeholders():
     recs = pd.DataFrame([{"item_id": "i1", "rank": None, "score": None, "source": None, "category": None}])
     rows = format_recommendation_rows(recs, category_column="category")

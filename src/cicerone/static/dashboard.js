@@ -120,7 +120,7 @@
       const status = card.getAttribute("data-run-status") || "";
       const stale = card.getAttribute("data-run-stale") === "true";
       if (status === "failed") parts.push("failed");
-      else if (stale) parts.push("stale");
+      else if (stale || card.getAttribute("data-run-stale") === "unknown") parts.push("stale");
     }
     const userId = currentUserId();
     if (userId) parts.push(userId);
@@ -133,8 +133,10 @@
     if (root.querySelector("[data-latest-run-empty]")) return "empty";
     const card = root.querySelector("[data-latest-run]");
     if (!card) return "";
-    const stale = card.getAttribute("data-run-stale") === "true" ? "stale" : "ok";
-    return (card.getAttribute("data-run-status") || "unknown") + ":" + stale;
+    const staleAttr = card.getAttribute("data-run-stale");
+    const stale = staleAttr === "true" ? "stale" : (staleAttr === "unknown" ? "unknown" : "ok");
+    const generated = card.getAttribute("data-run-generated") || "";
+    return (card.getAttribute("data-run-status") || "unknown") + ":" + stale + ":" + generated;
   }
 
   function statusAnnouncement(root) {

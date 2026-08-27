@@ -68,7 +68,10 @@ def _boost_factor_series(items: pd.DataFrame, boost: BoostRule) -> pd.Series | N
 
 
 def item_boost_details(
-    items: pd.DataFrame | None, boosts: Sequence[BoostRule]
+    items: pd.DataFrame | None,
+    boosts: Sequence[BoostRule],
+    *,
+    record_hits: bool = True,
 ) -> tuple[dict[str, float], dict[str, list[dict[str, object]]]]:
     """item_id → (product of factors, hits where a rule factor was not 1.0)."""
     if not boosts:
@@ -89,6 +92,8 @@ def item_boost_details(
     id_col = items_id_column(items)
     ids = items[id_col].astype(str)
     factors = dict(zip(ids, product.astype(float), strict=True))
+    if not record_hits:
+        return factors, {}
     hits: dict[str, list[dict[str, object]]] = {}
     for item_id, idx in zip(ids, items.index, strict=True):
         item_hits = []
@@ -112,6 +117,8 @@ def apply_boosts(
     items: pd.DataFrame | None,
     boosts: Sequence[BoostRule],
     top_k: int | None = None,
+    *,
+    record_hits: bool = True,
 ) -> pd.DataFrame:
     """Apply boost multipliers, re-rank; always truncates to ``top_k`` when set."""
     if recs.empty:
@@ -119,10 +126,11 @@ def apply_boosts(
     if not boosts:
         return _truncate_recs(recs, top_k) if top_k is not None else recs
 
-    factor_by_item, hits_by_item = item_boost_details(items, boosts)
+    factor_by_item, hits_by_item = item_boost_details(items, boosts, record_hits=record_hits)
     out = recs.copy()
     item_ids = out[Columns.Item].astype(str)
-    out[BOOST_HITS_COLUMN] = [hits_by_item.get(str(item_id), []) for item_id in item_ids]
+    if record_hits:
+        out[BOOST_HITS_COLUMN] = [hits_by_item.get(str(item_id), []) for item_id in item_ids]
     if factor_by_item:
         out[Columns.Score] = out[Columns.Score] * item_ids.map(factor_by_item).fillna(1.0)
         out = out.sort_values(

@@ -21,6 +21,8 @@ from cicerone.serve.metrics import (
 
 logger = logging.getLogger(__name__)
 
+_ONLINE_PERSIST_ATTEMPTS = 3
+
 
 class EventWorker:
     def __init__(
@@ -183,7 +185,8 @@ class EventWorker:
 
     def _flush_ready(self, ready: list[NormalizedEvent]) -> int:
         try:
-            applied = self._updater.apply(ready)
+            self._heartbeat_inflight(ready)
+            applied = self._updater.apply(ready, persist_online=False)
         except LockLostError:
             record_events_flush(status="error")
             update_events_leader(False)
@@ -191,16 +194,19 @@ class EventWorker:
                 "Apply lease lost before write; nacking %d event(s)",
                 len(ready),
             )
+            self._updater.abort_online()
             self._source.nack(ready)
             return 0
         except Exception:
             record_events_flush(status="error")
             logger.exception("Incremental apply failed; returning %d event(s) to source", len(ready))
+            self._updater.abort_online()
             self._source.nack(ready)
             return 0
         if applied == 0:
             record_events_flush(status="busy")
             record_events_apply_busy(reason="retrain")
+            self._updater.abort_online()
             self._source.nack(ready)
             return 0
         if applied != len(ready):
@@ -210,6 +216,7 @@ class EventWorker:
                 applied,
                 len(ready),
             )
+            self._updater.abort_online()
             self._source.nack(ready)
             return 0
         try:
@@ -217,7 +224,39 @@ class EventWorker:
         except Exception:
             record_events_flush(status="error")
             logger.exception("Event source ack failed after successful apply; nacking batch")
+            self._updater.abort_online()
             self._source.nack(ready)
             raise
+        self._persist_online_after_ack()
         record_events_flush(status="success", events=applied)
         return applied
+
+    def _heartbeat_inflight(self, ready: list[NormalizedEvent]) -> None:
+        beat = getattr(self._source, "heartbeat", None)
+        if not callable(beat):
+            return
+        try:
+            beat(ready)
+        except Exception:
+            logger.exception("Event source heartbeat failed")
+
+    def _persist_online_after_ack(self) -> None:
+        last_error: BaseException | None = None
+        for attempt in range(1, _ONLINE_PERSIST_ATTEMPTS + 1):
+            try:
+                self._updater.persist_online()
+                return
+            except LockLostError:
+                logger.error("Apply lease lost before online persist; dropping pending artifact")
+                self._updater.abort_online()
+                return
+            except Exception as exc:
+                last_error = exc
+                logger.exception(
+                    "Online artifact persist failed after ack (attempt %d/%d)",
+                    attempt,
+                    _ONLINE_PERSIST_ATTEMPTS,
+                )
+        self._updater.abort_online()
+        if last_error is not None:
+            logger.error("Online artifact persist gave up after ack; pending fit dropped")

@@ -12,13 +12,14 @@
 {% if manifest %}
   {% set status_key = manifest.status or "unknown" %}
   {% set is_stale = staleness.is_stale %}
-  {% set card_tone = "border-red-300 bg-red-50" if status_key == "failed" else "border-emerald-300 bg-emerald-50" if status_key == "success" and not is_stale else "border-amber-300 bg-amber-50" %}
+  {% set card_tone = "border-red-300 bg-red-50" if status_key == "failed" else "border-emerald-300 bg-emerald-50" if status_key == "success" and is_stale == false else "border-amber-300 bg-amber-50" %}
   <h3 class="text-sm font-medium text-slate-800 mb-2">Latest run</h3>
   <div
     class="rounded-lg border p-4 mb-4 {{ card_tone }}"
     data-latest-run
     data-run-status="{{ status_key }}"
-    data-run-stale="{{ 'true' if is_stale else 'false' }}"
+    data-run-stale="{{ 'true' if is_stale else ('unknown' if is_stale is none else 'false') }}"
+    data-run-generated="{{ manifest.generated_at or '' }}"
   >
     <div class="flex flex-wrap items-center justify-between gap-2">
       <div class="flex flex-wrap items-center gap-2">

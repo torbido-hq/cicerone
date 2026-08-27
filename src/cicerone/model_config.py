@@ -153,6 +153,10 @@ def _constrain_sequential_architecture(config: dict[str, Any]) -> dict[str, Any]
     # HSTU uses its own encoder; LiGR layers are SASRec/BERT4Rec-only.
     if config.get("architecture") == "hstu":
         config.pop("transformer_layers_type", None)
+        if config.get("loss") == "sampled_softmax":
+            config["loss"] = "softmax"
+            config.pop("n_negatives", None)
+        config.setdefault("relative_time_attention", True)
     return config
 
 

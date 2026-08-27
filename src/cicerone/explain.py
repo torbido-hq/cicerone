@@ -46,6 +46,8 @@ def _as_boosts(value: object) -> list[dict[str, object]]:
 def _item_token_index(
     items: pd.DataFrame | None,
     feature_columns: Sequence[FeatureColumn | tuple[str, str]],
+    *,
+    keep_ids: set[str] | None = None,
 ) -> dict[str, dict[str, float]]:
     if items is None or items.empty or not feature_columns:
         return {}
@@ -53,6 +55,8 @@ def _item_token_index(
     index: dict[str, dict[str, float]] = {}
     for record in items.to_dict(orient="records"):
         item_id = str(record[id_col])
+        if keep_ids is not None and item_id not in keep_ids:
+            continue
         tokens = item_feature_tokens(record, feature_columns)
         if tokens:
             index[item_id] = tokens
@@ -68,10 +72,13 @@ def _user_history(
         return {}
     user_col = interactions_user_column(interactions)
     item_col = interactions_item_column(interactions)
+    ordered = interactions
+    if Columns.Datetime in interactions.columns:
+        ordered = interactions.sort_values(Columns.Datetime, kind="mergesort")
     history: dict[str, list[str]] = {}
     for user_id, item_id in zip(
-        interactions[user_col].astype(str).tolist(),
-        interactions[item_col].astype(str).tolist(),
+        ordered[user_col].astype(str).tolist(),
+        ordered[item_col].astype(str).tolist(),
         strict=True,
     ):
         items = history.setdefault(user_id, [])
@@ -115,10 +122,15 @@ def overlap_for_item(
         union = rec_keys | hist_keys
         scored.append((history_id, len(shared) / len(union), shared))
     scored.sort(key=lambda row: (-row[1], row[0]))
-    top = scored[: max(0, max_similar_items)]
-    similar = [{"item_id": item, "score": float(score)} for item, score, _shared in top]
+    similar: list[dict[str, object]] = []
+    if max_similar_items > 0:
+        top = scored[: max(0, max_similar_items)]
+        similar = [{"item_id": item, "score": float(score)} for item, score, _shared in top]
+        attr_rows = top
+    else:
+        attr_rows = scored
     counts: Counter[tuple[str, str]] = Counter()
-    for _item, _score, shared in top:
+    for _item, _score, shared in attr_rows:
         for token in shared:
             counts[_token_column_value(token)] += 1
     matched = [
@@ -143,9 +155,15 @@ def attach_reasons(
         return _drop_internal(recs)
 
     out = recs.copy()
-    token_index = _item_token_index(items, feature_columns)
-    history = _user_history(interactions) if token_index else {}
-    want_overlap = bool(token_index) and (settings.max_similar_items > 0 or settings.max_attributes > 0)
+    want_overlap = settings.max_similar_items > 0 or settings.max_attributes > 0
+    history = _user_history(interactions) if want_overlap else {}
+    keep_ids: set[str] | None = None
+    if want_overlap:
+        keep_ids = set(out[Columns.Item].astype(str))
+        for item_ids in history.values():
+            keep_ids.update(item_ids)
+    token_index = _item_token_index(items, feature_columns, keep_ids=keep_ids) if want_overlap else {}
+    want_overlap = bool(token_index) and want_overlap
 
     payloads: list[str] = []
     for record in out.to_dict(orient="records"):

@@ -683,3 +683,67 @@ def test_incremental_updater_preserves_variants(tmp_path, feature_config: Featur
         assert f"old-{variant}" in set(rows["item_id"].astype(str))
     cold = frame[frame["user_id"] == COLD_START_USER_ID]
     assert set(cold["variant"].astype(str)) == {"control", "treatment"}
+
+
+def test_incremental_updater_collapses_leftover_variants_when_experiment_off(
+    tmp_path, feature_config: FeatureConfig
+):
+    out = tmp_path / "out"
+    out.mkdir()
+    existing = pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "old-control",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                "variant": "control",
+            },
+            {
+                "user_id": "u1",
+                "item_id": "old-treatment",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                "variant": "treatment",
+            },
+            {
+                "user_id": COLD_START_USER_ID,
+                "item_id": "cold-control",
+                "rank": 1,
+                "score": 0.2,
+                "source": "popular_fallback",
+                "variant": "control",
+            },
+            {
+                "user_id": COLD_START_USER_ID,
+                "item_id": "cold-treatment",
+                "rank": 1,
+                "score": 0.2,
+                "source": "popular_fallback",
+                "variant": "treatment",
+            },
+        ]
+    )
+    existing.to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+    )
+    events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
+    assert updater.apply(events) == 1
+    frame = load_recommendations_frame(settings.output)
+    u1 = frame[frame["user_id"] == "u1"]
+    assert set(u1["variant"].astype(str)) == {"control"}
+    assert "old-control" in set(u1["item_id"].astype(str))
+    assert "old-treatment" not in set(u1["item_id"].astype(str))
+    cold = frame[frame["user_id"] == COLD_START_USER_ID]
+    assert set(cold["variant"].astype(str)) == {"control"}
+    assert "cold-treatment" not in set(cold["item_id"].astype(str))

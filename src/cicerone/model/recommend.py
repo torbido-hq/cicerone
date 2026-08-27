@@ -557,15 +557,22 @@ def recommend_with_models(
         top_k=top_k,
     )
 
+    explain_settings = explain if explain is not None else ExplainSettings()
     if cohort_plan.has_boosts:
-        combined = apply_boosts(combined, built.items, config.boosts, top_k=top_k)
+        combined = apply_boosts(
+            combined,
+            built.items,
+            config.boosts,
+            top_k=top_k,
+            record_hits=explain_settings.enabled,
+        )
 
     return attach_reasons(
         combined.reset_index(drop=True),
         items=built.items,
         interactions=built.interactions,
         feature_columns=config.item_features,
-        settings=explain if explain is not None else ExplainSettings(),
+        settings=explain_settings,
     )
 
 

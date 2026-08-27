@@ -74,7 +74,47 @@ def test_recommendations_omit_experiment_fields_when_disabled():
     body = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
     assert body["experiment_id"] is None
     assert body["variant"] is None
-    assert {row["item_id"] for row in body["items"]} == {"control-item", "treatment-item"}
+    assert {row["item_id"] for row in body["items"]} == {"control-item"}
+
+
+def test_filter_variant_rows_collapses_mixed_when_unspecified():
+    from cicerone.io.recommendation_schema import filter_variant_rows
+
+    rows = filter_variant_rows(_variant_recs(), None)
+    assert set(rows[rows["user_id"] == "u1"]["item_id"].astype(str)) == {"control-item"}
+
+
+def test_variant_helpers_empty_and_no_control():
+    from cicerone.io.recommendation_schema import (
+        RECOMMENDATION_COLUMNS,
+        collapse_mixed_variants,
+        filter_variant_rows,
+        pick_fallback_variant,
+        recommendation_output_columns,
+    )
+
+    assert pick_fallback_variant([]) is None
+    assert pick_fallback_variant(["", "zeta", "alpha"]) == "alpha"
+    assert pick_fallback_variant([float("nan"), pd.NA, None, "treatment"]) == "treatment"
+    mixed_nan = pd.DataFrame(
+        {
+            "user_id": ["u1", "u1"],
+            "item_id": ["keep", "drop"],
+            "rank": [1, 1],
+            "score": [0.9, 0.8],
+            "source": ["personalized", "personalized"],
+            "variant": ["treatment", float("nan")],
+        }
+    )
+    collapsed = collapse_mixed_variants(mixed_nan)
+    assert list(collapsed["item_id"].astype(str)) == ["keep"]
+    assert recommendation_output_columns(object()) == list(RECOMMENDATION_COLUMNS)
+    empty = pd.DataFrame(columns=["user_id", "item_id", "rank", "score", "source", "variant"])
+    assert collapse_mixed_variants(empty).empty
+    assert filter_variant_rows(empty, "control").empty
+    assert filter_variant_rows(pd.DataFrame({"user_id": ["u1"]}), None).equals(
+        pd.DataFrame({"user_id": ["u1"]})
+    )
 
 
 def test_recommendations_filter_assigned_variant(tmp_path):

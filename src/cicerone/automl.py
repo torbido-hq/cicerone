@@ -25,6 +25,7 @@ from cicerone.config import (
     validate_model_weights,
     validate_rrf_k,
 )
+from cicerone.config.settings import ExplainSettings
 from cicerone.dataset import build_dataset, build_interactions
 from cicerone.feature_config import FeatureConfig
 from cicerone.model import (
@@ -241,6 +242,7 @@ def _evaluate_fold(
             strategy_cache=strategy_cache,
             model_configs=model_configs,
             recommend_cache=recommend_cache,
+            explain=ExplainSettings(enabled=False),
         )
         fold_metrics.append(calc_metrics(metrics, reco=reco, interactions=test_interactions))
     return fold_metrics

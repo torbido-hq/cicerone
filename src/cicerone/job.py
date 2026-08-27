@@ -176,8 +176,18 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
         recommend_cache: RecommendCache = {}
         if recipes:
             union = union_models(recipes)
+            recommend_names: list[str] = []
+            for recipe in recipes:
+                recipe_plan = plan_model_run(
+                    list(recipe.models),
+                    blending_enabled=recipe.blending.enabled,
+                    content_fallback_enabled=settings.content_fallback_enabled,
+                )
+                for name in recipe_plan.recommend_models:
+                    if name not in recommend_names:
+                        recommend_names.append(name)
             fit_plan = plan_model_run(
-                union,
+                recommend_names,
                 blending_enabled=False,
                 content_fallback_enabled=settings.content_fallback_enabled,
             )

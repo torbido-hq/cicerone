@@ -66,7 +66,7 @@ ranking recipes, see [experiments.md](experiments.md).
 | `config/lock_url.py` | Postgres lock URL resolution for config load + lock builder |
 | `http_auth.py` | Shared bearer-token (serve/trigger) and HTTP Basic Auth (dashboard) dependencies |
 | `dashboard.py` | Standalone FastAPI dashboard: job status/history plus user-id lookup (`cicerone dashboard`) |
-| `dashboard_lookup.py` | Output-store user lookup for the dashboard (fallback, category join, display formatting, assigned experiment variant) |
+| `dashboard_lookup.py` | Dashboard inspector: recs lookup, `[input]` event history, allowlisted user attrs, assigned experiment variant |
 | `dashboard_experiments.py` | Experiments page: sequential metrics, guardrails, promote winner |
 | `dashboard_users.py` | Load/save the dashboard's Basic Auth users file (TOML, username → bcrypt hash) |
 | `manage_dashboard_users.py` | CLI to add/remove/list dashboard users |
@@ -223,7 +223,8 @@ flowchart LR
    time-based folds of the raw event history — each fold trains a fresh
    `BuiltDataset` on everything before a `Settings.automl_test_days`-day
    held-out window and scores its recommendations against that window with
-   `rectools.metrics` (MAP@k/NDCG@k/Recall@k). Within a fold,
+   `rectools.metrics` (MAP@k/NDCG@k/Recall@k; optional
+   `[job.automl].debias` / RecTools `DebiasConfig`, default off). Within a fold,
    `evaluate_candidates()` passes a `strategy_cache` dict (reset per fold,
    shared across every candidate scored against that fold) to
    `train_and_recommend()` so candidates sharing a strategy reuse its fitted

@@ -137,6 +137,7 @@ def test_online_trainer_known_ids_fit_partial(
     trainer = _trainer(sink)
     calls = _spy_fit_partial(monkeypatch, trainer._artifact.fitted["collaborative"])
     result = trainer.refresh([_known_event("k1")])
+    trainer.commit()
     assert result.events_known == 1
     assert result.events_dropped_unknown == 0
     assert result.users_refreshed >= 1
@@ -146,6 +147,38 @@ def test_online_trainer_known_ids_fit_partial(
     assert "u2" in set(result.rows["user_id"].astype(str))
     loaded = loads_artifact(sink.read_model_artifact())
     assert loaded.dataset.get_raw_interactions() is not None
+
+
+def test_online_trainer_refresh_does_not_persist_until_commit(
+    tmp_path, feature_config, sample_events, sample_users, sample_items
+):
+    sink, _enabled = _write_artifact(tmp_path, feature_config, sample_events, sample_users, sample_items)
+    before = sink.read_model_artifact()
+    trainer = _trainer(sink)
+    trainer.refresh([_known_event("pending")])
+    assert sink.read_model_artifact() == before
+    trainer.abort()
+    trainer.refresh([_known_event("pending-2")])
+    trainer.commit()
+    assert sink.read_model_artifact() != before
+    trainer.abort()
+    trainer.commit()
+
+
+def test_online_trainer_commit_without_pending(tmp_path):
+    sink = build_output_sink(
+        IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    )
+    trainer = OnlineTrainer(
+        sink=sink,
+        top_k=3,
+        half_life_days=90,
+        fit_partial_epochs=1,
+        fit_min_events=1,
+    )
+    trainer.abort()
+    trainer.commit()
+    trainer.invalidate()
 
 
 def test_online_trainer_unknown_ids_dropped(
@@ -174,6 +207,7 @@ def test_online_trainer_epochs_zero_skips_sgd(
     trainer = _trainer(sink, epochs=0)
     calls = _spy_fit_partial(monkeypatch, trainer._artifact.fitted["collaborative"])
     result = trainer.refresh([_known_event("e0")])
+    trainer.commit()
     assert result.events_known == 1
     assert result.fit_partial_epochs == 0
     assert calls["n"] == 0
@@ -187,6 +221,7 @@ def test_online_trainer_fit_min_events_holds_sgd(
     trainer = _trainer(sink, min_events=10)
     calls = _spy_fit_partial(monkeypatch, trainer._artifact.fitted["collaborative"])
     result = trainer.refresh([_known_event("hold")])
+    trainer.commit()
     assert result.events_known == 1
     assert result.fit_partial_epochs == 0
     assert calls["n"] == 0
@@ -207,6 +242,7 @@ def test_online_trainer_skips_sequential_without_torch(
     monkeypatch.setattr("cicerone.events.online.sequential_extra_available", lambda: False)
     trainer = _trainer(sink)
     result = trainer.refresh([_known_event("seq")])
+    trainer.commit()
     assert result.users_refreshed >= 1
     assert "sequential" not in set(result.rows["source"].astype(str))
 
@@ -359,8 +395,8 @@ def test_incremental_updater_splices_online_rows_across_variants(tmp_path, featu
     for variant in ("control", "treatment"):
         rows = u1[u1["variant"] == variant]
         items = set(rows["item_id"].astype(str))
-        assert "fresh" in items
-        assert f"old-{variant}" not in items
+        assert "fresh" not in items
+        assert f"old-{variant}" in items
         assert "i9" in items
 
 
@@ -423,6 +459,44 @@ def test_start_events_runtime_online_requires_artifact(tmp_path, feature_config:
             feature_config=feature_config,
             reader=_Reader(),  # type: ignore[arg-type]
         )
+
+
+def test_start_events_runtime_online_skipped_during_experiment(tmp_path, feature_config: FeatureConfig):
+    from cicerone.config.settings import ExperimentSettings, VariantSettings
+
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+
+    class _Reader:
+        def refresh(self) -> None:
+            return None
+
+    runtime = start_events_runtime(
+        make_settings(
+            output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+            events=EventsSettings(
+                enabled=True,
+                kind="webhook",
+                incremental=EventsIncrementalSettings(
+                    batch_size=1, batch_window_seconds=60.0, poll_interval_seconds=0.05
+                ),
+                online=EventsOnlineSettings(enabled=True, fit_min_events=1),
+            ),
+            experiment=ExperimentSettings(
+                enabled=True,
+                id="exp",
+                variants=(VariantSettings(name="control", traffic=1.0),),
+            ),
+        ),
+        feature_config=feature_config,
+        reader=_Reader(),  # type: ignore[arg-type]
+    )
+    assert runtime.worker is not None
+    assert runtime.worker._updater._online is None
+    runtime.stop()
 
 
 def test_start_events_runtime_online_loads_artifact(
@@ -499,6 +573,7 @@ def test_online_trainer_accumulates_fit_min_events(
     assert first.fit_partial_epochs == 0
     assert calls["n"] == 0
     second = trainer.refresh([_known_event("acc-2")])
+    trainer.commit()
     assert second.fit_partial_epochs == 1
     assert calls["n"] == 1
 
@@ -641,6 +716,7 @@ def test_incremental_updater_online_error_keeps_preserved(tmp_path, feature_conf
         top_k=5,
         online=_BoomOnline(),
     )
-    assert updater.apply([normalize_event(event_payload(user_id="u1", item_id="i1", event_id="boom"))]) == 1
+    with pytest.raises(RuntimeError, match="online boom"):
+        updater.apply([normalize_event(event_payload(user_id="u1", item_id="i1", event_id="boom"))])
     frame = load_recommendations_frame(settings.output)
     assert "old" in set(frame[frame["user_id"] == "u1"]["item_id"].astype(str))

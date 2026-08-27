@@ -83,6 +83,8 @@ def evaluate_experiment(
     exposure_conditional = bool(exposures)
     if exposures:
         for row in exposures:
+            if str(row.get("experiment_id") or "") != experiment.id:
+                continue
             user_id = str(row.get("user_id") or "")
             variant = str(row.get("variant") or "")
             if user_id and variant in names:

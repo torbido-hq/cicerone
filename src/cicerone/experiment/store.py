@@ -14,7 +14,7 @@ from sqlalchemy import Engine, create_engine, text
 
 from cicerone.config.constants import ConfigError
 from cicerone.config.settings import IOSettings
-from cicerone.io.db_errors import is_missing_table_error
+from cicerone.io.db_errors import is_missing_column_error, is_missing_table_error
 from cicerone.io.db_store import MISSING_TABLE_ERRORS
 from cicerone.io.options import (
     build_s3_client,
@@ -36,6 +36,7 @@ EXPOSURE_LOG_BACKEND_ERROR = (
     'experiment.log_exposures requires output kind = "db" or a local dataset path; '
     "object-store JSONL append is not atomic"
 )
+EXPOSURE_LOG_HA_ERROR = 'experiment.log_exposures with events.ha requires output kind = "db"'
 
 EXPOSURE_COLUMNS: tuple[str, ...] = (
     "user_id",
@@ -93,8 +94,9 @@ class ExperimentStore:
         payload = dict(state)
         if self._kind == "db":
             self._write_state_db(payload)
-            return
-        self._write_bytes(STATE_FILENAME, json.dumps(payload, indent=2).encode("utf-8"), "application/json")
+        else:
+            encoded = json.dumps(payload, indent=2).encode("utf-8")
+            self._write_bytes(STATE_FILENAME, encoded, "application/json")
 
     def append_exposures(self, rows: Sequence[Mapping[str, Any]]) -> None:
         if not rows:
@@ -129,16 +131,20 @@ class ExperimentStore:
         )
         engine = self._db_engine()
         try:
-            frame = pd.read_sql(text(f'SELECT * FROM "{table}" ORDER BY rowid DESC LIMIT 1'), engine)
-        except MISSING_TABLE_ERRORS:
-            return None
+            frame = pd.read_sql(
+                text(f'SELECT * FROM "{table}" ORDER BY promoted_at DESC LIMIT 1'),
+                engine,
+            )
         except Exception as exc:
-            if is_missing_table_error(exc):
+            if is_missing_column_error(exc):
+                try:
+                    frame = pd.read_sql(text(f'SELECT * FROM "{table}" LIMIT 1'), engine)
+                except Exception:
+                    logger.exception("Failed to read experiment state table %r", table)
+                    return None
+            elif isinstance(exc, MISSING_TABLE_ERRORS) or is_missing_table_error(exc):
                 return None
-            # Postgres has no rowid — fall back to unordered last insert via ctid-less LIMIT.
-            try:
-                frame = pd.read_sql(text(f'SELECT * FROM "{table}" LIMIT 1'), engine)
-            except Exception:
+            else:
                 logger.exception("Failed to read experiment state table %r", table)
                 return None
         if frame.empty:
@@ -151,10 +157,35 @@ class ExperimentStore:
             option="experiment_state_table",
         )
         engine = self._db_engine()
-        frame = pd.DataFrame([state])
+        experiment_id = str(state.get("experiment_id") or "")
+        promoted_variant = state.get("promoted_variant")
+        promoted_at = state.get("promoted_at")
+        if promoted_variant is not None:
+            promoted_variant = str(promoted_variant)
+        if promoted_at is not None:
+            promoted_at = str(promoted_at)
+        create_sql = text(
+            f'CREATE TABLE IF NOT EXISTS "{table}" ('
+            "experiment_id TEXT PRIMARY KEY, "
+            "promoted_variant TEXT, "
+            "promoted_at TEXT"
+            ")"
+        )
+        params = {
+            "experiment_id": experiment_id,
+            "promoted_variant": promoted_variant,
+            "promoted_at": promoted_at,
+        }
         with engine.begin() as conn:
-            conn.execute(text(f'DROP TABLE IF EXISTS "{table}"'))
-            frame.to_sql(table, conn, if_exists="append", index=False)
+            conn.execute(create_sql)
+            conn.execute(text(f'DELETE FROM "{table}"'))
+            conn.execute(
+                text(
+                    f'INSERT INTO "{table}" (experiment_id, promoted_variant, promoted_at) '
+                    "VALUES (:experiment_id, :promoted_variant, :promoted_at)"
+                ),
+                params,
+            )
 
     def _append_exposures_db(self, rows: Sequence[Mapping[str, Any]]) -> None:
         table = sql_identifier(

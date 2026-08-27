@@ -91,6 +91,25 @@ class FakeRedis:
                 acked += 1
         return acked
 
+    def xclaim(
+        self,
+        name: str,
+        groupname: str,
+        consumername: str,
+        min_idle_time: int,
+        message_ids: list[str],
+    ) -> list[tuple[str, dict[str, str]]]:
+        group = self.groups[(name, groupname)]
+        claimed: list[tuple[str, dict[str, str]]] = []
+        for entry_id in message_ids:
+            meta = group["pending"].get(entry_id)
+            if meta is None or meta["idle_ms"] < min_idle_time:
+                continue
+            meta["consumer"] = consumername
+            meta["idle_ms"] = 0
+            claimed.append((entry_id, dict(meta["fields"])))
+        return claimed
+
     def xpending(self, name: str, groupname: str) -> dict[str, int]:
         group = self.groups[(name, groupname)]
         return {"pending": len(group["pending"]), "min": None, "max": None, "consumers": []}
@@ -383,6 +402,20 @@ def test_failed_ack_still_allows_nack(monkeypatch):
     assert [event.event_id for event in again] == ["e1"]
     source.ack([again[0].event_id])
     assert client.xpending("cicerone:events", "cicerone")["pending"] == 0
+
+
+def test_heartbeat_resets_pending_idle(monkeypatch):
+    client = _install_fake_redis(monkeypatch, FakeRedis())
+    source = RedisStreamsEventSource(_options())
+    source.connect()
+    client.xadd("cicerone:events", event_payload(event_id="e1"))
+    events = list(source.poll(10))
+    pending = client.groups[("cicerone:events", "cicerone")]["pending"]
+    entry_id = next(iter(pending))
+    pending[entry_id]["idle_ms"] = 60_000
+    source.heartbeat(events)
+    assert pending[entry_id]["idle_ms"] == 0
+    source.ack([events[0].event_id])
 
 
 def test_repeated_nack_does_not_duplicate(monkeypatch):

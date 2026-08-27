@@ -640,7 +640,7 @@ project; the import remains `cicerone`. LightFM may need a C compiler
 ```sh
 pip install cicerone-recommender
 pip install 'cicerone-recommender[redis]'        # lock backend / Redis Streams
-pip install 'cicerone-recommender[sequential]'   # SASRec / BERT4Rec
+pip install 'cicerone-recommender[sequential]'   # SASRec / BERT4Rec / HSTU
 ```
 
 Then, with your own TOML. Example files default to image paths

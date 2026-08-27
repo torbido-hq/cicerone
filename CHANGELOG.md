@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-28
+
 ### Added
 
 - Optional `[events.online]`: the serve events worker continues LightFM
@@ -55,6 +57,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Dashboard history no longer styles empty errors as failures.
 - Dashboard lookup keeps recommendations when a user attribute is a list,
   Series, or array.
+- Serve collapses leftover `variant` rows to `control` (else the first name)
+  when `[experiment]` is off, instead of mixing control and treatment ranks.
+- Experiment promote state is a single-row replace (no `DROP TABLE`);
+  reads order by `promoted_at`, and fall back if that column is missing.
+- Online LightFM persists the artifact only after a successful apply and
+  event `ack`; a failed refresh nacks the batch.
+- Online collaborative rewrite is skipped while `[experiment]` is enabled.
+- Dashboard unknown staleness (`is_stale` unset) is amber, not success green.
+- Exposure-conditional experiment metrics ignore rows from other
+  `experiment_id`s.
+- Incremental write-through collapses leftover `variant` rows when
+  `[experiment]` is off (same control-else-first rule as serve).
+- Experiment promote state is read live (no per-process TTL cache) so
+  replicas agree after promote.
+- `log_exposures` with `events.ha` requires db output.
+- Online persist after ack retries, then drops the pending fit if it still
+  fails or the apply lease is lost.
+- SQS and Redis Streams heartbeat in-flight messages for the duration of
+  incremental apply.
+- Leftover `variant` collapse ignores missing/NaN names instead of treating
+  them as `"nan"`.
+- Dashboard lookup refresh TTL tracks one reader, not an unbounded id map.
 
 ## [0.6.2] - 2026-08-24
 

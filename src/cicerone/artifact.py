@@ -22,6 +22,7 @@ from rectools.dataset import Dataset
 from rectools.models import load_model
 from rectools.models.base import ModelBase
 
+from cicerone.config.settings import ExplainSettings
 from cicerone.dataset import BuiltDataset
 from cicerone.feature_config import FeatureConfig
 from cicerone.model import (
@@ -223,6 +224,8 @@ def recommend_from_artifact(
     artifact: ModelArtifact,
     target_users: list[str],
     top_k: int,
+    *,
+    explain: ExplainSettings | None = None,
 ) -> pd.DataFrame:
     interactions = _interactions_from_dataset(artifact.dataset)
     built = BuiltDataset(
@@ -246,4 +249,5 @@ def recommend_from_artifact(
         enabled_models=list(artifact.models),
         weights=weights,
         rrf_k=artifact.rrf_k,
+        explain=explain,
     )

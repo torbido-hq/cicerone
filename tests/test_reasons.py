@@ -32,6 +32,14 @@ def test_parse_reasons_bytes_and_invalid_payload():
     assert parse_reasons({"sources": "personalized"}) is None
 
 
+def test_parse_reasons_equality_raises():
+    class _BoomEq:
+        def __eq__(self, other: object) -> bool:
+            raise TypeError("nope")
+
+    assert parse_reasons(_BoomEq()) is None
+
+
 def test_parse_reasons_dict():
     parsed = parse_reasons({"sources": [{"label": "latest"}], "boosts": []})
     assert parsed is not None

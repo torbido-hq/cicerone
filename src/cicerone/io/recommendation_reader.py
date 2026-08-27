@@ -329,6 +329,7 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
         self.refresh()
 
     def refresh(self) -> None:
+        self._variant_supported = None
         started = time.perf_counter()
         items_ok = False
         try:
@@ -361,11 +362,27 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             return cached
         try:
             columns = {col["name"] for col in inspect(self._engine).get_columns(self._table)}
-            supported = VARIANT_COLUMN in columns
         except Exception:
-            supported = False
+            logger.exception("Failed to inspect recommendations table %r for variant column", self._table)
+            return False
+        supported = VARIANT_COLUMN in columns
         self._variant_supported = supported
         return supported
+
+    def _fallback_variant(self, user_id: str) -> str | None:
+        sql = text(
+            f'SELECT DISTINCT "{VARIANT_COLUMN}" FROM "{self._table}" WHERE "{USER_COLUMN}" = :user_id'
+        )
+        try:
+            frame = pd.read_sql(sql, self._engine, params={"user_id": user_id})
+        except Exception as exc:
+            if self._remember_missing_variant_column(exc):
+                return None
+            logger.exception("Failed to list recommendation variants for user_id=%r", user_id)
+            return None
+        if frame.empty:
+            return None
+        return _rec.pick_fallback_variant(frame.iloc[:, 0].tolist())
 
     def _remember_missing_variant_column(self, exc: BaseException) -> bool:
         message = db_error_message(exc)
@@ -379,6 +396,8 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
     def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame:
         if variant is not None and not self._supports_variant_column():
             variant = None
+        elif variant is None and self._supports_variant_column():
+            variant = self._fallback_variant(user_id)
         if variant is None:
             sql = text(
                 f'SELECT * FROM "{self._table}" WHERE "{USER_COLUMN}" = :user_id '
@@ -409,6 +428,8 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
     def get_cold_start_fallback(self, k: int, *, variant: str | None = None) -> pd.DataFrame:
         if variant is not None and not self._supports_variant_column():
             variant = None
+        elif variant is None and self._supports_variant_column():
+            variant = self._fallback_variant(COLD_START_USER_ID)
         sentinel = self.get_recommendations(COLD_START_USER_ID, k, variant=variant)
         if not sentinel.empty:
             return sentinel
