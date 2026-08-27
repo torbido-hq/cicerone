@@ -111,8 +111,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Sequential epoch-metric `fit_partial` detects RecTools transformers by
   `min_epochs`/`max_epochs`, so LightFM `num_threads` stays at its default.
 - Online artifact persist is a compare-and-swap against the baseline
-  fingerprint (local file lock / DB transaction), after serializing the
-  blob, so a finishing retrain is not overwritten.
+  fingerprint (local file lock / DB `DELETE … WHERE written_at`), after
+  serializing the blob, so a finishing retrain is not overwritten.
 
 ## [0.6.2] - 2026-08-24
 

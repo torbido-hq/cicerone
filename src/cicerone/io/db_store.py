@@ -28,6 +28,7 @@ from sqlalchemy import (
     create_engine,
     insert,
     inspect,
+    select,
     text,
 )
 from sqlalchemy.exc import OperationalError, ProgrammingError
@@ -325,14 +326,16 @@ class DatabaseOutputSink:
         )
         with self._engine.begin() as conn:
             artifacts.create(conn, checkfirst=True)
-            row = conn.execute(text(f'SELECT written_at FROM "{table_name}" LIMIT 1')).first()
+            row = conn.execute(select(artifacts.c.written_at).limit(1).with_for_update()).first()
             if row is None or row[0] is None:
                 return False
             written = row[0]
             stamp = written.isoformat() if hasattr(written, "isoformat") else str(written)
             if f"db:{stamp}" != expected_fingerprint:
                 return False
-            conn.execute(artifacts.delete())
+            deleted = conn.execute(artifacts.delete().where(artifacts.c.written_at == written))
+            if deleted.rowcount < 1:
+                return False
             conn.execute(insert(artifacts).values(payload=payload, written_at=datetime.now(UTC)))
         return True
 
