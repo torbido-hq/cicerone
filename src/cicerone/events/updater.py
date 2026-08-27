@@ -28,7 +28,13 @@ from cicerone.io.recommendation_reader import (
     SOURCE_COLUMN,
     USER_COLUMN,
 )
-from cicerone.io.recommendation_schema import REASONS_COLUMN, VARIANT_COLUMN, recommendation_output_columns
+from cicerone.io.recommendation_schema import (
+    REASONS_COLUMN,
+    VARIANT_COLUMN,
+    collapse_mixed_variants,
+    pick_fallback_variant,
+    recommendation_output_columns,
+)
 from cicerone.locks import LockLostError
 from cicerone.reasons import dump_source_reasons
 from cicerone.weighting import event_row_weights
@@ -447,11 +453,13 @@ class IncrementalUpdater:
         weights: pd.Series | None = None,
         online_rows: pd.DataFrame | None = None,
     ) -> pd.DataFrame:
-        variants = self._variants_for(prior)
+        variants = self._variants_for()
         if not variants:
-            return self._merge_one_list(
+            prior = collapse_mixed_variants(prior)
+            merged = self._merge_one_list(
                 user_id, prior, popular, latest, batch, weights, online_rows=online_rows
             )
+            return self._stamp_collapsed_variant(merged, prior)
         parts = []
         for variant in variants:
             prior_slice = (
@@ -471,13 +479,18 @@ class IncrementalUpdater:
             return empty_recommendations_frame()
         return pd.concat(parts, ignore_index=True)
 
-    def _variants_for(self, prior: pd.DataFrame) -> tuple[str, ...]:
-        if self._variant_names:
-            return self._variant_names
-        if prior.empty or VARIANT_COLUMN not in prior.columns:
-            return ()
-        names = tuple(dict.fromkeys(prior[VARIANT_COLUMN].astype(str).tolist()))
-        return names
+    def _variants_for(self) -> tuple[str, ...]:
+        return self._variant_names
+
+    def _stamp_collapsed_variant(self, merged: pd.DataFrame, prior: pd.DataFrame) -> pd.DataFrame:
+        if merged.empty or VARIANT_COLUMN not in prior.columns or prior.empty:
+            return merged
+        pick = pick_fallback_variant(prior[VARIANT_COLUMN].astype(str).tolist())
+        if pick is None:
+            return merged
+        stamped = merged.copy()
+        stamped[VARIANT_COLUMN] = pick
+        return stamped
 
     def _merge_one_list(
         self,
@@ -578,9 +591,10 @@ class IncrementalUpdater:
         popular: pd.DataFrame,
         latest: pd.DataFrame,
     ) -> pd.DataFrame:
-        variants = self._variants_for(prior)
+        variants = self._variants_for()
         if not variants:
-            return self._cold_start_one_list(prior, popular, latest)
+            prior = collapse_mixed_variants(prior)
+            return self._stamp_collapsed_variant(self._cold_start_one_list(prior, popular, latest), prior)
         parts = []
         for variant in variants:
             prior_slice = (

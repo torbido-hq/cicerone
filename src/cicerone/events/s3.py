@@ -33,6 +33,8 @@ _DEFAULT_SQS_CLIENT_TIMEOUT_SECONDS = 2.0
 _LOAD_FAILURE_SKIP_AFTER = 3
 # Cover lock-busy nack retries so the message is not stolen mid-lease wait.
 _SQS_NACK_VISIBILITY_TIMEOUT_SECONDS = 60
+# In-flight apply (online fit_partial) can outlast the receive visibility window.
+_SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS = 300
 
 
 def validate_s3_event_options(options: dict[str, Any]) -> str:
@@ -276,7 +278,33 @@ class S3EventSource(EventSource):
                     receipts.append(batch.receipt_handle)
             sqs = self._sqs
             queue_url = self._queue_url
-        self._extend_sqs_visibility(receipts, sqs=sqs, queue_url=queue_url)
+        self._extend_sqs_visibility(
+            receipts,
+            sqs=sqs,
+            queue_url=queue_url,
+            timeout_seconds=_SQS_NACK_VISIBILITY_TIMEOUT_SECONDS,
+        )
+
+    def heartbeat(self, events: Sequence[NormalizedEvent]) -> None:
+        receipts: list[str] = []
+        with self._lock:
+            seen_batches: set[int] = set()
+            for event in events:
+                batch = self._event_batch.get(event.event_id)
+                if batch is None or not batch.receipt_handle:
+                    continue
+                if id(batch) in seen_batches:
+                    continue
+                seen_batches.add(id(batch))
+                receipts.append(batch.receipt_handle)
+            sqs = self._sqs
+            queue_url = self._queue_url
+        self._extend_sqs_visibility(
+            receipts,
+            sqs=sqs,
+            queue_url=queue_url,
+            timeout_seconds=_SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS,
+        )
 
     def ack(self, event_ids: Sequence[str]) -> None:
         completed: list[_Batch] = []
@@ -580,6 +608,7 @@ class S3EventSource(EventSource):
         *,
         sqs: Any,
         queue_url: str | None,
+        timeout_seconds: int = _SQS_NACK_VISIBILITY_TIMEOUT_SECONDS,
     ) -> None:
         if not receipts or sqs is None or queue_url is None:
             return
@@ -588,10 +617,10 @@ class S3EventSource(EventSource):
                 sqs.change_message_visibility(
                     QueueUrl=queue_url,
                     ReceiptHandle=receipt,
-                    VisibilityTimeout=_SQS_NACK_VISIBILITY_TIMEOUT_SECONDS,
+                    VisibilityTimeout=timeout_seconds,
                 )
             except Exception:
-                logger.exception("Failed to extend SQS visibility after nack")
+                logger.exception("Failed to extend SQS visibility")
 
     def _adopt_sqs_receipt(self, receipt: str, event_ids: set[str]) -> None:
         with self._lock:

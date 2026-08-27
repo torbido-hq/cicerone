@@ -20,6 +20,11 @@ def test_experiment_store_roundtrip_dataset(tmp_path) -> None:
     assert state["experiment_id"] == "exp"
     assert state["promoted_variant"] == "treatment"
 
+    other = ExperimentStore(output)
+    seen = other.read_state()
+    assert seen is not None
+    assert seen["promoted_variant"] == "treatment"
+
     store.append_exposures(
         [
             {

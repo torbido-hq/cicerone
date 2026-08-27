@@ -177,6 +177,13 @@ re-raised), not “lock free”. The same `owned()` callback is passed into
 full `job.run()` (cron and `RunGuard` trigger) so a lost retrain lock skips
 artifact and recommendation writes.
 
+Fan-out sources **heartbeat** in-flight messages for the duration of apply:
+S3 SQS extends visibility (5 minutes) so `fit_partial` cannot outrun the
+receive window; Redis Streams `XCLAIM`s to the same consumer with idle 0 so
+`XAUTOCLAIM` does not steal the PEL. Online persist after `ack` retries,
+then drops the pending fit if it still fails or the lease is lost — serving
+rows from that flush stay written.
+
 | Source | Multi-replica |
 | --- | --- |
 | webhook | Single-ingress or sticky session; do not claim multi-replica ingest |
@@ -232,7 +239,8 @@ next flush (prefer a DB output for history).
 Duplicate delivery can inflate weights for `quantity_scaled_events` on the
 popular/latest path. Online LightFM persists the model artifact only after
 the event source `ack`, so a nack/redelivery does not append the same
-interactions twice.
+interactions twice. If that persist still fails after retries, the pending
+fit is dropped (rows already written).
 
 ## Internals
 

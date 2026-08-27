@@ -21,6 +21,8 @@ from cicerone.serve.metrics import (
 
 logger = logging.getLogger(__name__)
 
+_ONLINE_PERSIST_ATTEMPTS = 3
+
 
 class EventWorker:
     def __init__(
@@ -183,6 +185,7 @@ class EventWorker:
 
     def _flush_ready(self, ready: list[NormalizedEvent]) -> int:
         try:
+            self._heartbeat_inflight(ready)
             applied = self._updater.apply(ready, persist_online=False)
         except LockLostError:
             record_events_flush(status="error")
@@ -224,9 +227,37 @@ class EventWorker:
             self._updater.abort_online()
             self._source.nack(ready)
             raise
-        try:
-            self._updater.persist_online()
-        except Exception:
-            logger.exception("Online artifact persist failed after ack; serving rows already written")
+        self._heartbeat_inflight(ready)
+        self._persist_online_after_ack()
         record_events_flush(status="success", events=applied)
         return applied
+
+    def _heartbeat_inflight(self, ready: list[NormalizedEvent]) -> None:
+        beat = getattr(self._source, "heartbeat", None)
+        if not callable(beat):
+            return
+        try:
+            beat(ready)
+        except Exception:
+            logger.exception("Event source heartbeat failed")
+
+    def _persist_online_after_ack(self) -> None:
+        last_error: BaseException | None = None
+        for attempt in range(1, _ONLINE_PERSIST_ATTEMPTS + 1):
+            try:
+                self._updater.persist_online()
+                return
+            except LockLostError:
+                logger.error("Apply lease lost before online persist; dropping pending artifact")
+                self._updater.abort_online()
+                return
+            except Exception as exc:
+                last_error = exc
+                logger.exception(
+                    "Online artifact persist failed after ack (attempt %d/%d)",
+                    attempt,
+                    _ONLINE_PERSIST_ATTEMPTS,
+                )
+        self._updater.abort_online()
+        if last_error is not None:
+            logger.error("Online artifact persist gave up after ack; pending fit dropped")

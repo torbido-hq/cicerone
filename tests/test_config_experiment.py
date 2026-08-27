@@ -193,3 +193,87 @@ def test_load_settings_allows_log_exposures_on_s3_when_experiment_disabled(tmp_p
     )
     assert settings.experiment.enabled is False
     assert settings.experiment.log_exposures is True
+
+
+def test_load_settings_rejects_log_exposures_with_ha_on_local_dataset(tmp_path):
+    with pytest.raises(ConfigError, match="events.ha requires output kind"):
+        load_settings(
+            write_toml(
+                tmp_path,
+                """
+                [job]
+                mode = "serve"
+                [job.trigger]
+                lock_backend = "redis"
+                redis_url = "redis://localhost:6379/0"
+                [serve]
+                auth_token = "tok"
+                [events]
+                enabled = true
+                kind = "webhook"
+                ha = true
+                [input]
+                kind = "dataset"
+                [input.options]
+                storage_backend = "local"
+                path = "/tmp/in"
+                [output]
+                kind = "dataset"
+                [output.options]
+                storage_backend = "local"
+                path = "/tmp/out"
+                [experiment]
+                enabled = true
+                id = "exp"
+                log_exposures = true
+                [[experiment.variants]]
+                name = "control"
+                traffic = 0.5
+                [[experiment.variants]]
+                name = "treatment"
+                traffic = 0.5
+                """,
+            )
+        )
+
+
+def test_load_settings_allows_log_exposures_with_ha_on_db(tmp_path):
+    settings = load_settings(
+        write_toml(
+            tmp_path,
+            f"""
+            [job]
+            mode = "serve"
+            [job.trigger]
+            lock_backend = "redis"
+            redis_url = "redis://localhost:6379/0"
+            [serve]
+            auth_token = "tok"
+            [events]
+            enabled = true
+            kind = "webhook"
+            ha = true
+            [input]
+            kind = "dataset"
+            [input.options]
+            storage_backend = "local"
+            path = "/tmp/in"
+            [output]
+            kind = "db"
+            [output.options]
+            database_url = "sqlite+pysqlite:///{tmp_path / "recs.db"}"
+            [experiment]
+            enabled = true
+            id = "exp"
+            log_exposures = true
+            [[experiment.variants]]
+            name = "control"
+            traffic = 0.5
+            [[experiment.variants]]
+            name = "treatment"
+            traffic = 0.5
+            """,
+        )
+    )
+    assert settings.events.ha is True
+    assert settings.experiment.log_exposures is True

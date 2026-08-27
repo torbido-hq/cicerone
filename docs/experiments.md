@@ -50,7 +50,8 @@ A dashboard **Promote** writes `experiment_state` next to the output store;
 serve then sends 100% traffic to that variant until you clear promote state
 or turn the experiment off. Promote survives later jobs. After you disable
 `[experiment]`, leftover `variant` rows collapse to `control` (else the
-lexicographically first name) until the next job rewrite. Do not mix lists.
+lexicographically first name) on **serve reads and incremental write-through**
+until the next job rewrite. Do not mix lists.
 
 ## Job
 
@@ -73,8 +74,9 @@ lookups.
 
 `[experiment].log_exposures = true` appends JSONL (`exposures.jsonl`) on a
 **local** dataset path, or a `recommendation_exposures` DB table. Object-store
-(S3) JSONL append is refused: it is not atomic. Default off: serve stays
-read-only.
+(S3) JSONL append is refused: it is not atomic. With `events.ha = true`,
+exposures require **db** output (two replicas must not append the same local
+file). Default off: serve stays read-only.
 
 ## Incremental events
 

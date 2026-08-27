@@ -225,9 +225,11 @@ def _load_lookup_user_attrs(raw: object) -> tuple[str, ...]:
 def _require_exposure_log_backend(settings: Settings) -> None:
     if not settings.experiment.enabled or not settings.experiment.log_exposures:
         return
-    from cicerone.experiment.store import require_appendable_exposure_log
+    from cicerone.experiment.store import EXPOSURE_LOG_HA_ERROR, require_appendable_exposure_log
 
     require_appendable_exposure_log(settings.output)
+    if settings.events.ha and settings.output.kind != "db":
+        raise ConfigError(EXPOSURE_LOG_HA_ERROR)
 
 
 def _coerce_experiment(value: Any) -> ExperimentSettings:

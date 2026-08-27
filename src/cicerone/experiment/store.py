@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -33,11 +32,11 @@ STATE_FILENAME = "experiment_state.json"
 EXPOSURES_FILENAME = "exposures.jsonl"
 DEFAULT_EXPOSURES_TABLE = "recommendation_exposures"
 DEFAULT_STATE_TABLE = "experiment_state"
-_STATE_CACHE_TTL_SECONDS = 5.0
 EXPOSURE_LOG_BACKEND_ERROR = (
     'experiment.log_exposures requires output kind = "db" or a local dataset path; '
     "object-store JSONL append is not atomic"
 )
+EXPOSURE_LOG_HA_ERROR = 'experiment.log_exposures with events.ha requires output kind = "db"'
 
 EXPOSURE_COLUMNS: tuple[str, ...] = (
     "user_id",
@@ -78,7 +77,6 @@ class ExperimentStore:
         self._kind = output.kind
         self._options = output.options
         self._engine: Engine | None = None
-        self._state_cache: tuple[float, dict[str, Any] | None] | None = None
 
     def _db_engine(self) -> Engine:
         if self._engine is None:
@@ -88,13 +86,9 @@ class ExperimentStore:
         return self._engine
 
     def read_state(self) -> dict[str, Any] | None:
-        now = time.monotonic()
-        cached = self._state_cache
-        if cached is not None and now < cached[0]:
-            return cached[1]
-        state = self._read_state_db() if self._kind == "db" else self._read_state_dataset()
-        self._state_cache = (now + _STATE_CACHE_TTL_SECONDS, state)
-        return state
+        if self._kind == "db":
+            return self._read_state_db()
+        return self._read_state_dataset()
 
     def write_state(self, state: Mapping[str, Any]) -> None:
         payload = dict(state)
@@ -103,7 +97,6 @@ class ExperimentStore:
         else:
             encoded = json.dumps(payload, indent=2).encode("utf-8")
             self._write_bytes(STATE_FILENAME, encoded, "application/json")
-        self._state_cache = (time.monotonic() + _STATE_CACHE_TTL_SECONDS, payload)
 
     def append_exposures(self, rows: Sequence[Mapping[str, Any]]) -> None:
         if not rows:

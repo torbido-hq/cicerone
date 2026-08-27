@@ -67,6 +67,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Dashboard unknown staleness (`is_stale` unset) is amber, not success green.
 - Exposure-conditional experiment metrics ignore rows from other
   `experiment_id`s.
+- Incremental write-through collapses leftover `variant` rows when
+  `[experiment]` is off (same control-else-first rule as serve).
+- Experiment promote state is read live (no per-process TTL cache) so
+  replicas agree after promote.
+- `log_exposures` with `events.ha` requires db output.
+- Online persist after ack retries, then drops the pending fit if it still
+  fails or the apply lease is lost.
+- SQS and Redis Streams heartbeat in-flight messages for the duration of
+  incremental apply.
 
 ## [0.6.2] - 2026-08-24
 
