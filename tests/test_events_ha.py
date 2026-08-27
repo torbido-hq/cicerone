@@ -87,8 +87,10 @@ def _worker(
     apply_lock=None,
     poll_without_lock: bool = True,
     busy_check=None,
+    write_busy_check=None,
     fence_check=None,
     online=None,
+    heartbeat_interval_seconds: float = 15.0,
 ) -> EventWorker:
     if fence_check is None and apply_lock is not None:
         fence_check = apply_lock.owned
@@ -98,6 +100,7 @@ def _worker(
         feature_config=feature_config,
         top_k=3,
         busy_check=busy_check,
+        write_busy_check=write_busy_check,
         fence_check=fence_check,
         online=online,
     )
@@ -107,6 +110,7 @@ def _worker(
         updater,
         apply_lock=apply_lock,
         poll_without_lock=poll_without_lock,
+        heartbeat_interval_seconds=heartbeat_interval_seconds,
     )
 
 
@@ -621,6 +625,91 @@ def test_ha_worker_heartbeats_inflight_during_flush(tmp_path, feature_config: Fe
 
     source = _BeatingSource()
     source.ingest(event_payload(event_id="hb1", user_id="u1", item_id="ihb"))
-    worker = _worker(settings, source, feature_config, apply_lock=SharedLock())
+    worker = _worker(
+        settings,
+        source,
+        feature_config,
+        apply_lock=SharedLock(),
+        heartbeat_interval_seconds=0.05,
+    )
+    original = worker._updater.apply
+
+    def _slow(events, *, persist_online: bool = True):  # type: ignore[no-untyped-def]
+        time.sleep(0.16)
+        return original(events, persist_online=persist_online)
+
+    worker._updater.apply = _slow  # type: ignore[method-assign]
+    assert worker.tick() == 1
+    assert source.beats >= 2
+
+
+def test_ha_worker_heartbeats_once_when_interval_disabled(tmp_path, feature_config: FeatureConfig):
+    _out, settings = _seed_out(tmp_path)
+
+    class _BeatingSource(WebhookEventSource):
+        def __init__(self) -> None:
+            super().__init__({})
+            self.beats = 0
+
+        def heartbeat(self, events):  # type: ignore[no-untyped-def]
+            del events
+            self.beats += 1
+
+    source = _BeatingSource()
+    source.ingest(event_payload(event_id="hb0", user_id="u1", item_id="ihb0"))
+    worker = _worker(
+        settings,
+        source,
+        feature_config,
+        apply_lock=SharedLock(),
+        heartbeat_interval_seconds=0,
+    )
     assert worker.tick() == 1
     assert source.beats == 1
+
+
+def test_ha_worker_continues_when_heartbeat_raises(tmp_path, feature_config: FeatureConfig):
+    _out, settings = _seed_out(tmp_path)
+
+    class _BoomBeat(WebhookEventSource):
+        def heartbeat(self, events):  # type: ignore[no-untyped-def]
+            del events
+            raise RuntimeError("beat failed")
+
+    source = _BoomBeat({})
+    source.ingest(event_payload(event_id="hbx", user_id="u1", item_id="ihbx"))
+    worker = _worker(settings, source, feature_config, apply_lock=SharedLock())
+    assert worker.tick() == 1
+
+
+def test_ha_online_skips_persist_when_write_busy_after_apply(tmp_path, feature_config: FeatureConfig):
+    _out, settings = _seed_out(tmp_path)
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="onbusy", user_id="u1", item_id="ionb"))
+    online = _FakeOnline()
+    busy = {"v": False}
+
+    def _write_busy() -> bool:
+        return busy["v"]
+
+    worker = _worker(
+        settings,
+        source,
+        feature_config,
+        apply_lock=SharedLock(),
+        online=online,
+        write_busy_check=_write_busy,
+        busy_check=lambda: False,
+    )
+    original = worker._updater.apply
+
+    def _flip(events, *, persist_online: bool = True):  # type: ignore[no-untyped-def]
+        applied = original(events, persist_online=persist_online)
+        busy["v"] = True
+        return applied
+
+    worker._updater.apply = _flip  # type: ignore[method-assign]
+    assert worker.tick() == 1
+    assert source.health().lag == 0
+    assert online.commits == 0
+    assert online.aborts == 1

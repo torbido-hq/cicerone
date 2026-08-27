@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import tomllib
@@ -51,6 +52,8 @@ from cicerone.config.validation import (
     validate_model_weights,
     validate_rrf_k,
 )
+
+logger = logging.getLogger(__name__)
 
 _ENV_PLACEHOLDER = re.compile(r"\$(\$?)\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
@@ -324,6 +327,13 @@ def _normalize_traffic(variants: tuple[VariantSettings, ...]) -> tuple[VariantSe
         raise ConfigError(f"experiment.variants traffic sums to {total}, which exceeds 1")
     remainder = max(0.0, 1.0 - total)
     last = variants[-1]
+    if remainder > 1e-9:
+        logger.warning(
+            "experiment.variants traffic sums to %s; assigning remainder %s to %r",
+            total,
+            remainder,
+            last.name,
+        )
     adjusted = replace(last, traffic=last.traffic + remainder)
     return (*variants[:-1], adjusted)
 

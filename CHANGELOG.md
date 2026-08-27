@@ -58,7 +58,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Dashboard history no longer styles empty errors as failures.
 - Dashboard lookup keeps recommendations when a user attribute is a list,
   Series, or array.
-- Serve collapses leftover `variant` rows to `control` (else the first name)
+- Serve collapses leftover `variant` rows to `control` (else the
+  lexicographically first remaining name)
   when `[experiment]` is off, instead of mixing control and treatment ranks.
 - Experiment promote state is a single-row replace (no `DROP TABLE`);
   reads order by `promoted_at`, and fall back if that column is missing.
@@ -80,6 +81,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Leftover `variant` collapse ignores missing/NaN names instead of treating
   them as `"nan"`.
 - Dashboard lookup refresh TTL tracks one reader, not an unbounded id map.
+- Experiment coverage guardrail uses the items-snapshot catalog size, not
+  distinct recommended item ids (so concentrated lists cannot relax the floor).
+- Online persist after ack is skipped when a full retrain holds the lock or
+  replaced the model artifact.
+- Online LightFM caps extra interactions on top of the last job artifact
+  (`events.online.max_extra_interactions`, default 50_000).
+- Dashboard Experiments can resume the split after promote.
+- Writing `reasons` or `variant` to an existing DB table missing those
+  columns raises a clear `ALTER TABLE` error.
+- Unknown dashboard staleness is announced as unknown, not success.
 
 ## [0.6.2] - 2026-08-24
 

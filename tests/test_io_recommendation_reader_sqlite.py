@@ -157,6 +157,31 @@ def test_sqlite_replace_recommendations_schema_mismatch(tmp_path, caplog):
     assert list(stored["item_id"]) == ["old"]
 
 
+def test_sqlite_write_recommendations_missing_optional_columns(tmp_path):
+    url = _sqlite_url(tmp_path)
+    engine = create_engine(url)
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"}]
+    ).to_sql("recommendations", engine, index=False, if_exists="replace")
+    sink = DatabaseOutputSink({"database_url": url})
+    with pytest.raises(RecommendationSchemaError, match="ALTER TABLE"):
+        sink.write_recommendations(
+            pd.DataFrame(
+                [
+                    {
+                        "user_id": "u1",
+                        "item_id": "i1",
+                        "rank": 1,
+                        "score": 1.0,
+                        "source": "personalized",
+                        "variant": "control",
+                        "reasons": "[]",
+                    }
+                ]
+            )
+        )
+
+
 def test_sqlite_db_reader_filters_variant(tmp_path):
     url = _sqlite_url(tmp_path)
     sink = DatabaseOutputSink({"database_url": url})

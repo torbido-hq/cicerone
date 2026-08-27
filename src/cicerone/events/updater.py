@@ -138,6 +138,10 @@ class IncrementalUpdater:
         return self._busy_check is not None and self._busy_check()
 
     def persist_online(self) -> None:
+        if self._write_busy_check is not None and self._write_busy_check():
+            logger.info("Skipping online persist: full retrain in progress")
+            self._abort_online()
+            return
         self._commit_online()
 
     def abort_online(self) -> None:

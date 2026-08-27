@@ -108,10 +108,14 @@ class ExperimentStore:
         payload = "".join(json.dumps(dict(row), separators=(",", ":")) + "\n" for row in rows).encode("utf-8")
         self._append_bytes(EXPOSURES_FILENAME, payload)
 
-    def read_exposures(self) -> list[dict[str, Any]]:
+    def read_exposures(self, *, experiment_id: str | None = None) -> list[dict[str, Any]]:
         if self._kind == "db":
-            return self._read_exposures_db()
-        return self._read_exposures_dataset()
+            rows = self._read_exposures_db(experiment_id=experiment_id)
+        else:
+            rows = self._read_exposures_dataset()
+        if not experiment_id:
+            return rows
+        return [row for row in rows if str(row.get("experiment_id") or "") == experiment_id]
 
     def _read_state_dataset(self) -> dict[str, Any] | None:
         raw = self._read_bytes(STATE_FILENAME)
@@ -195,19 +199,27 @@ class ExperimentStore:
         engine = self._db_engine()
         pd.DataFrame(list(rows)).to_sql(table, engine, if_exists="append", index=False)
 
-    def _read_exposures_db(self) -> list[dict[str, Any]]:
+    def _read_exposures_db(self, *, experiment_id: str | None = None) -> list[dict[str, Any]]:
         table = sql_identifier(
             self._options.get("exposures_table", DEFAULT_EXPOSURES_TABLE),
             option="exposures_table",
         )
         engine = self._db_engine()
+        if experiment_id:
+            sql = text(f'SELECT * FROM "{table}" WHERE experiment_id = :experiment_id')
+            params: dict[str, Any] = {"experiment_id": experiment_id}
+        else:
+            sql = text(f'SELECT * FROM "{table}"')
+            params = {}
         try:
-            frame = pd.read_sql(text(f'SELECT * FROM "{table}"'), engine)
+            frame = pd.read_sql(sql, engine, params=params)
         except MISSING_TABLE_ERRORS:
             return []
         except Exception as exc:
             if is_missing_table_error(exc):
                 return []
+            if experiment_id and is_missing_column_error(exc):
+                return self._read_exposures_db()
             logger.exception("Failed to read exposures table %r", table)
             return []
         if frame.empty:

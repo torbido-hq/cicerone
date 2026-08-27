@@ -269,6 +269,7 @@ prefix = "recommendations/latest"
 # enabled = true
 # fit_partial_epochs = 1          # 0 = frozen weights + history refresh only
 # fit_min_events = 100            # skip SGD until this many known-ID events
+# max_extra_interactions = 50000  # online-only rows on top of the last job artifact
 
 # DB watermark source (no POST /events). Advances cursor only after a successful flush.
 # [events]

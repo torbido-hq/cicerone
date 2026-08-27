@@ -7,15 +7,23 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
+from sqlalchemy import create_engine, text
+
 from cicerone.config import Settings
-from cicerone.events.store import load_recommendations_frame
+from cicerone.events.store import load_items_catalog_size, load_recommendation_guardrail_rows
 from cicerone.experiment.evaluate import evaluate_experiment
 from cicerone.experiment.recipes import ResolvedRecipe, resolve_recipes
 from cicerone.experiment.store import ExperimentStore, experiment_state
 from cicerone.feature_config import FeatureConfig, load_feature_config
+from cicerone.io.db_store import DEFAULT_EVENTS_TABLE
 from cicerone.io.factory import build_input_source, build_manifest_reader
+from cicerone.io.options import is_s3_not_found, read_parquet, require_option, sql_identifier
+from cicerone.io.recommendation_schema import USER_COLUMN
 
 logger = logging.getLogger(__name__)
+
+_EVENT_METRIC_COLUMNS = (USER_COLUMN, "event_type", "quantity")
 
 
 def experiment_context(settings: Settings) -> dict[str, Any]:
@@ -48,27 +56,27 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
             "promoted_variant": promoted,
         }
     try:
-        events = build_input_source(settings.input).read_events()
+        events = _load_metric_events(settings)
     except Exception:
         logger.exception("Failed to read events for experiment metrics")
         events = None
     if events is None:
-        import pandas as pd
-
         events = pd.DataFrame()
     try:
-        recs = load_recommendations_frame(settings.output)
+        recs = load_recommendation_guardrail_rows(settings.output)
     except Exception:
         logger.exception("Failed to load recommendations for experiment guardrails")
         recs = None
     try:
-        exposures = store.read_exposures() if experiment.log_exposures else None
+        exposures = store.read_exposures(experiment_id=experiment.id) if experiment.log_exposures else None
     except Exception:
         logger.exception("Failed to read experiment exposures")
         exposures = None
     catalog_size = None
-    if recs is not None and not recs.empty and "item_id" in recs.columns:
-        catalog_size = int(recs["item_id"].astype(str).nunique())
+    try:
+        catalog_size = load_items_catalog_size(settings.output)
+    except Exception:
+        logger.exception("Failed to read items snapshot for experiment catalog size")
     weights = feature_config.event_weights if feature_config is not None else {}
     report = evaluate_experiment(
         experiment=experiment,
@@ -109,6 +117,46 @@ def promote_winner(settings: Settings, variant: str) -> str | None:
         experiment_state(settings.experiment.id, promoted_variant=variant)
     )
     return None
+
+
+def clear_promotion(settings: Settings) -> str | None:
+    if not settings.experiment.enabled:
+        return "No experiment is enabled"
+    ExperimentStore(settings.output).write_state(
+        experiment_state(settings.experiment.id, promoted_variant=None)
+    )
+    return None
+
+
+def _load_metric_events(settings: Settings) -> pd.DataFrame:
+    inp = settings.input
+    if inp.kind == "dataset":
+        try:
+            frame = read_parquet(inp.options, "events.parquet", columns=list(_EVENT_METRIC_COLUMNS))
+        except FileNotFoundError:
+            return pd.DataFrame(columns=list(_EVENT_METRIC_COLUMNS))
+        except Exception as exc:
+            if is_s3_not_found(exc):
+                return pd.DataFrame(columns=list(_EVENT_METRIC_COLUMNS))
+            frame = build_input_source(inp).read_events()
+        keep = [column for column in _EVENT_METRIC_COLUMNS if column in frame.columns]
+        return frame.loc[:, keep] if keep else frame
+    if inp.kind == "db" and not inp.options.get("events_query"):
+        table = sql_identifier(
+            inp.options.get("events_table", DEFAULT_EVENTS_TABLE),
+            option="events_table",
+        )
+        engine = create_engine(require_option(inp.options, "database_url", "db"), pool_pre_ping=True)
+        quoted = ", ".join(f'"{column}"' for column in _EVENT_METRIC_COLUMNS)
+        try:
+            return pd.read_sql(text(f'SELECT {quoted} FROM "{table}"'), engine)
+        except Exception:
+            return build_input_source(inp).read_events()
+        finally:
+            engine.dispose()
+    frame = build_input_source(inp).read_events()
+    keep = [column for column in _EVENT_METRIC_COLUMNS if column in frame.columns]
+    return frame.loc[:, keep] if keep else frame
 
 
 def _load_features(settings: Settings) -> FeatureConfig | None:

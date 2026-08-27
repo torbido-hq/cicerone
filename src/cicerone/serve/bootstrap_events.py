@@ -130,6 +130,7 @@ def start_events_runtime(
             half_life_days=settings.half_life_days,
             fit_partial_epochs=settings.events.online.fit_partial_epochs,
             fit_min_events=settings.events.online.fit_min_events,
+            max_extra_interactions=settings.events.online.max_extra_interactions,
             fence_check=(apply_lock.owned if apply_lock is not None else None),
             explain=settings.explain,
         )

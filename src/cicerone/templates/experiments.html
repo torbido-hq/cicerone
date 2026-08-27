@@ -43,6 +43,11 @@
       </p>
       {% if promoted_variant %}
       <p class="text-sm text-sky-800 mb-3">Promoted variant: <span class="font-medium">{{ promoted_variant }}</span> (100% traffic at serve).</p>
+      <form action="/dashboard/experiments/unpromote" method="post">
+        <button type="submit" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2">
+          Resume split
+        </button>
+      </form>
       {% endif %}
       <table class="w-full text-sm border-collapse mb-4">
         <caption class="sr-only">Variant comparison</caption>

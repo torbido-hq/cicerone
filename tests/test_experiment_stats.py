@@ -57,6 +57,20 @@ def test_guardrails_fail_closed_on_empty_and_concentration() -> None:
     assert "coverage" in report.failures
 
 
+def test_guardrails_catalog_size_relaxes_only_for_small_catalogs() -> None:
+    recs = pd.DataFrame(
+        {
+            "user_id": [f"u{i}" for i in range(12)],
+            "item_id": [f"i{i % 3}" for i in range(12)],
+            "source": ["personalized"] * 12,
+        }
+    )
+    small = evaluate_guardrails(recs, variant="control", catalog_size=3)
+    large = evaluate_guardrails(recs, variant="control", catalog_size=100)
+    assert "coverage" not in small.failures
+    assert "coverage" in large.failures
+
+
 def test_user_outcome_weighted_and_event_type() -> None:
     events = pd.DataFrame(
         [

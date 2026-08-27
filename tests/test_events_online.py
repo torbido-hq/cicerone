@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 from support.events import event_payload
 
-from cicerone.artifact import build_artifact, dumps_artifact, loads_artifact
+from cicerone.artifact import ARTIFACT_FILENAME, build_artifact, dumps_artifact, loads_artifact
 from cicerone.config import (
     EventsIncrementalSettings,
     EventsOnlineSettings,
@@ -90,13 +90,17 @@ def _write_artifact(
     return sink, enabled
 
 
-def _trainer(sink, *, epochs: int = 1, min_events: int = 1) -> OnlineTrainer:
+def _trainer(sink, *, epochs: int = 1, min_events: int = 1, max_extra: int | None = None) -> OnlineTrainer:
+    kwargs = {}
+    if max_extra is not None:
+        kwargs["max_extra_interactions"] = max_extra
     trainer = OnlineTrainer(
         sink=sink,
         top_k=3,
         half_life_days=90,
         fit_partial_epochs=epochs,
         fit_min_events=min_events,
+        **kwargs,
     )
     trainer.ensure_loaded()
     return trainer
@@ -116,6 +120,15 @@ def test_online_trainer_rejects_bad_knobs(tmp_path):
         OnlineTrainer(sink=sink, top_k=3, half_life_days=90, fit_partial_epochs=-1, fit_min_events=1)
     with pytest.raises(ValueError, match="fit_min_events"):
         OnlineTrainer(sink=sink, top_k=3, half_life_days=90, fit_partial_epochs=1, fit_min_events=0)
+    with pytest.raises(ValueError, match="max_extra_interactions"):
+        OnlineTrainer(
+            sink=sink,
+            top_k=3,
+            half_life_days=90,
+            fit_partial_epochs=1,
+            fit_min_events=1,
+            max_extra_interactions=0,
+        )
     sink = build_output_sink(
         IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     )
@@ -128,6 +141,7 @@ def test_online_trainer_rejects_bad_knobs(tmp_path):
     )
     with pytest.raises(OnlineArtifactError, match="save_model_artifact"):
         trainer.ensure_loaded()
+    assert trainer.refresh([]).rows.empty
 
 
 def test_online_trainer_known_ids_fit_partial(
@@ -260,6 +274,50 @@ def test_online_trainer_skips_sequential_without_torch(
     trainer.commit()
     assert result.users_refreshed >= 1
     assert "sequential" not in set(result.rows["source"].astype(str))
+
+
+def test_online_trainer_caps_extra_interactions(
+    tmp_path, feature_config, sample_events, sample_users, sample_items
+):
+    sink, _enabled = _write_artifact(tmp_path, feature_config, sample_events, sample_users, sample_items)
+    trainer = _trainer(sink, epochs=0, max_extra=3)
+    pairs = (
+        ("u1", "i1", "2026-01-01T00:00:00Z"),
+        ("u1", "i2", "2026-01-02T00:00:00Z"),
+        ("u2", "i3", "2026-01-03T00:00:00Z"),
+        ("u3", "i2", "2026-01-04T00:00:00Z"),
+        ("u2", "i1", "2026-01-05T00:00:00Z"),
+    )
+    events = [
+        normalize_event(event_payload(user_id=user_id, item_id=item_id, event_id=f"cap{n}", occurred_at=when))
+        for n, (user_id, item_id, when) in enumerate(pairs)
+    ]
+    result = trainer.refresh(events)
+    trainer.commit()
+    assert result.events_known == 5
+    assert len(trainer._extra_raw) == 3
+    kept = set(
+        zip(
+            trainer._extra_raw["user_id"].astype(str),
+            trainer._extra_raw["item_id"].astype(str),
+            strict=True,
+        )
+    )
+    assert kept == {("u2", "i3"), ("u3", "i2"), ("u2", "i1")}
+
+
+def test_online_trainer_commit_drops_replaced_artifact(
+    tmp_path, feature_config, sample_events, sample_users, sample_items
+):
+    sink, _enabled = _write_artifact(tmp_path, feature_config, sample_events, sample_users, sample_items)
+    trainer = _trainer(sink, epochs=0)
+    trainer.refresh([_known_event("pending")])
+    assert trainer._pending is not None
+    artifact_path = tmp_path / "out" / ARTIFACT_FILENAME
+    artifact_path.write_bytes(b"batch-replaced")
+    trainer.commit()
+    assert trainer._pending is None
+    assert artifact_path.read_bytes() == b"batch-replaced"
 
 
 def test_incremental_updater_splices_online_rows(tmp_path, feature_config: FeatureConfig):

@@ -120,7 +120,7 @@
       const status = card.getAttribute("data-run-status") || "";
       const stale = card.getAttribute("data-run-stale") === "true";
       if (status === "failed") parts.push("failed");
-      else if (stale || card.getAttribute("data-run-stale") === "unknown") parts.push("stale");
+      else if (stale) parts.push("stale");
     }
     const userId = currentUserId();
     if (userId) parts.push(userId);
@@ -144,9 +144,12 @@
     const card = root.querySelector("[data-latest-run]");
     if (!card) return "";
     const status = card.getAttribute("data-run-status") || "unknown";
-    const stale = card.getAttribute("data-run-stale") === "true";
+    const staleAttr = card.getAttribute("data-run-stale");
+    const stale = staleAttr === "true";
+    const unknownStale = staleAttr === "unknown";
     if (status === "failed") return "Latest run failed.";
     if (stale) return "Latest run stale.";
+    if (unknownStale) return "Latest run staleness unknown.";
     if (status === "success") return "Latest run succeeded.";
     return "Latest run " + status + ".";
   }
