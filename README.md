@@ -249,7 +249,8 @@ process:
 
 Optional `[events]` on the serve process write-through popular/latest rows
 between full retrains (not request-path ranking). `[events.online]` continues
-LightFM on the last artifact for affected users. Guide:
+LightFM on the last artifact for affected users; that rewrite is skipped
+while `[experiment]` is on. Guide:
 [docs/incremental-events.md](docs/incremental-events.md).
 
 ## Dashboard
