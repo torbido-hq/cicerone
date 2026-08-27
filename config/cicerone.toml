@@ -26,7 +26,7 @@ feature_config_path = "/app/config/features.toml"
 # entries win ties for the same user/item pair). Defaults to
 # ["collaborative", "item_based", "popular"] if omitted. Available:
 # "collaborative" (LightFM, hybrid CF), "item_based" (item-item KNN),
-# "sequential" (SASRec / BERT4Rec; pip install 'cicerone-recommender[sequential]'
+# "sequential" (SASRec / BERT4Rec / HSTU; pip install 'cicerone-recommender[sequential]'
 # or requirements-sequential.txt), "content_fallback" (feature similarity for
 # zero-interaction items; also gated by [job.content_fallback].enabled),
 # "popular" (global popularity fallback), "latest" (trending in the last two
@@ -105,8 +105,9 @@ feature_config_path = "/app/config/features.toml"
 
 # Optional: also write a versioned fitted-model artifact (model.artifact /
 # model_artifacts table) alongside recommendations. Loadable later via
-# cicerone.artifact without re-running training. Default false. Serve mode
-# never loads this — it still reads precomputed recommendation rows only.
+# cicerone.artifact without re-running training. Default false. GET
+# /recommendations never loads this. With [events.online], the serve events
+# worker loads it for write-through.
 # save_model_artifact = false
 
 # Optional: log in-sample Precision@K/Recall@K every N epochs while fitting
@@ -260,8 +261,9 @@ prefix = "recommendations/latest"
 # batch_size = 100
 # batch_window_seconds = 60
 # poll_interval_seconds = 1
-# Optional: continue LightFM on known IDs and rewrite personalized rows
-# for affected users. Requires a model artifact in [output]
+# Optional: continue LightFM on known IDs and rewrite personalized /
+# item-KNN / content-fallback rows for affected users (skipped while
+# [experiment] is on). Requires a model artifact in [output]
 # (batch job: save_model_artifact = true). GET /recommendations stays a lookup.
 # [events.online]
 # enabled = true

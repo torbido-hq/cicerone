@@ -161,12 +161,13 @@ by default) — trending, not an embedding of recency.
 **Two different “latest” ideas:** the `latest` **strategy** is windowed
 popularity on interactions. Per-user **blending** can also rank by item
 datetime columns (`published_at`, …). While blending is on, the `latest`
-*strategy* is skipped so those two rankings do not fight. Incremental
-events refresh popular/latest **slices** of the written table. With
+strategy is skipped so those two rankings do not fight. Incremental events
+always refresh popular/latest **slices** of the written table. With
 `[events.online]` (and experiments off), the serve events worker also
 continues LightFM on IDs already in the last artifact and rewrites
-personalized rows for affected users. `GET /recommendations` still does
-not re-fit.
+personalized / item-KNN / content-fallback rows for affected users. `GET
+/recommendations` still does not re-fit. See
+[Incremental vs full retrain](#incremental-vs-full-retrain).
 
 ## Combining strategies
 

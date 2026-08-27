@@ -36,10 +36,10 @@ combiner = "blend"            # priority | rrf | blend
 # eligibility = true
 ```
 
-Validation: unique names; traffic ≥ 0 and sums to at most 1 (remainder is
-dumped on the last variant). Recipe overrides are the knobs `[job]` already
-has, plus optional `boosts = false` / `eligibility = false` to drop policy
-rules for that variant.
+Validation: unique names; traffic ≥ 0 and sums to at most 1 (any remainder
+is assigned to the last variant). Recipe overrides are the knobs `[job]`
+already has, plus optional `boosts = false` / `eligibility = false` to drop
+policy rules for that variant.
 
 ## Assignment
 
@@ -50,8 +50,9 @@ A dashboard **Promote** writes `experiment_state` next to the output store;
 serve then sends 100% traffic to that variant until you clear promote state
 or turn the experiment off. Promote survives later jobs. After you disable
 `[experiment]`, leftover `variant` rows collapse to `control` (else the
-lexicographically first name) on **serve reads and incremental write-through**
-until the next job rewrite. Do not mix lists.
+lexicographically first remaining name; blank/NaN names are ignored) on
+**serve reads and incremental write-through** until the next job rewrite.
+Do not mix lists.
 
 ## Job
 
@@ -68,7 +69,7 @@ the column to an existing DB table is `ALTER TABLE … ADD COLUMN variant TEXT`.
 `GET /recommendations/{user_id}` hashes the user, filters rows, and returns
 `experiment_id` + `variant` (`null` when experiments are off, or when the
 recommendations table has no `variant` column). Cold-start uses that
-variant’s `__cold_start__` rows. Prometheus
+variant's `__cold_start__` rows. Prometheus
 `cicerone_recommendations_experiment_total{experiment_id,variant}` counts
 lookups.
 
@@ -82,7 +83,9 @@ file). Default off: serve stays read-only.
 
 Popular/latest write-through refreshes **every variant** for affected users.
 `[events.online]` LightFM rewrite is **skipped** while `[experiment]` is on
-(so arms stay isolated). See [incremental-events.md](incremental-events.md).
+(so arms stay isolated). Without an experiment, it rewrites personalized /
+item-KNN / content-fallback rows for affected users. See
+[incremental-events.md](incremental-events.md).
 
 ## Metrics and promote
 
@@ -93,9 +96,10 @@ new impression protocol. Counts and weighted sums (`features.toml`
 The dashboard **Experiments** page (`GET /dashboard/experiments`) shows:
 
 - Approximate always-valid CIs on the primary metric (a LIL-style radius for
-  peeking — not a full anytime-valid CS for heavy-tailed outcomes). ITT on
-  users who appear in the event window, or exposure-conditional when
-  `log_exposures` is on (rows must match this `experiment_id`).
+  peeking — not a full anytime-valid CS for heavy-tailed outcomes).
+  Intention-to-treat on users who appear in the event window, or
+  exposure-conditional when `log_exposures` is on (rows must match this
+  `experiment_id`).
 - Guardrails (fail closed): fallback rate, top-item share, distinct-item
   coverage. A purchase win that collapses the catalog does not promote.
 - **Promote** — only when the CI excludes zero **and** guardrails pass —
@@ -103,7 +107,7 @@ The dashboard **Experiments** page (`GET /dashboard/experiments`) shows:
   recipe into `[job]` and disable the experiment.
 
 `automl_challenger = true` (with `[job.automl]` enabled) synthesizes
-`control` from the last successful manifest and `treatment` from this run’s
+`control` from the last successful manifest and `treatment` from this run's
 AutoML pick.
 
 ## What this is not

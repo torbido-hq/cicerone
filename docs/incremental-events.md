@@ -12,13 +12,15 @@ This is not live ranking on `GET /recommendations`. LightFM / item-KNN /
 content-fallback rows wait for the next `job.run()` **unless**
 `[events.online]` is enabled: the serve events worker then continues LightFM
 (`fit_partial`) on IDs already in the last model artifact and rewrites
-personalized rows for affected users. Sequential stays batch (runtime image
-is torch-free). New catalog IDs still wait for a full retrain.
+personalized / item-KNN / content-fallback rows for affected users.
+Sequential never runs `fit_partial`. The default runtime image is
+torch-free. New catalog IDs still wait for a full retrain.
+
 The incremental path always refreshes **popular / latest slices** (and recency
 boosts) for affected users plus `__cold_start__`. When `[experiment]` is
 on, that popular/latest refresh runs **in every variant**. Online LightFM
-personalized rewrite is skipped while `[experiment]` is on so arms stay
-isolated. [how-it-works.md](how-it-works.md) explains the split. Experiments:
+rewrite is skipped while `[experiment]` is on so arms stay isolated.
+[how-it-works.md](how-it-works.md) explains the split. Experiments:
 [experiments.md](experiments.md).
 
 Preserved personalized / `item_based` / `sequential` / `content_fallback`
@@ -77,7 +79,9 @@ poll_interval_seconds = 1
 
 Optional `[events.online]` continues LightFM on the last model artifact and
 rewrites personalized / item-KNN / content-fallback rows for **affected
-users only**. `GET /recommendations` is still a lookup.
+users only**. While `[experiment]` is on, that rewrite is skipped so arms
+stay isolated (popular/latest still refresh every variant).
+`GET /recommendations` is still a lookup.
 
 ```toml
 [events.online]
@@ -87,13 +91,15 @@ fit_min_events = 100            # skip SGD until this many known-ID events
 ```
 
 Startup fails if the `[output]` store has no artifact — the batch job must
-set `[job].save_model_artifact = true`. Only user/item IDs that already
-appear in that artifact's interaction matrix are trained; unknown IDs
-still get popular / latest / `incremental` boosts and wait for the next
-`job.run()`. After `fit_partial`, item factors move globally but only the
-flush's users are rewritten (same class of staleness as Gorse's cache
-between worker passes). Sequential rows are preserved unless the sequential
-extra is installed.
+set `[job].save_model_artifact = true`. An event is trained only when both
+its `user_id` and `item_id` already exist in that artifact (including a new
+interaction between two known IDs). Unknown IDs still get popular / latest /
+`incremental` boosts and wait for the next `job.run()`. After
+`fit_partial`, item factors move globally but only the flush's users are
+rewritten (same class of staleness as Gorse's cache between worker
+passes). Sequential never runs `fit_partial`. If the sequential extra is
+missing, existing sequential rows are left as-is; if it is installed,
+affected users are re-scored from the batch-fitted sequential model.
 
 `POST /events` uses Bearer auth (`events.options.auth_token` or
 `serve.auth_token`). Body: one event object, a JSON array, or
@@ -110,7 +116,7 @@ curl -sS -X POST \
 ```
 
 Flushes run when the buffer hits `batch_size` **or**
-`batch_window_seconds` elapses. Then serve’s refresh loop (dataset output)
+`batch_window_seconds` elapses. Then serve's refresh loop (dataset output)
 or the next DB read picks up the new rows. OpenAPI documents the route when
 webhook events are enabled (`/docs`, `/redoc`, checked-in
 `docs/openapi/serve.openapi.json`).
