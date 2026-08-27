@@ -227,7 +227,6 @@ class EventWorker:
             self._updater.abort_online()
             self._source.nack(ready)
             raise
-        self._heartbeat_inflight(ready)
         self._persist_online_after_ack()
         record_events_flush(status="success", events=applied)
         return applied

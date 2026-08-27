@@ -623,4 +623,4 @@ def test_ha_worker_heartbeats_inflight_during_flush(tmp_path, feature_config: Fe
     source.ingest(event_payload(event_id="hb1", user_id="u1", item_id="ihb"))
     worker = _worker(settings, source, feature_config, apply_lock=SharedLock())
     assert worker.tick() == 1
-    assert source.beats == 2
+    assert source.beats == 1
