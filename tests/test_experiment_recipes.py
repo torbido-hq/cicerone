@@ -103,6 +103,105 @@ def test_automl_challenger_uses_last_manifest_as_control() -> None:
     assert list(recipes[1].models) == ["item_based", "popular"]
 
 
+def test_automl_challenger_prefers_control_recipe_from_experiment_variants() -> None:
+    settings = make_settings(
+        models=["popular"],
+        experiment=ExperimentSettings(enabled=True, id="auto", automl_challenger=True),
+    )
+    last = {
+        "status": "success",
+        "models": "collaborative,item_based,popular",
+        "model_weights": "collaborative=2,popular=1",
+        "experiment_variants": json.dumps(
+            [
+                {"name": "control", "models": ["popular"], "weights": None, "rrf_k": None},
+                {
+                    "name": "treatment",
+                    "models": ["item_based", "popular"],
+                    "weights": {"item_based": 1.0, "popular": 1.0},
+                    "rrf_k": 50,
+                },
+            ]
+        ),
+    }
+    recipes = resolve_recipes(
+        settings,
+        _features(),
+        automl_models=["item_based", "popular"],
+        automl_weights={"item_based": 1.0, "popular": 1.0},
+        automl_rrf_k=50.0,
+        last_manifest=last,
+    )
+    assert list(recipes[0].models) == ["popular"]
+    assert recipes[0].weights is None
+
+
+def test_parse_job_recipe_from_manifest_falls_back_when_variants_invalid() -> None:
+    from cicerone.experiment.recipes import parse_job_recipe_from_manifest
+
+    recipe = parse_job_recipe_from_manifest(
+        {
+            "status": "success",
+            "models": "collaborative,popular",
+            "model_weights": "collaborative=2,popular=1",
+            "experiment_variants": "{not-json",
+        }
+    )
+    assert recipe is not None
+    assert recipe["models"] == ["collaborative", "popular"]
+    assert recipe["weights"] == {"collaborative": 2.0, "popular": 1.0}
+
+
+def test_parse_job_recipe_from_manifest_variant_row_shapes() -> None:
+    from cicerone.experiment.recipes import parse_job_recipe_from_manifest
+
+    assert parse_job_recipe_from_manifest(None) is None
+    assert parse_job_recipe_from_manifest({"status": "failed", "models": "popular"}) is None
+    empty_models = parse_job_recipe_from_manifest({"status": "success", "models": ""})
+    assert empty_models is None
+    csv_models = parse_job_recipe_from_manifest(
+        {
+            "status": "success",
+            "experiment_variants": json.dumps(
+                [
+                    {
+                        "name": "control",
+                        "models": "popular,latest",
+                        "weights": "popular=1,latest=2",
+                        "rrf_k": "",
+                    }
+                ]
+            ),
+        }
+    )
+    assert csv_models is not None
+    assert csv_models["models"] == ["popular", "latest"]
+    assert csv_models["weights"] == {"popular": 1.0, "latest": 2.0}
+    skipped_empty = parse_job_recipe_from_manifest(
+        {
+            "status": "success",
+            "models": "collaborative",
+            "experiment_variants": json.dumps([{"name": "control", "models": []}]),
+        }
+    )
+    assert skipped_empty is not None
+    assert skipped_empty["models"] == ["collaborative"]
+    listed = parse_job_recipe_from_manifest(
+        {
+            "status": "success",
+            "experiment_variants": [
+                "skip",
+                {"name": "control", "models": ["popular"], "weights": 1, "rrf_k": 40},
+            ],
+        }
+    )
+    assert listed is not None
+    assert listed["models"] == ["popular"]
+    assert listed["weights"] is None
+    assert listed["rrf_k"] == 40.0
+    assert parse_job_recipe_from_manifest({"status": "success", "experiment_variants": "null"}) is None
+
+
 def test_automl_challenger_requires_automl_pick() -> None:
     settings = make_settings(
         experiment=ExperimentSettings(enabled=True, id="auto", automl_challenger=True),

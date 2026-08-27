@@ -163,6 +163,37 @@ def test_online_trainer_known_ids_fit_partial(
     assert loaded.dataset.get_raw_interactions() is not None
 
 
+def test_online_trainer_map_only_ids_are_dropped(
+    tmp_path, feature_config, sample_events, sample_users, sample_items, monkeypatch
+):
+    from rectools import Columns
+
+    sink, _enabled = _write_artifact(tmp_path, feature_config, sample_events, sample_users, sample_items)
+    trainer = _trainer(sink)
+    raw = trainer._artifact.dataset.get_raw_interactions()
+    assert raw is not None
+    interaction_users = {str(value) for value in raw[Columns.User]}
+    interaction_items = {str(value) for value in raw[Columns.Item]}
+    map_users = {str(value) for value in trainer._artifact.dataset.user_id_map.external_ids}
+    map_items = {str(value) for value in trainer._artifact.dataset.item_id_map.external_ids}
+    extra_users = sorted(map_users - interaction_users)
+    extra_items = sorted(map_items - interaction_items)
+    assert extra_users or extra_items
+    if extra_items:
+        user_id = next(iter(trainer._hot_users))
+        item_id = extra_items[0]
+    else:
+        user_id = extra_users[0]
+        item_id = next(iter(trainer._hot_items))
+    calls = _spy_fit_partial(monkeypatch, trainer._artifact.fitted["collaborative"])
+    result = trainer.refresh(
+        [normalize_event(event_payload(user_id=user_id, item_id=item_id, event_id="map-only"))]
+    )
+    assert result.events_dropped_unknown == 1
+    assert result.events_known == 0
+    assert calls["n"] == 0
+
+
 def test_online_trainer_refresh_does_not_persist_until_commit(
     tmp_path, feature_config, sample_events, sample_users, sample_items
 ):
@@ -534,8 +565,50 @@ def test_start_events_runtime_online_requires_artifact(tmp_path, feature_config:
         )
 
 
-def test_start_events_runtime_online_skipped_during_experiment(tmp_path, feature_config: FeatureConfig):
+def test_start_events_runtime_online_skipped_during_experiment(
+    tmp_path, feature_config: FeatureConfig, caplog
+):
     from cicerone.config.settings import ExperimentSettings, VariantSettings
+
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+
+    class _Reader:
+        def refresh(self) -> None:
+            return None
+
+    with caplog.at_level("WARNING"):
+        runtime = start_events_runtime(
+            make_settings(
+                output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+                events=EventsSettings(
+                    enabled=True,
+                    kind="webhook",
+                    incremental=EventsIncrementalSettings(
+                        batch_size=1, batch_window_seconds=60.0, poll_interval_seconds=0.05
+                    ),
+                    online=EventsOnlineSettings(enabled=True, fit_min_events=1),
+                ),
+                experiment=ExperimentSettings(
+                    enabled=True,
+                    id="exp",
+                    variants=(VariantSettings(name="control", traffic=1.0),),
+                ),
+            ),
+            feature_config=feature_config,
+            reader=_Reader(),  # type: ignore[arg-type]
+        )
+    assert runtime.worker is not None
+    assert runtime.worker._updater._online is None
+    assert any("online collaborative refresh" in record.message.lower() for record in caplog.records)
+    runtime.stop()
+
+
+def test_start_events_runtime_challenger_variant_names(tmp_path, feature_config: FeatureConfig):
+    from cicerone.config.settings import ExperimentSettings
 
     out = tmp_path / "out"
     out.mkdir()
@@ -556,19 +629,14 @@ def test_start_events_runtime_online_skipped_during_experiment(tmp_path, feature
                 incremental=EventsIncrementalSettings(
                     batch_size=1, batch_window_seconds=60.0, poll_interval_seconds=0.05
                 ),
-                online=EventsOnlineSettings(enabled=True, fit_min_events=1),
             ),
-            experiment=ExperimentSettings(
-                enabled=True,
-                id="exp",
-                variants=(VariantSettings(name="control", traffic=1.0),),
-            ),
+            experiment=ExperimentSettings(enabled=True, id="auto", automl_challenger=True),
         ),
         feature_config=feature_config,
         reader=_Reader(),  # type: ignore[arg-type]
     )
     assert runtime.worker is not None
-    assert runtime.worker._updater._online is None
+    assert runtime.worker._updater._variant_names == ("control", "treatment")
     runtime.stop()
 
 

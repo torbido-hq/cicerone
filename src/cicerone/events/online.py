@@ -339,6 +339,7 @@ class OnlineTrainer:
 
     def _install(self, artifact: ModelArtifact, digest: bytes, token: str | None = None) -> None:
         raw = artifact.dataset.get_raw_interactions()
+        # LightFM identity features follow interacting IDs, not the full id map.
         if raw is None or raw.empty:
             hot_users: set[str] = set()
             hot_items: set[str] = set()

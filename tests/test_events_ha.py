@@ -668,7 +668,7 @@ def test_ha_worker_heartbeats_once_when_interval_disabled(tmp_path, feature_conf
     assert source.beats == 1
 
 
-def test_ha_worker_continues_when_heartbeat_raises(tmp_path, feature_config: FeatureConfig):
+def test_ha_worker_nacks_when_heartbeat_raises(tmp_path, feature_config: FeatureConfig):
     _out, settings = _seed_out(tmp_path)
 
     class _BoomBeat(WebhookEventSource):
@@ -678,8 +678,15 @@ def test_ha_worker_continues_when_heartbeat_raises(tmp_path, feature_config: Fea
 
     source = _BoomBeat({})
     source.ingest(event_payload(event_id="hbx", user_id="u1", item_id="ihbx"))
-    worker = _worker(settings, source, feature_config, apply_lock=SharedLock())
-    assert worker.tick() == 1
+    worker = _worker(
+        settings,
+        source,
+        feature_config,
+        apply_lock=SharedLock(),
+        heartbeat_interval_seconds=0,
+    )
+    assert worker.tick() == 0
+    assert source.health().lag == 1
 
 
 def test_ha_online_skips_persist_when_write_busy_after_apply(tmp_path, feature_config: FeatureConfig):

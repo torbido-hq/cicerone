@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import pytest
 from support.toml_config import write_toml
 
@@ -84,6 +86,47 @@ def test_load_events_section(tmp_path):
     assert settings.events.online.fit_partial_epochs == 2
     assert settings.events.online.fit_min_events == 7
     assert settings.events.online.max_extra_interactions == 12
+
+
+def test_load_online_and_experiment_warns(tmp_path, caplog):
+    path = write_toml(
+        tmp_path,
+        """
+        [job]
+        mode = "serve"
+        [serve]
+        auth_token = "tok"
+        [events]
+        enabled = true
+        kind = "webhook"
+        [events.online]
+        enabled = true
+        [experiment]
+        enabled = true
+        id = "exp"
+        [[experiment.variants]]
+        name = "control"
+        traffic = 0.5
+        [[experiment.variants]]
+        name = "treatment"
+        traffic = 0.5
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+    with caplog.at_level(logging.WARNING, logger="cicerone.config.load"):
+        settings = load_settings(path)
+    assert settings.events.online.enabled is True
+    assert settings.experiment.enabled is True
+    assert any("online collaborative refresh will be skipped" in record.message for record in caplog.records)
 
 
 def test_load_events_unknown_kind(tmp_path):

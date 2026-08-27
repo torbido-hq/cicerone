@@ -153,6 +153,22 @@ def test_hstu_drops_ligr_transformer_layers():
     assert cfg["relative_time_attention"] is True
 
 
+def test_hstu_keeps_explicit_sampled_softmax():
+    cfg = apply_sequential_architecture(
+        {**DEFAULT_SEQUENTIAL_CONFIG, "architecture": "hstu", "loss": "sampled_softmax"},
+        architecture_explicit=True,
+        loss_explicit=True,
+    )
+    assert cfg["loss"] == "sampled_softmax"
+    assert cfg["n_negatives"] == DEFAULT_SEQUENTIAL_CONFIG["n_negatives"]
+
+
+def test_hstu_toml_explicit_sampled_softmax_is_kept():
+    configs = resolve_model_configs({"sequential": {"architecture": "hstu", "loss": "sampled_softmax"}})
+    assert configs["sequential"]["loss"] == "sampled_softmax"
+    assert configs["sequential"]["n_negatives"] == DEFAULT_SEQUENTIAL_CONFIG["n_negatives"]
+
+
 def test_rectools_model_config_expands_ligr_layers():
     stripped = rectools_model_config({**DEFAULT_SEQUENTIAL_CONFIG})
     assert stripped["transformer_layers_type"].endswith("LiGRLayers")

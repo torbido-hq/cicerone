@@ -91,6 +91,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Writing `reasons` or `variant` to an existing DB table missing those
   columns raises a clear `ALTER TABLE` error.
 - Unknown dashboard staleness is announced as unknown, not success.
+- Sequential `log_epoch_metrics` calls transformer `fit_partial` with min
+  and max epoch (LightFM still gets epochs only).
+- AutoML scores candidates with `job.content_fallback.enabled`, matching
+  the recipe the job ships.
+- AutoML-challenger incremental apply uses `control`/`treatment` when
+  `[[experiment.variants]]` is empty.
+- Challenger control recipes prefer the prior run's `experiment_variants`
+  control arm over the union `models` list.
+- Experiment promote is blocked when recommendations or `variant` are
+  missing (catalog guardrails cannot run).
+- A failed first in-flight heartbeat nacks the batch instead of applying.
+- SQS receive uses a 5-minute visibility timeout so micro-batch plus apply
+  can outlast the queue default.
+- `[events.online]` with `[experiment]` logs a warning when the online
+  rewrite is skipped.
+- HSTU keeps an explicit `[model.sequential].loss = "sampled_softmax"`
+  instead of rewriting it to `softmax`.
 
 ## [0.6.2] - 2026-08-24
 

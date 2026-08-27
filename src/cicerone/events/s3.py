@@ -472,6 +472,7 @@ class S3EventSource(EventSource):
                 QueueUrl=queue_url,
                 MaxNumberOfMessages=min(self._max_messages, 10),
                 WaitTimeSeconds=self._wait_time_seconds if loaded == 0 else 0,
+                VisibilityTimeout=_SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS,
             )
             messages = response.get("Messages") or []
             if not messages:

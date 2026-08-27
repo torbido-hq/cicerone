@@ -83,9 +83,9 @@ file). Default off: serve stays read-only.
 
 Popular/latest write-through refreshes **every variant** for affected users.
 `[events.online]` LightFM rewrite is **skipped** while `[experiment]` is on
-(so arms stay isolated). Without an experiment, it rewrites personalized /
-item-KNN / content-fallback rows for affected users. See
-[incremental-events.md](incremental-events.md).
+(so arms stay isolated; load/serve log a warning). Without an experiment, it
+rewrites personalized / item-KNN / content-fallback rows for affected users.
+See [incremental-events.md](incremental-events.md).
 
 ## Metrics and promote
 
@@ -102,15 +102,18 @@ The dashboard **Experiments** page (`GET /dashboard/experiments`) shows:
   `experiment_id`).
 - Guardrails (fail closed): fallback rate, top-item share, distinct-item
   coverage against the **items snapshot** size (not recommended-item
-  diversity). A purchase win that collapses the catalog does not promote.
+  diversity). Missing recommendations or a `variant` column also block
+  promote. A purchase win that collapses the catalog does not promote.
 - **Promote** — only when the CI excludes zero **and** guardrails pass —
   writes the winner as 100% traffic at serve. **Resume split** clears
   promote state so sticky hashing resumes. The next job can copy that
   recipe into `[job]` and disable the experiment.
 
 `automl_challenger = true` (with `[job.automl]` enabled) synthesizes
-`control` from the last successful manifest and `treatment` from this run's
-AutoML pick.
+`control` from the last successful manifest (the `experiment_variants`
+control recipe when present, not the union `models` list) and `treatment`
+from this run's AutoML pick. Incremental write-through uses
+`control`/`treatment` even when `[[experiment.variants]]` is empty.
 
 ## What this is not
 

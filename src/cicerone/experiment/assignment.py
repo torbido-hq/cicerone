@@ -42,6 +42,19 @@ def assign_variant(
     return names[-1]
 
 
+def experiment_variant_names(settings: Settings) -> tuple[str, ...]:
+    """Names incremental apply and serve hash over (challenger defaults if unset)."""
+    experiment = settings.experiment
+    if not experiment.enabled:
+        return ()
+    names = tuple(variant.name for variant in experiment.variants)
+    if names:
+        return names
+    if experiment.automl_challenger:
+        return (CONTROL_NAME, TREATMENT_NAME)
+    return ()
+
+
 def resolve_assignment(
     settings: Settings,
     user_id: str,

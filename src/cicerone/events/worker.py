@@ -30,11 +30,22 @@ logger = logging.getLogger(__name__)
 _ONLINE_PERSIST_ATTEMPTS = 3
 
 
-def _call_heartbeat(beat: Callable[..., Any], events: Sequence[NormalizedEvent]) -> None:
+class HeartbeatError(RuntimeError):
+    """Raised when the first in-flight heartbeat fails (apply must not proceed)."""
+
+
+def _call_heartbeat(
+    beat: Callable[..., Any],
+    events: Sequence[NormalizedEvent],
+    *,
+    fail_closed: bool = False,
+) -> None:
     try:
         beat(events)
-    except Exception:
+    except Exception as exc:
         logger.exception("Event source heartbeat failed")
+        if fail_closed:
+            raise HeartbeatError("Event source heartbeat failed") from exc
 
 
 @contextmanager
@@ -48,7 +59,7 @@ def inflight_heartbeat(
     if not callable(beat):
         yield
         return
-    _call_heartbeat(beat, events)
+    _call_heartbeat(beat, events, fail_closed=True)
     if interval_seconds <= 0:
         yield
         return
@@ -232,6 +243,12 @@ class EventWorker:
         try:
             with inflight_heartbeat(self._source, ready, self._heartbeat_interval_seconds):
                 applied = self._updater.apply(ready, persist_online=False)
+        except HeartbeatError:
+            record_events_flush(status="error")
+            logger.error("In-flight heartbeat failed; returning %d event(s) to source", len(ready))
+            self._updater.abort_online()
+            self._source.nack(ready)
+            return 0
         except LockLostError:
             record_events_flush(status="error")
             update_events_leader(False)

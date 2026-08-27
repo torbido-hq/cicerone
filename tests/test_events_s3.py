@@ -200,6 +200,34 @@ def test_s3_sqs_poll_ack_deletes_message():
 
 
 @mock_aws
+def test_s3_sqs_receive_sets_apply_visibility(monkeypatch):
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-vis")["QueueUrl"]
+    _put_event(s3, "events/e1.json", event_payload(event_id="sqs-vis", item_id="i9"))
+    sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification("events/e1.json"))
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+    assert source._sqs is not None
+    calls: list[int] = []
+    real = source._sqs.receive_message
+
+    def counting(**kwargs):  # type: ignore[no-untyped-def]
+        timeout = kwargs.get("VisibilityTimeout")
+        if timeout is not None:
+            calls.append(int(timeout))
+        return real(**kwargs)
+
+    monkeypatch.setattr(source._sqs, "receive_message", counting)
+    events = list(source.poll(10))
+    assert [event.event_id for event in events] == ["sqs-vis"]
+    assert calls
+    assert calls[0] == _SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS
+    source.ack([events[0].event_id])
+
+
+@mock_aws
 def test_s3_sqs_nack_requeues_and_ack_still_deletes():
     s3 = boto3.client("s3", region_name="us-east-1")
     sqs = boto3.client("sqs", region_name="us-east-1")

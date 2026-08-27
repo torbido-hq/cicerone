@@ -257,6 +257,32 @@ def test_evaluate_candidates_scores_each_candidate(sample_items, feature_config)
         assert any(key.startswith("Recall") for key in result.metrics)
 
 
+def test_evaluate_candidates_passes_content_fallback_flag(sample_items, feature_config, monkeypatch):
+    seen: list[object] = []
+    real = automl.train_and_recommend
+
+    def _spy(*args, **kwargs):  # type: ignore[no-untyped-def]
+        seen.append(kwargs.get("content_fallback_enabled"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(automl, "train_and_recommend", _spy)
+    events = _spread_events(n_days=21)
+    evaluate_candidates(
+        events,
+        None,
+        sample_items,
+        feature_config,
+        top_k=2,
+        half_life_days=90,
+        candidates=[{"models": ["popular"]}],
+        n_splits=1,
+        test_days=7,
+        content_fallback_enabled=False,
+    )
+    assert seen
+    assert seen == [False] * len(seen)
+
+
 def test_evaluate_candidates_parallel_folds_match_sequential(sample_items, feature_config):
     # Deterministic strategies: parallel fold scoring must match sequential.
     events = _spread_events(n_days=35)

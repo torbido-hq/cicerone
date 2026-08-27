@@ -204,6 +204,7 @@ def make_settings(**overrides: Any) -> Settings:
             base["item_based_k_neighbors"] = k_from_cfg
     settings = Settings(**base)
     _require_exposure_log_backend(settings)
+    _warn_online_skipped_for_experiment(settings)
     return settings
 
 
@@ -233,6 +234,14 @@ def _require_exposure_log_backend(settings: Settings) -> None:
     require_appendable_exposure_log(settings.output)
     if settings.events.ha and settings.output.kind != "db":
         raise ConfigError(EXPOSURE_LOG_HA_ERROR)
+
+
+def _warn_online_skipped_for_experiment(settings: Settings) -> None:
+    if settings.events.online.enabled and settings.experiment.enabled:
+        logger.warning(
+            "[events.online] is enabled while [experiment] is enabled; "
+            "online collaborative refresh will be skipped"
+        )
 
 
 def _coerce_experiment(value: Any) -> ExperimentSettings:
@@ -602,4 +611,5 @@ def load_settings(config_path: str | None = None) -> Settings:
         experiment=load_experiment_settings(raw.get("experiment") or {}),
     )
     _require_exposure_log_backend(settings)
+    _warn_online_skipped_for_experiment(settings)
     return settings

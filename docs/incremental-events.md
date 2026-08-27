@@ -185,10 +185,12 @@ full `job.run()` (cron and `RunGuard` trigger) so a lost retrain lock skips
 artifact and recommendation writes.
 
 Fan-out sources **heartbeat** in-flight messages for the duration of apply
-(at the start of the flush, then every 15s):
-S3 SQS extends visibility (5 minutes) so `fit_partial` cannot outrun the
-receive window; Redis Streams `XCLAIM`s to the same consumer with idle 0 so
-`XAUTOCLAIM` does not steal the PEL. Online persist after `ack` retries,
+(at the start of the flush, then every 15s).
+S3 SQS `ReceiveMessage` sets visibility to 5 minutes (covering the
+micro-batch window plus apply); heartbeat then extends the same window so
+`fit_partial` cannot outrun it. Redis Streams `XCLAIM`s to the same consumer
+with idle 0 so `XAUTOCLAIM` does not steal the PEL. A failed first heartbeat
+nacks the batch. Online persist after `ack` retries,
 then drops the pending fit if it still fails, the lease is lost, a full
 retrain is in progress, or the batch job replaced the artifact — serving
 rows from that flush stay written. Online extras on top of the last job
