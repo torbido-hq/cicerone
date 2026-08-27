@@ -116,7 +116,7 @@ curl -sS -X POST \
 ```
 
 Flushes run when the buffer hits `batch_size` **or**
-`batch_window_seconds` elapses. Then serve’s refresh loop (dataset output)
+`batch_window_seconds` elapses. Then serve's refresh loop (dataset output)
 or the next DB read picks up the new rows. OpenAPI documents the route when
 webhook events are enabled (`/docs`, `/redoc`, checked-in
 `docs/openapi/serve.openapi.json`).

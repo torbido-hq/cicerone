@@ -92,9 +92,10 @@ at boot, then again on `[job].cron_schedule` in `config/cicerone.toml`
 By default (`[job].mode = "batch"`), the container only runs the batch job
 on its cron schedule — no HTTP surface at all. Setting `[job].mode = "serve"`
 switches `cicerone start` / `cicerone serve` to instead run a small FastAPI **read**
-API over the lookup table the batch job already wrote (never loads
-lightfm/implicit/torch and never trains; `rectools` itself is imported for
-`Columns`, so it stays in a serve-only image):
+API over the lookup table the batch job already wrote. The request path never
+loads lightfm/implicit/torch and never trains (`rectools` is imported for
+`Columns`, so it stays in a serve-only image). With `[events.online]`, the
+events worker loads the last artifact for write-through only:
 
 | Method | Path | Description |
 | --- | --- | --- |
@@ -256,8 +257,7 @@ LightFM on the last artifact for affected users. Guide:
 A lightweight, standalone web dashboard for checking whether the last job
 run succeeded and inspecting a user's current top-K — `cicerone dashboard`
 (compose maps port `8090`), regardless of `[job].mode` (batch or
-serve). Like serve mode, it never loads lightfm/implicit/torch (it does
-import `rectools`).
+serve). It never loads lightfm/implicit/torch (it does import `rectools`).
 
 ![Cicerone dashboard inspecting alice: recent events beside current top-K with amber overlap, Pause updates and Refresh, latest job success, and history including a failed S3 run](docs/images/dashboard.png)
 
@@ -520,10 +520,9 @@ events.
 
 Within each backtested fold, candidates that enable the same strategy (e.g.
 two fusion candidates that both include `popular`) reuse that strategy's
-already-fitted model instead of re-fitting it per candidate — fitting still
-happens once per fold per distinct strategy, and `recommend()` still runs
-fresh for every candidate, so this is purely a training-cost optimization
-and doesn't change scoring.
+already-fitted model instead of re-fitting it per candidate. Per-strategy
+`recommend()` frames are reused too; only the combination step is
+recomputed. Scoring is unchanged.
 
 ## Experiments
 
@@ -533,7 +532,7 @@ fits the union of variant models once, writes extra `variant` rows, and
 serve hashes `user_id` onto one list. The dashboard Experiments page shows
 always-valid CIs and catalog guardrails, and can promote a winner to 100%
 traffic. Optional `automl_challenger` uses the last successful manifest as
-control and this run’s AutoML pick as treatment.
+control and this run's AutoML pick as treatment.
 
 ```toml
 [experiment]

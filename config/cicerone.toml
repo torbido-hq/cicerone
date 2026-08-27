@@ -105,8 +105,9 @@ feature_config_path = "/app/config/features.toml"
 
 # Optional: also write a versioned fitted-model artifact (model.artifact /
 # model_artifacts table) alongside recommendations. Loadable later via
-# cicerone.artifact without re-running training. Default false. Serve mode
-# never loads this — it still reads precomputed recommendation rows only.
+# cicerone.artifact without re-running training. Default false. GET
+# /recommendations never loads this. With [events.online], the serve events
+# worker loads it for write-through.
 # save_model_artifact = false
 
 # Optional: log in-sample Precision@K/Recall@K every N epochs while fitting
@@ -260,9 +261,10 @@ prefix = "recommendations/latest"
 # batch_size = 100
 # batch_window_seconds = 60
 # poll_interval_seconds = 1
-# Optional: continue LightFM on known IDs and rewrite personalized rows
-# for affected users. Requires a model artifact in [output]
-# (batch job: save_model_artifact = true). GET /recommendations stays a lookup.
+# Optional: continue LightFM on known IDs and rewrite personalized /
+# item-KNN / content-fallback rows for affected users. Requires a model
+# artifact in [output] (batch job: save_model_artifact = true).
+# GET /recommendations stays a lookup.
 # [events.online]
 # enabled = true
 # fit_partial_epochs = 1          # 0 = frozen weights + history refresh only

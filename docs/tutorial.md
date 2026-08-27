@@ -472,7 +472,8 @@ switches to a separate, lightweight **read** API over whatever the batch job
 last wrote to `[output]` — `GET` never imports lightfm/implicit/torch, never
 trains, and never loads a model artifact. With `[events.online]` the events
 worker does load the artifact for write-through. (It does import `rectools`
-itself, for `Columns`, so that one stays in a serve-only image.) Reuse the local `data/output/` from
+itself, for `Columns`, so that one stays in a serve-only image.) Reuse the
+local `data/output/` from
 [step 3](#3-run-the-job-once):
 
 ```sh
