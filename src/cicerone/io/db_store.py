@@ -311,6 +311,31 @@ class DatabaseOutputSink:
             conn.execute(artifacts.delete())
             conn.execute(insert(artifacts).values(payload=payload, written_at=datetime.now(UTC)))
 
+    def replace_model_artifact_if(self, payload: bytes, expected_fingerprint: str) -> bool:
+        table_name = sql_identifier(
+            self._options.get("model_artifact_table", DEFAULT_MODEL_ARTIFACT_TABLE),
+            option="model_artifact_table",
+        )
+        metadata = MetaData()
+        artifacts = Table(
+            table_name,
+            metadata,
+            Column("payload", LargeBinary, nullable=False),
+            Column("written_at", DateTime(timezone=True), nullable=False),
+        )
+        with self._engine.begin() as conn:
+            artifacts.create(conn, checkfirst=True)
+            row = conn.execute(text(f'SELECT written_at FROM "{table_name}" LIMIT 1')).first()
+            if row is None or row[0] is None:
+                return False
+            written = row[0]
+            stamp = written.isoformat() if hasattr(written, "isoformat") else str(written)
+            if f"db:{stamp}" != expected_fingerprint:
+                return False
+            conn.execute(artifacts.delete())
+            conn.execute(insert(artifacts).values(payload=payload, written_at=datetime.now(UTC)))
+        return True
+
     def read_model_artifact(self) -> bytes | None:
         table_name = sql_identifier(
             self._options.get("model_artifact_table", DEFAULT_MODEL_ARTIFACT_TABLE),

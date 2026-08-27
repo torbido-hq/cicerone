@@ -216,6 +216,17 @@ def test_database_output_writes_and_replaces_model_artifact():
     assert sink.model_artifact_fingerprint() is not None
 
 
+def test_database_output_replace_model_artifact_if_is_compare_and_swap():
+    sink = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})
+    sink.write_model_artifact(b"first")
+    token = sink.model_artifact_fingerprint()
+    assert token is not None
+    assert sink.replace_model_artifact_if(b"second", token) is True
+    assert sink.read_model_artifact() == b"second"
+    assert sink.replace_model_artifact_if(b"third", token) is False
+    assert sink.read_model_artifact() == b"second"
+
+
 def test_database_output_read_model_artifact_missing_returns_none():
     sink = DatabaseOutputSink(
         {"database_url": TEST_DATABASE_URL, "model_artifact_table": "absent_model_artifacts"}

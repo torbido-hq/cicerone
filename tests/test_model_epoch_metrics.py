@@ -56,6 +56,16 @@ def test_invoke_epoch_fit_partial_max_epochs_keyword():
     assert calls == [("ds", 1, 1)]
 
 
+def test_invoke_epoch_fit_partial_lightfm_extra_positionals_keep_defaults():
+    calls: list[tuple[object, ...]] = []
+
+    def fit_partial(dataset, epochs, num_threads=4):  # type: ignore[no-untyped-def]
+        calls.append((dataset, epochs, num_threads))
+
+    invoke_epoch_fit_partial(fit_partial, "ds")
+    assert calls == [("ds", 1, 4)]
+
+
 def test_invoke_epoch_fit_partial_uninspected_arity(monkeypatch):
     calls: list[tuple[object, ...]] = []
 
@@ -68,16 +78,6 @@ def test_invoke_epoch_fit_partial_uninspected_arity(monkeypatch):
     monkeypatch.setattr("cicerone.model.epoch_metrics.inspect.signature", _boom)
     invoke_epoch_fit_partial(fit_partial, "ds")
     assert calls == [("ds", 1)]
-
-
-def test_invoke_epoch_fit_partial_three_positional_without_max_epochs_name():
-    calls: list[tuple[object, ...]] = []
-
-    def fit_partial(dataset, min_epochs, extra):  # type: ignore[no-untyped-def]
-        calls.append((dataset, min_epochs, extra))
-
-    invoke_epoch_fit_partial(fit_partial, "ds")
-    assert calls == [("ds", 1, 1)]
 
 
 def test_warn_on_epoch_metric_trajectory_regression_and_plateau(caplog):

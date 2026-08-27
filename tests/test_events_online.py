@@ -351,6 +351,28 @@ def test_online_trainer_commit_drops_replaced_artifact(
     assert artifact_path.read_bytes() == b"batch-replaced"
 
 
+def test_online_trainer_commit_does_not_clobber_during_serialize(
+    tmp_path, feature_config, sample_events, sample_users, sample_items, monkeypatch
+):
+    from cicerone.events import online as online_mod
+
+    sink, _enabled = _write_artifact(tmp_path, feature_config, sample_events, sample_users, sample_items)
+    trainer = _trainer(sink, epochs=0)
+    trainer.refresh([_known_event("pending")])
+    assert trainer._pending is not None
+    artifact_path = tmp_path / "out" / ARTIFACT_FILENAME
+    original = online_mod.dumps_artifact
+
+    def _swap_then_dump(artifact):  # type: ignore[no-untyped-def]
+        artifact_path.write_bytes(b"batch-replaced")
+        return original(artifact)
+
+    monkeypatch.setattr(online_mod, "dumps_artifact", _swap_then_dump)
+    trainer.commit()
+    assert trainer._pending is None
+    assert artifact_path.read_bytes() == b"batch-replaced"
+
+
 def test_incremental_updater_splices_online_rows(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()

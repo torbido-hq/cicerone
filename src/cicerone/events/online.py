@@ -168,14 +168,12 @@ class OnlineTrainer:
         if pending is None:
             return
         self._ensure_fence()
-        if self._artifact_replaced(pending):
+        payload = dumps_artifact(pending.artifact)
+        if not self._write_payload_if_current(pending, payload):
             logger.warning("Model artifact changed during online refresh; dropping pending fit")
             self._pending = None
             return
-        self._persist(pending.artifact)
-        digest = self._payload_digest
-        if digest is None:
-            digest = _digest(dumps_artifact(pending.artifact))
+        digest = _digest(payload)
         self._artifact = pending.artifact
         self._working = pending.working
         self._extra_raw = pending.extra_raw
@@ -387,11 +385,16 @@ class OnlineTrainer:
             logger.info("Online refresh skipping sequential (torch extra is not installed)")
         return models, fitted
 
-    def _persist(self, artifact: ModelArtifact) -> None:
-        payload = dumps_artifact(artifact)
+    def _write_payload_if_current(self, pending: _PendingRefresh, payload: bytes) -> bool:
+        self._ensure_fence()
+        replace = getattr(self._sink, "replace_model_artifact_if", None)
+        expected = pending.baseline_token
+        if callable(replace) and expected is not None:
+            return bool(replace(payload, expected))
+        if self._artifact_replaced(pending):
+            return False
         self._sink.write_model_artifact(payload)
-        self._payload_digest = _digest(payload)
-        self._artifact_token = self._fingerprint()
+        return True
 
     def _ensure_fence(self) -> None:
         if self._fence_check is not None and not self._fence_check():

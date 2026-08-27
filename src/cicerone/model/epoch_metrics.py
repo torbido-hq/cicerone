@@ -50,20 +50,11 @@ def invoke_epoch_fit_partial(fit_partial: Callable, dataset: Dataset) -> None:
     except (TypeError, ValueError):
         fit_partial(dataset, 1)
         return
-    if "max_epochs" in params:
+    if "min_epochs" in params and "max_epochs" in params:
         if params["max_epochs"].kind is inspect.Parameter.KEYWORD_ONLY:
             fit_partial(dataset, 1, max_epochs=1)
         else:
             fit_partial(dataset, 1, 1)
-        return
-    positional = [
-        name
-        for name, param in params.items()
-        if name != "self"
-        and param.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
-    ]
-    if len(positional) >= 3:
-        fit_partial(dataset, 1, 1)
         return
     fit_partial(dataset, 1)
 
