@@ -88,6 +88,8 @@ def _incremental_status(history: list[dict[str, Any]]) -> dict[str, Any] | None:
             "generated_at": run.get("generated_at"),
             "last_incremental_at": run.get("last_incremental_at") or run.get("generated_at"),
             "events": run.get("incremental_events_applied", run.get("n_events")),
+            "online_users_refreshed": run.get("online_users_refreshed"),
+            "online_fit_partial_epochs": run.get("online_fit_partial_epochs"),
             "error": run.get("error"),
         }
     return None

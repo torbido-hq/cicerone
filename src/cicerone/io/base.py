@@ -40,6 +40,14 @@ class OutputSink(Protocol):
 
     def write_model_artifact(self, payload: bytes) -> None: ...
 
+    def read_model_artifact(self) -> bytes | None:
+        """Latest fitted-model blob, or ``None`` if the sink has not written one."""
+        ...
+
+    def model_artifact_fingerprint(self) -> str | None:
+        """Cheap identity of the latest artifact (mtime/ETag/written_at), or ``None``."""
+        ...
+
     def write_items_snapshot(self, df: pd.DataFrame) -> None:
         """Persist items for serve-time category/availability filters."""
         ...

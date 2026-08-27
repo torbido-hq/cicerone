@@ -85,6 +85,16 @@
         <div><dt class="text-slate-600">Events applied</dt>
           <dd>{{ incremental.events if incremental.events is not none else "—" }}</dd>
         </div>
+        {% if incremental.online_users_refreshed is not none %}
+        <div><dt class="text-slate-600">Online users refreshed</dt>
+          <dd>{{ incremental.online_users_refreshed }}</dd>
+        </div>
+        {% endif %}
+        {% if incremental.online_fit_partial_epochs is not none %}
+        <div><dt class="text-slate-600">Online fit_partial epochs</dt>
+          <dd>{{ incremental.online_fit_partial_epochs }}</dd>
+        </div>
+        {% endif %}
       </dl>
       {% if incremental.status == "failed" and incremental.error %}
         <pre class="mt-3 whitespace-pre-wrap rounded bg-red-100 p-2 text-xs text-red-900">{{ incremental.error }}</pre>

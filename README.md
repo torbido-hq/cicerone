@@ -20,7 +20,8 @@ writes out top-K recommendations per user. An optional lightweight "serve"
 mode can then expose those precomputed recommendations over a small
 read-only HTTP API — there's still no live inference, no model loaded in the
 request path. Optional `[events]` ingest can refresh popular/latest rows
-between full retrains; that is still write-through, not request-path
+between full retrains; `[events.online]` can also continue LightFM for
+affected users. That is still write-through, not request-path
 ranking ([docs/incremental-events.md](docs/incremental-events.md)). How the
 strategies differ, with paper links:
 [docs/how-it-works.md](docs/how-it-works.md). Optionally
@@ -47,7 +48,8 @@ up to your own data doesn't require touching any code.
 - **Serve mode** — read-only HTTP API over precomputed recommendations
   (`limit` / `category` / `exclude_unavailable`, cold-start fallback;
   OpenAPI at `/docs` + thin `ServeClient`)
-- **Incremental events** — write-through of popular/latest between retrains
+- **Incremental events** — write-through of popular/latest between retrains;
+  optional `[events.online]` continues LightFM for affected users
   ([docs/incremental-events.md](docs/incremental-events.md))
 - **CLI / PyPI** — `cicerone` console script; `pip install cicerone-recommender`
   (import name `cicerone`; the PyPI name `cicerone` is a different project)
@@ -245,7 +247,8 @@ process:
 ### Incremental events
 
 Optional `[events]` on the serve process write-through popular/latest rows
-between full retrains (not request-path ranking). Guide:
+between full retrains (not request-path ranking). `[events.online]` continues
+LightFM on the last artifact for affected users. Guide:
 [docs/incremental-events.md](docs/incremental-events.md).
 
 ## Dashboard
@@ -568,8 +571,10 @@ manifest records `artifact_written` and `artifact_schema_version` when an
 artifact was saved.
 
 This is a train/serve *artifact* split (inspired by tools like
-LibRecommender), not live inference: serve mode still reads precomputed
-recommendation rows only and never loads the artifact or ML deps. Schema
+LibRecommender), not live inference: `GET /recommendations` still reads
+precomputed rows only. When `[events.online]` is enabled, the serve events
+worker loads the artifact to continue LightFM and rewrite affected users.
+Schema
 **v3** writes RecTools strategies with `model.save` / `load_model` inside a
 zip envelope; the envelope (dataset, feature config) and custom
 `content_fallback` weights still use pickle and must only be loaded from
@@ -586,8 +591,10 @@ when multi-source blending combined more than one. Existing DB tables need
 `ALTER TABLE … ADD COLUMN reasons TEXT` before the extra column will persist.
 An incremental flush rewrites a whole user's rows, but only the event-derived
 boost rows carry `incremental`: preserved personalized rows keep their original
-label, and the refilled slices stay `popular_fallback` / `latest`. Use the
-manifest's `incremental_events_applied` / `last_incremental_at` to see that a
+label unless `[events.online]` replaced them, and the refilled slices stay
+`popular_fallback` / `latest`. Use the
+manifest's `incremental_events_applied` / `last_incremental_at` (and
+`online_users_refreshed` when online refresh ran) to see that a
 flush happened — `source` will not tell you.
 
 `manifest`: metadata about the latest run (counts, timestamps,

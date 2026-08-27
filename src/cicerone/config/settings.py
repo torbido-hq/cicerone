@@ -15,6 +15,8 @@ from cicerone.config.constants import (
     DEFAULT_EPOCH_METRICS_REGRESSION_DROP,
     DEFAULT_EVENTS_BATCH_SIZE,
     DEFAULT_EVENTS_BATCH_WINDOW_SECONDS,
+    DEFAULT_EVENTS_ONLINE_FIT_MIN_EVENTS,
+    DEFAULT_EVENTS_ONLINE_FIT_PARTIAL_EPOCHS,
     DEFAULT_EVENTS_POLL_INTERVAL_SECONDS,
     DEFAULT_EXPERIMENT_ALPHA,
     DEFAULT_EXPLAIN_MAX_ATTRIBUTES,
@@ -95,12 +97,22 @@ class EventsIncrementalSettings:
 
 
 @dataclass(frozen=True)
+class EventsOnlineSettings:
+    """Serve-worker LightFM fit_partial + user-scoped recommend write-through."""
+
+    enabled: bool = False
+    fit_partial_epochs: int = DEFAULT_EVENTS_ONLINE_FIT_PARTIAL_EPOCHS
+    fit_min_events: int = DEFAULT_EVENTS_ONLINE_FIT_MIN_EVENTS
+
+
+@dataclass(frozen=True)
 class EventsSettings:
     enabled: bool = False
     kind: str = "webhook"
     options: dict[str, Any] = field(default_factory=dict)
     incremental: EventsIncrementalSettings = field(default_factory=EventsIncrementalSettings)
     ha: bool = False
+    online: EventsOnlineSettings = field(default_factory=EventsOnlineSettings)
 
 
 @dataclass(frozen=True)

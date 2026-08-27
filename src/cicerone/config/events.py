@@ -8,11 +8,13 @@ from typing import Any
 from cicerone.config.constants import (
     DEFAULT_EVENTS_BATCH_SIZE,
     DEFAULT_EVENTS_BATCH_WINDOW_SECONDS,
+    DEFAULT_EVENTS_ONLINE_FIT_MIN_EVENTS,
+    DEFAULT_EVENTS_ONLINE_FIT_PARTIAL_EPOCHS,
     DEFAULT_EVENTS_POLL_INTERVAL_SECONDS,
     ConfigError,
 )
-from cicerone.config.settings import EventsIncrementalSettings, EventsSettings
-from cicerone.config.validation import require_positive_float, require_positive_int
+from cicerone.config.settings import EventsIncrementalSettings, EventsOnlineSettings, EventsSettings
+from cicerone.config.validation import require_non_negative_int, require_positive_float, require_positive_int
 from cicerone.events.registry import registered_event_source_kinds
 
 ResolveEnv = Callable[[Any, str], Any]
@@ -49,14 +51,49 @@ def _incremental_settings(
     )
 
 
+def _online_settings(raw: dict[str, Any] | EventsOnlineSettings | None) -> EventsOnlineSettings:
+    if isinstance(raw, EventsOnlineSettings):
+        data = {
+            "enabled": raw.enabled,
+            "fit_partial_epochs": raw.fit_partial_epochs,
+            "fit_min_events": raw.fit_min_events,
+        }
+    elif raw is None:
+        data = {}
+    elif isinstance(raw, dict):
+        data = raw
+    else:
+        raise TypeError(f"Expected EventsOnlineSettings, dict, or None; got {type(raw).__name__}")
+    return EventsOnlineSettings(
+        enabled=bool(data.get("enabled", False)),
+        fit_partial_epochs=require_non_negative_int(
+            int(data.get("fit_partial_epochs", DEFAULT_EVENTS_ONLINE_FIT_PARTIAL_EPOCHS)),
+            name="events.online.fit_partial_epochs",
+        ),
+        fit_min_events=require_positive_int(
+            int(data.get("fit_min_events", DEFAULT_EVENTS_ONLINE_FIT_MIN_EVENTS)),
+            name="events.online.fit_min_events",
+        ),
+    )
+
+
+def _require_events_for_online(enabled: bool, online: EventsOnlineSettings) -> None:
+    if online.enabled and not enabled:
+        raise ConfigError("events.online.enabled requires events.enabled = true")
+
+
 def coerce_events_settings(value: Any | None) -> EventsSettings:
     if isinstance(value, EventsSettings):
+        incremental = _incremental_settings(value.incremental)
+        online = _online_settings(value.online)
+        _require_events_for_online(value.enabled, online)
         return EventsSettings(
             enabled=value.enabled,
             kind=value.kind,
             options=dict(value.options),
-            incremental=_incremental_settings(value.incremental),
+            incremental=incremental,
             ha=value.ha,
+            online=online,
         )
     if value is None:
         return EventsSettings()
@@ -64,7 +101,10 @@ def coerce_events_settings(value: Any | None) -> EventsSettings:
         raise TypeError(f"Expected EventsSettings, dict, or None; got {type(value).__name__}")
     raw = dict(value)
     incremental = _incremental_settings(raw.pop("incremental", None))
-    return EventsSettings(incremental=incremental, **raw)
+    online = _online_settings(raw.pop("online", None))
+    enabled = bool(raw.get("enabled", False))
+    _require_events_for_online(enabled, online)
+    return EventsSettings(incremental=incremental, online=online, **raw)
 
 
 def load_events_settings(
@@ -97,7 +137,15 @@ def load_events_settings(
     else:
         incremental_raw = {}
     incremental = _incremental_settings(incremental_raw)
+    if "online" in events_raw:
+        online_raw = events_raw["online"]
+        if not isinstance(online_raw, dict):
+            raise ConfigError("events.online must be a table")
+    else:
+        online_raw = {}
+    online = _online_settings(online_raw)
     ha = bool(events_raw.get("ha", False))
+    _require_events_for_online(enabled, online)
 
     if enabled and kind == "webhook" and mode == "serve":
         webhook_token = auth_token or serve_auth_token
@@ -123,4 +171,5 @@ def load_events_settings(
         options=options,
         incremental=incremental,
         ha=ha,
+        online=online,
     )

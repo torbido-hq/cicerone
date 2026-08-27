@@ -1,7 +1,8 @@
 """Versioned fitted-model artifacts (RecTools save/load + pickle envelope).
 
 Trust boundary: load only trusted batch-job artifacts — never untrusted
-uploads (pickle RCE). Not used on the serve HTTP path.
+uploads (pickle RCE). Not used on the serve HTTP request path; the events
+worker may load it when `[events.online]` is enabled.
 """
 
 from __future__ import annotations

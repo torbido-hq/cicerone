@@ -212,6 +212,16 @@ def test_database_output_writes_and_replaces_model_artifact():
     assert len(stored) == 1
     payload = stored.iloc[0]["payload"]
     assert bytes(payload) == b"second"
+    assert sink.read_model_artifact() == b"second"
+    assert sink.model_artifact_fingerprint() is not None
+
+
+def test_database_output_read_model_artifact_missing_returns_none():
+    sink = DatabaseOutputSink(
+        {"database_url": TEST_DATABASE_URL, "model_artifact_table": "absent_model_artifacts"}
+    )
+    assert sink.read_model_artifact() is None
+    assert sink.model_artifact_fingerprint() is None
 
 
 def test_database_output_model_artifact_custom_table_name():

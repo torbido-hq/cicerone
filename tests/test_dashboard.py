@@ -135,6 +135,8 @@ def test_status_partial_shows_incremental_panel_when_events_enabled():
             "triggered_by": "incremental",
             "last_incremental_at": "2026-08-13T15:00:00+00:00",
             "incremental_events_applied": 3,
+            "online_users_refreshed": 2,
+            "online_fit_partial_epochs": 1,
             "n_events": 3,
             "error": None,
         },
@@ -156,6 +158,7 @@ def test_status_partial_shows_incremental_panel_when_events_enabled():
     assert "Incremental events" in response.text
     assert "Source: webhook" in response.text
     assert "3" in response.text
+    assert "Online users refreshed" in response.text
     assert "cicerone_events_source_lag" in response.text
 
 
