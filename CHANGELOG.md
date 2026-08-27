@@ -59,8 +59,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Series, or array.
 - Serve collapses leftover `variant` rows to `control` (else the first name)
   when `[experiment]` is off, instead of mixing control and treatment ranks.
-- Experiment promote state is an upsert keyed by `experiment_id` (no
-  `DROP TABLE`); reads order by `promoted_at`.
+- Experiment promote state is a single-row replace (no `DROP TABLE`);
+  reads order by `promoted_at`, and fall back if that column is missing.
 - Online LightFM persists the artifact only after a successful apply and
   event `ack`; a failed refresh nacks the batch.
 - Online collaborative rewrite is skipped while `[experiment]` is enabled.
@@ -76,6 +76,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   fails or the apply lease is lost.
 - SQS and Redis Streams heartbeat in-flight messages for the duration of
   incremental apply.
+- Leftover `variant` collapse ignores missing/NaN names instead of treating
+  them as `"nan"`.
+- Dashboard lookup refresh TTL tracks one reader, not an unbounded id map.
 
 ## [0.6.2] - 2026-08-24
 

@@ -14,7 +14,7 @@ from sqlalchemy import Engine, create_engine, text
 
 from cicerone.config.constants import ConfigError
 from cicerone.config.settings import IOSettings
-from cicerone.io.db_errors import is_missing_table_error
+from cicerone.io.db_errors import is_missing_column_error, is_missing_table_error
 from cicerone.io.db_store import MISSING_TABLE_ERRORS
 from cicerone.io.options import (
     build_s3_client,
@@ -135,13 +135,18 @@ class ExperimentStore:
                 text(f'SELECT * FROM "{table}" ORDER BY promoted_at DESC LIMIT 1'),
                 engine,
             )
-        except MISSING_TABLE_ERRORS:
-            return None
         except Exception as exc:
-            if is_missing_table_error(exc):
+            if is_missing_column_error(exc):
+                try:
+                    frame = pd.read_sql(text(f'SELECT * FROM "{table}" LIMIT 1'), engine)
+                except Exception:
+                    logger.exception("Failed to read experiment state table %r", table)
+                    return None
+            elif isinstance(exc, MISSING_TABLE_ERRORS) or is_missing_table_error(exc):
                 return None
-            logger.exception("Failed to read experiment state table %r", table)
-            return None
+            else:
+                logger.exception("Failed to read experiment state table %r", table)
+                return None
         if frame.empty:
             return None
         return {str(key): _jsonish(value) for key, value in frame.iloc[0].to_dict().items()}
@@ -173,10 +178,7 @@ class ExperimentStore:
         }
         with engine.begin() as conn:
             conn.execute(create_sql)
-            conn.execute(
-                text(f'DELETE FROM "{table}" WHERE experiment_id = :experiment_id'),
-                {"experiment_id": experiment_id},
-            )
+            conn.execute(text(f'DELETE FROM "{table}"'))
             conn.execute(
                 text(
                     f'INSERT INTO "{table}" (experiment_id, promoted_variant, promoted_at) '

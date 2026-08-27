@@ -382,8 +382,7 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             return None
         if frame.empty:
             return None
-        names = [str(value) for value in frame.iloc[:, 0].astype(str).tolist()]
-        return _rec.pick_fallback_variant(names)
+        return _rec.pick_fallback_variant(frame.iloc[:, 0].tolist())
 
     def _remember_missing_variant_column(self, exc: BaseException) -> bool:
         message = db_error_message(exc)

@@ -34,7 +34,7 @@ HISTORY_UNAVAILABLE = "Event history is not available."
 HISTORY_FAILED = "Could not load event history."
 MISSING = "—"
 _LOOKUP_REFRESH_TTL_SECONDS = 5.0
-_last_lookup_refresh: dict[int, float] = {}
+_last_lookup_refresh: tuple[int, float] | None = None
 _MAX_USER_ATTRS = 12
 _EVENT_TYPE_COLUMN = "event_type"
 _QUANTITY_COLUMN = "quantity"
@@ -109,13 +109,15 @@ def lookup_recommendations(
             error="Recommendation store is not available.",
         )
 
+    global _last_lookup_refresh
     try:
+        global _last_lookup_refresh
         key = id(recommendation_reader)
         now = time.monotonic()
-        last = _last_lookup_refresh.get(key, 0.0)
-        if now - last >= _LOOKUP_REFRESH_TTL_SECONDS:
+        last_key, last_at = _last_lookup_refresh if _last_lookup_refresh is not None else (0, 0.0)
+        if key != last_key or now - last_at >= _LOOKUP_REFRESH_TTL_SECONDS:
             recommendation_reader.refresh()
-            _last_lookup_refresh[key] = now
+            _last_lookup_refresh = (key, now)
     except Exception:
         logger.exception("Failed to refresh recommendation reader for dashboard lookup")
 

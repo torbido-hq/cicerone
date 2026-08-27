@@ -485,7 +485,7 @@ class IncrementalUpdater:
     def _stamp_collapsed_variant(self, merged: pd.DataFrame, prior: pd.DataFrame) -> pd.DataFrame:
         if merged.empty or VARIANT_COLUMN not in prior.columns or prior.empty:
             return merged
-        pick = pick_fallback_variant(prior[VARIANT_COLUMN].astype(str).tolist())
+        pick = pick_fallback_variant(prior[VARIANT_COLUMN].tolist())
         if pick is None:
             return merged
         stamped = merged.copy()

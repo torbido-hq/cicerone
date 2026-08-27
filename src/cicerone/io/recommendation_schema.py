@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from cicerone.io.options import sql_identifier
+from cicerone.values import is_missing
 
 USER_COLUMN = "user_id"
 ITEM_COLUMN = "item_id"
@@ -55,9 +56,9 @@ def recommendation_output_columns(frame: Any) -> list[str]:
     return columns
 
 
-def pick_fallback_variant(names: Sequence[str]) -> str | None:
+def pick_fallback_variant(names: Sequence[object]) -> str | None:
     """Prefer control when mixed leftover variant rows must collapse to one list."""
-    values = [str(name) for name in names if str(name)]
+    values = [str(name) for name in names if not is_missing(name) and str(name)]
     if not values:
         return None
     if FALLBACK_VARIANT in values:
@@ -69,11 +70,14 @@ def collapse_mixed_variants(frame: Any) -> Any:
     """Keep a single variant when experiments are off but leftover rows remain."""
     if not has_variant_column(frame) or getattr(frame, "empty", False):
         return frame
-    names = [str(value) for value in frame[VARIANT_COLUMN].astype(str).unique().tolist()]
-    pick = pick_fallback_variant(names)
-    if pick is None or len(set(names)) <= 1:
+    series = frame[VARIANT_COLUMN]
+    pick = pick_fallback_variant(series.tolist())
+    if pick is None:
         return frame
-    return frame[frame[VARIANT_COLUMN].astype(str) == pick]
+    mask = series.map(lambda value: not is_missing(value) and str(value) == pick)
+    if bool(mask.all()):
+        return frame
+    return frame.loc[mask]
 
 
 def filter_variant_rows(frame: Any, variant: str | None) -> Any:

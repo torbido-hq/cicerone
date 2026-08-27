@@ -95,6 +95,19 @@ def test_variant_helpers_empty_and_no_control():
 
     assert pick_fallback_variant([]) is None
     assert pick_fallback_variant(["", "zeta", "alpha"]) == "alpha"
+    assert pick_fallback_variant([float("nan"), pd.NA, None, "treatment"]) == "treatment"
+    mixed_nan = pd.DataFrame(
+        {
+            "user_id": ["u1", "u1"],
+            "item_id": ["keep", "drop"],
+            "rank": [1, 1],
+            "score": [0.9, 0.8],
+            "source": ["personalized", "personalized"],
+            "variant": ["treatment", float("nan")],
+        }
+    )
+    collapsed = collapse_mixed_variants(mixed_nan)
+    assert list(collapsed["item_id"].astype(str)) == ["keep"]
     assert recommendation_output_columns(object()) == list(RECOMMENDATION_COLUMNS)
     empty = pd.DataFrame(columns=["user_id", "item_id", "rank", "score", "source", "variant"])
     assert collapse_mixed_variants(empty).empty
