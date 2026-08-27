@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from cicerone.io.options import sql_identifier
@@ -22,6 +22,9 @@ RECOMMENDATION_COLUMNS: tuple[str, ...] = (
     SOURCE_COLUMN,
 )
 _OPTIONAL_OUTPUT_COLUMNS: tuple[str, ...] = (REASONS_COLUMN, VARIANT_COLUMN)
+
+
+FALLBACK_VARIANT = "control"
 
 
 def recommendations_sql_names(
@@ -52,12 +55,35 @@ def recommendation_output_columns(frame: Any) -> list[str]:
     return columns
 
 
+def pick_fallback_variant(names: Sequence[str]) -> str | None:
+    """Prefer control when mixed leftover variant rows must collapse to one list."""
+    values = [str(name) for name in names if str(name)]
+    if not values:
+        return None
+    if FALLBACK_VARIANT in values:
+        return FALLBACK_VARIANT
+    return sorted(values)[0]
+
+
+def collapse_mixed_variants(frame: Any) -> Any:
+    """Keep a single variant when experiments are off but leftover rows remain."""
+    if not has_variant_column(frame) or getattr(frame, "empty", False):
+        return frame
+    names = [str(value) for value in frame[VARIANT_COLUMN].astype(str).unique().tolist()]
+    pick = pick_fallback_variant(names)
+    if pick is None or len(set(names)) <= 1:
+        return frame
+    return frame[frame[VARIANT_COLUMN].astype(str) == pick]
+
+
 def filter_variant_rows(frame: Any, variant: str | None) -> Any:
-    """Keep rows for ``variant``. Missing column or ``None`` variant is a no-op."""
-    if variant is None or not has_variant_column(frame):
+    """Keep rows for ``variant``. Missing column is a no-op; ``None`` collapses mixed lists."""
+    if not has_variant_column(frame):
         return frame
     if getattr(frame, "empty", False):
         return frame
+    if variant is None:
+        return collapse_mixed_variants(frame)
     return frame[frame[VARIANT_COLUMN].astype(str) == str(variant)]
 
 

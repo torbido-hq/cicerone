@@ -691,6 +691,10 @@ def test_apply_boosts_empty_recs_and_no_boosts_paths():
     assert list(truncated[Columns.Item]) == ["i1"]
     untruncated = apply_boosts(recs, _items(), [], top_k=None)
     assert len(untruncated) == 2
+    no_hits = apply_boosts(recs, _items(), boosts, top_k=2, record_hits=False)
+    from cicerone.reasons import BOOST_HITS_COLUMN
+
+    assert BOOST_HITS_COLUMN not in no_hits.columns
 
 
 def test_boolean_boost_respects_string_false():

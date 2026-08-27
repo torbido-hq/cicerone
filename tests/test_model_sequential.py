@@ -148,6 +148,9 @@ def test_hstu_drops_ligr_transformer_layers():
     )
     assert cfg["cls"] == "HSTUModel"
     assert "transformer_layers_type" not in cfg
+    assert cfg["loss"] == "softmax"
+    assert "n_negatives" not in cfg
+    assert cfg["relative_time_attention"] is True
 
 
 def test_rectools_model_config_expands_ligr_layers():

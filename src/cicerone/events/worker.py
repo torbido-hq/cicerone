@@ -183,7 +183,7 @@ class EventWorker:
 
     def _flush_ready(self, ready: list[NormalizedEvent]) -> int:
         try:
-            applied = self._updater.apply(ready)
+            applied = self._updater.apply(ready, persist_online=False)
         except LockLostError:
             record_events_flush(status="error")
             update_events_leader(False)
@@ -191,16 +191,19 @@ class EventWorker:
                 "Apply lease lost before write; nacking %d event(s)",
                 len(ready),
             )
+            self._updater.abort_online()
             self._source.nack(ready)
             return 0
         except Exception:
             record_events_flush(status="error")
             logger.exception("Incremental apply failed; returning %d event(s) to source", len(ready))
+            self._updater.abort_online()
             self._source.nack(ready)
             return 0
         if applied == 0:
             record_events_flush(status="busy")
             record_events_apply_busy(reason="retrain")
+            self._updater.abort_online()
             self._source.nack(ready)
             return 0
         if applied != len(ready):
@@ -210,6 +213,7 @@ class EventWorker:
                 applied,
                 len(ready),
             )
+            self._updater.abort_online()
             self._source.nack(ready)
             return 0
         try:
@@ -217,7 +221,12 @@ class EventWorker:
         except Exception:
             record_events_flush(status="error")
             logger.exception("Event source ack failed after successful apply; nacking batch")
+            self._updater.abort_online()
             self._source.nack(ready)
             raise
+        try:
+            self._updater.persist_online()
+        except Exception:
+            logger.exception("Online artifact persist failed after ack; serving rows already written")
         record_events_flush(status="success", events=applied)
         return applied

@@ -106,7 +106,8 @@ def test_event_worker_apply_failure_nacks(tmp_path, feature_config: FeatureConfi
     source.ingest(event_payload(event_id="fail1"))
 
     class _Boom(IncrementalUpdater):
-        def apply(self, events):  # type: ignore[no-untyped-def]
+        def apply(self, events, *, persist_online: bool = True):  # type: ignore[no-untyped-def]
+            del persist_online
             raise RuntimeError("boom")
 
     worker = EventWorker(
@@ -139,7 +140,8 @@ def test_event_worker_partial_apply_nacks(tmp_path, feature_config: FeatureConfi
     source.ingest(event_payload(event_id="p2", item_id="i2"))
 
     class _Partial(IncrementalUpdater):
-        def apply(self, events):  # type: ignore[no-untyped-def]
+        def apply(self, events, *, persist_online: bool = True):  # type: ignore[no-untyped-def]
+            del persist_online
             return max(len(events) - 1, 0)
 
     worker = EventWorker(

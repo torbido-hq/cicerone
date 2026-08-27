@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import logging
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 import pandas as pd
 from rectools import Columns
@@ -13,6 +14,7 @@ from rectools.dataset import Dataset
 from rectools.dataset.interactions import Interactions
 
 from cicerone.artifact import ModelArtifact, dumps_artifact, loads_artifact
+from cicerone.config.settings import ExplainSettings
 from cicerone.dataset import BuiltDataset, build_interactions
 from cicerone.events.base import NormalizedEvent
 from cicerone.events.normalize import events_to_dataframe
@@ -36,6 +38,13 @@ _INTERACTION_COLS = (Columns.User, Columns.Item, Columns.Weight, Columns.Datetim
 
 class OnlineArtifactError(RuntimeError):
     """Online mode is enabled but the output store has no model artifact."""
+
+
+@dataclass
+class _PendingRefresh:
+    artifact: ModelArtifact
+    working: Dataset
+    pending_fit_events: int
 
 
 def _digest(payload: bytes) -> bytes:
@@ -90,6 +99,7 @@ class OnlineTrainer:
         fit_partial_epochs: int,
         fit_min_events: int,
         fence_check: Callable[[], bool] | None = None,
+        explain: ExplainSettings | None = None,
     ):
         if top_k < 1:
             raise ValueError("top_k must be >= 1")
@@ -103,6 +113,7 @@ class OnlineTrainer:
         self._fit_partial_epochs = fit_partial_epochs
         self._fit_min_events = fit_min_events
         self._fence_check = fence_check
+        self._explain = explain if explain is not None else ExplainSettings()
         self._artifact: ModelArtifact | None = None
         self._working: Dataset | None = None
         self._payload_digest: bytes | None = None
@@ -110,8 +121,10 @@ class OnlineTrainer:
         self._hot_users: frozenset[str] = frozenset()
         self._hot_items: frozenset[str] = frozenset()
         self._pending_fit_events = 0
+        self._pending: _PendingRefresh | None = None
 
     def invalidate(self) -> None:
+        self._pending = None
         self._artifact = None
         self._working = None
         self._payload_digest = None
@@ -119,6 +132,24 @@ class OnlineTrainer:
         self._hot_users = frozenset()
         self._hot_items = frozenset()
         self._pending_fit_events = 0
+
+    def abort(self) -> None:
+        """Drop an uncommitted refresh; committed artifact on disk is unchanged."""
+        self._pending = None
+
+    def commit(self) -> None:
+        """Persist a successful refresh after recommendation rows are durable / acked."""
+        pending = self._pending
+        if pending is None:
+            return
+        self._ensure_fence()
+        self._persist(pending.artifact)
+        digest = self._payload_digest
+        if digest is None:
+            digest = _digest(dumps_artifact(pending.artifact))
+        self._install(pending.artifact, digest, self._fingerprint())
+        self._pending_fit_events = pending.pending_fit_events
+        self._pending = None
 
     def ensure_loaded(self) -> None:
         if not self._reload():
@@ -130,8 +161,11 @@ class OnlineTrainer:
         if not self._reload():
             logger.warning("%s; skipping online refresh", ONLINE_ARTIFACT_REQUIRED)
             return OnlineRefreshResult(rows=empty_online_rows())
-        artifact = self._artifact
-        working = self._working
+        artifact = self._pending.artifact if self._pending is not None else self._artifact
+        working = self._pending.working if self._pending is not None else self._working
+        pending_fit = (
+            self._pending.pending_fit_events if self._pending is not None else self._pending_fit_events
+        )
         if artifact is None or working is None:
             return OnlineRefreshResult(rows=empty_online_rows())
 
@@ -159,8 +193,7 @@ class OnlineTrainer:
         extra[Columns.User] = extra[Columns.User].astype(str)
         extra[Columns.Item] = extra[Columns.Item].astype(str)
         working = _append_known_interactions(working, extra)
-        self._working = working
-        self._pending_fit_events += int(len(known))
+        pending_fit += int(len(known))
 
         models, fitted = self._recommend_models(artifact)
         epochs_run = 0
@@ -168,16 +201,16 @@ class OnlineTrainer:
         if (
             collaborative is not None
             and self._fit_partial_epochs > 0
-            and self._pending_fit_events >= self._fit_min_events
+            and pending_fit >= self._fit_min_events
             and callable(getattr(collaborative, "fit_partial", None))
         ):
             self._ensure_fence()
+            collaborative = copy.deepcopy(collaborative)
             collaborative.fit_partial(working, self._fit_partial_epochs)
             epochs_run = self._fit_partial_epochs
-            self._pending_fit_events = 0
+            pending_fit = 0
             fitted = {**fitted, "collaborative": collaborative}
             artifact = replace(artifact, fitted={**artifact.fitted, "collaborative": collaborative})
-            self._artifact = artifact
 
         target_users = sorted({str(user_id) for user_id in extra[Columns.User].unique()})
         built = BuiltDataset(
@@ -195,10 +228,14 @@ class OnlineTrainer:
             enabled_models=models,
             weights=dict(artifact.model_weights) if artifact.model_weights is not None else None,
             rrf_k=artifact.rrf_k,
+            explain=self._explain,
         )
         artifact = replace(artifact, dataset=working, fitted={**artifact.fitted, **fitted})
-        self._artifact = artifact
-        self._persist(artifact)
+        self._pending = _PendingRefresh(
+            artifact=artifact,
+            working=working,
+            pending_fit_events=pending_fit,
+        )
         if rows.empty:
             return OnlineRefreshResult(
                 rows=empty_online_rows(),
@@ -211,7 +248,7 @@ class OnlineTrainer:
         rows = rows[recommendation_output_columns(rows)]
         refreshed = int(rows[USER_COLUMN].nunique())
         logger.info(
-            "Online refresh wrote recommendations for %d user(s) "
+            "Online refresh prepared recommendations for %d user(s) "
             "(%d known event(s), %d dropped, fit_partial=%d)",
             refreshed,
             len(known),
@@ -227,6 +264,8 @@ class OnlineTrainer:
         )
 
     def _reload(self) -> bool:
+        if self._pending is not None:
+            return True
         token = self._fingerprint()
         if (
             token is not None
@@ -282,7 +321,6 @@ class OnlineTrainer:
         return models, fitted
 
     def _persist(self, artifact: ModelArtifact) -> None:
-        self._ensure_fence()
         payload = dumps_artifact(artifact)
         self._sink.write_model_artifact(payload)
         self._payload_digest = _digest(payload)

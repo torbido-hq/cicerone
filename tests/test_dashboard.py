@@ -388,6 +388,8 @@ def test_status_partial_shows_unknown_staleness_for_invalid_cron_schedule():
 
     assert response.status_code == 200
     assert "misconfigured" in response.text
+    assert "border-amber-300" in response.text
+    assert 'data-run-stale="unknown"' in response.text
 
 
 def test_page_title_orders_status_then_user():

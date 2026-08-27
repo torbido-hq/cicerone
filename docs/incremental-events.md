@@ -16,8 +16,9 @@ personalized rows for affected users. Sequential stays batch (runtime image
 is torch-free). New catalog IDs still wait for a full retrain.
 The incremental path always refreshes **popular / latest slices** (and recency
 boosts) for affected users plus `__cold_start__`. When `[experiment]` is
-on, that refresh (and online personalized rewrite) runs **in every variant**.
-[how-it-works.md](how-it-works.md) explains the split. Experiments:
+on, that popular/latest refresh runs **in every variant**. Online LightFM
+personalized rewrite is skipped while `[experiment]` is on so arms stay
+isolated. [how-it-works.md](how-it-works.md) explains the split. Experiments:
 [experiments.md](experiments.md).
 
 Preserved personalized / `item_based` / `sequential` / `content_fallback`
@@ -228,7 +229,10 @@ next flush (prefer a DB output for history).
 | S3 list (R2) / SQS | At-least-once | Object key + ETag dedupe |
 | Redis Streams | At-least-once | `XACK` after successful flush; stream entry id fallback |
 
-Duplicate delivery can inflate weights for `quantity_scaled_events`.
+Duplicate delivery can inflate weights for `quantity_scaled_events` on the
+popular/latest path. Online LightFM persists the model artifact only after
+the event source `ack`, so a nack/redelivery does not append the same
+interactions twice.
 
 ## Internals
 

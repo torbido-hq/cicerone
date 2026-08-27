@@ -55,6 +55,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Dashboard history no longer styles empty errors as failures.
 - Dashboard lookup keeps recommendations when a user attribute is a list,
   Series, or array.
+- Serve collapses leftover `variant` rows to `control` (else the first name)
+  when `[experiment]` is off, instead of mixing control and treatment ranks.
+- Experiment promote state is an upsert keyed by `experiment_id` (no
+  `DROP TABLE`); reads order by `promoted_at`.
+- Online LightFM persists the artifact only after a successful apply and
+  event `ack`; a failed refresh nacks the batch.
+- Online collaborative rewrite is skipped while `[experiment]` is enabled.
+- Dashboard unknown staleness (`is_stale` unset) is amber, not success green.
+- Exposure-conditional experiment metrics ignore rows from other
+  `experiment_id`s.
 
 ## [0.6.2] - 2026-08-24
 

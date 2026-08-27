@@ -28,7 +28,7 @@ flowchart LR
   out[recommendations plus manifest]
   events[optional events ingest]
   input --> weigh --> dataset --> fit --> allow --> score --> combine --> boost --> out
-  events -->|"popular/latest write-through"| out
+  events -->|"popular/latest write-through, optional online LightFM"| out
 ```
 
 1. Load `events` (required) plus optional `users` / `items`.
@@ -162,8 +162,11 @@ by default) — trending, not an embedding of recency.
 popularity on interactions. Per-user **blending** can also rank by item
 datetime columns (`published_at`, …). While blending is on, the `latest`
 *strategy* is skipped so those two rankings do not fight. Incremental
-events refresh popular/latest **slices** of the written table — they do
-not re-fit LightFM.
+events refresh popular/latest **slices** of the written table. With
+`[events.online]` (and experiments off), the serve events worker also
+continues LightFM on IDs already in the last artifact and rewrites
+personalized rows for affected users. `GET /recommendations` still does
+not re-fit.
 
 ## Combining strategies
 
@@ -211,8 +214,10 @@ When `[job.explain]` is on (default), the batch job writes a `reasons`
 JSON column: contributing sources (rank / weight / RRF term), boost rules
 that changed the score, and similar history items plus shared catalog
 attributes (Jaccard over the same item-feature tokens as content fallback).
-`source` is unchanged. Disable with `[job.explain].enabled = false`.
-Existing DB recommendation tables need `ALTER TABLE … ADD COLUMN reasons TEXT`.
+`source` is unchanged. Disable with `[job.explain].enabled = false` (batch
+job, online LightFM rewrite, and incremental popular/latest/incremental
+reason dumps). Existing DB recommendation tables need
+`ALTER TABLE … ADD COLUMN reasons TEXT`.
 
 ## AutoML
 
@@ -232,7 +237,8 @@ for affected users plus `__cold_start__`. With `[events.online]`, the serve
 events worker also continues LightFM (`fit_partial`) on IDs already in the
 last model artifact and rewrites those users' personalized / item-KNN /
 content-fallback rows — still write-through, not request-path inference.
-New catalog IDs and sequential models wait for the next full `job.run()`.
+That online rewrite is skipped while `[experiment]` is on. New catalog IDs
+and sequential models wait for the next full `job.run()`.
 Operator guide: [incremental-events.md](incremental-events.md).
 
 ## Cold-start

@@ -168,7 +168,8 @@ Available strategies:
   legacy `[job.item_based].k_neighbors` still works. Personalized; users
   with interactions only (feature-only warm users stay on
   collaborative/popular).
-- `sequential`: RecTools `SASRecModel` (default) or `BERT4RecModel`. Opt-in;
+- `sequential`: RecTools `SASRecModel` (default eSASRec), `BERT4RecModel`,
+  or `HSTUModel` (`architecture = "hstu"`). Opt-in;
   not in the default Docker image (`pip install 'cicerone-recommender[sequential]'`
   or `pip install -r requirements-sequential.txt`). Sequences are unique
   items by last-touch time. AutoML skips it on sparse data or a missing

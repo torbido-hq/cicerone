@@ -43,11 +43,14 @@ rules for that variant.
 
 ## Assignment
 
-Sticky, replica-safe: `blake2s(experiment_id || "\0" || user_id)` → `[0, 1)`,
-then walk cumulative `traffic`. The same user gets the same variant on every
-serve replica and after every retrain. A dashboard **Promote** writes
-`experiment_state` next to the output store; serve then sends 100% traffic to
-that variant until the next job (or you turn the experiment off).
+Sticky, replica-safe **as long as** `experiment_id`, variant **names**,
+**order**, and `traffic` stay fixed: `blake2s(experiment_id || "\0" || user_id)`
+→ `[0, 1)`, then walk cumulative `traffic`. Changing traffic remaps users.
+A dashboard **Promote** writes `experiment_state` next to the output store;
+serve then sends 100% traffic to that variant until you clear promote state
+or turn the experiment off. Promote survives later jobs. After you disable
+`[experiment]`, leftover `variant` rows collapse to `control` (else the
+lexicographically first name) until the next job rewrite. Do not mix lists.
 
 ## Job
 
@@ -76,8 +79,8 @@ read-only.
 ## Incremental events
 
 Popular/latest write-through refreshes **every variant** for affected users.
-Personalized rows still wait for the next full job. See
-[incremental-events.md](incremental-events.md).
+`[events.online]` LightFM rewrite is **skipped** while `[experiment]` is on
+(so arms stay isolated). See [incremental-events.md](incremental-events.md).
 
 ## Metrics and promote
 
@@ -87,9 +90,10 @@ new impression protocol. Counts and weighted sums (`features.toml`
 
 The dashboard **Experiments** page (`GET /dashboard/experiments`) shows:
 
-- Always-valid mixture CIs on the primary metric (peek daily; do not treat a
-  single end-of-test t-test as the decision). ITT on users who appear in the
-  event window, or exposure-conditional when `log_exposures` is on.
+- Approximate always-valid CIs on the primary metric (a LIL-style radius for
+  peeking — not a full anytime-valid CS for heavy-tailed outcomes). ITT on
+  users who appear in the event window, or exposure-conditional when
+  `log_exposures` is on (rows must match this `experiment_id`).
 - Guardrails (fail closed): fallback rate, top-item share, distinct-item
   coverage. A purchase win that collapses the catalog does not promote.
 - **Promote** — only when the CI excludes zero **and** guardrails pass —

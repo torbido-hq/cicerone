@@ -129,6 +129,18 @@ def test_evaluate_experiment_itt_and_exposure_conditional() -> None:
     assert exposed.exposure_conditional is True
     assert exposed.n_assigned == 2
 
+    other = [
+        exposure_row(user_id="u1", experiment_id="other", variant="treatment", generated_at=None),
+    ]
+    skipped = evaluate_experiment(
+        experiment=experiment,
+        recipes=recipes,
+        events=events,
+        event_weights={"purchase": 1.0},
+        exposures=other,
+    )
+    assert skipped.n_assigned == 0
+
 
 def test_evaluate_experiment_blocks_promote_on_guardrails() -> None:
     experiment = ExperimentSettings(

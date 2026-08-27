@@ -68,6 +68,10 @@ class OnlineRefresher(Protocol):
 
     def invalidate(self) -> None: ...
 
+    def commit(self) -> None: ...
+
+    def abort(self) -> None: ...
+
 
 class IncrementalUpdater:
     """Write-through popular/latest slices for affected users; preserves personalized rows."""
@@ -86,6 +90,7 @@ class IncrementalUpdater:
         user_cache_max_size: int = DEFAULT_USER_CACHE_MAX_SIZE,
         online: OnlineRefresher | None = None,
         variant_names: Sequence[str] = (),
+        explain_enabled: bool = True,
     ):
         if user_cache_max_size < 1:
             raise ValueError("user_cache_max_size must be >= 1")
@@ -103,6 +108,7 @@ class IncrementalUpdater:
         self._user_cache_max_size = user_cache_max_size
         self._cached_by_user: OrderedDict[str, pd.DataFrame] = OrderedDict()
         self._variant_names = tuple(str(name) for name in variant_names)
+        self._explain_enabled = explain_enabled
 
     @property
     def last_success_at(self) -> datetime | None:
@@ -125,7 +131,13 @@ class IncrementalUpdater:
     def retrain_busy(self) -> bool:
         return self._busy_check is not None and self._busy_check()
 
-    def apply(self, events: Sequence[NormalizedEvent]) -> int:
+    def persist_online(self) -> None:
+        self._commit_online()
+
+    def abort_online(self) -> None:
+        self._abort_online()
+
+    def apply(self, events: Sequence[NormalizedEvent], *, persist_online: bool = True) -> int:
         if not events:
             return 0
         if self.retrain_busy():
@@ -189,6 +201,7 @@ class IncrementalUpdater:
             replace_ids.append(COLD_START_USER_ID)
 
         if not replace_ids:
+            self._abort_online()
             now = datetime.now(UTC)
             self._last_success_at = now
             self._events_applied += len(events)
@@ -203,6 +216,7 @@ class IncrementalUpdater:
         merged = pd.concat(frames, ignore_index=True)
         merged = merged[recommendation_output_columns(merged)]
         if not self._ensure_write_allowed():
+            self._abort_online()
             return 0
         self._ensure_fence()
         n_users = self._sink.replace_recommendations_for_users(merged, user_ids=sorted(set(replace_ids)))
@@ -227,6 +241,8 @@ class IncrementalUpdater:
         self._ensure_fence()
         self._sink.write_manifest(manifest)
         self._store_users_in_cache(set(replace_ids), merged)
+        if persist_online:
+            self._commit_online()
         self._last_success_at = now
         self._events_applied += len(events)
         if self._on_success is not None:
@@ -238,16 +254,32 @@ class IncrementalUpdater:
         )
         return len(events)
 
-    def _refresh_online(self, events: Sequence[NormalizedEvent]) -> OnlineRefreshResult:
+    def _commit_online(self) -> None:
         if self._online is None:
+            return
+        commit = getattr(self._online, "commit", None)
+        if callable(commit):
+            commit()
+
+    def _abort_online(self) -> None:
+        if self._online is None:
+            return
+        abort = getattr(self._online, "abort", None)
+        if callable(abort):
+            abort()
+
+    def _refresh_online(self, events: Sequence[NormalizedEvent]) -> OnlineRefreshResult:
+        if self._online is None or self._variant_names:
             return OnlineRefreshResult(rows=empty_online_rows())
         try:
             return self._online.refresh(events)
         except LockLostError:
+            self._abort_online()
             raise
         except Exception:
-            logger.exception("Online collaborative refresh failed; keeping preserved rows")
-            return OnlineRefreshResult(rows=empty_online_rows())
+            self._abort_online()
+            logger.exception("Online collaborative refresh failed; nacking incremental batch")
+            raise
 
     def _online_rows_by_user(self, result: OnlineRefreshResult) -> dict[str, pd.DataFrame]:
         frame = result.rows
@@ -372,9 +404,10 @@ class IncrementalUpdater:
             [SCORE_COLUMN, ITEM_COLUMN], ascending=[False, True], kind="mergesort"
         ).head(self._top_k)
         ranked[SOURCE_COLUMN] = POPULAR_SOURCE
-        ranked[REASONS_COLUMN] = [
-            dump_source_reasons(POPULAR_SOURCE, rank=rank) for rank in range(1, len(ranked) + 1)
-        ]
+        if self._explain_enabled:
+            ranked[REASONS_COLUMN] = [
+                dump_source_reasons(POPULAR_SOURCE, rank=rank) for rank in range(1, len(ranked) + 1)
+            ]
         return ranked.reset_index(drop=True)
 
     def _latest_ranking(self, batch: pd.DataFrame, weights: pd.Series | None = None) -> pd.DataFrame:
@@ -392,14 +425,14 @@ class IncrementalUpdater:
         )
         rows = []
         for rank, row in enumerate(latest.itertuples(index=False), start=1):
-            rows.append(
-                {
-                    ITEM_COLUMN: str(row.item_id),
-                    SCORE_COLUMN: float(self._top_k - rank + 1),
-                    SOURCE_COLUMN: LATEST_SOURCE,
-                    REASONS_COLUMN: dump_source_reasons(LATEST_SOURCE, rank=rank),
-                }
-            )
+            item = {
+                ITEM_COLUMN: str(row.item_id),
+                SCORE_COLUMN: float(self._top_k - rank + 1),
+                SOURCE_COLUMN: LATEST_SOURCE,
+            }
+            if self._explain_enabled:
+                item[REASONS_COLUMN] = dump_source_reasons(LATEST_SOURCE, rank=rank)
+            rows.append(item)
         return (
             pd.DataFrame(rows) if rows else pd.DataFrame(columns=[ITEM_COLUMN, SCORE_COLUMN, SOURCE_COLUMN])
         )
@@ -480,7 +513,11 @@ class IncrementalUpdater:
                     ITEM_COLUMN: item_id,
                     SCORE_COLUMN: float(len(boost_items) - index),
                     SOURCE_COLUMN: INCREMENTAL_SOURCE,
-                    REASONS_COLUMN: dump_source_reasons(INCREMENTAL_SOURCE, rank=index + 1),
+                    **(
+                        {REASONS_COLUMN: dump_source_reasons(INCREMENTAL_SOURCE, rank=index + 1)}
+                        if self._explain_enabled
+                        else {}
+                    ),
                 }
                 for index, item_id in enumerate(boost_items[:boost_slots])
             ]

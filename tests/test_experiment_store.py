@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import pandas as pd
 import pytest
+from sqlalchemy import text
 
 from cicerone.config import ConfigError, IOSettings
 from cicerone.experiment.store import ExperimentStore, experiment_state
@@ -81,6 +83,26 @@ def test_experiment_store_roundtrip_sqlite(tmp_path) -> None:
     )
     assert store._db_engine() is engine
     assert [row["user_id"] for row in store.read_exposures()] == ["u1", "u2"]
+
+
+def test_experiment_store_sqlite_replaces_same_experiment_id(tmp_path) -> None:
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    output = IOSettings(kind="db", options={"database_url": url})
+    store = ExperimentStore(output)
+    store.write_state(experiment_state("exp", promoted_variant="control"))
+    store.write_state(experiment_state("exp", promoted_variant="treatment"))
+    frame = pd.read_sql(text("SELECT * FROM experiment_state"), store._db_engine())
+    assert len(frame) == 1
+    state = store.read_state()
+    assert state is not None
+    assert state["promoted_variant"] == "treatment"
+
+
+def test_experiment_store_ignores_invalid_dataset_state(tmp_path) -> None:
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    (tmp_path / "experiment_state.json").write_text("not-json", encoding="utf-8")
+    store = ExperimentStore(output)
+    assert store.read_state() is None
 
 
 def test_append_exposures_rejects_object_store() -> None:

@@ -119,7 +119,9 @@ def start_events_runtime(
 
     sink = build_output_sink(settings.output)
     online = None
-    if settings.events.online.enabled:
+    if settings.events.online.enabled and settings.experiment.enabled:
+        logger.info("Online collaborative refresh skipped while [experiment] is enabled")
+    elif settings.events.online.enabled:
         from cicerone.events.online import OnlineTrainer
 
         online = OnlineTrainer(
@@ -129,6 +131,7 @@ def start_events_runtime(
             fit_partial_epochs=settings.events.online.fit_partial_epochs,
             fit_min_events=settings.events.online.fit_min_events,
             fence_check=(apply_lock.owned if apply_lock is not None else None),
+            explain=settings.explain,
         )
         online.ensure_loaded()
         logger.info(
@@ -152,6 +155,7 @@ def start_events_runtime(
         variant_names=tuple(variant.name for variant in settings.experiment.variants)
         if settings.experiment.enabled
         else (),
+        explain_enabled=settings.explain.enabled,
     )
     buffer = MicroBatchBuffer(
         batch_size=settings.events.incremental.batch_size,

@@ -11,6 +11,7 @@ from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import Settings
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.recommendation_reader import select_cold_start_fallback
+from cicerone.io.recommendation_schema import filter_variant_rows
 from cicerone.serve import create_app, main
 from cicerone.serve.app import (
     _GeneratedAtCache,
@@ -37,8 +38,7 @@ class _FakeReader:
 
     def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame:
         rows = self._recs[self._recs["user_id"] == user_id].sort_values("rank")
-        if variant is not None and "variant" in rows.columns:
-            rows = rows[rows["variant"].astype(str) == str(variant)]
+        rows = filter_variant_rows(rows, variant)
         return rows.head(k).reset_index(drop=True)
 
     def get_items(self) -> pd.DataFrame | None:
@@ -49,9 +49,7 @@ class _FakeReader:
         return self._items_version
 
     def get_cold_start_fallback(self, k: int, *, variant: str | None = None) -> pd.DataFrame:
-        rows = self._recs
-        if variant is not None and "variant" in rows.columns:
-            rows = rows[rows["variant"].astype(str) == str(variant)]
+        rows = filter_variant_rows(self._recs, variant)
         return select_cold_start_fallback(rows, k)
 
     def configure_item_filters(

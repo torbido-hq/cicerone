@@ -8,9 +8,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-import pandas as pd
-
 from cicerone.serve_schemas import RecommendationReasons
+from cicerone.values import is_missing
 
 SOURCE_CONTRIBS_COLUMN = "_source_contribs"
 BOOST_HITS_COLUMN = "_boost_hits"
@@ -52,15 +51,13 @@ def dump_source_reasons(
     return dump_reasons(source_reasons_payload(label, rank=rank, weight=weight, contribution=contribution))
 
 
-def _is_missing(value: object) -> bool:
-    if value is None or value == "":
-        return True
-    result = pd.isna(value)
-    return bool(result) if isinstance(result, bool) else False
-
-
 def parse_reasons(value: object) -> RecommendationReasons | None:
-    if _is_missing(value):
+    if is_missing(value):
+        return None
+    try:
+        if value == "":
+            return None
+    except (ValueError, TypeError):
         return None
     if isinstance(value, RecommendationReasons):
         return value
