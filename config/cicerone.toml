@@ -262,9 +262,9 @@ prefix = "recommendations/latest"
 # batch_window_seconds = 60
 # poll_interval_seconds = 1
 # Optional: continue LightFM on known IDs and rewrite personalized /
-# item-KNN / content-fallback rows for affected users. Requires a model
-# artifact in [output] (batch job: save_model_artifact = true).
-# GET /recommendations stays a lookup.
+# item-KNN / content-fallback rows for affected users (skipped while
+# [experiment] is on). Requires a model artifact in [output]
+# (batch job: save_model_artifact = true). GET /recommendations stays a lookup.
 # [events.online]
 # enabled = true
 # fit_partial_epochs = 1          # 0 = frozen weights + history refresh only

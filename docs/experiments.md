@@ -50,8 +50,9 @@ A dashboard **Promote** writes `experiment_state` next to the output store;
 serve then sends 100% traffic to that variant until you clear promote state
 or turn the experiment off. Promote survives later jobs. After you disable
 `[experiment]`, leftover `variant` rows collapse to `control` (else the
-lexicographically first name) on **serve reads and incremental write-through**
-until the next job rewrite. Do not mix lists.
+lexicographically first remaining name; blank/NaN names are ignored) on
+**serve reads and incremental write-through** until the next job rewrite.
+Do not mix lists.
 
 ## Job
 

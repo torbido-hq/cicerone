@@ -249,9 +249,10 @@ flowchart LR
    store. When `Settings.save_model_artifact` is true, it also writes
    a versioned fitted-model artifact (`model.artifact` for the dataset
    backend, `model_artifacts` table for db) via
-   `OutputSink.write_model_artifact`. The request path never loads this
+   `OutputSink.write_model_artifact`.    The request path never loads this
    artifact. When `[events.online]` is enabled, the serve **events worker**
-   loads it to continue LightFM and rewrite affected users (not `GET`).
+   loads it to continue LightFM and rewrite affected users (not `GET`);
+   that rewrite is skipped while `[experiment]` is on.
 6. For batch, `cicerone start` runs one job immediately (`job.run()`, so the
    manifest records `triggered_by = "manual"`) and aborts if it fails; only
    then does it enter `scheduler.main()`, which
@@ -466,8 +467,8 @@ generic `IOSettings`.
 
 Serve-process ingest lives in `events/` plus `serve/events_routes.py` and
 `serve/bootstrap_events.py`. Optional `[events.online]` loads the model
-artifact in the events worker (not on `GET`). Operator guide:
-[incremental-events.md](incremental-events.md).
+artifact in the events worker (not on `GET`); skipped while `[experiment]`
+is on. Operator guide: [incremental-events.md](incremental-events.md).
 
 ## Cold-start behavior
 
