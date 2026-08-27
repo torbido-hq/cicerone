@@ -174,11 +174,16 @@ class DatasetOutputSink:
         key = object_key(self._options, filename)
         client = build_s3_client(self._options)
         try:
-            return client.get_object(Bucket=bucket, Key=key)["Body"].read()
+            response = client.get_object(Bucket=bucket, Key=key)
         except Exception as exc:
             if is_s3_not_found(exc):
                 return None
             raise
+        body = response["Body"]
+        try:
+            return body.read()
+        finally:
+            body.close()
 
     def write_model_artifact(self, payload: bytes) -> None:
         from cicerone.artifact import ARTIFACT_FILENAME
@@ -189,3 +194,26 @@ class DatasetOutputSink:
         from cicerone.artifact import ARTIFACT_FILENAME
 
         return self._read_bytes(ARTIFACT_FILENAME)
+
+    def model_artifact_fingerprint(self) -> str | None:
+        from cicerone.artifact import ARTIFACT_FILENAME
+
+        if self._backend == "local":
+            path = Path(require_option(self._options, "path", "local")) / ARTIFACT_FILENAME
+            try:
+                stat = path.stat()
+            except FileNotFoundError:
+                return None
+            return f"local:{stat.st_mtime_ns}:{stat.st_size}"
+
+        bucket = require_option(self._options, "bucket", "s3")
+        key = object_key(self._options, ARTIFACT_FILENAME)
+        client = build_s3_client(self._options)
+        try:
+            head = client.head_object(Bucket=bucket, Key=key)
+        except Exception as exc:
+            if is_s3_not_found(exc):
+                return None
+            raise
+        etag = str(head.get("ETag") or "").strip('"')
+        return f"s3:{etag}:{head.get('ContentLength', '')}"

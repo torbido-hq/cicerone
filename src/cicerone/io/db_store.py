@@ -296,6 +296,21 @@ class DatabaseOutputSink:
             return None
         return bytes(row[0])
 
+    def model_artifact_fingerprint(self) -> str | None:
+        table_name = sql_identifier(
+            self._options.get("model_artifact_table", DEFAULT_MODEL_ARTIFACT_TABLE),
+            option="model_artifact_table",
+        )
+        if not inspect(self._engine).has_table(table_name):
+            return None
+        with self._engine.connect() as conn:
+            row = conn.execute(text(f'SELECT written_at FROM "{table_name}" LIMIT 1')).first()
+        if row is None or row[0] is None:
+            return None
+        written = row[0]
+        stamp = written.isoformat() if hasattr(written, "isoformat") else str(written)
+        return f"db:{stamp}"
+
     def write_items_snapshot(self, df: pd.DataFrame) -> None:
         table = sql_identifier(
             self._options.get("recommendation_items_table", DEFAULT_RECOMMENDATION_ITEMS_TABLE),

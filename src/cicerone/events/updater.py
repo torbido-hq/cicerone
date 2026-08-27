@@ -51,11 +51,16 @@ _BOOST_SLOT_FRACTION = 0.3
 DEFAULT_USER_CACHE_MAX_SIZE = 2048
 
 
+def _source_parts(source: str) -> set[str]:
+    return {part for part in source.split("+") if part}
+
+
 def _is_preserved_source(source: str) -> bool:
-    if source in _PRESERVE_LABELS:
-        return True
-    # Priority/RRF compound labels, e.g. personalized+popular_fallback.
-    return any(part in _PRESERVE_LABELS for part in source.split("+"))
+    return bool(_source_parts(source) & _PRESERVE_LABELS)
+
+
+def _overlaps_source_parts(source: str, parts: set[str]) -> bool:
+    return bool(_source_parts(source) & parts)
 
 
 class OnlineRefresher(Protocol):
@@ -510,11 +515,19 @@ class IncrementalUpdater:
             online = online.loc[online[SOURCE_COLUMN].astype(str).map(_is_preserved_source)]
         if online.empty:
             return preserved
-        online_labels = set(online[SOURCE_COLUMN].astype(str)) if SOURCE_COLUMN in online.columns else set()
+        online_parts: set[str] = set()
+        if SOURCE_COLUMN in online.columns:
+            for label in online[SOURCE_COLUMN].astype(str):
+                online_parts.update(_source_parts(label))
         if preserved.empty:
             kept = preserved
         elif SOURCE_COLUMN in preserved.columns:
-            kept = preserved.loc[~preserved[SOURCE_COLUMN].astype(str).isin(online_labels)]
+            drop = (
+                preserved[SOURCE_COLUMN]
+                .astype(str)
+                .map(lambda source: _overlaps_source_parts(source, online_parts))
+            )
+            kept = preserved.loc[~drop]
         else:
             kept = preserved.iloc[0:0]
         parts = [frame for frame in (online, kept) if not frame.empty]

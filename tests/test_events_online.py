@@ -258,6 +258,112 @@ def test_incremental_updater_splices_online_rows(tmp_path, feature_config: Featu
     assert "online_users_refreshed" in manifest
 
 
+def test_incremental_updater_splices_overlapping_compound_sources(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "compound",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized+popular_fallback",
+            },
+            {"user_id": "u1", "item_id": "seq-keep", "rank": 2, "score": 0.9, "source": "sequential"},
+        ]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    online_rows = pd.DataFrame(
+        [{"user_id": "u1", "item_id": "fresh", "rank": 1, "score": 2.0, "source": "personalized"}]
+    )
+
+    class _FakeOnline:
+        def refresh(self, events):
+            del events
+            return OnlineRefreshResult(rows=online_rows, users_refreshed=1, fit_partial_epochs=1)
+
+        def invalidate(self) -> None:
+            return None
+
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        online=_FakeOnline(),
+    )
+    events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="compound-splice"))]
+    assert updater.apply(events) == 1
+    frame = load_recommendations_frame(settings.output)
+    u1 = set(frame[frame["user_id"] == "u1"]["item_id"].astype(str))
+    assert "fresh" in u1
+    assert "compound" not in u1
+    assert "seq-keep" in u1
+
+
+def test_incremental_updater_splices_online_rows_across_variants(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "old-control",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                "variant": "control",
+            },
+            {
+                "user_id": "u1",
+                "item_id": "old-treatment",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                "variant": "treatment",
+            },
+        ]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    online_rows = pd.DataFrame(
+        [{"user_id": "u1", "item_id": "fresh", "rank": 1, "score": 2.0, "source": "personalized"}]
+    )
+
+    class _FakeOnline:
+        def refresh(self, events):
+            del events
+            return OnlineRefreshResult(rows=online_rows, users_refreshed=1, fit_partial_epochs=1)
+
+        def invalidate(self) -> None:
+            return None
+
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        online=_FakeOnline(),
+        variant_names=("control", "treatment"),
+    )
+    events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="variant-splice"))]
+    assert updater.apply(events) == 1
+    frame = load_recommendations_frame(settings.output)
+    u1 = frame[frame["user_id"] == "u1"]
+    for variant in ("control", "treatment"):
+        rows = u1[u1["variant"] == variant]
+        items = set(rows["item_id"].astype(str))
+        assert "fresh" in items
+        assert f"old-{variant}" not in items
+        assert "i9" in items
+
+
 def test_incremental_updater_busy_invalidates_online(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()
@@ -395,6 +501,26 @@ def test_online_trainer_accumulates_fit_min_events(
     second = trainer.refresh([_known_event("acc-2")])
     assert second.fit_partial_epochs == 1
     assert calls["n"] == 1
+
+
+def test_online_trainer_skips_download_when_fingerprint_unchanged(
+    tmp_path, feature_config, sample_events, sample_users, sample_items
+):
+    sink, _enabled = _write_artifact(tmp_path, feature_config, sample_events, sample_users, sample_items)
+    trainer = _trainer(sink)
+    reads = {"n": 0}
+    original = sink.read_model_artifact
+
+    def _counted() -> bytes | None:
+        reads["n"] += 1
+        return original()
+
+    sink.read_model_artifact = _counted  # type: ignore[method-assign]
+    assert trainer._reload() is True
+    assert reads["n"] == 0
+    trainer._artifact_token = "stale"
+    assert trainer._reload() is True
+    assert reads["n"] == 1
 
 
 def test_incremental_updater_online_trainer_replaces_personalized(

@@ -106,6 +106,7 @@ class OnlineTrainer:
         self._artifact: ModelArtifact | None = None
         self._working: Dataset | None = None
         self._payload_digest: bytes | None = None
+        self._artifact_token: str | None = None
         self._hot_users: frozenset[str] = frozenset()
         self._hot_items: frozenset[str] = frozenset()
         self._pending_fit_events = 0
@@ -114,6 +115,7 @@ class OnlineTrainer:
         self._artifact = None
         self._working = None
         self._payload_digest = None
+        self._artifact_token = None
         self._hot_users = frozenset()
         self._hot_items = frozenset()
         self._pending_fit_events = 0
@@ -225,17 +227,33 @@ class OnlineTrainer:
         )
 
     def _reload(self) -> bool:
+        token = self._fingerprint()
+        if (
+            token is not None
+            and token == self._artifact_token
+            and self._artifact is not None
+            and self._working is not None
+        ):
+            return True
         payload = self._sink.read_model_artifact()
         if payload is None:
             return False
         digest = _digest(payload)
         if digest == self._payload_digest and self._artifact is not None and self._working is not None:
+            self._artifact_token = token
             return True
         artifact = loads_artifact(payload)
-        self._install(artifact, digest)
+        self._install(artifact, digest, token)
         return True
 
-    def _install(self, artifact: ModelArtifact, digest: bytes) -> None:
+    def _fingerprint(self) -> str | None:
+        getter = getattr(self._sink, "model_artifact_fingerprint", None)
+        if not callable(getter):
+            return None
+        token = getter()
+        return None if token is None else str(token)
+
+    def _install(self, artifact: ModelArtifact, digest: bytes, token: str | None = None) -> None:
         raw = artifact.dataset.get_raw_interactions()
         if raw is None or raw.empty:
             hot_users: set[str] = set()
@@ -246,6 +264,7 @@ class OnlineTrainer:
         self._artifact = artifact
         self._working = artifact.dataset
         self._payload_digest = digest
+        self._artifact_token = token
         self._hot_users = frozenset(hot_users)
         self._hot_items = frozenset(hot_items)
         self._pending_fit_events = 0
@@ -267,6 +286,7 @@ class OnlineTrainer:
         payload = dumps_artifact(artifact)
         self._sink.write_model_artifact(payload)
         self._payload_digest = _digest(payload)
+        self._artifact_token = self._fingerprint()
 
     def _ensure_fence(self) -> None:
         if self._fence_check is not None and not self._fence_check():

@@ -42,6 +42,18 @@ def test_local_backend_round_trip(tmp_path):
 def test_local_read_model_artifact_missing_returns_none(tmp_path):
     sink = DatasetOutputSink({"storage_backend": "local", "path": str(tmp_path)})
     assert sink.read_model_artifact() is None
+    assert sink.model_artifact_fingerprint() is None
+
+
+def test_local_model_artifact_fingerprint_changes_after_write(tmp_path):
+    sink = DatasetOutputSink({"storage_backend": "local", "path": str(tmp_path)})
+    sink.write_model_artifact(b"first")
+    first = sink.model_artifact_fingerprint()
+    assert first is not None
+    sink.write_model_artifact(b"second")
+    second = sink.model_artifact_fingerprint()
+    assert second is not None
+    assert second != first
 
 
 def test_local_replace_recommendations_for_users_preserves_others(tmp_path):
@@ -263,8 +275,22 @@ def test_s3_backend_round_trip(s3_options):
 def test_s3_read_model_artifact_round_trip_and_missing(s3_options):
     sink = DatasetOutputSink(s3_options)
     assert sink.read_model_artifact() is None
+    assert sink.model_artifact_fingerprint() is None
     sink.write_model_artifact(b"s3-artifact")
     assert sink.read_model_artifact() == b"s3-artifact"
+    assert sink.model_artifact_fingerprint() is not None
+
+
+def test_s3_read_model_artifact_closes_streaming_body(s3_options, mocker):
+    sink = DatasetOutputSink(s3_options)
+    sink.write_model_artifact(b"payload")
+    body = mocker.Mock()
+    body.read.return_value = b"payload"
+    client = mocker.Mock()
+    client.get_object.return_value = {"Body": body}
+    mocker.patch("cicerone.io.dataset_store.build_s3_client", return_value=client)
+    assert sink.read_model_artifact() == b"payload"
+    body.close.assert_called_once()
 
 
 def test_s3_backend_optional_inputs_missing_return_none(s3_options):
