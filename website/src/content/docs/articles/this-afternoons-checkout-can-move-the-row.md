@@ -2,6 +2,7 @@
 title: This afternoon's checkout can move the row
 description: Stripe webhook to Cicerone 0.7 online LightFM. Known-ID purchases write through. GET stays a lookup.
 date: 2026-08-28
+lastUpdated: 2026-08-28
 excerpt: A paid Checkout can update an existing recommendation row after a flush. LightFM rewrite still needs known IDs. GET stays a lookup.
 authors:
   - nicholas
@@ -11,71 +12,121 @@ authors:
 
 Canonical URL: [https://cicerone.dev/articles/this-afternoons-checkout-can-move-the-row/](https://cicerone.dev/articles/this-afternoons-checkout-can-move-the-row/)
 
-[Cicerone](https://cicerone.dev) is a Docker job that reads who bought what, writes a ranked table, and goes back to sleep. The [nightly table](/articles/a-nightly-table-next-to-your-orders/) walkthrough leaves personalized ranks until 03:00 UTC. That is the right default. [LightFM](https://making.lyst.com/lightfm/docs/home.html) is a batch fit, and `GET /recommendations` is a lookup.
+A paid Stripe Checkout can enqueue a purchase that, after Cicerone's micro-batch flush, can update an **existing** recommendation row. That is write-through recommendation state, not fully real-time ranking. The checkout request never loads a model. `GET /recommendations` is still a lookup.
 
-A Stripe shop already has a second clock. `checkout.session.completed` means Checkout completed, not that payment succeeded. For immediately paid sessions, accept it only when `payment_status === "paid"`. Delayed methods — SEPA debit, some bank redirects — can produce `completed` while still `"unpaid"`. Those succeed later on `checkout.session.async_payment_succeeded` (or fail on `async_payment_failed`). From Cicerone 0.7 the paid path can update an **existing** recommendation row after a micro-batch, not inside the checkout request. It does not grow the catalog, and it does not promise that this afternoon's bottle is already in tonight's personalized list.
+[Cicerone](https://cicerone.dev) 0.7 is the job that already fitted [LightFM](https://making.lyst.com/lightfm/docs/home.html) and wrote the table. The [nightly table](/articles/a-nightly-table-next-to-your-orders/) walkthrough leaves personalized ranks until 03:00 UTC; that remains the right default. This article is the optional `[events.online]` path: Node verifies the Stripe signature and `POST`s Cicerone's event contract. There is no recommendations SDK.
 
-I built Cicerone for Torbido, a bottle shop that has not opened yet. The repo's default `features.toml` still has drink columns from that; ignore them. The examples below use `sku-42` on purpose. What the webhook has to get right is four strings the batch job already trained on: `user_id`, `item_id`, `event_type`, and `occurred_at`.
+**Idempotency (read this before copying the mapper).** `event_id: ${stripeEventId}:${itemId}` is not durable purchase idempotency. Cicerone 0.7's webhook source only suppresses that id while it is still pending or in-flight. After a successful flush `ack`, the same Stripe `event.id` can be ingested again. If a later retry must not add weight, persist `event.id` in your store before you return 2xx to Stripe.
 
-Node is here because that is where the Stripe signature is verified. There is no recommendations SDK. Stripe already forced a webhook; this adds a `POST`.
+## What changes
+
+After flush, for users in that micro-batch:
+
+- popular / latest (and `'__cold_start__'`) can rewrite
+- if both ids were already in the last job artifact, `[events.online]` is on, and `[experiment]` is off, Cicerone 0.7 can re-score those users against the extra interactions and, once `fit_min_events` known-ID events have piled up since the last `fit_partial`, run LightFM `fit_partial`
+
+The homepage can keep doing `SELECT … ORDER BY rank`. Serve `GET /recommendations/{user_id}` is the same rows.
+
+## What does not change
+
+- This is not live ranking. Serve never loads a model on `GET`.
+- 202 means queued, not applied. Flush does not imply `fit_partial`. `fit_partial` does not rewrite every user.
+- New user ids and new SKUs do not enter LightFM until `job.run()` writes a new artifact.
+- Sequential strategies stay batch. Embedding tables do not grow online.
+- Tonight's job remains authoritative: it refits from the full event log and writes a new artifact.
+- Cicerone does not durably dedupe Stripe events. See [Durable idempotency](#durable-idempotency).
+
+## Architecture
 
 ```text
-Stripe   checkout.session.completed (payment_status=paid)
-         checkout.session.async_payment_succeeded
-  │
-  ▼
-Node     verify signature, map line items
-  │
-  ▼
-POST /events          202 = accepted into the serve queue, not applied
-  │
-  ├─ flush at batch_size or batch_window_seconds
-  ├─ popular / latest write-through (always)
-  └─ [events.online]  LightFM fit_partial on known IDs,
-                      rewrite those users only
-  │
-  ▼
-same table / same GET lookup
+Stripe Checkout
+      ↓
+webhook verification
+      ↓
+map Stripe → Cicerone event
+      ↓
+POST /events
+      ↓
+202 / in-memory queue
+      ↓
+micro-batch flush
+      ↓
+popular/latest write-through
+      ↓
+optional LightFM fit_partial
+      ↓
+rewrite affected users
+      ↓
+existing recommendation table
+      ↓
+GET /recommendations
 ```
 
-Three different facts, in order:
+A purchase this afternoon can move a row that already exists. A SKU you listed today still waits for `job.run()` unless that id was already in the artifact.
 
-1. **202** — serve took the events into its webhook queue. That queue is in-memory. It is not a durable write, and it is not a model update.
-2. **Flush** — after `batch_size` or `batch_window_seconds` (default 60), popular / latest (and `'__cold_start__'`) can rewrite. Dataset output may wait another `[serve].refresh_interval_seconds` (default 60) before `GET` sees it. A `db` output is a query.
-3. **LightFM** — personalized / item-KNN / content-fallback rows rewrite only when both ids are already in the last job artifact, `[events.online]` is on, `[experiment]` is off, and `fit_min_events` known-ID events have piled up since the last `fit_partial` (default **100**). Until then weights stay frozen; the worker can still re-score affected users against the extra interactions. A single test card will not cross that gate. The top-K list can stay put even when the flush ran: the SKU might already be in the row.
+## Stripe payment semantics
 
-## What this is not
+`checkout.session.completed` means the Checkout Session completed. On cards and other immediate methods, that event usually arrives with `payment_status === "paid"` — this handler treats that as a successful payment. With delayed methods (SEPA debit, some bank redirects, ACH), Checkout can complete while payment is still pending (`payment_status === "unpaid"`). Stripe sends `checkout.session.async_payment_succeeded` later if that payment succeeds, or `checkout.session.async_payment_failed` if it fails.
 
-It is not live ranking. The checkout handler never loads a model. Serve never loads a model on `GET`. If you need the row to change in the same request as "add to cart," this is the wrong product.
+If you map every `completed` as a `purchase`, a delayed payment that later fails still trains as a buy. The handler:
 
-## What has to already be true
+- accepts `checkout.session.completed` **only** when `session.payment_status === "paid"`
+- accepts `checkout.session.async_payment_succeeded`
+- does **not** turn `async_payment_failed` into a purchase
 
-1. A nightly (or on-demand) `job.run()` with `[job].save_model_artifact = true`. Online serve **refuses to start** without an artifact in `[output]`.
-2. Serve with `[events]` `kind = "webhook"` and `[events.online]` enabled, experiments **off**.
-3. `purchase` (or whatever you send) listed under `[event_weights]` in `features.toml`. Unknown `event_type`s are dropped.
+## Stripe → Cicerone event contract
 
-The homepage can keep doing what the [nightly table](/articles/a-nightly-table-next-to-your-orders/) post does: `SELECT … ORDER BY rank`. Serve `GET /recommendations/{user_id}` is the same rows.
-
-## Make Stripe speak the event contract
-
-Cicerone never sees `cus_` or `prod_` unless those are the ids you trained on. They almost never are. The ids have to be yours:
+Cicerone IDs are yours. They are not automatically Stripe `cus_` / `prod_` / `price_` values.
 
 | Cicerone | Stripe | Where you set it |
 | --- | --- | --- |
 | `user_id` | `client_reference_id` | `checkout.sessions.create` |
 | `item_id` | Product `metadata.item_id`, else Price `lookup_key` | Dashboard or `products.create` / `prices.create` |
 | `event_type` | `"purchase"` | Hard-coded in the mapper (must exist in `[event_weights]`) |
-| `occurred_at` | `session.created` when `completed` is already `paid`; `event.created` on the async path | Unix seconds; Cicerone accepts that |
-| `quantity` | line-item `quantity` | One Cicerone event per SKU line; `quantity: 5` stays one row, not five |
-| `event_id` | `{event.id}:{item_id}` | Stripe's webhook event id (`evt_…`) plus the catalog id |
+| `occurred_at` | `session.created` on paid `completed`; `event.created` on async success | Unix seconds; Cicerone 0.7 accepts that |
+| `quantity` | line-item `quantity` | One Cicerone event per SKU line; `quantity: 5` stays one row |
+| `event_id` | `{event.id}:{item_id}` | Stripe webhook event id (`evt_…`) plus catalog id |
 
-Whichever catalog string you emit must be the exact `item_id` in the last LightFM artifact. `prod_…` and `price_…` are not aliases for that string.
+Whichever catalog string you emit must be the exact `item_id` in the last LightFM artifact. `prod_…` and `price_…` are not aliases for that string. Examples below use `sku-42` on purpose.
 
-The Checkout event payload does not include line items. You fetch them. If `client_reference_id` is missing, skip the session — do not invent a Stripe customer id. If a line has neither `metadata.item_id` nor `lookup_key`, skip that line. Posting `prod_xxx` against a job that fitted `sku-42` is a silent unknown-id drop: popular and latest still move, LightFM does not.
+If `client_reference_id` is missing, skip the session — do not invent a Stripe customer id. If a line has neither `metadata.item_id` nor `lookup_key`, skip that line. Posting `prod_xxx` against a job that fitted `sku-42` is a silent unknown-id drop: popular and latest can still move; LightFM does not.
 
-**Don't trust `completed` alone.** If you map every `completed` as a `purchase`, a delayed payment that later fails still trains as a buy. The handler below maps `completed` only when `payment_status === "paid"`, and it maps `async_payment_succeeded`. It ignores `async_payment_failed`.
+`user.id` must be the same string the batch job reads from your orders. Integer primary keys become text in Cicerone; send `String(user.id)` on both paths.
 
-`occurred_at` is not "when money settled" in every case. On the paid `completed` path, `session.created` is when Checkout was created. On the async path, `event.created` is when Stripe emitted that webhook — when Stripe learned the delayed payment succeeded — not a universal settlement clock. For a delayed method the session can sit open for minutes or longer before that event arrives.
+## Durable idempotency
+
+Three different things:
+
+| Layer | What it does | What it does not do |
+| --- | --- | --- |
+| Stripe delivery retries | Stripe reuses `event.id` across retries of the same webhook | Does not mean Cicerone applied the purchase only once |
+| Cicerone 0.7 webhook queue | Drops a duplicate `event_id` while that id is still **pending or in-flight** in this process | After flush `ack`, the id is forgotten. Restart empties the queue. |
+| Durable business-level idempotency | Your store of Stripe `event.id` (or `session.id` once paid) **before** 2xx | Not provided by this mapper or by `kind = "webhook"` |
+
+`:${itemId}` only keeps two SKUs in one webhook as two Cicerone rows instead of colliding on `evt_…` alone.
+
+After a successful flush `ack`, the same Stripe event ID can be ingested again. A later retry can inflate popular / latest weights for types in `quantity_scaled_events`, and online LightFM can pick up the extra interaction. 202 does not persist the queue.
+
+If duplicate delivery after acknowledgement must be harmless, persist Stripe's `event.id` in **your** application before you acknowledge Stripe.
+
+## `occurred_at`
+
+The mapper uses two clocks on purpose. These are event-domain timestamps, not a universal settlement clock, and `event.created` is not necessarily the moment funds settled.
+
+| Path | Value | What it is |
+| --- | --- | --- |
+| Paid `completed` | `session.created` | When the Checkout Session was created (can be before the customer paid) |
+| `async_payment_succeeded` | `event.created` | When Stripe created that webhook event — when Stripe learned the delayed payment succeeded |
+
+Cicerone 0.7 uses `occurred_at` as interaction time (recency / latest). Mixing session-create time with webhook-emit time can reorder two checkouts relative to wall-clock payment. If that matters, pick one clock on both paths, or your own order timestamp.
+
+## Line items and quantity
+
+The Checkout event payload does not include the full line list. `listLineItems` is paginated (default page size 10, max 100 per page). The mapper walks the complete list with `autoPagingToArray({ limit: 100 })`. That `limit` is stripe-node's **total-item cap**, not the page size. Checkout `mode: "payment"` currently allows at most 100 line items, so 100 matches Stripe's ceiling today.
+
+`quantity: 5` remains **one** Cicerone event with `quantity: 5`. Do not expand it into five purchase events unless you explicitly want five interactions. In Cicerone 0.7, types in `quantity_scaled_events` scale by `log1p(quantity)`.
+
+## Implementation
 
 When you create the session:
 
@@ -91,11 +142,7 @@ await stripe.checkout.sessions.create({
 });
 ```
 
-`user.id` must be the same string the batch job reads from your orders. Integer primary keys become text in Cicerone; send `String(user.id)` on both paths.
-
-## The mapper
-
-App Router, Node 18+, `npm install stripe` for the signature. Set `CICERONE_SERVE_TOKEN` to the same value as `[serve].auth_token`. `catalogItemId` must return the exact `item_id` in the last LightFM artifact. Express works if the route sees the **raw** body (`express.raw({ type: "application/json" })`). Parsed JSON makes `constructEvent` fail, and that is a Stripe fact rather than a Cicerone one.
+App Router, Node 18+, `npm install stripe` for the signature. Set `CICERONE_SERVE_TOKEN` to the same value as `[serve].auth_token`. `catalogItemId` must return the exact `item_id` in the last LightFM artifact. Express works if the route sees the **raw** body (`express.raw({ type: "application/json" })`). Parsed JSON makes `constructEvent` fail; that is a Stripe fact, not a Cicerone one.
 
 ```js
 // app/api/stripe/route.js
@@ -153,7 +200,7 @@ export async function POST(request) {
   try {
     event = stripe.webhooks.constructEvent(raw, signature, webhookSecret);
   } catch {
-    return new Response("invalid signature", { status: 400 });
+    return new Response("invalid payload or signature", { status: 400 });
   }
 
   const isSync = event.type === "checkout.session.completed";
@@ -200,25 +247,31 @@ export async function POST(request) {
 }
 ```
 
-`event.id` is Stripe's webhook event id. Stripe reuses it across retries of the same delivery, so those retries mint the same Cicerone `event_id`. `:${itemId}` keeps two SKUs in one webhook as two rows instead of colliding on `evt_…` alone.
-
-That is as far as this mapper goes. Cicerone's webhook source drops a duplicate `event_id` only while that id is still pending or in-flight. After a successful flush `ack`, the same id is a new ingest. A late Stripe retry can then inflate popular / latest weights for `quantity_scaled_events`. 202 does not persist the queue across a serve restart. If a retry after `ack` (or after a crash) must be a no-op, record `event.id` in **your** store before you return 2xx to Stripe. Do not treat the mapper as durable idempotency.
-
-A Cicerone **400** is a contract bug. Returning 200 to Stripe would mark the webhook delivered. The route maps non-OK Cicerone answers (including that 400) to **502** so Stripe retries.
-
 HTTP from this handler:
 
 | Status | Meaning |
 | --- | --- |
 | **202** | Cicerone accepted the batch into the in-memory queue (`accepted` is a count; ids are in `event_ids`). Not flushed, not fitted. |
-| **429** | Cicerone backlog full (`max_pending`, default 10_000, minimum 100). Return it so Stripe retries. |
-| **400** | Bad Stripe signature. Stripe should not retry a forged or truncated body. |
-| **502** | Cicerone answered non-OK (including its **400** contract errors). The mapper did not ack Stripe, so Stripe retries. A 200 here would hide a bad payload. |
+| **429** | Cicerone backlog full (`max_pending`, default 10_000, minimum 100). Stripe should retry. |
+| **400** | `constructEvent` threw: invalid webhook signature **or** payload (missing header, parsed/truncated body, wrong secret, clock skew). Do not process the body. |
+| **502** | Cicerone returned non-OK (including its **400** contract errors). Application-level mapping so Stripe retries; 502 is not the natural meaning of an upstream 400. A 2xx here would mark the webhook delivered. |
 | **500** | Missing `STRIPE_WEBHOOK_SECRET` / `CICERONE_SERVE_TOKEN`. Retryable once the env is set. |
+
+Ignored event types, unpaid `completed`, and an empty mapping return **200** `{ ok: true }` so Stripe does not retry a deliberate skip.
 
 Forward locally with `stripe listen --forward-to localhost:3000/api/stripe --events checkout.session.completed,checkout.session.async_payment_succeeded,checkout.session.async_payment_failed`.
 
-## Serve config
+## Queue / flush / LightFM (Cicerone 0.7)
+
+Keep these facts separate:
+
+1. **202** — serve took the events into its webhook queue. That queue is in-memory. It is not a durable write, and it is not a model update.
+2. **Flush** — after `batch_size` or `batch_window_seconds` (default 60), popular / latest (and `'__cold_start__'`) can rewrite. The serve process that applied the batch calls `reader.refresh()` on success, so dataset `GET` on **that** process can see the write then. Other dataset readers wait for `[serve].refresh_interval_seconds` (default 60). A `db` output is a query.
+3. **LightFM** — personalized / item-KNN / content-fallback rows rewrite only when both ids are already in the last job artifact, `[events.online]` is on, and `[experiment]` is off. Until `fit_min_events` known-ID events have piled up since the last `fit_partial` (default **100**), weights stay frozen; the worker can still re-score affected users against the extra interactions. A single test card will not run `fit_partial`. The top-K list can stay put even when the flush ran: the SKU might already be in the row.
+
+Item factors can drift globally after a real `fit_partial`, but only this flush's users are rewritten. Everyone else keeps last night's personalized rows until they show up in a later flush or the cron runs. Online extras on top of the artifact stop at `max_extra_interactions` (default 50_000). Cicerone persists the online artifact **after** source `ack`; if that persist fails, serving rows from the flush stay written and the pending fit is dropped.
+
+`[events.online]` **refuses to start** without an artifact in `[output]`. The batch job needs `[job].save_model_artifact = true`. Unknown `event_type`s are dropped; `purchase` must be in `[event_weights]`. An active `[experiment]` skips online LightFM rewrite on purpose (popular/latest still refresh).
 
 On the **job** that writes the artifact:
 
@@ -250,25 +303,44 @@ enabled = true
 
 Point Node's `CICERONE_SERVE_TOKEN` at `[serve].auth_token` (same name as [`examples/serve/`](https://github.com/torbido-hq/cicerone/tree/main/examples/serve)).
 
-## What actually moves
+## Failure modes
 
-| This afternoon | Still waits for `job.run()` |
+| Situation | Expected behavior |
 | --- | --- |
-| 202 into the queue, then popular / latest for people in the flush, plus `'__cold_start__'` | Brand-new SKUs and brand-new user ids in LightFM |
-| Personalized rewrite when **both** ids are in the last artifact, experiments off, and `fit_min_events` (default 100) known-ID events have arrived since the last `fit_partial` | Sequential strategies; growing the embedding tables |
+| Missing `client_reference_id` | Skip session (handler 200 `{ ok: true }`; Stripe will not retry) |
+| Missing catalog ID | Skip that line; other lines still post |
+| Invalid Stripe webhook | Handler **400** (`constructEvent` threw) |
+| Cicerone queue full | Handler **429**; Stripe should retry |
+| Cicerone contract error | Handler **502**; Stripe should retry |
+| Event accepted | Handler **202**; queued, not applied |
+| Unknown user/item | No LightFM personalized update; popular / latest can still move |
+| Below `fit_min_events` | No `fit_partial` (frozen weights; known users can still be re-scored) |
+| New SKU | LightFM waits for `job.run()` |
+| New user ID | LightFM waits for `job.run()` |
+| Serve restart before flush | In-memory queued events can be lost (Stripe already got 2xx) |
+| Duplicate Stripe event after acknowledgement | Cicerone can ingest it again; requires application-level durable idempotency |
 
-Item factors can drift globally after a real `fit_partial`, but only this flush's users are rewritten. Everyone else keeps last night's personalized rows until they show up in a later flush or the cron runs. Online extras on top of the artifact stop at `max_extra_interactions` (50_000). Tonight's job still refits from the full event log and writes a new artifact. The mapper does not replace that job.
+## Testing
 
-## Verifying it
+Treat **ingest** and **`fit_partial`** as two checks.
 
-After a test purchase:
+**Ingest.** One test card is enough. The handler returns 202 with your ids in `event_ids`. After the flush window, the incremental manifest's `generated_at` is newer than the purchase. `online_events_dropped_unknown` is how you see Stripe ids that were not in the artifact.
 
-1. This handler returned 202, with your ids listed in `event_ids`.
-2. After the flush window — and, on a dataset output, after `[serve].refresh_interval_seconds` — the incremental manifest's `generated_at` is newer than the purchase. `online_events_dropped_unknown` is how you see Stripe ids that were not in the artifact.
+**Personalized path without SGD.** Known user and known item, `[events.online]` on, `[experiment]` off. Cicerone 0.7 can rewrite that user's personalized / item-KNN / content-fallback rows from extra interactions while weights stay frozen. The top-K can still look unchanged if the SKU was already in the row. That is not `fit_partial`.
 
-If 202 came back clean and nothing personalized changed, that is the table above, not a dead webhook. Check `[experiment]` if you expected a LightFM rewrite: an active experiment skips it on purpose.
+**`fit_partial`.** Default `fit_min_events = 100` (known-ID events since the last `fit_partial`, not “100 in one flush”). A single test purchase will not cross that gate. To test the personalized online path including SGD, either send enough known-ID events to reach the configured threshold, or use a **development** serve config with a deliberately lower `fit_min_events`. Do not lower the production threshold just to see the feature work.
+
+```toml
+# development serve config only — default is 100
+[events.online]
+enabled = true
+fit_min_events = 1
+```
+
+If 202 came back clean and nothing personalized changed, check the failure table and `[experiment]` before assuming a dead webhook.
 
 ## When this is the wrong tool
 
-- You need the row inside the checkout response. Write-through is a queue plus a window (default 60s) plus, on a dataset output, the serve refresh interval.
+- You need the row inside the checkout response. Write-through is a queue plus a flush window (default 60s), not request-path inference.
 - The interesting catalog is SKUs you listed today. Unknown ids never enter LightFM until `job.run()`.
+- You need exactly-once purchases from Stripe retries. This mapper plus Cicerone 0.7's in-memory webhook source will not give you that.
