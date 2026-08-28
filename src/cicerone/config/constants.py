@@ -15,6 +15,9 @@ STRATEGY_NAMES: tuple[str, ...] = (
     "popular",
     "latest",
 )
+DEFAULT_MODELS: list[str] = ["collaborative", "item_based", "popular"]
+# Reciprocal rank fusion constant (Cormack et al., 2009); default for rrf_k.
+RRF_K = 60
 
 AUTOML_DEFAULT_N_SPLITS = 2
 AUTOML_DEFAULT_TEST_DAYS = 14
@@ -31,6 +34,8 @@ DEFAULT_ITEM_BASED_K_NEIGHBORS = 20
 DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS = 50
 # AutoML skip: median distinct items/user below this excludes sequential.
 DEFAULT_SEQUENTIAL_MIN_MEDIAN_INTERACTIONS = 5
+DEFAULT_EXPLAIN_MAX_SIMILAR_ITEMS = 3
+DEFAULT_EXPLAIN_MAX_ATTRIBUTES = 5
 
 Mode = Literal["batch", "serve"]
 # Strategy names stay as ``str`` and are validated against STRATEGY_NAMES at load.
@@ -48,6 +53,15 @@ DEFAULT_EVENTS_BATCH_SIZE = 100
 DEFAULT_EVENTS_BATCH_WINDOW_SECONDS = 60.0
 DEFAULT_EVENTS_POLL_INTERVAL_SECONDS = 1.0
 DEFAULT_EVENTS_WEBHOOK_MAX_PENDING = 10_000
+DEFAULT_EVENTS_ONLINE_FIT_PARTIAL_EPOCHS = 1
+DEFAULT_EVENTS_ONLINE_FIT_MIN_EVENTS = 100
+# Cap online-only interaction rows appended on top of the last job artifact.
+DEFAULT_EVENTS_ONLINE_MAX_EXTRA_INTERACTIONS = 50_000
+# SQS apply visibility is 300s; beat well inside that window.
+DEFAULT_EVENTS_HEARTBEAT_SECONDS = 15.0
+EXPERIMENT_COMBINERS: tuple[str, ...] = ("priority", "rrf", "blend")
+DEFAULT_EXPERIMENT_ALPHA = 0.05
+PRIMARY_METRIC_WEIGHTED = "weighted"
 
 
 class ConfigError(ValueError):

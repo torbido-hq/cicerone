@@ -155,3 +155,151 @@ def test_sqlite_replace_recommendations_schema_mismatch(tmp_path, caplog):
     assert any("delete skipped" in record.getMessage().lower() for record in caplog.records)
     stored = pd.read_sql(text("SELECT item_id FROM recommendations"), engine)
     assert list(stored["item_id"]) == ["old"]
+
+
+def test_sqlite_write_recommendations_missing_optional_columns(tmp_path):
+    url = _sqlite_url(tmp_path)
+    engine = create_engine(url)
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"}]
+    ).to_sql("recommendations", engine, index=False, if_exists="replace")
+    sink = DatabaseOutputSink({"database_url": url})
+    with pytest.raises(RecommendationSchemaError, match="ALTER TABLE"):
+        sink.write_recommendations(
+            pd.DataFrame(
+                [
+                    {
+                        "user_id": "u1",
+                        "item_id": "i1",
+                        "rank": 1,
+                        "score": 1.0,
+                        "source": "personalized",
+                        "variant": "control",
+                        "reasons": "[]",
+                    }
+                ]
+            )
+        )
+
+
+def test_sqlite_db_reader_filters_variant(tmp_path):
+    url = _sqlite_url(tmp_path)
+    sink = DatabaseOutputSink({"database_url": url})
+    sink.write_recommendations(
+        pd.DataFrame(
+            [
+                {
+                    "user_id": "u1",
+                    "item_id": "control-item",
+                    "rank": 1,
+                    "score": 0.9,
+                    "source": "personalized",
+                    "variant": "control",
+                },
+                {
+                    "user_id": "u1",
+                    "item_id": "treatment-item",
+                    "rank": 1,
+                    "score": 0.8,
+                    "source": "personalized",
+                    "variant": "treatment",
+                },
+            ]
+        )
+    )
+    reader = DbRecommendationReader({"database_url": url})
+    assert list(reader.get_recommendations("u1", k=10, variant="treatment")["item_id"]) == ["treatment-item"]
+
+
+def test_sqlite_db_reader_missing_variant_column_falls_back(tmp_path):
+    url = _sqlite_url(tmp_path)
+    engine = create_engine(url)
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"}]
+    ).to_sql("recommendations", engine, index=False, if_exists="replace")
+    reader = DbRecommendationReader({"database_url": url})
+    assert list(reader.get_recommendations("u1", k=10, variant="treatment")["item_id"]) == ["i1"]
+
+
+def _raise_on_variant_sql(original, variant_queries: dict[str, int]):
+    from sqlalchemy.exc import ProgrammingError
+
+    def fake_read_sql(sql, *args, **kwargs):
+        params = kwargs.get("params") or {}
+        if params.get("variant") is not None or ":variant" in str(sql):
+            variant_queries["n"] += 1
+            raise ProgrammingError("SELECT", {}, Exception("column variant does not exist"))
+        return original(sql, *args, **kwargs)
+
+    return fake_read_sql
+
+
+def test_sqlite_db_reader_caches_missing_variant_after_query_error(tmp_path, monkeypatch):
+    url = _sqlite_url(tmp_path)
+    engine = create_engine(url)
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"}]
+    ).to_sql("recommendations", engine, index=False, if_exists="replace")
+    reader = DbRecommendationReader({"database_url": url})
+    reader._variant_supported = True
+    variant_queries = {"n": 0}
+    monkeypatch.setattr(
+        "cicerone.io.recommendation_reader.pd.read_sql",
+        _raise_on_variant_sql(pd.read_sql, variant_queries),
+    )
+    assert list(reader.get_recommendations("u1", k=10, variant="treatment")["item_id"]) == ["i1"]
+    assert reader._variant_supported is False
+    assert list(reader.get_recommendations("u1", k=10, variant="treatment")["item_id"]) == ["i1"]
+    assert variant_queries["n"] == 1
+
+
+def test_sqlite_db_reader_cold_start_caches_missing_variant_after_query_error(tmp_path, monkeypatch):
+    url = _sqlite_url(tmp_path)
+    engine = create_engine(url)
+    pd.DataFrame(
+        [
+            {
+                "user_id": "z_user",
+                "item_id": "i1",
+                "rank": 1,
+                "score": 0.9,
+                "source": "popular_fallback",
+            }
+        ]
+    ).to_sql("recommendations", engine, index=False, if_exists="replace")
+    reader = DbRecommendationReader({"database_url": url})
+    reader._variant_supported = True
+    variant_queries = {"n": 0}
+    monkeypatch.setattr(
+        "cicerone.io.recommendation_reader.pd.read_sql",
+        _raise_on_variant_sql(pd.read_sql, variant_queries),
+    )
+    cold = reader.get_cold_start_fallback(k=1, variant="treatment")
+    assert list(cold["item_id"]) == ["i1"]
+    assert reader._variant_supported is False
+    assert list(reader.get_cold_start_fallback(k=1, variant="treatment")["item_id"]) == ["i1"]
+    assert variant_queries["n"] == 1
+
+
+def test_sqlite_db_reader_does_not_cache_unrelated_missing_column(tmp_path, monkeypatch):
+    from sqlalchemy.exc import ProgrammingError
+
+    url = _sqlite_url(tmp_path)
+    engine = create_engine(url)
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"}]
+    ).to_sql("recommendations", engine, index=False, if_exists="replace")
+    reader = DbRecommendationReader({"database_url": url})
+    reader._variant_supported = True
+    original = pd.read_sql
+
+    def fake_read_sql(sql, *args, **kwargs):
+        params = kwargs.get("params") or {}
+        if params.get("variant") is not None or ":variant" in str(sql):
+            raise ProgrammingError("SELECT", {}, Exception('column "user_id" does not exist'))
+        return original(sql, *args, **kwargs)
+
+    monkeypatch.setattr("cicerone.io.recommendation_reader.pd.read_sql", fake_read_sql)
+    with pytest.raises(ProgrammingError, match="user_id"):
+        reader.get_recommendations("u1", k=10, variant="treatment")
+    assert reader._variant_supported is True

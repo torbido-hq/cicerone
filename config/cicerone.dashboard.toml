@@ -7,8 +7,9 @@
 # same as serve mode.
 #
 # [output] here MUST point at the exact same store the batch job writes to
-# (status history and the user-id inspector both read from it) -- everything
-# else in this file is independent of the batch config.
+# (status history and the user-id inspector both read from it). [input] should
+# point at the job's event store so the inspector can show recent events
+# next to the current top-K; a placeholder path disables that pane.
 
 [output]
 kind = "dataset"
@@ -34,7 +35,9 @@ port = 8090
 users_path = "/app/config/dashboard_users.toml"
 refresh_interval_seconds = 30 # how often the page polls /partials/status
 history_limit = 20 # recent runs shown (only meaningful for [output].kind = "db")
-lookup_k = 20 # inspector rows (capped at job.top_k)
+lookup_k = 20 # inspector recommendation rows (capped at job.top_k)
+lookup_events = 20 # inspector event rows (from [input], newest first)
+# lookup_user_attrs = ["region_slug"] # allowlisted user columns to show; default none
 
 # [job] is required by config.load_settings() even though the dashboard
 # never trains anything -- kept generic/simple rather than special-casing
@@ -43,8 +46,8 @@ lookup_k = 20 # inspector rows (capped at job.top_k)
 [job]
 cron_schedule = "0 3 * * *"
 
-# [input] is likewise required but never read from in this mode -- any
-# valid, already-configured backend works as a placeholder.
+# Same event store the batch job reads. A missing/unreadable path disables
+# the inspector's event pane (recommendations still work from [output]).
 [input]
 kind = "dataset"
 

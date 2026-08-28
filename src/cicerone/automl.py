@@ -15,6 +15,7 @@ from typing import Any
 import pandas as pd
 from rectools.metrics import MAP, NDCG, Recall, calc_metrics
 from rectools.metrics.base import MetricAtK
+from rectools.metrics.debias import DebiasConfig
 
 from cicerone.config import (
     AUTOML_DEFAULT_N_SPLITS,
@@ -24,6 +25,7 @@ from cicerone.config import (
     validate_model_weights,
     validate_rrf_k,
 )
+from cicerone.config.settings import ExplainSettings
 from cicerone.dataset import build_dataset, build_interactions
 from cicerone.feature_config import FeatureConfig
 from cicerone.model import (
@@ -32,6 +34,7 @@ from cicerone.model import (
     RecommenderModel,
     train_and_recommend,
 )
+from cicerone.model.constants import RANDOM_STATE
 from cicerone.model_config import SEQUENTIAL_EXTRA_HINT, SEQUENTIAL_STRATEGY, sequential_extra_available
 
 logger = logging.getLogger(__name__)
@@ -197,12 +200,13 @@ def _time_based_folds(
     return list(reversed(folds))
 
 
-def _make_metrics(top_k: int) -> dict[str, MetricAtK]:
+def _make_metrics(top_k: int, *, debias: bool = False) -> dict[str, MetricAtK]:
     # rectools.metrics — not a custom MAP/NDCG/Recall implementation.
+    debias_config = DebiasConfig(random_state=RANDOM_STATE) if debias else None
     return {
-        f"MAP@{top_k}": MAP(k=top_k),
-        f"NDCG@{top_k}": NDCG(k=top_k),
-        f"Recall@{top_k}": Recall(k=top_k),
+        f"MAP@{top_k}": MAP(k=top_k, debias_config=debias_config),
+        f"NDCG@{top_k}": NDCG(k=top_k, debias_config=debias_config),
+        f"Recall@{top_k}": Recall(k=top_k, debias_config=debias_config),
     }
 
 
@@ -217,6 +221,7 @@ def _evaluate_fold(
     candidates: list[Candidate],
     metrics: dict[str, MetricAtK],
     model_configs: dict[str, dict[str, Any]] | None = None,
+    content_fallback_enabled: bool = False,
 ) -> list[dict[str, float]]:
     """Score every candidate on one fold (picklable for ProcessPoolExecutor)."""
     built = build_dataset(train_events, users, items, config, half_life_days=half_life_days)
@@ -238,6 +243,8 @@ def _evaluate_fold(
             strategy_cache=strategy_cache,
             model_configs=model_configs,
             recommend_cache=recommend_cache,
+            explain=ExplainSettings(enabled=False),
+            content_fallback_enabled=content_fallback_enabled,
         )
         fold_metrics.append(calc_metrics(metrics, reco=reco, interactions=test_interactions))
     return fold_metrics
@@ -256,6 +263,8 @@ def evaluate_candidates(
     max_workers: int = 1,
     model_configs: dict[str, dict[str, Any]] | None = None,
     sequential_min_median_interactions: int = DEFAULT_SEQUENTIAL_MIN_MEDIAN_INTERACTIONS,
+    debias: bool = False,
+    content_fallback_enabled: bool = False,
 ) -> list[CandidateResult]:
     """Backtest candidates over time folds. ``max_workers > 1`` evaluates folds in parallel."""
     parsed_candidates = _parse_candidates(candidates)
@@ -283,7 +292,7 @@ def evaluate_candidates(
             len(folds),
         )
 
-    metrics = _make_metrics(top_k)
+    metrics = _make_metrics(top_k, debias=debias)
     if max_workers > 1:
         with ProcessPoolExecutor(max_workers=min(max_workers, len(folds))) as executor:
             fold_results = list(
@@ -299,6 +308,7 @@ def evaluate_candidates(
                     repeat(parsed_candidates),
                     repeat(metrics),
                     repeat(model_configs),
+                    repeat(content_fallback_enabled),
                 )
             )
     else:
@@ -314,6 +324,7 @@ def evaluate_candidates(
                 parsed_candidates,
                 metrics,
                 model_configs,
+                content_fallback_enabled,
             )
             for train_events, test_events in folds
         ]

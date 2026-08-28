@@ -6,19 +6,22 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import uvicorn
 from croniter import CroniterError, croniter
-from fastapi import Depends, FastAPI, Query, Request
+from fastapi import Depends, FastAPI, Form, Query, Request
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from cicerone.config import Settings, load_settings
-from cicerone.dashboard_lookup import lookup_recommendations
+from cicerone.dashboard_experiments import clear_promotion, experiment_context, promote_winner
+from cicerone.dashboard_lookup import lookup_inspector
 from cicerone.dashboard_users import load_users
 from cicerone.http_auth import require_basic_auth
-from cicerone.io.base import ManifestReader, RecommendationReader
-from cicerone.io.factory import build_manifest_reader, build_recommendation_reader
+from cicerone.io.base import ManifestReader, RecommendationReader, UserHistoryReader
+from cicerone.io.factory import build_manifest_reader, build_recommendation_reader, build_user_history_reader
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -56,6 +59,25 @@ def _compute_staleness(manifest: dict[str, Any] | None, cron_schedule: str, now:
     return {"is_stale": is_stale, "expected_next_run": expected_next_run.isoformat(), "error": None}
 
 
+def page_title(
+    *,
+    user_id: str = "",
+    manifest: dict[str, Any] | None = None,
+    staleness: dict[str, Any] | None = None,
+) -> str:
+    parts: list[str] = []
+    if manifest is not None:
+        if manifest.get("status") == "failed":
+            parts.append("failed")
+        elif staleness is not None and staleness.get("is_stale"):
+            parts.append("stale")
+    cleaned = user_id.strip()
+    if cleaned:
+        parts.append(cleaned)
+    parts.append("Cicerone dashboard")
+    return " · ".join(parts)
+
+
 def _incremental_status(history: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Most recent incremental write-through run from manifest history (newest first)."""
     for run in history:
@@ -66,6 +88,8 @@ def _incremental_status(history: list[dict[str, Any]]) -> dict[str, Any] | None:
             "generated_at": run.get("generated_at"),
             "last_incremental_at": run.get("last_incremental_at") or run.get("generated_at"),
             "events": run.get("incremental_events_applied", run.get("n_events")),
+            "online_users_refreshed": run.get("online_users_refreshed"),
+            "online_fit_partial_epochs": run.get("online_fit_partial_epochs"),
             "error": run.get("error"),
         }
     return None
@@ -76,6 +100,7 @@ def create_app(
     reader: ManifestReader,
     users: dict[str, str],
     recommendation_reader: RecommendationReader | None = None,
+    history_reader: UserHistoryReader | None = None,
 ) -> FastAPI:
     app = FastAPI(title="cicerone-dashboard")
     app.mount("/static", StaticFiles(directory=str(_PACKAGE_DIR / "static")), name="static")
@@ -107,15 +132,55 @@ def create_app(
         return _TEMPLATES.TemplateResponse(
             request,
             "_recommendations.html",
-            lookup_recommendations(settings, recommendation_reader, user_id),
+            lookup_inspector(settings, recommendation_reader, history_reader, user_id),
         )
 
     @app.get("/dashboard", dependencies=[Depends(auth)])
     def dashboard(request: Request, user_id: str = Query(default="")):
         context = _status_context()
         context["refresh_interval_seconds"] = settings.dashboard.refresh_interval_seconds
-        context.update(lookup_recommendations(settings, recommendation_reader, user_id))
+        context.update(lookup_inspector(settings, recommendation_reader, history_reader, user_id))
+        context["page_title"] = page_title(
+            user_id=str(context.get("user_id") or ""),
+            manifest=context["manifest"],
+            staleness=context["staleness"],
+        )
         return _TEMPLATES.TemplateResponse(request, "dashboard.html", context)
+
+    @app.get("/dashboard/experiments", dependencies=[Depends(auth)])
+    def experiments(
+        request: Request, message: str = Query(default=""), promote_error: str = Query(default="")
+    ):
+        context = experiment_context(settings)
+        context["message"] = message or None
+        context["promote_error"] = promote_error or None
+        return _TEMPLATES.TemplateResponse(request, "experiments.html", context)
+
+    @app.post("/dashboard/experiments/promote", dependencies=[Depends(auth)])
+    def experiments_promote(variant: str = Form(...)):
+        error = promote_winner(settings, variant.strip())
+        if error:
+            return RedirectResponse(
+                url=f"/dashboard/experiments?promote_error={quote(error)}",
+                status_code=303,
+            )
+        return RedirectResponse(
+            url=f"/dashboard/experiments?message={quote('Promoted ' + variant.strip())}",
+            status_code=303,
+        )
+
+    @app.post("/dashboard/experiments/unpromote", dependencies=[Depends(auth)])
+    def experiments_unpromote():
+        error = clear_promotion(settings)
+        if error:
+            return RedirectResponse(
+                url=f"/dashboard/experiments?promote_error={quote(error)}",
+                status_code=303,
+            )
+        return RedirectResponse(
+            url="/dashboard/experiments?message=Resumed%20split",
+            status_code=303,
+        )
 
     return app
 
@@ -138,7 +203,12 @@ def main() -> None:
     except Exception:
         logger.exception("Recommendation store is not available; dashboard lookup will be disabled")
         rec_reader = None
-    app = create_app(settings, reader, users, rec_reader)
+    try:
+        history_reader = build_user_history_reader(settings.input)
+    except Exception:
+        logger.exception("Event store is not available; dashboard history pane will be disabled")
+        history_reader = None
+    app = create_app(settings, reader, users, rec_reader, history_reader)
     uvicorn.run(app, host=settings.dashboard.host, port=settings.dashboard.port)
 
 

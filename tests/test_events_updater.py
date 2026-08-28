@@ -7,11 +7,13 @@ from support.events import event_payload
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import IOSettings, make_settings
 from cicerone.events.normalize import normalize_event
+from cicerone.events.online_result import OnlineRefreshResult, empty_online_rows
 from cicerone.events.store import load_recommendations_for_users, load_recommendations_frame
 from cicerone.events.updater import INCREMENTAL_SOURCE, IncrementalUpdater
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.factory import build_output_sink
 from cicerone.io.recommendation_reader import RECOMMENDATION_COLUMNS
+from cicerone.reasons import dump_source_reasons, parse_reasons
 
 
 def test_incremental_updater_write_through(tmp_path, feature_config: FeatureConfig):
@@ -123,6 +125,41 @@ def test_incremental_updater_preserves_compound_sources(tmp_path, feature_config
     assert "compound" in set(u1[u1["user_id"] == "u1"]["item_id"].astype(str))
 
 
+def test_incremental_updater_preserves_reasons_on_personalized_rows(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    kept = dump_source_reasons("personalized", rank=1)
+    pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "old",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                "reasons": kept,
+            }
+        ]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+    )
+    updater.apply([normalize_event(event_payload(user_id="u1", item_id="new", event_id="r1"))])
+    frame = load_recommendations_frame(settings.output)
+    u1 = frame[frame["user_id"] == "u1"]
+    old = u1[u1["item_id"] == "old"].iloc[0]
+    assert parse_reasons(old["reasons"]).sources[0].label == "personalized"
+    fresh = u1[u1["item_id"] == "new"].iloc[0]
+    assert parse_reasons(fresh["reasons"]).sources[0].label == INCREMENTAL_SOURCE
+
+
 def test_incremental_updater_skips_when_busy(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()
@@ -206,6 +243,54 @@ def test_incremental_updater_write_busy_check_ignores_cached_start(tmp_path, fea
     )
     assert updater.apply([normalize_event(event_payload())]) == 0
     assert writes["n"] == 0
+
+
+def test_persist_online_skipped_when_write_busy(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+
+    class _FakeOnline:
+        def __init__(self) -> None:
+            self.commits = 0
+            self.aborts = 0
+
+        def refresh(self, events):  # type: ignore[no-untyped-def]
+            del events
+            return OnlineRefreshResult(rows=empty_online_rows())
+
+        def invalidate(self) -> None:
+            return None
+
+        def commit(self) -> None:
+            self.commits += 1
+
+        def abort(self) -> None:
+            self.aborts += 1
+
+    online = _FakeOnline()
+    busy = {"v": False}
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=3,
+        busy_check=lambda: False,
+        write_busy_check=lambda: busy["v"],
+        online=online,
+    )
+    assert updater.apply([normalize_event(event_payload())], persist_online=False) == 1
+    assert online.commits == 0
+    busy["v"] = True
+    updater.persist_online()
+    assert online.commits == 0
+    assert online.aborts == 1
 
 
 def test_incremental_updater_empty_and_unknown_event_type(tmp_path, feature_config: FeatureConfig):
@@ -583,3 +668,131 @@ def test_popular_ranking_drops_negative_weights(tmp_path, feature_config: Featur
     assert list(ranked["item_id"]) == ["ok"]
     reused = updater._popular_ranking(batch, updater._row_signal_weights(batch))
     assert list(reused["item_id"]) == ["ok"]
+
+
+def test_incremental_updater_preserves_variants(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    existing = pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "old-control",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                "variant": "control",
+            },
+            {
+                "user_id": "u1",
+                "item_id": "old-treatment",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                "variant": "treatment",
+            },
+            {
+                "user_id": COLD_START_USER_ID,
+                "item_id": "cold-control",
+                "rank": 1,
+                "score": 0.2,
+                "source": "popular_fallback",
+                "variant": "control",
+            },
+            {
+                "user_id": COLD_START_USER_ID,
+                "item_id": "cold-treatment",
+                "rank": 1,
+                "score": 0.2,
+                "source": "popular_fallback",
+                "variant": "treatment",
+            },
+        ]
+    )
+    existing.to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        variant_names=("control", "treatment"),
+    )
+    events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
+    assert updater.apply(events) == 1
+    frame = load_recommendations_frame(settings.output)
+    u1 = frame[frame["user_id"] == "u1"]
+    assert set(u1["variant"].astype(str)) == {"control", "treatment"}
+    for variant in ("control", "treatment"):
+        rows = u1[u1["variant"] == variant]
+        assert "i9" in set(rows["item_id"].astype(str))
+        assert f"old-{variant}" in set(rows["item_id"].astype(str))
+    cold = frame[frame["user_id"] == COLD_START_USER_ID]
+    assert set(cold["variant"].astype(str)) == {"control", "treatment"}
+
+
+def test_incremental_updater_collapses_leftover_variants_when_experiment_off(
+    tmp_path, feature_config: FeatureConfig
+):
+    out = tmp_path / "out"
+    out.mkdir()
+    existing = pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "old-control",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                "variant": "control",
+            },
+            {
+                "user_id": "u1",
+                "item_id": "old-treatment",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                "variant": "treatment",
+            },
+            {
+                "user_id": COLD_START_USER_ID,
+                "item_id": "cold-control",
+                "rank": 1,
+                "score": 0.2,
+                "source": "popular_fallback",
+                "variant": "control",
+            },
+            {
+                "user_id": COLD_START_USER_ID,
+                "item_id": "cold-treatment",
+                "rank": 1,
+                "score": 0.2,
+                "source": "popular_fallback",
+                "variant": "treatment",
+            },
+        ]
+    )
+    existing.to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+    )
+    events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
+    assert updater.apply(events) == 1
+    frame = load_recommendations_frame(settings.output)
+    u1 = frame[frame["user_id"] == "u1"]
+    assert set(u1["variant"].astype(str)) == {"control"}
+    assert "old-control" in set(u1["item_id"].astype(str))
+    assert "old-treatment" not in set(u1["item_id"].astype(str))
+    cold = frame[frame["user_id"] == COLD_START_USER_ID]
+    assert set(cold["variant"].astype(str)) == {"control"}
+    assert "cold-treatment" not in set(cold["item_id"].astype(str))

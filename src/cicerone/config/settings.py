@@ -15,7 +15,13 @@ from cicerone.config.constants import (
     DEFAULT_EPOCH_METRICS_REGRESSION_DROP,
     DEFAULT_EVENTS_BATCH_SIZE,
     DEFAULT_EVENTS_BATCH_WINDOW_SECONDS,
+    DEFAULT_EVENTS_ONLINE_FIT_MIN_EVENTS,
+    DEFAULT_EVENTS_ONLINE_FIT_PARTIAL_EPOCHS,
+    DEFAULT_EVENTS_ONLINE_MAX_EXTRA_INTERACTIONS,
     DEFAULT_EVENTS_POLL_INTERVAL_SECONDS,
+    DEFAULT_EXPERIMENT_ALPHA,
+    DEFAULT_EXPLAIN_MAX_ATTRIBUTES,
+    DEFAULT_EXPLAIN_MAX_SIMILAR_ITEMS,
     DEFAULT_LOCK_KEY,
     DEFAULT_LOCK_TTL_SECONDS,
     Mode,
@@ -24,7 +30,7 @@ from cicerone.config.constants import (
 
 @dataclass(frozen=True)
 class EpochMetricsSettings:
-    """Tunables for optional LightFM per-epoch metric logging."""
+    """Tunables for optional collaborative/sequential per-epoch metric logging."""
 
     every: int
     max_users: int = DEFAULT_EPOCH_METRICS_MAX_USERS
@@ -70,6 +76,8 @@ class DashboardSettings:
     refresh_interval_seconds: float = 30.0
     history_limit: int = 20
     lookup_k: int = 20
+    lookup_events: int = 20
+    lookup_user_attrs: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -79,6 +87,7 @@ class AutomlSettings:
     test_days: int = AUTOML_DEFAULT_TEST_DAYS
     primary_metric: str = AUTOML_DEFAULT_PRIMARY_METRIC
     candidates: list[dict[str, Any]] | None = None
+    debias: bool = False
 
 
 @dataclass(frozen=True)
@@ -89,12 +98,58 @@ class EventsIncrementalSettings:
 
 
 @dataclass(frozen=True)
+class EventsOnlineSettings:
+    """Serve-worker LightFM fit_partial + user-scoped recommend write-through."""
+
+    enabled: bool = False
+    fit_partial_epochs: int = DEFAULT_EVENTS_ONLINE_FIT_PARTIAL_EPOCHS
+    fit_min_events: int = DEFAULT_EVENTS_ONLINE_FIT_MIN_EVENTS
+    max_extra_interactions: int = DEFAULT_EVENTS_ONLINE_MAX_EXTRA_INTERACTIONS
+
+
+@dataclass(frozen=True)
 class EventsSettings:
     enabled: bool = False
     kind: str = "webhook"
     options: dict[str, Any] = field(default_factory=dict)
     incremental: EventsIncrementalSettings = field(default_factory=EventsIncrementalSettings)
     ha: bool = False
+    online: EventsOnlineSettings = field(default_factory=EventsOnlineSettings)
+
+
+@dataclass(frozen=True)
+class VariantSettings:
+    """One ranking recipe in an ``[experiment]`` block."""
+
+    name: str
+    traffic: float
+    models: list[str] | None = None
+    model_weights: dict[str, float] | None = None
+    rrf_k: float | None = None
+    combiner: str | None = None
+    blending: dict[str, Any] | None = None
+    boosts: bool = True
+    eligibility: bool = True
+
+
+@dataclass(frozen=True)
+class ExperimentSettings:
+    enabled: bool = False
+    id: str = ""
+    primary_metric: str = "weighted"
+    variants: tuple[VariantSettings, ...] = ()
+    log_exposures: bool = False
+    automl_challenger: bool = False
+    alpha: float = DEFAULT_EXPERIMENT_ALPHA
+
+
+@dataclass(frozen=True)
+class ExplainSettings:
+    """Batch-time recommendation reasons persisted on each output row."""
+
+    enabled: bool = True
+    max_similar_items: int = DEFAULT_EXPLAIN_MAX_SIMILAR_ITEMS
+    max_attributes: int = DEFAULT_EXPLAIN_MAX_ATTRIBUTES
 
 
 @dataclass(frozen=True)
@@ -128,6 +183,8 @@ class Settings:
     trigger: TriggerSettings
     dashboard: DashboardSettings
     events: EventsSettings
+    explain: ExplainSettings = field(default_factory=ExplainSettings)
+    experiment: ExperimentSettings = field(default_factory=ExperimentSettings)
 
     @property
     def serve_host(self) -> str:
@@ -238,6 +295,10 @@ class Settings:
         return self.dashboard.lookup_k
 
     @property
+    def dashboard_lookup_events(self) -> int:
+        return self.dashboard.lookup_events
+
+    @property
     def automl_enabled(self) -> bool:
         return self.automl.enabled
 
@@ -256,6 +317,10 @@ class Settings:
     @property
     def automl_candidates(self) -> list[dict[str, Any]] | None:
         return self.automl.candidates
+
+    @property
+    def automl_debias(self) -> bool:
+        return self.automl.debias
 
     @property
     def events_enabled(self) -> bool:

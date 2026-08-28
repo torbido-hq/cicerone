@@ -9,10 +9,12 @@ Options (from [input.options] / [output.options]):
 
 from __future__ import annotations
 
+import fcntl
 import io
 import json
 import logging
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +30,7 @@ from cicerone.io.options import (
 )
 from cicerone.io.recommendation_schema import USER_COLUMN
 from cicerone.io.replace_users import RecommendationSchemaError, normalize_replace_user_ids
+from cicerone.io.user_lookup import filter_rows_for_user, newest_events
 
 logger = logging.getLogger(__name__)
 
@@ -63,11 +66,59 @@ class DatasetInputSource:
     def read_items(self) -> pd.DataFrame | None:
         return self._read_optional("items.parquet", "item")
 
+    def _read_for_user(self, filename: str, user_id: str) -> pd.DataFrame:
+        try:
+            frame = read_parquet(self._options, filename, filters=[("user_id", "==", user_id)])
+        except FileNotFoundError:
+            raise
+        except Exception as exc:
+            if is_s3_not_found(exc):
+                raise
+            message = str(exc).lower()
+            if "user_id" in message or "fieldref" in message or "filter" in message:
+                logger.warning("Filtered %s read failed; falling back to full-file load: %s", filename, exc)
+                frame = read_parquet(self._options, filename)
+            else:
+                raise
+        if USER_COLUMN not in frame.columns:
+            frame = read_parquet(self._options, filename)
+        return filter_rows_for_user(frame, user_id)
+
+    def get_events_for_user(self, user_id: str, limit: int) -> pd.DataFrame:
+        return newest_events(self._read_for_user("events.parquet", user_id), limit)
+
+    def get_user(self, user_id: str) -> dict[str, Any] | None:
+        try:
+            frame = self._read_for_user("users.parquet", user_id)
+        except FileNotFoundError:
+            return None
+        except Exception as exc:
+            if is_s3_not_found(exc):
+                return None
+            raise
+        if frame.empty:
+            return None
+        return frame.iloc[0].to_dict()
+
 
 class DatasetOutputSink:
     def __init__(self, options: dict[str, Any]):
         self._options = options
         self._backend = validate_storage_options(options)
+
+    @contextmanager
+    def _artifact_lock(self) -> Iterator[None]:
+        if self._backend != "local":
+            yield
+            return
+        path = Path(require_option(self._options, "path", "local")) / ".model-artifact.lock"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     def _write_bytes(self, filename: str, payload: bytes, content_type: str) -> None:
         if self._backend == "local":
@@ -127,7 +178,68 @@ class DatasetOutputSink:
     def write_manifest(self, manifest: dict) -> None:
         self._write_bytes("manifest.json", json.dumps(manifest, indent=2).encode("utf-8"), "application/json")
 
+    def _read_bytes(self, filename: str) -> bytes | None:
+        if self._backend == "local":
+            path = Path(require_option(self._options, "path", "local")) / filename
+            try:
+                return path.read_bytes()
+            except FileNotFoundError:
+                return None
+
+        bucket = require_option(self._options, "bucket", "s3")
+        key = object_key(self._options, filename)
+        client = build_s3_client(self._options)
+        try:
+            response = client.get_object(Bucket=bucket, Key=key)
+        except Exception as exc:
+            if is_s3_not_found(exc):
+                return None
+            raise
+        body = response["Body"]
+        try:
+            return body.read()
+        finally:
+            body.close()
+
     def write_model_artifact(self, payload: bytes) -> None:
         from cicerone.artifact import ARTIFACT_FILENAME
 
-        self._write_bytes(ARTIFACT_FILENAME, payload, "application/octet-stream")
+        with self._artifact_lock():
+            self._write_bytes(ARTIFACT_FILENAME, payload, "application/octet-stream")
+
+    def replace_model_artifact_if(self, payload: bytes, expected_fingerprint: str) -> bool:
+        from cicerone.artifact import ARTIFACT_FILENAME
+
+        with self._artifact_lock():
+            if self.model_artifact_fingerprint() != expected_fingerprint:
+                return False
+            self._write_bytes(ARTIFACT_FILENAME, payload, "application/octet-stream")
+            return True
+
+    def read_model_artifact(self) -> bytes | None:
+        from cicerone.artifact import ARTIFACT_FILENAME
+
+        return self._read_bytes(ARTIFACT_FILENAME)
+
+    def model_artifact_fingerprint(self) -> str | None:
+        from cicerone.artifact import ARTIFACT_FILENAME
+
+        if self._backend == "local":
+            path = Path(require_option(self._options, "path", "local")) / ARTIFACT_FILENAME
+            try:
+                stat = path.stat()
+            except FileNotFoundError:
+                return None
+            return f"local:{stat.st_mtime_ns}:{stat.st_size}"
+
+        bucket = require_option(self._options, "bucket", "s3")
+        key = object_key(self._options, ARTIFACT_FILENAME)
+        client = build_s3_client(self._options)
+        try:
+            head = client.head_object(Bucket=bucket, Key=key)
+        except Exception as exc:
+            if is_s3_not_found(exc):
+                return None
+            raise
+        etag = str(head.get("ETag") or "").strip('"')
+        return f"s3:{etag}:{head.get('ContentLength', '')}"

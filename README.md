@@ -15,12 +15,13 @@ guides synced from [`docs/`](docs/). [Articles](https://cicerone.dev/articles/).
 
 A generic, self-hosted batch recommender system. It reads your interaction
 data, trains a hybrid [rectools](https://github.com/MobileTeleSystems/RecTools)
-+ LightFM model (optional item-KNN, SASRec/BERT4Rec, popular/latest), and
++ LightFM model (optional item-KNN, SASRec/BERT4Rec/HSTU, popular/latest), and
 writes out top-K recommendations per user. An optional lightweight "serve"
 mode can then expose those precomputed recommendations over a small
 read-only HTTP API — there's still no live inference, no model loaded in the
 request path. Optional `[events]` ingest can refresh popular/latest rows
-between full retrains; that is still write-through, not request-path
+between full retrains; `[events.online]` can also continue LightFM for
+affected users. That is still write-through, not request-path
 ranking ([docs/incremental-events.md](docs/incremental-events.md)). How the
 strategies differ, with paper links:
 [docs/how-it-works.md](docs/how-it-works.md). Optionally
@@ -39,19 +40,21 @@ up to your own data doesn't require touching any code.
 ## Features
 
 - **Batch recommender** — cron-scheduled train + top-K write (dataset or DB I/O)
-- **Hybrid strategies** — collaborative (LightFM), item-based KNN, optional SASRec/BERT4Rec, optional content cold-item fallback, popular, latest
+- **Hybrid strategies** — collaborative (LightFM), item-based KNN, optional SASRec/BERT4Rec/HSTU, optional content cold-item fallback, popular, latest
 - **Priority, RRF, or blending** — combine strategies by order, weighted ranks, or per-user mix
+- **A/B experiments** — sticky user assignment across whole ranking recipes; sequential CIs, catalog guardrails, optional AutoML challenger, dashboard promote
 - **AutoML** — time-fold backtest to pick models/weights per run
 - **Business policies** — TOML eligibility filters and score boosts
 - **Serve mode** — read-only HTTP API over precomputed recommendations
   (`limit` / `category` / `exclude_unavailable`, cold-start fallback;
   OpenAPI at `/docs` + thin `ServeClient`)
-- **Incremental events** — write-through of popular/latest between retrains
+- **Incremental events** — write-through of popular/latest between retrains;
+  optional `[events.online]` continues LightFM for affected users
   ([docs/incremental-events.md](docs/incremental-events.md))
 - **CLI / PyPI** — `cicerone` console script; `pip install cicerone-recommender`
   (import name `cicerone`; the PyPI name `cicerone` is a different project)
 - **Retrain trigger** — webhook (+ optional input poll) alongside cron
-- **Dashboard** — Basic-Auth status page for run success/failure, history, and user-id lookup
+- **Dashboard** — Basic-Auth status page for run success/failure, history, user-id lookup, and experiment promote
 - **Model artifacts** — optional versioned fitted-model bundle for offline reload
 
 > **Why "Cicerone"?** In the world of beer, a [Cicerone](https://www.cicerone.org)
@@ -89,14 +92,15 @@ at boot, then again on `[job].cron_schedule` in `config/cicerone.toml`
 By default (`[job].mode = "batch"`), the container only runs the batch job
 on its cron schedule — no HTTP surface at all. Setting `[job].mode = "serve"`
 switches `cicerone start` / `cicerone serve` to instead run a small FastAPI **read**
-API over the lookup table the batch job already wrote (never loads
-lightfm/implicit/torch and never trains; `rectools` itself is imported for
-`Columns`, so it stays in a serve-only image):
+API over the lookup table the batch job already wrote. The request path never
+loads lightfm/implicit/torch and never trains (`rectools` is imported for
+`Columns`, so it stays in a serve-only image). With `[events.online]`, the
+events worker loads the last artifact for write-through only:
 
 | Method | Path | Description |
 | --- | --- | --- |
 | `GET` | `/health` | Liveness probe (no auth) |
-| `GET` | `/recommendations/{user_id}` | Precomputed top-K for that user |
+| `GET` | `/recommendations/{user_id}` | Precomputed top-K for that user (optional `reasons`) |
 | `GET` | `/metrics` | Prometheus text format (no bearer token; optional `X-Metrics-Token`) |
 | `POST` | `/events` | Incremental ingest when `[events]` `kind = "webhook"` |
 | `GET` | `/docs` / `/redoc` | Interactive OpenAPI docs (Swagger / ReDoc) |
@@ -118,8 +122,23 @@ Response JSON:
   "user_id": "u1",
   "fallback": false,
   "items": [
-    {"item_id": "i1", "rank": 1, "score": 0.91, "source": "blended"}
-  ]
+    {
+      "item_id": "i1",
+      "rank": 1,
+      "score": 0.91,
+      "source": "blended",
+      "reasons": {
+        "sources": [
+          {"label": "personalized", "rank": 2, "weight": 0.8, "contribution": 0.0129}
+        ],
+        "boosts": [],
+        "similar_items": [{"item_id": "i9", "score": 0.5}],
+        "matched_attributes": [{"column": "style", "value": "lager"}]
+      }
+    }
+  ],
+  "experiment_id": "rrf-vs-blend-2026-08",
+  "variant": "control"
 }
 ```
 
@@ -129,7 +148,10 @@ table, the API returns the cold-start fallback
 (`popular_fallback` / `latest` / `blended` for `__cold_start__`) with
 `"fallback": true`. That sentinel is written only under blending; with
 priority or RRF the reader substitutes one `popular_fallback` / `latest`
-user's top-K instead, and 404s when the table has neither.
+user's top-K instead, and 404s when the table has neither. When
+`[experiment]` is enabled, the response also includes `experiment_id` and
+the sticky `variant`; both fields are `null` when experiments are off.
+See [docs/experiments.md](docs/experiments.md).
 
 - For a `dataset` output, the whole recommendations file (+ optional
   `items_snapshot.parquet`) is cached in memory and refreshed on a
@@ -226,7 +248,9 @@ process:
 ### Incremental events
 
 Optional `[events]` on the serve process write-through popular/latest rows
-between full retrains (not request-path ranking). Guide:
+between full retrains (not request-path ranking). `[events.online]` continues
+LightFM on the last artifact for affected users; that rewrite is skipped
+while `[experiment]` is on. Guide:
 [docs/incremental-events.md](docs/incremental-events.md).
 
 ## Dashboard
@@ -234,24 +258,30 @@ between full retrains (not request-path ranking). Guide:
 A lightweight, standalone web dashboard for checking whether the last job
 run succeeded and inspecting a user's current top-K — `cicerone dashboard`
 (compose maps port `8090`), regardless of `[job].mode` (batch or
-serve). Like serve mode, it never loads lightfm/implicit/torch (it does
-import `rectools`).
+serve). It never loads lightfm/implicit/torch (it does import `rectools`).
 
-![Cicerone dashboard with a user recommendation lookup, latest job status, and history including a failed run](docs/images/dashboard.png)
+![Cicerone dashboard inspecting alice: recent events beside current top-K with amber overlap, Pause updates and Refresh, latest job success, and history including a failed S3 run](docs/images/dashboard.png)
 
 - `GET /dashboard` shows the latest run's status (success/failed), counts,
   effective models, and (for a `db` output only — a `dataset` output's
   `manifest.json` is overwritten every run, so it only ever has the latest)
   a short run history. `GET /dashboard?user_id=` fills the inspector on
-  load. Enter a `user_id` to inspect that user's current
-  precomputed top-K from the same output store (cold-start fallback when
-  they have no personal rows). The inspector shows
-  `min(job.top_k, dashboard.lookup_k)` rows (`lookup_k` defaults to 20, so 10
-  with the default `top_k`). When `[events]` is
+  load. Enter a `user_id` to inspect that user's recent `[input]` events
+  beside their current precomputed top-K (cold-start fallback when they
+  have no personal rows). Shared item ids are highlighted; a source-mix
+  badge and optional user attributes (`dashboard.lookup_user_attrs`) sit above the two panes. Recs show
+  `min(job.top_k, dashboard.lookup_k)` rows (`lookup_k` defaults to 20, so
+  10 with the default `top_k`); events show `dashboard.lookup_events`
+  (default 20). When `[experiment]` is enabled, lookup shows the assigned
+  variant (what serve would return). `GET /dashboard/experiments` compares
+  recipes with always-valid CIs and catalog guardrails, and can **Promote**
+  a winner to 100% traffic. A missing event store does not hide recommendations. When `[events]` is
   enabled, a panel shows the latest incremental flush from recent manifests
   (dataset outputs may clear it on the next full retrain). The status block
   auto-refreshes via
-  [htmx](https://htmx.org) polling, so no page reload is needed.
+  [htmx](https://htmx.org) polling (Pause updates / Refresh on the page), so
+  no page reload is needed. HTTP Basic credentials persist until the
+  browser forgets them for the origin.
 - Protected by HTTP Basic Auth rather than a bearer token, since it's meant
   to be opened directly in a browser (a login prompt, not a header a human
   has to attach manually). Manage its small user list (a handful of named
@@ -390,17 +420,18 @@ if omitted:
   similarity (`TFIDFRecommender`). Personalized, warm users only. Neighbor
   count is RecTools `model.item_based.model.K` (default `20`); the legacy
   `[job.item_based].k_neighbors` key is still accepted and translated.
-- `sequential`: RecTools `SASRecModel` (default) or `BERT4RecModel` —
-  transformer next-item model. Personalized, interacting users only. Opt-in
-  (`job.models`); not in the default chain. Requires
+- `sequential`: RecTools `SASRecModel` (default), `BERT4RecModel`, or
+  `HSTUModel` — transformer next-item model. Personalized, interacting users
+  only. Opt-in (`job.models`); not in the default chain. Requires
   `pip install 'cicerone-recommender[sequential]'` or
   `pip install -r requirements-sequential.txt`. Hyperparameters via
-  `[model.sequential]` (`architecture = "sasrec"` | `"bert4rec"`, plus RecTools
-  keys such as `n_factors`, `epochs`, `loss`, `session_max_len`,
-  `train_min_user_interactions`). Sequences are **unique items ordered by
-  last interaction time** (Cicerone aggregates `(user, item)` before
-  `Dataset.construct`). AutoML skips this strategy when the extra is missing
-  or median distinct items/user is below
+  `[model.sequential]` (`architecture = "sasrec"` | `"bert4rec"` | `"hstu"`,
+  plus RecTools keys such as `n_factors`, `epochs`, `loss`, `session_max_len`,
+  `train_min_user_interactions`). SASRec defaults are eSASRec
+  (`sampled_softmax` + LiGR). Sequences are **unique items ordered by last
+  interaction time** (Cicerone aggregates `(user, item)` before
+  `Dataset.construct`), so HSTU relative-time bias is weak. AutoML skips this
+  strategy when the extra is missing or median distinct items/user is below
   `[job.sequential].min_median_interactions` (default `5`).
 - `content_fallback`: feature-similarity recommendations for **zero-interaction
   items** (one-hot over `item_features`, cosine vs user history). Personalized,
@@ -441,11 +472,11 @@ of how the underlying strategy labels happen to sort.
 `[job].max_workers` (default `1`, sequential) controls ProcessPool size for
 strategy fitting and AutoML fold evaluation. Set `>1` to opt into parallelism.
 
-To watch LightFM's training trajectory, set `[job].log_epoch_metrics = true`
-(default off). The collaborative strategy then fits epoch-by-epoch and logs
-in-sample Precision@K/Recall@K every `[job].epoch_metrics_every` epochs
-(default `5`) over a seeded random user sample. Significant regression or
-plateau emits a WARN. Optional tunables:
+To watch collaborative or sequential training, set
+`[job].log_epoch_metrics = true` (default off). Those strategies then fit
+epoch-by-epoch and log in-sample Precision@K/Recall@K every
+`[job].epoch_metrics_every` epochs (default `5`) over a seeded random user
+sample. Significant regression or plateau emits a WARN. Optional tunables:
 `epoch_metrics_max_users`, `epoch_metrics_regression_drop`,
 `epoch_metrics_plateau_eps`, `epoch_metrics_plateau_window` — see
 `config/cicerone.toml`.
@@ -461,6 +492,7 @@ enabled = true
 n_splits = 2       # time-based folds to backtest each candidate over
 test_days = 14     # size of each fold's held-out window, in days
 primary_metric = "MAP" # exact name, or a unique NAME@k (e.g. "MAP" → "MAP@10")
+# debias = false         # RecTools DebiasConfig; default off
 ```
 
 Each run, `cicerone.automl.evaluate_candidates()` splits your event history
@@ -489,10 +521,38 @@ events.
 
 Within each backtested fold, candidates that enable the same strategy (e.g.
 two fusion candidates that both include `popular`) reuse that strategy's
-already-fitted model instead of re-fitting it per candidate — fitting still
-happens once per fold per distinct strategy, and `recommend()` still runs
-fresh for every candidate, so this is purely a training-cost optimization
-and doesn't change scoring.
+already-fitted model instead of re-fitting it per candidate. Per-strategy
+`recommend()` frames are reused too; only the combination step is
+recomputed. Scoring is unchanged.
+
+## Experiments
+
+`[experiment]` runs a sticky A/B test of whole ranking recipes (models +
+combiner + blending knobs), not per-source CTR of a mixed cascade. The job
+fits the union of variant models once, writes extra `variant` rows, and
+serve hashes `user_id` onto one list. The dashboard Experiments page shows
+always-valid CIs and catalog guardrails, and can promote a winner to 100%
+traffic. Optional `automl_challenger` uses the last successful manifest as
+control and this run's AutoML pick as treatment.
+
+```toml
+[experiment]
+enabled = true
+id = "rrf-vs-blend-2026-08"
+primary_metric = "purchase"
+
+[[experiment.variants]]
+name = "control"
+traffic = 0.5
+
+[[experiment.variants]]
+name = "treatment"
+traffic = 0.5
+combiner = "blend"
+```
+
+Full assignment, schema, sequential stats, and promote rules:
+[docs/experiments.md](docs/experiments.md).
 
 ## Model artifacts
 
@@ -511,8 +571,10 @@ manifest records `artifact_written` and `artifact_schema_version` when an
 artifact was saved.
 
 This is a train/serve *artifact* split (inspired by tools like
-LibRecommender), not live inference: serve mode still reads precomputed
-recommendation rows only and never loads the artifact or ML deps. Schema
+LibRecommender), not live inference: `GET /recommendations` still reads
+precomputed rows only. When `[events.online]` is enabled, the serve events
+worker loads the artifact to continue LightFM and rewrite affected users.
+Schema
 **v3** writes RecTools strategies with `model.save` / `load_model` inside a
 zip envelope; the envelope (dataset, feature config) and custom
 `content_fallback` weights still use pickle and must only be loaded from
@@ -521,15 +583,19 @@ not loadable.
 
 ## Output
 
-`recommendations`: `user_id, item_id, rank, score, source` (`source` is the
-label of whichever strategy produced that row: `personalized`, `item_based`,
+`recommendations`: `user_id, item_id, rank, score, source` plus optional
+`reasons` JSON (`[job.explain]`, default on). `source` is the label of
+whichever strategy produced that row: `personalized`, `item_based`,
 `sequential`, `content_fallback`, `popular_fallback`, `latest`, or `blended`
-when multi-source blending combined more than one). An incremental flush
-rewrites a whole user's rows, but only the event-derived boost rows carry
-`incremental`: preserved personalized rows keep their original label, and the
-refilled slices stay `popular_fallback` / `latest`. Use the manifest's
-`incremental_events_applied` / `last_incremental_at` to see that a flush
-happened — `source` will not tell you.
+when multi-source blending combined more than one. Existing DB tables need
+`ALTER TABLE … ADD COLUMN reasons TEXT` before the extra column will persist.
+An incremental flush rewrites a whole user's rows, but only the event-derived
+boost rows carry `incremental`: preserved personalized rows keep their original
+label unless `[events.online]` replaced them, and the refilled slices stay
+`popular_fallback` / `latest`. Use the
+manifest's `incremental_events_applied` / `last_incremental_at` (and
+`online_users_refreshed` when online refresh ran) to see that a
+flush happened — `source` will not tell you.
 
 `manifest`: metadata about the latest run (counts, timestamps,
 `triggered_by`, effective models, optional AutoML metrics, and
@@ -574,7 +640,7 @@ project; the import remains `cicerone`. LightFM may need a C compiler
 ```sh
 pip install cicerone-recommender
 pip install 'cicerone-recommender[redis]'        # lock backend / Redis Streams
-pip install 'cicerone-recommender[sequential]'   # SASRec / BERT4Rec
+pip install 'cicerone-recommender[sequential]'   # SASRec / BERT4Rec / HSTU
 ```
 
 Then, with your own TOML. Example files default to image paths
@@ -617,7 +683,7 @@ The app services do **not** depend on Postgres, so a dataset/S3-only
 
 ```sh
 docker compose -f docker-compose.ci.yml --env-file docker/postgres/defaults.env \
-  up --build --abort-on-container-exit --exit-code-from test
+  up --build --abort-on-container-exit --exit-code-from test test
 ```
 
 Runs the whole pytest suite (with an ephemeral Postgres for the `db`

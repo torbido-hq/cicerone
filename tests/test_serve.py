@@ -11,6 +11,7 @@ from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import Settings
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.recommendation_reader import select_cold_start_fallback
+from cicerone.io.recommendation_schema import filter_variant_rows
 from cicerone.serve import create_app, main
 from cicerone.serve.app import (
     _GeneratedAtCache,
@@ -35,8 +36,9 @@ class _FakeReader:
         self.refresh_calls += 1
         self._items_version += 1
 
-    def get_recommendations(self, user_id: str, k: int) -> pd.DataFrame:
+    def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame:
         rows = self._recs[self._recs["user_id"] == user_id].sort_values("rank")
+        rows = filter_variant_rows(rows, variant)
         return rows.head(k).reset_index(drop=True)
 
     def get_items(self) -> pd.DataFrame | None:
@@ -46,8 +48,9 @@ class _FakeReader:
     def items_version(self) -> int:
         return self._items_version
 
-    def get_cold_start_fallback(self, k: int) -> pd.DataFrame:
-        return select_cold_start_fallback(self._recs, k)
+    def get_cold_start_fallback(self, k: int, *, variant: str | None = None) -> pd.DataFrame:
+        rows = filter_variant_rows(self._recs, variant)
+        return select_cold_start_fallback(rows, k)
 
     def configure_item_filters(
         self,
@@ -227,7 +230,37 @@ def test_recommendations_returns_records_with_valid_token():
     assert body["generated_at"] == "2026-08-04T12:00:00+00:00"
     assert body["fallback"] is False
     assert [row["item_id"] for row in body["items"]] == ["i1", "i2"]
+    assert all(row["reasons"] is None for row in body["items"])
     assert response.headers["X-Generated-At"] == "2026-08-04T12:00:00+00:00"
+
+
+def test_recommendations_returns_parsed_reasons():
+    recs = _recs_df().copy()
+    recs["reasons"] = [
+        (
+            '{"sources":[{"label":"personalized","rank":1,"weight":1.0,"contribution":null}],'
+            '"boosts":[],"similar_items":[{"item_id":"i9","score":0.5}],'
+            '"matched_attributes":[{"column":"style","value":"lager"}]}'
+        ),
+        None,
+        None,
+        None,
+        None,
+    ]
+    app = create_app(
+        _settings(),
+        _FakeReader(recs, _items_df()),
+        feature_config=_feature_config(),
+    )
+    client = TestClient(app)
+
+    response = client.get("/recommendations/u1", headers={"Authorization": "Bearer secret"})
+
+    assert response.status_code == 200
+    first = response.json()["items"][0]
+    assert first["reasons"]["sources"][0]["label"] == "personalized"
+    assert first["reasons"]["similar_items"][0]["item_id"] == "i9"
+    assert response.json()["items"][1]["reasons"] is None
 
 
 def test_recommendations_respects_limit_query_param():

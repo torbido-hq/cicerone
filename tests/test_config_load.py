@@ -60,11 +60,15 @@ def test_load_settings_dataset_backends(tmp_path):
     assert settings.content_fallback_enabled is False
     assert settings.content_fallback_max_neighbors == 50
     assert settings.sequential_min_median_interactions == 5
+    assert settings.explain.enabled is True
+    assert settings.explain.max_similar_items == 3
+    assert settings.explain.max_attributes == 5
     assert settings.automl_enabled is False
     assert settings.automl_n_splits == 2
     assert settings.automl_test_days == 14
     assert settings.automl_primary_metric == "MAP"
     assert settings.automl_candidates is None
+    assert settings.automl_debias is False
 
 
 def test_load_settings_with_explicit_models(tmp_path):
@@ -123,6 +127,63 @@ def test_load_settings_item_based_and_content_fallback(tmp_path):
     assert settings.item_based_k_neighbors == 15
     assert settings.content_fallback_enabled is True
     assert settings.content_fallback_max_neighbors == 25
+
+
+def test_load_settings_explain(tmp_path):
+    config_path = write_toml(
+        tmp_path,
+        """
+        [job]
+        [job.explain]
+        enabled = false
+        max_similar_items = 0
+        max_attributes = 2
+
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+
+    settings = load_settings(config_path)
+
+    assert settings.explain.enabled is False
+    assert settings.explain.max_similar_items == 0
+    assert settings.explain.max_attributes == 2
+
+
+def test_load_settings_explain_rejects_negative(tmp_path):
+    config_path = write_toml(
+        tmp_path,
+        """
+        [job]
+        [job.explain]
+        max_similar_items = -1
+
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+
+    with pytest.raises(ConfigError, match="job.explain.max_similar_items"):
+        load_settings(config_path)
 
 
 def test_load_settings_sequential_min_median_interactions(tmp_path):
@@ -382,6 +443,7 @@ def test_load_settings_with_explicit_automl(tmp_path):
         n_splits = 3
         test_days = 7
         primary_metric = "NDCG"
+        debias = true
 
         [[job.automl.candidates]]
         models = ["popular"]
@@ -412,6 +474,7 @@ def test_load_settings_with_explicit_automl(tmp_path):
     assert settings.automl_n_splits == 3
     assert settings.automl_test_days == 7
     assert settings.automl_primary_metric == "NDCG"
+    assert settings.automl_debias is True
     assert settings.automl_candidates == [
         {"models": ["popular"]},
         {"models": ["popular", "latest"], "weights": {"popular": 1.0, "latest": 0.5}},
@@ -453,6 +516,7 @@ def test_load_settings_defaults_when_job_section_missing(tmp_path):
     assert settings.automl_test_days == 14
     assert settings.automl_primary_metric == "MAP"
     assert settings.automl_candidates is None
+    assert settings.automl_debias is False
 
 
 def test_load_settings_save_model_artifact(tmp_path):
@@ -1030,6 +1094,79 @@ def test_load_settings_rejects_non_positive_dashboard_lookup_k(tmp_path):
     )
 
     with pytest.raises(ConfigError, match="dashboard.lookup_k must be >= 1"):
+        load_settings(config_path)
+
+
+def test_load_settings_dashboard_lookup_events(tmp_path):
+    config_path = write_toml(
+        tmp_path,
+        f"""
+        [dashboard]
+        enabled = true
+        lookup_events = 8
+        {_base_io_toml()}
+        """,
+    )
+
+    settings = load_settings(config_path)
+
+    assert settings.dashboard.lookup_events == 8
+    assert settings.dashboard_lookup_events == 8
+
+
+def test_load_settings_dashboard_lookup_events_defaults_to_20(tmp_path):
+    settings = load_settings(write_toml(tmp_path, _base_io_toml()))
+
+    assert settings.dashboard.lookup_events == 20
+
+
+def test_load_settings_rejects_non_positive_dashboard_lookup_events(tmp_path):
+    config_path = write_toml(
+        tmp_path,
+        f"""
+        [dashboard]
+        lookup_events = 0
+        {_base_io_toml()}
+        """,
+    )
+
+    with pytest.raises(ConfigError, match="dashboard.lookup_events must be >= 1"):
+        load_settings(config_path)
+
+
+def test_load_settings_dashboard_lookup_user_attrs(tmp_path):
+    config_path = write_toml(
+        tmp_path,
+        f"""
+        [dashboard]
+        enabled = true
+        lookup_user_attrs = ["region_slug", "user_id", " favorite_styles ", "region_slug"]
+        {_base_io_toml()}
+        """,
+    )
+
+    settings = load_settings(config_path)
+
+    assert settings.dashboard.lookup_user_attrs == ("region_slug", "favorite_styles")
+
+
+def test_load_settings_dashboard_lookup_user_attrs_defaults_empty(tmp_path):
+    settings = load_settings(write_toml(tmp_path, _base_io_toml()))
+
+    assert settings.dashboard.lookup_user_attrs == ()
+
+
+def test_load_settings_rejects_non_list_dashboard_lookup_user_attrs(tmp_path):
+    config_path = write_toml(
+        tmp_path,
+        f"""
+        [dashboard]
+        lookup_user_attrs = "region_slug"
+        {_base_io_toml()}
+        """,
+    )
+
+    with pytest.raises(ConfigError, match="dashboard.lookup_user_attrs must be a list of strings"):
         load_settings(config_path)
 
 

@@ -338,6 +338,9 @@ def test_blend_shared_item_gets_blended_source():
     )
     assert list(out[Columns.Item]) == ["shared"]
     assert list(out["source"]) == [BLENDED_SOURCE]
+    contribs = out.iloc[0]["_source_contribs"]
+    assert [row["label"] for row in contribs] == [PERSONALIZED_SOURCE, POPULAR_SOURCE]
+    assert all(row["contribution"] is not None for row in contribs)
 
 
 def test_append_cold_start_rows_adds_sentinel():

@@ -257,6 +257,32 @@ def test_evaluate_candidates_scores_each_candidate(sample_items, feature_config)
         assert any(key.startswith("Recall") for key in result.metrics)
 
 
+def test_evaluate_candidates_passes_content_fallback_flag(sample_items, feature_config, monkeypatch):
+    seen: list[object] = []
+    real = automl.train_and_recommend
+
+    def _spy(*args, **kwargs):  # type: ignore[no-untyped-def]
+        seen.append(kwargs.get("content_fallback_enabled"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(automl, "train_and_recommend", _spy)
+    events = _spread_events(n_days=21)
+    evaluate_candidates(
+        events,
+        None,
+        sample_items,
+        feature_config,
+        top_k=2,
+        half_life_days=90,
+        candidates=[{"models": ["popular"]}],
+        n_splits=1,
+        test_days=7,
+        content_fallback_enabled=False,
+    )
+    assert seen
+    assert seen == [False] * len(seen)
+
+
 def test_evaluate_candidates_parallel_folds_match_sequential(sample_items, feature_config):
     # Deterministic strategies: parallel fold scoring must match sequential.
     events = _spread_events(n_days=35)
@@ -392,3 +418,54 @@ def test_select_best_candidate_validates_metric_key_per_result():
     missing_map = CandidateResult(candidate=Candidate(models=["latest"]), metrics={"NDCG@5": 0.9}, n_folds=1)
     with pytest.raises(ValueError, match="latest"):
         select_best_candidate([has_map, missing_map], primary_metric="MAP")
+
+
+def test_make_metrics_attaches_debias_config_when_enabled():
+    from cicerone.model.constants import RANDOM_STATE
+
+    plain = automl._make_metrics(5)
+    debiased = automl._make_metrics(5, debias=True)
+    for metric in plain.values():
+        assert metric.debias_config is None
+    for metric in debiased.values():
+        assert metric.debias_config is not None
+        assert metric.debias_config.random_state == RANDOM_STATE
+
+
+def test_debias_changes_map_on_head_heavy_interactions():
+    from rectools import Columns
+
+    users = [f"u{i}" for i in range(40)]
+    rows = [{Columns.User: user, Columns.Item: "P"} for user in users]
+    tails = [f"t{i}" for i in range(8)]
+    for i, user in enumerate(users[:16]):
+        rows.append({Columns.User: user, Columns.Item: tails[i // 2]})
+    interactions = pd.DataFrame(rows)
+    reco = pd.DataFrame(
+        {
+            Columns.User: users,
+            Columns.Item: ["P"] * len(users),
+            Columns.Rank: [1] * len(users),
+        }
+    )
+    plain = calc_metrics(automl._make_metrics(5), reco=reco, interactions=interactions)
+    debiased = calc_metrics(automl._make_metrics(5, debias=True), reco=reco, interactions=interactions)
+    assert plain["MAP@5"] != debiased["MAP@5"]
+
+
+def test_evaluate_candidates_accepts_debias_flag(sample_items, feature_config):
+    events = _spread_events(n_days=21)
+    results = evaluate_candidates(
+        events,
+        None,
+        sample_items,
+        feature_config,
+        top_k=2,
+        half_life_days=90,
+        candidates=[{"models": ["popular"]}],
+        n_splits=1,
+        test_days=7,
+        debias=True,
+    )
+    assert len(results) == 1
+    assert any(key.startswith("MAP") for key in results[0].metrics)

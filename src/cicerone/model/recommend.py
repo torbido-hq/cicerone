@@ -28,7 +28,9 @@ from cicerone.config import (
     validate_model_weights,
     validate_rrf_k,
 )
+from cicerone.config.settings import ExplainSettings
 from cicerone.dataset import BuiltDataset
+from cicerone.explain import attach_reasons
 from cicerone.feature_config import DEFAULT_BOOST_OVERFETCH_FACTOR, FeatureConfig
 from cicerone.ids import interacting_external_user_ids
 from cicerone.model.combine import combine_by_priority, combine_by_weighted_fusion
@@ -492,6 +494,7 @@ def recommend_with_models(
     run_plan: ModelRunPlan | None = None,
     recommend_cache: RecommendCache | None = None,
     max_workers: int = 1,
+    explain: ExplainSettings | None = None,
 ) -> pd.DataFrame:
     """Recommend + combine on already-fitted strategies (no fit).
 
@@ -554,10 +557,23 @@ def recommend_with_models(
         top_k=top_k,
     )
 
+    explain_settings = explain if explain is not None else ExplainSettings()
     if cohort_plan.has_boosts:
-        combined = apply_boosts(combined, built.items, config.boosts, top_k=top_k)
+        combined = apply_boosts(
+            combined,
+            built.items,
+            config.boosts,
+            top_k=top_k,
+            record_hits=explain_settings.enabled,
+        )
 
-    return combined.reset_index(drop=True)
+    return attach_reasons(
+        combined.reset_index(drop=True),
+        items=built.items,
+        interactions=built.interactions,
+        feature_columns=config.item_features,
+        settings=explain_settings,
+    )
 
 
 def train_and_recommend(
@@ -577,6 +593,7 @@ def train_and_recommend(
     content_fallback_max_neighbors: int = DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS,
     run_plan: ModelRunPlan | None = None,
     recommend_cache: RecommendCache | None = None,
+    explain: ExplainSettings | None = None,
 ) -> pd.DataFrame:
     """Fit enabled strategies, then recommend + combine."""
     if run_plan is None:
@@ -610,4 +627,5 @@ def train_and_recommend(
         run_plan=run_plan,
         recommend_cache=recommend_cache,
         max_workers=max_workers,
+        explain=explain,
     )

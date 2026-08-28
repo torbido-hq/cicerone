@@ -46,6 +46,11 @@ metrics_token = ""   # empty = open endpoint; bind to a trusted network or rever
 # batch_size = 100
 # batch_window_seconds = 60
 # poll_interval_seconds = 1
+# [events.online]
+# enabled = true
+# fit_partial_epochs = 1          # 0 = frozen weights + history refresh only
+# fit_min_events = 100            # skip SGD until this many known-ID events
+# max_extra_interactions = 50000  # online-only rows on top of the last job artifact
 
 # [input] is required by config.load_settings() even in serve mode (kept
 # generic/simple rather than special-casing it away) but is never read from

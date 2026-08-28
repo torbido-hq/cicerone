@@ -6,13 +6,14 @@ This document describes how the code under `src/cicerone/` fits together.
 For configuration and usage, see the main [README](../README.md). For the
 pipeline and how strategies differ, see [how-it-works.md](how-it-works.md).
 For `[events]` ingest (webhook, backends, HA), see
-[incremental-events.md](incremental-events.md).
+[incremental-events.md](incremental-events.md). For sticky A/B tests of
+ranking recipes, see [experiments.md](experiments.md).
 
 ## Module overview
 
 | Path | Role |
 | --- | --- |
-| `config/` | Load & resolve `config/cicerone.toml` (structural config + `${ENV_VAR}` secrets); package: constants / settings / validation / load / `events` / lock_url; nested Serve/Trigger/Dashboard/AutoML/Events settings (+ flat property aliases); `ConfigError` for invalid knobs; `make_settings(**overrides)` for tests / OpenAPI export |
+| `config/` | Load & resolve `config/cicerone.toml` (structural config + `${ENV_VAR}` secrets); package: constants / settings / validation / load / `events` / lock_url; nested Serve/Trigger/Dashboard/AutoML/Events/Experiment settings (+ flat property aliases); `ConfigError` for invalid knobs; `make_settings(**overrides)` for tests / OpenAPI export |
 | `feature_config.py` | Load `config/features.toml` (event weights, feature columns, eligibility/boost policy rules; `[[boost]]` / `[[boosts]]`) |
 | `policy/` | Declarative eligibility masks (fail-open/fail-closed matrix), cohort grouping (`eligibility.py`), score boosts (`boosts.py`) |
 | `blending.py` | Per-user weighted mix of personalized/popular/latest (optional) |
@@ -34,12 +35,14 @@ For `[events]` ingest (webhook, backends, HA), see
 | `model/fit.py` | `fit_strategies`, `plan_model_run`, ProcessPool workers |
 | `model/recommend.py` | `recommend_with_models`, cohort plan, `train_and_recommend` |
 | `model/combine.py` | Priority + weighted RRF combiners |
-| `model/epoch_metrics.py` | Optional LightFM per-epoch Precision/Recall logging |
+| `model/epoch_metrics.py` | Optional collaborative/sequential per-epoch Precision/Recall logging |
 | `model/constants.py` | `RRF_K`, `DEFAULT_MODELS`, source column names |
 | `model_config.py` | Default + TOML `[model.*]` RecTools `model_from_config` configs; sequential `architecture` → `cls`; legacy `job.item_based.k_neighbors` → `model.K` (no ML imports — safe for serve) |
-| `content_fallback.py` | Optional content-based cold-item strategy (one-hot item features + cosine vs user history) |
+| `explain.py` | After combine + boosts, persist `reasons` JSON (source contributions, boost hits, similar history items) |
+| `reasons.py` | Serve-safe serialize/parse for the optional `reasons` column |
 | `artifact.py` | Optional versioned fitted-model bundle (schema **v3**: RecTools `save`/`load_model` for library models + pickle envelope; `content_fallback` still pickle) |
 | `automl.py` | Optional: backtests candidate models/weights/`rrf_k` configs over time-based folds of event history and picks the best one |
+| `experiment/` | Sticky A/B assignment, per-variant recipes, sequential stats, guardrails, promote state / exposure log |
 | `cli.py` | `cicerone` console script (`start` (alias `run`) / `job` / `serve` / `dashboard` / `scheduler` / `users` / `export-openapi`; `--config`, `--log-level`, `--log-format`) |
 | `packaging.py` | Wheel checks for the Docker `package` stage (`python -m cicerone.packaging`) |
 | `job.py` | Orchestrates one end-to-end run (source → dataset → model → sink) |
@@ -55,6 +58,7 @@ For `[events]` ingest (webhook, backends, HA), see
 | `serve_client.py` | Thin stdlib HTTP client for the serve read API |
 | `export_serve_openapi.py` | `cicerone export-openapi` — dump FastAPI OpenAPI JSON (`docs/openapi/…`) |
 | `events/` | EventSource registry, micro-batch write-through — [incremental-events.md](incremental-events.md) |
+| `events/online.py` | Optional LightFM `fit_partial` + user-scoped recommend from the last artifact |
 | `events/ha.py` | Leader-only apply helpers for horizontally scaled incremental-events ingest |
 | `trigger.py` | Event-driven retrain trigger: webhook + optional input-bucket poll, debounce guard (`RunGuard`) shared with the cron loop; increments `cicerone_retrain_trigger_total` (per replica) |
 | `locks/` | Optional lock backends (`postgres.py` / `redis.py`) for `RunGuard` and the events apply lease; Redis `owned()` checks the fencing token, Postgres `owned()` checks `pg_locks` for this backend pid |
@@ -62,7 +66,8 @@ For `[events]` ingest (webhook, backends, HA), see
 | `config/lock_url.py` | Postgres lock URL resolution for config load + lock builder |
 | `http_auth.py` | Shared bearer-token (serve/trigger) and HTTP Basic Auth (dashboard) dependencies |
 | `dashboard.py` | Standalone FastAPI dashboard: job status/history plus user-id lookup (`cicerone dashboard`) |
-| `dashboard_lookup.py` | Output-store user lookup for the dashboard (fallback, category join, display formatting) |
+| `dashboard_lookup.py` | Dashboard inspector: recs lookup, `[input]` event history, allowlisted user attrs, assigned experiment variant |
+| `dashboard_experiments.py` | Experiments page: always-valid CIs, guardrails, promote winner |
 | `dashboard_users.py` | Load/save the dashboard's Basic Auth users file (TOML, username → bcrypt hash) |
 | `manage_dashboard_users.py` | CLI to add/remove/list dashboard users |
 | `templates/`, `static/` | Jinja2 templates + vendored htmx/Stimulus/Tailwind assets for the dashboard |
@@ -94,15 +99,17 @@ Test modules mirror the packages (same pattern as `tests/test_io_*.py`):
 | `tests/test_model_fit.py` | Fit cache, parallel fit, `resolve_run_models` |
 | `tests/test_model_recommend.py` | `train_and_recommend` / boosts / `content_fallback` |
 | `tests/test_model_combine.py` | Priority combiner unit tests |
-| `tests/test_model_epoch_metrics.py` | LightFM per-epoch metric helpers |
+| `tests/test_model_epoch_metrics.py` | Per-epoch metric helpers |
 | `tests/test_model_config.py` | RecTools `[model.*]` + save/load round trips |
-| `tests/test_model_sequential.py` | SASRec/BERT4Rec TOML mapping, AutoML skip, serve no-torch |
+| `tests/test_model_sequential.py` | SASRec/BERT4Rec/HSTU TOML mapping, AutoML skip, serve no-torch |
 | `tests/support/model_events.py` | Shared synthetic events helper |
 | `tests/support/toml_config.py` | Shared `write_toml` helper |
 | `tests/support/events.py` | Shared event payload helper for `test_events_*` |
-| `tests/test_events_*.py` | EventSource registry / normalize / webhook / db / db_postgres / s3 / redis_streams / buffer / store / updater / worker / ha |
+| `tests/test_events_*.py` | EventSource registry / normalize / webhook / db / db_postgres / s3 / redis_streams / buffer / store / updater / worker / ha / online |
 | `tests/test_config_events.py` | `[events]` coerce + TOML load |
 | `tests/test_serve_events_routes.py` / `test_serve_bootstrap_events.py` | Serve webhook mount + worker bootstrap |
+| `tests/test_experiment_*.py` | Sticky assignment, per-variant recipes, sequential stats, store, serve lookup |
+| `tests/test_explain.py` / `test_reasons.py` | Batch `reasons` JSON + serve-safe parse |
 
 ## Data flow
 
@@ -125,8 +132,8 @@ flowchart LR
     end
     J -->|OutputSink| S3O
     J -->|OutputSink| DB2
-    Ev["optional EventSource"] -->|"write-through popular/latest"| S3O
-    Ev -->|"write-through popular/latest"| DB2
+    Ev["optional EventSource"] -->|"write-through popular/latest/online"| S3O
+    Ev -->|"write-through popular/latest/online"| DB2
 ```
 
 1. `job.run()` loads `Settings` (`config.load_settings`) and `FeatureConfig`
@@ -188,8 +195,8 @@ flowchart LR
    when set `>1`. Per-strategy top-K is rectools-native
    (`ModelBase.recommend()` maps external↔internal IDs via the Dataset's
    id maps — Cicerone does not hand-roll that conversion). When
-   `[job].log_epoch_metrics = true`, the collaborative LightFM strategy is
-   fitted epoch-by-epoch via `fit_partial` and logs in-sample
+   `[job].log_epoch_metrics = true`, collaborative LightFM and sequential
+   strategies are fitted epoch-by-epoch via `fit_partial` and log in-sample
    Precision@K/Recall@K every `[job].epoch_metrics_every` epochs over a
    seeded random user sample (default off). Tunables are grouped in
    `EpochMetricsSettings`.
@@ -197,7 +204,9 @@ flowchart LR
    `FeatureConfig.boost_overfetch_factor` (default 3× `top_k`), scores are
    multiplied by the product of boost factors, and ranks are rewritten
    before truncating to `top_k`. Cohorts with an empty allowlist (eligibility
-   filtered out every item) are skipped.
+   filtered out every item) are skipped. `attach_reasons` then writes optional
+   `reasons` JSON (`Settings.explain` / `[job.explain]`) and drops internal
+   combiner/boost columns.
    An optional `strategy_cache` parameter (keyed by strategy name, caching
    the *fitted model*) lets a caller who is evaluating multiple configs
    against the same `BuiltDataset` — namely `automl.evaluate_candidates()` —
@@ -216,7 +225,8 @@ flowchart LR
    time-based folds of the raw event history — each fold trains a fresh
    `BuiltDataset` on everything before a `Settings.automl_test_days`-day
    held-out window and scores its recommendations against that window with
-   `rectools.metrics` (MAP@k/NDCG@k/Recall@k). Within a fold,
+   `rectools.metrics` (MAP@k/NDCG@k/Recall@k; optional
+   `[job.automl].debias` / RecTools `DebiasConfig`, default off). Within a fold,
    `evaluate_candidates()` passes a `strategy_cache` dict (reset per fold,
    shared across every candidate scored against that fold) to
    `train_and_recommend()` so candidates sharing a strategy reuse its fitted
@@ -231,14 +241,18 @@ flowchart LR
 5. `job.run()` writes the combined recommendations and a small run manifest
    (counts, timestamp, effective `models`/`model_weights`/`rrf_k`,
    `artifact_written` / `artifact_schema_version` when a model artifact was
-   saved, and `automl_metrics` when AutoML ran) back out via the configured
+   saved, `experiment_id` / `experiment_variants` when `[experiment]` is on,
+   and `automl_metrics` when AutoML ran) back out via the configured
    `OutputSink`. When items were loaded, it also writes an items snapshot
    (`items_snapshot.parquet` / `recommendation_items`) so serve mode can
    apply `?category=` and `exclude_unavailable` without reading the input
    store. When `Settings.save_model_artifact` is true, it also writes
    a versioned fitted-model artifact (`model.artifact` for the dataset
    backend, `model_artifacts` table for db) via
-   `OutputSink.write_model_artifact`. Serve mode never loads this artifact.
+   `OutputSink.write_model_artifact`. The request path never loads this
+   artifact. When `[events.online]` is enabled, the serve **events worker**
+   loads it to continue LightFM and rewrite affected users (not `GET`);
+   that rewrite is skipped while `[experiment]` is on.
 6. For batch, `cicerone start` runs one job immediately (`job.run()`, so the
    manifest records `triggered_by = "manual"`) and aborts if it fails; only
    then does it enter `scheduler.main()`, which
@@ -256,8 +270,10 @@ flowchart LR
 
 Selected via `[job].mode = "serve"`, `cicerone.serve` is a separate entrypoint
 (`cicerone serve`) from the batch scheduler — a serve-only deployment never
-imports `cicerone.model`/`dataset`/`automl`, and needs no
-lightfm/implicit/torch in that process or its request path. It does import
+imports `cicerone.model`/`dataset`/`automl` on the **request path**, and
+needs no lightfm/implicit/torch there. With `[events.online]`, the events
+worker lazy-imports the artifact stack (LightFM) for write-through only.
+It does import
 `rectools` at startup: `serve/app.py` → `events/worker.py` → `blending.py` →
 `from rectools import Columns`, so `rectools` cannot be dropped from a
 serve-only image.
@@ -276,9 +292,14 @@ serve-only image.
   `exclude_unavailable`) behind `http_auth.require_bearer_token`. Unknown
   users fall back to the `__cold_start__` list when blending wrote one, else
   to one `popular_fallback` / `latest` user's top-K; with neither, they 404.
-  Responses include `generated_at` from the run manifest. Pydantic models in
+  Responses include `generated_at` from the run manifest, plus
+  `experiment_id` and the sticky `variant` (`null` when experiments are off
+  or the table has no `variant` column). Each item
+  may include `reasons` (contributing sources, boost hits, similar history
+  items) when the batch job wrote the optional column. Pydantic models in
   `serve_schemas.py` populate `/openapi.json` (and `/docs` / `/redoc`);
-  `export_serve_openapi` writes the checked-in copy under `docs/openapi/`.
+  `export_serve_openapi` writes the checked-in copy under `docs/openapi/`
+  (the docs site copies it to `website/public/openapi/` at build time).
   Integrators can call the same contract via `serve_client.ServeClient`, the
   snippets in `examples/serve/`, or the `x-codeSamples` embedded in OpenAPI /
   ReDoc (Ruby, Python, JavaScript, Shell).
@@ -343,15 +364,20 @@ never imports `cicerone.model`/`dataset`/`automl`.
   `recommendation_runs` table for real history (`read_recent(limit)`).
 - `io.factory.build_recommendation_reader(settings.output)` builds a
   `RecommendationReader` for the user-id inspector (`dashboard_lookup.py`).
-  Lookup reads the output store directly (no serve hop). `k` is
-  `min(job.top_k, dashboard.lookup_k)` (`lookup_k` defaults to 20, so 10 with
-  the default `top_k`). Missing users fall
-  back to `__cold_start__` / popular-latest rows with a badge; `category`
-  is joined from the items snapshot when that column exists.
+  `io.factory.build_user_history_reader(settings.input)` builds a
+  `UserHistoryReader` (`get_events_for_user` / `get_user` on the input
+  source) for the events pane. Lookup reads those stores directly (no serve
+  hop). Recs `k` is `min(job.top_k, dashboard.lookup_k)` (`lookup_k`
+  defaults to 20, so 10 with the default `top_k`); events use
+  `dashboard.lookup_events` (default 20). User attributes use
+  `dashboard.lookup_user_attrs` (default none). Missing users fall back to
+  `__cold_start__` / popular-latest rows with a badge; `category` is joined
+  from the items snapshot when that column exists. When `reasons` is
+  present, the recs table shows a short Why summary (source labels, top
+  similar item). History load failures keep the recs pane.
 - `job.run()` writes exactly one manifest per run via a `try`/`finally`,
   with a consistent key set (`status: "success"|"failed"`, `error`) on both
-  the success and failure paths, so a failed run is no longer silently
-  invisible to the dashboard.
+  the success and failure paths, so a failed run is visible on the dashboard.
 - Auth is HTTP Basic (`http_auth.require_basic_auth`), not the bearer-token
   pattern used by serve/trigger — a browser-navigable page needs a login
   prompt, since a human can't attach a custom `Authorization` header to a
@@ -362,12 +388,18 @@ never imports `cicerone.model`/`dataset`/`automl`.
 - `dashboard.create_app()` exposes `GET /health` (no auth), `GET
   /partials/status` (Basic Auth, an htmx-polled fragment — see
   `templates/_status.html`), `GET /partials/recommendations` (Basic Auth,
-  user-id lookup fragment — see `templates/_recommendations.html`), and
-  `GET /dashboard` (Basic Auth, the full page). The page polls
-  `/partials/status` via `hx-trigger="load, every Ns"`
-  (`Settings.dashboard_refresh_interval_seconds`) instead of a websocket or
-  client-side JS framework. The lookup form is outside that poll target so
-  a status refresh does not wipe results.
+  user-id lookup fragment — see `templates/_recommendations.html`),
+  `GET /dashboard` (Basic Auth, the full page), `GET /dashboard/experiments`
+  (Basic Auth, always-valid CIs / catalog guardrails), and
+  `POST /dashboard/experiments/promote` (Basic Auth, 100% traffic to a
+  winner). The page polls
+  `/partials/status` (`Settings.dashboard_refresh_interval_seconds`)
+  instead of a websocket or client-side JS framework. Initial markup is
+  `hx-trigger="refresh"`; dashboard.js adds `every Ns` and the first request
+  only when updates are not paused (`prefers-reduced-motion` starts paused).
+  Pause updates / Resume updates and Refresh sit outside that poll target.
+  The lookup form is also outside the poll target so a status refresh does
+  not wipe results.
 - Frontend stack: server-rendered Jinja2 templates + htmx (polling) +
   Stimulus (a small `time-ago` controller for relative timestamps) +
   Tailwind CSS, all vendored under `src/cicerone/static/` — no CDN at
@@ -421,9 +453,10 @@ keys a given backend requires. To add a new backend (e.g. a message queue):
    and/or `OutputSink` protocol (`io/base.py`) — read `options` yourself,
    validating required keys with `io.options.require_option`.
 2. Register the new `kind` string in the `io/factory.py` registries:
-   `_INPUT_SOURCES` / `_OUTPUT_SINKS` for the batch job, plus
-   `_RECOMMENDATION_READERS` / `_MANIFEST_READERS` or serve and the dashboard
-   raise `Unknown recommendation kind` for it.
+   `_INPUT_SOURCES` / `_OUTPUT_SINKS` for the batch job, and
+   `_RECOMMENDATION_READERS` / `_MANIFEST_READERS` for serve and the
+   dashboard (otherwise they raise `Unknown recommendation kind` /
+   `Unknown manifest kind`).
 3. Document the new `kind` and its `options` in `config/cicerone.toml`.
 
 Nothing in `config/`, `job.py`, `dataset.py`, or `model/` needs to
@@ -433,8 +466,9 @@ generic `IOSettings`.
 ## Incremental events
 
 Serve-process ingest lives in `events/` plus `serve/events_routes.py` and
-`serve/bootstrap_events.py`. Operator guide:
-[incremental-events.md](incremental-events.md).
+`serve/bootstrap_events.py`. Optional `[events.online]` loads the model
+artifact in the events worker (not on `GET`); skipped while `[experiment]`
+is on. Operator guide: [incremental-events.md](incremental-events.md).
 
 ## Cold-start behavior
 

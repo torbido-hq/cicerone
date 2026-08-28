@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 
 import pandas as pd
 import pytest
@@ -212,6 +213,55 @@ def test_database_output_writes_and_replaces_model_artifact():
     assert len(stored) == 1
     payload = stored.iloc[0]["payload"]
     assert bytes(payload) == b"second"
+    assert sink.read_model_artifact() == b"second"
+    assert sink.model_artifact_fingerprint() is not None
+
+
+def test_database_output_replace_model_artifact_if_is_compare_and_swap():
+    sink = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})
+    sink.write_model_artifact(b"first")
+    token = sink.model_artifact_fingerprint()
+    assert token is not None
+    assert sink.replace_model_artifact_if(b"second", token) is True
+    assert sink.read_model_artifact() == b"second"
+    assert sink.replace_model_artifact_if(b"third", token) is False
+    assert sink.read_model_artifact() == b"second"
+
+
+def test_database_output_replace_model_artifact_if_single_winner_under_contention():
+    sink = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})
+    sink.write_model_artifact(b"first")
+    token = sink.model_artifact_fingerprint()
+    assert token is not None
+    barrier = threading.Barrier(2)
+    outcomes: list[bool] = []
+    lock = threading.Lock()
+
+    def _cas(payload: bytes) -> None:
+        barrier.wait()
+        won = sink.replace_model_artifact_if(payload, token)
+        with lock:
+            outcomes.append(won)
+
+    threads = [
+        threading.Thread(target=_cas, args=(b"online-a",)),
+        threading.Thread(target=_cas, args=(b"online-b",)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert outcomes.count(True) == 1
+    assert outcomes.count(False) == 1
+    assert sink.read_model_artifact() in {b"online-a", b"online-b"}
+
+
+def test_database_output_read_model_artifact_missing_returns_none():
+    sink = DatabaseOutputSink(
+        {"database_url": TEST_DATABASE_URL, "model_artifact_table": "absent_model_artifacts"}
+    )
+    assert sink.read_model_artifact() is None
+    assert sink.model_artifact_fingerprint() is None
 
 
 def test_database_output_model_artifact_custom_table_name():
@@ -263,3 +313,57 @@ def test_database_input_custom_table_names_are_used():
     users = source.read_users()
 
     assert list(users["user_id"]) == ["u1"]
+
+
+def test_database_get_events_for_user_filters_and_limits():
+    engine = create_engine(TEST_DATABASE_URL)
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "old", "event_type": "view", "occurred_at": "2026-08-01T00:00:00Z"},
+            {
+                "user_id": "u1",
+                "item_id": "new",
+                "event_type": "purchase",
+                "occurred_at": "2026-08-21T00:00:00Z",
+            },
+            {
+                "user_id": "u2",
+                "item_id": "other",
+                "event_type": "view",
+                "occurred_at": "2026-08-21T00:00:00Z",
+            },
+        ]
+    ).to_sql("events", engine, index=False)
+
+    source = DatabaseInputSource({"database_url": TEST_DATABASE_URL})
+    rows = source.get_events_for_user("u1", limit=1)
+
+    assert list(rows["item_id"]) == ["new"]
+    assert source.get_user("u1") is None
+
+
+def test_database_get_events_for_user_custom_query():
+    engine = create_engine(TEST_DATABASE_URL)
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "event_type": "view", "occurred_at": "2026-08-21T00:00:00Z"},
+            {"user_id": "u2", "item_id": "i2", "event_type": "view", "occurred_at": "2026-08-21T00:00:00Z"},
+        ]
+    ).to_sql("custom_events", engine, index=False)
+
+    source = DatabaseInputSource(
+        {"database_url": TEST_DATABASE_URL, "events_query": 'SELECT * FROM "custom_events"'}
+    )
+    rows = source.get_events_for_user("u1", limit=10)
+
+    assert list(rows["item_id"]) == ["i1"]
+
+
+def test_database_get_user_from_table():
+    engine = create_engine(TEST_DATABASE_URL)
+    pd.DataFrame([{"user_id": "u1", "region_slug": "lazio"}]).to_sql("users", engine, index=False)
+
+    source = DatabaseInputSource({"database_url": TEST_DATABASE_URL})
+
+    assert source.get_user("u1")["region_slug"] == "lazio"
+    assert source.get_user("ghost") is None

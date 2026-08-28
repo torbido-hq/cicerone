@@ -28,7 +28,7 @@ flowchart LR
   out[recommendations plus manifest]
   events[optional events ingest]
   input --> weigh --> dataset --> fit --> allow --> score --> combine --> boost --> out
-  events -->|"popular/latest write-through"| out
+  events -->|"popular/latest write-through, optional online LightFM"| out
 ```
 
 1. Load `events` (required) plus optional `users` / `items`.
@@ -43,7 +43,9 @@ flowchart LR
    or per-user blending.
 6. Apply boosts (soft re-rank) to the combined list.
 7. Write `recommendations` + a run `manifest` (and an items snapshot so
-   serve can filter by category / availability).
+   serve can filter by category / availability). After boosts,
+   `[job.explain]` (default on) persists a `reasons` JSON column — see
+   [Why this item](#why-this-item).
 
 Full `job.run()` is the drift backstop (cron or `POST /trigger/retrain`).
 
@@ -99,7 +101,8 @@ WARP loss: [Weston, Bengio & Usunier, IJCAI 2011](https://www.ijcai.org/Proceedi
 ### `item_based` — item-item KNN
 
 RecTools [`ImplicitItemKNNWrapperModel`](https://rectools.readthedocs.io/en/stable/api/rectools.models.implicit_knn.ImplicitItemKNNWrapperModel.html)
-wrapping [`implicit`](https://github.com/benfred/implicit) `TFIDFRecommender`.
+wrapping [`pm-implicit`](https://github.com/chezou/pm-implicit) `TFIDFRecommender`
+(CUDA 12 fork of [`implicit`](https://github.com/benfred/implicit); import name is still `implicit`).
 Each item is a vector of who interacted with it; neighbors are similar
 items (`model.item_based.model.K`, default 20).
 
@@ -111,27 +114,28 @@ Paper: [Sarwar et al., *Item-Based Collaborative Filtering Recommendation Algori
 Cicerone's neighbor model is TF-IDF item-item kNN, not that paper's cosine
 over raw co-purchase counts.
 
-### `sequential` — SASRec or BERT4Rec
+### `sequential` — SASRec, BERT4Rec, or HSTU
 
 Opt-in (`job.models`); not in the default chain. RecTools
 [`SASRecModel`](https://rectools.readthedocs.io/en/stable/api/rectools.models.nn.transformers.sasrec.SASRecModel.html)
-(default) or `BERT4RecModel` via `[model.sequential].architecture`. Needs
-`pip install 'cicerone-recommender[sequential]'` or
+(default), `BERT4RecModel`, or `HSTUModel` via `[model.sequential].architecture`.
+Needs `pip install 'cicerone-recommender[sequential]'` or
 `pip install -r requirements-sequential.txt`. The default Docker image does
 **not** install torch; serve never imports it.
 
-Both models take a per-user item sequence. In Cicerone that sequence is
-**distinct items sorted by last-touch time** after aggregation — not a
-click stream with repeats.
+SASRec defaults follow RecTools eSASRec (`sampled_softmax` + LiGR layers).
+Sequences are **distinct items sorted by last-touch time** after aggregation —
+not a click stream with repeats — so HSTU relative-time bias is weak here.
 
-| | SASRec | BERT4Rec |
-| --- | --- | --- |
-| Attention | Unidirectional (causal) | Bidirectional |
-| Training | Shifted sequence: predict the next item | Cloze / item masking (MLM) |
-| Typical use | Next-item from left context | Fill-in from both sides of the sequence |
+| | SASRec | BERT4Rec | HSTU |
+| --- | --- | --- | --- |
+| Attention | Unidirectional (causal) | Bidirectional | Pointwise; optional relative time/position |
+| Training | Shifted sequence: predict the next item | Cloze / item masking (MLM) | Shifted sequence (SASRec-style) |
+| Typical use | Next-item from left context | Fill-in from both sides | Next-item; time bias needs raw event order |
 
 Papers: [Kang & McAuley, SASRec, 2018](https://arxiv.org/abs/1808.09781);
-[Sun et al., BERT4Rec, 2019](https://arxiv.org/abs/1904.06690). RecTools
+[Sun et al., BERT4Rec, 2019](https://arxiv.org/abs/1904.06690);
+[Zhai et al., HSTU, 2024](https://arxiv.org/abs/2402.17152). RecTools
 walkthrough:
 [transformer tutorial](https://rectools.readthedocs.io/en/stable/examples/tutorials/transformers_tutorial.html).
 
@@ -157,9 +161,13 @@ by default) — trending, not an embedding of recency.
 **Two different “latest” ideas:** the `latest` **strategy** is windowed
 popularity on interactions. Per-user **blending** can also rank by item
 datetime columns (`published_at`, …). While blending is on, the `latest`
-*strategy* is skipped so those two rankings do not fight. Incremental
-events refresh popular/latest **slices** of the written table — they do
-not re-fit LightFM.
+strategy is skipped so those two rankings do not fight. Incremental events
+always refresh popular/latest **slices** of the written table. With
+`[events.online]` (and experiments off), the serve events worker also
+continues LightFM on IDs already in the last artifact and rewrites
+personalized / item-KNN / content-fallback rows for affected users. `GET
+/recommendations` still does not re-fit. See
+[Incremental vs full retrain](#incremental-vs-full-retrain).
 
 ## Combining strategies
 
@@ -181,6 +189,10 @@ the remainder splits between `popular` and date-based `latest`. Cold /
 low-history users lean non-personalized without a hard cutoff. If both RRF
 and blending are set, blending wins and the job logs a warning.
 
+To compare two combiners (or two model lists) on live traffic, use
+`[experiment]` — a sticky user hash onto whole recipes, not a post-hoc
+source attribution chart. See [experiments.md](experiments.md).
+
 ## Policies
 
 Evaluated at **batch recommend time**. Serve does not re-run eligibility or
@@ -196,22 +208,39 @@ boosts (it can still filter the items snapshot with `?category=` and
 
 Recipes: `config/features.toml` and the README Business policies section.
 
+## Why this item
+
+Serve cannot reconstruct a model-level explanation on the request path.
+When `[job.explain]` is on (default), the batch job writes a `reasons`
+JSON column: contributing sources (rank / weight / RRF term), boost rules
+that changed the score, and similar history items plus shared catalog
+attributes (Jaccard over the same item-feature tokens as content fallback).
+`source` is unchanged. Disable with `[job.explain].enabled = false` (batch
+job, online LightFM rewrite, and incremental popular/latest/incremental
+reason dumps). Existing DB recommendation tables need
+`ALTER TABLE … ADD COLUMN reasons TEXT`.
+
 ## AutoML
 
 `[job.automl]` backtests candidate `models` / `weights` / `rrf_k` over
 time folds of your events (`MAP` / `NDCG` / `Recall` via RecTools metrics)
-and picks the winner for that run. It is not a neural architecture search.
+and picks the winner for that run. Set `[job.automl].debias = true` to pass
+RecTools `DebiasConfig` into those metrics (default off). It is not a neural
+architecture search.
 Fitted models **and** per-strategy `recommend()` frames are reused across
 candidates within a fold; only the combination step is recomputed. Sequential
 skip rules above still apply.
 
 ## Incremental vs full retrain
 
-`[events]` refreshes **popular / latest slices** (and recency boosts) for
-affected users plus `__cold_start__`. Collaborative, item-KNN, sequential,
-and content-fallback rows wait for the next full `job.run()` — LightFM has
-no clean online `partial_fit` on this path. Operator guide:
-[incremental-events.md](incremental-events.md).
+`[events]` always refreshes **popular / latest slices** (and recency boosts)
+for affected users plus `__cold_start__`. With `[events.online]`, the serve
+events worker also continues LightFM (`fit_partial`) on IDs already in the
+last model artifact and rewrites those users' personalized / item-KNN /
+content-fallback rows — still write-through, not request-path inference.
+That online rewrite is skipped while `[experiment]` is on. New catalog IDs
+and sequential models wait for the next full `job.run()`.
+Operator guide: [incremental-events.md](incremental-events.md).
 
 ## Cold-start
 

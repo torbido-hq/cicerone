@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
-from typing import Protocol
+from typing import Any, Protocol
 
 import pandas as pd
 
@@ -15,6 +15,18 @@ class InputSource(Protocol):
     def read_users(self) -> pd.DataFrame | None: ...
 
     def read_items(self) -> pd.DataFrame | None: ...
+
+    def get_events_for_user(self, user_id: str, limit: int) -> pd.DataFrame: ...
+
+    def get_user(self, user_id: str) -> dict[str, Any] | None: ...
+
+
+class UserHistoryReader(Protocol):
+    """Per-user slices of input events/users for the dashboard inspector."""
+
+    def get_events_for_user(self, user_id: str, limit: int) -> pd.DataFrame: ...
+
+    def get_user(self, user_id: str) -> dict[str, Any] | None: ...
 
 
 class OutputSink(Protocol):
@@ -28,13 +40,25 @@ class OutputSink(Protocol):
 
     def write_model_artifact(self, payload: bytes) -> None: ...
 
+    def replace_model_artifact_if(self, payload: bytes, expected_fingerprint: str) -> bool:
+        """Write only when the current fingerprint still matches ``expected_fingerprint``."""
+        ...
+
+    def read_model_artifact(self) -> bytes | None:
+        """Latest fitted-model blob, or ``None`` if the sink has not written one."""
+        ...
+
+    def model_artifact_fingerprint(self) -> str | None:
+        """Cheap identity of the latest artifact (mtime/ETag/written_at), or ``None``."""
+        ...
+
     def write_items_snapshot(self, df: pd.DataFrame) -> None:
         """Persist items for serve-time category/availability filters."""
         ...
 
 
 class RecommendationReader(Protocol):
-    def get_recommendations(self, user_id: str, k: int) -> pd.DataFrame: ...
+    def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame: ...
 
     def refresh(self) -> None:
         """Reload caches. No-op for live backends."""
@@ -48,7 +72,7 @@ class RecommendationReader(Protocol):
         """Monotonic token bumped when the items snapshot changes."""
         ...
 
-    def get_cold_start_fallback(self, k: int) -> pd.DataFrame:
+    def get_cold_start_fallback(self, k: int, *, variant: str | None = None) -> pd.DataFrame:
         """``__cold_start__`` rows, else a popular/latest heuristic for unknown users."""
         ...
 
@@ -79,8 +103,8 @@ class BaseRecommendationReader(ABC):
     def items_version(self) -> int:
         return 0
 
-    def get_cold_start_fallback(self, k: int) -> pd.DataFrame:
-        del k
+    def get_cold_start_fallback(self, k: int, *, variant: str | None = None) -> pd.DataFrame:
+        del k, variant
         return pd.DataFrame()
 
     def configure_item_filters(
@@ -92,7 +116,7 @@ class BaseRecommendationReader(ABC):
         del category_column, availability_filters
 
     @abstractmethod
-    def get_recommendations(self, user_id: str, k: int) -> pd.DataFrame: ...
+    def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame: ...
 
 
 class ManifestReader(Protocol):

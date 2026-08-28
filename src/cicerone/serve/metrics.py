@@ -50,6 +50,11 @@ RECOMMENDATIONS_SERVED_TOTAL = Counter(
     "Recommendation source tiers used to satisfy a request",
     ["source"],
 )
+RECOMMENDATIONS_EXPERIMENT_TOTAL = Counter(
+    "cicerone_recommendations_experiment_total",
+    "Recommendation lookups attributed to an experiment variant",
+    ["experiment_id", "variant"],
+)
 EVENTS_SOURCE_CONNECTED = Gauge(
     "cicerone_events_source_connected",
     "Event source connectivity (1 connected, 0 otherwise); 0 when events disabled",
@@ -154,6 +159,10 @@ def record_recommendations_served(stored_sources: set[str]) -> None:
             continue
         seen.add(metric_source)
         RECOMMENDATIONS_SERVED_TOTAL.labels(source=metric_source).inc()
+
+
+def record_experiment_served(experiment_id: str, variant: str) -> None:
+    RECOMMENDATIONS_EXPERIMENT_TOTAL.labels(experiment_id=experiment_id, variant=variant).inc()
 
 
 def record_events_flush(*, status: str, events: int = 0) -> None:

@@ -75,7 +75,9 @@ def test_default_sequential_config_is_sasrec():
     assert DEFAULT_SEQUENTIAL_CONFIG["architecture"] == "sasrec"
     assert DEFAULT_SEQUENTIAL_CONFIG["n_factors"] == 64
     assert DEFAULT_SEQUENTIAL_CONFIG["epochs"] == 3
-    assert DEFAULT_SEQUENTIAL_CONFIG["loss"] == "softmax"
+    assert DEFAULT_SEQUENTIAL_CONFIG["loss"] == "sampled_softmax"
+    assert DEFAULT_SEQUENTIAL_CONFIG["n_negatives"] == 256
+    assert DEFAULT_SEQUENTIAL_CONFIG["transformer_layers_type"] == "LiGRLayers"
     assert DEFAULT_SEQUENTIAL_CONFIG["session_max_len"] == 50
     assert DEFAULT_SEQUENTIAL_CONFIG["train_min_user_interactions"] == 2
     configs = default_model_configs()
@@ -89,6 +91,9 @@ def test_architecture_sasrec_and_bert4rec_map_to_cls():
     bert = apply_sequential_architecture({"architecture": "BERT4Rec", "epochs": 2})
     assert bert["cls"] == "BERT4RecModel"
     assert bert["architecture"] == "bert4rec"
+    hstu = apply_sequential_architecture({"architecture": "hstu"})
+    assert hstu["cls"] == "HSTUModel"
+    assert hstu["architecture"] == "hstu"
 
 
 def test_architecture_defaults_when_missing():
@@ -128,12 +133,46 @@ def test_architecture_override_wins_over_default_cls():
 
 def test_unknown_architecture_raises():
     with pytest.raises(ConfigError, match="architecture must be one of"):
-        apply_sequential_architecture({"architecture": "hstu"})
+        apply_sequential_architecture({"architecture": "gru4rec"})
 
 
 def test_unknown_sequential_cls_raises():
-    with pytest.raises(ConfigError, match="SASRecModel or BERT4RecModel"):
+    with pytest.raises(ConfigError, match="HSTUModel"):
         apply_sequential_architecture({"cls": "PopularModel"})
+
+
+def test_hstu_drops_ligr_transformer_layers():
+    cfg = apply_sequential_architecture(
+        {**DEFAULT_SEQUENTIAL_CONFIG, "architecture": "hstu"},
+        architecture_explicit=True,
+    )
+    assert cfg["cls"] == "HSTUModel"
+    assert "transformer_layers_type" not in cfg
+    assert cfg["loss"] == "softmax"
+    assert "n_negatives" not in cfg
+    assert cfg["relative_time_attention"] is True
+
+
+def test_hstu_keeps_explicit_sampled_softmax():
+    cfg = apply_sequential_architecture(
+        {**DEFAULT_SEQUENTIAL_CONFIG, "architecture": "hstu", "loss": "sampled_softmax"},
+        architecture_explicit=True,
+        loss_explicit=True,
+    )
+    assert cfg["loss"] == "sampled_softmax"
+    assert cfg["n_negatives"] == DEFAULT_SEQUENTIAL_CONFIG["n_negatives"]
+
+
+def test_hstu_toml_explicit_sampled_softmax_is_kept():
+    configs = resolve_model_configs({"sequential": {"architecture": "hstu", "loss": "sampled_softmax"}})
+    assert configs["sequential"]["loss"] == "sampled_softmax"
+    assert configs["sequential"]["n_negatives"] == DEFAULT_SEQUENTIAL_CONFIG["n_negatives"]
+
+
+def test_rectools_model_config_expands_ligr_layers():
+    stripped = rectools_model_config({**DEFAULT_SEQUENTIAL_CONFIG})
+    assert stripped["transformer_layers_type"].endswith("LiGRLayers")
+    assert "." in stripped["transformer_layers_type"]
 
 
 def test_rectools_model_config_strips_architecture():
@@ -145,7 +184,7 @@ def test_rectools_model_config_strips_architecture():
 
 @pytest.mark.parametrize(
     ("architecture", "expected_cls"),
-    [("sasrec", "SASRecModel"), ("bert4rec", "BERT4RecModel")],
+    [("sasrec", "SASRecModel"), ("bert4rec", "BERT4RecModel"), ("hstu", "HSTUModel")],
 )
 def test_toml_architecture_selects_cls(tmp_path, architecture, expected_cls):
     config_path = write_toml(
@@ -368,17 +407,22 @@ for name in list(sys.modules):
 
 
 @requires_sequential_extra
-@pytest.mark.parametrize("architecture", ["sasrec", "bert4rec"])
-def test_toml_builds_expected_rectools_class(architecture):
-    from rectools.models import BERT4RecModel, SASRecModel, model_from_config
+@pytest.mark.parametrize(
+    ("architecture", "expected_name"),
+    [("sasrec", "SASRecModel"), ("bert4rec", "BERT4RecModel"), ("hstu", "HSTUModel")],
+)
+def test_toml_builds_expected_rectools_class(architecture, expected_name):
+    from rectools.models import model_from_config
 
     configs = resolve_model_configs({"sequential": {"architecture": architecture, "epochs": 1}})
     model = model_from_config(rectools_model_config(configs["sequential"]))
-    expected = SASRecModel if architecture == "sasrec" else BERT4RecModel
-    assert isinstance(model, expected)
+    assert type(model).__name__ == expected_name
     params = model.get_params(simple_types=True)
-    assert expected.__name__ in str(params["cls"])
+    assert expected_name in str(params["cls"])
     assert params["epochs"] == 1
+    if architecture == "sasrec":
+        assert "sampled_softmax" in str(params.get("loss", "")).lower()
+        assert "LiGRLayers" in str(params.get("transformer_layers_type", ""))
 
 
 @requires_sequential_extra
@@ -386,6 +430,8 @@ def test_sequential_fit_recommend_top_k_shape(feature_config):
     from cicerone.model import train_and_recommend
 
     events = _sequence_events()
+    # Personalized sequential uses filter_viewed; leave one unseen item per user.
+    events = events[events["item_id"] != events["user_id"].map(lambda u: f"i{int(u[1:]) % 6}")]
     built = build_dataset(events, None, None, feature_config, half_life_days=90)
     configs = default_model_configs()
     configs["sequential"].update(
@@ -396,6 +442,7 @@ def test_sequential_fit_recommend_top_k_shape(feature_config):
             "n_blocks": 1,
             "batch_size": 4,
             "session_max_len": 8,
+            "n_negatives": 4,
         }
     )
     recs = train_and_recommend(

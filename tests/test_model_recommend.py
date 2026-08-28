@@ -6,6 +6,7 @@ from rectools import Columns
 from support.model_events import synthetic_events
 
 from cicerone.config import ConfigError
+from cicerone.config.settings import ExplainSettings
 from cicerone.dataset import build_dataset
 from cicerone.model import DEFAULT_MODELS, train_and_recommend
 from cicerone.model.recommend import _dataset_fingerprint, _items_fingerprint, _recommend_cache_key
@@ -30,6 +31,8 @@ def test_train_and_recommend_respects_top_k_and_availability_filter(sample_items
     assert (recommendations.groupby(Columns.User).size() <= 2).all()
     assert not recommendations[Columns.Item].isin(["i3", "i4"]).any()
     assert set(recommendations["source"]) <= {"personalized", "item_based", "popular_fallback"}
+    assert "reasons" in recommendations.columns
+    assert recommendations["reasons"].notna().all()
 
 
 def test_train_and_recommend_falls_back_to_popularity_for_cold_users(
@@ -118,6 +121,7 @@ def test_train_and_recommend_combines_multiple_personalized_strategies(sample_it
         Columns.Rank,
         Columns.Score,
         "source",
+        "reasons",
     }
     assert (recommendations.groupby(Columns.User).size() <= 3).all()
     assert not recommendations.duplicated(subset=[Columns.User, Columns.Item]).any()
@@ -191,6 +195,22 @@ def test_train_and_recommend_rejects_non_positive_rrf_k(sample_items, feature_co
             weights={"popular": 1.0},
             rrf_k=0,
         )
+
+
+def test_train_and_recommend_skips_reasons_when_disabled(sample_items, feature_config):
+    events = synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+    recommendations = train_and_recommend(
+        built,
+        target_users=["u1"],
+        config=feature_config,
+        top_k=2,
+        enabled_models=["popular"],
+        explain=ExplainSettings(enabled=False),
+    )
+    assert not recommendations.empty
+    assert "reasons" not in recommendations.columns
+    assert "_source_contribs" not in recommendations.columns
 
 
 def test_train_and_recommend_rejects_weights_for_models_dropped_from_recommend(sample_items, feature_config):

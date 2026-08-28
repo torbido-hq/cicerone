@@ -16,10 +16,15 @@ from cicerone import __version__
 from cicerone.config import Settings, load_settings
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
+from cicerone.experiment.assignment import resolve_assignment
+from cicerone.experiment.evaluate import exposure_row
+from cicerone.experiment.store import ExperimentStore
 from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.io.base import ManifestReader, RecommendationReader
 from cicerone.io.recommendation_reader import SOURCE_COLUMN
+from cicerone.io.recommendation_schema import has_variant_column
+from cicerone.reasons import parse_reasons
 from cicerone.serve.bootstrap_events import start_events_runtime
 from cicerone.serve.code_samples import HEALTH_PATH, RECOMMENDATIONS_PATH, attach_code_samples
 from cicerone.serve.events_routes import attach_events_ingest_openapi, mount_events_routes
@@ -32,6 +37,7 @@ from cicerone.serve.metrics import (
     METRICS_TOKEN_HEADER,
     REQUEST_LATENCY_SECONDS,
     REQUESTS_TOTAL,
+    record_experiment_served,
     record_recommendations_served,
     update_cache_age_gauge,
     update_events_source_health,
@@ -116,6 +122,20 @@ def _route_endpoint(request: Request) -> str:
     return request.url.path
 
 
+def _promoted_variant(settings: Settings, store: ExperimentStore | None) -> str | None:
+    if store is None or not settings.experiment.enabled:
+        return None
+    try:
+        state = store.read_state()
+    except Exception:
+        logger.exception("Failed to read experiment promote state")
+        return None
+    if not state or state.get("experiment_id") != settings.experiment.id:
+        return None
+    promoted = state.get("promoted_variant")
+    return str(promoted) if promoted else None
+
+
 def create_app(
     settings: Settings,
     reader: RecommendationReader,
@@ -141,6 +161,7 @@ def create_app(
     generated_at_cache = _GeneratedAtCache(manifest_reader)
     app.state.generated_at_cache = generated_at_cache
     app.state.events_worker = events_worker
+    experiment_store = ExperimentStore(settings.output) if settings.experiment.enabled else None
     missing_category_warned = False
 
     @app.middleware("http")
@@ -234,13 +255,18 @@ def create_app(
             and (category is not None or (exclude_unavailable and availability_filters))
         )
         fetch_k = max(top_k * 5, top_k) if can_filter else top_k
-        recs = reader.get_recommendations(user_id, fetch_k)
+        experiment_id, variant = resolve_assignment(
+            settings, user_id, promoted_variant=_promoted_variant(settings, experiment_store)
+        )
+        recs = reader.get_recommendations(user_id, fetch_k, variant=variant)
         used_fallback = False
         if recs.empty:
             used_fallback = True
-            recs = reader.get_cold_start_fallback(fetch_k)
+            recs = reader.get_cold_start_fallback(fetch_k, variant=variant)
         if recs.empty:
             raise HTTPException(status_code=404, detail=f"No recommendations for user_id={user_id!r}")
+        if not has_variant_column(recs):
+            experiment_id, variant = None, None
 
         filtered = filter_recommendations(
             recs,
@@ -258,18 +284,37 @@ def create_app(
             filtered["rank"] = range(1, len(filtered) + 1)
             if SOURCE_COLUMN in filtered.columns:
                 record_recommendations_served(set(filtered[SOURCE_COLUMN].astype(str)))
-
         generated_at = generated_at_cache.get()
+        if experiment_id and variant:
+            record_experiment_served(experiment_id, variant)
+            if settings.experiment.log_exposures and experiment_store is not None:
+                try:
+                    experiment_store.append_exposures(
+                        [
+                            exposure_row(
+                                user_id=user_id,
+                                experiment_id=experiment_id,
+                                variant=variant,
+                                generated_at=generated_at,
+                            )
+                        ]
+                    )
+                except Exception:
+                    logger.exception("Failed to append experiment exposure for user_id=%r", user_id)
+
         body = RecommendationsResponse(
             generated_at=generated_at,
             user_id=user_id,
             fallback=used_fallback,
+            experiment_id=experiment_id,
+            variant=variant,
             items=[
                 RecommendationItem(
                     item_id=str(row.item_id),
                     rank=int(row.rank),
                     score=float(row.score),
                     source=str(row.source),
+                    reasons=parse_reasons(getattr(row, "reasons", None)),
                 )
                 for row in filtered.itertuples(index=False)
             ],

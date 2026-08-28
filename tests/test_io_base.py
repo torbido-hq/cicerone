@@ -8,8 +8,8 @@ from cicerone.io.recommendation_reader import _ItemFilterMixin
 
 def test_base_recommendation_reader_defaults():
     class Minimal(BaseRecommendationReader):
-        def get_recommendations(self, user_id: str, k: int) -> pd.DataFrame:
-            del user_id, k
+        def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame:
+            del user_id, k, variant
             return pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.5}])
 
     reader = Minimal()

@@ -88,6 +88,14 @@ def _feature_dict(
     return tokens
 
 
+def item_feature_tokens(
+    row: Mapping[str, Any] | pd.Series,
+    feature_columns: Sequence[FeatureColumn | tuple[str, str]],
+) -> dict[str, float]:
+    """Public alias for the content-fallback item tokeniser."""
+    return _feature_dict(row, feature_columns)
+
+
 def _max_cosine_scores(cold_matrix, hist_matrix) -> np.ndarray:
     """Per-cold-item max cosine vs history (exact).
 

@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
+from cicerone.config.constants import DEFAULT_MODELS, RRF_K
 from cicerone.model_config import LATEST_WINDOW_DAYS
 
 RANDOM_STATE = 42
-DEFAULT_MODELS = ["collaborative", "item_based", "popular"]
-# Reciprocal rank fusion constant (Cormack et al., 2009); default for rrf_k.
-RRF_K = 60
 SOURCE_COLUMN = "source"
 WEIGHT_COLUMN = "_weight"  # internal-only; dropped before returning to callers
 

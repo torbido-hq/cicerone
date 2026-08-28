@@ -6,6 +6,114 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-28
+
+### Added
+
+- Optional `[events.online]`: the serve events worker continues LightFM
+  (`fit_partial`) on IDs already in the last model artifact and rewrites
+  personalized / item-KNN / content-fallback rows for affected users.
+  `GET /recommendations` stays a lookup. New catalog IDs and sequential
+  models still wait for `job.run()`.
+
+- Optional sequential architecture `hstu` (`HSTUModel`). Sequences are still
+  last-touch aggregated `(user, item)` pairs, so HSTU relative-time bias is
+  weak on Cicerone data.
+- Opt-in AutoML `[job.automl].debias` (RecTools `DebiasConfig` on MAP/NDCG/Recall;
+  default off).
+- Sequential per-epoch Precision/Recall logs when `[job].log_epoch_metrics`
+  is on (same knobs as collaborative).
+- Serve recommendations include optional `reasons` (contributing sources,
+  boost hits, similar history items / matched attributes), persisted at
+  batch time when `[job.explain]` is enabled (default on). Existing DB
+  tables need `ALTER TABLE … ADD COLUMN reasons TEXT`.
+- Dashboard user lookup shows recent `[input]` events next to current top-K
+  (overlap highlighting, source mix). `dashboard.lookup_events` defaults to 20.
+  User attributes render only when `dashboard.lookup_user_attrs` is set.
+- Dashboard Pause updates / Resume updates and Refresh for the status poll
+  (starts paused when `prefers-reduced-motion` is set).
+- `[experiment]` sticky A/B tests of whole ranking recipes (models + combiner +
+  blending knobs). The job fits the union once, writes a `variant` column, and
+  serve hashes `user_id` onto one list. Dashboard Experiments page: always-valid
+  CIs, catalog guardrails, optional exposure log, AutoML challenger, promote
+  winner to 100% traffic.
+
+### Changed
+
+- Sequential SASRec defaults to the eSASRec recipe (`sampled_softmax`,
+  `n_negatives = 256`, LiGR layers).
+- CI compose runs sequential extra tests in a separate `test-sequential`
+  image with `rectools[torch]` (main test and runtime images stay torch-free).
+- Bump `rectools` 0.13.0 → 0.19.0, `scipy` 1.12.0 → 1.17.0, and switch the
+  implicit pin to `pm-implicit` 0.7.3 (RecTools 0.18+ on Python 3.11).
+- Bump `uvicorn` 0.52.3 → 0.52.4, `ruff` 0.16.3 → 0.16.4, `mypy` 2.3.0 → 2.3.1,
+  `wheel` 0.44.0 → 0.48.0.
+- Bump `actions/upload-artifact` v4 → v7 and `actions/download-artifact` v4 → v8.
+- Dashboard latest-run card shows stale on the card, visible Latest run /
+  Recent runs headings, relative times in history, and plainer operator copy.
+
+### Fixed
+
+- Dashboard no longer paints unknown or overdue latest runs as success.
+- Dashboard history no longer styles empty errors as failures.
+- Dashboard lookup keeps recommendations when a user attribute is a list,
+  Series, or array.
+- Serve collapses leftover `variant` rows to `control` (else the
+  lexicographically first remaining name)
+  when `[experiment]` is off, instead of mixing control and treatment ranks.
+- Experiment promote state is a single-row replace (no `DROP TABLE`);
+  reads order by `promoted_at`, and fall back if that column is missing.
+- Online LightFM persists the artifact only after a successful apply and
+  event `ack`; a failed refresh nacks the batch.
+- Online collaborative rewrite is skipped while `[experiment]` is enabled.
+- Dashboard unknown staleness (`is_stale` unset) is amber, not success green.
+- Exposure-conditional experiment metrics ignore rows from other
+  `experiment_id`s.
+- Incremental write-through collapses leftover `variant` rows when
+  `[experiment]` is off (same control-else-first rule as serve).
+- Experiment promote state is read live (no per-process TTL cache) so
+  replicas agree after promote.
+- `log_exposures` with `events.ha` requires db output.
+- Online persist after ack retries, then drops the pending fit if it still
+  fails or the apply lease is lost.
+- SQS and Redis Streams heartbeat in-flight messages for the duration of
+  incremental apply.
+- Leftover `variant` collapse ignores missing/NaN names instead of treating
+  them as `"nan"`.
+- Dashboard lookup refresh TTL tracks one reader, not an unbounded id map.
+- Experiment coverage guardrail uses the items-snapshot catalog size, not
+  distinct recommended item ids (so concentrated lists cannot relax the floor).
+- Online persist after ack is skipped when a full retrain holds the lock or
+  replaced the model artifact.
+- Online LightFM caps extra interactions on top of the last job artifact
+  (`events.online.max_extra_interactions`, default 50_000).
+- Dashboard Experiments can resume the split after promote.
+- Writing `reasons` or `variant` to an existing DB table missing those
+  columns raises a clear `ALTER TABLE` error.
+- Unknown dashboard staleness is announced as unknown, not success.
+- Sequential `log_epoch_metrics` calls transformer `fit_partial` with min
+  and max epoch (LightFM still gets epochs only).
+- AutoML scores candidates with `job.content_fallback.enabled`, matching
+  the recipe the job ships.
+- AutoML-challenger incremental apply uses `control`/`treatment` when
+  `[[experiment.variants]]` is empty.
+- Challenger control recipes prefer the prior run's `experiment_variants`
+  control arm over the union `models` list.
+- Experiment promote is blocked when recommendations or `variant` are
+  missing (catalog guardrails cannot run).
+- A failed first in-flight heartbeat nacks the batch instead of applying.
+- SQS receive uses a 5-minute visibility timeout so micro-batch plus apply
+  can outlast the queue default.
+- `[events.online]` with `[experiment]` logs a warning when the online
+  rewrite is skipped.
+- HSTU keeps an explicit `[model.sequential].loss = "sampled_softmax"`
+  instead of rewriting it to `softmax`.
+- Sequential epoch-metric `fit_partial` detects RecTools transformers by
+  `min_epochs`/`max_epochs`, so LightFM `num_threads` stays at its default.
+- Online artifact persist is a compare-and-swap against the baseline
+  fingerprint (local file lock / DB `DELETE … WHERE written_at`), after
+  serializing the blob, so a finishing retrain is not overwritten.
+
 ## [0.6.2] - 2026-08-24
 
 ### Changed

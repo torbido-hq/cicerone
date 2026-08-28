@@ -14,6 +14,7 @@ import pandas as pd
 from rectools import Columns
 
 from cicerone.feature_config import BlendingConfig
+from cicerone.reasons import SOURCE_CONTRIBS_COLUMN
 
 SOURCE_COLUMN = "source"
 BLENDED_SOURCE = "blended"
@@ -25,6 +26,7 @@ COLD_START_USER_ID = "__cold_start__"
 _WEIGHT_EPS = 1e-9
 _SIGMOID_EXP_CLAMP = 50.0
 _EMPTY_COLS = [Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN]
+_SOURCE_ORDER = (PERSONALIZED_SOURCE, POPULAR_SOURCE, LATEST_SOURCE)
 
 
 def _empty_recs() -> pd.DataFrame:
@@ -187,6 +189,24 @@ def _normalize_source_frame(frame: pd.DataFrame, source_label: str) -> pd.DataFr
     return out[[Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN]]
 
 
+def _rrf_contrib(rank: float, weight: float, rrf_k: float) -> float:
+    return weight / (rrf_k + rank)
+
+
+def _source_contrib(label: str, rank: float, weight: float, rrf_k: float) -> dict[str, object]:
+    return {
+        "label": label,
+        "rank": int(rank),
+        "weight": float(weight),
+        "contribution": float(_rrf_contrib(rank, weight, rrf_k)),
+    }
+
+
+def _ordered_contribs(contribs: list[dict[str, object]]) -> list[dict[str, object]]:
+    order = {label: index for index, label in enumerate(_SOURCE_ORDER)}
+    return sorted(contribs, key=lambda item: order.get(str(item.get("label")), len(order)))
+
+
 def _weighted_rrf_frame(
     frame: pd.DataFrame,
     *,
@@ -194,17 +214,25 @@ def _weighted_rrf_frame(
     user_weights: pd.Series,
     rrf_k: float,
 ) -> pd.DataFrame:
+    empty = pd.DataFrame(
+        columns=[Columns.User, Columns.Item, Columns.Score, SOURCE_COLUMN, SOURCE_CONTRIBS_COLUMN]
+    )
     if frame.empty:
-        return pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Score, SOURCE_COLUMN])
+        return empty
     weights = frame[Columns.User].astype(str).map(user_weights.rename(index=str))
     keep = weights.notna() & (weights > _WEIGHT_EPS)
     if not bool(keep.any()):
-        return pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Score, SOURCE_COLUMN])
+        return empty
     out = frame.loc[keep, [Columns.User, Columns.Item, Columns.Rank]].copy()
     ranks = out[Columns.Rank].to_numpy(dtype=float)
-    out[Columns.Score] = weights.loc[keep].to_numpy(dtype=float) / (rrf_k + ranks)
+    weight_vals = weights.loc[keep].to_numpy(dtype=float)
+    out[Columns.Score] = weight_vals / (rrf_k + ranks)
     out[SOURCE_COLUMN] = source_label
-    return out[[Columns.User, Columns.Item, Columns.Score, SOURCE_COLUMN]]
+    out[SOURCE_CONTRIBS_COLUMN] = [
+        _source_contrib(source_label, rank, weight, rrf_k)
+        for rank, weight in zip(ranks, weight_vals, strict=True)
+    ]
+    return out[[Columns.User, Columns.Item, Columns.Score, SOURCE_COLUMN, SOURCE_CONTRIBS_COLUMN]]
 
 
 def _source_label_from_parts(labels: pd.Series) -> str:
@@ -315,16 +343,19 @@ def blend_for_users(
         **{
             Columns.Score: (Columns.Score, "sum"),
             SOURCE_COLUMN: (SOURCE_COLUMN, _source_label_from_parts),
+            SOURCE_CONTRIBS_COLUMN: (SOURCE_CONTRIBS_COLUMN, list),
         }
     )
+    combined[SOURCE_CONTRIBS_COLUMN] = combined[SOURCE_CONTRIBS_COLUMN].map(_ordered_contribs)
+
     combined = combined.sort_values(
         [Columns.User, Columns.Score, Columns.Item], ascending=[True, False, True]
     )
     combined[Columns.Rank] = combined.groupby(Columns.User).cumcount() + 1
     combined = combined.groupby(Columns.User, as_index=False).head(top_k)
-    return combined[[Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN]].reset_index(
-        drop=True
-    )
+    return combined[
+        [Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN, SOURCE_CONTRIBS_COLUMN]
+    ].reset_index(drop=True)
 
 
 def append_cold_start_rows(

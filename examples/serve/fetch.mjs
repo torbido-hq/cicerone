@@ -30,7 +30,7 @@ if (!response.ok) {
 }
 const body = await response.json();
 console.log(
-  `user=${body.user_id} fallback=${body.fallback} generated_at=${body.generated_at}`,
+  `user=${body.user_id} fallback=${body.fallback} generated_at=${body.generated_at} experiment=${body.experiment_id} variant=${body.variant}`,
 );
 for (const row of body.items) {
   console.log(`  #${row.rank} ${row.item_id} score=${row.score} source=${row.source}`);

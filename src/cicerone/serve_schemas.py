@@ -9,6 +9,38 @@ class HealthResponse(BaseModel):
     status: str = Field(examples=["ok"])
 
 
+class SourceContribution(BaseModel):
+    label: str = Field(description="Strategy source label", examples=["personalized"])
+    rank: int | None = Field(default=None, ge=1, description="Rank of this item within that strategy")
+    weight: float | None = Field(default=None, description="Combiner weight for this source")
+    contribution: float | None = Field(
+        default=None,
+        description="RRF term weight/(rrf_k+rank); null under priority combine",
+    )
+
+
+class BoostHit(BaseModel):
+    name: str = Field(description="Boost rule name from features.toml")
+    factor: float = Field(description="Multiplier applied by this rule")
+
+
+class SimilarItem(BaseModel):
+    item_id: str = Field(description="History item that shares catalog attributes")
+    score: float = Field(description="Jaccard overlap of item feature tokens")
+
+
+class MatchedAttribute(BaseModel):
+    column: str = Field(description="Item feature column")
+    value: str = Field(description="Shared feature value")
+
+
+class RecommendationReasons(BaseModel):
+    sources: list[SourceContribution] = Field(default_factory=list)
+    boosts: list[BoostHit] = Field(default_factory=list)
+    similar_items: list[SimilarItem] = Field(default_factory=list)
+    matched_attributes: list[MatchedAttribute] = Field(default_factory=list)
+
+
 class RecommendationItem(BaseModel):
     item_id: str = Field(description="Catalog item identifier")
     rank: int = Field(ge=1, description="1-based position in the returned list")
@@ -21,6 +53,10 @@ class RecommendationItem(BaseModel):
             "Weighted fusion joins labels in models order, e.g. popular_fallback+latest."
         ),
         examples=["blended"],
+    )
+    reasons: RecommendationReasons | None = Field(
+        default=None,
+        description="Why this item was ranked: contributing sources, boosts, similar history items",
     )
 
 
@@ -35,6 +71,16 @@ class RecommendationsResponse(BaseModel):
         description="True when the cold-start list was used because the user had no personal rows",
     )
     items: list[RecommendationItem] = Field(description="Ordered top-K recommendations")
+    experiment_id: str | None = Field(
+        default=None,
+        description="Active experiment id when [experiment] is enabled; null otherwise",
+        examples=["rrf-vs-blend-2026-08"],
+    )
+    variant: str | None = Field(
+        default=None,
+        description="Sticky assignment for this user_id when an experiment is active; null otherwise",
+        examples=["control"],
+    )
 
 
 class ErrorDetail(BaseModel):

@@ -81,9 +81,22 @@ def require_positive_int(value: int, *, name: str) -> int:
     return value
 
 
+def require_non_negative_int(value: int, *, name: str) -> int:
+    if value < 0:
+        raise ConfigError(f"{name} must be >= 0, got {value}")
+    return value
+
+
 def require_positive_float(value: float, *, name: str) -> float:
     if value <= 0:
         raise ConfigError(f"{name} must be > 0, got {value}")
+    return value
+
+
+def require_open_unit_interval(value: float, *, name: str) -> float:
+    """Require a relative fraction in ``(0, 1)``."""
+    if value <= 0 or value >= 1:
+        raise ConfigError(f"{name} must be in (0, 1), got {value}")
     return value
 
 

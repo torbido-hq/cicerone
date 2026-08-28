@@ -1,7 +1,8 @@
 """Versioned fitted-model artifacts (RecTools save/load + pickle envelope).
 
 Trust boundary: load only trusted batch-job artifacts — never untrusted
-uploads (pickle RCE). Not used on the serve HTTP path.
+uploads (pickle RCE). Not used on the serve HTTP request path; the events
+worker may load it when `[events.online]` is enabled.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from rectools.dataset import Dataset
 from rectools.models import load_model
 from rectools.models.base import ModelBase
 
+from cicerone.config.settings import ExplainSettings
 from cicerone.dataset import BuiltDataset
 from cicerone.feature_config import FeatureConfig
 from cicerone.model import (
@@ -210,22 +212,32 @@ def load_rectools_model(path: Path | str) -> RecommenderModel:
     return load_model(Path(path))  # type: ignore[return-value]
 
 
+def _interactions_from_dataset(dataset: Dataset) -> pd.DataFrame:
+    """External-id interaction table already stored inside the RecTools Dataset."""
+    frame = dataset.get_raw_interactions()
+    if frame is None or frame.empty:
+        return pd.DataFrame()
+    return frame
+
+
 def recommend_from_artifact(
     artifact: ModelArtifact,
     target_users: list[str],
     top_k: int,
+    *,
+    explain: ExplainSettings | None = None,
 ) -> pd.DataFrame:
-    # Artifacts omit interactions → blending sees n=0 for every user.
+    interactions = _interactions_from_dataset(artifact.dataset)
     built = BuiltDataset(
         dataset=artifact.dataset,
-        interactions=pd.DataFrame(),
+        interactions=interactions,
         items=artifact.items,
         users=artifact.users,
     )
-    if artifact.feature_config.blending.enabled:
+    if artifact.feature_config.blending.enabled and interactions.empty:
         logger.warning(
-            "recommend_from_artifact with blending.enabled: interactions are not stored in the "
-            "artifact, so the blend curve sees n_interactions=0 for every user"
+            "recommend_from_artifact with blending.enabled: stored Dataset has no "
+            "interactions, so the blend curve sees n_interactions=0 for every user"
         )
     weights = dict(artifact.model_weights) if artifact.model_weights is not None else None
     return recommend_with_models(
@@ -237,4 +249,5 @@ def recommend_from_artifact(
         enabled_models=list(artifact.models),
         weights=weights,
         rrf_k=artifact.rrf_k,
+        explain=explain,
     )

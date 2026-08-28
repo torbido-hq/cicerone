@@ -26,7 +26,7 @@ feature_config_path = "/app/config/features.toml"
 # entries win ties for the same user/item pair). Defaults to
 # ["collaborative", "item_based", "popular"] if omitted. Available:
 # "collaborative" (LightFM, hybrid CF), "item_based" (item-item KNN),
-# "sequential" (SASRec / BERT4Rec; pip install 'cicerone-recommender[sequential]'
+# "sequential" (SASRec / BERT4Rec / HSTU; pip install 'cicerone-recommender[sequential]'
 # or requirements-sequential.txt), "content_fallback" (feature similarity for
 # zero-interaction items; also gated by [job.content_fallback].enabled),
 # "popular" (global popularity fallback), "latest" (trending in the last two
@@ -67,14 +67,18 @@ feature_config_path = "/app/config/features.toml"
 # popularity = "n_interactions"
 # period = { days = 14 }
 #
-# Optional sequential strategy (SASRec default; BERT4Rec via architecture).
+# Optional sequential strategy (SASRec default; BERT4Rec / HSTU via architecture).
 # Requires: pip install 'cicerone-recommender[sequential]'
 # (or pip install -r requirements-sequential.txt from a checkout)
+# Defaults follow RecTools eSASRec (sampled softmax + LiGR layers).
+# HSTU relative-time bias is weak here: sequences are last-touch (user, item).
 # [model.sequential]
-# architecture = "sasrec"  # or "bert4rec"
+# architecture = "sasrec"  # or "bert4rec" or "hstu"
 # n_factors = 64
 # epochs = 3
-# loss = "softmax"
+# loss = "sampled_softmax"
+# n_negatives = 256
+# transformer_layers_type = "LiGRLayers"
 # session_max_len = 50
 # train_min_user_interactions = 2
 # batch_size = 128
@@ -92,17 +96,26 @@ feature_config_path = "/app/config/features.toml"
 # enabled = false
 # max_neighbors = 50
 
+# Persist why each row was ranked (strategy contributions, boost hits, similar
+# history items). Serve returns this as item.reasons. Default on.
+# [job.explain]
+# enabled = true
+# max_similar_items = 3
+# max_attributes = 5
+
 # Optional: also write a versioned fitted-model artifact (model.artifact /
 # model_artifacts table) alongside recommendations. Loadable later via
-# cicerone.artifact without re-running training. Default false. Serve mode
-# never loads this — it still reads precomputed recommendation rows only.
+# cicerone.artifact without re-running training. Default false. GET
+# /recommendations never loads this. With [events.online], the serve events
+# worker loads it for write-through.
 # save_model_artifact = false
 
-# Optional: log in-sample Precision@K/Recall@K every N LightFM epochs while
-# fitting the collaborative strategy (uses fit_partial epoch-by-epoch instead
-# of a single fit). Adds training time — default off. Significant regression
-# or plateau across logged epochs emits a WARN. The knobs below are ignored
-# unless log_epoch_metrics is true (scored users are a seeded random sample).
+# Optional: log in-sample Precision@K/Recall@K every N epochs while fitting
+# collaborative (LightFM) or sequential (SASRec/BERT4Rec/HSTU) via fit_partial
+# instead of a single fit. Adds training time — default off. Significant
+# regression or plateau across logged epochs emits a WARN. The knobs below
+# are ignored unless log_epoch_metrics is true (scored users are a seeded
+# random sample).
 # log_epoch_metrics = false
 # epoch_metrics_every = 5
 # epoch_metrics_max_users = 500
@@ -143,6 +156,7 @@ feature_config_path = "/app/config/features.toml"
 # n_splits = 2       # number of time-based folds to backtest each candidate over
 # test_days = 14     # size of each fold's held-out window, in days
 # primary_metric = "MAP" # exact name, or a unique NAME@k (e.g. "MAP" → "MAP@10")
+# debias = false         # RecTools DebiasConfig on MAP/NDCG/Recall; default off
 #
 # Optional: override the default candidate search space (every strategy
 # alone, the default priority combo, and a weighted-fusion blend). Each
@@ -247,6 +261,15 @@ prefix = "recommendations/latest"
 # batch_size = 100
 # batch_window_seconds = 60
 # poll_interval_seconds = 1
+# Optional: continue LightFM on known IDs and rewrite personalized /
+# item-KNN / content-fallback rows for affected users (skipped while
+# [experiment] is on). Requires a model artifact in [output]
+# (batch job: save_model_artifact = true). GET /recommendations stays a lookup.
+# [events.online]
+# enabled = true
+# fit_partial_epochs = 1          # 0 = frozen weights + history refresh only
+# fit_min_events = 100            # skip SGD until this many known-ID events
+# max_extra_interactions = 50000  # online-only rows on top of the last job artifact
 
 # DB watermark source (no POST /events). Advances cursor only after a successful flush.
 # [events]
@@ -303,7 +326,29 @@ prefix = "recommendations/latest"
 # users_path = "/app/config/dashboard_users.toml"
 # refresh_interval_seconds = 30 # how often the page polls /partials/status
 # history_limit = 20 # recent runs shown (only meaningful for [output].kind = "db")
-# lookup_k = 20 # inspector rows (capped at job.top_k)
+# lookup_k = 20 # inspector recommendation rows (capped at job.top_k)
+# lookup_events = 20 # inspector event rows (from [input], newest first)
+# lookup_user_attrs = ["region_slug"] # allowlisted user columns; default none
+
+# Sticky A/B test of whole ranking recipes (not per-source CTR). Serve hashes
+# user_id onto one variant list. See docs/experiments.md.
+# [experiment]
+# enabled = true
+# id = "rrf-vs-blend-2026-08"
+# primary_metric = "purchase"  # event_type, or "weighted"
+# # log_exposures = false
+# # automl_challenger = false
+# # alpha = 0.05
+# [[experiment.variants]]
+# name = "control"
+# traffic = 0.5
+# [[experiment.variants]]
+# name = "treatment"
+# traffic = 0.5
+# combiner = "blend"  # priority | rrf | blend
+# # models = ["collaborative", "item_based", "popular", "latest"]
+# # boosts = true
+# # eligibility = true
 
 # --- "db" kind example (commented out) ----------------------------------
 # [input]

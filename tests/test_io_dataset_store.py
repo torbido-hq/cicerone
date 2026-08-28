@@ -26,6 +26,7 @@ def test_local_backend_round_trip(tmp_path):
     sink.write_model_artifact(b"fake-artifact-bytes")
 
     assert not list(tmp_path.glob(".*.tmp"))
+    assert sink.read_model_artifact() == b"fake-artifact-bytes"
     source = DatasetInputSource(options)
     (tmp_path / "events.parquet").write_bytes((tmp_path / "recommendations.parquet").read_bytes())
     events = source.read_events()
@@ -36,6 +37,34 @@ def test_local_backend_round_trip(tmp_path):
     assert (tmp_path / "model.artifact").read_bytes() == b"fake-artifact-bytes"
     items_snap = pd.read_parquet(tmp_path / "items_snapshot.parquet")
     assert list(items_snap["item_id"]) == ["i1"]
+
+
+def test_local_read_model_artifact_missing_returns_none(tmp_path):
+    sink = DatasetOutputSink({"storage_backend": "local", "path": str(tmp_path)})
+    assert sink.read_model_artifact() is None
+    assert sink.model_artifact_fingerprint() is None
+
+
+def test_local_model_artifact_fingerprint_changes_after_write(tmp_path):
+    sink = DatasetOutputSink({"storage_backend": "local", "path": str(tmp_path)})
+    sink.write_model_artifact(b"first")
+    first = sink.model_artifact_fingerprint()
+    assert first is not None
+    sink.write_model_artifact(b"second")
+    second = sink.model_artifact_fingerprint()
+    assert second is not None
+    assert second != first
+
+
+def test_local_replace_model_artifact_if_is_compare_and_swap(tmp_path):
+    sink = DatasetOutputSink({"storage_backend": "local", "path": str(tmp_path)})
+    sink.write_model_artifact(b"first")
+    token = sink.model_artifact_fingerprint()
+    assert token is not None
+    assert sink.replace_model_artifact_if(b"second", token) is True
+    assert sink.read_model_artifact() == b"second"
+    assert sink.replace_model_artifact_if(b"third", token) is False
+    assert sink.read_model_artifact() == b"second"
 
 
 def test_local_replace_recommendations_for_users_preserves_others(tmp_path):
@@ -136,6 +165,52 @@ def test_local_backend_optional_inputs_missing_return_none(tmp_path):
     assert source.read_items() is None
 
 
+def test_local_backend_get_events_for_user_filters_and_limits(tmp_path):
+    options = {"storage_backend": "local", "path": str(tmp_path)}
+    events = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "old", "event_type": "view", "occurred_at": "2026-08-01T00:00:00Z"},
+            {
+                "user_id": "u1",
+                "item_id": "new",
+                "event_type": "purchase",
+                "occurred_at": "2026-08-21T00:00:00Z",
+            },
+            {
+                "user_id": "u2",
+                "item_id": "other",
+                "event_type": "view",
+                "occurred_at": "2026-08-21T00:00:00Z",
+            },
+        ]
+    )
+    events.to_parquet(tmp_path / "events.parquet", index=False)
+    source = DatasetInputSource(options)
+
+    rows = source.get_events_for_user("u1", limit=1)
+
+    assert list(rows["item_id"]) == ["new"]
+    assert list(source.get_events_for_user("ghost", limit=5)["item_id"]) == []
+
+
+def test_local_backend_get_user_returns_row_or_none(tmp_path):
+    options = {"storage_backend": "local", "path": str(tmp_path)}
+    source = DatasetInputSource(options)
+    assert source.get_user("u1") is None
+
+    pd.DataFrame(
+        [{"user_id": "u1", "region_slug": "lazio"}, {"user_id": "u2", "region_slug": "toscana"}]
+    ).to_parquet(tmp_path / "users.parquet", index=False)
+    assert source.get_user("u1")["region_slug"] == "lazio"
+    assert source.get_user("ghost") is None
+
+
+def test_local_backend_get_events_for_user_missing_file_raises(tmp_path):
+    source = DatasetInputSource({"storage_backend": "local", "path": str(tmp_path)})
+    with pytest.raises(FileNotFoundError):
+        source.get_events_for_user("u1", 5)
+
+
 def test_local_backend_optional_inputs_propagate_corrupt_file_errors(tmp_path):
     options = {"storage_backend": "local", "path": str(tmp_path)}
     (tmp_path / "users.parquet").write_bytes(b"not-a-parquet-file")
@@ -206,6 +281,27 @@ def test_s3_backend_round_trip(s3_options):
 
     events = source.read_events()
     assert list(events["user_id"]) == ["u1"]
+
+
+def test_s3_read_model_artifact_round_trip_and_missing(s3_options):
+    sink = DatasetOutputSink(s3_options)
+    assert sink.read_model_artifact() is None
+    assert sink.model_artifact_fingerprint() is None
+    sink.write_model_artifact(b"s3-artifact")
+    assert sink.read_model_artifact() == b"s3-artifact"
+    assert sink.model_artifact_fingerprint() is not None
+
+
+def test_s3_read_model_artifact_closes_streaming_body(s3_options, mocker):
+    sink = DatasetOutputSink(s3_options)
+    sink.write_model_artifact(b"payload")
+    body = mocker.Mock()
+    body.read.return_value = b"payload"
+    client = mocker.Mock()
+    client.get_object.return_value = {"Body": body}
+    mocker.patch("cicerone.io.dataset_store.build_s3_client", return_value=client)
+    assert sink.read_model_artifact() == b"payload"
+    body.close.assert_called_once()
 
 
 def test_s3_backend_optional_inputs_missing_return_none(s3_options):

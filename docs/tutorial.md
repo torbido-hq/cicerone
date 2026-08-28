@@ -133,8 +133,13 @@ print(json.dumps(json.load(open('/data/output/manifest.json')), indent=2))
 You should see up to `top_k` ranked `item_id`s per user, each tagged with
 the `source` strategy that produced it (`personalized` for the default
 `collaborative` model, `popular_fallback` for users without enough
-personalized results), plus a `manifest.json` with run metadata (event/user/
-item counts, the models/weights actually used, timestamps).
+personalized results). With `[job.explain]` on (default), each row also
+has a `reasons` JSON string: contributing sources, boost hits, and similar
+history items. Serve returns that as `item.reasons`. Disable with
+`[job.explain].enabled = false`. See
+[how-it-works.md](how-it-works.md#why-this-item). A `manifest.json` has
+run metadata (event/user/item counts, the models/weights actually used,
+timestamps).
 
 ## 5. Try different model strategies
 
@@ -163,7 +168,8 @@ Available strategies:
   legacy `[job.item_based].k_neighbors` still works. Personalized; users
   with interactions only (feature-only warm users stay on
   collaborative/popular).
-- `sequential`: RecTools `SASRecModel` (default) or `BERT4RecModel`. Opt-in;
+- `sequential`: RecTools `SASRecModel` (default eSASRec), `BERT4RecModel`,
+  or `HSTUModel` (`architecture = "hstu"`). Opt-in;
   not in the default Docker image (`pip install 'cicerone-recommender[sequential]'`
   or `pip install -r requirements-sequential.txt`). Sequences are unique
   items by last-touch time. AutoML skips it on sparse data or a missing
@@ -295,10 +301,10 @@ full annotated example of the default search space (safe to use as-is once
 your dataset has enough history for every strategy to see every backtested
 user).
 
-To watch LightFM's own training trajectory (separate from AutoML's fold
-scores), set `log_epoch_metrics = true` under `[job]` and re-run with
-`collaborative` enabled — you'll see per-epoch Precision@K/Recall@K lines,
-plus a WARN if metrics regress or plateau. Off by default; details in the
+To watch collaborative or sequential training (separate from AutoML's fold
+scores), set `log_epoch_metrics = true` under `[job]` — you'll see per-epoch
+Precision@K/Recall@K lines, plus a WARN if metrics regress or plateau. Off
+by default; details in the
 [README model strategies](../README.md#model-strategies) section.
 
 ## 9. Tune interaction weights & features
@@ -365,10 +371,11 @@ print(recommend_from_artifact(artifact, ['alice', 'bob'], top_k=3))
 "
 ```
 
-Serve mode never loads this file — it still only reads precomputed
-recommendation rows. Artifacts are for offline reload / a future thin
-inference layer; only load ones your own batch job wrote (pickle is not
-safe on untrusted bytes). See the README's
+Serve mode never loads this file on `GET /recommendations` — it still
+only reads precomputed recommendation rows. With `[events.online]` the
+events worker loads it between retrains. Artifacts are for offline reload /
+that write-through path; only load ones your own batch job wrote (pickle is
+not safe on untrusted bytes). See the README's
 [Model artifacts](../README.md#model-artifacts) section.
 
 ## 11. Try the database backend (optional)
@@ -441,6 +448,11 @@ print(pd.read_sql('SELECT status, models, artifact_written FROM recommendation_r
 "
 ```
 
+A fresh `recommendations` table includes `reasons`. An existing table from
+an older Cicerone needs `ALTER TABLE recommendations ADD COLUMN reasons TEXT`
+before the extra column will persist (`pandas` `to_sql(append)` will not
+add it).
+
 Input and output can be mixed (e.g. read from Postgres, write to S3, or
 vice versa), and raw SQL overrides (`events_query`/`users_query`/
 `items_query`) let you read straight from an existing application schema
@@ -457,9 +469,11 @@ docker compose --profile db down   # or: docker compose --profile db stop postgr
 
 Everything so far has run the batch job directly. `[job].mode = "serve"`
 switches to a separate, lightweight **read** API over whatever the batch job
-last wrote to `[output]` — it never imports lightfm/implicit/torch, never
-trains, and never loads a model artifact. (It does import `rectools` itself,
-for `Columns`, so that one stays in a serve-only image.) Reuse the local `data/output/` from
+last wrote to `[output]` — `GET` never imports lightfm/implicit/torch, never
+trains, and never loads a model artifact. With `[events.online]` the events
+worker does load the artifact for write-through. (It does import `rectools`
+itself, for `Columns`, so that one stays in a serve-only image.) Reuse the
+local `data/output/` from
 [step 3](#3-run-the-job-once):
 
 ```sh
@@ -508,7 +522,20 @@ The response is an object (not a bare list):
   "user_id": "alice",
   "fallback": false,
   "items": [
-    {"item_id": "lager-003", "rank": 1, "score": 0.91, "source": "blended"}
+    {
+      "item_id": "lager-003",
+      "rank": 1,
+      "score": 0.91,
+      "source": "blended",
+      "reasons": {
+        "sources": [
+          {"label": "personalized", "rank": 4, "weight": 0.72, "contribution": 0.0113}
+        ],
+        "boosts": [],
+        "similar_items": [{"item_id": "lager-001", "score": 0.67}],
+        "matched_attributes": [{"column": "style", "value": "lager"}]
+      }
+    }
   ]
 }
 ```
@@ -566,8 +593,9 @@ docker stop cicerone-tutorial-serve
 
 ## 13. Ingest incremental events (optional)
 
-Enable webhook `[events]` on serve and POST one interaction. Other backends
-and HA: [incremental-events.md](incremental-events.md).
+Enable webhook `[events]` on serve and POST one interaction. Other backends,
+HA, and optional `[events.online]` LightFM `fit_partial`:
+[incremental-events.md](incremental-events.md).
 
 Add this to `config/cicerone.serve.local.toml` (keep the `[output]` /
 `[serve]` edits from [step 12](#12-serve-recommendations-over-an-http-api)):
@@ -686,10 +714,16 @@ docker run --rm -it \
 Then start the dashboard and open `http://localhost:8090/dashboard` in a
 browser (log in with the user just created), or
 `http://localhost:8090/dashboard?user_id=alice` to fill the inspector on
-load. The **Look up recommendations** form inspects a `user_id`'s current
-top-K from the same output store (including cold-start fallback). Row count
-is `min(job.top_k, dashboard.lookup_k)` (`lookup_k` defaults to 20, so 10
-with the default `top_k`). The
+load. HTTP Basic credentials stay in the browser until it forgets them
+for this origin — closing the tab is not a sign-out; use a private window
+or clear saved passwords. The **Inspect user** form shows that `user_id`'s
+recent `[input]` events beside current top-K (including cold-start
+fallback). Shared item ids are highlighted. When `reasons` is present, a
+Why column summarizes source labels and the top similar history item.
+Recs row count is `min(job.top_k, dashboard.lookup_k)` (`lookup_k`
+defaults to 20, so 10 with the default `top_k`); events use
+`dashboard.lookup_events` (default 20). User attributes show only when
+`dashboard.lookup_user_attrs` lists columns. The
 incremental-events panel is gated on the `[events]` block of the config the
 **dashboard** was started with, not the one from
 [step 13](#13-ingest-incremental-events-optional): copy `enabled = true` into
@@ -746,9 +780,10 @@ docker compose up --build
 - Point input/output at S3-compatible object storage (R2, AWS S3, MinIO) —
   see the README's [Configuration](../README.md#configuration-configciceronetoml)
   section.
-- Production incremental ingest (db / s3 / Redis Streams, HA):
-  [incremental-events.md](incremental-events.md).
+- Sticky A/B tests of ranking recipes: [experiments.md](experiments.md).
+- Production incremental ingest (db / s3 / Redis Streams, HA, online
+  LightFM): [incremental-events.md](incremental-events.md).
 - Run the test suite (`docker compose -f docker-compose.ci.yml up --build
-  --abort-on-container-exit --exit-code-from test`) if you're contributing
+  --abort-on-container-exit --exit-code-from test test`) if you're contributing
   code — see [CONTRIBUTING.md](../CONTRIBUTING.md). That suite includes a
   system-style Postgres end-to-end check (`tests/test_system_db.py`).

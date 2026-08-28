@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 from rectools import Columns
 
 from cicerone.model.combine import combine_by_priority, combine_by_weighted_fusion
 from cicerone.model.constants import WEIGHT_COLUMN
+from cicerone.reasons import SOURCE_CONTRIBS_COLUMN
 
 
 def test_combine_by_priority_fills_from_earlier_strategies_first():
@@ -186,6 +188,70 @@ def test_combine_by_priority_recomputes_ranks_per_user():
         assert list(ordered[Columns.Rank]) == list(range(1, top_k + 1))
 
 
+def test_combine_by_priority_keeps_winning_source_contrib():
+    frames = [
+        pd.DataFrame(
+            [
+                {"user_id": "u1", "item_id": "a", "rank": 3, "score": 1.0, "source": "first", "_weight": 1.0},
+            ]
+        ),
+        pd.DataFrame(
+            [
+                {
+                    "user_id": "u1",
+                    "item_id": "a",
+                    "rank": 1,
+                    "score": 9.0,
+                    "source": "second",
+                    "_weight": 1.0,
+                },
+            ]
+        ),
+    ]
+    out = combine_by_priority(frames, top_k=1)
+    contribs = out.iloc[0][SOURCE_CONTRIBS_COLUMN]
+    assert contribs == [{"label": "first", "rank": 3, "weight": 1.0, "contribution": None}]
+
+
+def test_combine_by_weighted_fusion_keeps_per_source_contribs():
+    frames = [
+        pd.DataFrame(
+            [
+                {
+                    "user_id": "u1",
+                    "item_id": "a",
+                    "rank": 1,
+                    "score": 1.0,
+                    "source": "personalized",
+                    "_weight": 1.0,
+                },
+            ]
+        ),
+        pd.DataFrame(
+            [
+                {
+                    "user_id": "u1",
+                    "item_id": "a",
+                    "rank": 3,
+                    "score": 0.5,
+                    "source": "popular_fallback",
+                    "_weight": 0.5,
+                },
+            ]
+        ),
+    ]
+    out = combine_by_weighted_fusion(
+        frames, top_k=1, rrf_k=1.0, source_label_order=["personalized", "popular_fallback"]
+    )
+    assert list(out["source"]) == ["personalized+popular_fallback"]
+    contribs = out.iloc[0][SOURCE_CONTRIBS_COLUMN]
+    assert [row["label"] for row in contribs] == ["personalized", "popular_fallback"]
+    assert contribs[0]["rank"] == 1
+    assert contribs[0]["contribution"] == pytest.approx(1.0 / 2.0)
+    assert contribs[1]["rank"] == 3
+    assert contribs[1]["contribution"] == pytest.approx(0.5 / 4.0)
+
+
 def test_combine_by_weighted_fusion_ties_break_on_item_id():
     frames = [
         pd.DataFrame(
@@ -241,3 +307,14 @@ def test_combine_by_weighted_fusion_large_group_baseline():
     assert len(out) == n_users * 10
     assert (out.groupby(Columns.User).size() <= 10).all()
     assert (out["source"] == "first+second").all()
+
+
+def test_as_rank_and_float_parse_strings_and_bools():
+    from cicerone.model.combine import _as_float, _as_rank
+
+    assert _as_rank("3") == 3
+    assert _as_float("0.5") == pytest.approx(0.5)
+    assert _as_rank(True) == 1
+    assert _as_rank(False) == 0
+    assert _as_float(True) == pytest.approx(1.0)
+    assert _as_float(False) == pytest.approx(0.0)

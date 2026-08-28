@@ -10,6 +10,26 @@
       }
     },
     "schemas": {
+      "BoostHit": {
+        "properties": {
+          "factor": {
+            "description": "Multiplier applied by this rule",
+            "title": "Factor",
+            "type": "number"
+          },
+          "name": {
+            "description": "Boost rule name from features.toml",
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "factor"
+        ],
+        "title": "BoostHit",
+        "type": "object"
+      },
       "ErrorDetail": {
         "properties": {
           "detail": {
@@ -171,6 +191,26 @@
         "title": "InteractionEvent",
         "type": "object"
       },
+      "MatchedAttribute": {
+        "properties": {
+          "column": {
+            "description": "Item feature column",
+            "title": "Column",
+            "type": "string"
+          },
+          "value": {
+            "description": "Shared feature value",
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "column",
+          "value"
+        ],
+        "title": "MatchedAttribute",
+        "type": "object"
+      },
       "RecommendationItem": {
         "properties": {
           "item_id": {
@@ -183,6 +223,17 @@
             "minimum": 1.0,
             "title": "Rank",
             "type": "integer"
+          },
+          "reasons": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RecommendationReasons"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why this item was ranked: contributing sources, boosts, similar history items"
           },
           "score": {
             "description": "Score from the batch job (strategy- or blend-specific)",
@@ -207,8 +258,57 @@
         "title": "RecommendationItem",
         "type": "object"
       },
+      "RecommendationReasons": {
+        "properties": {
+          "boosts": {
+            "items": {
+              "$ref": "#/components/schemas/BoostHit"
+            },
+            "title": "Boosts",
+            "type": "array"
+          },
+          "matched_attributes": {
+            "items": {
+              "$ref": "#/components/schemas/MatchedAttribute"
+            },
+            "title": "Matched Attributes",
+            "type": "array"
+          },
+          "similar_items": {
+            "items": {
+              "$ref": "#/components/schemas/SimilarItem"
+            },
+            "title": "Similar Items",
+            "type": "array"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/SourceContribution"
+            },
+            "title": "Sources",
+            "type": "array"
+          }
+        },
+        "title": "RecommendationReasons",
+        "type": "object"
+      },
       "RecommendationsResponse": {
         "properties": {
+          "experiment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Active experiment id when [experiment] is enabled; null otherwise",
+            "examples": [
+              "rrf-vs-blend-2026-08"
+            ],
+            "title": "Experiment Id"
+          },
           "fallback": {
             "description": "True when the cold-start list was used because the user had no personal rows",
             "title": "Fallback",
@@ -241,6 +341,21 @@
             "description": "Echo of the requested user_id path parameter",
             "title": "User Id",
             "type": "string"
+          },
+          "variant": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Sticky assignment for this user_id when an experiment is active; null otherwise",
+            "examples": [
+              "control"
+            ],
+            "title": "Variant"
           }
         },
         "required": [
@@ -249,6 +364,80 @@
           "items"
         ],
         "title": "RecommendationsResponse",
+        "type": "object"
+      },
+      "SimilarItem": {
+        "properties": {
+          "item_id": {
+            "description": "History item that shares catalog attributes",
+            "title": "Item Id",
+            "type": "string"
+          },
+          "score": {
+            "description": "Jaccard overlap of item feature tokens",
+            "title": "Score",
+            "type": "number"
+          }
+        },
+        "required": [
+          "item_id",
+          "score"
+        ],
+        "title": "SimilarItem",
+        "type": "object"
+      },
+      "SourceContribution": {
+        "properties": {
+          "contribution": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "RRF term weight/(rrf_k+rank); null under priority combine",
+            "title": "Contribution"
+          },
+          "label": {
+            "description": "Strategy source label",
+            "examples": [
+              "personalized"
+            ],
+            "title": "Label",
+            "type": "string"
+          },
+          "rank": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Rank of this item within that strategy",
+            "title": "Rank"
+          },
+          "weight": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Combiner weight for this source",
+            "title": "Weight"
+          }
+        },
+        "required": [
+          "label"
+        ],
+        "title": "SourceContribution",
         "type": "object"
       },
       "ValidationError": {
@@ -374,7 +563,7 @@
   "info": {
     "description": "Read-only HTTP API over **precomputed** recommendations written by the batch job.\n\nThere is no live inference in the request path: `GET /recommendations/{user_id}`\nlooks up rows already stored in the configured output (dataset parquet or DB).\n\nWhen `[events]` is enabled with `kind = \"webhook\"`, `POST /events` accepts\ninteraction events for micro-batch incremental updates (write-through to the\nsame output store). See `docs/incremental-events.md`.\n\nInteractive docs: `/docs` (Swagger UI) and `/redoc` (includes language\ncode samples via ``x-codeSamples``). Machine-readable schema: `/openapi.json`.\nA checked-in copy lives at `docs/openapi/serve.openapi.json` (regenerate with\n`cicerone export-openapi`).",
     "title": "Cicerone Serve API",
-    "version": "0.6.2"
+    "version": "0.7.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -688,12 +877,12 @@
           {
             "label": "ServeClient",
             "lang": "Python",
-            "source": "import os\nfrom cicerone.serve_client import ServeClient\n\nclient = ServeClient(\n    os.environ.get(\"CICERONE_SERVE_URL\", \"http://localhost:8000\"),\n    token=os.environ[\"CICERONE_SERVE_TOKEN\"],\n)\nbody = client.recommendations(\n    os.environ.get(\"CICERONE_USER_ID\", \"alice\"),\n    limit=5,\n)\nprint(body.user_id, body.fallback, body.generated_at)\nfor row in body.items:\n    print(f\"  #{row.rank} {row.item_id} score={row.score}\")\n"
+            "source": "import os\nfrom cicerone.serve_client import ServeClient\n\nclient = ServeClient(\n    os.environ.get(\"CICERONE_SERVE_URL\", \"http://localhost:8000\"),\n    token=os.environ[\"CICERONE_SERVE_TOKEN\"],\n)\nbody = client.recommendations(\n    os.environ.get(\"CICERONE_USER_ID\", \"alice\"),\n    limit=5,\n)\nprint(body.user_id, body.fallback, body.generated_at, body.experiment_id, body.variant)\nfor row in body.items:\n    print(f\"  #{row.rank} {row.item_id} score={row.score}\")\n"
           },
           {
             "label": "fetch",
             "lang": "JavaScript",
-            "source": "const baseUrl = (process.env.CICERONE_SERVE_URL || \"http://localhost:8000\").replace(/\\/$/, \"\");\nconst token = process.env.CICERONE_SERVE_TOKEN;\nif (!token) {\n  console.error(\"Set CICERONE_SERVE_TOKEN to a bearer token\");\n  process.exit(1);\n}\nconst userId = process.env.CICERONE_USER_ID || \"alice\";\n\nasync function main() {\n  const url = new URL(`${baseUrl}/recommendations/${encodeURIComponent(userId)}`);\n  url.searchParams.set(\"limit\", \"5\");\n\n  const response = await fetch(url, {\n    headers: {\n      Accept: \"application/json\",\n      Authorization: `Bearer ${token}`,\n    },\n  });\n  if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);\n  const body = await response.json();\n  console.log(body.user_id, body.fallback, body.generated_at);\n  for (const row of body.items) {\n    console.log(`  #${row.rank} ${row.item_id} score=${row.score}`);\n  }\n}\n\nmain().catch((err) => {\n  console.error(err);\n  process.exitCode = 1;\n});\n"
+            "source": "const baseUrl = (process.env.CICERONE_SERVE_URL || \"http://localhost:8000\").replace(/\\/$/, \"\");\nconst token = process.env.CICERONE_SERVE_TOKEN;\nif (!token) {\n  console.error(\"Set CICERONE_SERVE_TOKEN to a bearer token\");\n  process.exit(1);\n}\nconst userId = process.env.CICERONE_USER_ID || \"alice\";\n\nasync function main() {\n  const url = new URL(`${baseUrl}/recommendations/${encodeURIComponent(userId)}`);\n  url.searchParams.set(\"limit\", \"5\");\n\n  const response = await fetch(url, {\n    headers: {\n      Accept: \"application/json\",\n      Authorization: `Bearer ${token}`,\n    },\n  });\n  if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);\n  const body = await response.json();\n  console.log(body.user_id, body.fallback, body.generated_at, body.experiment_id, body.variant);\n  for (const row of body.items) {\n    console.log(`  #${row.rank} ${row.item_id} score=${row.score}`);\n  }\n}\n\nmain().catch((err) => {\n  console.error(err);\n  process.exitCode = 1;\n});\n"
           },
           {
             "label": "curl",

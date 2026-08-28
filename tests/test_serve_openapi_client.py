@@ -53,6 +53,8 @@ def test_openapi_json_lists_serve_paths_and_schemas():
 
     components = schema["components"]["schemas"]
     assert "RecommendationsResponse" in components
+    assert "experiment_id" in components["RecommendationsResponse"]["properties"]
+    assert "variant" in components["RecommendationsResponse"]["properties"]
     assert "RecommendationItem" in components
     assert "HealthResponse" in components
     assert "ErrorDetail" in components

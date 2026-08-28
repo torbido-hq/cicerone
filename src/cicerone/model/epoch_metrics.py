@@ -1,7 +1,8 @@
-"""Optional per-epoch LightFM metric logging during collaborative fit."""
+"""Optional per-epoch Precision/Recall logging during collaborative or sequential fit."""
 
 from __future__ import annotations
 
+import inspect
 import logging
 import random
 from collections.abc import Callable
@@ -42,6 +43,22 @@ def _epoch_metric_fit_partial(model: object) -> Callable:
     return fit_partial
 
 
+def invoke_epoch_fit_partial(fit_partial: Callable, dataset: Dataset) -> None:
+    """LightFM is ``fit_partial(dataset, epochs)``; RecTools transformers need min/max."""
+    try:
+        params = inspect.signature(fit_partial).parameters
+    except (TypeError, ValueError):
+        fit_partial(dataset, 1)
+        return
+    if "min_epochs" in params and "max_epochs" in params:
+        if params["max_epochs"].kind is inspect.Parameter.KEYWORD_ONLY:
+            fit_partial(dataset, 1, max_epochs=1)
+        else:
+            fit_partial(dataset, 1, 1)
+        return
+    fit_partial(dataset, 1)
+
+
 def epoch_metric_total_epochs(model: object) -> int:
     # rectools stores epochs as n_epochs; accept epochs for other wrappers.
     for attr in ("n_epochs", "epochs"):
@@ -55,7 +72,10 @@ def epoch_metric_total_epochs(model: object) -> int:
 
 
 def warn_on_epoch_metric_trajectory(
-    history: list[tuple[int, dict[str, float]]], settings: EpochMetricsSettings
+    history: list[tuple[int, dict[str, float]]],
+    settings: EpochMetricsSettings,
+    *,
+    label: str = "Collaborative",
 ) -> None:
     """WARN when a tracked metric regresses from its best or plateaus late."""
     if len(history) < 2:
@@ -71,8 +91,9 @@ def warn_on_epoch_metric_trajectory(
         last = values[-1]
         if best > 0 and (best - last) / best >= settings.regression_drop:
             logger.warning(
-                "Collaborative epoch metrics: %s regressed from best %.4f to final %.4f "
+                "%s epoch metrics: %s regressed from best %.4f to final %.4f "
                 "(drop >= %.0f%% across logged epochs)",
+                label,
                 metric_name,
                 best,
                 last,
@@ -84,8 +105,8 @@ def warn_on_epoch_metric_trajectory(
             scale = max(max(abs(v) for v in recent), 1e-9)
             if span / scale <= settings.plateau_eps:
                 logger.warning(
-                    "Collaborative epoch metrics: %s plateaued near %.4f over the last %d "
-                    "logged snapshots (span %.4f)",
+                    "%s epoch metrics: %s plateaued near %.4f over the last %d logged snapshots (span %.4f)",
+                    label,
                     metric_name,
                     recent[-1],
                     settings.plateau_window,
@@ -100,14 +121,16 @@ def interactions_for_epoch_metrics(
     return interactions[interactions[Columns.User].isin(users)]
 
 
-def fit_lightfm_with_epoch_metrics(
+def fit_with_epoch_metrics(
     model: RecommenderModel,
     dataset: Dataset,
     interactions: pd.DataFrame,
     settings: EpochMetricsSettings,
     top_k: int,
+    *,
+    label: str = "Collaborative",
 ) -> RecommenderModel:
-    """LightFM ``fit_partial`` with in-sample Precision/Recall@K logs."""
+    """``fit_partial`` loop with in-sample Precision/Recall@K logs."""
     fit_partial = _epoch_metric_fit_partial(model)
     total_epochs = epoch_metric_total_epochs(model)
     metric_defs = {
@@ -118,7 +141,7 @@ def fit_lightfm_with_epoch_metrics(
     history: list[tuple[int, dict[str, float]]] = []
 
     for epoch in range(1, total_epochs + 1):
-        fit_partial(dataset, 1)
+        invoke_epoch_fit_partial(fit_partial, dataset)
         if not should_log_epoch(epoch, total_epochs, settings.every):
             continue
         reco = model.recommend(
@@ -129,7 +152,17 @@ def fit_lightfm_with_epoch_metrics(
         )
         snapshot = calc_metrics(metric_defs, reco=reco, interactions=interactions)
         history.append((epoch, snapshot))
-        logger.info("Collaborative epoch %d/%d metrics: %s", epoch, total_epochs, snapshot)
+        logger.info("%s epoch %d/%d metrics: %s", label, epoch, total_epochs, snapshot)
 
-    warn_on_epoch_metric_trajectory(history, settings)
+    warn_on_epoch_metric_trajectory(history, settings, label=label)
     return model
+
+
+def fit_lightfm_with_epoch_metrics(
+    model: RecommenderModel,
+    dataset: Dataset,
+    interactions: pd.DataFrame,
+    settings: EpochMetricsSettings,
+    top_k: int,
+) -> RecommenderModel:
+    return fit_with_epoch_metrics(model, dataset, interactions, settings, top_k, label="Collaborative")

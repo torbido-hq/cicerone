@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from cicerone.policy.boosts import apply_boosts, item_boost_factors
+from cicerone.policy.boosts import apply_boosts, item_boost_details, item_boost_factors
 from cicerone.policy.eligibility import (
     allowed_items_for_cohort,
     cohort_key,
@@ -23,6 +23,7 @@ __all__ = [
     "has_user_scoped_eligibility",
     "index_users_by_id",
     "is_user_scoped",
+    "item_boost_details",
     "item_boost_factors",
     "resolve_eligibility",
 ]

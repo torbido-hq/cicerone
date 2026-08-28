@@ -8,19 +8,34 @@ full batch retrains. Enable `[events]` on the **serve** process
 event contract, micro-batch, then write-through to the same `[output]`
 store serve already reads.
 
-This is not live ranking. LightFM, item-KNN, sequential, and content
-fallback wait for the next `job.run()` (cron or `POST /trigger/retrain`).
-The incremental path refreshes **popular / latest slices** (and recency
-boosts) for affected users plus `__cold_start__`.
-[how-it-works.md](how-it-works.md) explains why LightFM, item-KNN, and
-sequential wait for a full retrain.
+This is not live ranking on `GET /recommendations`. LightFM / item-KNN /
+content-fallback rows wait for the next `job.run()` **unless**
+`[events.online]` is enabled: the serve events worker then continues LightFM
+(`fit_partial`) on IDs already in the last model artifact and rewrites
+personalized / item-KNN / content-fallback rows for affected users.
+Sequential never runs `fit_partial`. The default runtime image is
+torch-free. New catalog IDs still wait for a full retrain.
+
+The incremental path always refreshes **popular / latest slices** (and recency
+boosts) for affected users plus `__cold_start__`. When `[experiment]` is
+on, that popular/latest refresh runs **in every variant**. Online LightFM
+rewrite is skipped while `[experiment]` is on so arms stay isolated.
+[how-it-works.md](how-it-works.md) explains the split. Experiments:
+[experiments.md](experiments.md).
+
+Preserved personalized / `item_based` / `sequential` / `content_fallback`
+/ `blended` rows keep their batch `reasons` unless `[events.online]` replaced
+them. New popular, latest, and
+`incremental` rows get a minimal `{sources:[{label}]}` payload — no
+history-overlap `similar_items` on this path.
 
 Batch I/O and serve packages: [architecture.md](architecture.md).
 
 ## What it does not do
 
-- Request-path LightFM / SASRec inference
-- Updating personalized / `item_based` / `sequential` rows between retrains
+- Request-path LightFM / SASRec inference (`GET` stays a lookup)
+- Growing LightFM embeddings for brand-new user/item IDs (those wait for `job.run()`)
+- Sequential `fit_partial` (SASRec/BERT4Rec/HSTU stay batch)
 - A public plugin API (`EventSource` is internal, same spirit as `io/` kinds)
 
 ## Event contract
@@ -60,6 +75,33 @@ batch_window_seconds = 60
 poll_interval_seconds = 1
 ```
 
+### Online collaborative refresh
+
+Optional `[events.online]` continues LightFM on the last model artifact and
+rewrites personalized / item-KNN / content-fallback rows for **affected
+users only**. While `[experiment]` is on, that rewrite is skipped so arms
+stay isolated (popular/latest still refresh every variant).
+`GET /recommendations` is still a lookup.
+
+```toml
+[events.online]
+enabled = true
+fit_partial_epochs = 1          # 0 = frozen weights + history refresh only
+fit_min_events = 100            # skip SGD until this many known-ID events
+max_extra_interactions = 50000  # online-only rows on top of the last job artifact
+```
+
+Startup fails if the `[output]` store has no artifact — the batch job must
+set `[job].save_model_artifact = true`. An event is trained only when both
+its `user_id` and `item_id` already exist in that artifact (including a new
+interaction between two known IDs). Unknown IDs still get popular / latest /
+`incremental` boosts and wait for the next `job.run()`. After
+`fit_partial`, item factors move globally but only the flush's users are
+rewritten (same class of staleness as Gorse's cache between worker
+passes). Sequential never runs `fit_partial`. If the sequential extra is
+missing, existing sequential rows are left as-is; if it is installed,
+affected users are re-scored from the batch-fitted sequential model.
+
 `POST /events` uses Bearer auth (`events.options.auth_token` or
 `serve.auth_token`). Body: one event object, a JSON array, or
 `{"events":[...]}`. Accepted events return **202** with `accepted` and
@@ -75,7 +117,7 @@ curl -sS -X POST \
 ```
 
 Flushes run when the buffer hits `batch_size` **or**
-`batch_window_seconds` elapses. Then serve’s refresh loop (dataset output)
+`batch_window_seconds` elapses. Then serve's refresh loop (dataset output)
 or the next DB read picks up the new rows. OpenAPI documents the route when
 webhook events are enabled (`/docs`, `/redoc`, checked-in
 `docs/openapi/serve.openapi.json`).
@@ -142,6 +184,18 @@ re-raised), not “lock free”. The same `owned()` callback is passed into
 full `job.run()` (cron and `RunGuard` trigger) so a lost retrain lock skips
 artifact and recommendation writes.
 
+Fan-out sources **heartbeat** in-flight messages for the duration of apply
+(at the start of the flush, then every 15s).
+S3 SQS `ReceiveMessage` sets visibility to 5 minutes (covering the
+micro-batch window plus apply); heartbeat then extends the same window so
+`fit_partial` cannot outrun it. Redis Streams `XCLAIM`s to the same consumer
+with idle 0 so `XAUTOCLAIM` does not steal the PEL. A failed first heartbeat
+nacks the batch. Online persist after `ack` retries,
+then drops the pending fit if it still fails, the lease is lost, a full
+retrain is in progress, or the batch job replaced the artifact — serving
+rows from that flush stay written. Online extras on top of the last job
+artifact are capped (`events.online.max_extra_interactions`).
+
 | Source | Multi-replica |
 | --- | --- |
 | webhook | Single-ingress or sticky session; do not claim multi-replica ingest |
@@ -194,7 +248,11 @@ next flush (prefer a DB output for history).
 | S3 list (R2) / SQS | At-least-once | Object key + ETag dedupe |
 | Redis Streams | At-least-once | `XACK` after successful flush; stream entry id fallback |
 
-Duplicate delivery can inflate weights for `quantity_scaled_events`.
+Duplicate delivery can inflate weights for `quantity_scaled_events` on the
+popular/latest path. Online LightFM persists the model artifact only after
+the event source `ack`, so a nack/redelivery does not append the same
+interactions twice. If that persist still fails after retries, the pending
+fit is dropped (rows already written).
 
 ## Internals
 
