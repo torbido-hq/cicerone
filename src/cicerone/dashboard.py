@@ -6,7 +6,7 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import urlencode, urlparse
 
 import uvicorn
 from croniter import CroniterError, croniter
@@ -28,6 +28,18 @@ logger = logging.getLogger(__name__)
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
 _TEMPLATES = Jinja2Templates(directory=str(_PACKAGE_DIR / "templates"))
+_EXPERIMENTS_PATH = "/dashboard/experiments"
+
+
+def _experiments_redirect(**query: str) -> RedirectResponse:
+    target = _EXPERIMENTS_PATH
+    if query:
+        target = f"{target}?{urlencode(query)}"
+    target = target.replace("\\", "")
+    parsed = urlparse(target)
+    if parsed.scheme or parsed.netloc or parsed.path != _EXPERIMENTS_PATH:
+        return RedirectResponse(url=_EXPERIMENTS_PATH, status_code=303)
+    return RedirectResponse(url=target, status_code=303)
 
 
 def _compute_staleness(manifest: dict[str, Any] | None, cron_schedule: str, now: datetime) -> dict[str, Any]:
@@ -160,27 +172,15 @@ def create_app(
     def experiments_promote(variant: str = Form(...)):
         error = promote_winner(settings, variant.strip())
         if error:
-            return RedirectResponse(
-                url=f"/dashboard/experiments?promote_error={quote(error)}",
-                status_code=303,
-            )
-        return RedirectResponse(
-            url=f"/dashboard/experiments?message={quote('Promoted ' + variant.strip())}",
-            status_code=303,
-        )
+            return _experiments_redirect(promote_error=error)
+        return _experiments_redirect(message=f"Promoted {variant.strip()}")
 
     @app.post("/dashboard/experiments/unpromote", dependencies=[Depends(auth)])
     def experiments_unpromote():
         error = clear_promotion(settings)
         if error:
-            return RedirectResponse(
-                url=f"/dashboard/experiments?promote_error={quote(error)}",
-                status_code=303,
-            )
-        return RedirectResponse(
-            url="/dashboard/experiments?message=Resumed%20split",
-            status_code=303,
-        )
+            return _experiments_redirect(promote_error=error)
+        return _experiments_redirect(message="Resumed split")
 
     return app
 

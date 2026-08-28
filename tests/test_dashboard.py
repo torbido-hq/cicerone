@@ -958,7 +958,82 @@ def test_dashboard_promote_unknown_variant_redirects():
         follow_redirects=False,
     )
     assert response.status_code == 303
-    assert "promote_error=" in response.headers["location"]
+    location = response.headers["location"]
+    assert location.startswith("/dashboard/experiments?")
+    assert "promote_error=" in location
+
+
+def test_dashboard_promote_hostile_variant_stays_on_experiments():
+    from cicerone.config.settings import ExperimentSettings, VariantSettings
+
+    experiment = ExperimentSettings(
+        enabled=True,
+        id="exp-1",
+        variants=(
+            VariantSettings(name="control", traffic=0.5),
+            VariantSettings(name="treatment", traffic=0.5),
+        ),
+    )
+    response = _recs_client(experiment=experiment).post(
+        "/dashboard/experiments/promote",
+        data={"variant": "https://evil.example/phish"},
+        auth=("alice", "s3cret"),
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    location = response.headers["location"]
+    assert location.startswith("/dashboard/experiments?")
+    assert "://" not in location.split("?", 1)[0]
+
+
+def test_experiments_redirect_rejects_absolute_target(monkeypatch):
+    from urllib.parse import ParseResult
+
+    import cicerone.dashboard as dash
+
+    monkeypatch.setattr(
+        dash,
+        "urlparse",
+        lambda _url: ParseResult("https", "evil.example", "/dashboard/experiments", "", "", ""),
+    )
+    response = dash._experiments_redirect(promote_error="x")
+    assert response.status_code == 303
+    assert response.headers["location"] == "/dashboard/experiments"
+
+
+def test_experiments_redirect_without_query_stays_on_path():
+    from cicerone.dashboard import _experiments_redirect
+
+    response = _experiments_redirect()
+    assert response.status_code == 303
+    assert response.headers["location"] == "/dashboard/experiments"
+
+
+def test_dashboard_promote_success_redirects(monkeypatch):
+    from cicerone.config.settings import ExperimentSettings, VariantSettings
+
+    import cicerone.dashboard as dash
+
+    monkeypatch.setattr(dash, "promote_winner", lambda _settings, _variant: None)
+    experiment = ExperimentSettings(
+        enabled=True,
+        id="exp-1",
+        variants=(
+            VariantSettings(name="control", traffic=0.5),
+            VariantSettings(name="treatment", traffic=0.5),
+        ),
+    )
+    response = _recs_client(experiment=experiment).post(
+        "/dashboard/experiments/promote",
+        data={"variant": "control"},
+        auth=("alice", "s3cret"),
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    location = response.headers["location"]
+    assert location.startswith("/dashboard/experiments?")
+    assert "Promoted" in location
+    assert "control" in location
 
 
 def test_dashboard_unpromote_resumes_split(tmp_path):
