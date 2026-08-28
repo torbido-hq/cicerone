@@ -50,6 +50,67 @@
 	font-size: var(--sl-text-sm);
 }
 
+.cicerone-article-feed {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	max-width: 38rem;
+}
+
+.cicerone-article-feed li {
+	margin: 0;
+	padding: 1.15rem 0 1.25rem;
+	border-bottom: 1px solid var(--sl-color-hairline);
+}
+
+.cicerone-article-feed li:first-child {
+	padding-top: 0;
+}
+
+.cicerone-article-feed time {
+	display: block;
+	margin-bottom: 0.35rem;
+	font-family: var(--sl-font-mono);
+	font-size: var(--sl-text-xs);
+	font-variant-numeric: tabular-nums;
+	letter-spacing: 0.04em;
+	color: var(--sl-color-gray-2);
+}
+
+.cicerone-article-feed a {
+	font-family: var(--article-font);
+	font-size: var(--sl-text-xl);
+	font-weight: 600;
+	letter-spacing: -0.02em;
+	line-height: 1.25;
+	text-decoration: none;
+	color: var(--sl-color-white);
+}
+
+.cicerone-article-feed a:hover,
+.cicerone-article-feed a:focus-visible {
+	color: var(--sl-color-text-accent);
+}
+
+.cicerone-article-feed a:focus-visible {
+	outline: 2px solid var(--sl-color-text-accent);
+	outline-offset: 0.25rem;
+	border-radius: 0.125rem;
+}
+
+.cicerone-article-feed p {
+	margin: 0.4rem 0 0;
+	max-width: 65ch;
+	color: var(--sl-color-gray-2);
+	font-size: var(--sl-text-sm);
+}
+
+.cicerone-article-feed-more {
+	margin: 0.9rem 0 0;
+	font-size: var(--sl-text-sm);
+	color: var(--sl-color-gray-2);
+}
+
 /* Module maps belong in tables; wrap long table cells instead of a nested scrollport. */
 .sl-markdown-content table:not(:where(.not-content *)) {
 	overflow-x: visible;

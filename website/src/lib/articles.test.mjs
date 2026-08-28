@@ -1,16 +1,21 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
 import {
 	ARTICLES_PREFIX,
+	HOME_ARTICLE_LIMIT,
+	articleHrefFromFilename,
+	articlesSidebarGroup,
 	articleIsVisible,
 	articleRedirects,
 	articlesContentDir,
 	articlesLayoutKind,
+	defaultArticlesDir,
 	hasPublishedArticles,
+	listPublishedArticles,
 	parseFrontmatter,
 } from './articles.mjs';
 
@@ -77,6 +82,65 @@ test('articlesLayoutKind classifies listing vs post from the route id', () => {
 
 test('articlesContentDir nests under the shared prefix', () => {
 	assert.equal(articlesContentDir('/site'), `/site/src/content/docs/${ARTICLES_PREFIX}`);
+});
+
+test('defaultArticlesDir is the site articles collection', () => {
+	assert.equal(
+		existsSync(join(defaultArticlesDir(), 'a-nightly-table-next-to-your-orders.md')),
+		true,
+	);
+});
+
+test('articleHrefFromFilename is the public articles URL', () => {
+	assert.equal(
+		articleHrefFromFilename('a-nightly-table-next-to-your-orders.md'),
+		'/articles/a-nightly-table-next-to-your-orders/',
+	);
+});
+
+test('listPublishedArticles is a newest-first feed from frontmatter', () => {
+	const dir = mkdtempSync(join(tmpdir(), 'cicerone-articles-feed-'));
+	writeFileSync(
+		join(dir, 'older.md'),
+		'---\ntitle: Older\ndate: 2026-08-20\nexcerpt: First published.\n---\n',
+	);
+	writeFileSync(
+		join(dir, 'newer.md'),
+		'---\ntitle: Newer\ndate: 2026-08-28\ndescription: Falls back when excerpt is missing.\n---\n',
+	);
+	writeFileSync(join(dir, 'wip.md'), '---\ntitle: Draft\ndate: 2026-08-29\ndraft: true\n---\n');
+	writeFileSync(join(dir, '_skip.md'), '---\ntitle: Skip\ndate: 2026-08-19\n---\n');
+	const posts = listPublishedArticles(dir, { production: true });
+	assert.deepEqual(
+		posts.map((post) => post.title),
+		['Newer', 'Older'],
+	);
+	assert.deepEqual(posts[0], {
+		href: '/articles/newer/',
+		title: 'Newer',
+		date: '2026-08-28',
+		excerpt: 'Falls back when excerpt is missing.',
+	});
+	assert.equal(posts[1].excerpt, 'First published.');
+	assert.equal(listPublishedArticles(dir, { production: false }).length, 3);
+	assert.equal(HOME_ARTICLE_LIMIT, 6);
+	for (let i = 1; i <= 8; i += 1) {
+		writeFileSync(
+			join(dir, `post-${String(i).padStart(2, '0')}.md`),
+			`---\ntitle: Post ${i}\ndate: 2026-07-${String(i).padStart(2, '0')}\n---\n`,
+		);
+	}
+	const home = listPublishedArticles(dir, { production: true, limit: HOME_ARTICLE_LIMIT });
+	assert.equal(home.length, HOME_ARTICLE_LIMIT);
+	assert.deepEqual(
+		home.map((post) => post.title),
+		['Newer', 'Older', 'Post 8', 'Post 7', 'Post 6', 'Post 5'],
+	);
+	const nav = articlesSidebarGroup(dir, { production: true });
+	assert.equal(nav?.label, 'Articles');
+	assert.deepEqual(nav?.items[0], { label: 'All articles', link: '/articles/' });
+	assert.equal(nav?.items.length, 1 + listPublishedArticles(dir, { production: true }).length);
+	assert.equal(nav?.items[1]?.label, 'Newer');
 });
 
 test('old article redirect is one directory route covering both slash variants', () => {

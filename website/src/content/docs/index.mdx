@@ -23,6 +23,7 @@ hero:
 ---
 
 import { LinkCard, CardGrid } from '@astrojs/starlight/components';
+import ArticleFeed from '../../components/ArticleFeed.astro';
 import LatestRelease from '../../components/LatestRelease.astro';
 
 <LatestRelease />
@@ -78,9 +79,4 @@ Markdown under [`docs/`](https://github.com/torbido-hq/cicerone/tree/main/docs) 
 
 ## Articles
 
-Index: [/articles/](/articles/).
-
-<CardGrid>
-  <LinkCard title="A nightly table next to your orders" href="/articles/a-nightly-table-next-to-your-orders/" description="Cron writes a ranked table. Rails JOINs it. No Python in the request." />
-  <LinkCard title="This afternoon's checkout can move the row" href="/articles/this-afternoons-checkout-can-move-the-row/" description="Stripe webhook, online LightFM on known IDs. GET stays a lookup." />
-</CardGrid>
+<ArticleFeed />

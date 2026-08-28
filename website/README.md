@@ -22,7 +22,7 @@ npm run preview  # serve dist/
 | Path | Role |
 | --- | --- |
 | `src/content/docs/index.mdx` | Landing (Starlight splash) |
-| `src/content/docs/articles/` | Articles (`title` + `date` frontmatter) → `/articles/` |
+| `src/content/docs/articles/` | Articles (`title` + `date` frontmatter) → `/articles/` (all posts). Homepage shows the latest 6. |
 | `scripts/sync-docs.mjs` | Copies `../docs/*.md` → `src/content/docs/` with frontmatter |
 | `astro.config.mjs` | Site URL, sidebar, logo, social, articles plugin |
 | `src/lib/consent.mjs` | Cookie banner + Consent Mode v2 (`G-E38EP8PJSR`) |
