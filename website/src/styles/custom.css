@@ -84,6 +84,7 @@
 	letter-spacing: -0.02em;
 	line-height: 1.25;
 	text-decoration: none;
+	/* Starlight inverts --sl-color-white in light theme; heading text, not literal white. */
 	color: var(--sl-color-white);
 }
 

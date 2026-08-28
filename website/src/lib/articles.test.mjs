@@ -85,10 +85,9 @@ test('articlesContentDir nests under the shared prefix', () => {
 });
 
 test('defaultArticlesDir is the site articles collection', () => {
-	assert.equal(
-		existsSync(join(defaultArticlesDir(), 'a-nightly-table-next-to-your-orders.md')),
-		true,
-	);
+	const dir = defaultArticlesDir();
+	assert.equal(existsSync(dir), true);
+	assert.equal(dir.endsWith(`/src/content/docs/${ARTICLES_PREFIX}`), true);
 });
 
 test('articleHrefFromFilename is the public articles URL', () => {

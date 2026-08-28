@@ -54,7 +54,11 @@ export function articleIsVisible(raw, { production = process.env.NODE_ENV === 'p
 }
 
 export function hasPublishedArticles(articlesDir, { production = process.env.NODE_ENV === 'production' } = {}) {
-	return listPublishedArticles(articlesDir, { production }).length > 0;
+	for (const entry of articleFiles(articlesDir)) {
+		const raw = readFileSync(join(articlesDir, entry.name), 'utf8');
+		if (articleIsVisible(raw, { production })) return true;
+	}
+	return false;
 }
 
 function isoDay(value) {

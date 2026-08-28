@@ -9,19 +9,21 @@ const posts = listPublishedArticles(defaultArticlesDir(), {
 
 {
 	posts.length > 0 && (
-		<ol class="cicerone-article-feed not-content">
-			{posts.map((post) => (
-				<li>
-					{post.date ? <time datetime={post.date}>{post.date}</time> : null}
-					<a href={post.href}>{post.title}</a>
-					{post.excerpt ? <p>{post.excerpt}</p> : null}
-				</li>
-			))}
-		</ol>
+		<>
+			<ol class="cicerone-article-feed not-content">
+				{posts.map((post) => (
+					<li>
+						{post.date ? <time datetime={post.date}>{post.date}</time> : null}
+						<a href={post.href}>{post.title}</a>
+						{post.excerpt ? <p>{post.excerpt}</p> : null}
+					</li>
+				))}
+			</ol>
+			<p class="cicerone-article-feed-more not-content">
+				<a href="/articles/">All articles</a>
+				{' · '}
+				<a href="/articles/rss.xml">RSS</a>
+			</p>
+		</>
 	)
 }
-<p class="cicerone-article-feed-more not-content">
-	<a href="/articles/">All articles</a>
-	{' · '}
-	<a href="/articles/rss.xml">RSS</a>
-</p>
