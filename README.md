@@ -537,14 +537,11 @@ recomputed. Scoring is unchanged.
 
 `[experiment]` runs a sticky A/B test of whole ranking recipes (models +
 combiner + blending knobs + optional boost/eligibility policy), not per-source
-CTR of a mixed cascade. Per-variant policy is the **recipe** half of 0.8
-evaluation (what is on the list). 0.7 metrics still join all `[input]` events
-to the hashed variant (ITT); they are not proof the served list worked. The
-job fits the union of variant models once, writes extra `variant` rows, and
-serve hashes `user_id` onto one list. The dashboard Experiments page shows
-always-valid CIs and catalog guardrails, and can promote a winner to 100%
-traffic. Optional `automl_challenger` uses the last successful manifest as
-control and this run's AutoML pick as treatment.
+CTR of a mixed cascade. The job fits the union of variant models once, writes
+extra `variant` rows, and serve hashes `user_id` onto one list. The dashboard
+Experiments page shows always-valid CIs and catalog guardrails, and can
+promote a winner to 100% traffic. Optional `automl_challenger` uses the last
+successful manifest as control and this run's AutoML pick as treatment.
 
 ```toml
 [experiment]

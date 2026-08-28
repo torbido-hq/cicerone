@@ -6,6 +6,7 @@ import pytest
 from support.toml_config import write_toml
 
 from cicerone.config import ConfigError, load_experiment_settings, load_settings
+from cicerone.feature_config import BoostRule, EligibilityRule
 
 
 def _minimal_io() -> str:
@@ -319,8 +320,10 @@ def test_load_experiment_policy_names_and_tables(tmp_path):
     control, treatment = settings.experiment.variants
     assert control.boosts == ("featured",)
     assert control.eligibility is False
-    assert treatment.boosts[0]["name"] == "new-arrivals"
-    assert treatment.eligibility[0]["op"] == "item_true"
+    assert isinstance(treatment.boosts[0], BoostRule)
+    assert treatment.boosts[0].name == "new-arrivals"
+    assert isinstance(treatment.eligibility[0], EligibilityRule)
+    assert treatment.eligibility[0].op == "item_true"
 
 
 def test_load_experiment_rejects_boosts_bool_and_tables():
@@ -380,6 +383,31 @@ def test_load_experiment_rejects_invalid_policy_spec_shape():
                 "variants": [
                     {"name": "control", "traffic": 0.5},
                     {"name": "treatment", "traffic": 0.5, "boosts": ["featured", {"name": "x"}]},
+                ],
+            }
+        )
+
+
+def test_load_experiment_rejects_duplicate_and_empty_policy_names():
+    with pytest.raises(ConfigError, match="duplicate rule name"):
+        load_experiment_settings(
+            {
+                "enabled": True,
+                "id": "exp",
+                "variants": [
+                    {"name": "control", "traffic": 0.5},
+                    {"name": "treatment", "traffic": 0.5, "boosts": ["featured", "featured"]},
+                ],
+            }
+        )
+    with pytest.raises(ConfigError, match="non-empty"):
+        load_experiment_settings(
+            {
+                "enabled": True,
+                "id": "exp",
+                "variants": [
+                    {"name": "control", "traffic": 0.5},
+                    {"name": "treatment", "traffic": 0.5, "boosts": ["featured", "  "]},
                 ],
             }
         )

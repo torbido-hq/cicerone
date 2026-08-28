@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tomllib
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -89,15 +90,7 @@ def _parse_boost_overfetch_factor(raw: Any) -> int:
     return factor
 
 
-def parse_eligibility_rules(raw_rules: list[dict[str, Any]]) -> list[EligibilityRule]:
-    return _parse_eligibility(raw_rules)
-
-
-def parse_boost_rules(raw_boosts: list[dict[str, Any]]) -> list[BoostRule]:
-    return _parse_boosts(raw_boosts)
-
-
-def _parse_eligibility(raw_rules: list[dict[str, Any]]) -> list[EligibilityRule]:
+def parse_eligibility_rules(raw_rules: Sequence[Mapping[str, Any]]) -> list[EligibilityRule]:
     rules: list[EligibilityRule] = []
     for raw in raw_rules:
         name = str(raw.get("name") or raw.get("item_column") or "unnamed")
@@ -128,7 +121,7 @@ def _parse_eligibility(raw_rules: list[dict[str, Any]]) -> list[EligibilityRule]
     return rules
 
 
-def _parse_boosts(raw_boosts: list[dict[str, Any]]) -> list[BoostRule]:
+def parse_boost_rules(raw_boosts: Sequence[Mapping[str, Any]]) -> list[BoostRule]:
     boosts: list[BoostRule] = []
     for raw in raw_boosts:
         name = str(raw.get("name") or raw.get("item_column") or "unnamed")
@@ -221,8 +214,8 @@ def load_feature_config(path: Path | str | None = None) -> FeatureConfig:
         user_features=_columns("user_features"),
         item_features=_columns("item_features"),
         item_availability_filters=list(raw.get("item_availability_filters", [])),
-        eligibility=_parse_eligibility(list(raw.get("eligibility", []))),
-        boosts=_parse_boosts(_raw_boost_rules(raw)),
+        eligibility=parse_eligibility_rules(list(raw.get("eligibility", []))),
+        boosts=parse_boost_rules(_raw_boost_rules(raw)),
         boost_overfetch_factor=_parse_boost_overfetch_factor(raw.get("boost_overfetch_factor")),
         blending=_parse_blending(raw.get("blending")),
     )

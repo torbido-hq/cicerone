@@ -34,9 +34,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   for windows that span jobs.
 - Experiment variants can inherit, drop, subset, or replace `[[boost]]` /
   `[[eligibility]]` rules (`boosts = ["featured"]` or
-  `[[experiment.variants.boost]]` tables). This is the recipe side of 0.8
-  evaluation: change what the list contains so a later served-item CTR /
-  conversion ingest can A/B merchandising policy, not only whole combiners.
+  `[[experiment.variants.boost]]` tables). Duplicate subset names are rejected.
 
 ### Fixed
 
