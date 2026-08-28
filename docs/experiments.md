@@ -3,10 +3,10 @@
 # Experiments
 
 Cicerone tests **whole ranking recipes** (models + combiner + optional blending
-knobs), not which `source` in a mixed cascade got the click. The unit of
-assignment is a user. Serve stays a lookup: the job writes extra recommendation
-rows tagged with `variant`, and `GET /recommendations/{user_id}` hashes the
-user onto one of those lists.
+knobs and boost/eligibility policy), not which `source` in a mixed cascade got
+the click. The unit of assignment is a user. Serve stays a lookup: the job
+writes extra recommendation rows tagged with `variant`, and
+`GET /recommendations/{user_id}` hashes the user onto one of those lists.
 
 One experiment at a time. Overlapping layers, request-path bandits, and
 GrowthBook/Statsig as a required dependency are out of scope.
@@ -32,14 +32,22 @@ name = "treatment"
 traffic = 0.5
 models = ["collaborative", "item_based", "popular", "latest"]
 combiner = "blend"            # priority | rrf | blend
-# boosts = true
+# boosts = true               # inherit [[boost]] from features.toml
+# boosts = false              # drop all boosts
+# boosts = ["featured"]       # named subset of features.toml
+# [[experiment.variants.boost]]
+# name = "new-arrivals"       # replacement rules for this variant only
+# kind = "boolean"
+# item_column = "is_new"
+# factor = 1.3
 # eligibility = true
 ```
 
 Validation: unique names; traffic ≥ 0 and sums to at most 1 (any remainder
 is assigned to the last variant). Recipe overrides are the knobs `[job]`
-already has, plus optional `boosts = false` / `eligibility = false` to drop
-policy rules for that variant.
+already has, plus optional `boosts` / `eligibility` (inherit, drop, named
+subset, or replacement `[[experiment.variants.boost]]` /
+`[[experiment.variants.eligibility]]` tables).
 
 ## Assignment
 

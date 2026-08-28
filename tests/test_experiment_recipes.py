@@ -75,7 +75,8 @@ def test_resolve_recipes_overrides_combiner_and_union() -> None:
     assert stripped.eligibility
     payload = json.loads(recipes_manifest_json(recipes))
     assert payload[1]["name"] == "treatment"
-    assert payload[1]["boosts"] is False
+    assert payload[1]["boosts"] == []
+    assert payload[0]["boosts"][0]["name"] == "featured"
 
 
 def test_automl_challenger_uses_last_manifest_as_control() -> None:
@@ -207,4 +208,61 @@ def test_automl_challenger_requires_automl_pick() -> None:
         experiment=ExperimentSettings(enabled=True, id="auto", automl_challenger=True),
     )
     with pytest.raises(ConfigError, match="AutoML"):
+        resolve_recipes(settings, _features())
+
+
+def test_resolve_recipes_named_and_replacement_policy() -> None:
+    settings = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="exp",
+            variants=(
+                VariantSettings(name="control", traffic=0.5, boosts=("featured",), eligibility=False),
+                VariantSettings(
+                    name="treatment",
+                    traffic=0.5,
+                    boosts=(
+                        {
+                            "name": "new-arrivals",
+                            "kind": "boolean",
+                            "item_column": "is_new",
+                            "factor": 1.4,
+                        },
+                    ),
+                    eligibility=(
+                        {
+                            "name": "published",
+                            "op": "item_true",
+                            "item_column": "published",
+                        },
+                    ),
+                ),
+            ),
+        ),
+    )
+    recipes = resolve_recipes(settings, _features())
+    control = apply_recipe(_features(), recipes[0])
+    treatment = apply_recipe(_features(), recipes[1])
+    assert [rule.name for rule in control.boosts] == ["featured"]
+    assert control.eligibility == []
+    assert [rule.name for rule in treatment.boosts] == ["new-arrivals"]
+    assert treatment.boosts[0].factor == 1.4
+    assert [rule.name for rule in treatment.eligibility] == ["published"]
+    payload = json.loads(recipes_manifest_json(recipes))
+    assert payload[0]["boosts"][0]["name"] == "featured"
+    assert payload[1]["eligibility"][0]["item_column"] == "published"
+
+
+def test_resolve_recipes_unknown_policy_name() -> None:
+    settings = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="exp",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5, boosts=("missing",)),
+            ),
+        ),
+    )
+    with pytest.raises(ConfigError, match="unknown rule name"):
         resolve_recipes(settings, _features())

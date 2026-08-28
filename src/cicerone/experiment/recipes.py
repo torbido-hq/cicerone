@@ -3,17 +3,21 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
-from dataclasses import dataclass, replace
-from typing import Any
+from collections.abc import Callable, Sequence
+from dataclasses import asdict, dataclass, replace
+from typing import Any, cast
 
 from cicerone.config.constants import DEFAULT_MODELS, RRF_K, STRATEGY_NAMES, ConfigError
-from cicerone.config.settings import Settings, VariantSettings
+from cicerone.config.settings import PolicySpec, Settings, VariantSettings
 from cicerone.config.validation import validate_model_weights, validate_rrf_k
 from cicerone.feature_config import (
     BLENDING_CURVES,
     BlendingConfig,
+    BoostRule,
+    EligibilityRule,
     FeatureConfig,
+    parse_boost_rules,
+    parse_eligibility_rules,
 )
 
 COMBINER_PRIORITY = "priority"
@@ -34,8 +38,8 @@ class ResolvedRecipe:
     rrf_k: float | None
     combiner: str
     blending: BlendingConfig
-    boosts: bool
-    eligibility: bool
+    boosts: tuple[BoostRule, ...]
+    eligibility: tuple[EligibilityRule, ...]
 
     def manifest_dict(self) -> dict[str, Any]:
         return {
@@ -45,8 +49,8 @@ class ResolvedRecipe:
             "weights": self.weights,
             "rrf_k": self.rrf_k,
             "combiner": self.combiner,
-            "boosts": self.boosts,
-            "eligibility": self.eligibility,
+            "boosts": [asdict(rule) for rule in self.boosts],
+            "eligibility": [asdict(rule) for rule in self.eligibility],
         }
 
 
@@ -63,14 +67,61 @@ def default_models(settings: Settings) -> list[str]:
 
 
 def apply_recipe(feature_config: FeatureConfig, recipe: ResolvedRecipe) -> FeatureConfig:
-    boosts = list(feature_config.boosts) if recipe.boosts else []
-    eligibility = list(feature_config.eligibility) if recipe.eligibility else []
     return replace(
         feature_config,
         blending=recipe.blending,
-        boosts=boosts,
-        eligibility=eligibility,
+        boosts=list(recipe.boosts),
+        eligibility=list(recipe.eligibility),
     )
+
+
+def resolve_boost_policy(
+    spec: PolicySpec | list[Any] | bool,
+    inherited: Sequence[BoostRule],
+    *,
+    label: str,
+) -> tuple[BoostRule, ...]:
+    return cast(tuple[BoostRule, ...], _resolve_policy_spec(spec, inherited, parse_boost_rules, label=label))
+
+
+def resolve_eligibility_policy(
+    spec: PolicySpec | list[Any] | bool,
+    inherited: Sequence[EligibilityRule],
+    *,
+    label: str,
+) -> tuple[EligibilityRule, ...]:
+    return cast(
+        tuple[EligibilityRule, ...],
+        _resolve_policy_spec(spec, inherited, parse_eligibility_rules, label=label),
+    )
+
+
+def _resolve_policy_spec(
+    spec: PolicySpec | list[Any] | bool,
+    inherited: Sequence[Any],
+    parse: Callable[[list[dict[str, Any]]], Sequence[Any]],
+    *,
+    label: str,
+) -> tuple[Any, ...]:
+    if spec is True:
+        return tuple(inherited)
+    if spec is False:
+        return ()
+    items = tuple(spec)
+    if not items:
+        return ()
+    if all(isinstance(item, str) for item in items):
+        by_name = {rule.name: rule for rule in inherited}
+        missing = [name for name in items if name not in by_name]
+        if missing:
+            raise ConfigError(f"{label} unknown rule name(s) {missing}")
+        return tuple(by_name[str(name)] for name in items)
+    if not all(isinstance(item, dict) for item in items):
+        raise ConfigError(f"{label} must be true, false, rule names, or rule tables")
+    try:
+        return tuple(parse([dict(item) for item in items]))
+    except ValueError as exc:
+        raise ConfigError(f"{label}: {exc}") from exc
 
 
 def union_models(recipes: Sequence[ResolvedRecipe]) -> list[str]:
@@ -231,8 +282,16 @@ def _resolve_one(
         rrf_k=rrf_k,
         combiner=combiner,
         blending=blending,
-        boosts=variant.boosts,
-        eligibility=variant.eligibility,
+        boosts=resolve_boost_policy(
+            variant.boosts,
+            feature_config.boosts,
+            label=f"experiment.variants[{variant.name}].boosts",
+        ),
+        eligibility=resolve_eligibility_policy(
+            variant.eligibility,
+            feature_config.eligibility,
+            label=f"experiment.variants[{variant.name}].eligibility",
+        ),
     )
 
 

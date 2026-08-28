@@ -47,6 +47,7 @@ from cicerone.config.settings import (
     ExperimentSettings,
     ExplainSettings,
     IOSettings,
+    PolicySpec,
     ServeSettings,
     Settings,
     TrackSettings,
@@ -66,6 +67,7 @@ from cicerone.config.validation import (
 
 logger = logging.getLogger(__name__)
 
+_POLICY_MISSING = object()
 _ENV_PLACEHOLDER = re.compile(r"\$(\$?)\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 _SERVE_FLAT_KEYS = (
@@ -413,9 +415,46 @@ def _load_variant(raw: Any, index: int) -> VariantSettings:
         rrf_k=rrf_k,
         combiner=combiner,
         blending=blending,
-        boosts=bool(raw.get("boosts", True)),
-        eligibility=bool(raw.get("eligibility", True)),
+        boosts=_load_policy_spec(raw, name, field="boosts", alias="boost"),
+        eligibility=_load_policy_spec(raw, name, field="eligibility", alias="eligibility"),
     )
+
+
+def _load_policy_spec(raw: dict[str, Any], name: str, *, field: str, alias: str) -> PolicySpec:
+    field_value = raw.get(field, _POLICY_MISSING)
+    alias_value = raw.get(alias, _POLICY_MISSING) if alias != field else _POLICY_MISSING
+    if field_value is not _POLICY_MISSING and alias_value is not _POLICY_MISSING:
+        raise ConfigError(f"experiment.variants[{name}] must not set both {field} and [[{alias}]]")
+    value = alias_value if alias_value is not _POLICY_MISSING else field_value
+    if value is _POLICY_MISSING:
+        return True
+    if isinstance(value, bool):
+        return value
+    if not isinstance(value, list):
+        raise ConfigError(
+            f"experiment.variants[{name}].{field} must be true, false, "
+            "a list of rule names, or an array of rule tables"
+        )
+    if all(isinstance(item, str) for item in value):
+        return tuple(item.strip() for item in value if str(item).strip())
+    if not all(isinstance(item, dict) for item in value):
+        raise ConfigError(
+            f"experiment.variants[{name}].{field} must be true, false, "
+            "a list of rule names, or an array of rule tables"
+        )
+    tables = tuple(dict(item) for item in value)
+    try:
+        if field == "boosts":
+            from cicerone.feature_config import parse_boost_rules
+
+            parse_boost_rules(list(tables))
+        else:
+            from cicerone.feature_config import parse_eligibility_rules
+
+            parse_eligibility_rules(list(tables))
+    except ValueError as exc:
+        raise ConfigError(f"experiment.variants[{name}].{field}: {exc}") from exc
+    return tables
 
 
 def _normalize_traffic(variants: tuple[VariantSettings, ...]) -> tuple[VariantSettings, ...]:

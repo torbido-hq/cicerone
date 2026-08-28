@@ -32,6 +32,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Optional `[job.eval]` production replay (HitRate / NDCG / Recall of the
   previous lists against later events) and append-only recommendation history
   for windows that span jobs.
+- Experiment variants can inherit, drop, subset, or replace `[[boost]]` /
+  `[[eligibility]]` rules (`boosts = ["featured"]` or
+  `[[experiment.variants.boost]]` tables), so a treatment can test merchandising
+  policy without copying the whole recipe.
 
 ### Fixed
 
