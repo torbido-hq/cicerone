@@ -8,6 +8,7 @@ import pytest
 
 from cicerone import __version__
 from cicerone.cli import main
+from cicerone.config.constants import DEFAULT_LOG_FORMAT
 
 
 @pytest.fixture(autouse=True)
@@ -195,7 +196,7 @@ def test_log_level_and_format_from_flags_and_env(monkeypatch):
 
     assert main(["export-openapi"]) == 0
     assert seen["level"] == logging.INFO
-    assert seen["format"] == "%(asctime)s %(levelname)s %(name)s: %(message)s"
+    assert seen["format"] == DEFAULT_LOG_FORMAT
 
     monkeypatch.setenv("CICERONE_LOG_LEVEL", "WARNING")
     monkeypatch.setenv("CICERONE_LOG_FORMAT", "%(message)s")

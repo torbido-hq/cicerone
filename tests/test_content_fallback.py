@@ -48,7 +48,7 @@ def test_feature_dict_handles_list_features_and_nans():
             Columns.User: ["u1"],
             Columns.Item: ["i1"],
             Columns.Weight: [1.0],
-            Columns.Datetime: [pd.Timestamp.utcnow()],
+            Columns.Datetime: [pd.Timestamp.now(tz="UTC")],
         }
     )
     model = ContentFallbackModel(
@@ -105,7 +105,7 @@ def test_recommend_skips_users_without_history_or_unmapped_history():
             Columns.User: ["u1"],
             Columns.Item: ["i1"],
             Columns.Weight: [1.0],
-            Columns.Datetime: [pd.Timestamp.utcnow()],
+            Columns.Datetime: [pd.Timestamp.now(tz="UTC")],
         }
     )
     model = ContentFallbackModel(
@@ -138,7 +138,7 @@ def test_recommend_empty_when_allowlist_excludes_all_cold_items():
             Columns.User: ["u1"],
             Columns.Item: ["i1"],
             Columns.Weight: [1.0],
-            Columns.Datetime: [pd.Timestamp.utcnow()],
+            Columns.Datetime: [pd.Timestamp.now(tz="UTC")],
         }
     )
     model = build_content_fallback_model(
@@ -168,7 +168,7 @@ def test_fit_caps_user_history_to_max_items():
             Columns.User: ["u1"] * n_history,
             Columns.Item: [f"i{i}" for i in range(n_history)],
             Columns.Weight: [1.0] * n_history,
-            Columns.Datetime: [pd.Timestamp.utcnow()] * n_history,
+            Columns.Datetime: [pd.Timestamp.now(tz="UTC")] * n_history,
         }
     )
     model = ContentFallbackModel(
@@ -194,7 +194,7 @@ def test_recommend_from_worker_thread_matches_main_thread():
             Columns.User: ["u1", "u2"],
             Columns.Item: ["i1", "i1"],
             Columns.Weight: [1.0, 1.0],
-            Columns.Datetime: [pd.Timestamp.utcnow(), pd.Timestamp.utcnow()],
+            Columns.Datetime: [pd.Timestamp.now(tz="UTC"), pd.Timestamp.now(tz="UTC")],
         }
     )
     model = ContentFallbackModel(
@@ -229,7 +229,7 @@ def test_fit_releases_source_frames_after_building_indexes():
             Columns.User: ["u1"],
             Columns.Item: ["i1"],
             Columns.Weight: [1.0],
-            Columns.Datetime: [pd.Timestamp.utcnow()],
+            Columns.Datetime: [pd.Timestamp.now(tz="UTC")],
         }
     )
     model = build_content_fallback_model(
@@ -261,7 +261,7 @@ def test_recommend_respects_max_neighbors_cap():
             Columns.User: ["u1"],
             Columns.Item: ["i1"],
             Columns.Weight: [1.0],
-            Columns.Datetime: [pd.Timestamp.utcnow()],
+            Columns.Datetime: [pd.Timestamp.now(tz="UTC")],
         }
     )
     model = build_content_fallback_model(
@@ -296,7 +296,7 @@ def test_fit_raises_clear_error_when_items_missing_id_column():
             Columns.User: ["u1"],
             Columns.Item: ["i1"],
             Columns.Weight: [1.0],
-            Columns.Datetime: [pd.Timestamp.utcnow()],
+            Columns.Datetime: [pd.Timestamp.now(tz="UTC")],
         }
     )
     model = ContentFallbackModel(
@@ -346,7 +346,7 @@ def test_recommend_thread_pool_path_returns_rows_for_each_user():
             Columns.User: ["u1", "u2"],
             Columns.Item: ["i1", "i1"],
             Columns.Weight: [1.0, 1.0],
-            Columns.Datetime: [pd.Timestamp.utcnow(), pd.Timestamp.utcnow()],
+            Columns.Datetime: [pd.Timestamp.now(tz="UTC"), pd.Timestamp.now(tz="UTC")],
         }
     )
     model = ContentFallbackModel(
@@ -377,7 +377,7 @@ def test_recommend_thread_pool_matches_serial_user_rank_order():
             Columns.User: ["u1", "u2"],
             Columns.Item: ["i1", "i1"],
             Columns.Weight: [1.0, 1.0],
-            Columns.Datetime: [pd.Timestamp.utcnow(), pd.Timestamp.utcnow()],
+            Columns.Datetime: [pd.Timestamp.now(tz="UTC"), pd.Timestamp.now(tz="UTC")],
         }
     )
     model = ContentFallbackModel(
@@ -407,7 +407,7 @@ def test_recommend_handles_mixed_non_string_ids():
             Columns.User: ["u1", "u1", "u2"],
             Columns.Item: [1, "2", 1],
             Columns.Weight: [1.0, 1.0, 1.0],
-            Columns.Datetime: [pd.Timestamp.utcnow()] * 3,
+            Columns.Datetime: [pd.Timestamp.now(tz="UTC")] * 3,
         }
     )
     model = ContentFallbackModel(
@@ -440,7 +440,7 @@ def test_recommend_matches_int_and_str_user_ids():
             Columns.User: [1],
             Columns.Item: [1],
             Columns.Weight: [1.0],
-            Columns.Datetime: [pd.Timestamp.utcnow()],
+            Columns.Datetime: [pd.Timestamp.now(tz="UTC")],
         }
     )
     model = ContentFallbackModel(
@@ -479,7 +479,7 @@ def test_recommend_single_user_path_does_not_use_thread_pool(monkeypatch):
             Columns.User: ["u1"],
             Columns.Item: ["i1"],
             Columns.Weight: [1.0],
-            Columns.Datetime: [pd.Timestamp.utcnow()],
+            Columns.Datetime: [pd.Timestamp.now(tz="UTC")],
         }
     )
     model = ContentFallbackModel(
@@ -505,7 +505,7 @@ def test_recommend_skips_historyless_user_without_affecting_others():
             Columns.User: ["u1"],
             Columns.Item: ["i1"],
             Columns.Weight: [1.0],
-            Columns.Datetime: [pd.Timestamp.utcnow()],
+            Columns.Datetime: [pd.Timestamp.now(tz="UTC")],
         }
     )
     model = ContentFallbackModel(

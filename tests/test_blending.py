@@ -448,7 +448,7 @@ def test_append_cold_start_rows_noop_when_no_popular():
 
 
 def test_train_and_recommend_with_blending_end_to_end(feature_config: FeatureConfig, sample_items):
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     items = sample_items.copy()
     items["published_at"] = [
         now - pd.Timedelta(days=30),
@@ -496,7 +496,7 @@ def test_train_and_recommend_with_blending_end_to_end(feature_config: FeatureCon
 
 
 def test_train_and_recommend_blending_without_date_column(feature_config: FeatureConfig, sample_items):
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     events = pd.DataFrame(
         [
             {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},

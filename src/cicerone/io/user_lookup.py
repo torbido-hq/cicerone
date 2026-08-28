@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pandas as pd
 
-USER_COLUMN = "user_id"
+from cicerone.io.recommendation_schema import USER_COLUMN
+
 OCCURRED_AT_COLUMN = "occurred_at"
 
 
@@ -25,7 +26,7 @@ def newest_events(frame: pd.DataFrame, limit: int) -> pd.DataFrame:
     if OCCURRED_AT_COLUMN in work.columns:
         occurred = pd.to_datetime(work[OCCURRED_AT_COLUMN], utc=True, errors="coerce")
         work = work.assign(**{_NEWEST_EVENTS_SORT: occurred}).sort_values(
-            _NEWEST_EVENTS_SORT, ascending=False, na_position="last"
+            _NEWEST_EVENTS_SORT, ascending=False, na_position="last", kind="mergesort"
         )
         work = work.drop(columns=[_NEWEST_EVENTS_SORT])
     return work.head(limit).reset_index(drop=True)

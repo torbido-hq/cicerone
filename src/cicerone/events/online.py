@@ -21,8 +21,7 @@ from cicerone.events.base import NormalizedEvent
 from cicerone.events.normalize import events_to_dataframe
 from cicerone.events.online_result import OnlineRefreshResult, empty_online_rows
 from cicerone.io.base import OutputSink
-from cicerone.io.recommendation_reader import ITEM_COLUMN, USER_COLUMN
-from cicerone.io.recommendation_schema import recommendation_output_columns
+from cicerone.io.recommendation_schema import ITEM_COLUMN, USER_COLUMN, recommendation_output_columns
 from cicerone.locks import LockLostError
 from cicerone.model import recommend_with_models
 from cicerone.model_config import SEQUENTIAL_STRATEGY, sequential_extra_available

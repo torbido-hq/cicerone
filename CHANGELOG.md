@@ -20,6 +20,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   threads.
 - Importing `cicerone.job` no longer calls `logging.basicConfig` (`cicerone job`
   and `python -m cicerone.job` still configure logging).
+- Ranking sorts use pandas `mergesort` so score ties follow item id (same as
+  weighted RRF).
+- Boost boolean/value_map factors use `item_true_mask` / vectorized map instead
+  of per-cell lambdas. `PRIMARY_METRIC_WEIGHTED` and the log format string live
+  in one constants module.
 
 ## [0.7.0] - 2026-08-28
 

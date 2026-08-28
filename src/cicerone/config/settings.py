@@ -24,6 +24,7 @@ from cicerone.config.constants import (
     DEFAULT_EXPLAIN_MAX_SIMILAR_ITEMS,
     DEFAULT_LOCK_KEY,
     DEFAULT_LOCK_TTL_SECONDS,
+    PRIMARY_METRIC_WEIGHTED,
     Mode,
 )
 
@@ -136,7 +137,7 @@ class VariantSettings:
 class ExperimentSettings:
     enabled: bool = False
     id: str = ""
-    primary_metric: str = "weighted"
+    primary_metric: str = PRIMARY_METRIC_WEIGHTED
     variants: tuple[VariantSettings, ...] = ()
     log_exposures: bool = False
     automl_challenger: bool = False

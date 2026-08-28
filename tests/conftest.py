@@ -37,7 +37,7 @@ def feature_config() -> FeatureConfig:
 
 @pytest.fixture
 def sample_events() -> pd.DataFrame:
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     return pd.DataFrame(
         [
             {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 3, "occurred_at": now},

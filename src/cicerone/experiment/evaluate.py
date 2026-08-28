@@ -9,14 +9,13 @@ from typing import Any
 
 import pandas as pd
 
+from cicerone.config.constants import PRIMARY_METRIC_WEIGHTED
 from cicerone.config.settings import ExperimentSettings
 from cicerone.experiment.assignment import assign_variant
 from cicerone.experiment.guardrails import GuardrailReport, evaluate_guardrails
 from cicerone.experiment.recipes import ResolvedRecipe
 from cicerone.experiment.stats import ComparisonResult, compare_variants, pick_control_name, variant_metric
 from cicerone.io.recommendation_schema import USER_COLUMN, VARIANT_COLUMN, filter_variant_rows
-
-PRIMARY_METRIC_WEIGHTED = "weighted"
 
 
 @dataclass(frozen=True)
@@ -58,7 +57,7 @@ def user_outcome(
         matched = frame[frame["event_type"].astype(str) == primary_metric]
         counts = matched.groupby(USER_COLUMN).size()
         return {str(user_id): float(count) for user_id, count in counts.items()}
-    weights = frame["event_type"].astype(str).map(lambda name: float(event_weights.get(name, 0.0)))
+    weights = frame["event_type"].astype(str).map(event_weights).fillna(0.0).astype(float)
     if "quantity" in frame.columns:
         quantity = pd.to_numeric(frame["quantity"], errors="coerce").fillna(1.0)
         weights = weights * quantity

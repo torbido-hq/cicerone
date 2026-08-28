@@ -26,6 +26,7 @@ from cicerone.config.constants import (
     EXPERIMENT_COMBINERS,
     LOCK_BACKENDS,
     MODES,
+    PRIMARY_METRIC_WEIGHTED,
     STRATEGY_NAMES,
     ConfigError,
     Mode,
@@ -260,7 +261,8 @@ def load_experiment_settings(raw: dict[str, Any] | None) -> ExperimentSettings:
     variants_raw = data.get("variants") or []
     variants = tuple(_load_variant(item, index) for index, item in enumerate(variants_raw))
     experiment_id = str(data.get("id") or "").strip()
-    primary_metric = str(data.get("primary_metric") or "weighted").strip() or "weighted"
+    default_metric = PRIMARY_METRIC_WEIGHTED
+    primary_metric = str(data.get("primary_metric") or default_metric).strip() or default_metric
     alpha = float(data.get("alpha", DEFAULT_EXPERIMENT_ALPHA))
     automl_challenger = bool(data.get("automl_challenger", False))
     if enabled:

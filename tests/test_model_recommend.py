@@ -424,7 +424,7 @@ def test_train_and_recommend_respects_per_user_eligibility(feature_config):
 
     from cicerone.feature_config import EligibilityRule
 
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     events = pd.DataFrame(
         [
             {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},
@@ -493,7 +493,7 @@ def test_train_and_recommend_empty_users_frame_skips_user_scoped_rules(feature_c
 
     from cicerone.feature_config import EligibilityRule
 
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     events = pd.DataFrame(
         [
             {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},
@@ -556,7 +556,7 @@ def test_train_and_recommend_paying_producer_boost_reorders(feature_config):
 
     from cicerone.feature_config import BoostRule
 
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     # Equal popularity → boost alone decides order.
     events = pd.DataFrame(
         [
@@ -625,7 +625,7 @@ def test_train_and_recommend_paying_producer_boost_overfetch(feature_config):
     assert boost_overfetch_k(2, True, overfetch_factor=5) == 10
     assert feature_config.boost_overfetch_factor >= 1
 
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     # Over-fetch + boost can promote i3 past popularity-only top_k.
     events = pd.DataFrame(
         [
@@ -716,7 +716,7 @@ def test_topk_extraction_preserves_external_ids_no_duplicates_or_seen_items(feat
     Personalized strategies must also exclude already-seen items and never
     emit duplicate item IDs for the same user.
     """
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     # IDs far from 0..n-1 so reindex leaks can't look valid.
     external_users = [1000, 2000, 3000]
     external_items = [100, 200, 300, 400, 500, 600]
@@ -779,7 +779,7 @@ def test_topk_extraction_preserves_external_ids_no_duplicates_or_seen_items(feat
 
 
 def test_content_fallback_surfaces_cold_item_for_matching_user(feature_config):
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     events = pd.DataFrame(
         [
             # u1 is a beer buyer — should match cold beer i_new.
@@ -825,7 +825,7 @@ def test_content_fallback_surfaces_cold_item_for_matching_user(feature_config):
 
 
 def test_content_fallback_disabled_emits_no_content_source(feature_config):
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     events = pd.DataFrame(
         [
             {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},
@@ -859,7 +859,7 @@ def test_content_fallback_disabled_emits_no_content_source(feature_config):
 
 
 def test_content_fallback_respects_availability_filters(feature_config):
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     events = pd.DataFrame(
         [
             {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},

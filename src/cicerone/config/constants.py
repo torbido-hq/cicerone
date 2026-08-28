@@ -62,6 +62,7 @@ DEFAULT_EVENTS_HEARTBEAT_SECONDS = 15.0
 EXPERIMENT_COMBINERS: tuple[str, ...] = ("priority", "rrf", "blend")
 DEFAULT_EXPERIMENT_ALPHA = 0.05
 PRIMARY_METRIC_WEIGHTED = "weighted"
+DEFAULT_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 
 
 class ConfigError(ValueError):

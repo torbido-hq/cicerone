@@ -70,7 +70,7 @@ def test_sequential_strategy_is_personalized_and_requires_interactions():
 
 def test_item_based_and_content_fallback_require_interactions(feature_config, sample_users):
     """Feature-only warm users must not get item_based / content_fallback rows."""
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     # u4 is feature-only in sample_users; give u1 beer interactions + a cold beer.
     events = pd.DataFrame(
         [

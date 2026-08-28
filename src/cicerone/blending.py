@@ -103,6 +103,7 @@ def collapse_best_rank(frame: pd.DataFrame) -> pd.DataFrame:
     out = frame.sort_values(
         [Columns.User, Columns.Item, Columns.Rank, Columns.Score],
         ascending=[True, True, True, False],
+        kind="mergesort",
     )
     return out.drop_duplicates(subset=[Columns.User, Columns.Item], keep="first").reset_index(drop=True)
 
@@ -130,7 +131,7 @@ def rank_latest_items(
     if frame.empty:
         return []
 
-    frame = frame.sort_values(["_date", item_col], ascending=[False, True]).head(top_k)
+    frame = frame.sort_values(["_date", item_col], ascending=[False, True], kind="mergesort").head(top_k)
     frame = frame.reset_index(drop=True)
     ranks = list(range(1, len(frame) + 1))
     scores = [float(len(frame) - i + 1) for i in ranks]  # synthetic; blend uses ranks
@@ -349,7 +350,9 @@ def blend_for_users(
     combined[SOURCE_CONTRIBS_COLUMN] = combined[SOURCE_CONTRIBS_COLUMN].map(_ordered_contribs)
 
     combined = combined.sort_values(
-        [Columns.User, Columns.Score, Columns.Item], ascending=[True, False, True]
+        [Columns.User, Columns.Score, Columns.Item],
+        ascending=[True, False, True],
+        kind="mergesort",
     )
     combined[Columns.Rank] = combined.groupby(Columns.User).cumcount() + 1
     combined = combined.groupby(Columns.User, as_index=False).head(top_k)

@@ -52,7 +52,7 @@ def _minimal_io_toml() -> str:
 
 
 def _tiny_dataset(feature_config):
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     events = pd.DataFrame(
         [
             {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},
