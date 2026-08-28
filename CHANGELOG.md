@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Dashboard Configuration page (`GET /dashboard/config`) shows the loaded
   Settings and `features.toml` with tokens, URLs, and keys redacted.
   Section chips, on/off badges, and nested panels.
+- Config keys and section titles can open a one-line hint; some include a
+  Docs link to cicerone.dev.
 
 ### Security
 

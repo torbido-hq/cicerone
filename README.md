@@ -277,7 +277,9 @@ serve). It never loads lightfm/implicit/torch (it does import `rectools`).
   recipes with always-valid CIs and catalog guardrails, and can **Promote**
   a winner to 100% traffic. `GET /dashboard/config` shows the Settings this
   dashboard process loaded (and `features.toml` when present), with tokens,
-  URLs, and keys redacted. Pages send `noindex` / `X-Robots-Tag` and
+  URLs, and keys redacted. Section titles and known keys offer a one-line
+  hint (`?`), with a Docs link when cicerone.dev covers that setting.
+  Pages send `noindex` / `X-Robots-Tag` and
   `GET /robots.txt` disallows `/` in case the process is reachable from
   the public internet. A missing event store does not hide recommendations. When `[events]` is
   enabled, a panel shows the latest incremental flush from recent manifests
