@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from cicerone.config.constants import (
     AUTOML_DEFAULT_N_SPLITS,
@@ -29,6 +29,9 @@ from cicerone.config.constants import (
     PRIMARY_METRIC_WEIGHTED,
     Mode,
 )
+
+if TYPE_CHECKING:
+    from cicerone.feature_config import BoostRule, EligibilityRule
 
 
 @dataclass(frozen=True)
@@ -121,10 +124,6 @@ class EventsSettings:
     online: EventsOnlineSettings = field(default_factory=EventsOnlineSettings)
 
 
-# True = inherit features.toml; False = drop; names = subset; dicts = replacement rules.
-PolicySpec = bool | tuple[str, ...] | tuple[dict[str, Any], ...]
-
-
 @dataclass(frozen=True)
 class PublishSettings:
     enabled: bool = False
@@ -143,8 +142,8 @@ class VariantSettings:
     rrf_k: float | None = None
     combiner: str | None = None
     blending: dict[str, Any] | None = None
-    boosts: PolicySpec = True
-    eligibility: PolicySpec = True
+    boosts: bool | tuple[str, ...] | tuple[BoostRule, ...] = True
+    eligibility: bool | tuple[str, ...] | tuple[EligibilityRule, ...] = True
 
 
 @dataclass(frozen=True)

@@ -16,6 +16,7 @@ from cicerone.experiment.recipes import (
     apply_recipe,
     inherit_combiner,
     recipes_manifest_json,
+    resolve_boost_policy,
     resolve_recipes,
     union_models,
 )
@@ -222,19 +223,19 @@ def test_resolve_recipes_named_and_replacement_policy() -> None:
                     name="treatment",
                     traffic=0.5,
                     boosts=(
-                        {
-                            "name": "new-arrivals",
-                            "kind": "boolean",
-                            "item_column": "is_new",
-                            "factor": 1.4,
-                        },
+                        BoostRule(
+                            name="new-arrivals",
+                            kind="boolean",
+                            item_column="is_new",
+                            factor=1.4,
+                        ),
                     ),
                     eligibility=(
-                        {
-                            "name": "published",
-                            "op": "item_true",
-                            "item_column": "published",
-                        },
+                        EligibilityRule(
+                            name="published",
+                            op="item_true",
+                            item_column="published",
+                        ),
                     ),
                 ),
             ),
@@ -266,3 +267,18 @@ def test_resolve_recipes_unknown_policy_name() -> None:
     )
     with pytest.raises(ConfigError, match="unknown rule name"):
         resolve_recipes(settings, _features())
+
+
+def test_resolve_boost_policy_from_manifest_dicts() -> None:
+    rules = resolve_boost_policy(
+        [{"name": "x", "kind": "boolean", "item_column": "featured", "factor": 1.1}],
+        _features().boosts,
+        label="boosts",
+    )
+    assert rules[0].name == "x"
+    assert rules[0].factor == 1.1
+
+
+def test_resolve_boost_policy_rejects_duplicate_names() -> None:
+    with pytest.raises(ConfigError, match="duplicate rule name"):
+        resolve_boost_policy(("featured", "featured"), _features().boosts, label="boosts")

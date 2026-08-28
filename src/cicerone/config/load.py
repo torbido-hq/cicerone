@@ -6,9 +6,10 @@ import logging
 import os
 import re
 import tomllib
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TypeVar, cast
 
 from cicerone.config.constants import (
     ATTRIBUTION_CLICK,
@@ -48,7 +49,6 @@ from cicerone.config.settings import (
     ExperimentSettings,
     ExplainSettings,
     IOSettings,
-    PolicySpec,
     ServeSettings,
     Settings,
     TrackSettings,
@@ -65,9 +65,11 @@ from cicerone.config.validation import (
     validate_model_weights,
     validate_rrf_k,
 )
+from cicerone.feature_config import parse_boost_rules, parse_eligibility_rules
 
 logger = logging.getLogger(__name__)
 
+_T = TypeVar("_T")
 _POLICY_MISSING = object()
 _ENV_PLACEHOLDER = re.compile(r"\$(\$?)\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
@@ -444,17 +446,42 @@ def _load_variant(raw: Any, index: int) -> VariantSettings:
         rrf_k=rrf_k,
         combiner=combiner,
         blending=blending,
-        boosts=_load_policy_spec(raw, name, field="boosts", alias="boost"),
-        eligibility=_load_policy_spec(raw, name, field="eligibility", alias="eligibility"),
+        boosts=_load_policy_spec(
+            raw, name, field="boosts", extra_field="boost", parse_table=parse_boost_rules
+        ),
+        eligibility=_load_policy_spec(
+            raw, name, field="eligibility", extra_field=None, parse_table=parse_eligibility_rules
+        ),
     )
 
 
-def _load_policy_spec(raw: dict[str, Any], name: str, *, field: str, alias: str) -> PolicySpec:
+def _unique_policy_names(names: Sequence[object], *, label: str) -> tuple[str, ...]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in names:
+        name = str(raw).strip()
+        if not name:
+            raise ConfigError(f"{label} rule name must be non-empty")
+        if name in seen:
+            raise ConfigError(f"{label} duplicate rule name {name!r}")
+        seen.add(name)
+        out.append(name)
+    return tuple(out)
+
+
+def _load_policy_spec(
+    raw: dict[str, Any],
+    name: str,
+    *,
+    field: str,
+    extra_field: str | None,
+    parse_table: Callable[[Sequence[Mapping[str, Any]]], Sequence[_T]],
+) -> bool | tuple[str, ...] | tuple[_T, ...]:
     field_value = raw.get(field, _POLICY_MISSING)
-    alias_value = raw.get(alias, _POLICY_MISSING) if alias != field else _POLICY_MISSING
-    if field_value is not _POLICY_MISSING and alias_value is not _POLICY_MISSING:
-        raise ConfigError(f"experiment.variants[{name}] must not set both {field} and [[{alias}]]")
-    value = alias_value if alias_value is not _POLICY_MISSING else field_value
+    extra_value = raw.get(extra_field, _POLICY_MISSING) if extra_field else _POLICY_MISSING
+    if field_value is not _POLICY_MISSING and extra_value is not _POLICY_MISSING:
+        raise ConfigError(f"experiment.variants[{name}] must not set both {field} and [[{extra_field}]]")
+    value = extra_value if extra_value is not _POLICY_MISSING else field_value
     if value is _POLICY_MISSING:
         return True
     if isinstance(value, bool):
@@ -464,26 +491,17 @@ def _load_policy_spec(raw: dict[str, Any], name: str, *, field: str, alias: str)
             f"experiment.variants[{name}].{field} must be true, false, "
             "a list of rule names, or an array of rule tables"
         )
+    if not value:
+        return ()
+    label = f"experiment.variants[{name}].{field}"
     if all(isinstance(item, str) for item in value):
-        return tuple(item.strip() for item in value if str(item).strip())
+        return _unique_policy_names(value, label=label)
     if not all(isinstance(item, dict) for item in value):
-        raise ConfigError(
-            f"experiment.variants[{name}].{field} must be true, false, "
-            "a list of rule names, or an array of rule tables"
-        )
-    tables = tuple(dict(item) for item in value)
+        raise ConfigError(f"{label} must be true, false, a list of rule names, or an array of rule tables")
     try:
-        if field == "boosts":
-            from cicerone.feature_config import parse_boost_rules
-
-            parse_boost_rules(list(tables))
-        else:
-            from cicerone.feature_config import parse_eligibility_rules
-
-            parse_eligibility_rules(list(tables))
+        return tuple(parse_table([dict(item) for item in value]))
     except ValueError as exc:
-        raise ConfigError(f"experiment.variants[{name}].{field}: {exc}") from exc
-    return tables
+        raise ConfigError(f"{label}: {exc}") from exc
 
 
 def _normalize_traffic(variants: tuple[VariantSettings, ...]) -> tuple[VariantSettings, ...]:
