@@ -21,10 +21,7 @@ Checklist:
 ## Current trains
 
 Concrete mapping (this line only):
-patch **0.6.2** on `main`; minor **0.7.0** on `release/0.7.0`.
-
-`X.Y.0` is a placeholder; while 0.6.2 and 0.7.0 are in flight,
-`X.Y.0` = `0.7.0`.
+no split; main is **0.7.0**.
 
 Update this line in the same PR that changes the split.
 
