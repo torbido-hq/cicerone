@@ -8,7 +8,7 @@ from conftest import make_settings
 from fastapi.testclient import TestClient
 
 from cicerone.config import Settings
-from cicerone.dashboard import create_app, main
+from cicerone.dashboard import ROBOTS_TAG, ROBOTS_TXT, create_app, main
 from cicerone.dashboard_lookup import HISTORY_UNAVAILABLE, LOOKUP_FAILED, MISSING
 from cicerone.http_auth import require_basic_auth
 
@@ -40,6 +40,48 @@ def test_health_requires_no_auth():
     client = TestClient(app)
 
     assert client.get("/health").status_code == 200
+
+
+def test_robots_txt_disallows_all_without_auth():
+    app = create_app(_settings(), _FakeReader(None), _users_with("alice", "s3cret"))
+    client = TestClient(app)
+
+    response = client.get("/robots.txt")
+
+    assert response.status_code == 200
+    assert response.text == ROBOTS_TXT
+    assert response.headers["x-robots-tag"] == ROBOTS_TAG
+    assert "no-store" in response.headers["cache-control"]
+
+
+def test_dashboard_responses_are_not_indexable():
+    app = create_app(_settings(), _FakeReader(None), _users_with("alice", "s3cret"))
+    client = TestClient(app)
+    auth = ("alice", "s3cret")
+
+    for path in ("/health", "/dashboard", "/dashboard/config", "/dashboard/experiments"):
+        response = client.get(path, auth=auth)
+        assert response.status_code == 200, path
+        assert response.headers["x-robots-tag"] == ROBOTS_TAG
+        assert "no-store" in response.headers["cache-control"]
+
+    unauthorized = client.get("/dashboard")
+    assert unauthorized.status_code == 401
+    assert unauthorized.headers["x-robots-tag"] == ROBOTS_TAG
+
+    static = client.get("/static/cicerone-logo.svg")
+    assert static.status_code == 200
+    assert static.headers["x-robots-tag"] == ROBOTS_TAG
+    assert "no-store" not in static.headers.get("cache-control", "")
+
+
+def test_dashboard_openapi_docs_are_disabled():
+    app = create_app(_settings(), _FakeReader(None), _users_with("alice", "s3cret"))
+    client = TestClient(app)
+
+    assert client.get("/docs").status_code == 404
+    assert client.get("/redoc").status_code == 404
+    assert client.get("/openapi.json").status_code == 404
 
 
 def test_dashboard_page_requires_auth():
@@ -97,6 +139,11 @@ def test_dashboard_page_renders_with_valid_credentials():
     assert 'href="/dashboard/experiments"' in response.text
     assert 'href="/dashboard/config"' in response.text
     assert ">Config<" in response.text
+    assert 'name="robots"' in response.text
+    assert "noindex" in response.text
+    assert 'aria-label="Main"' in response.text
+    assert 'id="main"' in response.text
+    assert "Skip to content" in response.text
 
 
 def test_status_partial_renders_latest_manifest():

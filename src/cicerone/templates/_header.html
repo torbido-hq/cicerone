@@ -1,25 +1,25 @@
   {% set current = nav_current|default("") %}
-  <a href="#main" class="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-10 focus:rounded focus:bg-white focus:px-3 focus:py-2 focus:text-sm focus:text-slate-800">
+  <a href="#main" class="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-10 focus:rounded focus:bg-white focus:px-3 focus:py-2 focus:text-sm focus:font-medium focus:text-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-800 focus:ring-offset-2">
     Skip to content
   </a>
   <header class="border-b border-slate-200 bg-white">
     <div class="mx-auto max-w-6xl px-4 py-3 flex items-center gap-4">
       <h1><img src="/static/cicerone-logo.svg" alt="Cicerone" class="h-12 w-auto"></h1>
       <p class="text-sm text-slate-600 border-l border-slate-200 pl-4">{{ page_subtitle }}</p>
-      <nav class="ml-auto flex items-center gap-3 text-sm">
+      <nav class="ml-auto flex items-center gap-2 text-sm" aria-label="Main">
         <a
           href="/dashboard"
-          class="{% if current == 'status' %}font-medium text-slate-900{% else %}text-slate-700 hover:text-slate-900{% endif %}"
+          class="inline-flex min-h-9 items-center rounded px-2 {% if current == 'status' %}font-medium text-slate-900{% else %}text-slate-700 hover:text-slate-900{% endif %} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2"
           {% if current == "status" %}aria-current="page"{% endif %}
         >Status</a>
         <a
           href="/dashboard/experiments"
-          class="{% if current == 'experiments' %}font-medium text-slate-900{% else %}text-slate-700 hover:text-slate-900{% endif %}"
+          class="inline-flex min-h-9 items-center rounded px-2 {% if current == 'experiments' %}font-medium text-slate-900{% else %}text-slate-700 hover:text-slate-900{% endif %} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2"
           {% if current == "experiments" %}aria-current="page"{% endif %}
         >Experiments</a>
         <a
           href="/dashboard/config"
-          class="{% if current == 'config' %}font-medium text-slate-900{% else %}text-slate-700 hover:text-slate-900{% endif %}"
+          class="inline-flex min-h-9 items-center rounded px-2 {% if current == 'config' %}font-medium text-slate-900{% else %}text-slate-700 hover:text-slate-900{% endif %} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2"
           {% if current == "config" %}aria-current="page"{% endif %}
         >Config</a>
       </nav>

@@ -386,7 +386,8 @@ never imports `cicerone.model`/`dataset`/`automl`.
   (`dashboard_users.py`: username -> bcrypt hash) managed via
   `cicerone users add <username>` (optional `--users-path`, or `--config`
   pointing at the dashboard TOML).
-- `dashboard.create_app()` exposes `GET /health` (no auth), `GET
+- `dashboard.create_app()` exposes `GET /health` (no auth), `GET /robots.txt`
+  (no auth, `Disallow: /`), `GET
   /partials/status` (Basic Auth, an htmx-polled fragment — see
   `templates/_status.html`), `GET /partials/recommendations` (Basic Auth,
   user-id lookup fragment — see `templates/_recommendations.html`),
@@ -395,7 +396,9 @@ never imports `cicerone.model`/`dataset`/`automl`.
   (Basic Auth, read-only loaded Settings and features.toml with secrets
   redacted), and
   `POST /dashboard/experiments/promote` (Basic Auth, 100% traffic to a
-  winner). The page polls
+  winner). OpenAPI `/docs` is disabled. HTML pages include a `noindex`
+  meta tag; every response sets `X-Robots-Tag` and HTML uses
+  `Cache-Control: private, no-store`. The page polls
   `/partials/status` (`Settings.dashboard_refresh_interval_seconds`)
   instead of a websocket or client-side JS framework. Initial markup is
   `hx-trigger="refresh"`; dashboard.js adds `every Ns` and the first request

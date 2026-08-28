@@ -12,6 +12,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Settings and `features.toml` with tokens, URLs, and keys redacted.
   Section chips, on/off badges, and nested panels.
 
+### Security
+
+- Dashboard pages send `X-Robots-Tag` and HTML `noindex` so crawlers skip
+  them if the process is accidentally public; `GET /robots.txt` disallows
+  `/`, and OpenAPI `/docs` is off.
+
 ## [0.7.0] - 2026-08-28
 
 ### Added
