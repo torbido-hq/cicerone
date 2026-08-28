@@ -87,7 +87,7 @@ await stripe.checkout.sessions.create({
 
 ## The mapper
 
-App Router, Node 18+, `npm install stripe` for the signature. Express works if the route sees the **raw** body (`express.raw({ type: "application/json" })`). Parsed JSON makes `constructEvent` fail, and that is a Stripe fact rather than a Cicerone one.
+App Router, Node 18+, `npm install stripe` for the signature. Set `CICERONE_SERVE_TOKEN` to the same value as `[serve].auth_token`. Express works if the route sees the **raw** body (`express.raw({ type: "application/json" })`). Parsed JSON makes `constructEvent` fail, and that is a Stripe fact rather than a Cicerone one.
 
 ```js
 // app/api/stripe/route.js
@@ -95,7 +95,7 @@ import Stripe from "stripe";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const serveUrl = (process.env.CICERONE_SERVE_URL || "http://localhost:8000").replace(/\/$/, "");
-const eventsToken = process.env.CICERONE_EVENTS_TOKEN;
+const eventsToken = process.env.CICERONE_SERVE_TOKEN;
 const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
 function catalogItemId(line) {
@@ -158,6 +158,10 @@ export async function POST(request) {
 
   const occurredAt = isSync ? session.created : event.created;
 
+  if (!eventsToken) {
+    return new Response("set CICERONE_SERVE_TOKEN", { status: 500 });
+  }
+
   const lineItems = await stripe.checkout.sessions
     .listLineItems(session.id, { expand: ["data.price.product"] })
     .autoPagingToArray({ limit: 100 });
@@ -209,7 +213,7 @@ ha = false
 kind = "webhook"
 
 [events.options]
-# auth_token = "${CICERONE_EVENTS_TOKEN}"  # omit to reuse serve.auth_token
+# omit auth_token to reuse serve.auth_token
 # max_pending = 10000
 
 [events.incremental]
@@ -221,7 +225,7 @@ poll_interval_seconds = 1
 enabled = true
 ```
 
-Point `CICERONE_EVENTS_TOKEN` in Node at whichever bearer serve actually checks.
+Point Node’s `CICERONE_SERVE_TOKEN` at `[serve].auth_token` (same name as [`examples/serve/`](https://github.com/torbido-hq/cicerone/tree/main/examples/serve)).
 
 ## What actually moves
 
