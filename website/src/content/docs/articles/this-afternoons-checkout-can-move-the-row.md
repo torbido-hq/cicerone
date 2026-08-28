@@ -13,7 +13,7 @@ Canonical URL: [https://cicerone.dev/articles/this-afternoons-checkout-can-move-
 
 [Cicerone](https://cicerone.dev) is a Docker job that reads who bought what, writes a ranked table, and goes back to sleep. The [nightly table](/articles/a-nightly-table-next-to-your-orders/) walkthrough leaves personalized ranks until 03:00 UTC. That is the right default. [LightFM](https://making.lyst.com/lightfm/docs/home.html) is a batch fit, and `GET /recommendations` is a lookup.
 
-A Stripe shop already has a second clock. Checkout completion is not the same as successful payment. Cards and other immediate methods often arrive as `checkout.session.completed` with `payment_status === "paid"`. Delayed methods — SEPA debit, some bank redirects — can fire `completed` while still `"unpaid"`; the money is confirmed later on `checkout.session.async_payment_succeeded` (or not, on `async_payment_failed`). From Cicerone 0.7 the **paid** path can update an **existing** recommendation row after a micro-batch, not inside the checkout request. It does not grow the catalog, and it does not promise that this afternoon's bottle is already in tonight's personalized list.
+A Stripe shop already has a second clock. `checkout.session.completed` means Checkout completed, not that payment succeeded. For immediately paid sessions, accept it only when `payment_status === "paid"`. Delayed methods — SEPA debit, some bank redirects — can produce `completed` while still `"unpaid"`. Those succeed later on `checkout.session.async_payment_succeeded` (or fail on `async_payment_failed`). From Cicerone 0.7 the paid path can update an **existing** recommendation row after a micro-batch, not inside the checkout request. It does not grow the catalog, and it does not promise that this afternoon's bottle is already in tonight's personalized list.
 
 I built Cicerone for Torbido, a bottle shop that has not opened yet. The repo's default `features.toml` still has drink columns from that; ignore them. The examples below use `sku-42` on purpose. What the webhook has to get right is four strings the batch job already trained on: `user_id`, `item_id`, `event_type`, and `occurred_at`.
 
@@ -95,7 +95,7 @@ await stripe.checkout.sessions.create({
 
 ## The mapper
 
-App Router, Node 18+, `npm install stripe` for the signature. Set `CICERONE_SERVE_TOKEN` to the same value as `[serve].auth_token`. Express works if the route sees the **raw** body (`express.raw({ type: "application/json" })`). Parsed JSON makes `constructEvent` fail, and that is a Stripe fact rather than a Cicerone one.
+App Router, Node 18+, `npm install stripe` for the signature. Set `CICERONE_SERVE_TOKEN` to the same value as `[serve].auth_token`. `catalogItemId` must return the exact `item_id` in the last LightFM artifact. Express works if the route sees the **raw** body (`express.raw({ type: "application/json" })`). Parsed JSON makes `constructEvent` fail, and that is a Stripe fact rather than a Cicerone one.
 
 ```js
 // app/api/stripe/route.js
@@ -203,6 +203,8 @@ export async function POST(request) {
 `event.id` is Stripe's webhook event id. Stripe reuses it across retries of the same delivery, so those retries mint the same Cicerone `event_id`. `:${itemId}` keeps two SKUs in one webhook as two rows instead of colliding on `evt_…` alone.
 
 That is as far as this mapper goes. Cicerone's webhook source drops a duplicate `event_id` only while that id is still pending or in-flight. After a successful flush `ack`, the same id is a new ingest. A late Stripe retry can then inflate popular / latest weights for `quantity_scaled_events`. 202 does not persist the queue across a serve restart. If a retry after `ack` (or after a crash) must be a no-op, record `event.id` in **your** store before you return 2xx to Stripe. Do not treat the mapper as durable idempotency.
+
+A Cicerone **400** is a contract bug. Returning 200 to Stripe would mark the webhook delivered. The route maps non-OK Cicerone answers (including that 400) to **502** so Stripe retries.
 
 HTTP from this handler:
 
