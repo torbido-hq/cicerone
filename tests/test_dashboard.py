@@ -1010,9 +1010,8 @@ def test_experiments_redirect_without_query_stays_on_path():
 
 
 def test_dashboard_promote_success_redirects(monkeypatch):
-    from cicerone.config.settings import ExperimentSettings, VariantSettings
-
     import cicerone.dashboard as dash
+    from cicerone.config.settings import ExperimentSettings, VariantSettings
 
     monkeypatch.setattr(dash, "promote_winner", lambda _settings, _variant: None)
     experiment = ExperimentSettings(
