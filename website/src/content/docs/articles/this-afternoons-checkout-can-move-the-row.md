@@ -113,7 +113,7 @@ If duplicate delivery after acknowledgement must be harmless, persist Stripe's `
 
 ## `occurred_at`
 
-Keep `session.created` on paid `checkout.session.completed` and `event.created` on async success. Both are **ingestion / event-domain** timestamps. Neither is a guaranteed payment-settlement time: `session.created` can precede the charge, and `event.created` is when Stripe emitted that webhook, not necessarily when funds settled.
+Paid `checkout.session.completed` uses `session.created`; async success uses `event.created`. Both are **ingestion / event-domain** timestamps. Neither is a guaranteed payment-settlement time: `session.created` can precede the charge, and `event.created` is when Stripe emitted that webhook, not necessarily when funds settled.
 
 | Path | Value | What it is |
 | --- | --- | --- |
@@ -328,7 +328,7 @@ Point Node's `CICERONE_SERVE_TOKEN` at `[serve].auth_token` (same name as [`exam
 
 ## Testing
 
-Treat **ingest** and **`fit_partial`** as two checks.
+Treat **ingest**, **frozen re-score**, and **`fit_partial`** as three checks.
 
 **Ingest.** One test card is enough. The handler returns 202 with your ids in `event_ids`. After the flush window, the incremental manifest's `generated_at` is newer than the purchase. `online_events_dropped_unknown` is how you see Stripe ids that were not in the artifact.
 
