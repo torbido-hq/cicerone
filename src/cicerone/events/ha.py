@@ -7,7 +7,7 @@ from typing import Any
 
 def ingest_is_fanout(kind: str, options: dict[str, Any] | None = None) -> bool:
     """True when multiple replicas may safely claim ingest (apply still locked)."""
-    if kind == "redis_streams":
+    if kind in {"redis_streams", "kafka", "rabbitmq"}:
         return True
     if kind != "s3":
         return False

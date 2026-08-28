@@ -314,6 +314,44 @@ prefix = "recommendations/latest"
 # # block_ms = 0
 # # claim_idle_ms = 300000
 
+# Kafka consumer group. Requires: pip install 'cicerone-recommender[kafka]'
+# Raise max.poll.interval.ms on the broker/client if apply can exceed 5 minutes.
+# [events]
+# enabled = true
+# kind = "kafka"
+# [events.options]
+# bootstrap_servers = "${KAFKA_BOOTSTRAP_SERVERS}"
+# topic = "cicerone.events"
+# group_id = "cicerone"
+# # consumer_name = "serve-1"       # default: hostname
+# # security_protocol = "SASL_SSL"
+# # sasl_mechanism = "PLAIN"
+# # sasl_username = "${KAFKA_USERNAME}"
+# # sasl_password = "${KAFKA_PASSWORD}"
+
+# RabbitMQ queue. Requires: pip install 'cicerone-recommender[rabbitmq]'
+# [events]
+# enabled = true
+# kind = "rabbitmq"
+# [events.options]
+# amqp_url = "${RABBITMQ_URL}"
+# queue = "cicerone.events"
+# # prefetch = 100
+
+# Optional: after [output] writes, also emit per-user recommendation JSON
+# to Kafka or RabbitMQ. Serve still reads [output]. Independent of [events].
+# [publish]
+# enabled = true
+# kind = "kafka"   # kafka | rabbitmq
+# [publish.options]
+# bootstrap_servers = "${KAFKA_BOOTSTRAP_SERVERS}"
+# topic = "cicerone.recommendations"
+# # RabbitMQ instead:
+# # amqp_url = "${RABBITMQ_URL}"
+# # queue = "cicerone.recommendations"
+# # exchange = ""
+# # routing_key = ""
+
 # Optional: a small, standalone read-only status page over job run history
 # (its own container/port, independent of [job].mode -- see the README's
 # Dashboard section). Protected by HTTP Basic Auth (a handful of named

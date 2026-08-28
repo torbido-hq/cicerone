@@ -167,7 +167,7 @@ def test_load_events_unknown_kind(tmp_path):
         [job]
         [events]
         enabled = true
-        kind = "kafka"
+        kind = "carrier-pigeon"
         [input]
         kind = "dataset"
         [input.options]
@@ -309,6 +309,58 @@ def test_load_events_redis_streams_ok():
         resolve_env=lambda value, _path: value,
     )
     assert settings.kind == "redis_streams"
+
+
+def test_load_events_kafka_requires_bootstrap_servers():
+    with pytest.raises(ConfigError, match="bootstrap_servers"):
+        load_events_settings(
+            {"enabled": True, "kind": "kafka", "options": {"topic": "t", "group_id": "g"}},
+            mode="serve",
+            serve_auth_token="tok",
+            resolve_env=lambda value, _path: value,
+        )
+
+
+def test_load_events_kafka_ok():
+    settings = load_events_settings(
+        {
+            "enabled": True,
+            "kind": "kafka",
+            "options": {
+                "bootstrap_servers": "localhost:9092",
+                "topic": "cicerone.events",
+                "group_id": "cicerone",
+            },
+        },
+        mode="serve",
+        serve_auth_token="tok",
+        resolve_env=lambda value, _path: value,
+    )
+    assert settings.kind == "kafka"
+
+
+def test_load_events_rabbitmq_requires_queue():
+    with pytest.raises(ConfigError, match="queue"):
+        load_events_settings(
+            {"enabled": True, "kind": "rabbitmq", "options": {"amqp_url": "amqp://localhost/"}},
+            mode="serve",
+            serve_auth_token="tok",
+            resolve_env=lambda value, _path: value,
+        )
+
+
+def test_load_events_rabbitmq_ok():
+    settings = load_events_settings(
+        {
+            "enabled": True,
+            "kind": "rabbitmq",
+            "options": {"amqp_url": "amqp://localhost/", "queue": "cicerone.events"},
+        },
+        mode="serve",
+        serve_auth_token="tok",
+        resolve_env=lambda value, _path: value,
+    )
+    assert settings.kind == "rabbitmq"
 
 
 def test_load_events_online_must_be_table():

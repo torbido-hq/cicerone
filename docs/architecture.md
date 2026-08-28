@@ -58,6 +58,9 @@ ranking recipes, see [experiments.md](experiments.md).
 | `serve_client.py` | Thin stdlib HTTP client for the serve read API |
 | `export_serve_openapi.py` | `cicerone export-openapi` — dump FastAPI OpenAPI JSON (`docs/openapi/…`) |
 | `events/` | EventSource registry, micro-batch write-through — [incremental-events.md](incremental-events.md) |
+| `events/kafka.py` | Optional Kafka consumer-group EventSource (`cicerone-recommender[kafka]`) |
+| `events/rabbitmq.py` | Optional RabbitMQ queue EventSource (`cicerone-recommender[rabbitmq]`) |
+| `publish/` | Optional per-user recs sidecar to Kafka or RabbitMQ after `[output]` writes |
 | `events/online.py` | Optional LightFM `fit_partial` + user-scoped recommend from the last artifact |
 | `events/ha.py` | Leader-only apply helpers for horizontally scaled incremental-events ingest |
 | `trigger.py` | Event-driven retrain trigger: webhook + optional input-bucket poll, debounce guard (`RunGuard`) shared with the cron loop; increments `cicerone_retrain_trigger_total` (per replica) |
@@ -106,7 +109,8 @@ Test modules mirror the packages (same pattern as `tests/test_io_*.py`):
 | `tests/support/model_events.py` | Shared synthetic events helper |
 | `tests/support/toml_config.py` | Shared `write_toml` helper |
 | `tests/support/events.py` | Shared event payload helper for `test_events_*` |
-| `tests/test_events_*.py` | EventSource registry / normalize / webhook / db / db_postgres / s3 / redis_streams / buffer / store / updater / worker / ha / online |
+| `tests/test_events_*.py` | EventSource registry / normalize / webhook / db / db_postgres / s3 / redis_streams / kafka / rabbitmq / buffer / store / updater / worker / ha / online |
+| `tests/test_publish.py` | Recommendation publish sidecar |
 | `tests/test_config_events.py` | `[events]` coerce + TOML load |
 | `tests/test_serve_events_routes.py` / `test_serve_bootstrap_events.py` | Serve webhook mount + worker bootstrap |
 | `tests/test_experiment_*.py` | Sticky assignment, per-variant recipes, sequential stats, store, serve lookup |
@@ -433,7 +437,7 @@ Implementation details:
 
 Input and output are each just a `kind` (string) + a free-form `options`
 dict (`config.IOSettings`) — the config loader never needs to know what
-keys a given backend requires. To add a new backend (e.g. a message queue):
+keys a given backend requires. To add a new backend (e.g. another object store):
 
 1. Add a module under `src/cicerone/io/` implementing the `InputSource`
    and/or `OutputSink` protocol (`io/base.py`) — read `options` yourself,
@@ -455,6 +459,8 @@ Serve-process ingest lives in `events/` plus `serve/events_routes.py` and
 `serve/bootstrap_events.py`. Optional `[events.online]` loads the model
 artifact in the events worker (not on `GET`); skipped while `[experiment]`
 is on. Operator guide: [incremental-events.md](incremental-events.md).
+Optional `[publish]` emits per-user recommendation JSON to Kafka or RabbitMQ
+after the store write; serve still reads `[output]`.
 
 ## Cold-start behavior
 

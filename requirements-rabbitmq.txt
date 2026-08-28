@@ -1,0 +1,3 @@
+# Optional RabbitMQ extra (events.kind / publish.kind = rabbitmq).
+# pip install 'cicerone-recommender[rabbitmq]'
+pika==1.3.2

@@ -48,6 +48,7 @@ from cicerone.config.lock_url import (
     resolve_postgres_lock_url,
     resolve_postgres_lock_url_parts,
 )
+from cicerone.config.publish import coerce_publish_settings, load_publish_settings
 from cicerone.config.settings import (
     AutomlSettings,
     DashboardSettings,
@@ -58,6 +59,7 @@ from cicerone.config.settings import (
     ExperimentSettings,
     ExplainSettings,
     IOSettings,
+    PublishSettings,
     ServeSettings,
     Settings,
     TriggerSettings,
@@ -114,6 +116,7 @@ __all__ = [
     "Mode",
     "PRIMARY_METRIC_WEIGHTED",
     "POSTGRES_LOCK_URL_REQUIRED",
+    "PublishSettings",
     "RRF_K",
     "STRATEGY_NAMES",
     "ServeSettings",
@@ -123,6 +126,8 @@ __all__ = [
     "VariantSettings",
     "coerce_events_settings",
     "load_events_settings",
+    "load_publish_settings",
+    "coerce_publish_settings",
     "load_experiment_settings",
     "load_settings",
     "make_settings",

@@ -646,6 +646,8 @@ project; the import remains `cicerone`. LightFM may need a C compiler
 ```sh
 pip install cicerone-recommender
 pip install 'cicerone-recommender[redis]'        # lock backend / Redis Streams
+pip install 'cicerone-recommender[kafka]'        # events.kind / publish.kind = kafka
+pip install 'cicerone-recommender[rabbitmq]'     # events.kind / publish.kind = rabbitmq
 pip install 'cicerone-recommender[sequential]'   # SASRec / BERT4Rec / HSTU
 ```
 

@@ -32,6 +32,7 @@ from cicerone.config.constants import (
     Mode,
 )
 from cicerone.config.events import coerce_events_settings, load_events_settings
+from cicerone.config.publish import coerce_publish_settings, load_publish_settings
 from cicerone.config.settings import (
     AutomlSettings,
     DashboardSettings,
@@ -160,6 +161,7 @@ def make_settings(**overrides: Any) -> Settings:
     )
     automl = _coerce_nested(AutomlSettings, overrides.pop("automl", None), _AUTOML_FLAT_KEYS, overrides)
     events = coerce_events_settings(overrides.pop("events", None))
+    publish = coerce_publish_settings(overrides.pop("publish", None))
     experiment = _coerce_experiment(overrides.pop("experiment", None))
 
     base: dict[str, Any] = dict(
@@ -186,6 +188,7 @@ def make_settings(**overrides: Any) -> Settings:
         trigger=trigger,
         dashboard=dashboard,
         events=events,
+        publish=publish,
         explain=ExplainSettings(),
         experiment=experiment,
     )
@@ -478,6 +481,10 @@ def load_settings(config_path: str | None = None) -> Settings:
         serve_auth_token=serve_auth_token,
         resolve_env=_resolve_env_placeholders,
     )
+    publish = load_publish_settings(
+        raw.get("publish", {}) or {},
+        resolve_env=_resolve_env_placeholders,
+    )
 
     log_epoch_metrics = bool(job.get("log_epoch_metrics", False))
 
@@ -630,6 +637,7 @@ def load_settings(config_path: str | None = None) -> Settings:
             lookup_user_attrs=_load_lookup_user_attrs(dashboard_raw.get("lookup_user_attrs")),
         ),
         events=events,
+        publish=publish,
         experiment=load_experiment_settings(raw.get("experiment") or {}),
     )
     _require_exposure_log_backend(settings)
