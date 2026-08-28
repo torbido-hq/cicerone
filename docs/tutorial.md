@@ -713,7 +713,8 @@ docker run --rm -it \
 Then start the dashboard and open `http://localhost:8090/dashboard` in a
 browser (log in with the user just created), or
 `http://localhost:8090/dashboard?user_id=alice` to fill the inspector on
-load. HTTP Basic credentials stay in the browser until it forgets them
+load. The header also links to **Config**, a read-only view of the TOML this
+dashboard process loaded (secrets redacted). HTTP Basic credentials stay in the browser until it forgets them
 for this origin — closing the tab is not a sign-out; use a private window
 or clear saved passwords. The **Inspect user** form shows that `user_id`'s
 recent `[input]` events beside current top-K (including cold-start

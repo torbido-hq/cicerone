@@ -273,7 +273,9 @@ serve). It never loads lightfm/implicit/torch (it does import `rectools`).
   (default 20). When `[experiment]` is enabled, lookup shows the assigned
   variant (what serve would return). `GET /dashboard/experiments` compares
   recipes with always-valid CIs and catalog guardrails, and can **Promote**
-  a winner to 100% traffic. A missing event store does not hide recommendations. When `[events]` is
+  a winner to 100% traffic. `GET /dashboard/config` shows the Settings this
+  dashboard process loaded (and `features.toml` when present), with tokens,
+  URLs, and keys redacted. A missing event store does not hide recommendations. When `[events]` is
   enabled, a panel shows the latest incremental flush from recent manifests
   (dataset outputs may clear it on the next full retrain). The status block
   auto-refreshes via

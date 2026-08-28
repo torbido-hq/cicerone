@@ -68,6 +68,7 @@ ranking recipes, see [experiments.md](experiments.md).
 | `dashboard.py` | Standalone FastAPI dashboard: job status/history plus user-id lookup (`cicerone dashboard`) |
 | `dashboard_lookup.py` | Dashboard inspector: recs lookup, `[input]` event history, allowlisted user attrs, assigned experiment variant |
 | `dashboard_experiments.py` | Experiments page: always-valid CIs, guardrails, promote winner |
+| `dashboard_config.py` | Configuration page: redacted view of the loaded Settings and features.toml |
 | `dashboard_users.py` | Load/save the dashboard's Basic Auth users file (TOML, username → bcrypt hash) |
 | `manage_dashboard_users.py` | CLI to add/remove/list dashboard users |
 | `templates/`, `static/` | Jinja2 templates + vendored htmx/Stimulus/Tailwind assets for the dashboard |
@@ -368,7 +369,9 @@ never imports `cicerone.model`/`dataset`/`automl`.
   `templates/_status.html`), `GET /partials/recommendations` (Basic Auth,
   user-id lookup fragment — see `templates/_recommendations.html`),
   `GET /dashboard` (Basic Auth, the full page), `GET /dashboard/experiments`
-  (Basic Auth, always-valid CIs / catalog guardrails), and
+  (Basic Auth, always-valid CIs / catalog guardrails), `GET /dashboard/config`
+  (Basic Auth, read-only loaded Settings and features.toml with secrets
+  redacted), and
   `POST /dashboard/experiments/promote` (Basic Auth, 100% traffic to a
   winner). The page polls
   `/partials/status` (`Settings.dashboard_refresh_interval_seconds`)

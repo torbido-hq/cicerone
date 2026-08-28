@@ -1,0 +1,22 @@
+{% macro render_value(value, nested=false) %}
+  {% if value is mapping %}
+  <dl class="mt-1 text-sm text-slate-700 {% if nested %}space-y-2 border-l border-slate-200 pl-3{% else %}grid grid-cols-1 gap-2 sm:grid-cols-2{% endif %}">
+    {% for key, child in value.items() %}
+    <div{% if not nested and (child is mapping or (child is iterable and child is not string)) %} class="sm:col-span-2"{% endif %}>
+      <dt class="text-slate-600">{{ key }}</dt>
+      <dd class="break-all">{{ render_value(child, true) }}</dd>
+    </div>
+    {% endfor %}
+  </dl>
+  {% elif value is iterable and value is not string %}
+  <ul class="list-disc pl-5 text-sm text-slate-700">
+    {% for item in value %}
+    <li class="break-all">{{ render_value(item, true) }}</li>
+    {% endfor %}
+  </ul>
+  {% elif value == "[redacted]" %}
+  <span class="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">[redacted]</span>
+  {% else %}
+  {{ value }}
+  {% endif %}
+{% endmacro %}
