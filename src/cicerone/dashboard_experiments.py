@@ -11,6 +11,7 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 
 from cicerone.config import Settings
+from cicerone.config.constants import ATTRIBUTION_CLICK, ATTRIBUTION_IMPRESSION, TRACK_KIND_IMPRESSION
 from cicerone.evaluation import conversion_event_types, user_track_outcomes
 from cicerone.events.store import load_items_catalog_size, load_recommendation_guardrail_rows
 from cicerone.experiment.evaluate import evaluate_experiment
@@ -91,20 +92,21 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
         except Exception:
             logger.exception("Failed to read track rows for experiment metrics")
             track_rows = []
-        n_impressions = sum(1 for row in track_rows if str(row.get("kind") or "") == "impression")
-        types = conversion_event_types(
-            settings.track.conversion_event_types, primary_metric=experiment.primary_metric
-        )
-        conversions = events
-        if not conversions.empty and "event_type" in conversions.columns:
-            conversions = conversions[conversions["event_type"].astype(str).isin(set(types))]
-        track_outcomes = user_track_outcomes(
-            track_rows=track_rows,
-            conversions=conversions,
-            primary_metric=experiment.primary_metric,
-            attribution=experiment.attribution,
-            window_hours=settings.track.attribution_window_hours,
-        )
+        n_impressions = sum(1 for row in track_rows if str(row.get("kind") or "") == TRACK_KIND_IMPRESSION)
+        if experiment.attribution in {ATTRIBUTION_CLICK, ATTRIBUTION_IMPRESSION}:
+            types = conversion_event_types(
+                settings.track.conversion_event_types, primary_metric=experiment.primary_metric
+            )
+            conversions = events
+            if not conversions.empty and "event_type" in conversions.columns:
+                conversions = conversions[conversions["event_type"].astype(str).isin(set(types))]
+            track_outcomes = user_track_outcomes(
+                track_rows=track_rows,
+                conversions=conversions,
+                primary_metric=experiment.primary_metric,
+                attribution=experiment.attribution,
+                window_hours=settings.track.attribution_window_hours,
+            )
     report = evaluate_experiment(
         experiment=experiment,
         recipes=recipes,

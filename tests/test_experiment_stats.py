@@ -645,6 +645,92 @@ def test_evaluate_experiment_recommended_attribution() -> None:
     assert report.primary_metric == "purchase"
 
 
+def test_evaluate_experiment_recommended_ignores_track_outcomes() -> None:
+    experiment = ExperimentSettings(
+        enabled=True,
+        id="exp",
+        primary_metric="ctr",
+        attribution="recommended",
+        variants=(
+            VariantSettings(name="control", traffic=0.5),
+            VariantSettings(name="treatment", traffic=0.5),
+        ),
+    )
+    recs = pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "shown",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                "variant": "control",
+            },
+            {
+                "user_id": "u2",
+                "item_id": "shown",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                "variant": "treatment",
+            },
+        ]
+    )
+    events = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "shown", "event_type": "ctr", "quantity": 1},
+            {"user_id": "u1", "item_id": "other", "event_type": "ctr", "quantity": 1},
+            {"user_id": "u2", "item_id": "other", "event_type": "ctr", "quantity": 1},
+        ]
+    )
+    report = evaluate_experiment(
+        experiment=experiment,
+        recipes=(_recipe("control"), _recipe("treatment")),
+        events=events,
+        event_weights={},
+        recommendations=recs,
+        exposures=[
+            {"user_id": "u1", "experiment_id": "exp", "variant": "control"},
+            {"user_id": "u2", "experiment_id": "exp", "variant": "treatment"},
+        ],
+        track_outcomes={"u1": 0.0, "u2": 50.0},
+    )
+    assert report.comparisons[0].control.mean == pytest.approx(1.0)
+    assert report.comparisons[0].treatment.mean == pytest.approx(0.0)
+
+
+def test_evaluate_experiment_user_attribution_ignores_track_outcomes() -> None:
+    experiment = ExperimentSettings(
+        enabled=True,
+        id="exp",
+        primary_metric="ctr",
+        attribution="user",
+        variants=(
+            VariantSettings(name="control", traffic=0.5),
+            VariantSettings(name="treatment", traffic=0.5),
+        ),
+    )
+    events = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "shown", "event_type": "ctr", "quantity": 1},
+            {"user_id": "u2", "item_id": "other", "event_type": "ctr", "quantity": 1},
+        ]
+    )
+    report = evaluate_experiment(
+        experiment=experiment,
+        recipes=(_recipe("control"), _recipe("treatment")),
+        events=events,
+        event_weights={},
+        exposures=[
+            {"user_id": "u1", "experiment_id": "exp", "variant": "control"},
+            {"user_id": "u2", "experiment_id": "exp", "variant": "treatment"},
+        ],
+        track_outcomes={"u1": 0.0, "u2": 50.0},
+    )
+    assert report.comparisons[0].control.mean == pytest.approx(1.0)
+    assert report.comparisons[0].treatment.mean == pytest.approx(1.0)
+
+
 def test_evaluate_experiment_split_winners() -> None:
     from cicerone.experiment.assignment import assign_variant
 

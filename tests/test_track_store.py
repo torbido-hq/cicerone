@@ -131,6 +131,32 @@ def test_track_store_roundtrip_sqlite(tmp_path) -> None:
     assert len(store.read_rows()) == 2
 
 
+def test_track_store_sqlite_unknown_rowcount_falls_back(tmp_path) -> None:
+    url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
+    output = IOSettings(kind="db", options={"database_url": url})
+    store = TrackStore(output)
+
+    class _Result:
+        rowcount = None
+
+    class _Conn:
+        def execute(self, _sql, _params=None):
+            return _Result()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+    class _Engine:
+        def begin(self):
+            return _Conn()
+
+    store._engine = _Engine()  # type: ignore[assignment]
+    assert store.append_rows([_row(event_id="imp-fallback")]) == 1
+
+
 def test_track_store_ignores_invalid_eval_json(tmp_path) -> None:
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     (tmp_path / "track_eval.json").write_text("not-json", encoding="utf-8")
@@ -273,6 +299,30 @@ def test_track_store_sqlite_read_errors(tmp_path, monkeypatch) -> None:
     assert store.read_rows() == []
     assert store.read_eval() is None
     assert store.read_history().empty
+
+
+def test_track_jsonl_same_batch_duplicate_event_id(tmp_path) -> None:
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    store = TrackStore(output)
+    assert store.append_rows([_row(), _row()]) == 1
+    assert len(store.read_rows()) == 1
+
+
+def test_track_jsonl_append_skips_reread_when_warm(tmp_path, monkeypatch) -> None:
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    store = TrackStore(output)
+    assert store.append_rows([_row()]) == 1
+    reads = {"n": 0}
+    original = store._read_bytes
+
+    def _count(filename: str) -> bytes | None:
+        reads["n"] += 1
+        return original(filename)
+
+    monkeypatch.setattr(store, "_read_bytes", _count)
+    assert store.append_rows([_row(event_id="imp-2", item_id="ipa-002")]) == 1
+    assert reads["n"] == 0
+    assert {row["event_id"] for row in store.read_rows()} == {"imp-1", "imp-2"}
 
 
 def test_track_jsonl_dedupes_duplicate_event_ids(tmp_path) -> None:

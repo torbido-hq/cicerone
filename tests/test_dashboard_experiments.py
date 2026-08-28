@@ -554,6 +554,41 @@ def test_experiment_context_track_read_error(tmp_path, monkeypatch):
     assert context["report"].n_assigned >= 0
 
 
+def test_experiment_context_user_attribution_skips_track_outcomes(tmp_path, monkeypatch):
+    base = _settings(tmp_path, log_exposures=False)
+    _write_frames(
+        base,
+        events=[{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1}],
+        recs=[
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                VARIANT_COLUMN: "control",
+            }
+        ],
+    )
+    settings = make_settings(
+        feature_config_path=str(REPO_FEATURES),
+        input=base.input,
+        output=base.output,
+        experiment=base.experiment,
+        track={"enabled": True},
+    )
+    called = {"n": 0}
+
+    def _boom(**_kwargs):
+        called["n"] += 1
+        return {}
+
+    monkeypatch.setattr("cicerone.dashboard_experiments.user_track_outcomes", _boom)
+    context = experiment_context(settings)
+    assert context["report"] is not None
+    assert called["n"] == 0
+
+
 def test_experiment_context_events_full_parquet_fallback(tmp_path, monkeypatch):
     settings = _settings(tmp_path, log_exposures=False)
     _write_frames(

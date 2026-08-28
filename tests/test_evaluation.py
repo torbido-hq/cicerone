@@ -247,6 +247,41 @@ def test_evaluate_served_hit_rate_and_history() -> None:
     assert replayed.metrics["HitRate@1"] == pytest.approx(1.0)
 
 
+def test_evaluate_served_history_without_generated_at() -> None:
+    recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa", "rank": 1, "source": "personalized"}])
+    history = pd.DataFrame(
+        [
+            {
+                "user_id": "alice",
+                "item_id": "stout",
+                "rank": 1,
+                "source": "personalized",
+                "generated_at": "2026-08-20T00:00:00Z",
+            }
+        ]
+    )
+    events = pd.DataFrame(
+        [
+            {
+                "user_id": "alice",
+                "item_id": "stout",
+                "event_type": "purchase",
+                "occurred_at": "2026-08-21T00:00:00Z",
+            }
+        ]
+    )
+    report = evaluate_served(
+        recs,
+        events,
+        generated_at=None,
+        ks=(1,),
+        event_types=("purchase",),
+        history=history,
+    )
+    assert report is not None
+    assert report.metrics["HitRate@1"] == pytest.approx(1.0)
+
+
 def test_score_previous_run_fail_open(tmp_path) -> None:
     from cicerone.config import IOSettings, make_settings
     from cicerone.job import _score_previous_run
