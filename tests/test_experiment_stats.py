@@ -20,8 +20,8 @@ def _recipe(name: str, traffic: float = 0.5) -> ResolvedRecipe:
         rrf_k=None,
         combiner="priority",
         blending=BlendingConfig(),
-        boosts=True,
-        eligibility=True,
+        boosts=(),
+        eligibility=(),
     )
 
 

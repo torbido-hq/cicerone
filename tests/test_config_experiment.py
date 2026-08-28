@@ -282,3 +282,104 @@ def test_load_settings_allows_log_exposures_with_ha_on_db(tmp_path):
     )
     assert settings.events.ha is True
     assert settings.experiment.log_exposures is True
+
+
+def test_load_experiment_policy_names_and_tables(tmp_path):
+    settings = load_settings(
+        write_toml(
+            tmp_path,
+            """
+            [job]
+            """
+            + _minimal_io()
+            + """
+            [experiment]
+            enabled = true
+            id = "policy"
+            [[experiment.variants]]
+            name = "control"
+            traffic = 0.5
+            boosts = ["featured"]
+            eligibility = false
+            [[experiment.variants]]
+            name = "treatment"
+            traffic = 0.5
+            [[experiment.variants.boost]]
+            name = "new-arrivals"
+            kind = "boolean"
+            item_column = "is_new"
+            factor = 1.3
+            [[experiment.variants.eligibility]]
+            name = "published"
+            op = "item_true"
+            item_column = "published"
+            """,
+        )
+    )
+    control, treatment = settings.experiment.variants
+    assert control.boosts == ("featured",)
+    assert control.eligibility is False
+    assert treatment.boosts[0]["name"] == "new-arrivals"
+    assert treatment.eligibility[0]["op"] == "item_true"
+
+
+def test_load_experiment_rejects_boosts_bool_and_tables():
+    with pytest.raises(ConfigError, match="must not set both"):
+        load_experiment_settings(
+            {
+                "enabled": True,
+                "id": "exp",
+                "variants": [
+                    {"name": "control", "traffic": 0.5},
+                    {
+                        "name": "treatment",
+                        "traffic": 0.5,
+                        "boosts": False,
+                        "boost": [{"name": "x", "kind": "boolean", "item_column": "featured", "factor": 1.1}],
+                    },
+                ],
+            }
+        )
+
+
+def test_load_experiment_rejects_invalid_boost_table():
+    with pytest.raises(ConfigError, match="boolean"):
+        load_experiment_settings(
+            {
+                "enabled": True,
+                "id": "exp",
+                "variants": [
+                    {"name": "control", "traffic": 0.5},
+                    {
+                        "name": "treatment",
+                        "traffic": 0.5,
+                        "boosts": [{"name": "x", "kind": "boolean", "item_column": "featured"}],
+                    },
+                ],
+            }
+        )
+
+
+def test_load_experiment_rejects_invalid_policy_spec_shape():
+    with pytest.raises(ConfigError, match="must be true, false"):
+        load_experiment_settings(
+            {
+                "enabled": True,
+                "id": "exp",
+                "variants": [
+                    {"name": "control", "traffic": 0.5},
+                    {"name": "treatment", "traffic": 0.5, "boosts": 1},
+                ],
+            }
+        )
+    with pytest.raises(ConfigError, match="must be true, false"):
+        load_experiment_settings(
+            {
+                "enabled": True,
+                "id": "exp",
+                "variants": [
+                    {"name": "control", "traffic": 0.5},
+                    {"name": "treatment", "traffic": 0.5, "boosts": ["featured", {"name": "x"}]},
+                ],
+            }
+        )

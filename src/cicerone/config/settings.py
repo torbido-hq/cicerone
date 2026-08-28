@@ -121,6 +121,10 @@ class EventsSettings:
     online: EventsOnlineSettings = field(default_factory=EventsOnlineSettings)
 
 
+# True = inherit features.toml; False = drop; names = subset; dicts = replacement rules.
+PolicySpec = bool | tuple[str, ...] | tuple[dict[str, Any], ...]
+
+
 @dataclass(frozen=True)
 class PublishSettings:
     enabled: bool = False
@@ -139,8 +143,8 @@ class VariantSettings:
     rrf_k: float | None = None
     combiner: str | None = None
     blending: dict[str, Any] | None = None
-    boosts: bool = True
-    eligibility: bool = True
+    boosts: PolicySpec = True
+    eligibility: PolicySpec = True
 
 
 @dataclass(frozen=True)

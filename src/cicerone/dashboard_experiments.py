@@ -16,7 +16,12 @@ from cicerone.config.constants import ATTRIBUTION_CLICK, ATTRIBUTION_IMPRESSION,
 from cicerone.evaluation import conversion_event_types, user_track_outcomes
 from cicerone.events.store import load_items_catalog_size, load_recommendation_guardrail_rows
 from cicerone.experiment.evaluate import evaluate_experiment
-from cicerone.experiment.recipes import ResolvedRecipe, resolve_recipes
+from cicerone.experiment.recipes import (
+    ResolvedRecipe,
+    resolve_boost_policy,
+    resolve_eligibility_policy,
+    resolve_recipes,
+)
 from cicerone.experiment.store import ExperimentStore, experiment_state
 from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.io.db_store import DEFAULT_EVENTS_TABLE
@@ -254,8 +259,16 @@ def _recipes(settings: Settings, feature_config: FeatureConfig | None) -> tuple[
                 rrf_k=item.get("rrf_k"),
                 combiner=str(item.get("combiner") or "priority"),
                 blending=BlendingConfig(enabled=str(item.get("combiner")) == "blend"),
-                boosts=bool(item.get("boosts", True)),
-                eligibility=bool(item.get("eligibility", True)),
+                boosts=resolve_boost_policy(
+                    item.get("boosts", True),
+                    feature_config.boosts,
+                    label="experiment_variants.boosts",
+                ),
+                eligibility=resolve_eligibility_policy(
+                    item.get("eligibility", True),
+                    feature_config.eligibility,
+                    label="experiment_variants.eligibility",
+                ),
             )
             for item in parsed
         )

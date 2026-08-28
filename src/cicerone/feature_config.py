@@ -89,6 +89,14 @@ def _parse_boost_overfetch_factor(raw: Any) -> int:
     return factor
 
 
+def parse_eligibility_rules(raw_rules: list[dict[str, Any]]) -> list[EligibilityRule]:
+    return _parse_eligibility(raw_rules)
+
+
+def parse_boost_rules(raw_boosts: list[dict[str, Any]]) -> list[BoostRule]:
+    return _parse_boosts(raw_boosts)
+
+
 def _parse_eligibility(raw_rules: list[dict[str, Any]]) -> list[EligibilityRule]:
     rules: list[EligibilityRule] = []
     for raw in raw_rules:

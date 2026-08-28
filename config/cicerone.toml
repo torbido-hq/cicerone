@@ -385,8 +385,13 @@ prefix = "recommendations/latest"
 # traffic = 0.5
 # combiner = "blend"  # priority | rrf | blend
 # # models = ["collaborative", "item_based", "popular", "latest"]
-# # boosts = true
+# # boosts = true            # inherit features.toml; false drops; ["name"] subsets
 # # eligibility = true
+# # [[experiment.variants.boost]]
+# # name = "new-arrivals"
+# # kind = "boolean"
+# # item_column = "is_new"
+# # factor = 1.3
 
 # Impression/click tracking and production replay. See docs/evaluation.md.
 # [track]
