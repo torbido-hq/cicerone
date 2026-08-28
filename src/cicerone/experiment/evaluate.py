@@ -114,7 +114,11 @@ def evaluate_experiment(
         from cicerone.evaluation import filter_events_to_recommended
 
         metric_events = filter_events_to_recommended(metric_events, recommendations, assigned=assigned)
-    if rec_metric and track_outcomes is not None:
+    if (
+        rec_metric
+        and attribution in {ATTRIBUTION_CLICK, ATTRIBUTION_IMPRESSION}
+        and track_outcomes is not None
+    ):
         outcomes = {str(user_id): float(value) for user_id, value in track_outcomes.items()}
     else:
         outcomes = user_outcome(

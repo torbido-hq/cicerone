@@ -248,22 +248,18 @@ def evaluate_tracking(
     overall = _slice_metrics(impressions, matched_clicks, view_conv, click_conv)
     by_rank: dict[str, SliceMetrics] = {}
     if RANK_COLUMN in impressions.columns:
-        for rank, group in impressions.groupby(impressions[RANK_COLUMN], dropna=True):
+        for rank, group in impressions.groupby(RANK_COLUMN, dropna=True):
             key = str(int(rank)) if float(rank).is_integer() else str(rank)
             by_rank[key] = _metrics_for_impression_slice(group, matched_clicks, view_conv, click_conv)
     by_source: dict[str, SliceMetrics] = {}
     if SOURCE_COLUMN in impressions.columns:
-        for source, group in impressions.groupby(impressions[SOURCE_COLUMN].astype(str), dropna=True):
-            if not source or source == "None":
-                continue
+        for source, group in impressions.groupby(SOURCE_COLUMN, dropna=True):
             by_source[str(source)] = _metrics_for_impression_slice(
                 group, matched_clicks, view_conv, click_conv
             )
     by_variant: dict[str, SliceMetrics] = {}
     if VARIANT_COLUMN in impressions.columns:
-        for variant, group in impressions.groupby(impressions[VARIANT_COLUMN].astype(str), dropna=True):
-            if not variant or variant == "None":
-                continue
+        for variant, group in impressions.groupby(VARIANT_COLUMN, dropna=True):
             by_variant[str(variant)] = _metrics_for_impression_slice(
                 group, matched_clicks, view_conv, click_conv
             )
@@ -276,18 +272,12 @@ def _metrics_for_impression_slice(
     view_conv: pd.DataFrame,
     click_conv: pd.DataFrame,
 ) -> SliceMetrics:
-    keys = set(zip(impressions[USER_COLUMN].astype(str), impressions[ITEM_COLUMN].astype(str), strict=False))
+    keys = impressions.loc[:, [USER_COLUMN, ITEM_COLUMN]].drop_duplicates()
 
     def _subset(frame: pd.DataFrame) -> pd.DataFrame:
-        if frame.empty or USER_COLUMN not in frame.columns:
+        if frame.empty or USER_COLUMN not in frame.columns or ITEM_COLUMN not in frame.columns:
             return frame
-        mask = [
-            (str(user), str(item)) in keys
-            for user, item in zip(
-                frame[USER_COLUMN].astype(str), frame[ITEM_COLUMN].astype(str), strict=False
-            )
-        ]
-        return frame.loc[mask]
+        return frame.merge(keys, on=[USER_COLUMN, ITEM_COLUMN], how="inner")
 
     return _slice_metrics(impressions, _subset(matched_clicks), _subset(view_conv), _subset(click_conv))
 
@@ -366,20 +356,13 @@ def filter_events_to_recommended(
     recs[ITEM_COLUMN] = recs[ITEM_COLUMN].astype(str)
     recs = recs[recs[USER_COLUMN] != COLD_START_USER_ID]
     if assigned and VARIANT_COLUMN in recs.columns:
-        keep_idx = [
-            str(row[VARIANT_COLUMN]) == assigned.get(str(row[USER_COLUMN]), str(row[VARIANT_COLUMN]))
-            for _, row in recs.iterrows()
-        ]
-        recs = recs.loc[keep_idx]
-    keys = set(zip(recs[USER_COLUMN].astype(str), recs[ITEM_COLUMN].astype(str), strict=False))
+        expected = recs[USER_COLUMN].map(assigned)
+        recs = recs.loc[expected.isna() | (recs[VARIANT_COLUMN].astype(str) == expected)]
+    keys = recs.loc[:, [USER_COLUMN, ITEM_COLUMN]].drop_duplicates()
     frame = events.copy()
     frame[USER_COLUMN] = frame[USER_COLUMN].astype(str)
     frame[ITEM_COLUMN] = frame[ITEM_COLUMN].astype(str)
-    mask = [
-        (str(user), str(item)) in keys
-        for user, item in zip(frame[USER_COLUMN], frame[ITEM_COLUMN], strict=False)
-    ]
-    return frame.loc[mask]
+    return frame.merge(keys, on=[USER_COLUMN, ITEM_COLUMN], how="inner")
 
 
 def _hit_rate(reco: pd.DataFrame, relevant: pd.DataFrame, *, k: int) -> float:
@@ -432,7 +415,13 @@ def evaluate_served(
     if event_types and "event_type" in window_events.columns:
         window_events = window_events[window_events["event_type"].astype(str).isin(set(event_types))]
     if history is not None and not history.empty and OCCURRED_AT in window_events.columns:
-        hist_recs = _recs_from_history(history, window_events)
+        live = recs.copy()
+        if generated_at:
+            live["generated_at"] = generated_at
+            combined = pd.concat([history, live], ignore_index=True)
+        else:
+            combined = history
+        hist_recs = _recs_from_history(combined, window_events)
         if not hist_recs.empty:
             hist_recs = hist_recs[hist_recs[USER_COLUMN] != COLD_START_USER_ID]
         if not hist_recs.empty:
@@ -462,9 +451,7 @@ def evaluate_served(
                 logger.exception("RecTools calc_metrics failed for k=%s", k)
     by_source: dict[str, dict[str, float]] = {}
     if SOURCE_COLUMN in recs.columns:
-        for source, group in recs.groupby(recs[SOURCE_COLUMN].astype(str)):
-            if not source or source == "None":
-                continue
+        for source, group in recs.groupby(SOURCE_COLUMN, dropna=True):
             source_metrics: dict[str, float] = {}
             for k in ks:
                 source_metrics[f"HitRate@{k}"] = _hit_rate(group, relevant, k=k)
@@ -485,6 +472,7 @@ def _recs_from_history(history: pd.DataFrame, events: pd.DataFrame) -> pd.DataFr
     hist[ITEM_COLUMN] = hist[ITEM_COLUMN].astype(str)
     hist["generated_at"] = pd.to_datetime(hist["generated_at"], utc=True, errors="coerce")
     hist = hist.dropna(subset=["generated_at"])
+    hist = hist.drop_duplicates(subset=[USER_COLUMN, ITEM_COLUMN, "generated_at"], keep="last")
     if hist.empty or events.empty or OCCURRED_AT not in events.columns:
         return hist.iloc[0:0]
     first = events.groupby(USER_COLUMN, sort=False)[OCCURRED_AT].min().reset_index()

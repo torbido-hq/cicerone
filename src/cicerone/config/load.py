@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any, cast
 
 from cicerone.config.constants import (
+    ATTRIBUTION_CLICK,
+    ATTRIBUTION_IMPRESSION,
     AUTOML_DEFAULT_N_SPLITS,
     AUTOML_DEFAULT_PRIMARY_METRIC,
     AUTOML_DEFAULT_TEST_DAYS,
@@ -30,6 +32,8 @@ from cicerone.config.constants import (
     EXPERIMENT_COMBINERS,
     LOCK_BACKENDS,
     MODES,
+    PRIMARY_METRIC_CONVERSION,
+    PRIMARY_METRIC_CTR,
     PRIMARY_METRIC_WEIGHTED,
     STRATEGY_NAMES,
     ConfigError,
@@ -365,6 +369,14 @@ def load_experiment_settings(raw: dict[str, Any] | None) -> ExperimentSettings:
     if attribution not in EXPERIMENT_ATTRIBUTIONS:
         raise ConfigError(
             f"experiment.attribution must be one of {list(EXPERIMENT_ATTRIBUTIONS)}, got {attribution!r}"
+        )
+    if primary_metric in {PRIMARY_METRIC_CTR, PRIMARY_METRIC_CONVERSION} and attribution not in {
+        ATTRIBUTION_CLICK,
+        ATTRIBUTION_IMPRESSION,
+    }:
+        raise ConfigError(
+            "experiment.primary_metric 'ctr'/'conversion' requires attribution "
+            "'click' or 'impression' (user keeps event ITT; recommended joins the list)"
         )
     if enabled:
         if not experiment_id:

@@ -7,6 +7,7 @@ import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Request, Response
@@ -15,7 +16,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from cicerone import __version__
 from cicerone.config import Settings, load_settings
-from cicerone.config.constants import DEFAULT_LOG_FORMAT, DEFAULT_SERVE_MAX_K
+from cicerone.config.constants import DEFAULT_LOG_FORMAT, DEFAULT_SERVE_MAX_K, TRACK_KIND_IMPRESSION
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
 from cicerone.experiment.assignment import resolve_assignment
@@ -46,7 +47,6 @@ from cicerone.serve.metrics import (
     update_events_source_health,
 )
 from cicerone.serve_schemas import ErrorDetail, HealthResponse, RecommendationItem, RecommendationsResponse
-from cicerone.track.normalize import TRACK_KIND_IMPRESSION, normalize_track
 from cicerone.track.routes import attach_track_ingest_openapi, mount_track_routes
 from cicerone.track.store import TrackStore
 
@@ -314,19 +314,20 @@ def create_app(
         if settings.serve.log_impressions and track_store is not None and not filtered.empty:
             try:
                 occurred = datetime.now(UTC).isoformat()
-                rows = []
-                for row in filtered.itertuples(index=False):
-                    payload = {
+                rows = [
+                    {
                         "kind": TRACK_KIND_IMPRESSION,
                         "user_id": user_id,
                         "item_id": str(row.item_id),
                         "rank": int(row.rank),
                         "occurred_at": occurred,
+                        "event_id": str(uuid4()),
                         "variant": variant,
                         "experiment_id": experiment_id,
                         "generated_at": generated_at,
                     }
-                    rows.append(normalize_track(payload).as_row())
+                    for row in filtered.itertuples(index=False)
+                ]
                 track_store.append_rows(rows)
             except Exception:
                 logger.exception("Failed to append serve impressions for user_id=%r", user_id)

@@ -208,3 +208,28 @@ def test_load_experiment_attribution(tmp_path):
                 ],
             }
         )
+    with pytest.raises(ConfigError, match="click"):
+        load_experiment_settings(
+            {
+                "enabled": True,
+                "id": "exp",
+                "primary_metric": "ctr",
+                "variants": [
+                    {"name": "control", "traffic": 0.5},
+                    {"name": "treatment", "traffic": 0.5},
+                ],
+            }
+        )
+    with pytest.raises(ConfigError, match="impression"):
+        load_experiment_settings(
+            {
+                "enabled": True,
+                "id": "exp",
+                "primary_metric": "conversion",
+                "attribution": "recommended",
+                "variants": [
+                    {"name": "control", "traffic": 0.5},
+                    {"name": "treatment", "traffic": 0.5},
+                ],
+            }
+        )

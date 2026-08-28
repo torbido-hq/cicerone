@@ -84,6 +84,7 @@ class TrackStore:
         self._kind = output.kind
         self._options = output.options
         self._engine: Engine | None = None
+        self._known_ids: set[str] | None = None
 
     def _db_engine(self) -> Engine:
         if self._engine is None:
@@ -99,8 +100,15 @@ class TrackStore:
         if self._kind == "db":
             return self._append_rows_db(payload)
         require_appendable_track_log(self._output)
-        existing = {str(row.get("event_id") or "") for row in self.read_rows()}
-        fresh = [row for row in payload if str(row.get("event_id") or "") not in existing]
+        known = self._dataset_event_ids()
+        fresh: list[dict[str, Any]] = []
+        for row in payload:
+            event_id = str(row.get("event_id") or "")
+            if event_id and event_id in known:
+                continue
+            if event_id:
+                known.add(event_id)
+            fresh.append(row)
         if not fresh:
             return 0
         encoded = "".join(json.dumps(row, separators=(",", ":")) + "\n" for row in fresh).encode("utf-8")
@@ -193,7 +201,6 @@ class TrackStore:
             option="track_table",
         )
         engine = self._db_engine()
-        inserted = 0
         insert_sql = text(
             f'INSERT INTO "{table}" (event_id, kind, user_id, item_id, rank, occurred_at, '
             "variant, experiment_id, generated_at) "
@@ -201,26 +208,34 @@ class TrackStore:
             ":variant, :experiment_id, :generated_at) "
             "ON CONFLICT (event_id) DO NOTHING"
         )
+        params: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for row in rows:
+            event_id = str(row.get("event_id") or "")
+            if event_id and event_id in seen:
+                continue
+            if event_id:
+                seen.add(event_id)
+            params.append(
+                {
+                    "event_id": event_id,
+                    "kind": str(row.get("kind") or ""),
+                    "user_id": str(row.get("user_id") or ""),
+                    "item_id": str(row.get("item_id") or ""),
+                    "rank": row.get("rank"),
+                    "occurred_at": str(row.get("occurred_at") or ""),
+                    "variant": row.get("variant"),
+                    "experiment_id": row.get("experiment_id"),
+                    "generated_at": row.get("generated_at"),
+                }
+            )
         with engine.begin() as conn:
             self._ensure_track_table(conn, table)
-            for row in rows:
-                result = conn.execute(
-                    insert_sql,
-                    {
-                        "event_id": str(row.get("event_id") or ""),
-                        "kind": str(row.get("kind") or ""),
-                        "user_id": str(row.get("user_id") or ""),
-                        "item_id": str(row.get("item_id") or ""),
-                        "rank": row.get("rank"),
-                        "occurred_at": str(row.get("occurred_at") or ""),
-                        "variant": row.get("variant"),
-                        "experiment_id": row.get("experiment_id"),
-                        "generated_at": row.get("generated_at"),
-                    },
-                )
-                if result.rowcount and result.rowcount > 0:
-                    inserted += 1
-        return inserted
+            result = conn.execute(insert_sql, params)
+            rowcount = result.rowcount
+            if rowcount is not None and rowcount >= 0:
+                return int(rowcount)
+        return len(params)
 
     def _read_rows_db(self) -> list[dict[str, Any]]:
         table = sql_identifier(
@@ -245,6 +260,8 @@ class TrackStore:
     def _read_rows_dataset(self) -> list[dict[str, Any]]:
         raw = self._read_bytes(TRACK_FILENAME)
         if raw is None:
+            if self._known_ids is None:
+                self._known_ids = set()
             return []
         rows: list[dict[str, Any]] = []
         for line in raw.decode("utf-8").splitlines():
@@ -257,7 +274,16 @@ class TrackStore:
                 continue
             if isinstance(parsed, dict):
                 rows.append(parsed)
+        if self._known_ids is None:
+            self._known_ids = {str(row.get("event_id") or "") for row in rows}
+            self._known_ids.discard("")
         return rows
+
+    def _dataset_event_ids(self) -> set[str]:
+        if self._known_ids is None:
+            self._read_rows_dataset()
+        assert self._known_ids is not None
+        return self._known_ids
 
     def _write_eval_db(self, payload: dict[str, Any]) -> None:
         table = sql_identifier(
