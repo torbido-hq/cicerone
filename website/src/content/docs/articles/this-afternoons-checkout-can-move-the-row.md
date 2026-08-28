@@ -70,7 +70,7 @@ A purchase this afternoon can move a row that already exists. A SKU you listed t
 
 `checkout.session.completed` means the Checkout Session completed. On cards and other immediate methods, that event usually arrives with `payment_status === "paid"` — this handler treats that as a successful payment. With delayed methods (SEPA debit, some bank redirects, ACH), Checkout can complete while payment is still pending (`payment_status === "unpaid"`). Stripe sends `checkout.session.async_payment_succeeded` later if that payment succeeds, or `checkout.session.async_payment_failed` if it fails.
 
-If you map every `completed` as a `purchase`, a delayed payment that later fails still trains as a buy. The handler:
+If you map every `completed` as a `purchase`, a delayed payment that later fails can still enter the event stream as a purchase. The handler:
 
 - accepts `checkout.session.completed` **only** when `session.payment_status === "paid"`
 - accepts `checkout.session.async_payment_succeeded`
@@ -126,7 +126,9 @@ Cicerone 0.7 uses `occurred_at` as interaction time (recency / latest). Mixing t
 
 The Checkout event payload does not include the full line list. `listLineItems()` is a **paginated** Stripe list (default 10 objects per page; the list API accepts a per-page `limit` of 1–100). A single page is not the cart.
 
-`autoPagingToArray({ limit: 100 })` walks those pages. The `100` is stripe-node's **total number of items materialized**, not the Stripe page size. Pagination continues until that many objects are collected or the list ends. It is this mapper's cap, not Cicerone's event contract. Raise it if a session can have more lines.
+`autoPagingToArray({ limit: 100 })` walks those pages. The `100` is stripe-node's **total number of items materialized**, not the Stripe page size. Pagination continues until that many objects are collected or the list ends. It is this mapper's cap, not Cicerone's event contract.
+
+**If a Checkout Session has more than 100 line items, this mapper silently omits the rest.** That is partial purchase ingestion: Stripe saw the full cart; Cicerone only gets the first 100 SKU lines. Raise the `limit` if a session can be larger.
 
 `quantity: 5` remains **one** Cicerone event with `quantity: 5`. Do not expand it into five purchase events unless you explicitly want five interactions. In Cicerone 0.7, types in `quantity_scaled_events` scale by `log1p(quantity)`.
 
