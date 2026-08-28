@@ -12,7 +12,9 @@ __all__ = [
     "EventBackpressureError",
     "EventSource",
     "EventSourceHealth",
+    "KafkaEventSource",
     "NormalizedEvent",
+    "RabbitMQEventSource",
     "RedisStreamsEventSource",
     "S3EventSource",
     "WebhookEventSource",
@@ -23,6 +25,8 @@ __all__ = [
 
 _LAZY: dict[str, tuple[str, str]] = {
     "DbEventSource": ("cicerone.events.db", "DbEventSource"),
+    "KafkaEventSource": ("cicerone.events.kafka", "KafkaEventSource"),
+    "RabbitMQEventSource": ("cicerone.events.rabbitmq", "RabbitMQEventSource"),
     "RedisStreamsEventSource": ("cicerone.events.redis_streams", "RedisStreamsEventSource"),
     "S3EventSource": ("cicerone.events.s3", "S3EventSource"),
     "WebhookEventSource": ("cicerone.events.webhook", "WebhookEventSource"),

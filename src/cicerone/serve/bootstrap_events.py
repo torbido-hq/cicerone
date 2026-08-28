@@ -6,6 +6,7 @@ import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 from cicerone.config import Settings
 from cicerone.config.constants import (
@@ -25,6 +26,7 @@ from cicerone.feature_config import FeatureConfig
 from cicerone.io.base import RecommendationReader
 from cicerone.io.factory import build_output_sink
 from cicerone.locks import LockBackend, build_lock_backend, events_apply_lock_key
+from cicerone.publish import build_publisher
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +36,7 @@ class EventsRuntime:
     webhook_source: WebhookEventSource | None
     worker: EventWorker | None
     apply_lock: LockBackend | None = None
+    publisher: Any | None = None
 
     def stop(self) -> bool:
         stopped = True
@@ -43,6 +46,11 @@ class EventsRuntime:
                 logger.warning("Event worker did not stop in time; skipping engine dispose")
                 return False
         dispose_recommendation_engines()
+        if self.publisher is not None:
+            try:
+                self.publisher.close()
+            except Exception:
+                logger.exception("Recommendation publisher close failed")
         return True
 
 
@@ -148,6 +156,7 @@ def start_events_runtime(
     )
 
     sink = build_output_sink(settings.output)
+    publisher = build_publisher(settings)
     online = None
     if settings.events.online.enabled and settings.experiment.enabled:
         logger.warning("Online collaborative refresh skipped while [experiment] is enabled")
@@ -187,6 +196,7 @@ def start_events_runtime(
         variant_names=experiment_variant_names(settings),
         assign_variant=_assign_incremental_variant(settings),
         explain_enabled=settings.explain.enabled,
+        publisher=publisher,
     )
     buffer = MicroBatchBuffer(
         batch_size=settings.events.incremental.batch_size,
@@ -217,4 +227,6 @@ def start_events_runtime(
             settings.events.kind,
             settings.output.kind,
         )
-    return EventsRuntime(webhook_source=webhook_source, worker=worker, apply_lock=apply_lock)
+    return EventsRuntime(
+        webhook_source=webhook_source, worker=worker, apply_lock=apply_lock, publisher=publisher
+    )

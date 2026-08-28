@@ -43,7 +43,7 @@ WORKDIR /app
 RUN pip install --no-cache-dir build==1.5.0 twine==7.0.0
 
 COPY pyproject.toml MANIFEST.in LICENSE README.md CHANGELOG.md ./
-COPY requirements.txt requirements-redis.txt requirements-sequential.txt ./
+COPY requirements.txt requirements-redis.txt requirements-sequential.txt requirements-kafka.txt requirements-rabbitmq.txt ./
 COPY src/ ./src/
 COPY --from=frontend /build/tailwind.css ./src/cicerone/static/tailwind.css
 
@@ -96,7 +96,7 @@ USER root
 COPY requirements-dev.txt ./
 RUN pip install --no-cache-dir -r requirements-dev.txt
 COPY pyproject.toml MANIFEST.in ./
-COPY requirements-redis.txt requirements-sequential.txt ./
+COPY requirements-redis.txt requirements-sequential.txt requirements-kafka.txt requirements-rabbitmq.txt ./
 COPY src/ ./src/
 COPY --from=frontend /build/tailwind.css ./src/cicerone/static/tailwind.css
 COPY tests/ ./tests/

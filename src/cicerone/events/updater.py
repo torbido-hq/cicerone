@@ -6,7 +6,7 @@ import logging
 from collections import OrderedDict
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import Any, Protocol
 
 import pandas as pd
 
@@ -64,6 +64,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         variant_names: Sequence[str] = (),
         assign_variant: Callable[[str], str | None] | None = None,
         explain_enabled: bool = True,
+        publisher: Any | None = None,
     ):
         if user_cache_max_size < 1:
             raise ValueError("user_cache_max_size must be >= 1")
@@ -83,6 +84,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         self._variant_names = tuple(str(name) for name in variant_names)
         self._assign_variant = assign_variant
         self._explain_enabled = explain_enabled
+        self._publisher = publisher
 
     @property
     def last_success_at(self) -> datetime | None:
@@ -198,6 +200,8 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             return 0
         self._ensure_fence()
         n_users = self._sink.replace_recommendations_for_users(merged, user_ids=sorted(set(replace_ids)))
+        if self._publisher is not None:
+            self._publisher.publish(merged)
 
         now = datetime.now(UTC)
         manifest = {

@@ -40,6 +40,7 @@ from cicerone.model import (
     train_and_recommend,
 )
 from cicerone.model.recommend import RecommendCache
+from cicerone.publish import build_publisher
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +105,7 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
     settings = load_settings()
     feature_config = load_feature_config(settings.feature_config_path)
     sink = build_output_sink(settings.output)
+    publisher = build_publisher(settings)
 
     manifest = dict(_MANIFEST_DEFAULTS)
     manifest["triggered_by"] = triggered_by
@@ -311,6 +313,8 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
             _ensure_fence(fence_check)
             sink.write_recommendations(recommendations)
             outputs_written = True
+            if publisher is not None:
+                publisher.publish(recommendations)
         except Exception:
             if outputs_written or manifest.get("artifact_written"):
                 manifest["partial_outputs"] = True
@@ -349,6 +353,11 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
         manifest["error"] = error_message
         raise
     finally:
+        if publisher is not None:
+            try:
+                publisher.close()
+            except Exception:
+                logger.exception("Failed to close recommendation publisher")
         manifest["generated_at"] = datetime.now(UTC).isoformat()
         try:
             sink.write_manifest(manifest)

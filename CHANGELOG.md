@@ -13,6 +13,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Section chips, on/off badges, and nested panels.
 - Config keys and section titles can open a one-line hint; some include a
   Docs link to cicerone.dev.
+- Optional Kafka and RabbitMQ extras: `[events].kind = "kafka"` /
+  `"rabbitmq"` ingest (consumer group / queue) and `[publish]` to emit
+  per-user recommendation JSON after the `[output]` store write. Serve
+  still looks up from dataset/db. `pip install 'cicerone-recommender[kafka]'`
+  or `[rabbitmq]`. Prefer Redis Streams when you already run Redis for the
+  lock.
 
 ### Fixed
 

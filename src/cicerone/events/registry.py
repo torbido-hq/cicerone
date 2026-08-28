@@ -29,8 +29,22 @@ def _s3_source(options: dict[str, Any]) -> EventSource:
     return S3EventSource(options)
 
 
+def _kafka_source(options: dict[str, Any]) -> EventSource:
+    from cicerone.events.kafka import KafkaEventSource
+
+    return KafkaEventSource(options)
+
+
+def _rabbitmq_source(options: dict[str, Any]) -> EventSource:
+    from cicerone.events.rabbitmq import RabbitMQEventSource
+
+    return RabbitMQEventSource(options)
+
+
 _EVENT_SOURCES: dict[str, _EventSourceFactory] = {
     "db": _db_source,
+    "kafka": _kafka_source,
+    "rabbitmq": _rabbitmq_source,
     "redis_streams": _redis_source,
     "s3": _s3_source,
     "webhook": WebhookEventSource,

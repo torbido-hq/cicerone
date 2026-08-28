@@ -104,6 +104,37 @@ def test_target_user_ids_skip_missing_values():
     assert "nan" not in _target_user_ids(events, users)
 
 
+def test_job_publishes_recommendations_after_write(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.utcnow()
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+            {"user_id": "u2", "item_id": "i2", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+        ]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    config_path = _write_config(tmp_path, input_dir, output_dir, top_k=2)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
+    captured: list[pd.DataFrame] = []
+    closed = {"n": 0}
+
+    class _Pub:
+        def publish(self, df: pd.DataFrame) -> None:
+            captured.append(df.copy())
+
+        def close(self) -> None:
+            closed["n"] += 1
+
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
+    job.run()
+    assert len(captured) == 1
+    assert {"u1", "u2"}.issubset(set(captured[0]["user_id"].astype(str)))
+    assert closed["n"] == 1
+
+
 def test_recommendation_user_count_excludes_cold_start():
     frame = pd.DataFrame(
         [

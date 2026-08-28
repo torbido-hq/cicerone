@@ -119,6 +119,13 @@ class EventsSettings:
 
 
 @dataclass(frozen=True)
+class PublishSettings:
+    enabled: bool = False
+    kind: str = "kafka"
+    options: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class VariantSettings:
     """One ranking recipe in an ``[experiment]`` block."""
 
@@ -184,6 +191,7 @@ class Settings:
     trigger: TriggerSettings
     dashboard: DashboardSettings
     events: EventsSettings
+    publish: PublishSettings = field(default_factory=PublishSettings)
     explain: ExplainSettings = field(default_factory=ExplainSettings)
     experiment: ExperimentSettings = field(default_factory=ExperimentSettings)
 
