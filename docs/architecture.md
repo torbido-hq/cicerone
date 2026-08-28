@@ -372,7 +372,8 @@ never imports `cicerone.model`/`dataset`/`automl`.
   `GET /dashboard` (Basic Auth, the full page), `GET /dashboard/experiments`
   (Basic Auth, always-valid CIs / catalog guardrails), `GET /dashboard/config`
   (Basic Auth, read-only loaded Settings and features.toml with secrets
-  redacted), and
+  redacted; known keys open a one-line hint with an optional cicerone.dev
+  link), and
   `POST /dashboard/experiments/promote` (Basic Auth, 100% traffic to a
   winner). OpenAPI `/docs` is disabled. HTML pages include a `noindex`
   meta tag; every response sets `X-Robots-Tag` and HTML uses

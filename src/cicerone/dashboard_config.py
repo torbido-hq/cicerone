@@ -44,6 +44,136 @@ _NESTED_SECTIONS: tuple[tuple[str, str, str], ...] = (
 )
 _JOB_SKIP = frozenset({key for key, _title, _toml in _NESTED_SECTIONS} | {"mode"})
 
+_DOCS = "https://cicerone.dev"
+HINTS: dict[str, dict[str, str]] = {
+    "meta": {
+        "text": "Identity of this dashboard process, not the job or serve replica.",
+        "docs": f"{_DOCS}/architecture/#dashboard",
+    },
+    "meta.mode": {
+        "text": "batch or serve. The dashboard runs in either mode.",
+        "docs": f"{_DOCS}/architecture/#dashboard",
+    },
+    "meta.version": {"text": "Installed cicerone package version."},
+    "meta.config_path": {
+        "text": "TOML this process opened. Job and serve may point at a different file.",
+        "docs": f"{_DOCS}/architecture/#dashboard",
+    },
+    "job": {
+        "text": "The batch train-and-write job: strategies, top-K, and schedule.",
+        "docs": f"{_DOCS}/how-it-works/",
+    },
+    "job.top_k": {
+        "text": "How many items the job writes for each user.",
+        "docs": f"{_DOCS}/how-it-works/",
+    },
+    "job.models": {
+        "text": "Which ranking strategies to fit this run.",
+        "docs": f"{_DOCS}/how-it-works/#strategies",
+    },
+    "job.model_weights": {
+        "text": "When set, combine strategies with weighted reciprocal rank fusion.",
+        "docs": f"{_DOCS}/how-it-works/#combining-strategies",
+    },
+    "job.rrf_k": {
+        "text": "RRF smoothing constant when model_weights is set.",
+        "docs": f"{_DOCS}/how-it-works/#combining-strategies",
+    },
+    "job.half_life_days": {
+        "text": "Exponential recency decay on interaction timestamps.",
+        "docs": f"{_DOCS}/how-it-works/#interaction-weighting",
+    },
+    "job.cron_schedule": {"text": "When the scheduler starts a full job run."},
+    "job.feature_config_path": {
+        "text": "Path to features.toml (weights, eligibility, boosts).",
+        "docs": f"{_DOCS}/how-it-works/#interaction-weighting",
+    },
+    "job.save_model_artifact": {"text": "Write the fitted model next to the output store."},
+    "job.max_workers": {"text": "Process pool size for strategy fit."},
+    "job.content_fallback_enabled": {
+        "text": "Recommend cold items from similar item metadata.",
+        "docs": f"{_DOCS}/how-it-works/#strategies",
+    },
+    "job.sequential_min_median_interactions": {
+        "text": "Skip sequential models when the typical user is too sparse.",
+        "docs": f"{_DOCS}/how-it-works/#strategies",
+    },
+    "job.automl": {
+        "text": "Time-split search over ranking recipes.",
+        "docs": f"{_DOCS}/tutorial/#8-let-automl-pick-a-strategy-for-you",
+    },
+    "job.explain": {
+        "text": "Persist a short why-this-item payload on each output row.",
+        "docs": f"{_DOCS}/how-it-works/#why-this-item",
+    },
+    "model_configs": {
+        "text": "Per-strategy hyperparameters under [model.<name>].",
+        "docs": f"{_DOCS}/how-it-works/#strategies",
+    },
+    "input": {
+        "text": "Where events, users, and items are read from.",
+        "docs": f"{_DOCS}/architecture/",
+    },
+    "input.kind": {"text": "dataset files or a database."},
+    "output": {
+        "text": "Where recommendations and the run manifest are written.",
+        "docs": f"{_DOCS}/architecture/",
+    },
+    "output.kind": {"text": "dataset files or a database."},
+    "serve": {
+        "text": "Read-only HTTP API over the precomputed top-K table.",
+        "docs": f"{_DOCS}/openapi/",
+    },
+    "serve.enabled": {"text": "Whether this config starts the serve API."},
+    "serve.auth_token": {"text": "Bearer token for GET /recommendations. Shown redacted."},
+    "serve.default_k": {"text": "Default number of rows when the client omits limit."},
+    "serve.metrics_enabled": {"text": "Expose Prometheus metrics on the serve process."},
+    "dashboard": {
+        "text": "This status UI: Basic Auth, lookup, experiments, and this page.",
+        "docs": f"{_DOCS}/architecture/#dashboard",
+    },
+    "dashboard.enabled": {"text": "Whether this config starts the dashboard process."},
+    "dashboard.users_path": {"text": "TOML of dashboard usernames to bcrypt hashes."},
+    "dashboard.lookup_k": {"text": "Max recommendation rows shown in Inspect user."},
+    "dashboard.lookup_events": {"text": "Max recent input events shown in Inspect user."},
+    "events": {
+        "text": "Incremental ingest between full retrains, plus optional online LightFM.",
+        "docs": f"{_DOCS}/incremental-events/",
+    },
+    "events.enabled": {"text": "Turn on the events worker."},
+    "events.kind": {"text": "webhook, db, s3, or redis_streams."},
+    "events.online": {
+        "text": "Continue LightFM for users who sent events since the last full fit.",
+        "docs": f"{_DOCS}/incremental-events/#online-collaborative-refresh",
+    },
+    "trigger": {
+        "text": "HTTP webhook (and optional poll) to start a retrain.",
+        "docs": f"{_DOCS}/tutorial/#14-trigger-a-retrain-on-demand",
+    },
+    "trigger.enabled": {"text": "Whether this config starts the trigger service."},
+    "experiment": {
+        "text": "Sticky A/B test of ranking recipes, with promote on this dashboard.",
+        "docs": f"{_DOCS}/experiments/",
+    },
+    "experiment.enabled": {"text": "Assign users to variants at serve and job time."},
+    "features": {
+        "text": "Event weights, feature columns, eligibility, and boosts.",
+        "docs": f"{_DOCS}/how-it-works/#interaction-weighting",
+    },
+    "features.event_weights": {
+        "text": "Base weight per event_type before recency decay.",
+        "docs": f"{_DOCS}/how-it-works/#interaction-weighting",
+    },
+    "features.eligibility": {
+        "text": "Hard allowlists of which items a user may be recommended.",
+        "docs": f"{_DOCS}/architecture/#business-policies",
+    },
+    "features.boosts": {
+        "text": "Soft re-rank after strategies are combined.",
+        "docs": f"{_DOCS}/architecture/#business-policies",
+    },
+}
+
 
 def config_display(
     settings: Settings,
@@ -104,6 +234,7 @@ def config_display(
     )
     return {
         "sections": sections,
+        "hints": HINTS,
         "split_note": (
             "This is the config this dashboard process loaded. Job and serve may use "
             "a different file when configs are split."

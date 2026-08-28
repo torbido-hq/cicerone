@@ -92,6 +92,8 @@ def test_config_display_redacts_secrets_and_keeps_safe_values():
     assert incoming["kind"] == "dataset"
     assert incoming["toml"] == "[input]"
     assert "split" in display["split_note"]
+    assert display["hints"]["job.top_k"]["text"]
+    assert display["hints"]["job.top_k"]["docs"].startswith("https://cicerone.dev/")
 
 
 def test_config_display_missing_feature_file(tmp_path):
@@ -176,6 +178,11 @@ def test_config_page_renders_redacted_html(tmp_path):
     assert 'name="robots"' in html
     assert "noindex" in html
     assert "[job]" in html
+    assert 'data-config-hint-button="job.top_k"' in html
+    assert 'aria-label="About top_k"' in html
+    assert "How many items the job writes for each user." in html
+    assert "https://cicerone.dev/how-it-works/" in html
+    assert 'popovertarget="config-hint-job-top_k"' in html
 
 
 def test_config_page_unset_token_is_em_dash(tmp_path):

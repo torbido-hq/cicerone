@@ -17,14 +17,29 @@
   display: inline;
 }
 
+[data-config-hint] {
+  margin: 0;
+  width: min(20rem, calc(100vw - 2rem));
+  padding: 0.75rem 1rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.5rem;
+  background: #fff;
+  color: #0f172a;
+  box-shadow: 0 10px 15px -3px rgb(15 23 42 / 0.12);
+}
+
 @media (forced-colors: active) {
   [data-status-badge],
   [data-config-jump],
+  [data-config-hint-button],
   a,
   button,
   input,
   summary {
     outline: 1px solid CanvasText;
     outline-offset: 2px;
+  }
+  [data-config-hint] {
+    border: 1px solid CanvasText;
   }
 }

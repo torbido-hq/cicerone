@@ -37,22 +37,28 @@
       </a>
       {% endfor %}
     </nav>
-    {% from "_config_value.html" import render_value %}
+    {% from "_config_value.html" import render_value, hint_control with context %}
     {% for section in sections %}
     {% if section.id == "meta" %}
     <section id="config-meta" class="mb-4 scroll-mt-4" data-config-section="meta" tabindex="-1" aria-labelledby="config-meta-heading">
       <h2 id="config-meta-heading" class="sr-only">{{ section.title }}</h2>
       <div class="grid gap-3 sm:grid-cols-3">
         <dl class="rounded-lg border border-slate-200 border-l-4 border-l-sky-700 bg-white p-4">
-          <dt class="text-xs font-medium uppercase tracking-wide text-slate-600">Mode</dt>
+          <dt class="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-slate-600">
+            Mode{{ hint_control("meta.mode", "Mode") }}
+          </dt>
           <dd class="mt-1 font-mono text-lg text-slate-900">{{ section.fields.mode }}</dd>
         </dl>
         <dl class="rounded-lg border border-slate-200 border-l-4 border-l-sky-700 bg-white p-4">
-          <dt class="text-xs font-medium uppercase tracking-wide text-slate-600">Version</dt>
+          <dt class="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-slate-600">
+            Version{{ hint_control("meta.version", "Version") }}
+          </dt>
           <dd class="mt-1 font-mono text-lg text-slate-900">{{ section.fields.version }}</dd>
         </dl>
         <dl class="rounded-lg border border-slate-200 border-l-4 border-l-sky-700 bg-white p-4">
-          <dt class="text-xs font-medium uppercase tracking-wide text-slate-600">Config path</dt>
+          <dt class="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-slate-600">
+            Config path{{ hint_control("meta.config_path", "Config path") }}
+          </dt>
           <dd class="mt-1 font-mono text-sm text-slate-800 break-all">{{ section.fields.config_path }}</dd>
         </dl>
       </div>
@@ -67,9 +73,12 @@
     >
       <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 bg-slate-50 px-4 py-3">
         <div>
-          <h2 id="config-{{ section.id }}-heading" class="text-base font-semibold text-slate-900">
-            {{ section.title }}{% if section.badge %} <span class="sr-only">({{ section.badge }})</span>{% endif %}
-          </h2>
+          <div class="flex items-center gap-1.5">
+            <h2 id="config-{{ section.id }}-heading" class="text-base font-semibold text-slate-900">
+              {{ section.title }}{% if section.badge %} <span class="sr-only">({{ section.badge }})</span>{% endif %}
+            </h2>
+            {{ hint_control(section.id, section.title) }}
+          </div>
           {% if section.toml %}<p class="font-mono text-xs text-slate-600">{{ section.toml }}</p>{% endif %}
         </div>
         <div class="flex flex-wrap items-center gap-2">
@@ -92,7 +101,7 @@
         <p class="py-3 text-sm text-slate-700">{{ section.message }}</p>
         {% endif %}
         {% if section.fields %}
-        {{ render_value(section.fields) }}
+        {{ render_value(section.fields, false, section.id ~ ".") }}
         {% endif %}
       </div>
     </section>
