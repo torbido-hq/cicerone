@@ -4,12 +4,6 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
-
-### Changed
-
-- Bump `scipy` 1.17.0 → 1.17.1 and `moto` 5.2.2 → 5.2.3.
-
 ## [0.7.0] - 2026-08-28
 
 ### Added
@@ -52,6 +46,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   implicit pin to `pm-implicit` 0.7.3 (RecTools 0.18+ on Python 3.11).
 - Bump `uvicorn` 0.52.3 → 0.52.4, `ruff` 0.16.3 → 0.16.4, `mypy` 2.3.0 → 2.3.1,
   `wheel` 0.44.0 → 0.48.0.
+- Bump `scipy` 1.17.0 → 1.17.1 and `moto` 5.2.2 → 5.2.3.
 - Bump `actions/upload-artifact` v4 → v7 and `actions/download-artifact` v4 → v8.
 - Dashboard latest-run card shows stale on the card, visible Latest run /
   Recent runs headings, relative times in history, and plainer operator copy.

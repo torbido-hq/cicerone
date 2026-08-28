@@ -31,7 +31,7 @@ Update this line in the same PR that changes the split.
 
 When **Current trains** is `no split; main is …`, there is one train —
 `main`. Fixes and features both land on `main`. No `release/X.Y.0` PRs
-and no cherry-picks. Unreleased is that version.
+and no cherry-picks. New notes go under that version heading.
 
 <a id="cherry-picks" name="cherry-picks"></a>
 

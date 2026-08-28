@@ -5,12 +5,19 @@ description: CHANGELOG is product-only; never date website work; freeze shipped 
 
 # Changelog (released versions are frozen)
 
-[CHANGELOG.md](CHANGELOG.md) follows Keep a Changelog. Dated `## [x.y.z]`
-bullet text is **immutable** once tagged; do not rewrite or “clarify” it.
+[CHANGELOG.md](CHANGELOG.md) follows Keep a Changelog **groups**, but
+**do not** use a `## [Unreleased]` section. Ever. New product notes go
+under the current dated `## [x.y.z]`. When that version is already tagged,
+add a new dated `## [x.y.z]` on the PR that completes the next version
+(same PR as `__version__` / OpenAPI). Do not open a heading with no date.
 
-`###` groups are **A–Z** in every version (Unreleased and dated, including
-past): Added, Changed, Deprecated, Fixed, Removed, Security. Do not use
-Keep a Changelog’s Removed-before-Fixed order. Omit unused groups.
+Dated `## [x.y.z]` bullet text is **immutable** once tagged; do not rewrite
+or “clarify” it. The current open version (not yet tagged) may still
+receive new bullets.
+
+`###` groups are **A–Z** in every version: Added, Changed, Deprecated,
+Fixed, Removed, Security. Do not use Keep a Changelog’s
+Removed-before-Fixed order. Omit unused groups.
 
 **CHANGELOG = product. Website ≠ product.** Do not add, date, or “complete
 a release” with website notes.
@@ -23,13 +30,13 @@ cicerone.dev. `docs/*.md` is not website-only (see Borderline).
 Product is the `cicerone` package: job, serve, dashboard app, events, I/O,
 CLI, config, models.
 
-If a train has both product and site changes, Unreleased gets **only**
-the product bullets — no website bullet beside them. Site-only: leave
-Unreleased empty (no placeholder). Empty Unreleased is expected, not an
-error: `website/src/lib/changelog.mjs` `parseLatestRelease` skips
-`## [Unreleased]` and uses the first dated `## [x.y.z] - YYYY-MM-DD`
+If a train has both product and site changes, the current version gets
+**only** the product bullets — no website bullet beside them. Site-only:
+leave the current version unchanged. Empty new-version sections are not
+required: `website/src/lib/changelog.mjs` `parseLatestRelease` uses the
+first dated `## [x.y.z] - YYYY-MM-DD`
 (`website/src/lib/changelog.test.mjs`). No pytest/CI/tag/`publish.yml`
-job requires Unreleased bullets; do not invent any.
+job requires a placeholder heading; do not invent any.
 
 Split lives only in this file. Keep the `changelog.mdc` line in
 [agent-policy-source.mdc](agent-policy-source.mdc) in sync; do not fork a
@@ -44,18 +51,19 @@ second copy of the split.
 
 ## Do
 
-- Put new notes only under `## [Unreleased]` on the train you are
-  targeting (patch on `main`, minor on `release/X.Y.0`), except when that
-  version is already dated on the open release PR — then add under that
-  dated section.
+- Put new notes under the current dated `## [x.y.z]` on the train you
+  are targeting (patch on `main`, minor on `release/X.Y.0`), except when
+  that version is already tagged — then start the next dated `## [x.y.z]`
+  on the PR that completes it.
 - Keep `###` headings A–Z. Reorder existing groups to match; do not
-  rewrite their bullets.
+  rewrite tagged bullets.
 - Short bullets for **this** product change. Do not re-tell older releases.
 
 ## Do not
 
 - Changelog the website. Ever.
+- Add `## [Unreleased]`. Ever.
 - Rewrite, move, or “clarify” bullets in a tagged `## [x.y.z]` section.
-- Expand Unreleased bullets so they re-document a shipped version
+- Re-document a shipped version inside a later heading
   (e.g. do not narrate 0.5.0 lock behavior inside a later HA note).
-- Backport Unreleased items into an already-tagged release section.
+- Backport later items into an already-tagged release section.
