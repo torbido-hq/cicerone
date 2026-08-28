@@ -1,12 +1,12 @@
 {% macro scalar(value) %}
   {% if value == "[redacted]" %}
-  <span class="inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900">[redacted]</span>
+  <span class="inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-950">[redacted]</span>
   {% elif value == "true" %}
-  <span class="inline-flex rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">true</span>
+  <span class="inline-flex rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-900">true</span>
   {% elif value == "false" %}
-  <span class="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">false</span>
+  <span class="inline-flex rounded-full bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-800">false</span>
   {% elif value == "—" %}
-  <span class="text-slate-400">—</span>
+  <span class="text-slate-600">—</span>
   {% else %}
   <span class="font-mono text-sm text-slate-800 break-all">{{ value }}</span>
   {% endif %}
@@ -14,7 +14,7 @@
 
 {% macro field_row(key, child) %}
   <div class="grid grid-cols-1 gap-1 py-2.5 sm:grid-cols-[minmax(9rem,16rem)_1fr] sm:items-start sm:gap-4">
-    <dt class="font-mono text-xs text-slate-500">{{ key }}</dt>
+    <dt class="font-mono text-xs text-slate-600">{{ key }}</dt>
     <dd class="min-w-0">{{ render_value(child, true) }}</dd>
   </div>
 {% endmacro %}

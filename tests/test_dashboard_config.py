@@ -168,8 +168,13 @@ def test_config_page_renders_redacted_html(tmp_path):
     assert ">Metrics_token<" not in html
     assert ">metrics_token<" in html
     assert 'data-config-jump="job"' in html
+    assert 'href="#config-job"' in html
+    assert 'id="config-job"' in html
     assert 'aria-current="page"' in html
     assert 'aria-label="Config sections"' in html
+    assert 'aria-label="Main"' in html
+    assert 'name="robots"' in html
+    assert "noindex" in html
     assert "[job]" in html
 
 
