@@ -32,17 +32,17 @@ _SECRET_KEY_RE = re.compile(
     r"(secret|password|token|auth|credential|api_key|private_key)",
     re.IGNORECASE,
 )
-_NESTED_SECTIONS: tuple[tuple[str, str], ...] = (
-    ("model_configs", "Models"),
-    ("input", "Input"),
-    ("output", "Output"),
-    ("serve", "Serve"),
-    ("dashboard", "Dashboard"),
-    ("events", "Events"),
-    ("trigger", "Trigger"),
-    ("experiment", "Experiment"),
+_NESTED_SECTIONS: tuple[tuple[str, str, str], ...] = (
+    ("model_configs", "Models", "[model.*]"),
+    ("input", "Input", "[input]"),
+    ("output", "Output", "[output]"),
+    ("serve", "Serve", "[serve]"),
+    ("dashboard", "Dashboard", "[dashboard]"),
+    ("events", "Events", "[events]"),
+    ("trigger", "Trigger", "[job.trigger]"),
+    ("experiment", "Experiment", "[experiment]"),
 )
-_JOB_SKIP = frozenset({key for key, _title in _NESTED_SECTIONS} | {"mode"})
+_JOB_SKIP = frozenset({key for key, _title, _toml in _NESTED_SECTIONS} | {"mode"})
 
 
 def config_display(
@@ -59,19 +59,24 @@ def config_display(
         if field.name not in _JOB_SKIP
     }
     sections: list[dict[str, Any]] = [
-        {
-            "id": "meta",
-            "title": "Meta",
-            "fields": {
-                "config_path": _normalize(config_path),
-                "version": __version__,
-                "mode": _normalize(redacted.get("mode")),
-            },
-            "message": None,
-        },
-        {"id": "job", "title": "Job", "fields": job_fields, "message": None},
+        _decorate_section(
+            {
+                "id": "meta",
+                "title": "Meta",
+                "toml": None,
+                "fields": {
+                    "config_path": _normalize(config_path),
+                    "version": __version__,
+                    "mode": _normalize(redacted.get("mode")),
+                },
+                "message": None,
+            }
+        ),
+        _decorate_section(
+            {"id": "job", "title": "Job", "toml": "[job]", "fields": job_fields, "message": None}
+        ),
     ]
-    for key, title in _NESTED_SECTIONS:
+    for key, title, toml in _NESTED_SECTIONS:
         section_fields = _normalize(redacted.get(key))
         if key == "dashboard" and isinstance(section_fields, dict):
             section_fields = {
@@ -80,15 +85,22 @@ def config_display(
             }
         if not isinstance(section_fields, dict):
             section_fields = {"value": section_fields}
-        sections.append({"id": key, "title": title, "fields": section_fields, "message": None})
+        sections.append(
+            _decorate_section(
+                {"id": key, "title": title, "toml": toml, "fields": section_fields, "message": None}
+            )
+        )
     feature_fields, feature_message = _feature_section(settings)
     sections.append(
-        {
-            "id": "features",
-            "title": "Features",
-            "fields": feature_fields,
-            "message": feature_message,
-        }
+        _decorate_section(
+            {
+                "id": "features",
+                "title": "Features",
+                "toml": "features.toml",
+                "fields": feature_fields,
+                "message": feature_message,
+            }
+        )
     )
     return {
         "sections": sections,
@@ -97,6 +109,26 @@ def config_display(
             "a different file when configs are split."
         ),
     }
+
+
+def _decorate_section(section: dict[str, Any]) -> dict[str, Any]:
+    fields = section.get("fields")
+    badge: str | None = None
+    kind: str | None = None
+    if isinstance(fields, dict):
+        enabled = fields.get("enabled")
+        if enabled == "true":
+            badge = "on"
+        elif enabled == "false":
+            badge = "off"
+        raw_kind = fields.get("kind")
+        if isinstance(raw_kind, str) and raw_kind not in {MISSING, REDACTED}:
+            kind = raw_kind
+        if section["id"] == "model_configs" and "value" not in fields:
+            badge = f"{len(fields)} models"
+    section["badge"] = badge
+    section["kind"] = kind
+    return section
 
 
 def _is_secret_key(key: str, *, in_options: bool) -> bool:

@@ -1,3 +1,4 @@
+  {% set current = nav_current|default("") %}
   <a href="#main" class="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-10 focus:rounded focus:bg-white focus:px-3 focus:py-2 focus:text-sm focus:text-slate-800">
     Skip to content
   </a>
@@ -6,9 +7,21 @@
       <h1><img src="/static/cicerone-logo.svg" alt="Cicerone" class="h-12 w-auto"></h1>
       <p class="text-sm text-slate-600 border-l border-slate-200 pl-4">{{ page_subtitle }}</p>
       <nav class="ml-auto flex items-center gap-3 text-sm">
-        <a href="/dashboard" class="text-slate-700 hover:text-slate-900">Status</a>
-        <a href="/dashboard/experiments" class="text-slate-700 hover:text-slate-900">Experiments</a>
-        <a href="/dashboard/config" class="text-slate-700 hover:text-slate-900">Config</a>
+        <a
+          href="/dashboard"
+          class="{% if current == 'status' %}font-medium text-slate-900{% else %}text-slate-700 hover:text-slate-900{% endif %}"
+          {% if current == "status" %}aria-current="page"{% endif %}
+        >Status</a>
+        <a
+          href="/dashboard/experiments"
+          class="{% if current == 'experiments' %}font-medium text-slate-900{% else %}text-slate-700 hover:text-slate-900{% endif %}"
+          {% if current == "experiments" %}aria-current="page"{% endif %}
+        >Experiments</a>
+        <a
+          href="/dashboard/config"
+          class="{% if current == 'config' %}font-medium text-slate-900{% else %}text-slate-700 hover:text-slate-900{% endif %}"
+          {% if current == "config" %}aria-current="page"{% endif %}
+        >Config</a>
       </nav>
     </div>
   </header>
