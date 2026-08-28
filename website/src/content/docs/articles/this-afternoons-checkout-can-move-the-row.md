@@ -16,7 +16,7 @@ A paid Stripe Checkout can enqueue a purchase that, after Cicerone's micro-batch
 
 [Cicerone](https://cicerone.dev) 0.7 is the job that already fitted [LightFM](https://making.lyst.com/lightfm/docs/home.html) and wrote the table. The [nightly table](/articles/a-nightly-table-next-to-your-orders/) walkthrough leaves personalized ranks until 03:00 UTC; that remains the right default. This article is the optional `[events.online]` path: Node verifies the Stripe signature and `POST`s Cicerone's event contract. There is no recommendations SDK.
 
-**Idempotency (read this before copying the mapper).** `event_id: ${stripeEventId}:${itemId}` is not durable purchase idempotency. Cicerone 0.7's webhook source only suppresses that id while it is still pending or in-flight. After a successful flush `ack`, the same Stripe `event.id` can be ingested again. If a later retry must not add weight, persist `event.id` in your store before you return 2xx to Stripe.
+**Idempotency (read this before copying the mapper).** `event_id: ${stripeEventId}:${itemId}` is not durable purchase idempotency. In the current Cicerone 0.7 implementation, the in-memory webhook source only suppresses that id while it is still pending or in-flight. That is not a durable API guarantee. After a successful flush `ack`, the same Stripe `event.id` can be ingested again. If a later retry must not add weight, persist `event.id` in your store before you return 2xx to Stripe.
 
 ## What changes
 
@@ -102,7 +102,7 @@ Three different things:
 | Layer | What it does | What it does not do |
 | --- | --- | --- |
 | Stripe delivery retries | Stripe reuses `event.id` across retries of the same webhook | Does not mean Cicerone applied the purchase only once |
-| Cicerone 0.7 webhook queue | Drops a duplicate `event_id` while that id is still **pending or in-flight** in this process | After flush `ack`, the id is forgotten. Restart empties the queue. |
+| Cicerone 0.7 webhook queue | Drops a duplicate `event_id` while that id is still **pending or in-flight** in this process (current in-memory implementation, not a durable API guarantee) | After flush `ack`, the id is forgotten. A serve-process restart empties the in-memory queue. |
 | Durable business-level idempotency | Your store of Stripe `event.id` (or `session.id` once paid) **before** 2xx | Not provided by this mapper or by `kind = "webhook"` |
 
 `:${itemId}` only keeps two SKUs in one webhook as two Cicerone rows instead of colliding on `evt_…` alone.
@@ -128,7 +128,7 @@ The Checkout event payload does not include the full line list. `listLineItems()
 
 `autoPagingToArray({ limit: 100 })` walks those pages. The `100` is stripe-node's **total number of items materialized**, not the Stripe page size. Pagination continues until that many objects are collected or the list ends. It is this mapper's cap, not Cicerone's event contract.
 
-**If a Checkout Session has more than 100 line items, this mapper silently omits the rest.** That is partial purchase ingestion: Stripe saw the full cart; Cicerone only gets the first 100 SKU lines. Raise the `limit` if a session can be larger.
+**If a Checkout Session has more than 100 line items, this mapper omits the rest, producing partial purchase ingestion. Raise the `limit` if a session can be larger.**
 
 `quantity: 5` remains **one** Cicerone event with `quantity: 5`. Do not expand it into five purchase events unless you explicitly want five interactions. In Cicerone 0.7, types in `quantity_scaled_events` scale by `log1p(quantity)`.
 
