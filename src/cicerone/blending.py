@@ -244,22 +244,22 @@ def _latest_index_frame(
     latest_index: Mapping[str, Sequence[tuple[str, int, float]]],
     target_users: Sequence[str],
 ) -> pd.DataFrame:
-    rows: list[dict[str, object]] = []
+    groups: dict[tuple[tuple[str, int, float], ...], list[str]] = {}
     for user_id in dict.fromkeys(target_users):
         ranking = latest_index.get(user_id)
         if not ranking:
             continue
-        for item_id, rank, _score in ranking:
-            rows.append(
-                {
-                    Columns.User: user_id,
-                    Columns.Item: str(item_id),
-                    Columns.Rank: float(rank),
-                    Columns.Score: 0.0,
-                    SOURCE_COLUMN: LATEST_SOURCE,
-                }
-            )
-    return pd.DataFrame(rows) if rows else _empty_recs()
+        ranked = tuple((str(item_id), int(rank), float(score)) for item_id, rank, score in ranking)
+        groups.setdefault(ranked, []).append(str(user_id))
+    if not groups:
+        return _empty_recs()
+    if len(groups) == 1:
+        ranked, users = next(iter(groups.items()))
+        return expand_latest_ranking(ranked, users)
+    return pd.concat(
+        [expand_latest_ranking(ranked, users) for ranked, users in groups.items()],
+        ignore_index=True,
+    )
 
 
 def blend_for_users(

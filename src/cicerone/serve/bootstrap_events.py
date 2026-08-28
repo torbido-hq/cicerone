@@ -134,6 +134,7 @@ def start_events_runtime(
             max_extra_interactions=settings.events.online.max_extra_interactions,
             fence_check=(apply_lock.owned if apply_lock is not None else None),
             explain=settings.explain,
+            max_workers=settings.max_workers,
         )
         online.ensure_loaded()
         logger.info(

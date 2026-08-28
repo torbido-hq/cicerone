@@ -4,6 +4,23 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.1] - 2026-08-28
+
+### Changed
+
+- ProcessPool fit and AutoML pickle the shared dataset/config once per worker,
+  not once per strategy or fold.
+- Blending expands identical per-user latest rankings with the same vectorized
+  path as `shared_latest`.
+- Content-fallback fit stores only the last 50 history items per user (the
+  window recommend already scored).
+- Content-fallback recommend does not start an inner thread pool when it is
+  already running inside the job strategy pool.
+- Online collaborative refresh uses `[job].max_workers` for strategy recommend
+  threads.
+- Importing `cicerone.job` no longer calls `logging.basicConfig` (`cicerone job`
+  and `python -m cicerone.job` still configure logging).
+
 ## [0.7.0] - 2026-08-28
 
 ### Added

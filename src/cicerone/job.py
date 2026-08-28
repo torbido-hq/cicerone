@@ -40,7 +40,6 @@ from cicerone.model import (
 )
 from cicerone.model.recommend import RecommendCache
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 _MAX_ERROR_LENGTH = 500
@@ -351,6 +350,7 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     try:
         run()
     except Exception:

@@ -469,3 +469,9 @@ def test_evaluate_candidates_accepts_debias_flag(sample_items, feature_config):
     )
     assert len(results) == 1
     assert any(key.startswith("MAP") for key in results[0].metrics)
+
+
+def test_evaluate_fold_on_worker_requires_initializer():
+    automl._EVAL_WORKER = None
+    with pytest.raises(RuntimeError, match="not initialized"):
+        automl._evaluate_fold_on_worker(pd.DataFrame(), pd.DataFrame())

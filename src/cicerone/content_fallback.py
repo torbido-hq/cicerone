@@ -5,8 +5,10 @@ No free-text / TF-IDF — ``item_features`` are categoricals / lists.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import threading
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -65,8 +67,6 @@ def _feature_dict(
                 stripped = value.strip()
                 if stripped.startswith("[") and stripped.endswith("]"):
                     try:
-                        import json
-
                         parsed = json.loads(stripped)
                         values = list(parsed) if isinstance(parsed, list) else [value]
                     except (json.JSONDecodeError, TypeError):
@@ -178,6 +178,9 @@ class ContentFallbackModel:
                 strict=True,
             ):
                 self._user_history[str(user_id)].append(str(item_id))
+            for user_id, item_ids in self._user_history.items():
+                if len(item_ids) > _MAX_HISTORY_ITEMS:
+                    self._user_history[user_id] = item_ids[-_MAX_HISTORY_ITEMS:]
 
         if self.items is None or self.items.empty or not self.feature_columns:
             logger.info("Content fallback: no items/features — strategy will emit no rows")
@@ -299,7 +302,8 @@ class ContentFallbackModel:
             min_users=self.recommend_thread_min_users,
             max_workers=self.recommend_thread_max_workers,
         )
-        if workers > 1:
+        # Nested pools oversubscribe when strategy recommend already uses threads.
+        if workers > 1 and threading.current_thread() is threading.main_thread():
             with ThreadPoolExecutor(max_workers=workers) as pool:
                 user_rows = list(pool.map(_score_user, users))
         else:

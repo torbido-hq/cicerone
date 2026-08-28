@@ -655,6 +655,29 @@ def test_blend_for_users_latest_by_user_avoids_cartesian_frame():
     assert by_user["u2"] == ["b"]
 
 
+def test_blend_for_users_latest_by_user_shared_ranking_matches_shared_latest():
+    config = _blending(curve="linear", saturate_at=1.0, popular_share=0.5)
+    empty = pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, "source"])
+    ranking = [("a", 1, 2.0), ("b", 2, 1.0)]
+    users = [f"u{i}" for i in range(20)]
+    kwargs = dict(
+        personalized=empty,
+        popular=empty,
+        latest=None,
+        counts=dict.fromkeys(users, 0),
+        target_users=users,
+        config=config,
+        top_k=2,
+        latest_available=True,
+    )
+    indexed = blend_for_users(latest_by_user={user: ranking for user in users}, **kwargs)
+    shared = blend_for_users(shared_latest=ranking, **kwargs)
+    pd.testing.assert_frame_equal(
+        indexed.sort_values([Columns.User, Columns.Item]).reset_index(drop=True),
+        shared.sort_values([Columns.User, Columns.Item]).reset_index(drop=True),
+    )
+
+
 def test_blend_for_users_latest_by_user_normalizes_non_string_keys():
     config = _blending(curve="linear", saturate_at=1.0, popular_share=0.5)
     empty = pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, "source"])

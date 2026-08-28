@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import threading
+
 import pandas as pd
 import pytest
 from rectools import Columns
 
-from cicerone.content_fallback import ContentFallbackModel, build_content_fallback_model
+from cicerone.content_fallback import (
+    _MAX_HISTORY_ITEMS,
+    ContentFallbackModel,
+    build_content_fallback_model,
+)
 from cicerone.feature_config import FeatureColumn
 
 
@@ -150,6 +156,65 @@ def test_recommend_empty_when_allowlist_excludes_all_cold_items():
         items_to_recommend=["i1"],  # warm only — no cold items allowed
     )
     assert recs.empty
+
+
+def test_fit_caps_user_history_to_max_items():
+    n_history = _MAX_HISTORY_ITEMS + 10
+    rows = [{"item_id": f"i{i}", "category": "beer"} for i in range(n_history)]
+    rows.append({"item_id": "i_new", "category": "beer"})
+    items = pd.DataFrame(rows)
+    interactions = pd.DataFrame(
+        {
+            Columns.User: ["u1"] * n_history,
+            Columns.Item: [f"i{i}" for i in range(n_history)],
+            Columns.Weight: [1.0] * n_history,
+            Columns.Datetime: [pd.Timestamp.utcnow()] * n_history,
+        }
+    )
+    model = ContentFallbackModel(
+        feature_columns=[FeatureColumn(column="category", type="categorical")],
+        items=items,
+        interactions=interactions,
+    )
+    model.fit(_DummyDataset())
+    history = model._user_history["u1"]
+    assert len(history) == _MAX_HISTORY_ITEMS
+    assert history == [f"i{i}" for i in range(n_history - _MAX_HISTORY_ITEMS, n_history)]
+
+
+def test_recommend_from_worker_thread_matches_main_thread():
+    items = pd.DataFrame(
+        [
+            {"item_id": "i1", "category": "beer"},
+            {"item_id": "i_new", "category": "beer"},
+        ]
+    )
+    interactions = pd.DataFrame(
+        {
+            Columns.User: ["u1", "u2"],
+            Columns.Item: ["i1", "i1"],
+            Columns.Weight: [1.0, 1.0],
+            Columns.Datetime: [pd.Timestamp.utcnow(), pd.Timestamp.utcnow()],
+        }
+    )
+    model = ContentFallbackModel(
+        feature_columns=[FeatureColumn(column="category", type="categorical")],
+        items=items,
+        interactions=interactions,
+        recommend_thread_min_users=1,
+    )
+    model.fit(_DummyDataset())
+    kwargs = dict(users=["u2", "u1"], dataset=_DummyDataset(), k=5, filter_viewed=True)
+    main_recs = model.recommend(**kwargs)
+    holder: dict[str, pd.DataFrame] = {}
+
+    def _run() -> None:
+        holder["recs"] = model.recommend(**kwargs)
+
+    worker = threading.Thread(target=_run)
+    worker.start()
+    worker.join()
+    pd.testing.assert_frame_equal(main_recs.reset_index(drop=True), holder["recs"].reset_index(drop=True))
 
 
 def test_fit_releases_source_frames_after_building_indexes():

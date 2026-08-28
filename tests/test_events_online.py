@@ -120,6 +120,15 @@ def test_online_trainer_rejects_bad_knobs(tmp_path):
         OnlineTrainer(sink=sink, top_k=3, half_life_days=90, fit_partial_epochs=-1, fit_min_events=1)
     with pytest.raises(ValueError, match="fit_min_events"):
         OnlineTrainer(sink=sink, top_k=3, half_life_days=90, fit_partial_epochs=1, fit_min_events=0)
+    with pytest.raises(ValueError, match="max_workers"):
+        OnlineTrainer(
+            sink=sink,
+            top_k=3,
+            half_life_days=90,
+            fit_partial_epochs=1,
+            fit_min_events=1,
+            max_workers=0,
+        )
     with pytest.raises(ValueError, match="max_extra_interactions"):
         OnlineTrainer(
             sink=sink,

@@ -118,6 +118,7 @@ class OnlineTrainer:
         max_extra_interactions: int = DEFAULT_EVENTS_ONLINE_MAX_EXTRA_INTERACTIONS,
         fence_check: Callable[[], bool] | None = None,
         explain: ExplainSettings | None = None,
+        max_workers: int = 1,
     ):
         if top_k < 1:
             raise ValueError("top_k must be >= 1")
@@ -127,6 +128,8 @@ class OnlineTrainer:
             raise ValueError("fit_min_events must be >= 1")
         if max_extra_interactions < 1:
             raise ValueError("max_extra_interactions must be >= 1")
+        if max_workers < 1:
+            raise ValueError("max_workers must be >= 1")
         self._sink = sink
         self._top_k = top_k
         self._half_life_days = half_life_days
@@ -135,6 +138,7 @@ class OnlineTrainer:
         self._max_extra_interactions = max_extra_interactions
         self._fence_check = fence_check
         self._explain = explain if explain is not None else ExplainSettings()
+        self._max_workers = max_workers
         self._artifact: ModelArtifact | None = None
         self._working: Dataset | None = None
         self._job_raw = _empty_interaction_frame()
@@ -269,6 +273,7 @@ class OnlineTrainer:
             weights=dict(artifact.model_weights) if artifact.model_weights is not None else None,
             rrf_k=artifact.rrf_k,
             explain=self._explain,
+            max_workers=self._max_workers,
         )
         artifact = replace(artifact, dataset=working, fitted={**artifact.fitted, **fitted})
         self._pending = _PendingRefresh(
