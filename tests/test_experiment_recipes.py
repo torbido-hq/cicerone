@@ -282,3 +282,20 @@ def test_resolve_boost_policy_from_manifest_dicts() -> None:
 def test_resolve_boost_policy_rejects_duplicate_names() -> None:
     with pytest.raises(ConfigError, match="duplicate rule name"):
         resolve_boost_policy(("featured", "featured"), _features().boosts, label="boosts")
+
+
+def test_resolve_boost_policy_edge_shapes() -> None:
+    inherited = _features().boosts
+    assert resolve_boost_policy([], inherited, label="boosts") == ()
+    with pytest.raises(ConfigError, match="must be true, false"):
+        resolve_boost_policy(1, inherited, label="boosts")
+    with pytest.raises(ConfigError, match="non-empty"):
+        resolve_boost_policy(("featured", "  "), inherited, label="boosts")
+    with pytest.raises(ConfigError, match="must be true, false"):
+        resolve_boost_policy(["featured", {"name": "x"}], inherited, label="boosts")
+    with pytest.raises(ConfigError, match="boolean"):
+        resolve_boost_policy(
+            [{"name": "x", "kind": "boolean", "item_column": "featured"}],
+            inherited,
+            label="boosts",
+        )

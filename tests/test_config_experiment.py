@@ -411,3 +411,17 @@ def test_load_experiment_rejects_duplicate_and_empty_policy_names():
                 ],
             }
         )
+
+
+def test_load_experiment_empty_policy_list_drops():
+    settings = load_experiment_settings(
+        {
+            "enabled": True,
+            "id": "exp",
+            "variants": [
+                {"name": "control", "traffic": 0.5},
+                {"name": "treatment", "traffic": 0.5, "boosts": []},
+            ],
+        }
+    )
+    assert settings.variants[1].boosts == ()
