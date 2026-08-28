@@ -113,6 +113,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Online artifact persist is a compare-and-swap against the baseline
   fingerprint (local file lock / DB `DELETE … WHERE written_at`), after
   serializing the blob, so a finishing retrain is not overwritten.
+- Dashboard experiment promote/resume redirects stay on `/dashboard/experiments`
+  even when the variant or error text is hostile.
 
 ## [0.6.2] - 2026-08-24
 
