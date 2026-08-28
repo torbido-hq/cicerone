@@ -21,7 +21,7 @@ Checklist:
 ## Current trains
 
 Concrete mapping (this line only):
-no split; main is **0.7.0**.
+patch **0.7.1** on `main`; minor **0.8.0** on `release/0.8.0`.
 
 Update this line in the same PR that changes the split.
 
