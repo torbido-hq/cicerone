@@ -118,5 +118,5 @@ from this run's AutoML pick. Incremental write-through uses
 ## What this is not
 
 - Live LightFM / SASRec in `GET /recommendations`
-- Gorse-style per-source positive-feedback-rate of a mixed cascade
+- Per-source positive-feedback-rate of a mixed cascade
 - Multi-layer concurrent experiments
