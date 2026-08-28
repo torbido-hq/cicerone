@@ -15,9 +15,16 @@ import pandas as pd
 from cicerone.artifact import ARTIFACT_SCHEMA_VERSION, build_artifact, dumps_artifact
 from cicerone.automl import evaluate_candidates, select_best_candidate
 from cicerone.blending import COLD_START_USER_ID
-from cicerone.config import load_settings
+from cicerone.config import Settings, load_settings
 from cicerone.config.constants import DEFAULT_LOG_FORMAT
 from cicerone.dataset import build_dataset
+from cicerone.evaluation import (
+    conversion_event_types,
+    evaluate_served,
+    evaluate_tracking,
+    replay_ks,
+)
+from cicerone.events.store import load_recommendations_frame
 from cicerone.experiment import (
     ResolvedRecipe,
     apply_recipe,
@@ -41,6 +48,7 @@ from cicerone.model import (
 )
 from cicerone.model.recommend import RecommendCache
 from cicerone.publish import build_publisher
+from cicerone.track.store import TrackStore
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +74,76 @@ _MANIFEST_DEFAULTS: dict[str, Any] = {
     "automl_metrics": "",
     "experiment_id": "",
     "experiment_variants": "",
+    "track_eval": "",
+    "served_eval": "",
 }
+
+
+def _score_previous_run(
+    settings: Settings,
+    events: pd.DataFrame,
+    last_manifest: dict[str, Any] | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    if not settings.track.enabled and not settings.eval.enabled:
+        return None, None
+    previous_generated_at = None
+    if last_manifest:
+        previous_generated_at = last_manifest.get("generated_at")
+        previous_generated_at = str(previous_generated_at) if previous_generated_at else None
+    previous_recs = None
+    try:
+        previous_recs = load_recommendations_frame(settings.output)
+        if previous_recs is not None and previous_recs.empty:
+            previous_recs = None
+    except Exception:
+        logger.exception("Failed to load previous recommendations for eval")
+        previous_recs = None
+    store = TrackStore(settings.output)
+    track_payload = None
+    served_payload = None
+    if settings.track.enabled:
+        try:
+            types = conversion_event_types(
+                settings.track.conversion_event_types,
+                primary_metric=settings.experiment.primary_metric,
+            )
+            conversions = events
+            if not conversions.empty and "event_type" in conversions.columns:
+                conversions = conversions[conversions["event_type"].astype(str).isin(set(types))]
+            track_payload = evaluate_tracking(
+                track_rows=store.read_rows(),
+                conversions=conversions,
+                recommendations=previous_recs,
+                window_hours=settings.track.attribution_window_hours,
+            ).as_dict()
+        except Exception:
+            logger.exception("Failed to compute track eval")
+    if settings.eval.enabled and previous_recs is not None and previous_generated_at:
+        try:
+            history = None
+            try:
+                history = store.read_history()
+                if history is not None and history.empty:
+                    history = None
+            except Exception:
+                logger.exception("Failed to read recommendation history")
+                history = None
+            types = settings.eval.event_types or conversion_event_types(
+                settings.track.conversion_event_types,
+                primary_metric=settings.experiment.primary_metric,
+            )
+            report = evaluate_served(
+                previous_recs,
+                events,
+                generated_at=previous_generated_at,
+                ks=replay_ks(settings.eval.ks, top_k=settings.top_k),
+                event_types=types,
+                history=history,
+            )
+            served_payload = report.as_dict() if report is not None else None
+        except Exception:
+            logger.exception("Failed to compute served eval")
+    return track_payload, served_payload
 
 
 def _read_input(source: InputSource) -> tuple[pd.DataFrame, pd.DataFrame | None, pd.DataFrame | None]:
@@ -100,6 +177,9 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
     manifest["lock_backend"] = settings.trigger.lock_backend
     manifest["top_k"] = settings.top_k
     manifest["automl_enabled"] = settings.automl.enabled
+    track_eval_payload: dict[str, Any] | None = None
+    served_eval_payload: dict[str, Any] | None = None
+    recommendations: pd.DataFrame | None = None
 
     try:
         source = build_input_source(settings.input)
@@ -111,6 +191,13 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
             len(users) if users is not None else "n/a",
             len(items) if items is not None else "n/a",
         )
+
+        last_manifest = None
+        try:
+            last_manifest = build_manifest_reader(settings.output).read_latest()
+        except Exception:
+            logger.exception("Failed to read last manifest")
+        track_eval_payload, served_eval_payload = _score_previous_run(settings, events, last_manifest)
 
         built = build_dataset(events, users, items, feature_config, half_life_days=settings.half_life_days)
 
@@ -150,8 +237,7 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
             )
 
         fitted: dict[str, RecommenderModel] = {}
-        last_manifest = None
-        if settings.experiment.enabled:
+        if settings.experiment.enabled and last_manifest is None:
             try:
                 last_manifest = build_manifest_reader(settings.output).read_latest()
             except Exception:
@@ -333,6 +419,8 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
                     if automl_result is not None
                     else ""
                 ),
+                "track_eval": json.dumps(track_eval_payload) if track_eval_payload else "",
+                "served_eval": json.dumps(served_eval_payload) if served_eval_payload else "",
             }
         )
     except Exception as exc:
@@ -357,6 +445,17 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
             else:
                 raise
         logger.info("Job finished: %s", json.dumps(manifest))
+        if manifest.get("status") == "success" and (settings.track.enabled or settings.eval.enabled):
+            store = TrackStore(settings.output)
+            try:
+                store.write_eval({"track_eval": track_eval_payload, "served_eval": served_eval_payload})
+            except Exception:
+                logger.exception("Failed to write track eval")
+            if recommendations is not None:
+                try:
+                    store.append_history(recommendations, generated_at=str(manifest["generated_at"]))
+                except Exception:
+                    logger.exception("Failed to append recommendation history")
 
 
 if __name__ == "__main__":

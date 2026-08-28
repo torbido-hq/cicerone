@@ -11,6 +11,7 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 
 from cicerone.config import Settings
+from cicerone.evaluation import conversion_event_types, user_track_outcomes
 from cicerone.events.store import load_items_catalog_size, load_recommendation_guardrail_rows
 from cicerone.experiment.evaluate import evaluate_experiment
 from cicerone.experiment.recipes import ResolvedRecipe, resolve_recipes
@@ -20,10 +21,11 @@ from cicerone.io.db_store import DEFAULT_EVENTS_TABLE
 from cicerone.io.factory import build_input_source, build_manifest_reader
 from cicerone.io.options import is_s3_not_found, read_parquet, require_option, sql_identifier
 from cicerone.io.recommendation_schema import USER_COLUMN
+from cicerone.track.store import TrackStore
 
 logger = logging.getLogger(__name__)
 
-_EVENT_METRIC_COLUMNS = (USER_COLUMN, "event_type", "quantity", "occurred_at")
+_EVENT_METRIC_COLUMNS = (USER_COLUMN, "item_id", "event_type", "quantity", "occurred_at")
 
 
 def experiment_context(settings: Settings) -> dict[str, Any]:
@@ -81,6 +83,28 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
     except Exception:
         logger.exception("Failed to read items snapshot for experiment catalog size")
     weights = feature_config.event_weights if feature_config is not None else {}
+    track_outcomes = None
+    n_impressions = 0
+    if settings.track.enabled:
+        try:
+            track_rows = TrackStore(settings.output).read_rows()
+        except Exception:
+            logger.exception("Failed to read track rows for experiment metrics")
+            track_rows = []
+        n_impressions = sum(1 for row in track_rows if str(row.get("kind") or "") == "impression")
+        types = conversion_event_types(
+            settings.track.conversion_event_types, primary_metric=experiment.primary_metric
+        )
+        conversions = events
+        if not conversions.empty and "event_type" in conversions.columns:
+            conversions = conversions[conversions["event_type"].astype(str).isin(set(types))]
+        track_outcomes = user_track_outcomes(
+            track_rows=track_rows,
+            conversions=conversions,
+            primary_metric=experiment.primary_metric,
+            attribution=experiment.attribution,
+            window_hours=settings.track.attribution_window_hours,
+        )
     report = evaluate_experiment(
         experiment=experiment,
         recipes=recipes,
@@ -91,6 +115,9 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
         promoted_variant=promoted,
         promoted_at=promoted_at,
         catalog_size=catalog_size,
+        track_outcomes=track_outcomes,
+        n_impressions=n_impressions,
+        min_impressions=settings.track.min_impressions if settings.track.enabled else 0,
     )
     return {
         "enabled": True,
@@ -142,7 +169,10 @@ def _load_metric_events(settings: Settings) -> pd.DataFrame:
         except Exception as exc:
             if is_s3_not_found(exc):
                 return pd.DataFrame(columns=list(_EVENT_METRIC_COLUMNS))
-            frame = build_input_source(inp).read_events()
+            try:
+                frame = read_parquet(inp.options, "events.parquet")
+            except Exception:
+                frame = build_input_source(inp).read_events()
         keep = [column for column in _EVENT_METRIC_COLUMNS if column in frame.columns]
         return frame.loc[:, keep] if keep else frame
     if inp.kind == "db" and not inp.options.get("events_query"):

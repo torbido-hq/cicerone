@@ -13,6 +13,11 @@
           {% if current == "status" %}aria-current="page"{% endif %}
         >Status</a>
         <a
+          href="/dashboard/quality"
+          class="inline-flex min-h-9 items-center rounded px-2 {% if current == 'quality' %}font-medium text-slate-900{% else %}text-slate-700 hover:text-slate-900{% endif %} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2"
+          {% if current == "quality" %}aria-current="page"{% endif %}
+        >Quality</a>
+        <a
           href="/dashboard/experiments"
           class="inline-flex min-h-9 items-center rounded px-2 {% if current == 'experiments' %}font-medium text-slate-900{% else %}text-slate-700 hover:text-slate-900{% endif %} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2"
           {% if current == "experiments" %}aria-current="page"{% endif %}

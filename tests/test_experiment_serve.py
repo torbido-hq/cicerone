@@ -211,3 +211,47 @@ def test_recommendations_exposure_generated_at_matches_response(tmp_path):
     row = json.loads((tmp_path / "exposures.jsonl").read_text().strip().splitlines()[0])
     assert row["generated_at"] == body["generated_at"]
     assert body["generated_at"] == "2026-08-04T12:00:00+00:00"
+
+
+def test_recommendations_promoted_variant_read_errors(tmp_path, monkeypatch):
+    from cicerone.experiment.store import ExperimentStore, experiment_state
+
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    ExperimentStore(output).write_state(experiment_state("rrf-vs-blend", promoted_variant=None))
+    app = create_app(
+        _settings(experiment=_experiment_settings(), output=output),
+        _FakeReader(_variant_recs()),
+        manifest_reader=_FakeManifest(),
+        feature_config=_feature_config(),
+    )
+    body = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
+    assert body["experiment_id"] == "rrf-vs-blend"
+    monkeypatch.setattr(
+        "cicerone.experiment.store.ExperimentStore.read_state",
+        lambda self: (_ for _ in ()).throw(RuntimeError("state")),
+    )
+    app = create_app(
+        _settings(experiment=_experiment_settings(), output=output),
+        _FakeReader(_variant_recs()),
+        manifest_reader=_FakeManifest(),
+        feature_config=_feature_config(),
+    )
+    again = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"})
+    assert again.status_code == 200
+
+
+def test_recommendations_exposure_append_error_still_serves(tmp_path, monkeypatch):
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    monkeypatch.setattr(
+        "cicerone.experiment.store.ExperimentStore.append_exposures",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("exposures")),
+    )
+    app = create_app(
+        _settings(experiment=_experiment_settings(log_exposures=True), output=output),
+        _FakeReader(_variant_recs()),
+        manifest_reader=_FakeManifest(),
+        feature_config=_feature_config(),
+    )
+    response = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"})
+    assert response.status_code == 200
+    assert response.json()["items"]

@@ -9,7 +9,14 @@ from typing import Any
 
 import pandas as pd
 
-from cicerone.config.constants import PRIMARY_METRIC_WEIGHTED
+from cicerone.config.constants import (
+    ATTRIBUTION_CLICK,
+    ATTRIBUTION_IMPRESSION,
+    ATTRIBUTION_RECOMMENDED,
+    PRIMARY_METRIC_CONVERSION,
+    PRIMARY_METRIC_CTR,
+    PRIMARY_METRIC_WEIGHTED,
+)
 from cicerone.config.settings import ExperimentSettings
 from cicerone.experiment.assignment import assign_variant
 from cicerone.experiment.guardrails import GuardrailReport, evaluate_guardrails
@@ -73,14 +80,24 @@ def evaluate_experiment(
     promoted_variant: str | None = None,
     promoted_at: str | None = None,
     catalog_size: int | None = None,
+    track_outcomes: dict[str, float] | None = None,
+    n_impressions: int = 0,
+    min_impressions: int = 0,
 ) -> ExperimentReport:
     variants = [(recipe.name, recipe.traffic) for recipe in recipes]
     names = [recipe.name for recipe in recipes]
     assigned: dict[str, str] = {}
-    exposure_conditional = bool(exposures)
+    attribution = experiment.attribution
+    rec_metric = experiment.primary_metric in {PRIMARY_METRIC_CTR, PRIMARY_METRIC_CONVERSION}
     starts: dict[str, pd.Timestamp] = {}
+    exposure_conditional = bool(exposures) or (
+        rec_metric and attribution in {ATTRIBUTION_CLICK, ATTRIBUTION_IMPRESSION} and bool(track_outcomes)
+    )
     if exposures:
         assigned, starts = _first_exposures(exposures, experiment_id=experiment.id, names=names)
+    elif track_outcomes and rec_metric:
+        for user_id in track_outcomes:
+            assigned[str(user_id)] = assign_variant(experiment.id, str(user_id), variants)
     elif not events.empty and USER_COLUMN in events.columns:
         for user_id in events[USER_COLUMN].astype(str).unique():
             assigned[str(user_id)] = assign_variant(
@@ -93,9 +110,16 @@ def evaluate_experiment(
         metric_events = events.iloc[0:0]
     else:
         metric_events = _restrict_events(events, starts=starts, until=until)
-    outcomes = user_outcome(
-        metric_events, event_weights=event_weights, primary_metric=experiment.primary_metric
-    )
+    if attribution == ATTRIBUTION_RECOMMENDED and recommendations is not None:
+        from cicerone.evaluation import filter_events_to_recommended
+
+        metric_events = filter_events_to_recommended(metric_events, recommendations, assigned=assigned)
+    if rec_metric and track_outcomes is not None:
+        outcomes = {str(user_id): float(value) for user_id, value in track_outcomes.items()}
+    else:
+        outcomes = user_outcome(
+            metric_events, event_weights=event_weights, primary_metric=experiment.primary_metric
+        )
     values_by_variant: dict[str, list[float]] = defaultdict(list)
     for user_id, variant in assigned.items():
         values_by_variant[variant].append(float(outcomes.get(user_id, 0.0)))
@@ -126,6 +150,8 @@ def evaluate_experiment(
             guardrails.append(evaluate_guardrails(slice_rows, variant=name, catalog_size=catalog_size))
         if any(not item.ok for item in guardrails):
             blocked.append("guardrails")
+    if rec_metric and n_impressions < min_impressions:
+        blocked.append("volume")
     decided = bool(comparisons) and all(item.decided for item in comparisons)
     if promoted_variant:
         blocked.append("promoted")

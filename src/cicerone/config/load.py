@@ -23,6 +23,9 @@ from cicerone.config.constants import (
     DEFAULT_LOCK_TTL_SECONDS,
     DEFAULT_MAX_WORKERS,
     DEFAULT_SEQUENTIAL_MIN_MEDIAN_INTERACTIONS,
+    DEFAULT_TRACK_ATTRIBUTION_WINDOW_HOURS,
+    DEFAULT_TRACK_MIN_IMPRESSIONS,
+    EXPERIMENT_ATTRIBUTIONS,
     EXPERIMENT_COMBINERS,
     LOCK_BACKENDS,
     MODES,
@@ -36,11 +39,13 @@ from cicerone.config.publish import coerce_publish_settings, load_publish_settin
 from cicerone.config.settings import (
     AutomlSettings,
     DashboardSettings,
+    EvalSettings,
     ExperimentSettings,
     ExplainSettings,
     IOSettings,
     ServeSettings,
     Settings,
+    TrackSettings,
     TriggerSettings,
     VariantSettings,
 )
@@ -68,6 +73,7 @@ _SERVE_FLAT_KEYS = (
     ("serve_category_column", "category_column"),
     ("serve_metrics_enabled", "metrics_enabled"),
     ("serve_metrics_token", "metrics_token"),
+    ("serve_log_impressions", "log_impressions"),
 )
 _TRIGGER_FLAT_KEYS = (
     ("trigger_enabled", "enabled"),
@@ -101,6 +107,17 @@ _AUTOML_FLAT_KEYS = (
     ("automl_primary_metric", "primary_metric"),
     ("automl_candidates", "candidates"),
     ("automl_debias", "debias"),
+)
+_TRACK_FLAT_KEYS = (
+    ("track_enabled", "enabled"),
+    ("track_attribution_window_hours", "attribution_window_hours"),
+    ("track_conversion_event_types", "conversion_event_types"),
+    ("track_min_impressions", "min_impressions"),
+)
+_EVAL_FLAT_KEYS = (
+    ("eval_enabled", "enabled"),
+    ("eval_event_types", "event_types"),
+    ("eval_ks", "ks"),
 )
 
 
@@ -163,6 +180,18 @@ def make_settings(**overrides: Any) -> Settings:
     events = coerce_events_settings(overrides.pop("events", None))
     publish = coerce_publish_settings(overrides.pop("publish", None))
     experiment = _coerce_experiment(overrides.pop("experiment", None))
+    track_raw = overrides.pop("track", None)
+    eval_raw = overrides.pop("eval", None)
+    track = (
+        load_track_settings(track_raw)
+        if isinstance(track_raw, dict)
+        else _coerce_nested(TrackSettings, track_raw, _TRACK_FLAT_KEYS, overrides)
+    )
+    job_eval = (
+        load_eval_settings(eval_raw)
+        if isinstance(eval_raw, dict)
+        else _coerce_nested(EvalSettings, eval_raw, _EVAL_FLAT_KEYS, overrides)
+    )
 
     base: dict[str, Any] = dict(
         input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": "/tmp/in"}),
@@ -191,6 +220,8 @@ def make_settings(**overrides: Any) -> Settings:
         publish=publish,
         explain=ExplainSettings(),
         experiment=experiment,
+        track=track,
+        eval=job_eval,
     )
     base.update(overrides)
     if base.get("model_configs") is None:
@@ -209,6 +240,7 @@ def make_settings(**overrides: Any) -> Settings:
     settings = Settings(**base)
     _require_exposure_log_backend(settings)
     _require_online_output_backend(settings)
+    _require_track_backend(settings)
     _warn_online_skipped_for_experiment(settings)
     return settings
 
@@ -260,6 +292,18 @@ def _require_online_output_backend(settings: Settings) -> None:
     raise ConfigError(ONLINE_OUTPUT_ERROR)
 
 
+def _require_track_backend(settings: Settings) -> None:
+    if settings.serve.log_impressions and not settings.track.enabled:
+        raise ConfigError("serve.log_impressions requires track.enabled = true")
+    if not settings.track.enabled:
+        return
+    from cicerone.track.store import TRACK_LOG_HA_ERROR, require_appendable_track_log
+
+    require_appendable_track_log(settings.output)
+    if settings.events.ha and settings.output.kind != "db":
+        raise ConfigError(TRACK_LOG_HA_ERROR)
+
+
 def _warn_online_skipped_for_experiment(settings: Settings) -> None:
     if settings.events.online.enabled and settings.experiment.enabled:
         logger.warning(
@@ -288,6 +332,11 @@ def load_experiment_settings(raw: dict[str, Any] | None) -> ExperimentSettings:
     primary_metric = str(data.get("primary_metric") or default_metric).strip() or default_metric
     alpha = float(data.get("alpha", DEFAULT_EXPERIMENT_ALPHA))
     automl_challenger = bool(data.get("automl_challenger", False))
+    attribution = str(data.get("attribution") or "user").strip().lower() or "user"
+    if attribution not in EXPERIMENT_ATTRIBUTIONS:
+        raise ConfigError(
+            f"experiment.attribution must be one of {list(EXPERIMENT_ATTRIBUTIONS)}, got {attribution!r}"
+        )
     if enabled:
         if not experiment_id:
             raise ConfigError("experiment.id is required when experiment.enabled = true")
@@ -310,6 +359,7 @@ def load_experiment_settings(raw: dict[str, Any] | None) -> ExperimentSettings:
         log_exposures=bool(data.get("log_exposures", False)),
         automl_challenger=automl_challenger,
         alpha=alpha,
+        attribution=attribution,
     )
 
 
@@ -370,6 +420,60 @@ def _normalize_traffic(variants: tuple[VariantSettings, ...]) -> tuple[VariantSe
         )
     adjusted = replace(last, traffic=last.traffic + remainder)
     return (*variants[:-1], adjusted)
+
+
+def _load_string_tuple(raw: object, *, name: str) -> tuple[str, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list) or not all(isinstance(item, str) and item.strip() for item in raw):
+        raise ConfigError(f"{name} must be a list of non-empty strings")
+    return tuple(item.strip() for item in raw)
+
+
+def _load_positive_int_tuple(raw: object, *, name: str) -> tuple[int, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ConfigError(f"{name} must be a list of positive integers")
+    values: list[int] = []
+    for item in raw:
+        try:
+            number = int(item)
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(f"{name} must be a list of positive integers") from exc
+        values.append(require_positive_int(number, name=name))
+    return tuple(values)
+
+
+def load_track_settings(raw: dict[str, Any] | None) -> TrackSettings:
+    data = raw or {}
+    enabled = bool(data.get("enabled", False))
+    window = float(data.get("attribution_window_hours", DEFAULT_TRACK_ATTRIBUTION_WINDOW_HOURS))
+    if window <= 0:
+        raise ConfigError(f"track.attribution_window_hours must be > 0, got {window}")
+    min_impressions = require_non_negative_int(
+        int(data.get("min_impressions", DEFAULT_TRACK_MIN_IMPRESSIONS)),
+        name="track.min_impressions",
+    )
+    return TrackSettings(
+        enabled=enabled,
+        attribution_window_hours=window,
+        conversion_event_types=_load_string_tuple(
+            data.get("conversion_event_types"), name="track.conversion_event_types"
+        ),
+        min_impressions=min_impressions,
+    )
+
+
+def load_eval_settings(raw: dict[str, Any] | None) -> EvalSettings:
+    data = raw or {}
+    ks_raw = data.get("ks")
+    ks = _load_positive_int_tuple(ks_raw, name="job.eval.ks") if ks_raw is not None else ()
+    return EvalSettings(
+        enabled=bool(data.get("enabled", False)),
+        event_types=_load_string_tuple(data.get("event_types"), name="job.eval.event_types"),
+        ks=ks,
+    )
 
 
 def _load_explain_settings(raw: dict[str, Any]) -> ExplainSettings:
@@ -597,6 +701,7 @@ def load_settings(config_path: str | None = None) -> Settings:
             category_column=str(serve_raw.get("category_column", "category")),
             metrics_enabled=bool(serve_raw.get("metrics_enabled", True)),
             metrics_token=serve_metrics_token,
+            log_impressions=bool(serve_raw.get("log_impressions", False)),
         ),
         trigger=TriggerSettings(
             enabled=trigger_enabled,
@@ -639,8 +744,11 @@ def load_settings(config_path: str | None = None) -> Settings:
         events=events,
         publish=publish,
         experiment=load_experiment_settings(raw.get("experiment") or {}),
+        track=load_track_settings(raw.get("track") or {}),
+        eval=load_eval_settings(job.get("eval") or {}),
     )
     _require_exposure_log_backend(settings)
     _require_online_output_backend(settings)
+    _require_track_backend(settings)
     _warn_online_skipped_for_experiment(settings)
     return settings

@@ -36,6 +36,7 @@ def build_openapi() -> dict:
         mode="serve",
         serve_auth_token="openapi-export",
         events=EventsSettings(enabled=True, kind="webhook"),
+        track={"enabled": True},
     )
     return create_app(settings, _SchemaReader()).openapi()
 

@@ -62,6 +62,14 @@ metrics_token = ""   # empty = open endpoint; bind to a trusted network or rever
 # bootstrap_servers = "${KAFKA_BOOTSTRAP_SERVERS}"
 # topic = "cicerone.recommendations"
 
+# Impression/click tracking (not used for training). See docs/evaluation.md.
+# [track]
+# enabled = true
+# attribution_window_hours = 24
+# conversion_event_types = ["purchase"]
+# [serve]
+# log_impressions = false         # GET lookup is not a view; host should POST /track
+
 # [input] is required by config.load_settings() even in serve mode (kept
 # generic/simple rather than special-casing it away) but is never read from
 # in this mode -- any valid, already-configured backend works as a placeholder.

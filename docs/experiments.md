@@ -79,6 +79,10 @@ lookups.
 exposures require **db** output (two replicas must not append the same local
 file). Default off: serve stays read-only.
 
+Impression and click tracking (CTR / conversion of shown items) is a separate
+`POST /track` contract. See [evaluation.md](evaluation.md). Do not send
+impressions through `POST /events`.
+
 ## Incremental events
 
 Popular/latest write-through refreshes **every variant** for affected users.
@@ -90,8 +94,14 @@ See [incremental-events.md](incremental-events.md).
 ## Metrics and promote
 
 Deterministic assignment means ingested `[events]` join a variant without a
-new impression protocol. Counts and weighted sums (`features.toml`
-`[event_weights]`) are **descriptive** until the sequential test decides.
+new impression protocol when `attribution = "user"`. Counts and weighted sums
+(`features.toml` `[event_weights]`) are **descriptive** until the sequential
+test decides.
+
+To A/B the lists themselves, set `primary_metric = "ctr"` or `"conversion"`
+and `attribution = "click"` or `"impression"` after wiring `[track]`.
+`attribution = "recommended"` counts only events whose item was on the
+assigned list (no `/track`). See [evaluation.md](evaluation.md).
 
 The dashboard **Experiments** page (`GET /dashboard/experiments`) shows:
 
