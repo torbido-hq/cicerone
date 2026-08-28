@@ -15,12 +15,8 @@ test('githubHeadingSlug matches Keep a Changelog GitHub anchors', () => {
 	assert.equal(githubHeadingSlug('[1.1.0] - 2023-03-06'), '110---2023-03-06');
 });
 
-test('parseLatestRelease skips Unreleased and returns the first dated section', () => {
+test('parseLatestRelease returns the first dated section', () => {
 	const text = `# Changelog
-
-## [Unreleased]
-
-- pending
 
 ## [0.6.0] - 2026-08-20
 
@@ -38,7 +34,7 @@ test('parseLatestRelease skips Unreleased and returns the first dated section', 
 });
 
 test('parseLatestRelease returns null when no dated release exists', () => {
-	assert.equal(parseLatestRelease('## [Unreleased]\n\n- wip\n'), null);
+	assert.equal(parseLatestRelease('## Notes\n\n- wip\n'), null);
 	assert.equal(parseLatestRelease(''), null);
 });
 

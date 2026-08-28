@@ -198,8 +198,6 @@ patch train and `release/X.Y.0` is the minor train.
   flight. Feature work stays on `release/X.Y.0` and reaches `main` only
   via [Merge-backs](.cursor/rules/releases.mdc#merge-backs) after the
   patch is tagged (not by retargeting those PRs at `main`).
-- `## [Unreleased]` is per-branch (patch on `main`, minor on
-  `release/X.Y.0`).
 - After the patch is tagged, follow
   [Merge-backs](.cursor/rules/releases.mdc#merge-backs) and update
   **Current trains** in that same PR.
@@ -227,8 +225,8 @@ named `pypi`, then a [pending trusted publisher](https://docs.pypi.org/trusted-p
 for `cicerone-recommender` — owner `torbido-hq`, repo `cicerone`, workflow
 `publish.yml`, environment `pypi`. No API token.
 
-1. On the PR that completes the version, move `## [Unreleased]` notes
-   into `## [X.Y.Z] - YYYY-MM-DD` (today's date) in the same branch
+1. On the PR that completes the version, put notes under
+   `## [X.Y.Z] - YYYY-MM-DD` (today's date) in the same branch
    before merge, and set `cicerone.__version__`
    (`src/cicerone/__init__.py`) to the same `X.Y.Z` (serve OpenAPI
    metadata uses it via `SERVE_API_VERSION` — regenerate
@@ -247,6 +245,6 @@ for `cicerone-recommender` — owner `torbido-hq`, repo `cicerone`, workflow
    changelog section). `.github/workflows/publish.yml` builds the sdist and
    wheel (including dashboard CSS) and uploads them to PyPI.
 
-If the version was already tagged while the changelog still said
-Unreleased, fold the date fix into the next real PR — never a dating-only
+If the version was already tagged while the changelog heading still
+lacked a date, fold the date fix into the next real PR — never a dating-only
 PR.
