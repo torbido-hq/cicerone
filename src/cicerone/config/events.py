@@ -10,6 +10,7 @@ from cicerone.config.constants import (
     DEFAULT_EVENTS_BATCH_WINDOW_SECONDS,
     DEFAULT_EVENTS_ONLINE_FIT_MIN_EVENTS,
     DEFAULT_EVENTS_ONLINE_FIT_PARTIAL_EPOCHS,
+    DEFAULT_EVENTS_ONLINE_MAX_EXTRA_INTERACTIONS,
     DEFAULT_EVENTS_POLL_INTERVAL_SECONDS,
     ConfigError,
 )
@@ -57,6 +58,7 @@ def _online_settings(raw: dict[str, Any] | EventsOnlineSettings | None) -> Event
             "enabled": raw.enabled,
             "fit_partial_epochs": raw.fit_partial_epochs,
             "fit_min_events": raw.fit_min_events,
+            "max_extra_interactions": raw.max_extra_interactions,
         }
     elif raw is None:
         data = {}
@@ -73,6 +75,10 @@ def _online_settings(raw: dict[str, Any] | EventsOnlineSettings | None) -> Event
         fit_min_events=require_positive_int(
             int(data.get("fit_min_events", DEFAULT_EVENTS_ONLINE_FIT_MIN_EVENTS)),
             name="events.online.fit_min_events",
+        ),
+        max_extra_interactions=require_positive_int(
+            int(data.get("max_extra_interactions", DEFAULT_EVENTS_ONLINE_MAX_EXTRA_INTERACTIONS)),
+            name="events.online.max_extra_interactions",
         ),
     )
 

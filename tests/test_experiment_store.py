@@ -49,6 +49,18 @@ def test_experiment_store_roundtrip_dataset(tmp_path) -> None:
     )
     rows = store.read_exposures()
     assert [row["user_id"] for row in rows] == ["u1", "u2"]
+    store.append_exposures(
+        [
+            {
+                "user_id": "u9",
+                "experiment_id": "other",
+                "variant": "control",
+                "generated_at": None,
+                "exposed_at": "2026-08-25T00:02:00+00:00",
+            }
+        ]
+    )
+    assert [row["user_id"] for row in store.read_exposures(experiment_id="exp")] == ["u1", "u2"]
 
 
 def test_experiment_store_roundtrip_sqlite(tmp_path) -> None:

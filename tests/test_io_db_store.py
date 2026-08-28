@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 
 import pandas as pd
 import pytest
@@ -214,6 +215,45 @@ def test_database_output_writes_and_replaces_model_artifact():
     assert bytes(payload) == b"second"
     assert sink.read_model_artifact() == b"second"
     assert sink.model_artifact_fingerprint() is not None
+
+
+def test_database_output_replace_model_artifact_if_is_compare_and_swap():
+    sink = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})
+    sink.write_model_artifact(b"first")
+    token = sink.model_artifact_fingerprint()
+    assert token is not None
+    assert sink.replace_model_artifact_if(b"second", token) is True
+    assert sink.read_model_artifact() == b"second"
+    assert sink.replace_model_artifact_if(b"third", token) is False
+    assert sink.read_model_artifact() == b"second"
+
+
+def test_database_output_replace_model_artifact_if_single_winner_under_contention():
+    sink = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})
+    sink.write_model_artifact(b"first")
+    token = sink.model_artifact_fingerprint()
+    assert token is not None
+    barrier = threading.Barrier(2)
+    outcomes: list[bool] = []
+    lock = threading.Lock()
+
+    def _cas(payload: bytes) -> None:
+        barrier.wait()
+        won = sink.replace_model_artifact_if(payload, token)
+        with lock:
+            outcomes.append(won)
+
+    threads = [
+        threading.Thread(target=_cas, args=(b"online-a",)),
+        threading.Thread(target=_cas, args=(b"online-b",)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert outcomes.count(True) == 1
+    assert outcomes.count(False) == 1
+    assert sink.read_model_artifact() in {b"online-a", b"online-b"}
 
 
 def test_database_output_read_model_artifact_missing_returns_none():

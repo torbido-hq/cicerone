@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from cicerone.config import Settings, load_settings
-from cicerone.dashboard_experiments import experiment_context, promote_winner
+from cicerone.dashboard_experiments import clear_promotion, experiment_context, promote_winner
 from cicerone.dashboard_lookup import lookup_inspector
 from cicerone.dashboard_users import load_users
 from cicerone.http_auth import require_basic_auth
@@ -166,6 +166,19 @@ def create_app(
             )
         return RedirectResponse(
             url=f"/dashboard/experiments?message={quote('Promoted ' + variant.strip())}",
+            status_code=303,
+        )
+
+    @app.post("/dashboard/experiments/unpromote", dependencies=[Depends(auth)])
+    def experiments_unpromote():
+        error = clear_promotion(settings)
+        if error:
+            return RedirectResponse(
+                url=f"/dashboard/experiments?promote_error={quote(error)}",
+                status_code=303,
+            )
+        return RedirectResponse(
+            url="/dashboard/experiments?message=Resumed%20split",
             status_code=303,
         )
 

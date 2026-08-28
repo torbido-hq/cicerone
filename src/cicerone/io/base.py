@@ -40,6 +40,10 @@ class OutputSink(Protocol):
 
     def write_model_artifact(self, payload: bytes) -> None: ...
 
+    def replace_model_artifact_if(self, payload: bytes, expected_fingerprint: str) -> bool:
+        """Write only when the current fingerprint still matches ``expected_fingerprint``."""
+        ...
+
     def read_model_artifact(self) -> bytes | None:
         """Latest fitted-model blob, or ``None`` if the sink has not written one."""
         ...

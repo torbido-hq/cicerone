@@ -12,6 +12,8 @@ from cicerone.events.store import (
     count_recommendation_users,
     dispose_recommendation_engines,
     empty_recommendations_frame,
+    load_items_catalog_size,
+    load_recommendation_guardrail_rows,
     load_recommendations_for_users,
     load_recommendations_frame,
 )
@@ -309,3 +311,102 @@ def test_load_recommendations_for_users_unsupported_kind():
         load_recommendations_for_users(IOSettings(kind="other", options={}), ["u1"])
     with pytest.raises(ValueError, match="Unsupported output kind"):
         count_recommendation_users(IOSettings(kind="other", options={}))
+
+
+def test_load_items_catalog_size_dataset(tmp_path):
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    )
+    assert load_items_catalog_size(settings.output) is None
+    pd.DataFrame({"item_id": ["a", "b", "a"]}).to_parquet(tmp_path / "items_snapshot.parquet", index=False)
+    assert load_items_catalog_size(settings.output) == 2
+    assert load_items_catalog_size(IOSettings(kind="other", options={})) is None
+
+
+def test_load_items_catalog_size_sqlite(tmp_path):
+    url = f"sqlite+pysqlite:///{tmp_path / 'items.db'}"
+    engine = create_engine(url)
+    pd.DataFrame({"item_id": ["a", "b", "a"]}).to_sql("recommendation_items", engine, index=False)
+    settings = make_settings(output=IOSettings(kind="db", options={"database_url": url}))
+    assert load_items_catalog_size(settings.output) == 2
+
+
+def test_load_items_catalog_size_sqlite_missing_table(tmp_path):
+    db_path = tmp_path / "missing_items.db"
+    sqlite3.connect(db_path).close()
+    settings = make_settings(
+        output=IOSettings(kind="db", options={"database_url": f"sqlite+pysqlite:///{db_path}"})
+    )
+    assert load_items_catalog_size(settings.output) is None
+
+
+def test_load_recommendation_guardrail_rows_dataset(tmp_path):
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    )
+    empty = load_recommendation_guardrail_rows(settings.output)
+    assert empty is not None
+    assert empty.empty
+    pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                "variant": "control",
+            }
+        ]
+    ).to_parquet(tmp_path / "recommendations.parquet", index=False)
+    frame = load_recommendation_guardrail_rows(settings.output)
+    assert frame is not None
+    assert list(frame["item_id"]) == ["i1"]
+    assert list(frame["variant"]) == ["control"]
+    with pytest.raises(ValueError, match="Unsupported output kind"):
+        load_recommendation_guardrail_rows(IOSettings(kind="other", options={}))
+
+
+def test_load_recommendation_guardrail_rows_sqlite(tmp_path):
+    url = f"sqlite+pysqlite:///{tmp_path / 'guard.db'}"
+    engine = create_engine(url)
+    pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                "variant": "treatment",
+            }
+        ]
+    ).to_sql("recommendations", engine, index=False)
+    settings = make_settings(output=IOSettings(kind="db", options={"database_url": url}))
+    frame = load_recommendation_guardrail_rows(settings.output)
+    assert frame is not None
+    assert list(frame["variant"]) == ["treatment"]
+
+
+def test_load_recommendation_guardrail_rows_sqlite_without_variant(tmp_path):
+    url = f"sqlite+pysqlite:///{tmp_path / 'guard_novar.db'}"
+    engine = create_engine(url)
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_sql("recommendations", engine, index=False)
+    settings = make_settings(output=IOSettings(kind="db", options={"database_url": url}))
+    frame = load_recommendation_guardrail_rows(settings.output)
+    assert frame is not None
+    assert list(frame["item_id"]) == ["i1"]
+    assert "variant" not in frame.columns or frame["variant"].isna().all()
+
+
+def test_load_recommendation_guardrail_rows_sqlite_missing_table(tmp_path):
+    db_path = tmp_path / "missing_guard.db"
+    sqlite3.connect(db_path).close()
+    settings = make_settings(
+        output=IOSettings(kind="db", options={"database_url": f"sqlite+pysqlite:///{db_path}"})
+    )
+    frame = load_recommendation_guardrail_rows(settings.output)
+    assert frame is not None
+    assert frame.empty

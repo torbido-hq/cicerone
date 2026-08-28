@@ -47,8 +47,8 @@ Sticky, replica-safe **as long as** `experiment_id`, variant **names**,
 **order**, and `traffic` stay fixed: `blake2s(experiment_id || "\0" || user_id)`
 → `[0, 1)`, then walk cumulative `traffic`. Changing traffic remaps users.
 A dashboard **Promote** writes `experiment_state` next to the output store;
-serve then sends 100% traffic to that variant until you clear promote state
-or turn the experiment off. Promote survives later jobs. After you disable
+serve then sends 100% traffic to that variant until you **Resume split**
+(or delete promote state / turn the experiment off). Promote survives later jobs. After you disable
 `[experiment]`, leftover `variant` rows collapse to `control` (else the
 lexicographically first remaining name; blank/NaN names are ignored) on
 **serve reads and incremental write-through** until the next job rewrite.
@@ -83,9 +83,9 @@ file). Default off: serve stays read-only.
 
 Popular/latest write-through refreshes **every variant** for affected users.
 `[events.online]` LightFM rewrite is **skipped** while `[experiment]` is on
-(so arms stay isolated). Without an experiment, it rewrites personalized /
-item-KNN / content-fallback rows for affected users. See
-[incremental-events.md](incremental-events.md).
+(so arms stay isolated; load/serve log a warning). Without an experiment, it
+rewrites personalized / item-KNN / content-fallback rows for affected users.
+See [incremental-events.md](incremental-events.md).
 
 ## Metrics and promote
 
@@ -101,14 +101,19 @@ The dashboard **Experiments** page (`GET /dashboard/experiments`) shows:
   exposure-conditional when `log_exposures` is on (rows must match this
   `experiment_id`).
 - Guardrails (fail closed): fallback rate, top-item share, distinct-item
-  coverage. A purchase win that collapses the catalog does not promote.
+  coverage against the **items snapshot** size (not recommended-item
+  diversity). Missing recommendations or a `variant` column also block
+  promote. A purchase win that collapses the catalog does not promote.
 - **Promote** — only when the CI excludes zero **and** guardrails pass —
-  writes the winner as 100% traffic at serve. The next job can copy that
+  writes the winner as 100% traffic at serve. **Resume split** clears
+  promote state so sticky hashing resumes. The next job can copy that
   recipe into `[job]` and disable the experiment.
 
 `automl_challenger = true` (with `[job.automl]` enabled) synthesizes
-`control` from the last successful manifest and `treatment` from this run's
-AutoML pick.
+`control` from the last successful manifest (the `experiment_variants`
+control recipe when present, not the union `models` list) and `treatment`
+from this run's AutoML pick. Incremental write-through uses
+`control`/`treatment` even when `[[experiment.variants]]` is empty.
 
 ## What this is not
 

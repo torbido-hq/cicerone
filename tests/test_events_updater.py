@@ -7,6 +7,7 @@ from support.events import event_payload
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import IOSettings, make_settings
 from cicerone.events.normalize import normalize_event
+from cicerone.events.online_result import OnlineRefreshResult, empty_online_rows
 from cicerone.events.store import load_recommendations_for_users, load_recommendations_frame
 from cicerone.events.updater import INCREMENTAL_SOURCE, IncrementalUpdater
 from cicerone.feature_config import FeatureConfig
@@ -242,6 +243,54 @@ def test_incremental_updater_write_busy_check_ignores_cached_start(tmp_path, fea
     )
     assert updater.apply([normalize_event(event_payload())]) == 0
     assert writes["n"] == 0
+
+
+def test_persist_online_skipped_when_write_busy(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+
+    class _FakeOnline:
+        def __init__(self) -> None:
+            self.commits = 0
+            self.aborts = 0
+
+        def refresh(self, events):  # type: ignore[no-untyped-def]
+            del events
+            return OnlineRefreshResult(rows=empty_online_rows())
+
+        def invalidate(self) -> None:
+            return None
+
+        def commit(self) -> None:
+            self.commits += 1
+
+        def abort(self) -> None:
+            self.aborts += 1
+
+    online = _FakeOnline()
+    busy = {"v": False}
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=3,
+        busy_check=lambda: False,
+        write_busy_check=lambda: busy["v"],
+        online=online,
+    )
+    assert updater.apply([normalize_event(event_payload())], persist_online=False) == 1
+    assert online.commits == 0
+    busy["v"] = True
+    updater.persist_online()
+    assert online.commits == 0
+    assert online.aborts == 1
 
 
 def test_incremental_updater_empty_and_unknown_event_type(tmp_path, feature_config: FeatureConfig):

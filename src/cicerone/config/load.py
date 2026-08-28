@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import tomllib
@@ -51,6 +52,8 @@ from cicerone.config.validation import (
     validate_model_weights,
     validate_rrf_k,
 )
+
+logger = logging.getLogger(__name__)
 
 _ENV_PLACEHOLDER = re.compile(r"\$(\$?)\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
@@ -201,6 +204,7 @@ def make_settings(**overrides: Any) -> Settings:
             base["item_based_k_neighbors"] = k_from_cfg
     settings = Settings(**base)
     _require_exposure_log_backend(settings)
+    _warn_online_skipped_for_experiment(settings)
     return settings
 
 
@@ -230,6 +234,14 @@ def _require_exposure_log_backend(settings: Settings) -> None:
     require_appendable_exposure_log(settings.output)
     if settings.events.ha and settings.output.kind != "db":
         raise ConfigError(EXPOSURE_LOG_HA_ERROR)
+
+
+def _warn_online_skipped_for_experiment(settings: Settings) -> None:
+    if settings.events.online.enabled and settings.experiment.enabled:
+        logger.warning(
+            "[events.online] is enabled while [experiment] is enabled; "
+            "online collaborative refresh will be skipped"
+        )
 
 
 def _coerce_experiment(value: Any) -> ExperimentSettings:
@@ -324,6 +336,13 @@ def _normalize_traffic(variants: tuple[VariantSettings, ...]) -> tuple[VariantSe
         raise ConfigError(f"experiment.variants traffic sums to {total}, which exceeds 1")
     remainder = max(0.0, 1.0 - total)
     last = variants[-1]
+    if remainder > 1e-9:
+        logger.warning(
+            "experiment.variants traffic sums to %s; assigning remainder %s to %r",
+            total,
+            remainder,
+            last.name,
+        )
     adjusted = replace(last, traffic=last.traffic + remainder)
     return (*variants[:-1], adjusted)
 
@@ -592,4 +611,5 @@ def load_settings(config_path: str | None = None) -> Settings:
         experiment=load_experiment_settings(raw.get("experiment") or {}),
     )
     _require_exposure_log_backend(settings)
+    _warn_online_skipped_for_experiment(settings)
     return settings

@@ -959,3 +959,39 @@ def test_dashboard_promote_unknown_variant_redirects():
     )
     assert response.status_code == 303
     assert "promote_error=" in response.headers["location"]
+
+
+def test_dashboard_unpromote_resumes_split(tmp_path):
+    from cicerone.config import IOSettings
+    from cicerone.config.settings import ExperimentSettings, VariantSettings
+
+    out = tmp_path / "out"
+    out.mkdir()
+    experiment = ExperimentSettings(
+        enabled=True,
+        id="exp-1",
+        variants=(
+            VariantSettings(name="control", traffic=0.5),
+            VariantSettings(name="treatment", traffic=0.5),
+        ),
+    )
+    response = _recs_client(
+        experiment=experiment,
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+    ).post(
+        "/dashboard/experiments/unpromote",
+        auth=("alice", "s3cret"),
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert "Resumed" in response.headers["location"]
+
+
+def test_dashboard_unpromote_disabled_experiment_redirects():
+    response = _recs_client().post(
+        "/dashboard/experiments/unpromote",
+        auth=("alice", "s3cret"),
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert "promote_error=" in response.headers["location"]

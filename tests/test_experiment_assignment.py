@@ -7,6 +7,7 @@ from cicerone.config.settings import ExperimentSettings, VariantSettings
 from cicerone.experiment.assignment import (
     assign_variant,
     assignment_bucket,
+    experiment_variant_names,
     resolve_assignment,
 )
 
@@ -71,6 +72,26 @@ def test_resolve_assignment_automl_challenger_without_variants() -> None:
     assert experiment_id == "auto"
     assert variant in {"control", "treatment"}
     assert resolve_assignment(settings, "u1", promoted_variant="treatment") == ("auto", "treatment")
+
+
+def test_experiment_variant_names_challenger_defaults() -> None:
+    off = make_settings()
+    assert experiment_variant_names(off) == ()
+    named = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="exp",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        )
+    )
+    assert experiment_variant_names(named) == ("control", "treatment")
+    challenger = make_settings(experiment=ExperimentSettings(enabled=True, id="auto", automl_challenger=True))
+    assert experiment_variant_names(challenger) == ("control", "treatment")
+    enabled_empty = make_settings(experiment=ExperimentSettings(enabled=True, id="exp"))
+    assert experiment_variant_names(enabled_empty) == ()
 
 
 def test_resolve_assignment_enabled_without_variants_is_off() -> None:

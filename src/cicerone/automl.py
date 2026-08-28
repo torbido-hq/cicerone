@@ -221,6 +221,7 @@ def _evaluate_fold(
     candidates: list[Candidate],
     metrics: dict[str, MetricAtK],
     model_configs: dict[str, dict[str, Any]] | None = None,
+    content_fallback_enabled: bool = False,
 ) -> list[dict[str, float]]:
     """Score every candidate on one fold (picklable for ProcessPoolExecutor)."""
     built = build_dataset(train_events, users, items, config, half_life_days=half_life_days)
@@ -243,6 +244,7 @@ def _evaluate_fold(
             model_configs=model_configs,
             recommend_cache=recommend_cache,
             explain=ExplainSettings(enabled=False),
+            content_fallback_enabled=content_fallback_enabled,
         )
         fold_metrics.append(calc_metrics(metrics, reco=reco, interactions=test_interactions))
     return fold_metrics
@@ -262,6 +264,7 @@ def evaluate_candidates(
     model_configs: dict[str, dict[str, Any]] | None = None,
     sequential_min_median_interactions: int = DEFAULT_SEQUENTIAL_MIN_MEDIAN_INTERACTIONS,
     debias: bool = False,
+    content_fallback_enabled: bool = False,
 ) -> list[CandidateResult]:
     """Backtest candidates over time folds. ``max_workers > 1`` evaluates folds in parallel."""
     parsed_candidates = _parse_candidates(candidates)
@@ -305,6 +308,7 @@ def evaluate_candidates(
                     repeat(parsed_candidates),
                     repeat(metrics),
                     repeat(model_configs),
+                    repeat(content_fallback_enabled),
                 )
             )
     else:
@@ -320,6 +324,7 @@ def evaluate_candidates(
                 parsed_candidates,
                 metrics,
                 model_configs,
+                content_fallback_enabled,
             )
             for train_events, test_events in folds
         ]

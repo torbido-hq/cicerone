@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import pytest
 from support.toml_config import write_toml
 
@@ -16,6 +18,7 @@ def test_make_settings_events_defaults():
     assert settings.events.online.enabled is False
     assert settings.events.online.fit_partial_epochs == 1
     assert settings.events.online.fit_min_events == 100
+    assert settings.events.online.max_extra_interactions == 50_000
     assert settings.events_enabled is False
     assert settings.events_kind == "webhook"
 
@@ -33,6 +36,8 @@ def test_coerce_events_settings_errors():
         coerce_events_settings({"online": {"fit_partial_epochs": -1}})
     with pytest.raises(ValueError):
         coerce_events_settings({"online": {"fit_min_events": 0}})
+    with pytest.raises(ValueError):
+        coerce_events_settings({"online": {"max_extra_interactions": 0}})
     with pytest.raises(ConfigError, match="events.online.enabled requires events.enabled"):
         coerce_events_settings({"enabled": False, "online": {"enabled": True}})
 
@@ -58,6 +63,7 @@ def test_load_events_section(tmp_path):
         enabled = true
         fit_partial_epochs = 2
         fit_min_events = 7
+        max_extra_interactions = 12
         [input]
         kind = "dataset"
         [input.options]
@@ -79,6 +85,48 @@ def test_load_events_section(tmp_path):
     assert settings.events.online.enabled is True
     assert settings.events.online.fit_partial_epochs == 2
     assert settings.events.online.fit_min_events == 7
+    assert settings.events.online.max_extra_interactions == 12
+
+
+def test_load_online_and_experiment_warns(tmp_path, caplog):
+    path = write_toml(
+        tmp_path,
+        """
+        [job]
+        mode = "serve"
+        [serve]
+        auth_token = "tok"
+        [events]
+        enabled = true
+        kind = "webhook"
+        [events.online]
+        enabled = true
+        [experiment]
+        enabled = true
+        id = "exp"
+        [[experiment.variants]]
+        name = "control"
+        traffic = 0.5
+        [[experiment.variants]]
+        name = "treatment"
+        traffic = 0.5
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+    with caplog.at_level(logging.WARNING, logger="cicerone.config.load"):
+        settings = load_settings(path)
+    assert settings.events.online.enabled is True
+    assert settings.experiment.enabled is True
+    assert any("online collaborative refresh will be skipped" in record.message for record in caplog.records)
 
 
 def test_load_events_unknown_kind(tmp_path):

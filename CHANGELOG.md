@@ -58,7 +58,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Dashboard history no longer styles empty errors as failures.
 - Dashboard lookup keeps recommendations when a user attribute is a list,
   Series, or array.
-- Serve collapses leftover `variant` rows to `control` (else the first name)
+- Serve collapses leftover `variant` rows to `control` (else the
+  lexicographically first remaining name)
   when `[experiment]` is off, instead of mixing control and treatment ranks.
 - Experiment promote state is a single-row replace (no `DROP TABLE`);
   reads order by `promoted_at`, and fall back if that column is missing.
@@ -80,6 +81,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Leftover `variant` collapse ignores missing/NaN names instead of treating
   them as `"nan"`.
 - Dashboard lookup refresh TTL tracks one reader, not an unbounded id map.
+- Experiment coverage guardrail uses the items-snapshot catalog size, not
+  distinct recommended item ids (so concentrated lists cannot relax the floor).
+- Online persist after ack is skipped when a full retrain holds the lock or
+  replaced the model artifact.
+- Online LightFM caps extra interactions on top of the last job artifact
+  (`events.online.max_extra_interactions`, default 50_000).
+- Dashboard Experiments can resume the split after promote.
+- Writing `reasons` or `variant` to an existing DB table missing those
+  columns raises a clear `ALTER TABLE` error.
+- Unknown dashboard staleness is announced as unknown, not success.
+- Sequential `log_epoch_metrics` calls transformer `fit_partial` with min
+  and max epoch (LightFM still gets epochs only).
+- AutoML scores candidates with `job.content_fallback.enabled`, matching
+  the recipe the job ships.
+- AutoML-challenger incremental apply uses `control`/`treatment` when
+  `[[experiment.variants]]` is empty.
+- Challenger control recipes prefer the prior run's `experiment_variants`
+  control arm over the union `models` list.
+- Experiment promote is blocked when recommendations or `variant` are
+  missing (catalog guardrails cannot run).
+- A failed first in-flight heartbeat nacks the batch instead of applying.
+- SQS receive uses a 5-minute visibility timeout so micro-batch plus apply
+  can outlast the queue default.
+- `[events.online]` with `[experiment]` logs a warning when the online
+  rewrite is skipped.
+- HSTU keeps an explicit `[model.sequential].loss = "sampled_softmax"`
+  instead of rewriting it to `softmax`.
+- Sequential epoch-metric `fit_partial` detects RecTools transformers by
+  `min_epochs`/`max_epochs`, so LightFM `num_threads` stays at its default.
+- Online artifact persist is a compare-and-swap against the baseline
+  fingerprint (local file lock / DB `DELETE … WHERE written_at`), after
+  serializing the blob, so a finishing retrain is not overwritten.
 
 ## [0.6.2] - 2026-08-24
 

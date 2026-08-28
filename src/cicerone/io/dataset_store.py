@@ -9,10 +9,12 @@ Options (from [input.options] / [output.options]):
 
 from __future__ import annotations
 
+import fcntl
 import io
 import json
 import logging
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -104,6 +106,20 @@ class DatasetOutputSink:
         self._options = options
         self._backend = validate_storage_options(options)
 
+    @contextmanager
+    def _artifact_lock(self) -> Iterator[None]:
+        if self._backend != "local":
+            yield
+            return
+        path = Path(require_option(self._options, "path", "local")) / ".model-artifact.lock"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
     def _write_bytes(self, filename: str, payload: bytes, content_type: str) -> None:
         if self._backend == "local":
             path = Path(require_option(self._options, "path", "local")) / filename
@@ -188,7 +204,17 @@ class DatasetOutputSink:
     def write_model_artifact(self, payload: bytes) -> None:
         from cicerone.artifact import ARTIFACT_FILENAME
 
-        self._write_bytes(ARTIFACT_FILENAME, payload, "application/octet-stream")
+        with self._artifact_lock():
+            self._write_bytes(ARTIFACT_FILENAME, payload, "application/octet-stream")
+
+    def replace_model_artifact_if(self, payload: bytes, expected_fingerprint: str) -> bool:
+        from cicerone.artifact import ARTIFACT_FILENAME
+
+        with self._artifact_lock():
+            if self.model_artifact_fingerprint() != expected_fingerprint:
+                return False
+            self._write_bytes(ARTIFACT_FILENAME, payload, "application/octet-stream")
+            return True
 
     def read_model_artifact(self) -> bytes | None:
         from cicerone.artifact import ARTIFACT_FILENAME

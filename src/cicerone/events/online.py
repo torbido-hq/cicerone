@@ -14,6 +14,7 @@ from rectools.dataset import Dataset
 from rectools.dataset.interactions import Interactions
 
 from cicerone.artifact import ModelArtifact, dumps_artifact, loads_artifact
+from cicerone.config.constants import DEFAULT_EVENTS_ONLINE_MAX_EXTRA_INTERACTIONS
 from cicerone.config.settings import ExplainSettings
 from cicerone.dataset import BuiltDataset, build_interactions
 from cicerone.events.base import NormalizedEvent
@@ -45,6 +46,9 @@ class _PendingRefresh:
     artifact: ModelArtifact
     working: Dataset
     pending_fit_events: int
+    extra_raw: pd.DataFrame
+    baseline_token: str | None
+    baseline_digest: bytes | None
 
 
 def _digest(payload: bytes) -> bytes:
@@ -53,6 +57,10 @@ def _digest(payload: bytes) -> bytes:
 
 def _external_ids(values: Iterable[object]) -> set[str]:
     return {str(value) for value in values}
+
+
+def _empty_interaction_frame() -> pd.DataFrame:
+    return pd.DataFrame(columns=list(_INTERACTION_COLS))
 
 
 def _interaction_frame(frame: pd.DataFrame) -> pd.DataFrame:
@@ -64,19 +72,28 @@ def _interaction_frame(frame: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def _append_known_interactions(dataset: Dataset, extra: pd.DataFrame) -> Dataset:
-    raw = dataset.get_raw_interactions()
-    parts: list[pd.DataFrame] = []
-    if raw is not None and not raw.empty:
-        parts.append(_interaction_frame(raw))
-    if not extra.empty:
-        parts.append(_interaction_frame(extra))
+def _trim_recent_interactions(frame: pd.DataFrame, max_rows: int) -> pd.DataFrame:
+    if max_rows < 1 or frame.empty or len(frame) <= max_rows:
+        return frame
+    ordered = frame
+    if Columns.Datetime in frame.columns:
+        ordered = frame.sort_values(Columns.Datetime, kind="mergesort")
+    return ordered.tail(max_rows).reset_index(drop=True)
+
+
+def _merge_interaction_frames(*frames: pd.DataFrame) -> pd.DataFrame:
+    parts = [_interaction_frame(frame) for frame in frames if frame is not None and not frame.empty]
     if not parts:
-        return dataset
+        return _empty_interaction_frame()
     combined = pd.concat(parts, ignore_index=True)
-    combined = combined.groupby([Columns.User, Columns.Item], as_index=False).agg(
+    return combined.groupby([Columns.User, Columns.Item], as_index=False).agg(
         {Columns.Weight: "sum", Columns.Datetime: "max"}
     )
+
+
+def _dataset_with_interactions(dataset: Dataset, combined: pd.DataFrame) -> Dataset:
+    if combined.empty:
+        return dataset
     interactions = Interactions.from_raw(combined, dataset.user_id_map, dataset.item_id_map)
     return Dataset(
         user_id_map=dataset.user_id_map,
@@ -98,6 +115,7 @@ class OnlineTrainer:
         half_life_days: float,
         fit_partial_epochs: int,
         fit_min_events: int,
+        max_extra_interactions: int = DEFAULT_EVENTS_ONLINE_MAX_EXTRA_INTERACTIONS,
         fence_check: Callable[[], bool] | None = None,
         explain: ExplainSettings | None = None,
     ):
@@ -107,15 +125,20 @@ class OnlineTrainer:
             raise ValueError("fit_partial_epochs must be >= 0")
         if fit_min_events < 1:
             raise ValueError("fit_min_events must be >= 1")
+        if max_extra_interactions < 1:
+            raise ValueError("max_extra_interactions must be >= 1")
         self._sink = sink
         self._top_k = top_k
         self._half_life_days = half_life_days
         self._fit_partial_epochs = fit_partial_epochs
         self._fit_min_events = fit_min_events
+        self._max_extra_interactions = max_extra_interactions
         self._fence_check = fence_check
         self._explain = explain if explain is not None else ExplainSettings()
         self._artifact: ModelArtifact | None = None
         self._working: Dataset | None = None
+        self._job_raw = _empty_interaction_frame()
+        self._extra_raw = _empty_interaction_frame()
         self._payload_digest: bytes | None = None
         self._artifact_token: str | None = None
         self._hot_users: frozenset[str] = frozenset()
@@ -127,6 +150,8 @@ class OnlineTrainer:
         self._pending = None
         self._artifact = None
         self._working = None
+        self._job_raw = _empty_interaction_frame()
+        self._extra_raw = _empty_interaction_frame()
         self._payload_digest = None
         self._artifact_token = None
         self._hot_users = frozenset()
@@ -143,11 +168,17 @@ class OnlineTrainer:
         if pending is None:
             return
         self._ensure_fence()
-        self._persist(pending.artifact)
-        digest = self._payload_digest
-        if digest is None:
-            digest = _digest(dumps_artifact(pending.artifact))
-        self._install(pending.artifact, digest, self._fingerprint())
+        payload = dumps_artifact(pending.artifact)
+        if not self._write_payload_if_current(pending, payload):
+            logger.warning("Model artifact changed during online refresh; dropping pending fit")
+            self._pending = None
+            return
+        digest = _digest(payload)
+        self._artifact = pending.artifact
+        self._working = pending.working
+        self._extra_raw = pending.extra_raw
+        self._payload_digest = digest
+        self._artifact_token = self._fingerprint()
         self._pending_fit_events = pending.pending_fit_events
         self._pending = None
 
@@ -192,7 +223,16 @@ class OnlineTrainer:
         extra = extra.copy()
         extra[Columns.User] = extra[Columns.User].astype(str)
         extra[Columns.Item] = extra[Columns.Item].astype(str)
-        working = _append_known_interactions(working, extra)
+        extra_raw = _merge_interaction_frames(self._pending_extra(), extra)
+        extra_raw = _trim_recent_interactions(extra_raw, self._max_extra_interactions)
+        if extra_raw.empty:
+            return OnlineRefreshResult(
+                rows=empty_online_rows(),
+                events_dropped_unknown=dropped,
+                events_known=int(len(known)),
+            )
+        maps = artifact.dataset
+        working = _dataset_with_interactions(maps, _merge_interaction_frames(self._job_raw, extra_raw))
         pending_fit += int(len(known))
 
         models, fitted = self._recommend_models(artifact)
@@ -235,6 +275,9 @@ class OnlineTrainer:
             artifact=artifact,
             working=working,
             pending_fit_events=pending_fit,
+            extra_raw=extra_raw,
+            baseline_token=self._artifact_token,
+            baseline_digest=self._payload_digest,
         )
         if rows.empty:
             return OnlineRefreshResult(
@@ -294,6 +337,7 @@ class OnlineTrainer:
 
     def _install(self, artifact: ModelArtifact, digest: bytes, token: str | None = None) -> None:
         raw = artifact.dataset.get_raw_interactions()
+        # LightFM identity features follow interacting IDs, not the full id map.
         if raw is None or raw.empty:
             hot_users: set[str] = set()
             hot_items: set[str] = set()
@@ -307,6 +351,27 @@ class OnlineTrainer:
         self._hot_users = frozenset(hot_users)
         self._hot_items = frozenset(hot_items)
         self._pending_fit_events = 0
+        if raw is None or raw.empty:
+            self._job_raw = _empty_interaction_frame()
+        else:
+            self._job_raw = _interaction_frame(raw)
+        self._extra_raw = _empty_interaction_frame()
+
+    def _pending_extra(self) -> pd.DataFrame:
+        if self._pending is not None:
+            return self._pending.extra_raw
+        return self._extra_raw
+
+    def _artifact_replaced(self, pending: _PendingRefresh) -> bool:
+        token = self._fingerprint()
+        if pending.baseline_token is not None and token is not None:
+            return token != pending.baseline_token
+        payload = self._sink.read_model_artifact()
+        if payload is None:
+            return True
+        if pending.baseline_digest is None:
+            return False
+        return _digest(payload) != pending.baseline_digest
 
     def _recommend_models(self, artifact: ModelArtifact) -> tuple[list[str], dict]:
         skip_sequential = SEQUENTIAL_STRATEGY in artifact.models and not sequential_extra_available()
@@ -320,11 +385,16 @@ class OnlineTrainer:
             logger.info("Online refresh skipping sequential (torch extra is not installed)")
         return models, fitted
 
-    def _persist(self, artifact: ModelArtifact) -> None:
-        payload = dumps_artifact(artifact)
+    def _write_payload_if_current(self, pending: _PendingRefresh, payload: bytes) -> bool:
+        self._ensure_fence()
+        replace = getattr(self._sink, "replace_model_artifact_if", None)
+        expected = pending.baseline_token
+        if callable(replace) and expected is not None:
+            return bool(replace(payload, expected))
+        if self._artifact_replaced(pending):
+            return False
         self._sink.write_model_artifact(payload)
-        self._payload_digest = _digest(payload)
-        self._artifact_token = self._fingerprint()
+        return True
 
     def _ensure_fence(self) -> None:
         if self._fence_check is not None and not self._fence_check():

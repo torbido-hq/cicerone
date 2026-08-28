@@ -20,6 +20,7 @@ import pandas as pd
 from sqlalchemy import (
     Column,
     DateTime,
+    Engine,
     LargeBinary,
     MetaData,
     Table,
@@ -27,13 +28,18 @@ from sqlalchemy import (
     create_engine,
     insert,
     inspect,
+    select,
     text,
 )
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from cicerone.io.db_errors import is_missing_column_error
 from cicerone.io.options import require_option, sql_identifier
-from cicerone.io.recommendation_schema import recommendations_sql_names
+from cicerone.io.recommendation_schema import (
+    REASONS_COLUMN,
+    VARIANT_COLUMN,
+    recommendations_sql_names,
+)
 from cicerone.io.replace_users import RecommendationSchemaError, normalize_replace_user_ids
 from cicerone.io.user_lookup import OCCURRED_AT_COLUMN, filter_rows_for_user, newest_events
 
@@ -93,6 +99,27 @@ def _clear_table_for_replace(conn, table: str) -> None:
         savepoint.commit()
     except _MISSING_TABLE_ERRORS:
         savepoint.rollback()
+
+
+def _missing_optional_recommendation_columns(engine: Engine, table: str, frame: pd.DataFrame) -> list[str]:
+    wanted = [column for column in (REASONS_COLUMN, VARIANT_COLUMN) if column in frame.columns]
+    if not wanted:
+        return []
+    inspector = inspect(engine)
+    if not inspector.has_table(table):
+        return []
+    existing = {column["name"] for column in inspector.get_columns(table)}
+    return [column for column in wanted if column not in existing]
+
+
+def _require_optional_recommendation_columns(engine: Engine, table: str, frame: pd.DataFrame) -> None:
+    missing = _missing_optional_recommendation_columns(engine, table, frame)
+    if not missing:
+        return
+    alters = "; ".join(f"ALTER TABLE … ADD COLUMN {column} TEXT" for column in missing)
+    raise RecommendationSchemaError(
+        f"Recommendations table {table!r} is missing column(s) {missing}; {alters}"
+    )
 
 
 def _sql_user_source(query: str | None, table: str) -> str:
@@ -201,6 +228,7 @@ class DatabaseOutputSink:
             self._options, default_table=DEFAULT_RECOMMENDATIONS_TABLE
         )
         logger.info("Writing %d rows to database table %r", len(df), table)
+        _require_optional_recommendation_columns(self._engine, table, df)
         with self._engine.begin() as conn:
             _clear_table_for_replace(conn, table)
             df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
@@ -218,6 +246,7 @@ class DatabaseOutputSink:
             len(df),
             table,
         )
+        _require_optional_recommendation_columns(self._engine, table, df)
         # Identifiers are sql_identifier-validated; match events.store SELECT quoting.
         delete_sql = text(f"DELETE FROM {table} WHERE {user_col} IN :user_ids").bindparams(
             bindparam("user_ids", expanding=True)
@@ -282,6 +311,33 @@ class DatabaseOutputSink:
             artifacts.create(conn, checkfirst=True)
             conn.execute(artifacts.delete())
             conn.execute(insert(artifacts).values(payload=payload, written_at=datetime.now(UTC)))
+
+    def replace_model_artifact_if(self, payload: bytes, expected_fingerprint: str) -> bool:
+        table_name = sql_identifier(
+            self._options.get("model_artifact_table", DEFAULT_MODEL_ARTIFACT_TABLE),
+            option="model_artifact_table",
+        )
+        metadata = MetaData()
+        artifacts = Table(
+            table_name,
+            metadata,
+            Column("payload", LargeBinary, nullable=False),
+            Column("written_at", DateTime(timezone=True), nullable=False),
+        )
+        with self._engine.begin() as conn:
+            artifacts.create(conn, checkfirst=True)
+            row = conn.execute(select(artifacts.c.written_at).limit(1).with_for_update()).first()
+            if row is None or row[0] is None:
+                return False
+            written = row[0]
+            stamp = written.isoformat() if hasattr(written, "isoformat") else str(written)
+            if f"db:{stamp}" != expected_fingerprint:
+                return False
+            deleted = conn.execute(artifacts.delete().where(artifacts.c.written_at == written))
+            if deleted.rowcount < 1:
+                return False
+            conn.execute(insert(artifacts).values(payload=payload, written_at=datetime.now(UTC)))
+        return True
 
     def read_model_artifact(self) -> bytes | None:
         table_name = sql_identifier(

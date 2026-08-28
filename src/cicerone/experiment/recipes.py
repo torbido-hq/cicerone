@@ -90,6 +90,10 @@ def parse_job_recipe_from_manifest(manifest: dict[str, Any] | None) -> dict[str,
     """Recover models / weights / rrf_k from a successful job manifest."""
     if not manifest or manifest.get("status") != "success":
         return None
+    for row in _experiment_variant_rows(manifest.get("experiment_variants")):
+        recipe = _recipe_from_variant_row(row)
+        if recipe is not None:
+            return recipe
     raw_models = str(manifest.get("models") or "").strip()
     if not raw_models:
         return None
@@ -262,6 +266,46 @@ def _recipe_blending(
         else:
             updates["latest_date_columns"] = tuple(str(column) for column in raw)
     return replace(base, **updates)
+
+
+def _experiment_variant_rows(raw: Any) -> list[dict[str, Any]]:
+    if raw in (None, ""):
+        return []
+    if isinstance(raw, list):
+        parsed = raw
+    else:
+        try:
+            parsed = json.loads(str(raw))
+        except json.JSONDecodeError:
+            return []
+    if not isinstance(parsed, list):
+        return []
+    rows = [row for row in parsed if isinstance(row, dict)]
+    if not rows:
+        return []
+    control = [row for row in rows if str(row.get("name") or "") == CONTROL_NAME]
+    rest = [row for row in rows if str(row.get("name") or "") != CONTROL_NAME]
+    return control + rest
+
+
+def _recipe_from_variant_row(row: dict[str, Any]) -> dict[str, Any] | None:
+    models_raw = row.get("models")
+    if isinstance(models_raw, list):
+        models = [str(part) for part in models_raw if part]
+    elif isinstance(models_raw, str) and models_raw.strip():
+        models = [part for part in models_raw.split(",") if part]
+    else:
+        return None
+    if not models:
+        return None
+    weights = row.get("weights")
+    if isinstance(weights, str):
+        weights = _parse_weights_csv(weights)
+    elif not isinstance(weights, dict):
+        weights = None
+    rrf_k_raw = row.get("rrf_k")
+    rrf_k = None if rrf_k_raw in (None, "") else float(str(rrf_k_raw))
+    return {"models": models, "weights": weights, "rrf_k": rrf_k}
 
 
 def _parse_weights_csv(raw: str) -> dict[str, float] | None:

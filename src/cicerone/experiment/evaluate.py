@@ -117,13 +117,15 @@ def evaluate_experiment(
             )
         )
     guardrails: list[GuardrailReport] = []
-    if recommendations is not None and VARIANT_COLUMN in recommendations.columns:
+    blocked: list[str] = []
+    if recommendations is None or VARIANT_COLUMN not in recommendations.columns:
+        blocked.append("guardrails")
+    else:
         for name in names:
             slice_rows = filter_variant_rows(recommendations, name)
             guardrails.append(evaluate_guardrails(slice_rows, variant=name, catalog_size=catalog_size))
-    blocked: list[str] = []
-    if any(not item.ok for item in guardrails):
-        blocked.append("guardrails")
+        if any(not item.ok for item in guardrails):
+            blocked.append("guardrails")
     decided = comparisons and all(item.decided for item in comparisons)
     winners = {item.winner for item in comparisons if item.decided}
     if not decided:

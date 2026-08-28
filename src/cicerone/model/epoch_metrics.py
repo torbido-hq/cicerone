@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 import random
 from collections.abc import Callable
@@ -40,6 +41,22 @@ def _epoch_metric_fit_partial(model: object) -> Callable:
             "epoch metric logging requires a model with fit_partial and an epoch count"
         )
     return fit_partial
+
+
+def invoke_epoch_fit_partial(fit_partial: Callable, dataset: Dataset) -> None:
+    """LightFM is ``fit_partial(dataset, epochs)``; RecTools transformers need min/max."""
+    try:
+        params = inspect.signature(fit_partial).parameters
+    except (TypeError, ValueError):
+        fit_partial(dataset, 1)
+        return
+    if "min_epochs" in params and "max_epochs" in params:
+        if params["max_epochs"].kind is inspect.Parameter.KEYWORD_ONLY:
+            fit_partial(dataset, 1, max_epochs=1)
+        else:
+            fit_partial(dataset, 1, 1)
+        return
+    fit_partial(dataset, 1)
 
 
 def epoch_metric_total_epochs(model: object) -> int:
@@ -124,7 +141,7 @@ def fit_with_epoch_metrics(
     history: list[tuple[int, dict[str, float]]] = []
 
     for epoch in range(1, total_epochs + 1):
-        fit_partial(dataset, 1)
+        invoke_epoch_fit_partial(fit_partial, dataset)
         if not should_log_epoch(epoch, total_epochs, settings.every):
             continue
         reco = model.recommend(

@@ -56,6 +56,17 @@ def test_local_model_artifact_fingerprint_changes_after_write(tmp_path):
     assert second != first
 
 
+def test_local_replace_model_artifact_if_is_compare_and_swap(tmp_path):
+    sink = DatasetOutputSink({"storage_backend": "local", "path": str(tmp_path)})
+    sink.write_model_artifact(b"first")
+    token = sink.model_artifact_fingerprint()
+    assert token is not None
+    assert sink.replace_model_artifact_if(b"second", token) is True
+    assert sink.read_model_artifact() == b"second"
+    assert sink.replace_model_artifact_if(b"third", token) is False
+    assert sink.read_model_artifact() == b"second"
+
+
 def test_local_replace_recommendations_for_users_preserves_others(tmp_path):
     options = {"storage_backend": "local", "path": str(tmp_path)}
     sink = DatasetOutputSink(options)

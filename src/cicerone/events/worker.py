@@ -4,8 +4,14 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Callable, Sequence
+from contextlib import contextmanager
+from typing import Any
 
-from cicerone.config.constants import DEFAULT_EVENTS_POLL_INTERVAL_SECONDS
+from cicerone.config.constants import (
+    DEFAULT_EVENTS_HEARTBEAT_SECONDS,
+    DEFAULT_EVENTS_POLL_INTERVAL_SECONDS,
+)
 from cicerone.events.base import EventSource, NormalizedEvent
 from cicerone.events.buffer import MicroBatchBuffer
 from cicerone.events.updater import IncrementalUpdater
@@ -24,6 +30,54 @@ logger = logging.getLogger(__name__)
 _ONLINE_PERSIST_ATTEMPTS = 3
 
 
+class HeartbeatError(RuntimeError):
+    """Raised when the first in-flight heartbeat fails (apply must not proceed)."""
+
+
+def _call_heartbeat(
+    beat: Callable[..., Any],
+    events: Sequence[NormalizedEvent],
+    *,
+    fail_closed: bool = False,
+) -> None:
+    try:
+        beat(events)
+    except Exception as exc:
+        logger.exception("Event source heartbeat failed")
+        if fail_closed:
+            raise HeartbeatError("Event source heartbeat failed") from exc
+
+
+@contextmanager
+def inflight_heartbeat(
+    source: EventSource,
+    events: Sequence[NormalizedEvent],
+    interval_seconds: float,
+):
+    """Beat at start of apply and again every ``interval_seconds`` until exit."""
+    beat = getattr(source, "heartbeat", None)
+    if not callable(beat):
+        yield
+        return
+    _call_heartbeat(beat, events, fail_closed=True)
+    if interval_seconds <= 0:
+        yield
+        return
+    stop = threading.Event()
+
+    def _loop() -> None:
+        while not stop.wait(interval_seconds):
+            _call_heartbeat(beat, events)
+
+    thread = threading.Thread(target=_loop, name="cicerone-events-heartbeat", daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join(timeout=max(1.0, interval_seconds))
+
+
 class EventWorker:
     def __init__(
         self,
@@ -35,6 +89,7 @@ class EventWorker:
         poll_max_events: int = 100,
         apply_lock: LockBackend | None = None,
         poll_without_lock: bool = False,
+        heartbeat_interval_seconds: float = DEFAULT_EVENTS_HEARTBEAT_SECONDS,
     ):
         self._source = source
         self._buffer = buffer
@@ -43,6 +98,7 @@ class EventWorker:
         self._poll_max_events = poll_max_events
         self._apply_lock = apply_lock
         self._poll_without_lock = poll_without_lock
+        self._heartbeat_interval_seconds = heartbeat_interval_seconds
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -185,8 +241,14 @@ class EventWorker:
 
     def _flush_ready(self, ready: list[NormalizedEvent]) -> int:
         try:
-            self._heartbeat_inflight(ready)
-            applied = self._updater.apply(ready, persist_online=False)
+            with inflight_heartbeat(self._source, ready, self._heartbeat_interval_seconds):
+                applied = self._updater.apply(ready, persist_online=False)
+        except HeartbeatError:
+            record_events_flush(status="error")
+            logger.error("In-flight heartbeat failed; returning %d event(s) to source", len(ready))
+            self._updater.abort_online()
+            self._source.nack(ready)
+            return 0
         except LockLostError:
             record_events_flush(status="error")
             update_events_leader(False)
@@ -230,15 +292,6 @@ class EventWorker:
         self._persist_online_after_ack()
         record_events_flush(status="success", events=applied)
         return applied
-
-    def _heartbeat_inflight(self, ready: list[NormalizedEvent]) -> None:
-        beat = getattr(self._source, "heartbeat", None)
-        if not callable(beat):
-            return
-        try:
-            beat(ready)
-        except Exception:
-            logger.exception("Event source heartbeat failed")
 
     def _persist_online_after_ack(self) -> None:
         last_error: BaseException | None = None

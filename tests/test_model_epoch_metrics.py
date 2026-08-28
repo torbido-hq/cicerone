@@ -10,6 +10,7 @@ from cicerone.model import train_and_recommend
 from cicerone.model.epoch_metrics import (
     epoch_metric_total_epochs,
     fit_lightfm_with_epoch_metrics,
+    invoke_epoch_fit_partial,
     sample_epoch_metric_users,
     should_log_epoch,
     warn_on_epoch_metric_trajectory,
@@ -23,6 +24,60 @@ def test_should_log_epoch_first_last_and_interval():
     assert should_log_epoch(30, 30, 5)
     assert not should_log_epoch(2, 30, 5)
     assert not should_log_epoch(29, 30, 5)
+
+
+def test_invoke_epoch_fit_partial_lightfm_arity():
+    calls: list[tuple[object, ...]] = []
+
+    def fit_partial(dataset, epochs):  # type: ignore[no-untyped-def]
+        calls.append((dataset, epochs))
+
+    invoke_epoch_fit_partial(fit_partial, "ds")
+    assert calls == [("ds", 1)]
+
+
+def test_invoke_epoch_fit_partial_transformer_arity():
+    calls: list[tuple[object, ...]] = []
+
+    def fit_partial(dataset, min_epochs, max_epochs):  # type: ignore[no-untyped-def]
+        calls.append((dataset, min_epochs, max_epochs))
+
+    invoke_epoch_fit_partial(fit_partial, "ds")
+    assert calls == [("ds", 1, 1)]
+
+
+def test_invoke_epoch_fit_partial_max_epochs_keyword():
+    calls: list[tuple[object, ...]] = []
+
+    def fit_partial(dataset, min_epochs, *, max_epochs=0):  # type: ignore[no-untyped-def]
+        calls.append((dataset, min_epochs, max_epochs))
+
+    invoke_epoch_fit_partial(fit_partial, "ds")
+    assert calls == [("ds", 1, 1)]
+
+
+def test_invoke_epoch_fit_partial_lightfm_extra_positionals_keep_defaults():
+    calls: list[tuple[object, ...]] = []
+
+    def fit_partial(dataset, epochs, num_threads=4):  # type: ignore[no-untyped-def]
+        calls.append((dataset, epochs, num_threads))
+
+    invoke_epoch_fit_partial(fit_partial, "ds")
+    assert calls == [("ds", 1, 4)]
+
+
+def test_invoke_epoch_fit_partial_uninspected_arity(monkeypatch):
+    calls: list[tuple[object, ...]] = []
+
+    def fit_partial(dataset, epochs):  # type: ignore[no-untyped-def]
+        calls.append((dataset, epochs))
+
+    def _boom(_fn):  # type: ignore[no-untyped-def]
+        raise TypeError("no signature")
+
+    monkeypatch.setattr("cicerone.model.epoch_metrics.inspect.signature", _boom)
+    invoke_epoch_fit_partial(fit_partial, "ds")
+    assert calls == [("ds", 1)]
 
 
 def test_warn_on_epoch_metric_trajectory_regression_and_plateau(caplog):

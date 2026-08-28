@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import importlib.util
+import logging
 from copy import deepcopy
 from functools import cache
 from typing import Any
 
 from cicerone.config.constants import DEFAULT_ITEM_BASED_K_NEIGHBORS
+
+logger = logging.getLogger(__name__)
 
 # Single source for latest PopularModel period; re-exported via model.constants.
 LATEST_WINDOW_DAYS = 14
@@ -111,6 +114,7 @@ def apply_sequential_architecture(
     *,
     architecture_explicit: bool = False,
     cls_explicit: bool = False,
+    loss_explicit: bool = False,
 ) -> dict[str, Any]:
     """Map ``architecture`` ↔ RecTools ``cls`` for the sequential strategy."""
     from cicerone.config import ConfigError
@@ -138,22 +142,28 @@ def apply_sequential_architecture(
         if architecture_explicit or not cls_explicit:
             result["architecture"] = key
             result["cls"] = expected_cls
-            return _constrain_sequential_architecture(result)
+            return _constrain_sequential_architecture(result, loss_explicit=loss_explicit)
     if isinstance(cls, str) and cls in _SEQUENTIAL_CLS_TO_ARCHITECTURE:
         result["architecture"] = _SEQUENTIAL_CLS_TO_ARCHITECTURE[cls]
-        return _constrain_sequential_architecture(result)
+        return _constrain_sequential_architecture(result, loss_explicit=loss_explicit)
     if cls is None:
         result["architecture"] = "sasrec"
         result["cls"] = SEQUENTIAL_ARCHITECTURES["sasrec"]
-        return _constrain_sequential_architecture(result)
+        return _constrain_sequential_architecture(result, loss_explicit=loss_explicit)
     raise ConfigError(f"model.sequential.cls must be SASRecModel, BERT4RecModel, or HSTUModel, got {cls!r}")
 
 
-def _constrain_sequential_architecture(config: dict[str, Any]) -> dict[str, Any]:
+def _constrain_sequential_architecture(
+    config: dict[str, Any], *, loss_explicit: bool = False
+) -> dict[str, Any]:
     # HSTU uses its own encoder; LiGR layers are SASRec/BERT4Rec-only.
     if config.get("architecture") == "hstu":
         config.pop("transformer_layers_type", None)
-        if config.get("loss") == "sampled_softmax":
+        if config.get("loss") == "sampled_softmax" and not loss_explicit:
+            logger.warning(
+                "HSTU inherited loss=sampled_softmax from SASRec defaults; using softmax "
+                "(set [model.sequential].loss explicitly to keep sampled_softmax)"
+            )
             config["loss"] = "softmax"
             config.pop("n_negatives", None)
         config.setdefault("relative_time_attention", True)
@@ -278,6 +288,7 @@ def resolve_model_configs(
             configs[SEQUENTIAL_STRATEGY],
             architecture_explicit="architecture" in sequential_override,
             cls_explicit="cls" in sequential_override,
+            loss_explicit="loss" in sequential_override,
         )
 
     for name, cfg in configs.items():

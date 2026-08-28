@@ -57,6 +57,20 @@ def test_guardrails_fail_closed_on_empty_and_concentration() -> None:
     assert "coverage" in report.failures
 
 
+def test_guardrails_catalog_size_relaxes_only_for_small_catalogs() -> None:
+    recs = pd.DataFrame(
+        {
+            "user_id": [f"u{i}" for i in range(12)],
+            "item_id": [f"i{i % 3}" for i in range(12)],
+            "source": ["personalized"] * 12,
+        }
+    )
+    small = evaluate_guardrails(recs, variant="control", catalog_size=3)
+    large = evaluate_guardrails(recs, variant="control", catalog_size=100)
+    assert "coverage" not in small.failures
+    assert "coverage" in large.failures
+
+
 def test_user_outcome_weighted_and_event_type() -> None:
     events = pd.DataFrame(
         [
@@ -181,3 +195,37 @@ def test_evaluate_experiment_blocks_promote_on_guardrails() -> None:
     assert report.can_promote is False
     assert "guardrails" in report.promote_blocked_by
     assert report.winner is None
+
+
+def test_evaluate_experiment_blocks_promote_when_recs_missing() -> None:
+    experiment = ExperimentSettings(
+        enabled=True,
+        id="exp",
+        variants=(
+            VariantSettings(name="control", traffic=0.5),
+            VariantSettings(name="treatment", traffic=0.5),
+        ),
+    )
+    events = pd.DataFrame(
+        [{"user_id": "u1", "event_type": "purchase", "quantity": 1}]
+        + [{"user_id": "u2", "event_type": "purchase", "quantity": 1}]
+    )
+    missing = evaluate_experiment(
+        experiment=experiment,
+        recipes=(_recipe("control"), _recipe("treatment")),
+        events=events,
+        event_weights={"purchase": 1.0},
+        recommendations=None,
+    )
+    assert missing.can_promote is False
+    assert "guardrails" in missing.promote_blocked_by
+
+    no_variant = evaluate_experiment(
+        experiment=experiment,
+        recipes=(_recipe("control"), _recipe("treatment")),
+        events=events,
+        event_weights={"purchase": 1.0},
+        recommendations=pd.DataFrame([{"user_id": "u1", "item_id": "i1", "source": "personalized"}]),
+    )
+    assert no_variant.can_promote is False
+    assert "guardrails" in no_variant.promote_blocked_by

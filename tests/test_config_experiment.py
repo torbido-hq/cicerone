@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import pytest
 from support.toml_config import write_toml
 
@@ -30,15 +32,16 @@ def test_load_experiment_defaults_disabled(tmp_path):
     assert settings.experiment.automl_challenger is False
 
 
-def test_load_experiment_variants_and_remainder_traffic(tmp_path):
-    settings = load_settings(
-        write_toml(
-            tmp_path,
-            """
+def test_load_experiment_variants_and_remainder_traffic(tmp_path, caplog):
+    with caplog.at_level(logging.WARNING, logger="cicerone.config.load"):
+        settings = load_settings(
+            write_toml(
+                tmp_path,
+                """
             [job]
             """
-            + _minimal_io()
-            + """
+                + _minimal_io()
+                + """
             [experiment]
             enabled = true
             id = "rrf-vs-blend"
@@ -54,8 +57,8 @@ def test_load_experiment_variants_and_remainder_traffic(tmp_path):
             combiner = "blend"
             models = ["collaborative", "popular"]
             """,
+            )
         )
-    )
     experiment = settings.experiment
     assert experiment.enabled is True
     assert experiment.id == "rrf-vs-blend"
@@ -65,6 +68,8 @@ def test_load_experiment_variants_and_remainder_traffic(tmp_path):
     assert experiment.variants[1].traffic == pytest.approx(0.6)
     assert experiment.variants[1].combiner == "blend"
     assert experiment.variants[1].models == ["collaborative", "popular"]
+    assert "assigning remainder" in caplog.text
+    assert "treatment" in caplog.text
 
 
 def test_load_experiment_rejects_duplicate_names():
