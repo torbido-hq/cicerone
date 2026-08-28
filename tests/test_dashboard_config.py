@@ -87,6 +87,10 @@ def test_config_display_redacts_secrets_and_keeps_safe_values():
     assert outgoing["fields"]["options"]["database_url"] == REDACTED
     assert events["fields"]["options"]["auth_token"] == REDACTED
     assert dashboard["fields"]["users"] == ["alice", "bob"]
+    assert events["badge"] == "on"
+    assert events["kind"] == "webhook"
+    assert incoming["kind"] == "dataset"
+    assert incoming["toml"] == "[input]"
     assert "split" in display["split_note"]
 
 
@@ -163,6 +167,10 @@ def test_config_page_renders_redacted_html(tmp_path):
     assert "This is the config this dashboard process loaded" in html
     assert ">Metrics_token<" not in html
     assert ">metrics_token<" in html
+    assert 'data-config-jump="job"' in html
+    assert 'aria-current="page"' in html
+    assert 'aria-label="Config sections"' in html
+    assert "[job]" in html
 
 
 def test_config_page_unset_token_is_em_dash(tmp_path):

@@ -9,20 +9,80 @@
 </head>
 <body class="h-full">
   {% set page_subtitle = "Configuration" %}
+  {% set nav_current = "config" %}
   {% include "_header.html" %}
   <main id="main" class="mx-auto max-w-6xl px-4 py-6">
-    <p class="text-sm text-slate-600 mb-4">{{ split_note }}</p>
+    <div class="mb-4 rounded-lg border border-sky-200 bg-sky-50 p-3 text-sm text-sky-900" role="note">
+      {{ split_note }}
+    </div>
+    <nav aria-label="Config sections" class="mb-4 flex flex-wrap gap-2">
+      {% for section in sections %}
+      <a
+        href="#config-{{ section.id }}"
+        data-config-jump="{{ section.id }}"
+        class="inline-flex items-center gap-1.5 rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-800 shadow-sm hover:border-slate-500 hover:bg-slate-50"
+      >
+        {{ section.title }}
+        {% if section.badge == "on" %}
+        <span class="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[0.65rem] font-medium text-emerald-800">on</span>
+        {% elif section.badge == "off" %}
+        <span class="rounded-full bg-slate-100 px-1.5 py-0.5 text-[0.65rem] font-medium text-slate-600">off</span>
+        {% elif section.badge %}
+        <span class="text-slate-500">{{ section.badge }}</span>
+        {% endif %}
+      </a>
+      {% endfor %}
+    </nav>
     {% from "_config_value.html" import render_value %}
     {% for section in sections %}
-    <section class="rounded-lg border border-slate-200 bg-white p-4 mb-4" data-config-section="{{ section.id }}" aria-labelledby="config-{{ section.id }}">
-      <h2 id="config-{{ section.id }}" class="text-sm font-medium text-slate-800 mb-2">{{ section.title }}</h2>
-      {% if section.message %}
-      <p class="text-sm text-slate-700">{{ section.message }}</p>
-      {% endif %}
-      {% if section.fields %}
-      {{ render_value(section.fields) }}
-      {% endif %}
+    {% if section.id == "meta" %}
+    <section id="config-meta" class="mb-4" data-config-section="meta" aria-labelledby="config-meta-heading">
+      <h2 id="config-meta-heading" class="sr-only">{{ section.title }}</h2>
+      <div class="grid gap-3 sm:grid-cols-3">
+        <div class="rounded-lg border border-slate-200 border-l-4 border-l-sky-600 bg-white p-4">
+          <p class="text-xs font-medium uppercase tracking-wide text-slate-500">Mode</p>
+          <p class="mt-1 font-mono text-lg text-slate-900">{{ section.fields.mode }}</p>
+        </div>
+        <div class="rounded-lg border border-slate-200 border-l-4 border-l-sky-600 bg-white p-4">
+          <p class="text-xs font-medium uppercase tracking-wide text-slate-500">Version</p>
+          <p class="mt-1 font-mono text-lg text-slate-900">{{ section.fields.version }}</p>
+        </div>
+        <div class="rounded-lg border border-slate-200 border-l-4 border-l-sky-600 bg-white p-4 sm:col-span-1">
+          <p class="text-xs font-medium uppercase tracking-wide text-slate-500">Config path</p>
+          <p class="mt-1 font-mono text-sm text-slate-800 break-all">{{ section.fields.config_path }}</p>
+        </div>
+      </div>
     </section>
+    {% else %}
+    <section class="mb-4 overflow-hidden rounded-lg border border-slate-200 border-l-4 border-l-sky-600 bg-white" data-config-section="{{ section.id }}" aria-labelledby="config-{{ section.id }}">
+      <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 bg-slate-50 px-4 py-3">
+        <div>
+          <h2 id="config-{{ section.id }}" class="text-base font-semibold text-slate-900">{{ section.title }}</h2>
+          {% if section.toml %}<p class="font-mono text-xs text-slate-500">{{ section.toml }}</p>{% endif %}
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          {% if section.kind %}
+          <span class="font-mono text-xs text-slate-600">{{ section.kind }}</span>
+          {% endif %}
+          {% if section.badge == "on" %}
+          <span class="inline-flex rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">on</span>
+          {% elif section.badge == "off" %}
+          <span class="inline-flex rounded-full bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700">off</span>
+          {% elif section.badge %}
+          <span class="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">{{ section.badge }}</span>
+          {% endif %}
+        </div>
+      </div>
+      <div class="px-4 py-1">
+        {% if section.message %}
+        <p class="py-3 text-sm text-slate-700">{{ section.message }}</p>
+        {% endif %}
+        {% if section.fields %}
+        {{ render_value(section.fields) }}
+        {% endif %}
+      </div>
+    </section>
+    {% endif %}
     {% endfor %}
   </main>
 </body>
