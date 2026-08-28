@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -15,7 +16,8 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from cicerone.config import Settings, load_settings
+from cicerone.config import DEFAULT_CONFIG_PATH, Settings, load_settings
+from cicerone.dashboard_config import config_display
 from cicerone.dashboard_experiments import clear_promotion, experiment_context, promote_winner
 from cicerone.dashboard_lookup import lookup_inspector
 from cicerone.dashboard_users import load_users
@@ -113,6 +115,7 @@ def create_app(
     users: dict[str, str],
     recommendation_reader: RecommendationReader | None = None,
     history_reader: UserHistoryReader | None = None,
+    config_path: str | None = None,
 ) -> FastAPI:
     app = FastAPI(title="cicerone-dashboard")
     app.mount("/static", StaticFiles(directory=str(_PACKAGE_DIR / "static")), name="static")
@@ -182,6 +185,18 @@ def create_app(
             return _experiments_redirect(promote_error=error)
         return _experiments_redirect(message="Resumed split")
 
+    @app.get("/dashboard/config", dependencies=[Depends(auth)])
+    def config_page(request: Request):
+        return _TEMPLATES.TemplateResponse(
+            request,
+            "config.html",
+            config_display(
+                settings,
+                config_path=config_path,
+                usernames=tuple(users),
+            ),
+        )
+
     return app
 
 
@@ -208,7 +223,15 @@ def main() -> None:
     except Exception:
         logger.exception("Event store is not available; dashboard history pane will be disabled")
         history_reader = None
-    app = create_app(settings, reader, users, rec_reader, history_reader)
+    loaded_config_path = os.environ.get("CICERONE_CONFIG_PATH") or DEFAULT_CONFIG_PATH
+    app = create_app(
+        settings,
+        reader,
+        users,
+        rec_reader,
+        history_reader,
+        config_path=loaded_config_path,
+    )
     uvicorn.run(app, host=settings.dashboard.host, port=settings.dashboard.port)
 
 

@@ -94,6 +94,9 @@ def test_dashboard_page_renders_with_valid_credentials():
     assert 'hx-trigger="load, refresh, every' not in response.text
     assert "<title>Cicerone dashboard</title>" in response.text
     assert 'id="recommendation-results" class="mt-3"' in response.text
+    assert 'href="/dashboard/experiments"' in response.text
+    assert 'href="/dashboard/config"' in response.text
+    assert ">Config<" in response.text
 
 
 def test_status_partial_renders_latest_manifest():
@@ -258,14 +261,16 @@ def test_main_raises_when_no_users_configured(tmp_path, monkeypatch):
 def test_main_starts_when_recommendation_reader_fails(monkeypatch):
     captured: dict[str, object] = {}
 
-    def fake_create_app(settings, reader, users, rec_reader=None, history_reader=None):
+    def fake_create_app(settings, reader, users, rec_reader=None, history_reader=None, **kwargs):
         captured["rec_reader"] = rec_reader
         captured["history_reader"] = history_reader
+        captured["config_path"] = kwargs.get("config_path")
         return object()
 
     def boom(_output):
         raise RuntimeError("bad store")
 
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", "/tmp/cicerone.dashboard.toml")
     monkeypatch.setattr("cicerone.dashboard.load_settings", lambda: _settings())
     monkeypatch.setattr("cicerone.dashboard.load_users", lambda _path: {"alice": "hash"})
     monkeypatch.setattr("cicerone.dashboard.build_manifest_reader", lambda _output: _FakeReader(None))
@@ -279,12 +284,13 @@ def test_main_starts_when_recommendation_reader_fails(monkeypatch):
     main()
 
     assert captured["rec_reader"] is None
+    assert captured["config_path"] == "/tmp/cicerone.dashboard.toml"
 
 
 def test_main_starts_when_history_reader_fails(monkeypatch):
     captured: dict[str, object] = {}
 
-    def fake_create_app(settings, reader, users, rec_reader=None, history_reader=None):
+    def fake_create_app(settings, reader, users, rec_reader=None, history_reader=None, **_kwargs):
         captured["history_reader"] = history_reader
         return object()
 
@@ -853,6 +859,7 @@ def test_dashboard_experiments_page_disabled():
     assert response.status_code == 200
     assert "No experiment is enabled" in response.text
     assert 'href="/dashboard/experiments"' in response.text
+    assert 'href="/dashboard/config"' in response.text
 
 
 def test_dashboard_lookup_shows_assigned_variant():
