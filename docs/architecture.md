@@ -7,7 +7,8 @@ For configuration and usage, see the main [README](../README.md). For the
 pipeline and how strategies differ, see [how-it-works.md](how-it-works.md).
 For `[events]` ingest (webhook, backends, HA), see
 [incremental-events.md](incremental-events.md). For sticky A/B tests of
-ranking recipes, see [experiments.md](experiments.md).
+ranking recipes, see [experiments.md](experiments.md). For impressions,
+clicks, CTR, and conversion, see [evaluation.md](evaluation.md).
 
 ## Module overview
 
@@ -43,6 +44,8 @@ ranking recipes, see [experiments.md](experiments.md).
 | `artifact.py` | Optional versioned fitted-model bundle (schema **v3**: RecTools `save`/`load_model` for library models + pickle envelope; `content_fallback` still pickle) |
 | `automl.py` | Optional: backtests candidate models/weights/`rrf_k` configs over time-based folds of event history and picks the best one |
 | `experiment/` | Sticky A/B assignment, per-variant recipes, sequential stats, guardrails, promote state / exposure log |
+| `track/` | Impression/click ingest (`POST /track`), JSONL/db store, rec history snapshots |
+| `evaluation.py` | CTR/CVR attribution and production replay of written lists |
 | `cli.py` | `cicerone` console script (`start` (alias `run`) / `job` / `serve` / `dashboard` / `scheduler` / `users` / `export-openapi`; `--config`, `--log-level`, `--log-format`) |
 | `packaging.py` | Wheel checks for the Docker `package` stage (`python -m cicerone.packaging`) |
 | `job.py` | Orchestrates one end-to-end run (source → dataset → model → sink) |
@@ -72,6 +75,7 @@ ranking recipes, see [experiments.md](experiments.md).
 | `dashboard_lookup.py` | Dashboard inspector: recs lookup, `[input]` event history, allowlisted user attrs, assigned experiment variant |
 | `dashboard_experiments.py` | Experiments page: always-valid CIs, guardrails, promote winner |
 | `dashboard_config.py` | Configuration page: redacted view of the loaded Settings and features.toml |
+| `dashboard_quality.py` | Quality page: CTR/CVR and optional production replay |
 | `dashboard_users.py` | Load/save the dashboard's Basic Auth users file (TOML, username → bcrypt hash) |
 | `manage_dashboard_users.py` | CLI to add/remove/list dashboard users |
 | `templates/`, `static/` | Jinja2 templates + vendored htmx/Stimulus/Tailwind assets for the dashboard |
@@ -114,6 +118,7 @@ Test modules mirror the packages (same pattern as `tests/test_io_*.py`):
 | `tests/test_config_events.py` | `[events]` coerce + TOML load |
 | `tests/test_serve_events_routes.py` / `test_serve_bootstrap_events.py` | Serve webhook mount + worker bootstrap |
 | `tests/test_experiment_*.py` | Sticky assignment, per-variant recipes, sequential stats, store, serve lookup |
+| `tests/test_track_*.py` / `test_evaluation.py` / `test_dashboard_quality.py` | Track ingest, CTR/CVR, replay, Quality page |
 | `tests/test_explain.py` / `test_reasons.py` | Batch `reasons` JSON + serve-safe parse |
 
 ## Data flow

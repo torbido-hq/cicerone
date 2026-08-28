@@ -388,6 +388,17 @@ prefix = "recommendations/latest"
 # # boosts = true
 # # eligibility = true
 
+# Impression/click tracking and production replay. See docs/evaluation.md.
+# [track]
+# enabled = true
+# attribution_window_hours = 24
+# conversion_event_types = ["purchase"]
+# min_impressions = 100
+# [job.eval]
+# enabled = true
+# # event_types = ["purchase"]
+# # ks = [5, 10]
+
 # --- "db" kind example (commented out) ----------------------------------
 # [input]
 # kind = "db"

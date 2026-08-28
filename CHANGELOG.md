@@ -19,6 +19,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   still looks up from dataset/db. `pip install 'cicerone-recommender[kafka]'`
   or `[rabbitmq]`. Prefer Redis Streams when you already run Redis for the
   lock.
+- `[track]` ingest: `POST /track` records recommendation impressions and clicks
+  off the training event path (db table or local JSONL). Hosts report what was
+  actually rendered; `GET /recommendations` is not an impression unless
+  `[serve].log_impressions` is on.
+- CTR and attributed conversion (view-through and click-through) with an
+  attribution window, sliced by rank, source, and variant. The job writes
+  `track_eval`; the dashboard Quality page shows it.
+- `[experiment].primary_metric` `ctr` / `conversion` and
+  `attribution = click | impression | user | recommended`, with a volume floor
+  (`track.min_impressions`) before promote.
+- Optional `[job.eval]` production replay (HitRate / NDCG / Recall of the
+  previous lists against later events) and append-only recommendation history
+  for windows that span jobs.
 
 ### Fixed
 

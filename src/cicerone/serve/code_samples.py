@@ -9,6 +9,7 @@ HEALTH_PATH = "/health"
 RECOMMENDATIONS_PATH = "/recommendations/{user_id}"
 RECOMMENDATIONS_PATH_PREFIX = RECOMMENDATIONS_PATH.rsplit("/", 1)[0] + "/"
 EVENTS_PATH = "/events"
+TRACK_PATH = "/track"
 
 DEFAULT_SERVE_URL = "http://localhost:8000"
 DEFAULT_USER_ID = "alice"
@@ -304,6 +305,28 @@ EVENTS_CODE_SAMPLES: list[dict[str, str]] = [
     {"lang": "Shell", "label": "curl", "source": _EVENTS_SHELL},
 ]
 
+_TRACK_RUBY = _EVENTS_RUBY.replace(EVENTS_PATH, TRACK_PATH).replace(
+    '"event_type" => "purchase",\n  "quantity" => 1,', '"kind" => "impression",\n  "rank" => 1,'
+)
+_TRACK_PYTHON = _EVENTS_PYTHON.replace(EVENTS_PATH, TRACK_PATH).replace(
+    '"event_type": "purchase",\n    "quantity": 1,', '"kind": "impression",\n    "rank": 1,'
+)
+_TRACK_JAVASCRIPT = _EVENTS_JAVASCRIPT.replace(EVENTS_PATH, TRACK_PATH).replace(
+    'event_type: "purchase",\n      quantity: 1,', 'kind: "impression",\n      rank: 1,'
+)
+_TRACK_SHELL = (
+    _EVENTS_SHELL.replace(EVENTS_PATH, TRACK_PATH)
+    .replace('"event_type": "purchase",\n    "quantity": 1,', '"kind": "impression", "rank": 1,')
+    .replace('event_type:"purchase",quantity:1', 'kind:"impression",rank:1')
+)
+
+TRACK_CODE_SAMPLES: list[dict[str, str]] = [
+    {"lang": "Ruby", "label": "Net::HTTP", "source": _TRACK_RUBY},
+    {"lang": "Python", "label": "urllib", "source": _TRACK_PYTHON},
+    {"lang": "JavaScript", "label": "fetch", "source": _TRACK_JAVASCRIPT},
+    {"lang": "Shell", "label": "curl", "source": _TRACK_SHELL},
+]
+
 
 def _extend_code_samples(operation: dict[str, Any], samples: list[dict[str, str]]) -> None:
     existing = operation.get("x-codeSamples")
@@ -326,3 +349,6 @@ def attach_code_samples(schema: dict[str, Any]) -> None:
     events = paths.get(EVENTS_PATH, {}).get("post")
     if isinstance(events, dict):
         _extend_code_samples(events, EVENTS_CODE_SAMPLES)
+    track = paths.get(TRACK_PATH, {}).get("post")
+    if isinstance(track, dict):
+        _extend_code_samples(track, TRACK_CODE_SAMPLES)

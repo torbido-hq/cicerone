@@ -37,6 +37,7 @@ Batch I/O and serve packages: [architecture.md](architecture.md).
 - Growing LightFM embeddings for brand-new user/item IDs (those wait for `job.run()`)
 - Sequential `fit_partial` (SASRec/BERT4Rec/HSTU stay batch)
 - A public plugin API (`EventSource` is internal, same spirit as `io/` kinds)
+- Impression/click tracking (`POST /track` — see [evaluation.md](evaluation.md))
 
 ## Event contract
 

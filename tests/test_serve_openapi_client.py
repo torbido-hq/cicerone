@@ -23,6 +23,8 @@ from cicerone.serve.code_samples import (
     HEALTH_PATH,
     RECOMMENDATIONS_CODE_SAMPLES,
     RECOMMENDATIONS_PATH,
+    TRACK_CODE_SAMPLES,
+    TRACK_PATH,
 )
 from cicerone.serve_client import ServeClient, ServeClientError
 from cicerone.serve_schemas import HealthResponse
@@ -89,6 +91,17 @@ def test_exported_openapi_includes_events_code_samples():
     samples = schema["paths"][EVENTS_PATH]["post"]["x-codeSamples"]
     assert {s["lang"] for s in samples} >= {s["lang"] for s in EVENTS_CODE_SAMPLES}
     assert all("occurred_at" in sample["source"] for sample in samples)
+
+
+def test_exported_openapi_includes_track_path_and_samples():
+    schema = build_openapi()
+    assert TRACK_PATH in schema["paths"]
+    samples = schema["paths"][TRACK_PATH]["post"]["x-codeSamples"]
+    assert {s["lang"] for s in samples} >= {s["lang"] for s in TRACK_CODE_SAMPLES}
+    assert all("kind" in sample["source"] for sample in samples)
+    assert all(TRACK_PATH in sample["source"] for sample in samples)
+    assert "TrackEvent" in schema["components"]["schemas"]
+    assert "TrackIngestResponse" in schema["components"]["schemas"]
 
 
 def test_docs_ui_is_available():
@@ -177,6 +190,20 @@ def test_serve_client_conflict_limit_k(live_serve_url):
     with pytest.raises(ServeClientError) as exc_info:
         client.recommendations("u1", limit=1, k=2)
     assert exc_info.value.status_code == 400
+
+
+def test_serve_client_track_posts_json(live_serve_url):
+    client = ServeClient(live_serve_url, token="secret")
+    with pytest.raises(ServeClientError) as exc_info:
+        client.track(
+            {
+                "kind": "impression",
+                "user_id": "u1",
+                "item_id": "i1",
+                "occurred_at": "2026-08-28T12:00:00Z",
+            }
+        )
+    assert exc_info.value.status_code == 404
 
 
 def test_serve_api_version_tracks_package_version():

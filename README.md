@@ -151,7 +151,9 @@ priority or RRF the reader substitutes one `popular_fallback` / `latest`
 user's top-K instead, and 404s when the table has neither. When
 `[experiment]` is enabled, the response also includes `experiment_id` and
 the sticky `variant`; both fields are `null` when experiments are off.
-See [docs/experiments.md](docs/experiments.md).
+See [docs/experiments.md](docs/experiments.md). Impression and click
+tracking (`POST /track`, CTR/CVR, Quality dashboard) is documented in
+[docs/evaluation.md](docs/evaluation.md).
 
 - For a `dataset` output, the whole recommendations file (+ optional
   `items_snapshot.parquet`) is cached in memory and refreshed on a
@@ -556,7 +558,8 @@ combiner = "blend"
 ```
 
 Full assignment, schema, sequential stats, and promote rules:
-[docs/experiments.md](docs/experiments.md).
+[docs/experiments.md](docs/experiments.md). In-house CTR, conversion,
+and production replay: [docs/evaluation.md](docs/evaluation.md).
 
 ## Model artifacts
 

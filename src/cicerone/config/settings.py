@@ -24,6 +24,8 @@ from cicerone.config.constants import (
     DEFAULT_EXPLAIN_MAX_SIMILAR_ITEMS,
     DEFAULT_LOCK_KEY,
     DEFAULT_LOCK_TTL_SECONDS,
+    DEFAULT_TRACK_ATTRIBUTION_WINDOW_HOURS,
+    DEFAULT_TRACK_MIN_IMPRESSIONS,
     PRIMARY_METRIC_WEIGHTED,
     Mode,
 )
@@ -50,6 +52,7 @@ class ServeSettings:
     category_column: str = "category"
     metrics_enabled: bool = False
     metrics_token: str | None = None
+    log_impressions: bool = False
 
 
 @dataclass(frozen=True)
@@ -149,6 +152,26 @@ class ExperimentSettings:
     log_exposures: bool = False
     automl_challenger: bool = False
     alpha: float = DEFAULT_EXPERIMENT_ALPHA
+    attribution: str = "user"
+
+
+@dataclass(frozen=True)
+class TrackSettings:
+    """Impression/click ingest; kept off the training event path."""
+
+    enabled: bool = False
+    attribution_window_hours: float = DEFAULT_TRACK_ATTRIBUTION_WINDOW_HOURS
+    conversion_event_types: tuple[str, ...] = ()
+    min_impressions: int = DEFAULT_TRACK_MIN_IMPRESSIONS
+
+
+@dataclass(frozen=True)
+class EvalSettings:
+    """Job-time production replay of previously written lists."""
+
+    enabled: bool = False
+    event_types: tuple[str, ...] = ()
+    ks: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -194,6 +217,8 @@ class Settings:
     publish: PublishSettings = field(default_factory=PublishSettings)
     explain: ExplainSettings = field(default_factory=ExplainSettings)
     experiment: ExperimentSettings = field(default_factory=ExperimentSettings)
+    track: TrackSettings = field(default_factory=TrackSettings)
+    eval: EvalSettings = field(default_factory=EvalSettings)
 
     @property
     def serve_host(self) -> str:

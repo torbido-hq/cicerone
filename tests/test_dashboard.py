@@ -59,7 +59,13 @@ def test_dashboard_responses_are_not_indexable():
     client = TestClient(app)
     auth = ("alice", "s3cret")
 
-    for path in ("/health", "/dashboard", "/dashboard/config", "/dashboard/experiments"):
+    for path in (
+        "/health",
+        "/dashboard",
+        "/dashboard/config",
+        "/dashboard/quality",
+        "/dashboard/experiments",
+    ):
         response = client.get(path, auth=auth)
         assert response.status_code == 200, path
         assert response.headers["x-robots-tag"] == ROBOTS_TAG
@@ -141,7 +147,9 @@ def test_dashboard_page_renders_with_valid_credentials():
     assert "<title>Cicerone dashboard</title>" in response.text
     assert 'id="recommendation-results" class="mt-3"' in response.text
     assert 'href="/dashboard/experiments"' in response.text
+    assert 'href="/dashboard/quality"' in response.text
     assert 'href="/dashboard/config"' in response.text
+    assert ">Quality<" in response.text
     assert ">Config<" in response.text
     assert 'name="robots"' in response.text
     assert f'content="{ROBOTS_TAG}"' in response.text
@@ -944,6 +952,7 @@ def test_dashboard_experiments_page_disabled():
     assert response.status_code == 200
     assert "No experiment is enabled" in response.text
     assert 'href="/dashboard/experiments"' in response.text
+    assert 'href="/dashboard/quality"' in response.text
     assert 'href="/dashboard/config"' in response.text
 
 

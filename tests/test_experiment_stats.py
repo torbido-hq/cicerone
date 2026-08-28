@@ -84,6 +84,9 @@ def test_user_outcome_weighted_and_event_type() -> None:
     assert weighted["a"] == pytest.approx(8.5)
     purchases = user_outcome(events, event_weights=weights, primary_metric="purchase")
     assert purchases == {"a": 1.0}
+    assert (
+        user_outcome(pd.DataFrame({"user_id": ["a"]}), event_weights=weights, primary_metric="purchase") == {}
+    )
 
 
 def test_evaluate_experiment_itt_and_exposure_conditional() -> None:
@@ -618,3 +621,154 @@ def test_evaluate_experiment_blocks_promote_when_recs_missing() -> None:
     )
     assert no_variant.can_promote is False
     assert "guardrails" in no_variant.promote_blocked_by
+
+
+def test_evaluate_experiment_ctr_volume_floor() -> None:
+    experiment = ExperimentSettings(
+        enabled=True,
+        id="exp",
+        primary_metric="ctr",
+        attribution="click",
+        variants=(
+            VariantSettings(name="control", traffic=0.5),
+            VariantSettings(name="treatment", traffic=0.5),
+        ),
+    )
+    recs = pd.DataFrame(
+        [
+            {
+                "user_id": f"u{i}",
+                "item_id": f"i{i % 8}",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                "variant": "control" if i < 15 else "treatment",
+            }
+            for i in range(30)
+        ]
+    )
+    report = evaluate_experiment(
+        experiment=experiment,
+        recipes=(_recipe("control"), _recipe("treatment")),
+        events=pd.DataFrame(),
+        event_weights={"purchase": 1.0},
+        recommendations=recs,
+        track_outcomes={f"u{i}": 0.2 if i < 15 else 0.8 for i in range(30)},
+        n_impressions=12,
+        min_impressions=100,
+    )
+    assert "volume" in report.promote_blocked_by
+    assert report.can_promote is False
+    assert report.winner is None
+    enough = evaluate_experiment(
+        experiment=experiment,
+        recipes=(_recipe("control"), _recipe("treatment")),
+        events=pd.DataFrame(),
+        event_weights={"purchase": 1.0},
+        recommendations=recs,
+        track_outcomes={f"u{i}": 0.0 if i < 15 else 1.0 for i in range(30)},
+        n_impressions=100,
+        min_impressions=100,
+    )
+    assert "volume" not in enough.promote_blocked_by
+    assert enough.primary_metric == "ctr"
+
+
+def test_evaluate_experiment_recommended_attribution() -> None:
+    experiment = ExperimentSettings(
+        enabled=True,
+        id="exp",
+        primary_metric="purchase",
+        attribution="recommended",
+        variants=(
+            VariantSettings(name="control", traffic=0.5),
+            VariantSettings(name="treatment", traffic=0.5),
+        ),
+    )
+    recs = pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "shown",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                "variant": "control",
+            },
+            {
+                "user_id": "u2",
+                "item_id": "shown",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                "variant": "treatment",
+            },
+        ]
+    )
+    events = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "shown", "event_type": "purchase", "quantity": 1},
+            {"user_id": "u1", "item_id": "other", "event_type": "purchase", "quantity": 1},
+            {"user_id": "u2", "item_id": "other", "event_type": "purchase", "quantity": 1},
+        ]
+    )
+    report = evaluate_experiment(
+        experiment=experiment,
+        recipes=(_recipe("control"), _recipe("treatment")),
+        events=events,
+        event_weights={"purchase": 1.0},
+        recommendations=recs,
+    )
+    assert report.n_assigned == 2
+    assert report.primary_metric == "purchase"
+
+
+def test_evaluate_experiment_split_winners() -> None:
+    from cicerone.experiment.assignment import assign_variant
+
+    experiment = ExperimentSettings(
+        enabled=True,
+        id="exp",
+        primary_metric="ctr",
+        attribution="impression",
+        variants=(
+            VariantSettings(name="control", traffic=0.34),
+            VariantSettings(name="t1", traffic=0.33),
+            VariantSettings(name="t2", traffic=0.33),
+        ),
+    )
+    variants = (("control", 0.34), ("t1", 0.33), ("t2", 0.33))
+    buckets: dict[str, list[str]] = {"control": [], "t1": [], "t2": []}
+    i = 0
+    while min(len(group) for group in buckets.values()) < 25:
+        user_id = f"u{i}"
+        buckets[assign_variant("exp", user_id, variants)].append(user_id)
+        i += 1
+    recs = pd.DataFrame(
+        [
+            {
+                "user_id": user_id,
+                "item_id": "i1",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                "variant": variant,
+            }
+            for variant, users in buckets.items()
+            for user_id in users
+        ]
+    )
+    outcomes = {user_id: 0.0 for user_id in buckets["control"]}
+    outcomes.update({user_id: 1.0 for user_id in buckets["t1"]})
+    outcomes.update({user_id: 1.0 for user_id in buckets["t2"]})
+    report = evaluate_experiment(
+        experiment=experiment,
+        recipes=(_recipe("control", 0.34), _recipe("t1", 0.33), _recipe("t2", 0.33)),
+        events=pd.DataFrame(),
+        event_weights={"purchase": 1.0},
+        recommendations=recs,
+        track_outcomes=outcomes,
+        n_impressions=200,
+        min_impressions=100,
+    )
+    assert "split_winners" in report.promote_blocked_by

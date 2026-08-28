@@ -23,6 +23,7 @@ from cicerone.config.constants import DEFAULT_LOG_FORMAT
 from cicerone.dashboard_config import config_display
 from cicerone.dashboard_experiments import clear_promotion, experiment_context, promote_winner
 from cicerone.dashboard_lookup import lookup_inspector
+from cicerone.dashboard_quality import quality_context
 from cicerone.dashboard_users import load_users
 from cicerone.http_auth import require_basic_auth
 from cicerone.http_security import (
@@ -216,6 +217,10 @@ def create_app(
         context["message"] = message or None
         context["promote_error"] = promote_error or None
         return _html(request, "experiments.html", context)
+
+    @app.get("/dashboard/quality", dependencies=[Depends(auth)])
+    def quality(request: Request):
+        return _TEMPLATES.TemplateResponse(request, "quality.html", quality_context(settings))
 
     @app.post("/dashboard/experiments/promote", dependencies=[Depends(auth)])
     def experiments_promote(
