@@ -23,6 +23,7 @@ hero:
 ---
 
 import { LinkCard, CardGrid } from '@astrojs/starlight/components';
+import ArticleFeed from '../../components/ArticleFeed.astro';
 import LatestRelease from '../../components/LatestRelease.astro';
 
 <LatestRelease />
@@ -65,7 +66,6 @@ Standalone status page for the latest job run (and history with a DB output), pl
 Markdown under [`docs/`](https://github.com/torbido-hq/cicerone/tree/main/docs) in the repository is the source of truth; this site rebuilds it on deploy.
 
 <CardGrid>
-  <LinkCard title="A nightly table next to your orders" href="/articles/a-nightly-table-next-to-your-orders/" description="Cron writes a ranked table. Rails JOINs it. No Python in the request." />
   <LinkCard title="How it works" href="/how-it-works/" description="Pipeline, algorithms, and how strategies differ." />
   <LinkCard title="Tutorial" href="/tutorial/" description="From sample data to serve API and dashboard." />
   <LinkCard title="Architecture" href="/architecture/" description="How packages under src/cicerone/ fit together." />
@@ -76,3 +76,7 @@ Markdown under [`docs/`](https://github.com/torbido-hq/cicerone/tree/main/docs) 
   <LinkCard title="PyPI" href="https://pypi.org/project/cicerone-recommender/" description="pip install cicerone-recommender (import cicerone; extras [redis] / [sequential])." />
   <LinkCard title="License" href="https://github.com/torbido-hq/cicerone/blob/main/LICENSE" description="Beerware." />
 </CardGrid>
+
+## Articles
+
+<ArticleFeed />

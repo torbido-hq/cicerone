@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { ARTICLES_PREFIX, parseFrontmatter } from './articles.mjs';
+import { articleHrefFromFilename, parseFrontmatter } from './articles.mjs';
 
 const ARTICLE_EXT = /\.(mdx?|markdown)$/i;
 
@@ -14,8 +14,7 @@ export function frontmatterLastmod(fm) {
 }
 
 export function articlePathFromFilename(name) {
-	const stem = String(name).replace(ARTICLE_EXT, '');
-	return `/${ARTICLES_PREFIX}/${stem}/`;
+	return articleHrefFromFilename(name);
 }
 
 export function articleSitemapLastmods(articlesDir, { site = 'https://cicerone.dev' } = {}) {

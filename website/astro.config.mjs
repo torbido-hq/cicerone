@@ -11,6 +11,7 @@ import {
 	articleRedirects,
 	ARTICLES_PREFIX,
 	articlesContentDir,
+	articlesSidebarGroup,
 	hasPublishedArticles,
 } from './src/lib/articles.mjs';
 import { analyticsHead, gaMeasurementId } from './src/lib/consent.mjs';
@@ -28,6 +29,8 @@ const articlesPlugin = hasPublishedArticles(articlesDir, { production })
 			starlightBlog({
 				title: 'Articles',
 				prefix: ARTICLES_PREFIX,
+				postCount: Infinity,
+				recentPostCount: Infinity,
 				metrics: { readingTime: true },
 				authors: {
 					nicholas: {
@@ -38,6 +41,7 @@ const articlesPlugin = hasPublishedArticles(articlesDir, { production })
 			}),
 		]
 	: [];
+const articlesNav = articlesSidebarGroup(articlesDir, { production });
 
 // https://astro.build/config
 export default defineConfig({
@@ -102,6 +106,7 @@ export default defineConfig({
 						{ label: 'Experiments', slug: 'experiments' },
 					],
 				},
+				...(articlesNav ? [articlesNav] : []),
 				{
 					label: 'Reference',
 					items: [
