@@ -99,6 +99,24 @@ Popular/latest write-through refreshes **every variant** for affected users.
 rewrites personalized / item-KNN / content-fallback rows for affected users.
 See [incremental-events.md](incremental-events.md).
 
+## Recipe vs measurement
+
+Per-variant `boosts` / `eligibility` change **what is on the served list**.
+That is the recipe half of 0.8 evaluation: you can A/B a merchandising
+policy (drop boosts, keep `["featured"]`, or ship a replacement
+`[[experiment.variants.boost]]` table) without cloning the whole combiner.
+
+0.7 experiment metrics still join **all** `[input]` events to the hashed
+variant (intention-to-treat). A purchase that came from search or email is
+not evidence that the treatment list worked, so you cannot honestly A/B
+those lists on purchases alone.
+
+Knowing whether recommendations are working needs **served-item** signals
+(impressions and clicks on ranks from `GET /recommendations`). That ingest
+is **not** `POST /events` and must not enter `[event_weights]` / LightFM.
+Until that measurement layer lands on this train, policy variants can still
+run; do not treat purchase ITT as CTR.
+
 ## Metrics and promote
 
 Deterministic assignment means ingested `[events]` join a variant without a
