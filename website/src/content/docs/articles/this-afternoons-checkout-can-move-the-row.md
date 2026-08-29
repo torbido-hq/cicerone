@@ -22,16 +22,16 @@ Skip this path when:
 
 After flush, for users in that micro-batch, in this order:
 
-- popular / latest (and `'__cold_start__'`) can **rewrite**
+- popular / latest (and `'__cold_start__'`) can **rewrite** recommendation rows
 - if both ids were already in the last job artifact, `[events.online]` is on, and `[experiment]` is off, Cicerone 0.7 can **re-score** those users against the extra interactions while LightFM weights stay frozen
-- once `fit_min_events` known-ID events have piled up since the last `fit_partial`, Cicerone can run LightFM `fit_partial` (a **model update**) and **rewrite** affected users again
+- once `fit_min_events` known-ID events have piled up since the last `fit_partial`, Cicerone can run LightFM `fit_partial` (a **model update**) and **rewrite** recommendation rows for affected users again
 
 Flush does not imply `fit_partial`. A re-score is not a model update. The homepage can keep doing `SELECT … ORDER BY rank`. Serve `GET /recommendations/{user_id}` is the same rows.
 
 ## What does not change
 
 - This is not live ranking. Serve never loads a model on `GET`.
-- 202 means queued, not applied. Flush does not imply `fit_partial`. `fit_partial` does not rewrite every user.
+- 202 means queued, not applied. Flush does not imply `fit_partial`. `fit_partial` does not rewrite recommendation rows for every user.
 - New user ids and new SKUs do not enter LightFM until `job.run()` writes a new artifact.
 - Sequential strategies stay batch. Embedding tables do not grow online.
 - Tonight's job remains authoritative: it refits from the full event log and writes a new artifact.
@@ -127,7 +127,7 @@ Cicerone 0.7 uses `occurred_at` as interaction time (recency / latest). Mixing t
 
 The Checkout event payload does not include the full line list. `listLineItems()` is a **paginated** Stripe list (default 10 objects per page; the list API accepts a per-page `limit` of 1–100). A single page is not the cart.
 
-`autoPagingToArray({ limit: 100 })` walks those pages. The `100` is stripe-node's **total number of items materialized**, not the Stripe page size. Pagination continues until that many objects are collected or the list ends. It is this mapper's cap, not Cicerone's event contract.
+`autoPagingToArray({ limit: 100 })` walks those pages. The `100` is the **total number of line items materialized by stripe-node**, not the Stripe page size. Pagination continues until that many objects are collected or the list ends. It is this mapper's cap, not Cicerone's event contract.
 
 **If a Checkout Session has more than 100 line items, this mapper omits the rest, producing partial purchase ingestion. Raise the `limit` if a session can be larger.**
 
@@ -258,9 +258,11 @@ export async function POST(request) {
 
 Persist Stripe's webhook-level `event.id` (`evt_…`). That is a different string from Cicerone's per-line `event_id: ${stripeEventId}:${itemId}`. The Cicerone id only keeps two SKUs in one webhook as two rows. In the current 0.7 in-memory webhook source, a duplicate Cicerone `event_id` is dropped only while that id is still pending or in-flight. After flush `ack`, or after a serve restart, the same Stripe `event.id` can be ingested again.
 
-Claim Stripe `event.id` **before** `POST /events`. If Cicerone returns a definite non-OK, delete the claim so Stripe can retry. Persist the Stripe `event.id` before returning any 2xx. That prevents ordinary duplicate deliveries (Stripe retries while the first request is still in flight, or retries after you already returned 2xx).
+Claim Stripe `event.id` **before** `POST /events`. Persist the Stripe `event.id` before returning any 2xx. That prevents ordinary duplicate deliveries (Stripe retries while the first request is still in flight, or retries after you already returned 2xx). It does **not** give exactly-once semantics.
 
-It does **not** give exactly-once semantics. If Cicerone accepted the batch into the in-memory queue and the HTTP response was lost (timeout, reset, process crash after send), this handler may delete the claim and return 5xx. Stripe then retries, the `INSERT` succeeds again, and a second `POST /events` can enqueue the same purchase.
+A received, definite non-OK HTTP response from Cicerone can be treated as a rejection: release the claim so Stripe can retry. A `fetch()` timeout, connection reset, process crash, or any failure where no HTTP response was received is **ambiguous**: Cicerone may already have accepted the batch. Do not delete the claim in that case. If exactly-once behavior matters, reconciliation or retry handling is required.
+
+Add the durable claim around the existing handler; the abbreviated snippet below shows only the claim/retry portion.
 
 ```sql
 CREATE TABLE processed_stripe_events (
@@ -280,12 +282,18 @@ if (claimed.rowCount === 0) {
   return Response.json({ ok: true });
 }
 
-// … existing listLineItems + POST /events …
+let response;
+try {
+  // existing listLineItems + POST /events (same fetch as the handler above)
+  response = await fetch(/* … */);
+} catch {
+  // No HTTP response: Cicerone may already have accepted the batch.
+  // Do not delete the claim. Reconciliation/retry if exactly-once matters.
+  throw;
+}
 
 if (response.status === 429 || !response.ok) {
-  // Definite rejection: drop the claim so Stripe can retry.
-  // If Cicerone accepted the batch and the response was lost, deleting
-  // the claim can permit a duplicate on Stripe retry. Not exactly-once.
+  // Definite HTTP rejection: release the claim so Stripe can retry.
   await db.query(
     `DELETE FROM processed_stripe_events WHERE event_id = $1`,
     [event.id],
@@ -318,15 +326,15 @@ Forward locally with `stripe listen --forward-to localhost:3000/api/stripe --eve
 Sequence, in order. Keep the verbs separate: **rewrite** = write recommendation rows; **re-score** = rank known users with **frozen** LightFM weights plus extra interactions; **`fit_partial`** = a **model update** (SGD on LightFM weights). Flush is none of those last two by itself.
 
 1. **202 / queued** — serve took the events into its webhook queue. That queue is in-memory. It is not a durable write, not a row rewrite, and not a model update. The recommendation table is unchanged at this point.
-2. **Flush** — after `batch_size` or `batch_window_seconds` (default 60), popular / latest (and `'__cold_start__'`) can **rewrite**. The serve process that applied the batch calls `reader.refresh()` on success, so dataset `GET` on **that** process can see the write then. Other dataset readers wait for `[serve].refresh_interval_seconds` (default 60). A `db` output is a query. Flush does not run `fit_partial`.
-3. **Conditional frozen re-score** — personalized / item-KNN / content-fallback rows **rewrite** only when both ids are already in the last job artifact, `[events.online]` is on, and `[experiment]` is off. LightFM weights stay frozen. Known users can be re-scored against the extra interactions. This is not a model update.
-4. **Conditional `fit_partial`** — a **model update**, only after `fit_min_events` known-ID events have piled up since the last `fit_partial`. Default is **100**. A single test purchase does not trigger `fit_partial`. Then **rewrite** affected users only. Everyone else keeps last night's personalized rows until they show up in a later flush or the cron runs.
+2. **Flush** — after `batch_size` or `batch_window_seconds` (default 60), popular / latest (and `'__cold_start__'`) can **rewrite** recommendation rows. The serve process that applied the batch calls `reader.refresh()` on success, so dataset `GET` on **that** process can see the write then. Other dataset readers wait for `[serve].refresh_interval_seconds` (default 60). A `db` output is a query. Flush does not run `fit_partial`.
+3. **Conditional frozen re-score** — personalized / item-KNN / content-fallback recommendation rows **rewrite** only when both ids are already in the last job artifact, `[events.online]` is on, and `[experiment]` is off. LightFM weights stay frozen. Known users can be re-scored against the extra interactions. This is not a model update.
+4. **Conditional `fit_partial`** — a **model update**, only after `fit_min_events` known-ID events have piled up since the last `fit_partial`. Default is **100**. A single test purchase does not trigger `fit_partial`. Then **rewrite** recommendation rows for affected users only. Everyone else keeps last night's personalized rows until they show up in a later flush or the cron runs.
 
 The top-K list can stay put even when the flush ran, or even after a frozen re-score: the SKU might already be in the row.
 
-Item factors can drift globally after a real `fit_partial`, but only this flush's users are rewritten. Online extras on top of the artifact stop at `max_extra_interactions` (default 50_000). Cicerone persists the online artifact **after** source `ack`; if that persist fails, serving rows from the flush stay written and the pending fit is dropped.
+Item factors can drift globally after a real `fit_partial`, but only this flush's users have recommendation rows rewritten. Online extras on top of the artifact stop at `max_extra_interactions` (default 50_000). Cicerone persists the online artifact **after** source `ack`; if that persist fails, serving rows from the flush stay written and the pending fit is dropped.
 
-`[events.online]` **refuses to start** without an artifact in `[output]`. The batch job needs `[job].save_model_artifact = true`. Unknown `event_type`s are dropped; `purchase` must be in `[event_weights]`. An active `[experiment]` skips online LightFM rewrite on purpose (popular/latest still refresh).
+`[events.online]` **refuses to start** without an artifact in `[output]`. The batch job needs `[job].save_model_artifact = true`. Unknown `event_type`s are dropped; `purchase` must be in `[event_weights]`. An active `[experiment]` skips online LightFM rewrite of recommendation rows on purpose (popular/latest still refresh).
 
 On the **job** that writes the artifact:
 
@@ -368,13 +376,13 @@ Point Node's `CICERONE_SERVE_TOKEN` at `[serve].auth_token` (same name as [`exam
 | Cicerone queue full | Handler **429**; Stripe should retry |
 | Cicerone contract error | Handler **502**; Stripe should retry |
 | Event accepted | Handler **202**; queued, not applied |
-| Unknown user/item | No LightFM personalized rewrite or re-score; popular / latest can still rewrite |
+| Unknown user/item | No LightFM personalized rewrite or re-score; popular / latest can still rewrite recommendation rows |
 | Below `fit_min_events` | No `fit_partial` (frozen weights; known users can still be re-scored) |
 | New SKU | LightFM waits for `job.run()` |
 | New user ID | LightFM waits for `job.run()` |
 | Serve restart before flush | In-memory queued events can be lost (Stripe already got 2xx) |
 | Duplicate Stripe event after acknowledgement | Cicerone can ingest it again unless you persist `event.id` ([snippet](#persist-stripe-eventid)) |
-| Cicerone 202, HTTP response lost | Persist-before-POST is not exactly-once; a retry can enqueue the purchase again |
+| No HTTP response after `POST /events` | Ambiguous: Cicerone may already have accepted the batch. Do not release the claim. Not exactly-once; reconciliation or retry handling if that matters |
 
 ## Testing
 
@@ -382,7 +390,7 @@ Treat **ingest**, **frozen re-score**, and **`fit_partial`** as three checks. A 
 
 **Ingest.** One test card is enough. The handler returns 202 with your ids in `event_ids`. After the flush window, the incremental manifest's `generated_at` is newer than the purchase. `online_events_dropped_unknown` is how you see Stripe ids that were not in the artifact.
 
-**Frozen re-score.** Known user and known item, `[events.online]` on, `[experiment]` off. Cicerone 0.7 can **rewrite** that user's personalized / item-KNN / content-fallback rows from extra interactions while weights stay frozen. The top-K can still look unchanged. That is not `fit_partial` and not a model update.
+**Frozen re-score.** Known user and known item, `[events.online]` on, `[experiment]` off. Cicerone 0.7 can **rewrite** that user's personalized / item-KNN / content-fallback recommendation rows from extra interactions while weights stay frozen. The top-K can still look unchanged. That is not `fit_partial` and not a model update.
 
 **`fit_partial`.** Default `fit_min_events = 100` (known-ID events since the last `fit_partial`, not “100 in one flush”). A single test purchase will not cross that gate. To test the personalized online path including SGD, either send enough known-ID events to reach the configured threshold, or use a **development** serve config with a deliberately lower `fit_min_events`. Do not lower the production threshold just to see the feature work.
 
@@ -399,4 +407,4 @@ If 202 came back clean and nothing personalized changed, check the failure table
 
 - You need the row inside the checkout response. Write-through is a queue plus a flush window (default 60s), not request-path inference.
 - The interesting catalog is SKUs you listed today. Unknown ids never enter LightFM until `job.run()`.
-- You need exactly-once purchases from Stripe retries. Persist Stripe `event.id` yourself ([snippet](#persist-stripe-eventid)) to stop ordinary duplicates. This mapper plus Cicerone 0.7's in-memory webhook source will not give you exactly-once if Cicerone accepted the batch and the response was lost.
+- Cicerone 0.7's in-memory webhook source does not provide exactly-once purchase semantics; durable Stripe event handling belongs in the application.
