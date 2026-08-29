@@ -8,10 +8,6 @@ authors:
   - nicholas
 ---
 
-<img src="https://cicerone.dev/images/docs/cicerone-logo.svg" alt="Cicerone" width="200">
-
-Canonical URL: [https://cicerone.dev/articles/this-afternoons-checkout-can-move-the-row/](https://cicerone.dev/articles/this-afternoons-checkout-can-move-the-row/)
-
 A paid Stripe Checkout can enqueue a purchase that, after Cicerone's micro-batch flush, can update an **existing** recommendation row. That is write-through recommendation state, not fully real-time ranking. The checkout request never loads a model. `GET /recommendations` is still a lookup.
 
 [Cicerone](https://cicerone.dev) 0.7 is the job that already fitted [LightFM](https://making.lyst.com/lightfm/docs/home.html) and wrote the table. The [nightly table](/articles/a-nightly-table-next-to-your-orders/) walkthrough leaves personalized ranks until 03:00 UTC; that remains the right default. This article is the optional `[events.online]` path: Node verifies the Stripe signature and `POST`s Cicerone's event contract. There is no recommendations SDK.

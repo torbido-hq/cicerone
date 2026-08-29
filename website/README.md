@@ -88,4 +88,8 @@ Accept. Override with `PUBLIC_GA_MEASUREMENT_ID` at build time if needed.
 | `AAAA` | `@` | `2606:50c0:8003::153` |
 | `CNAME` | `www` | `torbido-hq.github.io` |
 
+Add `www.cicerone.dev` in GitHub Pages custom domains (or a Cloudflare
+301 from `www` to the apex). A www CNAME alone, with no Pages hostname,
+returns Cloudflare 521.
+
 Remove Gandi web-forward / `webredir` records first.

@@ -1,9 +1,19 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { articleHrefFromFilename, parseFrontmatter } from './articles.mjs';
 
 const ARTICLE_EXT = /\.(mdx?|markdown)$/i;
+
+export const OPENAPI_SITEMAP_URL = 'https://cicerone.dev/openapi/';
+
+export const DOC_SITEMAP_PAGES = Object.freeze([
+	['how-it-works.md', '/how-it-works/'],
+	['tutorial.md', '/tutorial/'],
+	['architecture.md', '/architecture/'],
+	['incremental-events.md', '/incremental-events/'],
+	['experiments.md', '/experiments/'],
+]);
 
 export function frontmatterLastmod(fm) {
 	if (fm == null || typeof fm !== 'object') return undefined;
@@ -37,4 +47,24 @@ export function applySitemapLastmod(item, lastmods) {
 	const lastmod = lastmods.get(item.url);
 	if (!lastmod) return item;
 	return { ...item, lastmod };
+}
+
+export function mergeLastmods(...maps) {
+	const lastmods = new Map();
+	for (const map of maps) {
+		if (!map) continue;
+		for (const [url, date] of map) lastmods.set(url, date);
+	}
+	return lastmods;
+}
+
+export function docsSitemapLastmods(docsDir, { site = 'https://cicerone.dev' } = {}) {
+	const lastmods = new Map();
+	if (!existsSync(docsDir)) return lastmods;
+	for (const [name, path] of DOC_SITEMAP_PAGES) {
+		const file = join(docsDir, name);
+		if (!existsSync(file)) continue;
+		lastmods.set(new URL(path, site).href, statSync(file).mtime);
+	}
+	return lastmods;
 }

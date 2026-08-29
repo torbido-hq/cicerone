@@ -16,18 +16,30 @@ import {
 } from './src/lib/articles.mjs';
 import { analyticsHead, gaMeasurementId } from './src/lib/consent.mjs';
 import { latestArticleLastmod, stampRssUpdated } from './src/lib/rss.mjs';
-import { applySitemapLastmod, articleSitemapLastmods } from './src/lib/sitemap.mjs';
+import { ARTICLES_DESCRIPTION } from './src/lib/structured-data.mjs';
+import {
+	OPENAPI_SITEMAP_URL,
+	applySitemapLastmod,
+	articleSitemapLastmods,
+	docsSitemapLastmods,
+	mergeLastmods,
+} from './src/lib/sitemap.mjs';
 
 const websiteRoot = dirname(fileURLToPath(import.meta.url));
 const articlesDir = articlesContentDir(websiteRoot);
 const production = process.env.NODE_ENV === 'production';
 const publicEnv = loadEnv(production ? 'production' : 'development', websiteRoot, 'PUBLIC_');
 const articleLastmods = articleSitemapLastmods(articlesDir);
+const sitemapLastmods = mergeLastmods(
+	docsSitemapLastmods(join(websiteRoot, '..', 'docs')),
+	articleLastmods,
+);
 
 const articlesPlugin = hasPublishedArticles(articlesDir, { production })
 	? [
 			starlightBlog({
 				title: 'Articles',
+				description: ARTICLES_DESCRIPTION,
 				prefix: ARTICLES_PREFIX,
 				postCount: Infinity,
 				recentPostCount: Infinity,
@@ -50,8 +62,9 @@ export default defineConfig({
 	integrations: [
 		// Before Starlight so it does not inject a second @astrojs/sitemap.
 		sitemap({
+			customPages: [OPENAPI_SITEMAP_URL],
 			serialize(item) {
-				return applySitemapLastmod(item, articleLastmods);
+				return applySitemapLastmod(item, sitemapLastmods);
 			},
 		}),
 		{
@@ -90,8 +103,10 @@ export default defineConfig({
 				},
 			],
 			components: {
+				Head: './src/components/Head.astro',
 				PageFrame: './src/components/PageFrame.astro',
 				Footer: './src/components/Footer.astro',
+				TableOfContents: './src/components/TableOfContents.astro',
 			},
 			customCss: ['./src/styles/custom.css'],
 			sidebar: [
@@ -118,17 +133,29 @@ export default defineConfig({
 						{
 							label: 'Changelog',
 							link: 'https://github.com/torbido-hq/cicerone/blob/main/CHANGELOG.md',
-							attrs: { target: '_blank', rel: 'noopener noreferrer' },
+							attrs: {
+								target: '_blank',
+								rel: 'noopener noreferrer',
+								'aria-label': 'Changelog (opens in a new tab)',
+							},
 						},
 						{
 							label: 'License',
 							link: 'https://github.com/torbido-hq/cicerone/blob/main/LICENSE',
-							attrs: { target: '_blank', rel: 'noopener noreferrer' },
+							attrs: {
+								target: '_blank',
+								rel: 'noopener noreferrer',
+								'aria-label': 'License (opens in a new tab)',
+							},
 						},
 						{
 							label: 'Repository README',
 							link: 'https://github.com/torbido-hq/cicerone/blob/main/README.md',
-							attrs: { target: '_blank', rel: 'noopener noreferrer' },
+							attrs: {
+								target: '_blank',
+								rel: 'noopener noreferrer',
+								'aria-label': 'Repository README (opens in a new tab)',
+							},
 						},
 					],
 				},
@@ -185,6 +212,18 @@ export default defineConfig({
 						name: 'twitter:image:alt',
 						content: 'Cicerone recommendation job status dashboard',
 					},
+				},
+				{
+					tag: 'meta',
+					attrs: { property: 'og:image:width', content: '1920' },
+				},
+				{
+					tag: 'meta',
+					attrs: { property: 'og:image:height', content: '1080' },
+				},
+				{
+					tag: 'link',
+					attrs: { rel: 'apple-touch-icon', href: '/apple-touch-icon.png' },
 				},
 				{
 					tag: 'link',

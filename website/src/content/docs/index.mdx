@@ -1,5 +1,5 @@
 ---
-title: Home
+title: Self-hosted batch recommender
 description: Self-hosted batch recommender — hybrid models, policies, incremental events, serve API, and dashboard. No live inference in the request path.
 template: splash
 hero:
@@ -8,7 +8,7 @@ hero:
   image:
     light: ../../assets/cicerone-logo.svg
     dark: ../../assets/cicerone-logo-dark.svg
-    alt: Cicerone
+    alt: ''
   actions:
     - text: How it works
       link: /how-it-works/
@@ -43,7 +43,12 @@ import LatestRelease from '../../components/LatestRelease.astro';
 
 Input (dataset or database) → weigh interactions → train strategies → write top-K recommendations → optional serve API / dashboard.
 
-![Diagram of the Cicerone pipeline from input events through training to recommendation output](/images/flow.svg)
+<img
+  src="/images/flow.svg"
+  width="960"
+  height="320"
+  alt="Diagram of the Cicerone pipeline from input events through training to recommendation output"
+/>
 
 ## Dashboard
 

@@ -1,0 +1,24 @@
+---
+import Default from '@astrojs/starlight/components/TableOfContents.astro';
+---
+
+<div class="cicerone-toc">
+	<Default><slot /></Default>
+</div>
+
+<style is:global>
+	.cicerone-toc #starlight__on-this-page {
+		font-size: var(--sl-text-lg);
+		font-weight: 600;
+	}
+</style>
+
+<script>
+	for (const heading of document.querySelectorAll('.cicerone-toc h2#starlight__on-this-page')) {
+		const label = document.createElement('p');
+		label.id = heading.id;
+		label.className = heading.className;
+		label.textContent = heading.textContent;
+		heading.replaceWith(label);
+	}
+</script>

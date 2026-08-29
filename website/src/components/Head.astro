@@ -1,0 +1,44 @@
+---
+import Default from '@astrojs/starlight/components/Head.astro';
+import {
+	DEFAULT_OG_IMAGE,
+	DEFAULT_OG_IMAGE_ALT,
+	DEFAULT_OG_IMAGE_HEIGHT,
+	DEFAULT_OG_IMAGE_WIDTH,
+	articleImageForId,
+	homeStructuredData,
+	listingDescriptionForId,
+} from '../lib/structured-data.mjs';
+
+const id = Astro.locals.starlightRoute?.id ?? '';
+const isHome = id === 'index' || id === '';
+const is404 = id === '404';
+const listingDescription = listingDescriptionForId(id);
+const ogImage = isHome ? DEFAULT_OG_IMAGE : articleImageForId(id);
+const jsonLd = isHome ? homeStructuredData() : null;
+---
+
+<Default><slot /></Default>
+{isHome && <meta property="og:type" content="website" />}
+{is404 && <meta name="robots" content="noindex" />}
+{
+	listingDescription && (
+		<>
+			<meta name="description" content={listingDescription} />
+			<meta property="og:description" content={listingDescription} />
+		</>
+	)
+}
+<meta property="og:image" content={ogImage} />
+<meta property="og:image:alt" content={DEFAULT_OG_IMAGE_ALT} />
+<meta property="og:image:width" content={String(DEFAULT_OG_IMAGE_WIDTH)} />
+<meta property="og:image:height" content={String(DEFAULT_OG_IMAGE_HEIGHT)} />
+<meta name="twitter:image" content={ogImage} />
+<meta name="twitter:image:alt" content={DEFAULT_OG_IMAGE_ALT} />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+{
+	jsonLd && (
+		<script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />
+	)
+}

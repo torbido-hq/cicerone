@@ -106,10 +106,15 @@ export function trapDialogTab(event, root) {
 	wrap.focus();
 }
 
-export function openConsentDialog(root) {
+export function firstConsentAction(root) {
+	return root.querySelector('[data-cicerone-consent]') ?? dialogFocusables(root)[0] ?? null;
+}
+
+export function openConsentDialog(root, { modal = false } = {}) {
 	root.hidden = false;
-	root.setAttribute('aria-modal', 'true');
-	const first = dialogFocusables(root)[0];
+	root.setAttribute('aria-modal', modal ? 'true' : 'false');
+	if (!modal) return;
+	const first = firstConsentAction(root);
 	if (first && typeof first.focus === 'function') first.focus();
 	else if (typeof root.focus === 'function') root.focus();
 }
@@ -145,15 +150,15 @@ export function initConsentBanner(doc = document) {
 		lastFocus = null;
 	};
 
-	const open = () => {
+	const open = ({ modal = true } = {}) => {
 		lastFocus = isElement(doc.activeElement) ? doc.activeElement : null;
-		openConsentDialog(root);
+		openConsentDialog(root, { modal });
 	};
 
 	root.addEventListener('keydown', (event) => {
 		if (root.hidden) return;
-		trapDialogTab(event, root);
-		if (event.key === 'Escape' && readStoredConsent()) {
+		if (root.getAttribute('aria-modal') === 'true') trapDialogTab(event, root);
+		if (event.key === 'Escape') {
 			event.preventDefault();
 			closeConsentDialog(root, lastFocus);
 			lastFocus = null;
@@ -176,5 +181,5 @@ export function initConsentBanner(doc = document) {
 		open();
 	});
 
-	if (!readStoredConsent()) open();
+	if (!readStoredConsent()) open({ modal: false });
 }

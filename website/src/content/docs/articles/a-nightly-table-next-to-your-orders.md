@@ -8,10 +8,6 @@ authors:
   - nicholas
 ---
 
-<img src="https://cicerone.dev/images/docs/cicerone-logo.svg" alt="Cicerone" width="200">
-
-Canonical URL: [https://cicerone.dev/articles/a-nightly-table-next-to-your-orders/](https://cicerone.dev/articles/a-nightly-table-next-to-your-orders/)
-
 You have an `order_items` table and you want a “Recommended for you” row on the homepage. What you do not want is Python running inside Rails, and you do not have a recommendations team to hand the problem to.
 
 The usual answer is `ORDER BY sold_count DESC` under a friendlier heading. There is nothing dishonest about that query, but it shows the same row to everybody.

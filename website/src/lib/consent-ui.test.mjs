@@ -5,9 +5,11 @@ import { CONSENT_ANALYTICS, CONSENT_DENIED, CONSENT_STORAGE_KEY } from './consen
 import {
 	analyticsStorageJustGranted,
 	applyConsentState,
+	firstConsentAction,
 	initConsentBanner,
 	loadGoogleTag,
 	googleMeasurementId,
+	openConsentDialog,
 	readStoredConsent,
 	tabWrapTarget,
 	updateGtagConsent,
@@ -217,6 +219,37 @@ test('initConsentBanner loads gtag when stored analytics consent is granted', ()
 	} finally {
 		harness.restore();
 	}
+});
+
+test('firstConsentAction prefers the Reject/Accept buttons', () => {
+	const reject = { id: 'reject' };
+	const root = {
+		querySelector: (sel) => (sel === '[data-cicerone-consent]' ? reject : null),
+		querySelectorAll: () => [{ id: 'privacy' }, reject],
+	};
+	assert.equal(firstConsentAction(root), reject);
+});
+
+test('openConsentDialog first visit is not modal and does not steal focus', () => {
+	const focused = [];
+	const reject = { focus() { focused.push('reject'); } };
+	const root = {
+		hidden: true,
+		attrs: {},
+		setAttribute(name, value) {
+			this.attrs[name] = value;
+		},
+		querySelector: () => reject,
+		querySelectorAll: () => [reject],
+		focus() { focused.push('root'); },
+	};
+	openConsentDialog(root, { modal: false });
+	assert.equal(root.hidden, false);
+	assert.equal(root.attrs['aria-modal'], 'false');
+	assert.deepEqual(focused, []);
+	openConsentDialog(root, { modal: true });
+	assert.equal(root.attrs['aria-modal'], 'true');
+	assert.deepEqual(focused, ['reject']);
 });
 
 test('initConsentBanner shows controls when gtag is missing', () => {

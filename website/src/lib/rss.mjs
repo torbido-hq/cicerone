@@ -14,8 +14,12 @@ function escapeRegExp(value) {
 	return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-export function stampRssUpdated(xml, { lastBuildDate, itemUpdatedByLink } = {}) {
-	let out = String(xml);
+export function stampRssChannelLink(xml, href = 'https://cicerone.dev/articles/') {
+	return String(xml).replace(/(<channel>\s*<title>[^<]*<\/title>\s*(?:<description>[^<]*<\/description>)?\s*<link>)[^<]*(<\/link>)/, `$1${href}$2`);
+}
+
+export function stampRssUpdated(xml, { lastBuildDate, itemUpdatedByLink, channelLink } = {}) {
+	let out = stampRssChannelLink(String(xml), channelLink);
 	if (lastBuildDate instanceof Date && !Number.isNaN(lastBuildDate.getTime())) {
 		const tag = `<lastBuildDate>${rfc822(lastBuildDate)}</lastBuildDate>`;
 		if (/<lastBuildDate>/.test(out)) {
