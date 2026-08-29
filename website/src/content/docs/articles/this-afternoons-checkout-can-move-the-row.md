@@ -2,7 +2,7 @@
 title: This afternoon's checkout can move the row
 description: Stripe webhook to Cicerone 0.7 online LightFM. Known-ID purchases write through. GET stays a lookup.
 date: 2026-08-28
-lastUpdated: 2026-08-28
+lastUpdated: 2026-08-29
 excerpt: A paid Checkout can update an existing recommendation row after a flush. LightFM rewrite still needs known IDs. GET stays a lookup.
 authors:
   - nicholas
@@ -12,7 +12,11 @@ A paid Stripe Checkout can enqueue a purchase that, after Cicerone's micro-batch
 
 [Cicerone](https://cicerone.dev) 0.7 is the job that already fitted [LightFM](https://making.lyst.com/lightfm/docs/home.html) and wrote the table. The [nightly table](/articles/a-nightly-table-next-to-your-orders/) walkthrough leaves personalized ranks until 03:00 UTC; that remains the right default. This article is the optional `[events.online]` path: Node verifies the Stripe signature and `POST`s Cicerone's event contract. There is no recommendations SDK.
 
-**Idempotency (read this before copying the mapper).** `event_id: ${stripeEventId}:${itemId}` is not durable purchase idempotency. In the current Cicerone 0.7 implementation, the in-memory webhook source only suppresses that id while it is still pending or in-flight. That is not a durable API guarantee. After a successful flush `ack`, the same Stripe `event.id` can be ingested again. If a later retry must not add weight, persist `event.id` in your store before you return 2xx to Stripe.
+Skip this path when:
+
+- The row must exist before the checkout response returns. Flush is a queue window (default 60s), not request-path inference.
+- The SKUs that matter were listed today. Unknown ids wait for `job.run()`.
+- Stripe retries must not add a second purchase. Persist `event.id` yourself ([snippet](#persist-stripe-eventid)); Cicerone 0.7's in-memory queue is not durable exactly-once.
 
 ## What changes
 
@@ -30,7 +34,7 @@ The homepage can keep doing `SELECT … ORDER BY rank`. Serve `GET /recommendati
 - New user ids and new SKUs do not enter LightFM until `job.run()` writes a new artifact.
 - Sequential strategies stay batch. Embedding tables do not grow online.
 - Tonight's job remains authoritative: it refits from the full event log and writes a new artifact.
-- Cicerone does not durably dedupe Stripe events. See [Durable idempotency](#durable-idempotency).
+- Cicerone does not durably dedupe Stripe events ([snippet](#persist-stripe-eventid)).
 
 ## Architecture
 
@@ -78,12 +82,12 @@ Cicerone IDs are yours. They are not automatically Stripe `cus_` / `prod_` / `pr
 
 | Cicerone | Stripe | Where you set it |
 | --- | --- | --- |
-| `user_id` | `client_reference_id` | `checkout.sessions.create` |
-| `item_id` | Product `metadata.item_id`, else Price `lookup_key` | Dashboard or `products.create` / `prices.create` |
-| `event_type` | `"purchase"` | Hard-coded in the mapper (must exist in `[event_weights]`) |
-| `occurred_at` | `session.created` on paid `completed`; `event.created` on async success | Unix seconds; Cicerone 0.7 accepts that |
-| `quantity` | line-item `quantity` | One Cicerone event per SKU line; `quantity: 5` stays one row |
-| `event_id` | `{event.id}:{item_id}` | Stripe webhook event id (`evt_…`) plus catalog id |
+| `user_id` | `client_reference_id` | API call: `checkout.sessions.create` |
+| `item_id` | Product `metadata.item_id`, else Price `lookup_key` | Dashboard / API call: `products.create` / `prices.create` |
+| `event_type` | `"purchase"` | Mapper: hard-coded (must exist in `[event_weights]`) |
+| `occurred_at` | `session.created` on paid `completed`; `event.created` on async success | Mapper: Unix seconds (Cicerone 0.7 accepts that) |
+| `quantity` | line-item `quantity` | API call: `listLineItems` (`quantity: 5` stays one event) |
+| `event_id` | `{event.id}:{item_id}` | Mapper: Stripe `event.id` plus catalog id |
 
 Whichever catalog string you emit must be the exact `item_id` in the last LightFM artifact. `prod_…` and `price_…` are not aliases for that string. Examples below use `sku-42` on purpose.
 
@@ -103,9 +107,7 @@ Three different things:
 
 `:${itemId}` only keeps two SKUs in one webhook as two Cicerone rows instead of colliding on `evt_…` alone.
 
-After a successful flush `ack`, the same Stripe event ID can be ingested again. A later retry can inflate popular / latest weights for types in `quantity_scaled_events`, and online LightFM can pick up the extra interaction. 202 does not persist the queue.
-
-If duplicate delivery after acknowledgement must be harmless, persist Stripe's `event.id` in **your** application before you acknowledge Stripe.
+How to persist `event.id` before 2xx: [Persist Stripe `event.id`](#persist-stripe-eventid).
 
 ## `occurred_at`
 
@@ -249,6 +251,44 @@ export async function POST(request) {
 }
 ```
 
+### Persist Stripe `event.id`
+
+`event_id: ${stripeEventId}:${itemId}` is Cicerone's per-line id. It is not a durable purchase key. In the current 0.7 in-memory webhook source, a duplicate is dropped only while that id is still pending or in-flight. After flush `ack`, or after a serve restart, the same Stripe `event.id` can be ingested again.
+
+Claim the Stripe id **before** `POST /events`. If Cicerone does not accept the batch, delete the claim so Stripe can retry. Write the row before any 2xx.
+
+```sql
+CREATE TABLE processed_stripe_events (
+  event_id TEXT PRIMARY KEY
+);
+```
+
+```js
+const claimed = await db.query(
+  `INSERT INTO processed_stripe_events (event_id)
+   VALUES ($1)
+   ON CONFLICT (event_id) DO NOTHING
+   RETURNING event_id`,
+  [event.id],
+);
+if (claimed.rowCount === 0) {
+  return Response.json({ ok: true });
+}
+
+// … existing listLineItems + POST /events …
+
+if (response.status === 429 || !response.ok) {
+  await db.query(
+    `DELETE FROM processed_stripe_events WHERE event_id = $1`,
+    [event.id],
+  );
+  return new Response(await response.text(), {
+    status: response.status === 429 ? 429 : 502,
+  });
+}
+return Response.json(await response.json(), { status: 202 });
+```
+
 A Cicerone **400** (malformed JSON, missing fields, bad `occurred_at`) is a contract error. This handler maps every non-OK Cicerone response — including that 400, and 401 — to **502**. That is an application-level retry decision: Stripe must not treat the webhook as acknowledged if Cicerone did not accept the events. Returning 2xx would mark the delivery done.
 
 HTTP from this handler:
@@ -322,7 +362,7 @@ Point Node's `CICERONE_SERVE_TOKEN` at `[serve].auth_token` (same name as [`exam
 | New SKU | LightFM waits for `job.run()` |
 | New user ID | LightFM waits for `job.run()` |
 | Serve restart before flush | In-memory queued events can be lost (Stripe already got 2xx) |
-| Duplicate Stripe event after acknowledgement | Cicerone can ingest it again; requires application-level durable idempotency |
+| Duplicate Stripe event after acknowledgement | Cicerone can ingest it again unless you persist `event.id` ([snippet](#persist-stripe-eventid)) |
 
 ## Testing
 
@@ -347,4 +387,4 @@ If 202 came back clean and nothing personalized changed, check the failure table
 
 - You need the row inside the checkout response. Write-through is a queue plus a flush window (default 60s), not request-path inference.
 - The interesting catalog is SKUs you listed today. Unknown ids never enter LightFM until `job.run()`.
-- You need exactly-once purchases from Stripe retries. This mapper plus Cicerone 0.7's in-memory webhook source will not give you that.
+- You need exactly-once purchases from Stripe retries. Persist `event.id` yourself ([snippet](#persist-stripe-eventid)). This mapper plus Cicerone 0.7's in-memory webhook source will not give you that.
