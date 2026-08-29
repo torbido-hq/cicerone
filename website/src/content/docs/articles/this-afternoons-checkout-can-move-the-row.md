@@ -106,11 +106,11 @@ Three different things:
 | --- | --- | --- |
 | Stripe delivery retries | Stripe reuses `event.id` across retries of the same webhook. That string is the durable **webhook-level** key you persist. | Does not mean Cicerone applied the purchase only once |
 | Cicerone 0.7 webhook queue | Drops a duplicate Cicerone `event_id` (`${stripeEventId}:${itemId}`) while that per-line id is still **pending or in-flight** in this process (current in-memory implementation, not a durable API guarantee) | After flush `ack`, the id is forgotten. A serve-process restart empties the in-memory queue. |
-| Durable business-level idempotency | Your store of Stripe `event.id` (or `session.id` once paid) **before** 2xx | Not provided by this mapper or by `kind = "webhook"`. Not exactly-once if Cicerone accepted the batch and the HTTP response was lost. |
+| Durable business-level idempotency | Your store of Stripe `event.id` (or `session.id` once paid) before returning any 2xx | Not provided by this mapper or by `kind = "webhook"`. Not exactly-once if Cicerone accepted the batch and the HTTP response was lost. |
 
 Stripe's `event.id` (`evt_…`) is the webhook-level key. Cicerone's `event_id: ${stripeEventId}:${itemId}` is a **per-line** contract id so two SKUs in one webhook do not collide on `evt_…` alone. It is not a durable purchase key.
 
-How to persist Stripe `event.id` before 2xx: [Persist Stripe `event.id`](#persist-stripe-eventid).
+How to persist Stripe `event.id` before returning any 2xx: [Persist Stripe `event.id`](#persist-stripe-eventid).
 
 ## `occurred_at`
 
@@ -121,7 +121,7 @@ Paid `checkout.session.completed` uses `session.created`; async success uses `ev
 | Paid `completed` | `session.created` | When the Checkout Session was created | When funds settled, or when the webhook arrived |
 | `async_payment_succeeded` | `event.created` | When Stripe created the async-success event | When funds settled, or when Checkout was opened |
 
-Cicerone 0.7 uses `occurred_at` as interaction time (recency / latest). Mixing the two clocks can reorder checkouts: a card session opened at 14:00 and paid at 14:01 is stamped 14:00; a SEPA session opened at 13:00 that succeeds at 16:00 is stamped 16:00. Sort those as interaction time and the later-paid SEPA ranks newer than the earlier card charge. If you need strict temporal ordering, use one consistent clock on both paths, or your own order timestamp.
+Cicerone 0.7 uses `occurred_at` as interaction time (recency / latest). Mixing the two clocks can reorder checkouts. A card session opened at 14:00 and paid at 14:01 is stamped 14:00. A SEPA session opened at 13:00 that succeeds at 16:00 is stamped 16:00. Sorted as interaction time, the later-paid SEPA ranks newer than the earlier card charge. If you need strict temporal ordering, use one consistent clock on both paths, or your own order timestamp.
 
 ## Line items and quantity
 
@@ -258,7 +258,7 @@ export async function POST(request) {
 
 Persist Stripe's webhook-level `event.id` (`evt_…`). That is a different string from Cicerone's per-line `event_id: ${stripeEventId}:${itemId}`. The Cicerone id only keeps two SKUs in one webhook as two rows. In the current 0.7 in-memory webhook source, a duplicate Cicerone `event_id` is dropped only while that id is still pending or in-flight. After flush `ack`, or after a serve restart, the same Stripe `event.id` can be ingested again.
 
-Claim Stripe `event.id` **before** `POST /events`. If Cicerone returns a definite non-OK, delete the claim so Stripe can retry. Write the row before any 2xx. That prevents ordinary duplicate deliveries (Stripe retries while the first request is still in flight, or retries after you already returned 2xx).
+Claim Stripe `event.id` **before** `POST /events`. If Cicerone returns a definite non-OK, delete the claim so Stripe can retry. Persist the Stripe `event.id` before returning any 2xx. That prevents ordinary duplicate deliveries (Stripe retries while the first request is still in flight, or retries after you already returned 2xx).
 
 It does **not** give exactly-once semantics. If Cicerone accepted the batch into the in-memory queue and the HTTP response was lost (timeout, reset, process crash after send), this handler may delete the claim and return 5xx. Stripe then retries, the `INSERT` succeeds again, and a second `POST /events` can enqueue the same purchase.
 
@@ -283,6 +283,9 @@ if (claimed.rowCount === 0) {
 // … existing listLineItems + POST /events …
 
 if (response.status === 429 || !response.ok) {
+  // Definite rejection: drop the claim so Stripe can retry.
+  // If Cicerone accepted the batch and the response was lost, deleting
+  // the claim can permit a duplicate on Stripe retry. Not exactly-once.
   await db.query(
     `DELETE FROM processed_stripe_events WHERE event_id = $1`,
     [event.id],
