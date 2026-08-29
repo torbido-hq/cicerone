@@ -45,20 +45,32 @@ export function homeStructuredData() {
 				publisher: { '@id': `${SITE_URL}/#org` },
 			},
 			{
-				'@type': 'Organization',
+				...PUBLISHER,
 				'@id': `${SITE_URL}/#org`,
-				name: SITE_NAME,
-				url: SITE_URL,
 			},
 		],
 	};
 }
 
-export function articleImageForId(id) {
+export function ogImageForId(id) {
 	if (id === 'articles/this-afternoons-checkout-can-move-the-row') {
-		return `${SITE_URL}/images/afternoon-checkout-architecture.png`;
+		return {
+			url: `${SITE_URL}/images/afternoon-checkout-architecture.png`,
+			alt: 'Stripe checkout to a queue, a flush, optional LightFM rewrite, then a GET lookup',
+			width: 1024,
+			height: 682,
+		};
 	}
-	return DEFAULT_OG_IMAGE;
+	return {
+		url: DEFAULT_OG_IMAGE,
+		alt: DEFAULT_OG_IMAGE_ALT,
+		width: DEFAULT_OG_IMAGE_WIDTH,
+		height: DEFAULT_OG_IMAGE_HEIGHT,
+	};
+}
+
+export function articleImageForId(id) {
+	return ogImageForId(id).url;
 }
 
 export function listingDescriptionForId(id) {
