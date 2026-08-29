@@ -2,15 +2,11 @@
 title: A nightly table next to your orders
 description: Nightly product recs as a Postgres table. Rails walkthrough; no Python in the request.
 date: 2026-08-20
-lastUpdated: 2026-08-24
+lastUpdated: 2026-08-28
 excerpt: Cron reads order_items, writes a ranked table, Rails JOINs it. Honest when the data is too thin to personalize.
 authors:
   - nicholas
 ---
-
-<img src="https://cicerone.dev/images/docs/cicerone-logo.svg" alt="Cicerone" width="200">
-
-Canonical URL: [https://cicerone.dev/articles/a-nightly-table-next-to-your-orders/](https://cicerone.dev/articles/a-nightly-table-next-to-your-orders/)
 
 You have an `order_items` table and you want a “Recommended for you” row on the homepage. What you do not want is Python running inside Rails, and you do not have a recommendations team to hand the problem to.
 
@@ -62,7 +58,7 @@ LIMIT 3;
 
 Your app joins that to `products` and renders the row. The numbers are illustrative; the shape is exact — one row per recommendation, ranked, carrying the label of whatever produced it.
 
-This walkthrough configures no `[events]` block, so the ranks change only when the job runs. A purchase this afternoon surfaces tomorrow. Turning on [incremental events](https://cicerone.dev/incremental-events/) refreshes the bestsellers and newest-by-date rows between runs, but the personalized half always waits for the cron.
+This walkthrough configures no `[events]` block, so the ranks change only when the job runs. A purchase this afternoon surfaces tomorrow. Turning on [incremental events](https://cicerone.dev/incremental-events/) refreshes the bestsellers and newest-by-date rows between runs. From 0.7, optional `[events.online]` can continue LightFM for IDs the last job already knew — that path is a [Stripe webhook in Node](/articles/this-afternoons-checkout-can-move-the-row/), not this `JOIN`.
 
 What those labels mean, and the one config name that shadows them:
 

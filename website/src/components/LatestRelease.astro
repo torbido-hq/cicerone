@@ -6,9 +6,12 @@ import release from '../generated/latest-release.json';
 	release && (
 		<p class="latest-release">
 			Latest release <strong>{release.version}</strong>
+			{' '}
 			<time datetime={release.date}>{release.date}</time>
 			{' · '}
-			<a href={release.url} target="_blank" rel="noopener noreferrer">what changed</a>
+			<a href={release.url} target="_blank" rel="noopener noreferrer" aria-label="what changed (opens in a new tab)">
+				what changed
+			</a>
 		</p>
 	)
 }

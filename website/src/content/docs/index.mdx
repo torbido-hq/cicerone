@@ -1,5 +1,5 @@
 ---
-title: Home
+title: Self-hosted batch recommender
 description: Self-hosted batch recommender — hybrid models, policies, incremental events, serve API, and dashboard. No live inference in the request path.
 template: splash
 hero:
@@ -8,7 +8,7 @@ hero:
   image:
     light: ../../assets/cicerone-logo.svg
     dark: ../../assets/cicerone-logo-dark.svg
-    alt: Cicerone
+    alt: ''
   actions:
     - text: How it works
       link: /how-it-works/
@@ -23,6 +23,7 @@ hero:
 ---
 
 import { LinkCard, CardGrid } from '@astrojs/starlight/components';
+import ArticleFeed from '../../components/ArticleFeed.astro';
 import LatestRelease from '../../components/LatestRelease.astro';
 
 <LatestRelease />
@@ -42,7 +43,12 @@ import LatestRelease from '../../components/LatestRelease.astro';
 
 Input (dataset or database) → weigh interactions → train strategies → write top-K recommendations → optional serve API / dashboard.
 
-![Diagram of the Cicerone pipeline from input events through training to recommendation output](/images/flow.svg)
+<img
+  src="/images/flow.svg"
+  width="960"
+  height="320"
+  alt="Diagram of the Cicerone pipeline from input events through training to recommendation output"
+/>
 
 ## Dashboard
 
@@ -65,7 +71,6 @@ Standalone status page for the latest job run (and history with a DB output), pl
 Markdown under [`docs/`](https://github.com/torbido-hq/cicerone/tree/main/docs) in the repository is the source of truth; this site rebuilds it on deploy.
 
 <CardGrid>
-  <LinkCard title="A nightly table next to your orders" href="/articles/a-nightly-table-next-to-your-orders/" description="Cron writes a ranked table. Rails JOINs it. No Python in the request." />
   <LinkCard title="How it works" href="/how-it-works/" description="Pipeline, algorithms, and how strategies differ." />
   <LinkCard title="Tutorial" href="/tutorial/" description="From sample data to serve API and dashboard." />
   <LinkCard title="Architecture" href="/architecture/" description="How packages under src/cicerone/ fit together." />
@@ -76,3 +81,7 @@ Markdown under [`docs/`](https://github.com/torbido-hq/cicerone/tree/main/docs) 
   <LinkCard title="PyPI" href="https://pypi.org/project/cicerone-recommender/" description="pip install cicerone-recommender (import cicerone; extras [redis] / [sequential])." />
   <LinkCard title="License" href="https://github.com/torbido-hq/cicerone/blob/main/LICENSE" description="Beerware." />
 </CardGrid>
+
+## Articles
+
+<ArticleFeed />

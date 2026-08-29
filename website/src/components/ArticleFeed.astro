@@ -1,0 +1,29 @@
+---
+import { defaultArticlesDir, HOME_ARTICLE_LIMIT, listPublishedArticles } from '../lib/articles.mjs';
+
+const posts = listPublishedArticles(defaultArticlesDir(), {
+	production: import.meta.env.PROD,
+	limit: HOME_ARTICLE_LIMIT,
+});
+---
+
+{
+	posts.length > 0 && (
+		<>
+			<ol class="cicerone-article-feed not-content">
+				{posts.map((post) => (
+					<li>
+						{post.date ? <time datetime={post.date}>{post.date}</time> : null}
+						<a href={post.href}>{post.title}</a>
+						{post.excerpt ? <p>{post.excerpt}</p> : null}
+					</li>
+				))}
+			</ol>
+			<p class="cicerone-article-feed-more not-content">
+				<a href="/articles/">All articles</a>
+				{' · '}
+				<a href="/articles/rss.xml">RSS</a>
+			</p>
+		</>
+	)
+}

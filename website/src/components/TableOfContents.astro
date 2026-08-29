@@ -1,0 +1,14 @@
+---
+import Default from '@astrojs/starlight/components/TableOfContents.astro';
+---
+
+<div class="cicerone-toc">
+	<Default><slot /></Default>
+</div>
+
+<style is:global>
+	.cicerone-toc #starlight__on-this-page {
+		font-size: var(--sl-text-lg);
+		font-weight: 600;
+	}
+</style>
