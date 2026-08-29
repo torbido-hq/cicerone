@@ -363,6 +363,61 @@ def test_load_experiment_rejects_invalid_boost_table():
         )
 
 
+def test_load_experiment_rejects_incomplete_or_typed_policy_tables():
+    with pytest.raises(ConfigError, match="kind"):
+        load_experiment_settings(
+            {
+                "enabled": True,
+                "id": "exp",
+                "variants": [
+                    {"name": "control", "traffic": 0.5},
+                    {
+                        "name": "treatment",
+                        "traffic": 0.5,
+                        "boosts": [{"name": "x", "item_column": "featured", "factor": 1.1}],
+                    },
+                ],
+            }
+        )
+    with pytest.raises(ConfigError, match="op"):
+        load_experiment_settings(
+            {
+                "enabled": True,
+                "id": "exp",
+                "variants": [
+                    {"name": "control", "traffic": 0.5},
+                    {
+                        "name": "treatment",
+                        "traffic": 0.5,
+                        "eligibility": [{"name": "x", "item_column": "published"}],
+                    },
+                ],
+            }
+        )
+    with pytest.raises(ConfigError):
+        load_experiment_settings(
+            {
+                "enabled": True,
+                "id": "exp",
+                "variants": [
+                    {"name": "control", "traffic": 0.5},
+                    {
+                        "name": "treatment",
+                        "traffic": 0.5,
+                        "boosts": [
+                            {
+                                "name": "x",
+                                "kind": "boolean",
+                                "item_column": "featured",
+                                "factor": {"bad": 1},
+                            }
+                        ],
+                    },
+                ],
+            }
+        )
+
+
 def test_load_experiment_rejects_invalid_policy_spec_shape():
     with pytest.raises(ConfigError, match="must be true, false"):
         load_experiment_settings(
