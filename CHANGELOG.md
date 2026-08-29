@@ -14,8 +14,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   path as `shared_latest`.
 - Content-fallback fit stores only the last 50 history items per user (the
   window recommend already scored).
-- Content-fallback recommend does not start an inner thread pool when it is
-  already running inside the job strategy pool.
+- Content-fallback recommend starts an inner user thread pool only on the
+  process main thread (not from a worker thread).
 - Online collaborative refresh uses `[job].max_workers` for strategy recommend
   threads.
 - Importing `cicerone.job` no longer calls `logging.basicConfig` (`cicerone job`
