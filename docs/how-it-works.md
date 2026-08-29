@@ -15,21 +15,7 @@ read next.
 
 ## Pipeline
 
-```mermaid
-flowchart LR
-  input[events users items]
-  weigh[features.toml weights]
-  dataset[RecTools Dataset]
-  fit[fit strategies]
-  allow[eligibility allowlist]
-  score[score allowed items]
-  combine[priority or RRF or blending]
-  boost[boosts re-rank]
-  out[recommendations plus manifest]
-  events[optional events ingest]
-  input --> weigh --> dataset --> fit --> allow --> score --> combine --> boost --> out
-  events -->|"popular/latest write-through, optional online LightFM"| out
-```
+![Pipeline from events through weighting, fitting, combining, and boosts to a recommendations table, with optional incremental events writing through](/images/pipeline.svg)
 
 1. Load `events` (required) plus optional `users` / `items`.
 2. Turn raw events into weighted `(user, item)` pairs (`features.toml` +

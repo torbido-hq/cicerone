@@ -1,0 +1,40 @@
+---
+import Default from '@astrojs/starlight/components/Head.astro';
+import {
+	homeStructuredData,
+	listingDescriptionForId,
+	ogImageForId,
+} from '../lib/structured-data.mjs';
+
+const id = Astro.locals.starlightRoute?.id ?? '';
+const isHome = id === 'index' || id === '';
+const is404 = id === '404';
+const listingDescription = listingDescriptionForId(id);
+const og = ogImageForId(id);
+const jsonLd = isHome ? homeStructuredData() : null;
+---
+
+<Default><slot /></Default>
+{isHome && <meta property="og:type" content="website" />}
+{is404 && <meta name="robots" content="noindex" />}
+{
+	listingDescription && (
+		<>
+			<meta name="description" content={listingDescription} />
+			<meta property="og:description" content={listingDescription} />
+		</>
+	)
+}
+<meta property="og:image" content={og.url} />
+<meta property="og:image:alt" content={og.alt} />
+<meta property="og:image:width" content={String(og.width)} />
+<meta property="og:image:height" content={String(og.height)} />
+<meta name="twitter:image" content={og.url} />
+<meta name="twitter:image:alt" content={og.alt} />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+{
+	jsonLd && (
+		<script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />
+	)
+}

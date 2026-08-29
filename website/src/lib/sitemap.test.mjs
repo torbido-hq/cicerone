@@ -5,10 +5,13 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 
 import {
+	OPENAPI_SITEMAP_URL,
 	applySitemapLastmod,
 	articlePathFromFilename,
 	articleSitemapLastmods,
+	docsSitemapLastmods,
 	frontmatterLastmod,
+	mergeLastmods,
 } from './sitemap.mjs';
 
 test('frontmatterLastmod prefers lastUpdated over date', () => {
@@ -57,4 +60,24 @@ test('applySitemapLastmod copies lastmod onto a matching item', () => {
 	assert.deepEqual(applySitemapLastmod({ url: 'https://cicerone.dev/tutorial/' }, lastmods), {
 		url: 'https://cicerone.dev/tutorial/',
 	});
+});
+
+test('docsSitemapLastmods stamps how-it-works from file mtime', () => {
+	const dir = mkdtempSync(join(tmpdir(), 'cicerone-docs-'));
+	writeFileSync(join(dir, 'how-it-works.md'), '# How\n');
+	const lastmods = docsSitemapLastmods(dir);
+	const lastmod = lastmods.get('https://cicerone.dev/how-it-works/');
+	assert.ok(lastmod instanceof Date);
+	assert.equal(lastmods.has('https://cicerone.dev/tutorial/'), false);
+});
+
+test('mergeLastmods prefers later maps', () => {
+	const older = new Date('2026-08-01T00:00:00.000Z');
+	const newer = new Date('2026-08-24T00:00:00.000Z');
+	const merged = mergeLastmods(
+		new Map([['https://cicerone.dev/how-it-works/', older]]),
+		new Map([['https://cicerone.dev/how-it-works/', newer]]),
+	);
+	assert.equal(merged.get('https://cicerone.dev/how-it-works/'), newer);
+	assert.equal(OPENAPI_SITEMAP_URL, 'https://cicerone.dev/openapi/');
 });

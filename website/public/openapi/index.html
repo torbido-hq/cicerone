@@ -5,7 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Cicerone serve API — OpenAPI</title>
   <meta name="description" content="Interactive OpenAPI (Swagger UI) for Cicerone's read-only serve API.">
+  <link rel="canonical" href="https://cicerone.dev/openapi/">
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <meta property="og:title" content="Cicerone serve API — OpenAPI">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://cicerone.dev/openapi/">
+  <meta property="og:description" content="Interactive OpenAPI (Swagger UI) for Cicerone's read-only serve API.">
+  <meta property="og:image" content="https://cicerone.dev/images/docs/dashboard.png">
+  <meta name="twitter:card" content="summary_large_image">
   <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5.30.2/swagger-ui.css" crossorigin>
   <style>
     html { box-sizing: border-box; }
@@ -14,6 +23,23 @@
       margin: 0;
       background: #f7f8f8;
       font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    }
+    .skip-link {
+      position: absolute;
+      left: 0.75rem;
+      top: 0.75rem;
+      z-index: 2;
+      padding: 0.35rem 0.6rem;
+      background: #fff;
+      color: #004b75;
+    }
+    .skip-link:not(:focus) {
+      clip: rect(0, 0, 0, 0);
+      clip-path: inset(50%);
+      height: 1px;
+      overflow: hidden;
+      white-space: nowrap;
+      width: 1px;
     }
     .topbar {
       display: flex;
@@ -41,10 +67,18 @@
       text-decoration: none;
     }
     .brand img { height: 1.75rem; width: auto; }
+    .summary {
+      max-width: 56rem;
+      margin: 1rem auto 0;
+      padding: 0 1.25rem;
+      color: #353841;
+      font-size: 0.95rem;
+    }
     #swagger-ui .topbar { display: none; }
   </style>
 </head>
 <body>
+  <a class="skip-link" href="#swagger-ui">Skip to API operations</a>
   <header class="topbar">
     <a class="brand" href="/">
       <img src="/favicon.svg" alt="" width="28" height="28">
@@ -56,6 +90,13 @@
       <a href="https://github.com/torbido-hq/cicerone" rel="noopener noreferrer">GitHub</a>
     </nav>
   </header>
+  <p class="summary">
+    Read-only HTTP API over precomputed recommendations.
+    Main routes: <code>GET /recommendations/{user_id}</code>,
+    <code>GET /health</code>, and optional <code>POST /events</code>.
+    Prefer the <a href="/openapi/serve.openapi.json">raw OpenAPI JSON</a>
+    if the interactive explorer is hard to use.
+  </p>
   <div id="swagger-ui" role="main" aria-label="Swagger UI"></div>
   <script src="https://unpkg.com/swagger-ui-dist@5.30.2/swagger-ui-bundle.js" crossorigin></script>
   <script>

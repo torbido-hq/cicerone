@@ -27,6 +27,7 @@ npm run preview  # serve dist/
 | `astro.config.mjs` | Site URL, sidebar, logo, social, articles plugin |
 | `src/lib/consent.mjs` | Cookie banner + Consent Mode v2 (`G-E38EP8PJSR`) |
 | `public/CNAME` | Custom domain (`cicerone.dev`) |
+| `public/apple-touch-icon.png`, `favicon-32.png` | PNG icon fallbacks (written from the logo SVG by `sync-docs`) |
 | `public/images/` | Site diagrams (`flow.svg`) |
 | `public/images/docs/` | Copied from `../docs/images/` at build time (gitignored) |
 
@@ -87,5 +88,9 @@ Accept. Override with `PUBLIC_GA_MEASUREMENT_ID` at build time if needed.
 | `AAAA` | `@` | `2606:50c0:8002::153` |
 | `AAAA` | `@` | `2606:50c0:8003::153` |
 | `CNAME` | `www` | `torbido-hq.github.io` |
+
+Add `www.cicerone.dev` in GitHub Pages custom domains (or a Cloudflare
+301 from `www` to the apex). A www CNAME alone, with no Pages hostname,
+returns Cloudflare 521.
 
 Remove Gandi web-forward / `webredir` records first.
