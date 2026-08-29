@@ -48,3 +48,11 @@ test('stampRssChannelLink rewrites the channel link only', () => {
 	assert.match(stamped, /<channel><title>Articles<\/title><description>x<\/description><link>https:\/\/cicerone.dev\/articles\/<\/link>/);
 	assert.match(stamped, /<item><link>https:\/\/cicerone.dev\/articles\/a\/<\/link>/);
 });
+
+test('stampRssChannelLink finds the channel link after language, atom:link, or image', () => {
+	const feed = `<channel><title>Articles</title><language>en</language><atom:link href="https://cicerone.dev/articles/rss.xml" rel="self" type="application/rss+xml"/><image><url>https://cicerone.dev/favicon.svg</url><title>Cicerone</title><link>https://cicerone.dev/</link></image><link>https://cicerone.dev/</link><item><link>https://cicerone.dev/articles/a/</link></item></channel>`;
+	const stamped = stampRssChannelLink(feed);
+	assert.match(stamped, /<image><url>https:\/\/cicerone.dev\/favicon.svg<\/url><title>Cicerone<\/title><link>https:\/\/cicerone.dev\/<\/link><\/image><link>https:\/\/cicerone.dev\/articles\/<\/link>/);
+	assert.match(stamped, /<item><link>https:\/\/cicerone.dev\/articles\/a\/<\/link>/);
+	assert.equal(stampRssChannelLink('<rss><item><link>https://cicerone.dev/</link></item></rss>'), '<rss><item><link>https://cicerone.dev/</link></item></rss>');
+});

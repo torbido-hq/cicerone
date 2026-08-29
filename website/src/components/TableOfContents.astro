@@ -12,13 +12,3 @@ import Default from '@astrojs/starlight/components/TableOfContents.astro';
 		font-weight: 600;
 	}
 </style>
-
-<script>
-	for (const heading of document.querySelectorAll('.cicerone-toc h2#starlight__on-this-page')) {
-		const label = document.createElement('p');
-		label.id = heading.id;
-		label.className = heading.className;
-		label.textContent = heading.textContent;
-		heading.replaceWith(label);
-	}
-</script>

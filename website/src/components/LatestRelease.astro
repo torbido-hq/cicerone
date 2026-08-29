@@ -9,8 +9,8 @@ import release from '../generated/latest-release.json';
 			{' '}
 			<time datetime={release.date}>{release.date}</time>
 			{' · '}
-			<a href={release.url} target="_blank" rel="noopener noreferrer">
-				what changed<span class="sr-only"> (opens in a new tab)</span>
+			<a href={release.url} target="_blank" rel="noopener noreferrer" aria-label="what changed (opens in a new tab)">
+				what changed
 			</a>
 		</p>
 	)
