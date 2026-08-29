@@ -210,6 +210,9 @@ class DatasetOutputSink:
     def replace_model_artifact_if(self, payload: bytes, expected_fingerprint: str) -> bool:
         from cicerone.artifact import ARTIFACT_FILENAME
 
+        if self._backend != "local":
+            logger.warning("Skipping model artifact replace: S3 is not compare-and-swap")
+            return False
         with self._artifact_lock():
             if self.model_artifact_fingerprint() != expected_fingerprint:
                 return False

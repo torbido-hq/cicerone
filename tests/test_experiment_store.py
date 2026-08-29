@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 import pytest
-from sqlalchemy import text
+from sqlalchemy import create_engine, text
 
 from cicerone.config import ConfigError, IOSettings
 from cicerone.experiment.store import ExperimentStore, experiment_state
@@ -214,6 +214,30 @@ def test_experiment_store_state_roundtrip_s3() -> None:
         state = store.read_state()
         assert state is not None
         assert state["promoted_variant"] == "treatment"
+
+
+def test_promoted_variant_reuses_cache_when_read_fails(tmp_path, monkeypatch) -> None:
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    store = ExperimentStore(output)
+    store.write_state(experiment_state("exp", promoted_variant="treatment"))
+    assert store.promoted_variant("exp") == "treatment"
+
+    def boom() -> None:
+        raise RuntimeError("store down")
+
+    monkeypatch.setattr(store, "read_state", boom)
+    assert store.promoted_variant("exp") == "treatment"
+    assert store.promoted_variant("other") is None
+
+
+def test_read_exposures_missing_experiment_id_column_returns_empty(tmp_path) -> None:
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    output = IOSettings(kind="db", options={"database_url": url})
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE recommendation_exposures (user_id TEXT, variant TEXT)"))
+        conn.execute(text("INSERT INTO recommendation_exposures (user_id, variant) VALUES ('u1', 'control')"))
+    assert ExperimentStore(output).read_exposures(experiment_id="exp") == []
 
 
 def test_jsonish_numpy_scalar_and_na() -> None:

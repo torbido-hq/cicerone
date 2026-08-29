@@ -72,7 +72,7 @@ def resolve_assignment(
         return None, None
     variant = assign_variant(
         experiment.id,
-        user_id,
+        str(user_id),
         variants,
         promoted_variant=promoted_variant,
     )

@@ -29,8 +29,9 @@ def _drop_internal(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _as_contribs(value: object, source: object) -> list[dict[str, object]]:
-    if isinstance(value, list):
-        return [item for item in value if isinstance(item, dict)]
+    items = [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+    if items:
+        return items
     label = str(source) if source is not None and str(source) != "" else ""
     if not label:
         return []
@@ -40,7 +41,12 @@ def _as_contribs(value: object, source: object) -> list[dict[str, object]]:
 def _as_boosts(value: object) -> list[dict[str, object]]:
     if not isinstance(value, list):
         return []
-    return [item for item in value if isinstance(item, dict)]
+    hits: list[dict[str, object]] = []
+    for item in value:
+        if not isinstance(item, dict) or item.get("name") is None or item.get("factor") is None:
+            continue
+        hits.append(item)
+    return hits
 
 
 def _item_token_index(

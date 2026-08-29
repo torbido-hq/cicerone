@@ -156,6 +156,194 @@ def test_evaluate_experiment_itt_and_exposure_conditional() -> None:
     assert skipped.n_assigned == 0
 
 
+def test_evaluate_experiment_blocks_promote_when_already_promoted() -> None:
+    experiment = ExperimentSettings(
+        enabled=True,
+        id="exp",
+        variants=(
+            VariantSettings(name="control", traffic=0.5),
+            VariantSettings(name="treatment", traffic=0.5),
+        ),
+    )
+    events = pd.DataFrame([{"user_id": f"u{i}", "event_type": "purchase", "quantity": 1} for i in range(4)])
+    report = evaluate_experiment(
+        experiment=experiment,
+        recipes=(_recipe("control"), _recipe("treatment")),
+        events=events,
+        event_weights={"purchase": 1.0},
+        recommendations=pd.DataFrame(
+            [
+                {
+                    "user_id": "u1",
+                    "item_id": "i1",
+                    "source": "personalized",
+                    "variant": "control",
+                },
+                {
+                    "user_id": "u2",
+                    "item_id": "i2",
+                    "source": "personalized",
+                    "variant": "treatment",
+                },
+            ]
+        ),
+        promoted_variant="treatment",
+    )
+    assert report.can_promote is False
+    assert "promoted" in report.promote_blocked_by
+
+
+def test_evaluate_experiment_uses_first_exposure_and_later_events() -> None:
+    experiment = ExperimentSettings(
+        enabled=True,
+        id="exp",
+        primary_metric="purchase",
+        variants=(
+            VariantSettings(name="control", traffic=0.5),
+            VariantSettings(name="treatment", traffic=0.5),
+        ),
+    )
+    events = pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": "2026-01-01T00:00:00Z",
+            },
+            {
+                "user_id": "u1",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": "2026-01-03T00:00:00Z",
+            },
+        ]
+    )
+    exposures = [
+        exposure_row(
+            user_id="u1",
+            experiment_id="exp",
+            variant="control",
+            generated_at=None,
+            exposed_at=pd.Timestamp("2026-01-02T00:00:00Z"),
+        ),
+        exposure_row(
+            user_id="u1",
+            experiment_id="exp",
+            variant="treatment",
+            generated_at=None,
+            exposed_at=pd.Timestamp("2026-01-04T00:00:00Z"),
+        ),
+    ]
+    report = evaluate_experiment(
+        experiment=experiment,
+        recipes=(_recipe("control"), _recipe("treatment")),
+        events=events,
+        event_weights={"purchase": 1.0},
+        exposures=exposures,
+    )
+    assert report.exposure_conditional is True
+    assert report.n_assigned == 1
+    assert report.comparisons[0].control.total == pytest.approx(1.0)
+    assert report.comparisons[0].treatment.n_users == 0
+
+
+def test_evaluate_experiment_picks_best_mean_among_three_arms() -> None:
+    experiment = ExperimentSettings(
+        enabled=True,
+        id="exp",
+        primary_metric="purchase",
+        alpha=0.05,
+        variants=(
+            VariantSettings(name="control", traffic=0.34),
+            VariantSettings(name="a", traffic=0.33),
+            VariantSettings(name="b", traffic=0.33),
+        ),
+    )
+    recs = pd.DataFrame(
+        [
+            {
+                "user_id": f"u{i}",
+                "item_id": f"i{i % 8}",
+                "source": "personalized",
+                "variant": name,
+            }
+            for name in ("control", "a", "b")
+            for i in range(40)
+        ]
+    )
+    events = pd.DataFrame(
+        [
+            {
+                "user_id": f"{name}-u{i}",
+                "event_type": ("purchase" if name == "b" or (name == "a" and i % 2 == 0) else "view"),
+                "quantity": 1,
+            }
+            for name in ("control", "a", "b")
+            for i in range(40)
+        ]
+    )
+    # Force assignment via exposures so arm membership is deterministic.
+    exposures = [
+        exposure_row(
+            user_id=f"{name}-u{i}",
+            experiment_id="exp",
+            variant=name,
+            generated_at=None,
+        )
+        for name in ("control", "a", "b")
+        for i in range(40)
+    ]
+    report = evaluate_experiment(
+        experiment=experiment,
+        recipes=(_recipe("control"), _recipe("a"), _recipe("b")),
+        events=events,
+        event_weights={"purchase": 1.0},
+        recommendations=recs,
+        exposures=exposures,
+    )
+    assert report.can_promote is True
+    assert report.winner == "b"
+
+
+def test_evaluate_experiment_cuts_events_after_promoted_at() -> None:
+    experiment = ExperimentSettings(
+        enabled=True,
+        id="exp",
+        primary_metric="purchase",
+        variants=(
+            VariantSettings(name="control", traffic=0.5),
+            VariantSettings(name="treatment", traffic=0.5),
+        ),
+    )
+    events = pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": "2026-01-01T00:00:00Z",
+            },
+            {
+                "user_id": "u1",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": "2026-01-03T00:00:00Z",
+            },
+        ]
+    )
+    report = evaluate_experiment(
+        experiment=experiment,
+        recipes=(_recipe("control"), _recipe("treatment")),
+        events=events,
+        event_weights={"purchase": 1.0},
+        promoted_at="2026-01-02T00:00:00Z",
+    )
+    totals = {item.control.name: item.control.total for item in report.comparisons}
+    totals.update({item.treatment.name: item.treatment.total for item in report.comparisons})
+    assert sum(totals.values()) == pytest.approx(1.0)
+
+
 def test_evaluate_experiment_blocks_promote_on_guardrails() -> None:
     experiment = ExperimentSettings(
         enabled=True,

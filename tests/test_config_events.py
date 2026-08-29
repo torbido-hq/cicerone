@@ -129,6 +129,37 @@ def test_load_online_and_experiment_warns(tmp_path, caplog):
     assert any("online collaborative refresh will be skipped" in record.message for record in caplog.records)
 
 
+def test_load_online_rejects_s3_output(tmp_path):
+    path = write_toml(
+        tmp_path,
+        """
+        [job]
+        mode = "serve"
+        [serve]
+        auth_token = "tok"
+        [events]
+        enabled = true
+        kind = "webhook"
+        [events.online]
+        enabled = true
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "s3"
+        bucket = "recs"
+        access_key_id = "id"
+        secret_access_key = "secret"
+        """,
+    )
+    with pytest.raises(ConfigError, match="compare-and-swap"):
+        load_settings(path)
+
+
 def test_load_events_unknown_kind(tmp_path):
     path = write_toml(
         tmp_path,

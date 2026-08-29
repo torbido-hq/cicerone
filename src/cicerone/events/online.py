@@ -238,7 +238,7 @@ class OnlineTrainer:
         working = _dataset_with_interactions(maps, _merge_interaction_frames(self._job_raw, extra_raw))
         pending_fit += int(len(known))
 
-        models, fitted = self._recommend_models(artifact)
+        models, fitted, skip_sequential = self._recommend_models(artifact)
         epochs_run = 0
         collaborative = fitted.get("collaborative")
         if (
@@ -254,6 +254,30 @@ class OnlineTrainer:
             pending_fit = 0
             fitted = {**fitted, "collaborative": collaborative}
             artifact = replace(artifact, fitted={**artifact.fitted, "collaborative": collaborative})
+
+        if skip_sequential:
+            artifact = replace(artifact, dataset=working, fitted={**artifact.fitted, **fitted})
+            self._pending = _PendingRefresh(
+                artifact=artifact,
+                working=working,
+                pending_fit_events=pending_fit,
+                extra_raw=extra_raw,
+                baseline_token=self._artifact_token,
+                baseline_digest=self._payload_digest,
+            )
+            logger.info(
+                "Online refresh skipped recommend (sequential in artifact, torch extra missing); "
+                "fit_partial=%d, %d known event(s)",
+                epochs_run,
+                len(known),
+            )
+            return OnlineRefreshResult(
+                rows=empty_online_rows(),
+                fit_partial_epochs=epochs_run,
+                events_dropped_unknown=dropped,
+                events_known=int(len(known)),
+                sequential_skipped=True,
+            )
 
         target_users = sorted({str(user_id) for user_id in extra[Columns.User].unique()})
         built = BuiltDataset(
@@ -377,7 +401,7 @@ class OnlineTrainer:
             return False
         return _digest(payload) != pending.baseline_digest
 
-    def _recommend_models(self, artifact: ModelArtifact) -> tuple[list[str], dict]:
+    def _recommend_models(self, artifact: ModelArtifact) -> tuple[list[str], dict, bool]:
         skip_sequential = SEQUENTIAL_STRATEGY in artifact.models and not sequential_extra_available()
         models = [
             name
@@ -387,7 +411,7 @@ class OnlineTrainer:
         fitted = {name: artifact.fitted[name] for name in models}
         if skip_sequential:
             logger.info("Online refresh skipping sequential (torch extra is not installed)")
-        return models, fitted
+        return models, fitted, skip_sequential
 
     def _write_payload_if_current(self, pending: _PendingRefresh, payload: bytes) -> bool:
         self._ensure_fence()

@@ -205,6 +205,7 @@ def make_settings(**overrides: Any) -> Settings:
             base["item_based_k_neighbors"] = k_from_cfg
     settings = Settings(**base)
     _require_exposure_log_backend(settings)
+    _require_online_output_backend(settings)
     _warn_online_skipped_for_experiment(settings)
     return settings
 
@@ -235,6 +236,25 @@ def _require_exposure_log_backend(settings: Settings) -> None:
     require_appendable_exposure_log(settings.output)
     if settings.events.ha and settings.output.kind != "db":
         raise ConfigError(EXPOSURE_LOG_HA_ERROR)
+
+
+ONLINE_OUTPUT_ERROR = (
+    'events.online.enabled requires output kind = "db" or a local dataset path; '
+    "S3 object replace is not compare-and-swap"
+)
+
+
+def _require_online_output_backend(settings: Settings) -> None:
+    if not settings.events.online.enabled:
+        return
+    from cicerone.io.options import storage_backend
+
+    output = settings.output
+    if output.kind == "db":
+        return
+    if output.kind == "dataset" and storage_backend(output.options) == "local":
+        return
+    raise ConfigError(ONLINE_OUTPUT_ERROR)
 
 
 def _warn_online_skipped_for_experiment(settings: Settings) -> None:
@@ -613,5 +633,6 @@ def load_settings(config_path: str | None = None) -> Settings:
         experiment=load_experiment_settings(raw.get("experiment") or {}),
     )
     _require_exposure_log_backend(settings)
+    _require_online_output_backend(settings)
     _warn_online_skipped_for_experiment(settings)
     return settings

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -77,6 +78,10 @@ class ExperimentStore:
         self._kind = output.kind
         self._options = output.options
         self._engine: Engine | None = None
+        self._promote_lock = threading.Lock()
+        self._promote_loaded = False
+        self._promote_experiment_id: str | None = None
+        self._promote_value: str | None = None
 
     def _db_engine(self) -> Engine:
         if self._engine is None:
@@ -90,6 +95,26 @@ class ExperimentStore:
             return self._read_state_db()
         return self._read_state_dataset()
 
+    def promoted_variant(self, experiment_id: str) -> str | None:
+        """Return the live promote winner; reuse the last successful read on failure."""
+        try:
+            state = self.read_state()
+        except Exception:
+            logger.exception("Failed to read experiment promote state")
+            with self._promote_lock:
+                if self._promote_loaded and self._promote_experiment_id == experiment_id:
+                    return self._promote_value
+            return None
+        value = None
+        if state and state.get("experiment_id") == experiment_id:
+            promoted = state.get("promoted_variant")
+            value = str(promoted) if promoted else None
+        with self._promote_lock:
+            self._promote_loaded = True
+            self._promote_experiment_id = experiment_id
+            self._promote_value = value
+        return value
+
     def write_state(self, state: Mapping[str, Any]) -> None:
         payload = dict(state)
         if self._kind == "db":
@@ -97,6 +122,11 @@ class ExperimentStore:
         else:
             encoded = json.dumps(payload, indent=2).encode("utf-8")
             self._write_bytes(STATE_FILENAME, encoded, "application/json")
+        promoted = payload.get("promoted_variant")
+        with self._promote_lock:
+            self._promote_loaded = True
+            self._promote_experiment_id = str(payload.get("experiment_id") or "")
+            self._promote_value = str(promoted) if promoted else None
 
     def append_exposures(self, rows: Sequence[Mapping[str, Any]]) -> None:
         if not rows:
@@ -219,7 +249,8 @@ class ExperimentStore:
             if is_missing_table_error(exc):
                 return []
             if experiment_id and is_missing_column_error(exc):
-                return self._read_exposures_db()
+                logger.warning("Exposures table %r has no experiment_id column; ignoring rows", table)
+                return []
             logger.exception("Failed to read exposures table %r", table)
             return []
         if frame.empty:

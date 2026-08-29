@@ -97,3 +97,17 @@ def test_experiment_variant_names_challenger_defaults() -> None:
 def test_resolve_assignment_enabled_without_variants_is_off() -> None:
     settings = make_settings(experiment=ExperimentSettings(enabled=True, id="exp"))
     assert resolve_assignment(settings, "u1") == (None, None)
+
+
+def test_resolve_assignment_normalizes_numeric_user_id() -> None:
+    settings = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="exp",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        )
+    )
+    assert resolve_assignment(settings, 123) == resolve_assignment(settings, "123")

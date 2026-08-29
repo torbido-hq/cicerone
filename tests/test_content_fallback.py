@@ -11,6 +11,7 @@ from rectools import Columns
 from cicerone.content_fallback import (
     _MAX_HISTORY_ITEMS,
     ContentFallbackModel,
+    _recommend_thread_workers,
     build_content_fallback_model,
 )
 from cicerone.feature_config import FeatureColumn
@@ -518,6 +519,68 @@ def test_recommend_single_user_path_does_not_use_thread_pool(monkeypatch):
     recs = model.recommend(users=["u1"], dataset=_DummyDataset(), k=5, filter_viewed=True)
     assert set(recs[Columns.User].astype(str)) == {"u1"}
     assert (recs[Columns.Item] == "i_new").all()
+
+
+def test_recommend_thread_workers_is_serial_off_main_thread():
+    seen: list[int] = []
+
+    def run() -> None:
+        seen.append(_recommend_thread_workers(20, min_users=8, max_workers=8))
+
+    worker = threading.Thread(target=run)
+    worker.start()
+    worker.join()
+    assert seen == [1]
+
+
+def test_recommend_from_worker_thread_does_not_use_thread_pool(monkeypatch):
+    class _ThreadPoolSpy:
+        def __init__(self, *_, **__):
+            raise AssertionError("ThreadPoolExecutor should not start from a worker thread")
+
+    monkeypatch.setattr("cicerone.content_fallback.ThreadPoolExecutor", _ThreadPoolSpy)
+    items = pd.DataFrame(
+        [
+            {"item_id": "i1", "category": "beer"},
+            {"item_id": "i_new", "category": "beer"},
+        ]
+    )
+    interactions = pd.DataFrame(
+        {
+            Columns.User: [f"u{i}" for i in range(10)],
+            Columns.Item: ["i1"] * 10,
+            Columns.Weight: [1.0] * 10,
+            Columns.Datetime: [pd.Timestamp.utcnow()] * 10,
+        }
+    )
+    model = ContentFallbackModel(
+        feature_columns=[FeatureColumn(column="category", type="categorical")],
+        items=items,
+        interactions=interactions,
+        recommend_thread_min_users=1,
+    )
+    model.fit(_DummyDataset())
+    recs: list[pd.DataFrame] = []
+    errors: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            recs.append(
+                model.recommend(
+                    users=[f"u{i}" for i in range(10)],
+                    dataset=_DummyDataset(),
+                    k=5,
+                    filter_viewed=True,
+                )
+            )
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=run)
+    worker.start()
+    worker.join()
+    assert errors == []
+    assert not recs[0].empty
 
 
 def test_recommend_skips_historyless_user_without_affecting_others():

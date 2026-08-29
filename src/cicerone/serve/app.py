@@ -126,15 +126,7 @@ def _route_endpoint(request: Request) -> str:
 def _promoted_variant(settings: Settings, store: ExperimentStore | None) -> str | None:
     if store is None or not settings.experiment.enabled:
         return None
-    try:
-        state = store.read_state()
-    except Exception:
-        logger.exception("Failed to read experiment promote state")
-        return None
-    if not state or state.get("experiment_id") != settings.experiment.id:
-        return None
-    promoted = state.get("promoted_variant")
-    return str(promoted) if promoted else None
+    return store.promoted_variant(settings.experiment.id)
 
 
 def create_app(

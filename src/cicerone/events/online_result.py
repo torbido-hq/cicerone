@@ -20,3 +20,4 @@ class OnlineRefreshResult:
     fit_partial_epochs: int = 0
     events_dropped_unknown: int = 0
     events_known: int = 0
+    sequential_skipped: bool = False

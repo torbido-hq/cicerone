@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from cicerone.reasons import dump_reasons, parse_reasons, source_reasons_payload
 from cicerone.serve_schemas import RecommendationReasons
 
@@ -38,6 +41,11 @@ def test_parse_reasons_equality_raises():
             raise TypeError("nope")
 
     assert parse_reasons(_BoomEq()) is None
+
+
+def test_dump_reasons_rejects_invalid_payload():
+    with pytest.raises(ValidationError):
+        dump_reasons({"boosts": [{"name": "category"}]})
 
 
 def test_parse_reasons_dict():
