@@ -299,3 +299,9 @@ def test_resolve_boost_policy_edge_shapes() -> None:
             inherited,
             label="boosts",
         )
+    with pytest.raises(ConfigError, match="kind"):
+        resolve_boost_policy(
+            [{"name": "x", "item_column": "featured", "factor": 1.1}],
+            inherited,
+            label="boosts",
+        )

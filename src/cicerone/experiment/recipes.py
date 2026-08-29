@@ -140,7 +140,7 @@ def _resolve_policy_spec(
     if all(isinstance(item, Mapping) for item in items):
         try:
             return tuple(parse([dict(item) for item in items]))
-        except ValueError as exc:
+        except (KeyError, TypeError, ValueError) as exc:
             raise ConfigError(f"{label}: {exc}") from exc
     if any(isinstance(item, (str, Mapping)) for item in items):
         raise ConfigError(f"{label} must be true, false, rule names, or rule tables")

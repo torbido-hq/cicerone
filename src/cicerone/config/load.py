@@ -500,7 +500,7 @@ def _load_policy_spec(
         raise ConfigError(f"{label} must be true, false, a list of rule names, or an array of rule tables")
     try:
         return tuple(parse_table([dict(item) for item in value]))
-    except ValueError as exc:
+    except (KeyError, TypeError, ValueError) as exc:
         raise ConfigError(f"{label}: {exc}") from exc
 
 
