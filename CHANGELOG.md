@@ -10,8 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - ProcessPool fit and AutoML pickle the shared dataset/config once per worker,
   not once per strategy or fold.
-- Blending expands identical per-user latest rankings with the same vectorized
-  path as `shared_latest`.
+- Blending expands identical per-user latest item/rank order with the same
+  vectorized path as `shared_latest`.
 - Content-fallback fit stores only the last 50 history items per user,
   ordered by event datetime when present (the window recommend already scored).
 - Content-fallback recommend starts an inner user thread pool only on the

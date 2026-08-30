@@ -245,20 +245,24 @@ def _latest_index_frame(
     latest_index: Mapping[str, Sequence[tuple[str, int, float]]],
     target_users: Sequence[str],
 ) -> pd.DataFrame:
-    groups: dict[tuple[tuple[str, int, float], ...], list[str]] = {}
+    groups: dict[tuple[tuple[str, int], ...], tuple[list[str], tuple[tuple[str, int, float], ...]]] = {}
     for user_id in dict.fromkeys(target_users):
         ranking = latest_index.get(user_id)
         if not ranking:
             continue
         ranked = tuple((str(item_id), int(rank), float(score)) for item_id, rank, score in ranking)
-        groups.setdefault(ranked, []).append(str(user_id))
+        key = tuple((item_id, rank) for item_id, rank, _score in ranked)
+        if key in groups:
+            groups[key][0].append(str(user_id))
+        else:
+            groups[key] = ([str(user_id)], ranked)
     if not groups:
         return _empty_recs()
     if len(groups) == 1:
-        ranked, users = next(iter(groups.items()))
+        users, ranked = next(iter(groups.values()))
         return expand_latest_ranking(ranked, users)
     return pd.concat(
-        [expand_latest_ranking(ranked, users) for ranked, users in groups.items()],
+        [expand_latest_ranking(ranked, users) for users, ranked in groups.values()],
         ignore_index=True,
     )
 

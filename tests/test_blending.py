@@ -678,6 +678,34 @@ def test_blend_for_users_latest_by_user_shared_ranking_matches_shared_latest():
     )
 
 
+def test_blend_for_users_latest_by_user_groups_identical_ranks_despite_scores():
+    config = _blending(curve="linear", saturate_at=1.0, popular_share=0.5)
+    empty = pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, "source"])
+    users = ["u1", "u2"]
+    kwargs = dict(
+        personalized=empty,
+        popular=empty,
+        latest=None,
+        counts=dict.fromkeys(users, 0),
+        target_users=users,
+        config=config,
+        top_k=2,
+        latest_available=True,
+    )
+    indexed = blend_for_users(
+        latest_by_user={
+            "u1": [("a", 1, 9.0), ("b", 2, 3.0)],
+            "u2": [("a", 1, 0.2), ("b", 2, 0.1)],
+        },
+        **kwargs,
+    )
+    shared = blend_for_users(shared_latest=[("a", 1, 9.0), ("b", 2, 3.0)], **kwargs)
+    pd.testing.assert_frame_equal(
+        indexed.sort_values([Columns.User, Columns.Item]).reset_index(drop=True),
+        shared.sort_values([Columns.User, Columns.Item]).reset_index(drop=True),
+    )
+
+
 def test_blend_for_users_latest_by_user_normalizes_non_string_keys():
     config = _blending(curve="linear", saturate_at=1.0, popular_share=0.5)
     empty = pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, "source"])
