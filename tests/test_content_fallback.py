@@ -182,6 +182,33 @@ def test_fit_caps_user_history_to_max_items():
     assert history == [f"i{i}" for i in range(n_history - _MAX_HISTORY_ITEMS, n_history)]
 
 
+def test_fit_caps_user_history_by_datetime_not_frame_order():
+    n_history = _MAX_HISTORY_ITEMS + 10
+    newest = [f"i{i}" for i in range(n_history)]
+    oldest_first = list(reversed(newest))
+    base = pd.Timestamp("2026-01-01", tz="UTC")
+    items = pd.DataFrame(
+        [{"item_id": item_id, "category": "beer"} for item_id in newest]
+        + [{"item_id": "i_new", "category": "beer"}]
+    )
+    interactions = pd.DataFrame(
+        {
+            Columns.User: ["u1"] * n_history,
+            Columns.Item: oldest_first,
+            Columns.Weight: [1.0] * n_history,
+            Columns.Datetime: [base + pd.Timedelta(hours=n_history - 1 - i) for i in range(n_history)],
+        }
+    )
+    model = ContentFallbackModel(
+        feature_columns=[FeatureColumn(column="category", type="categorical")],
+        items=items,
+        interactions=interactions,
+    )
+    model.fit(_DummyDataset())
+    history = model._user_history["u1"]
+    assert history == newest[-_MAX_HISTORY_ITEMS:]
+
+
 def test_recommend_from_worker_thread_matches_main_thread():
     items = pd.DataFrame(
         [
