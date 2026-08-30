@@ -19,6 +19,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Dashboard pages send `X-Robots-Tag` and HTML `noindex` so crawlers skip
   them if the process is accidentally public; `GET /robots.txt` disallows
   `/`, and OpenAPI `/docs` is off.
+- Config page redacts `*_url` option keys and any value with embedded URL
+  credentials.
 
 ## [0.7.3] - 2026-09-03
 
