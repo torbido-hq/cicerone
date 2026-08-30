@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import asdict, fields
+from dataclasses import asdict, fields, is_dataclass
 from pathlib import Path
 from typing import Any
 
@@ -25,13 +25,16 @@ _SECRET_KEYS = frozenset(
         "database_url",
         "postgres_url",
         "redis_url",
+        "endpoint_url",
+        "queue_url",
         "password",
     }
 )
 _SECRET_KEY_RE = re.compile(
-    r"(secret|password|token|auth|credential|api_key|private_key)",
+    r"(secret|password|token|auth|credential|api_key|private_key|url)",
     re.IGNORECASE,
 )
+_USERINFO_IN_URL_RE = re.compile(r"://[^/\s]+@")
 _NESTED_SECTIONS: tuple[tuple[str, str, str], ...] = (
     ("model_configs", "Models", "[model.*]"),
     ("input", "Input", "[input]"),
@@ -268,10 +271,16 @@ def _is_secret_key(key: str, *, in_options: bool) -> bool:
     return in_options and _SECRET_KEY_RE.search(key) is not None
 
 
+def _has_url_userinfo(value: Any) -> bool:
+    return isinstance(value, str) and _USERINFO_IN_URL_RE.search(value) is not None
+
+
 def _redact(value: Any, *, key: str | None = None, in_options: bool = False) -> Any:
     if key is not None and _is_secret_key(key, in_options=in_options):
         if value is None or value == "":
             return MISSING
+        return REDACTED
+    if _has_url_userinfo(value):
         return REDACTED
     if isinstance(value, dict):
         child_in_options = in_options or key == "options"
@@ -287,6 +296,8 @@ def _redact(value: Any, *, key: str | None = None, in_options: bool = False) -> 
 
 
 def _normalize(value: Any) -> Any:
+    if is_dataclass(value) and not isinstance(value, type):
+        return _normalize(asdict(value))
     if value is None:
         return MISSING
     if isinstance(value, bool):

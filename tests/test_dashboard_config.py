@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from conftest import make_settings
 from fastapi.testclient import TestClient
 
 from cicerone.config import EventsSettings, IOSettings
 from cicerone.dashboard import create_app
-from cicerone.dashboard_config import MISSING, REDACTED, config_display
+from cicerone.dashboard_config import MISSING, REDACTED, _normalize, config_display
 
 
 class _FakeReader:
@@ -40,6 +42,8 @@ def _secret_settings(**overrides):
                 "secret_access_key": "s3secretVALUE",
                 "api_key": "options-api-key",
                 "bucket": "recs",
+                "endpoint_url": "https://minio.example:9000",
+                "webhook": "https://hook:leaked@example.com/hook",
             },
         ),
         output=IOSettings(
@@ -49,7 +53,10 @@ def _secret_settings(**overrides):
         events=EventsSettings(
             enabled=True,
             kind="webhook",
-            options={"auth_token": "event-secret"},
+            options={
+                "auth_token": "event-secret",
+                "queue_url": "https://sqs.example/123/cicerone",
+            },
         ),
         **overrides,
     )
@@ -83,9 +90,16 @@ def test_config_display_redacts_secrets_and_keeps_safe_values():
     assert incoming["fields"]["options"]["access_key_id"] == "AKIATEST"
     assert incoming["fields"]["options"]["secret_access_key"] == REDACTED
     assert incoming["fields"]["options"]["api_key"] == REDACTED
+    assert incoming["fields"]["options"]["endpoint_url"] == REDACTED
+    assert incoming["fields"]["options"]["webhook"] == REDACTED
     assert outgoing["fields"]["kind"] == "db"
     assert outgoing["fields"]["options"]["database_url"] == REDACTED
     assert events["fields"]["options"]["auth_token"] == REDACTED
+    assert events["fields"]["options"]["queue_url"] == REDACTED
+    assert isinstance(job["fields"]["automl"], dict)
+    assert "enabled" in job["fields"]["automl"]
+    assert isinstance(job["fields"]["explain"], dict)
+    assert isinstance(_section(display, "experiment")["fields"], dict)
     assert dashboard["fields"]["users"] == ["alice", "bob"]
     assert events["badge"] == "on"
     assert events["kind"] == "webhook"
@@ -119,6 +133,14 @@ def test_config_display_loads_feature_file(tmp_path):
     features = _section(config_display(settings), "features")
     assert features["message"] is None
     assert features["fields"]["event_weights"]["purchase"] == 4.0
+
+
+def test_normalize_dataclass_instance():
+    @dataclass
+    class _Probe:
+        enabled: bool = True
+
+    assert _normalize(_Probe()) == {"enabled": "true"}
 
 
 def test_config_display_empty_model_configs_wraps_missing():
@@ -163,6 +185,9 @@ def test_config_page_renders_redacted_html(tmp_path):
     assert "options-api-key" not in html
     assert "hunter2" not in html
     assert "event-secret" not in html
+    assert "minio.example" not in html
+    assert "sqs.example" not in html
+    assert "leaked" not in html
     assert hash_value not in html
     assert ">alice<" in html or "alice" in html
     assert "purchase" in html
