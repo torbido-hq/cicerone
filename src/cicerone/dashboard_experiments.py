@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,16 @@ from cicerone.track.store import TrackStore
 logger = logging.getLogger(__name__)
 
 _EVENT_METRIC_COLUMNS = (USER_COLUMN, "item_id", "event_type", "quantity", "occurred_at")
+
+
+def _track_rows_for_experiment(rows: Sequence[dict[str, Any]], experiment_id: str) -> list[dict[str, Any]]:
+    matched: list[dict[str, Any]] = []
+    for row in rows:
+        row_id = str(row.get("experiment_id") or "")
+        if row_id and row_id != experiment_id:
+            continue
+        matched.append(row)
+    return matched
 
 
 def experiment_context(settings: Settings) -> dict[str, Any]:
@@ -92,6 +103,7 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
         except Exception:
             logger.exception("Failed to read track rows for experiment metrics")
             track_rows = []
+        track_rows = _track_rows_for_experiment(track_rows, experiment.id)
         n_impressions = sum(1 for row in track_rows if str(row.get("kind") or "") == TRACK_KIND_IMPRESSION)
         if experiment.attribution in {ATTRIBUTION_CLICK, ATTRIBUTION_IMPRESSION}:
             types = conversion_event_types(
