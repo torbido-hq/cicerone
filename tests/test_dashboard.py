@@ -360,6 +360,31 @@ def test_main_starts_when_history_reader_fails(monkeypatch):
     assert captured["history_reader"] is None
 
 
+def test_main_uses_package_default_config_path(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_create_app(settings, reader, users, rec_reader=None, history_reader=None, **kwargs):
+        captured["config_path"] = kwargs.get("config_path")
+        return object()
+
+    monkeypatch.delenv("CICERONE_CONFIG_PATH", raising=False)
+    monkeypatch.setattr("cicerone.config.DEFAULT_CONFIG_PATH", "/patched/cicerone.toml")
+    monkeypatch.setattr("cicerone.dashboard.load_settings", lambda: _settings())
+    monkeypatch.setattr("cicerone.dashboard.load_users", lambda _path: {"alice": "hash"})
+    monkeypatch.setattr("cicerone.dashboard.build_manifest_reader", lambda _output: _FakeReader(None))
+    monkeypatch.setattr("cicerone.dashboard.build_recommendation_reader", lambda _output: object())
+    monkeypatch.setattr("cicerone.dashboard.build_user_history_reader", lambda _input: object())
+    monkeypatch.setattr("cicerone.dashboard.create_app", fake_create_app)
+    monkeypatch.setattr(
+        "cicerone.dashboard.uvicorn",
+        type("_Uvicorn", (), {"run": staticmethod(lambda *_a, **_k: None)}),
+    )
+
+    main()
+
+    assert captured["config_path"] == "/patched/cicerone.toml"
+
+
 def test_require_basic_auth_used_directly_rejects_unknown_user():
     # Call dependency directly for the timing-safe unknown-username branch.
     from fastapi import HTTPException
