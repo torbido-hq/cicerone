@@ -174,20 +174,22 @@ Consumer group, JSON objects matching the event contract. Required:
 `bootstrap_servers`, `topic`, `group_id`. Optional `consumer_name`
 (default hostname), `security_protocol`, `sasl_mechanism`,
 `sasl_username`, `sasl_password`. Missing `event_id` uses
-`{partition}-{offset}`. Manual commits; `nack` returns the batch to a
-local deque without committing. Librdkafka session heartbeats cover
-apply; raise `max.poll.interval.ms` if a flush can exceed the default
-(~5 minutes). Requires `pip install 'cicerone-recommender[kafka]'` or
-`pip install -r requirements-kafka.txt`.
+`{partition}-{offset}`. Manual commits of the contiguous watermark per
+partition (an out-of-order ack cannot skip an earlier offset). `nack`
+returns the batch to a local deque without committing. Librdkafka session
+heartbeats cover apply; raise `max.poll.interval.ms` if a flush can exceed
+the default (~5 minutes). Requires `pip install 'cicerone-recommender[kafka]'`
+or `pip install -r requirements-kafka.txt`.
 
 ### `rabbitmq`
 
 JSON objects from one durable queue (`basic_get` / `basic_ack`). Required:
 `amqp_url`, `queue`. Optional `prefetch` (default 100). Missing `event_id`
 uses the delivery tag. `nack` returns events to a local deque (broker
-delivery stays unacked). `heartbeat` pumps `process_data_events` so the
-AMQP connection stays alive during apply. Poison messages are acked and
-dropped. Requires `pip install 'cicerone-recommender[rabbitmq]'` or
+delivery stays unacked). AMQP calls run on one I/O thread; `heartbeat`
+pumps `process_data_events` there so apply does not share the connection
+with the worker thread. Poison messages are acked and dropped. Requires
+`pip install 'cicerone-recommender[rabbitmq]'` or
 `pip install -r requirements-rabbitmq.txt`.
 
 ## Publish sidecar

@@ -68,7 +68,7 @@ def test_poll_ack_and_health(monkeypatch):
     assert [event.event_id for event in second] == ["e2"]
     source.ack([second[0].event_id])
     assert list(source.poll(10)) == []
-    assert broker.committed == [(0, 0), (0, 1)]
+    assert broker.committed == [(0, 1), (0, 2)]
 
 
 def test_nack_allows_repoll(monkeypatch):
@@ -106,7 +106,7 @@ def test_poison_entry_is_committed(monkeypatch):
     source.connect()
     events = list(source.poll(10))
     assert [event.event_id for event in events] == ["ok"]
-    assert (0, 0) in broker.committed
+    assert (0, 1) in broker.committed
 
 
 def test_bytes_json_payload(monkeypatch):
@@ -139,6 +139,20 @@ def test_duplicate_event_id_is_committed(monkeypatch):
     assert first[0].event_id == "e1"
     assert again == []
     source.ack([first[0].event_id])
+
+
+def test_ack_does_not_skip_earlier_offset(monkeypatch):
+    broker = install_fake_kafka(monkeypatch)
+    broker.add("cicerone.events", event_payload(event_id="e1"))
+    broker.add("cicerone.events", event_payload(event_id="e2"))
+    source = KafkaEventSource(_options())
+    source.connect()
+    events = list(source.poll(10))
+    assert [event.event_id for event in events] == ["e1", "e2"]
+    source.ack([events[1].event_id])
+    assert broker.committed == []
+    source.ack([events[0].event_id])
+    assert broker.committed == [(0, 2)]
 
 
 def test_sasl_options_in_consumer_config(monkeypatch):
