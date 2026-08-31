@@ -160,6 +160,73 @@ def test_incremental_updater_preserves_reasons_on_personalized_rows(tmp_path, fe
     assert parse_reasons(fresh["reasons"]).sources[0].label == INCREMENTAL_SOURCE
 
 
+def test_incremental_updater_keeps_reasons_when_event_rehits_item(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    kept = dump_source_reasons("personalized", rank=1)
+    pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "old",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                "reasons": kept,
+            }
+        ]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+    )
+    updater.apply([normalize_event(event_payload(user_id="u1", item_id="old", event_id="r2"))])
+    frame = load_recommendations_frame(settings.output)
+    old = frame[(frame["user_id"] == "u1") & (frame["item_id"] == "old")].iloc[0]
+    assert parse_reasons(old["reasons"]).sources[0].label == "personalized"
+    assert old["source"] == "personalized"
+
+
+def test_incremental_updater_unlabelled_prior_stays_on_control(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "old",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+            }
+        ]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        variant_names=("control", "treatment"),
+    )
+    updater.apply([normalize_event(event_payload(user_id="u1", item_id="i9", event_id="v1"))])
+    frame = load_recommendations_frame(settings.output)
+    u1 = frame[frame["user_id"] == "u1"]
+    control = u1[u1["variant"] == "control"]
+    treatment = u1[u1["variant"] == "treatment"]
+    assert "old" in set(control["item_id"].astype(str))
+    assert "old" not in set(treatment["item_id"].astype(str))
+
+
 def test_incremental_updater_skips_when_busy(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()

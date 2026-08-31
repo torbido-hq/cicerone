@@ -6,7 +6,6 @@ import logging
 from concurrent.futures import ProcessPoolExecutor
 from copy import deepcopy
 from dataclasses import dataclass
-from itertools import repeat
 from typing import Any
 
 from rectools.dataset import Dataset
@@ -35,12 +34,47 @@ from cicerone.model_config import SEQUENTIAL_STRATEGY, default_model_configs, re
 logger = logging.getLogger(__name__)
 
 _FIT_POOL_LIGHTFM_THREADS = LIGHTFM_NUM_THREADS_SEQUENTIAL
+_FIT_WORKER: _FitWorkerContext | None = None
 
 
-def _init_fit_worker(lightfm_threads: int) -> None:
-    """ProcessPool initializer: keep LightFM single-threaded inside workers."""
-    global _FIT_POOL_LIGHTFM_THREADS
+@dataclass(frozen=True)
+class _FitWorkerContext:
+    """Shared ProcessPool payload — pickled once per worker, not per strategy."""
+
+    dataset: Dataset
+    epoch_interactions: object | None
+    epoch_metrics: EpochMetricsSettings | None
+    epoch_metrics_top_k: int
+    model_configs: dict[str, dict[str, Any]] | None
+    content_feature_columns: list[FeatureColumn] | None
+    content_max_neighbors: int
+    content_items: object | None
+    content_interactions: object | None
+
+
+def _init_fit_worker(lightfm_threads: int, context: _FitWorkerContext) -> None:
+    """ProcessPool initializer: LightFM threads + shared fit payload."""
+    global _FIT_POOL_LIGHTFM_THREADS, _FIT_WORKER
     _FIT_POOL_LIGHTFM_THREADS = lightfm_threads
+    _FIT_WORKER = context
+
+
+def _fit_strategy_on_worker(name: str) -> tuple[str, RecommenderModel]:
+    ctx = _FIT_WORKER
+    if ctx is None:
+        raise RuntimeError("fit worker is not initialized")
+    return _fit_strategy(
+        name,
+        ctx.dataset,
+        ctx.epoch_interactions,
+        ctx.epoch_metrics,
+        ctx.epoch_metrics_top_k,
+        ctx.model_configs,
+        ctx.content_feature_columns,
+        ctx.content_max_neighbors,
+        ctx.content_items,
+        ctx.content_interactions,
+    )
 
 
 def _resolve_model_configs_for_fit(
@@ -264,24 +298,23 @@ def fit_strategies(
     content_interactions = built.interactions if "content_fallback" in to_fit else None
     if to_fit:
         if max_workers > 1 and len(to_fit) > 1:
+            worker_context = _FitWorkerContext(
+                dataset=dataset,
+                epoch_interactions=epoch_interactions,
+                epoch_metrics=epoch_metrics,
+                epoch_metrics_top_k=epoch_metrics_top_k,
+                model_configs=resolved_configs,
+                content_feature_columns=content_cols,
+                content_max_neighbors=content_fallback_max_neighbors,
+                content_items=content_items,
+                content_interactions=content_interactions,
+            )
             with ProcessPoolExecutor(
                 max_workers=min(max_workers, len(to_fit)),
                 initializer=_init_fit_worker,
-                initargs=(LIGHTFM_NUM_THREADS_PARALLEL,),
+                initargs=(LIGHTFM_NUM_THREADS_PARALLEL, worker_context),
             ) as executor:
-                for name, model in executor.map(
-                    _fit_strategy,
-                    to_fit,
-                    repeat(dataset),
-                    repeat(epoch_interactions),
-                    repeat(epoch_metrics),
-                    repeat(epoch_metrics_top_k),
-                    repeat(resolved_configs),
-                    repeat(content_cols),
-                    repeat(content_fallback_max_neighbors),
-                    repeat(content_items),
-                    repeat(content_interactions),
-                ):
+                for name, model in executor.map(_fit_strategy_on_worker, to_fit):
                     logger.info("Fitted '%s' on %d interactions", name, len(built.interactions))
                     models[name] = model
         else:

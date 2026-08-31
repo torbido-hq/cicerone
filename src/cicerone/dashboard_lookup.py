@@ -124,14 +124,7 @@ def lookup_recommendations(
     k = lookup_k(settings.top_k, settings.dashboard.lookup_k)
     experiment_id, variant = None, None
     if settings.experiment.enabled:
-        promoted = None
-        try:
-            state = ExperimentStore(settings.output).read_state()
-            if state and state.get("experiment_id") == settings.experiment.id:
-                promoted = state.get("promoted_variant")
-                promoted = str(promoted) if promoted else None
-        except Exception:
-            logger.exception("Failed to read experiment state for dashboard lookup")
+        promoted = ExperimentStore(settings.output).promoted_variant(settings.experiment.id)
         experiment_id, variant = resolve_assignment(settings, user_id, promoted_variant=promoted)
     try:
         recs, used_fallback = _load_rows(recommendation_reader, user_id, k, variant=variant)

@@ -26,6 +26,7 @@ from cicerone.config.constants import (
     EXPERIMENT_COMBINERS,
     LOCK_BACKENDS,
     MODES,
+    PRIMARY_METRIC_WEIGHTED,
     STRATEGY_NAMES,
     ConfigError,
     Mode,
@@ -204,6 +205,7 @@ def make_settings(**overrides: Any) -> Settings:
             base["item_based_k_neighbors"] = k_from_cfg
     settings = Settings(**base)
     _require_exposure_log_backend(settings)
+    _require_online_output_backend(settings)
     _warn_online_skipped_for_experiment(settings)
     return settings
 
@@ -236,6 +238,25 @@ def _require_exposure_log_backend(settings: Settings) -> None:
         raise ConfigError(EXPOSURE_LOG_HA_ERROR)
 
 
+ONLINE_OUTPUT_ERROR = (
+    'events.online.enabled requires output kind = "db" or a local dataset path; '
+    "S3 object replace is not compare-and-swap"
+)
+
+
+def _require_online_output_backend(settings: Settings) -> None:
+    if not settings.events.online.enabled:
+        return
+    from cicerone.io.options import storage_backend
+
+    output = settings.output
+    if output.kind == "db":
+        return
+    if output.kind == "dataset" and storage_backend(output.options) == "local":
+        return
+    raise ConfigError(ONLINE_OUTPUT_ERROR)
+
+
 def _warn_online_skipped_for_experiment(settings: Settings) -> None:
     if settings.events.online.enabled and settings.experiment.enabled:
         logger.warning(
@@ -260,7 +281,8 @@ def load_experiment_settings(raw: dict[str, Any] | None) -> ExperimentSettings:
     variants_raw = data.get("variants") or []
     variants = tuple(_load_variant(item, index) for index, item in enumerate(variants_raw))
     experiment_id = str(data.get("id") or "").strip()
-    primary_metric = str(data.get("primary_metric") or "weighted").strip() or "weighted"
+    default_metric = PRIMARY_METRIC_WEIGHTED
+    primary_metric = str(data.get("primary_metric") or default_metric).strip() or default_metric
     alpha = float(data.get("alpha", DEFAULT_EXPERIMENT_ALPHA))
     automl_challenger = bool(data.get("automl_challenger", False))
     if enabled:
@@ -611,5 +633,6 @@ def load_settings(config_path: str | None = None) -> Settings:
         experiment=load_experiment_settings(raw.get("experiment") or {}),
     )
     _require_exposure_log_backend(settings)
+    _require_online_output_backend(settings)
     _warn_online_skipped_for_experiment(settings)
     return settings

@@ -13,9 +13,10 @@ from croniter import croniter
 
 from cicerone import job
 from cicerone.config import Settings, load_settings
+from cicerone.config.constants import DEFAULT_LOG_FORMAT
 from cicerone.locks import LockBackend, build_lock_backend
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logging.basicConfig(level=logging.INFO, format=DEFAULT_LOG_FORMAT)
 logger = logging.getLogger(__name__)
 
 

@@ -50,7 +50,7 @@ def test_job_run_end_to_end_with_local_dataset_backend(tmp_path, monkeypatch):
     input_dir.mkdir()
     output_dir.mkdir()
 
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     events = pd.DataFrame(
         [
             {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 2, "occurred_at": now},
@@ -116,7 +116,7 @@ def test_job_run_writes_model_artifact_when_enabled(tmp_path, monkeypatch):
     input_dir.mkdir()
     output_dir.mkdir()
 
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     events = pd.DataFrame(
         [
             {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 2, "occurred_at": now},
@@ -170,7 +170,7 @@ def test_job_run_with_automl_enabled_selects_and_records_best_candidate(tmp_path
     input_dir.mkdir()
     output_dir.mkdir()
 
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     rows = []
     interactions = {"u1": ["i1", "i2"], "u2": ["i2", "i3"], "u3": ["i1", "i3"]}
     for day_offset in range(0, 21, 3):
@@ -256,7 +256,7 @@ def test_job_run_with_automl_fusion_candidate_reports_effective_weights(tmp_path
     input_dir.mkdir()
     output_dir.mkdir()
 
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     rows = []
     interactions = {"u1": ["i1", "i2"], "u2": ["i2", "i3"], "u3": ["i1", "i3"]}
     for day_offset in range(0, 21, 3):
@@ -335,7 +335,7 @@ def test_job_run_with_manual_fusion_configuration_reports_manifest_fields(tmp_pa
     input_dir.mkdir()
     output_dir.mkdir()
 
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     events = pd.DataFrame(
         [
             {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 2, "occurred_at": now},
@@ -426,7 +426,7 @@ def test_job_run_records_custom_triggered_by(tmp_path, monkeypatch):
     input_dir.mkdir()
     output_dir.mkdir()
 
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     events = pd.DataFrame(
         [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
     )
@@ -452,7 +452,7 @@ def test_job_run_records_configured_lock_backend(tmp_path, monkeypatch):
     input_dir.mkdir()
     output_dir.mkdir()
 
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     events = pd.DataFrame(
         [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
     )
@@ -482,7 +482,7 @@ def test_job_marks_partial_outputs_when_recommendation_write_fails(tmp_path, mon
     input_dir.mkdir()
     output_dir.mkdir()
 
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     events = pd.DataFrame(
         [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
     )
@@ -520,7 +520,7 @@ def test_job_preserves_success_when_manifest_write_fails(tmp_path, monkeypatch):
     input_dir.mkdir()
     output_dir.mkdir()
 
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     events = pd.DataFrame(
         [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
     )
@@ -552,7 +552,7 @@ def test_job_skips_writes_when_fence_lost_before_output(tmp_path, monkeypatch):
     input_dir.mkdir()
     output_dir.mkdir()
 
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     events = pd.DataFrame(
         [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
     )
@@ -583,7 +583,7 @@ def test_job_marks_partial_outputs_when_fence_lost_after_write(tmp_path, monkeyp
     input_dir.mkdir()
     output_dir.mkdir()
 
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     events = pd.DataFrame(
         [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
     )
@@ -620,7 +620,7 @@ def test_run_guard_skips_job_writes_when_owned_is_false(tmp_path, monkeypatch):
     input_dir.mkdir()
     output_dir.mkdir()
 
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     events = pd.DataFrame(
         [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
     )
@@ -662,7 +662,7 @@ def test_job_run_writes_both_experiment_variants(tmp_path, monkeypatch):
     input_dir.mkdir()
     output_dir.mkdir()
 
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     events = pd.DataFrame(
         [
             {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 2, "occurred_at": now},

@@ -23,7 +23,7 @@ from cicerone.io.recommendation_schema import USER_COLUMN
 
 logger = logging.getLogger(__name__)
 
-_EVENT_METRIC_COLUMNS = (USER_COLUMN, "event_type", "quantity")
+_EVENT_METRIC_COLUMNS = (USER_COLUMN, "event_type", "quantity", "occurred_at")
 
 
 def experiment_context(settings: Settings) -> dict[str, Any]:
@@ -38,11 +38,14 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
         }
     store = ExperimentStore(settings.output)
     promoted = None
+    promoted_at = None
     try:
         state = store.read_state()
         if state and state.get("experiment_id") == experiment.id:
             promoted = state.get("promoted_variant")
             promoted = str(promoted) if promoted else None
+            promoted_at = state.get("promoted_at")
+            promoted_at = str(promoted_at) if promoted_at else None
     except Exception:
         logger.exception("Failed to read experiment state")
     feature_config = _load_features(settings)
@@ -86,6 +89,7 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
         recommendations=recs,
         exposures=exposures,
         promoted_variant=promoted,
+        promoted_at=promoted_at,
         catalog_size=catalog_size,
     )
     return {

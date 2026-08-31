@@ -7,11 +7,11 @@ import logging
 import os
 
 from cicerone import __version__
+from cicerone.config.constants import DEFAULT_LOG_FORMAT
 
 logger = logging.getLogger(__name__)
 
 _FORWARDING_COMMANDS = frozenset({"users", "export-openapi"})
-_DEFAULT_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 
 
 def _apply_config(path: str | None) -> None:
@@ -56,7 +56,7 @@ def _resolve_log_level(name: str) -> int:
 
 def _configure_logging(level_name: str | None, log_format: str | None) -> None:
     name = level_name or os.environ.get("CICERONE_LOG_LEVEL") or "INFO"
-    fmt = log_format or os.environ.get("CICERONE_LOG_FORMAT") or _DEFAULT_LOG_FORMAT
+    fmt = log_format or os.environ.get("CICERONE_LOG_FORMAT") or DEFAULT_LOG_FORMAT
     logging.basicConfig(level=_resolve_log_level(name), format=fmt)
 
 

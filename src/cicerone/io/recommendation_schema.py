@@ -74,7 +74,7 @@ def collapse_mixed_variants(frame: Any) -> Any:
     pick = pick_fallback_variant(series.tolist())
     if pick is None:
         return frame
-    mask = series.map(lambda value: not is_missing(value) and str(value) == pick)
+    mask = ~series.map(is_missing) & series.astype(str).eq(pick)
     if bool(mask.all()):
         return frame
     return frame.loc[mask]
@@ -88,7 +88,9 @@ def filter_variant_rows(frame: Any, variant: str | None) -> Any:
         return frame
     if variant is None:
         return collapse_mixed_variants(frame)
-    return frame[frame[VARIANT_COLUMN].astype(str) == str(variant)]
+    series = frame[VARIANT_COLUMN]
+    mask = ~series.map(is_missing) & series.astype(str).eq(str(variant))
+    return frame.loc[mask]
 
 
 def has_variant_column(frame: Any) -> bool:

@@ -16,6 +16,7 @@ BOOST_HITS_COLUMN = "_boost_hits"
 
 
 def dump_reasons(payload: dict[str, Any]) -> str:
+    RecommendationReasons.model_validate(payload)
     return json.dumps(payload, separators=(",", ":"), ensure_ascii=True)
 
 

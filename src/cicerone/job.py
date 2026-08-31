@@ -16,6 +16,7 @@ from cicerone.artifact import ARTIFACT_SCHEMA_VERSION, build_artifact, dumps_art
 from cicerone.automl import evaluate_candidates, select_best_candidate
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import load_settings
+from cicerone.config.constants import DEFAULT_LOG_FORMAT
 from cicerone.dataset import build_dataset
 from cicerone.experiment import (
     ResolvedRecipe,
@@ -27,7 +28,7 @@ from cicerone.experiment import (
 from cicerone.feature_config import load_feature_config
 from cicerone.io.base import InputSource
 from cicerone.io.factory import build_input_source, build_manifest_reader, build_output_sink
-from cicerone.io.recommendation_schema import VARIANT_COLUMN
+from cicerone.io.recommendation_schema import USER_COLUMN, VARIANT_COLUMN
 from cicerone.locks import LockLostError
 from cicerone.model import (
     DEFAULT_MODELS,
@@ -40,7 +41,6 @@ from cicerone.model import (
 )
 from cicerone.model.recommend import RecommendCache
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 _MAX_ERROR_LENGTH = 500
@@ -82,9 +82,9 @@ def _ensure_fence(fence_check: Callable[[], bool] | None) -> None:
 
 
 def _recommendation_user_count(recommendations: pd.DataFrame) -> int:
-    if recommendations.empty or "user_id" not in recommendations.columns:
+    if recommendations.empty or USER_COLUMN not in recommendations.columns:
         return 0
-    user_ids = recommendations["user_id"].astype(str)
+    user_ids = recommendations[USER_COLUMN].astype(str)
     return int(user_ids[user_ids != COLD_START_USER_ID].nunique())
 
 
@@ -112,8 +112,8 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
 
         built = build_dataset(events, users, items, feature_config, half_life_days=settings.half_life_days)
 
-        known_users = set(users["user_id"]) if users is not None else set()
-        target_users = sorted(set(events["user_id"]) | known_users)
+        known_users = set(users[USER_COLUMN]) if users is not None else set()
+        target_users = sorted(set(events[USER_COLUMN]) | known_users)
 
         automl_result = None
         enabled_models, weights, rrf_k = settings.models, settings.model_weights, settings.rrf_k
@@ -351,6 +351,7 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format=DEFAULT_LOG_FORMAT)
     try:
         run()
     except Exception:

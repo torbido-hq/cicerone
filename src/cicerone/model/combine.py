@@ -45,7 +45,7 @@ def combine_by_priority(frames: list[pd.DataFrame], top_k: int) -> pd.DataFrame:
         tagged.append(part)
     combined = pd.concat(tagged, ignore_index=True)
     combined = combined.drop_duplicates(subset=[Columns.User, Columns.Item], keep="first")
-    combined = combined.sort_values([Columns.User, "_priority", Columns.Rank])
+    combined = combined.sort_values([Columns.User, "_priority", Columns.Rank], kind="mergesort")
     combined = combined.groupby(Columns.User, as_index=False).head(top_k)
     combined[SOURCE_CONTRIBS_COLUMN] = [
         _priority_contrib(label, rank)

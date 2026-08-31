@@ -54,7 +54,7 @@ def _minimal_io_toml() -> str:
 
 
 def _sequence_events(n_items: int = 6, n_users: int = 4) -> pd.DataFrame:
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     rows = []
     for user_i in range(n_users):
         for item_i in range(n_items):
@@ -287,7 +287,7 @@ def test_evaluate_candidates_skips_sequential_when_extra_missing(
     from cicerone.automl import evaluate_candidates
 
     monkeypatch.setattr("cicerone.automl.sequential_extra_available", lambda: False)
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     events = pd.DataFrame(
         [
             {
@@ -328,7 +328,7 @@ def test_evaluate_candidates_skips_sequential_below_median_threshold(
     from cicerone.automl import evaluate_candidates
 
     monkeypatch.setattr("cicerone.automl.sequential_extra_available", lambda: True)
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     events = pd.DataFrame(
         [
             {
@@ -364,7 +364,7 @@ def test_evaluate_candidates_raises_when_only_sequential_is_excluded(
     from cicerone.automl import evaluate_candidates
 
     monkeypatch.setattr("cicerone.automl.sequential_extra_available", lambda: False)
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     events = pd.DataFrame(
         [
             {

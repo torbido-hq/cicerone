@@ -108,7 +108,7 @@ def build_interactions(events: pd.DataFrame, config: FeatureConfig, half_life_da
         if mask.any():
             # One sort for all capped event types; keep most recent ``cap`` per
             # (user, item, event_type).
-            capped = df.loc[mask].sort_values("occurred_at", ascending=False)
+            capped = df.loc[mask].sort_values("occurred_at", ascending=False, kind="mergesort")
             rank = capped.groupby(["user_id", "item_id", "event_type"], sort=False).cumcount()
             limits = capped["event_type"].map(config.event_caps)
             df = df.drop(index=capped.index[rank >= limits])

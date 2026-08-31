@@ -292,6 +292,15 @@ def test_s3_read_model_artifact_round_trip_and_missing(s3_options):
     assert sink.model_artifact_fingerprint() is not None
 
 
+def test_s3_replace_model_artifact_if_does_not_write(s3_options):
+    sink = DatasetOutputSink(s3_options)
+    sink.write_model_artifact(b"first")
+    token = sink.model_artifact_fingerprint()
+    assert token is not None
+    assert sink.replace_model_artifact_if(b"second", token) is False
+    assert sink.read_model_artifact() == b"first"
+
+
 def test_s3_read_model_artifact_closes_streaming_body(s3_options, mocker):
     sink = DatasetOutputSink(s3_options)
     sink.write_model_artifact(b"payload")

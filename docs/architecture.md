@@ -114,28 +114,7 @@ Test modules mirror the packages (same pattern as `tests/test_io_*.py`):
 
 ## Data flow
 
-```mermaid
-flowchart LR
-    subgraph Input
-        S3["dataset (S3/local parquet)"]
-        DB1["db (SQLAlchemy)"]
-    end
-    S3 -->|InputSource| J[job.run]
-    DB1 -->|InputSource| J
-    J -->|if Settings.automl_enabled| A[automl: evaluate_candidates + select_best_candidate]
-    A --> J
-    J --> D[dataset.build_dataset]
-    D --> M[model.train_and_recommend]
-    M --> J
-    subgraph Output
-        S3O["dataset (S3/local parquet)"]
-        DB2["db (SQLAlchemy)"]
-    end
-    J -->|OutputSink| S3O
-    J -->|OutputSink| DB2
-    Ev["optional EventSource"] -->|"write-through popular/latest/online"| S3O
-    Ev -->|"write-through popular/latest/online"| DB2
-```
+![Architecture: dataset or database input into job.run, then dataset build and train, then dataset or database output; optional EventSource write-through](/images/architecture-flow.svg)
 
 1. `job.run()` loads `Settings` (`config.load_settings`) and `FeatureConfig`
    (`feature_config.load_feature_config`), builds the configured

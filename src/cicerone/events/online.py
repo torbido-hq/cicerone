@@ -21,8 +21,7 @@ from cicerone.events.base import NormalizedEvent
 from cicerone.events.normalize import events_to_dataframe
 from cicerone.events.online_result import OnlineRefreshResult, empty_online_rows
 from cicerone.io.base import OutputSink
-from cicerone.io.recommendation_reader import ITEM_COLUMN, USER_COLUMN
-from cicerone.io.recommendation_schema import recommendation_output_columns
+from cicerone.io.recommendation_schema import ITEM_COLUMN, USER_COLUMN, recommendation_output_columns
 from cicerone.locks import LockLostError
 from cicerone.model import recommend_with_models
 from cicerone.model_config import SEQUENTIAL_STRATEGY, sequential_extra_available
@@ -118,6 +117,7 @@ class OnlineTrainer:
         max_extra_interactions: int = DEFAULT_EVENTS_ONLINE_MAX_EXTRA_INTERACTIONS,
         fence_check: Callable[[], bool] | None = None,
         explain: ExplainSettings | None = None,
+        max_workers: int = 1,
     ):
         if top_k < 1:
             raise ValueError("top_k must be >= 1")
@@ -127,6 +127,8 @@ class OnlineTrainer:
             raise ValueError("fit_min_events must be >= 1")
         if max_extra_interactions < 1:
             raise ValueError("max_extra_interactions must be >= 1")
+        if max_workers < 1:
+            raise ValueError("max_workers must be >= 1")
         self._sink = sink
         self._top_k = top_k
         self._half_life_days = half_life_days
@@ -135,6 +137,7 @@ class OnlineTrainer:
         self._max_extra_interactions = max_extra_interactions
         self._fence_check = fence_check
         self._explain = explain if explain is not None else ExplainSettings()
+        self._max_workers = max_workers
         self._artifact: ModelArtifact | None = None
         self._working: Dataset | None = None
         self._job_raw = _empty_interaction_frame()
@@ -235,7 +238,7 @@ class OnlineTrainer:
         working = _dataset_with_interactions(maps, _merge_interaction_frames(self._job_raw, extra_raw))
         pending_fit += int(len(known))
 
-        models, fitted = self._recommend_models(artifact)
+        models, fitted, skip_sequential = self._recommend_models(artifact)
         epochs_run = 0
         collaborative = fitted.get("collaborative")
         if (
@@ -251,6 +254,30 @@ class OnlineTrainer:
             pending_fit = 0
             fitted = {**fitted, "collaborative": collaborative}
             artifact = replace(artifact, fitted={**artifact.fitted, "collaborative": collaborative})
+
+        if skip_sequential:
+            artifact = replace(artifact, dataset=working, fitted={**artifact.fitted, **fitted})
+            self._pending = _PendingRefresh(
+                artifact=artifact,
+                working=working,
+                pending_fit_events=pending_fit,
+                extra_raw=extra_raw,
+                baseline_token=self._artifact_token,
+                baseline_digest=self._payload_digest,
+            )
+            logger.info(
+                "Online refresh skipped recommend (sequential in artifact, torch extra missing); "
+                "fit_partial=%d, %d known event(s)",
+                epochs_run,
+                len(known),
+            )
+            return OnlineRefreshResult(
+                rows=empty_online_rows(),
+                fit_partial_epochs=epochs_run,
+                events_dropped_unknown=dropped,
+                events_known=int(len(known)),
+                sequential_skipped=True,
+            )
 
         target_users = sorted({str(user_id) for user_id in extra[Columns.User].unique()})
         built = BuiltDataset(
@@ -269,6 +296,7 @@ class OnlineTrainer:
             weights=dict(artifact.model_weights) if artifact.model_weights is not None else None,
             rrf_k=artifact.rrf_k,
             explain=self._explain,
+            max_workers=self._max_workers,
         )
         artifact = replace(artifact, dataset=working, fitted={**artifact.fitted, **fitted})
         self._pending = _PendingRefresh(
@@ -373,7 +401,7 @@ class OnlineTrainer:
             return False
         return _digest(payload) != pending.baseline_digest
 
-    def _recommend_models(self, artifact: ModelArtifact) -> tuple[list[str], dict]:
+    def _recommend_models(self, artifact: ModelArtifact) -> tuple[list[str], dict, bool]:
         skip_sequential = SEQUENTIAL_STRATEGY in artifact.models and not sequential_extra_available()
         models = [
             name
@@ -383,7 +411,7 @@ class OnlineTrainer:
         fitted = {name: artifact.fitted[name] for name in models}
         if skip_sequential:
             logger.info("Online refresh skipping sequential (torch extra is not installed)")
-        return models, fitted
+        return models, fitted, skip_sequential
 
     def _write_payload_if_current(self, pending: _PendingRefresh, payload: bytes) -> bool:
         self._ensure_fence()

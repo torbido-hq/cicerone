@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import threading
+
 import pandas as pd
 import pytest
 from rectools import Columns
 
-from cicerone.content_fallback import ContentFallbackModel, build_content_fallback_model
+from cicerone.content_fallback import (
+    _MAX_HISTORY_ITEMS,
+    ContentFallbackModel,
+    _recommend_thread_workers,
+    build_content_fallback_model,
+)
 from cicerone.feature_config import FeatureColumn
 
 
@@ -42,7 +49,7 @@ def test_feature_dict_handles_list_features_and_nans():
             Columns.User: ["u1"],
             Columns.Item: ["i1"],
             Columns.Weight: [1.0],
-            Columns.Datetime: [pd.Timestamp.utcnow()],
+            Columns.Datetime: [pd.Timestamp.now(tz="UTC")],
         }
     )
     model = ContentFallbackModel(
@@ -99,7 +106,7 @@ def test_recommend_skips_users_without_history_or_unmapped_history():
             Columns.User: ["u1"],
             Columns.Item: ["i1"],
             Columns.Weight: [1.0],
-            Columns.Datetime: [pd.Timestamp.utcnow()],
+            Columns.Datetime: [pd.Timestamp.now(tz="UTC")],
         }
     )
     model = ContentFallbackModel(
@@ -132,7 +139,7 @@ def test_recommend_empty_when_allowlist_excludes_all_cold_items():
             Columns.User: ["u1"],
             Columns.Item: ["i1"],
             Columns.Weight: [1.0],
-            Columns.Datetime: [pd.Timestamp.utcnow()],
+            Columns.Datetime: [pd.Timestamp.now(tz="UTC")],
         }
     )
     model = build_content_fallback_model(
@@ -152,6 +159,92 @@ def test_recommend_empty_when_allowlist_excludes_all_cold_items():
     assert recs.empty
 
 
+def test_fit_caps_user_history_to_max_items():
+    n_history = _MAX_HISTORY_ITEMS + 10
+    rows = [{"item_id": f"i{i}", "category": "beer"} for i in range(n_history)]
+    rows.append({"item_id": "i_new", "category": "beer"})
+    items = pd.DataFrame(rows)
+    interactions = pd.DataFrame(
+        {
+            Columns.User: ["u1"] * n_history,
+            Columns.Item: [f"i{i}" for i in range(n_history)],
+            Columns.Weight: [1.0] * n_history,
+            Columns.Datetime: [pd.Timestamp.now(tz="UTC")] * n_history,
+        }
+    )
+    model = ContentFallbackModel(
+        feature_columns=[FeatureColumn(column="category", type="categorical")],
+        items=items,
+        interactions=interactions,
+    )
+    model.fit(_DummyDataset())
+    history = model._user_history["u1"]
+    assert len(history) == _MAX_HISTORY_ITEMS
+    assert history == [f"i{i}" for i in range(n_history - _MAX_HISTORY_ITEMS, n_history)]
+
+
+def test_fit_caps_user_history_by_datetime_not_frame_order():
+    n_history = _MAX_HISTORY_ITEMS + 10
+    newest = [f"i{i}" for i in range(n_history)]
+    oldest_first = list(reversed(newest))
+    base = pd.Timestamp("2026-01-01", tz="UTC")
+    items = pd.DataFrame(
+        [{"item_id": item_id, "category": "beer"} for item_id in newest]
+        + [{"item_id": "i_new", "category": "beer"}]
+    )
+    interactions = pd.DataFrame(
+        {
+            Columns.User: ["u1"] * n_history,
+            Columns.Item: oldest_first,
+            Columns.Weight: [1.0] * n_history,
+            Columns.Datetime: [base + pd.Timedelta(hours=n_history - 1 - i) for i in range(n_history)],
+        }
+    )
+    model = ContentFallbackModel(
+        feature_columns=[FeatureColumn(column="category", type="categorical")],
+        items=items,
+        interactions=interactions,
+    )
+    model.fit(_DummyDataset())
+    history = model._user_history["u1"]
+    assert history == newest[-_MAX_HISTORY_ITEMS:]
+
+
+def test_recommend_from_worker_thread_matches_main_thread():
+    items = pd.DataFrame(
+        [
+            {"item_id": "i1", "category": "beer"},
+            {"item_id": "i_new", "category": "beer"},
+        ]
+    )
+    interactions = pd.DataFrame(
+        {
+            Columns.User: ["u1", "u2"],
+            Columns.Item: ["i1", "i1"],
+            Columns.Weight: [1.0, 1.0],
+            Columns.Datetime: [pd.Timestamp.now(tz="UTC"), pd.Timestamp.now(tz="UTC")],
+        }
+    )
+    model = ContentFallbackModel(
+        feature_columns=[FeatureColumn(column="category", type="categorical")],
+        items=items,
+        interactions=interactions,
+        recommend_thread_min_users=1,
+    )
+    model.fit(_DummyDataset())
+    kwargs = dict(users=["u2", "u1"], dataset=_DummyDataset(), k=5, filter_viewed=True)
+    main_recs = model.recommend(**kwargs)
+    holder: dict[str, pd.DataFrame] = {}
+
+    def _run() -> None:
+        holder["recs"] = model.recommend(**kwargs)
+
+    worker = threading.Thread(target=_run)
+    worker.start()
+    worker.join()
+    pd.testing.assert_frame_equal(main_recs.reset_index(drop=True), holder["recs"].reset_index(drop=True))
+
+
 def test_fit_releases_source_frames_after_building_indexes():
     items = pd.DataFrame(
         [
@@ -164,7 +257,7 @@ def test_fit_releases_source_frames_after_building_indexes():
             Columns.User: ["u1"],
             Columns.Item: ["i1"],
             Columns.Weight: [1.0],
-            Columns.Datetime: [pd.Timestamp.utcnow()],
+            Columns.Datetime: [pd.Timestamp.now(tz="UTC")],
         }
     )
     model = build_content_fallback_model(
@@ -196,7 +289,7 @@ def test_recommend_respects_max_neighbors_cap():
             Columns.User: ["u1"],
             Columns.Item: ["i1"],
             Columns.Weight: [1.0],
-            Columns.Datetime: [pd.Timestamp.utcnow()],
+            Columns.Datetime: [pd.Timestamp.now(tz="UTC")],
         }
     )
     model = build_content_fallback_model(
@@ -231,7 +324,7 @@ def test_fit_raises_clear_error_when_items_missing_id_column():
             Columns.User: ["u1"],
             Columns.Item: ["i1"],
             Columns.Weight: [1.0],
-            Columns.Datetime: [pd.Timestamp.utcnow()],
+            Columns.Datetime: [pd.Timestamp.now(tz="UTC")],
         }
     )
     model = ContentFallbackModel(
@@ -281,7 +374,7 @@ def test_recommend_thread_pool_path_returns_rows_for_each_user():
             Columns.User: ["u1", "u2"],
             Columns.Item: ["i1", "i1"],
             Columns.Weight: [1.0, 1.0],
-            Columns.Datetime: [pd.Timestamp.utcnow(), pd.Timestamp.utcnow()],
+            Columns.Datetime: [pd.Timestamp.now(tz="UTC"), pd.Timestamp.now(tz="UTC")],
         }
     )
     model = ContentFallbackModel(
@@ -312,7 +405,7 @@ def test_recommend_thread_pool_matches_serial_user_rank_order():
             Columns.User: ["u1", "u2"],
             Columns.Item: ["i1", "i1"],
             Columns.Weight: [1.0, 1.0],
-            Columns.Datetime: [pd.Timestamp.utcnow(), pd.Timestamp.utcnow()],
+            Columns.Datetime: [pd.Timestamp.now(tz="UTC"), pd.Timestamp.now(tz="UTC")],
         }
     )
     model = ContentFallbackModel(
@@ -342,7 +435,7 @@ def test_recommend_handles_mixed_non_string_ids():
             Columns.User: ["u1", "u1", "u2"],
             Columns.Item: [1, "2", 1],
             Columns.Weight: [1.0, 1.0, 1.0],
-            Columns.Datetime: [pd.Timestamp.utcnow()] * 3,
+            Columns.Datetime: [pd.Timestamp.now(tz="UTC")] * 3,
         }
     )
     model = ContentFallbackModel(
@@ -375,7 +468,7 @@ def test_recommend_matches_int_and_str_user_ids():
             Columns.User: [1],
             Columns.Item: [1],
             Columns.Weight: [1.0],
-            Columns.Datetime: [pd.Timestamp.utcnow()],
+            Columns.Datetime: [pd.Timestamp.now(tz="UTC")],
         }
     )
     model = ContentFallbackModel(
@@ -414,7 +507,7 @@ def test_recommend_single_user_path_does_not_use_thread_pool(monkeypatch):
             Columns.User: ["u1"],
             Columns.Item: ["i1"],
             Columns.Weight: [1.0],
-            Columns.Datetime: [pd.Timestamp.utcnow()],
+            Columns.Datetime: [pd.Timestamp.now(tz="UTC")],
         }
     )
     model = ContentFallbackModel(
@@ -426,6 +519,68 @@ def test_recommend_single_user_path_does_not_use_thread_pool(monkeypatch):
     recs = model.recommend(users=["u1"], dataset=_DummyDataset(), k=5, filter_viewed=True)
     assert set(recs[Columns.User].astype(str)) == {"u1"}
     assert (recs[Columns.Item] == "i_new").all()
+
+
+def test_recommend_thread_workers_is_serial_off_main_thread():
+    seen: list[int] = []
+
+    def run() -> None:
+        seen.append(_recommend_thread_workers(20, min_users=8, max_workers=8))
+
+    worker = threading.Thread(target=run)
+    worker.start()
+    worker.join()
+    assert seen == [1]
+
+
+def test_recommend_from_worker_thread_does_not_use_thread_pool(monkeypatch):
+    class _ThreadPoolSpy:
+        def __init__(self, *_, **__):
+            raise AssertionError("ThreadPoolExecutor should not start from a worker thread")
+
+    monkeypatch.setattr("cicerone.content_fallback.ThreadPoolExecutor", _ThreadPoolSpy)
+    items = pd.DataFrame(
+        [
+            {"item_id": "i1", "category": "beer"},
+            {"item_id": "i_new", "category": "beer"},
+        ]
+    )
+    interactions = pd.DataFrame(
+        {
+            Columns.User: [f"u{i}" for i in range(10)],
+            Columns.Item: ["i1"] * 10,
+            Columns.Weight: [1.0] * 10,
+            Columns.Datetime: [pd.Timestamp.utcnow()] * 10,
+        }
+    )
+    model = ContentFallbackModel(
+        feature_columns=[FeatureColumn(column="category", type="categorical")],
+        items=items,
+        interactions=interactions,
+        recommend_thread_min_users=1,
+    )
+    model.fit(_DummyDataset())
+    recs: list[pd.DataFrame] = []
+    errors: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            recs.append(
+                model.recommend(
+                    users=[f"u{i}" for i in range(10)],
+                    dataset=_DummyDataset(),
+                    k=5,
+                    filter_viewed=True,
+                )
+            )
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=run)
+    worker.start()
+    worker.join()
+    assert errors == []
+    assert not recs[0].empty
 
 
 def test_recommend_skips_historyless_user_without_affecting_others():
@@ -440,7 +595,7 @@ def test_recommend_skips_historyless_user_without_affecting_others():
             Columns.User: ["u1"],
             Columns.Item: ["i1"],
             Columns.Weight: [1.0],
-            Columns.Datetime: [pd.Timestamp.utcnow()],
+            Columns.Datetime: [pd.Timestamp.now(tz="UTC")],
         }
     )
     model = ContentFallbackModel(

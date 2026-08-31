@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 from rectools import Columns
 from support.model_events import synthetic_events
 
@@ -243,3 +244,11 @@ def test_item_based_k_neighbors_reaches_tfidf_recommender(sample_items, feature_
     )
     params = fitted["item_based"].get_params(simple_types=True)
     assert params["model.K"] == 7
+
+
+def test_fit_strategy_on_worker_requires_initializer():
+    from cicerone.model import fit as fit_mod
+
+    fit_mod._FIT_WORKER = None
+    with pytest.raises(RuntimeError, match="not initialized"):
+        fit_mod._fit_strategy_on_worker("popular")

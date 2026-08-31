@@ -14,6 +14,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from cicerone import __version__
 from cicerone.config import Settings, load_settings
+from cicerone.config.constants import DEFAULT_LOG_FORMAT
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
 from cicerone.experiment.assignment import resolve_assignment
@@ -44,7 +45,7 @@ from cicerone.serve.metrics import (
 )
 from cicerone.serve_schemas import ErrorDetail, HealthResponse, RecommendationItem, RecommendationsResponse
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logging.basicConfig(level=logging.INFO, format=DEFAULT_LOG_FORMAT)
 logger = logging.getLogger(__name__)
 
 SERVE_API_TITLE = "Cicerone Serve API"
@@ -125,15 +126,7 @@ def _route_endpoint(request: Request) -> str:
 def _promoted_variant(settings: Settings, store: ExperimentStore | None) -> str | None:
     if store is None or not settings.experiment.enabled:
         return None
-    try:
-        state = store.read_state()
-    except Exception:
-        logger.exception("Failed to read experiment promote state")
-        return None
-    if not state or state.get("experiment_id") != settings.experiment.id:
-        return None
-    promoted = state.get("promoted_variant")
-    return str(promoted) if promoted else None
+    return store.promoted_variant(settings.experiment.id)
 
 
 def create_app(

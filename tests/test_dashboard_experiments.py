@@ -94,8 +94,24 @@ def test_promote_winner_when_treatment_wins(tmp_path):
     recs = []
     exposures = []
     for i in range(40):
-        events.append({"user_id": f"c{i}", "item_id": f"i{i % 10}", "event_type": "view", "quantity": 1})
-        events.append({"user_id": f"t{i}", "item_id": f"i{i % 10}", "event_type": "purchase", "quantity": 1})
+        events.append(
+            {
+                "user_id": f"c{i}",
+                "item_id": f"i{i % 10}",
+                "event_type": "view",
+                "quantity": 1,
+                "occurred_at": "2026-01-02T00:00:00Z",
+            }
+        )
+        events.append(
+            {
+                "user_id": f"t{i}",
+                "item_id": f"i{i % 10}",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": "2026-01-02T00:00:00Z",
+            }
+        )
         recs.append(
             {
                 "user_id": f"c{i}",
@@ -117,10 +133,22 @@ def test_promote_winner_when_treatment_wins(tmp_path):
             }
         )
         exposures.append(
-            exposure_row(user_id=f"c{i}", experiment_id="exp-1", variant="control", generated_at=None)
+            exposure_row(
+                user_id=f"c{i}",
+                experiment_id="exp-1",
+                variant="control",
+                generated_at=None,
+                exposed_at=pd.Timestamp("2026-01-01T00:00:00Z"),
+            )
         )
         exposures.append(
-            exposure_row(user_id=f"t{i}", experiment_id="exp-1", variant="treatment", generated_at=None)
+            exposure_row(
+                user_id=f"t{i}",
+                experiment_id="exp-1",
+                variant="treatment",
+                generated_at=None,
+                exposed_at=pd.Timestamp("2026-01-01T00:00:00Z"),
+            )
         )
     _write_frames(settings, events=events, recs=recs, exposures=exposures)
     context = experiment_context(settings)

@@ -11,6 +11,7 @@ from cicerone.automl import (
     _parse_candidates,
     _time_based_folds,
     evaluate_candidates,
+    exclude_content_fallback_from_candidates,
     select_best_candidate,
 )
 from cicerone.config import ConfigError
@@ -19,7 +20,7 @@ from cicerone.model import train_and_recommend
 
 
 def _spread_events(n_days: int) -> pd.DataFrame:
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     rows = []
     interactions = {
         "u1": ["i1", "i2"],
@@ -55,7 +56,7 @@ def test_time_based_folds_splits_oldest_test_window_first():
 
 
 def test_time_based_folds_skips_folds_without_enough_history():
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     events = pd.DataFrame(
         [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
     )
@@ -64,7 +65,7 @@ def test_time_based_folds_skips_folds_without_enough_history():
 
 def test_time_based_folds_includes_most_recent_event_in_latest_fold():
     # Latest event must not land on the exclusive `< test_end` bound.
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     events = pd.DataFrame(
         [
             {
@@ -175,7 +176,7 @@ def test_candidate_label_for_priority_and_fusion():
 
 
 def test_evaluate_candidates_raises_without_enough_history(sample_items, feature_config):
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     events = pd.DataFrame(
         [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
     )
@@ -187,7 +188,7 @@ def test_evaluate_candidates_raises_without_enough_history(sample_items, feature
 
 def test_evaluate_candidates_raises_without_enough_history_with_max_workers(sample_items, feature_config):
     # Empty-folds check must run before ProcessPoolExecutor(max_workers=0).
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     events = pd.DataFrame(
         [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
     )
@@ -202,6 +203,40 @@ def test_evaluate_candidates_raises_without_enough_history_with_max_workers(samp
             n_splits=3,
             test_days=14,
             max_workers=4,
+        )
+
+
+def test_exclude_content_fallback_from_candidates_drops_solo_and_strips_fusion():
+    solo = Candidate(models=["content_fallback"])
+    fusion = Candidate(
+        models=["collaborative", "content_fallback", "popular"],
+        weights={"collaborative": 1.0, "content_fallback": 0.3, "popular": 0.3},
+    )
+    popular = Candidate(models=["popular"])
+    fallback_only_weights = Candidate(
+        models=["content_fallback", "popular"],
+        weights={"content_fallback": 1.0},
+    )
+    result = exclude_content_fallback_from_candidates([solo, fusion, popular, fallback_only_weights])
+    assert [c.models for c in result] == [["collaborative", "popular"], ["popular"], ["popular"]]
+    assert result[0].weights == {"collaborative": 1.0, "popular": 0.3}
+    assert result[2].weights is None
+
+
+def test_evaluate_candidates_excludes_content_fallback_when_disabled(sample_items, feature_config):
+    events = _spread_events(n_days=21)
+    with pytest.raises(ValueError, match="content_fallback"):
+        evaluate_candidates(
+            events,
+            None,
+            sample_items,
+            feature_config,
+            top_k=2,
+            half_life_days=90,
+            candidates=[{"models": ["content_fallback"]}],
+            n_splits=1,
+            test_days=7,
+            content_fallback_enabled=False,
         )
 
 
@@ -469,3 +504,9 @@ def test_evaluate_candidates_accepts_debias_flag(sample_items, feature_config):
     )
     assert len(results) == 1
     assert any(key.startswith("MAP") for key in results[0].metrics)
+
+
+def test_evaluate_fold_on_worker_requires_initializer():
+    automl._EVAL_WORKER = None
+    with pytest.raises(RuntimeError, match="not initialized"):
+        automl._evaluate_fold_on_worker(pd.DataFrame(), pd.DataFrame())

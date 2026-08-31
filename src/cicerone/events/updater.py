@@ -29,6 +29,7 @@ from cicerone.io.recommendation_reader import (
     USER_COLUMN,
 )
 from cicerone.io.recommendation_schema import (
+    FALLBACK_VARIANT,
     REASONS_COLUMN,
     VARIANT_COLUMN,
     collapse_mixed_variants,
@@ -169,7 +170,7 @@ class IncrementalUpdater:
         popular_ranking = self._popular_ranking(batch, weights)
         latest_ranking = self._latest_ranking(batch, weights)
         online_result = self._refresh_online(events)
-        online_by_user = self._online_rows_by_user(online_result)
+        online_by_user = {} if online_result.sequential_skipped else self._online_rows_by_user(online_result)
 
         by_user = (
             {user_id: group for user_id, group in existing.groupby(USER_COLUMN, sort=False)}
@@ -429,7 +430,7 @@ class IncrementalUpdater:
         frame = frame.copy()
         frame[ITEM_COLUMN] = frame[ITEM_COLUMN].astype(str)
         latest = (
-            frame.sort_values("occurred_at", ascending=False)
+            frame.sort_values("occurred_at", ascending=False, kind="mergesort")
             .drop_duplicates(subset=[ITEM_COLUMN], keep="first")
             .head(self._top_k)
         )
@@ -464,12 +465,14 @@ class IncrementalUpdater:
                 user_id, prior, popular, latest, batch, weights, online_rows=online_rows
             )
             return self._stamp_collapsed_variant(merged, prior)
+        has_variant = VARIANT_COLUMN in prior.columns and not prior.empty
+        primary = FALLBACK_VARIANT if FALLBACK_VARIANT in variants else variants[0]
         parts = []
         for variant in variants:
             prior_slice = (
                 prior[prior[VARIANT_COLUMN].astype(str) == variant]
-                if VARIANT_COLUMN in prior.columns and not prior.empty
-                else prior
+                if has_variant
+                else (prior if variant == primary else empty_recommendations_frame())
             )
             merged = self._merge_one_list(
                 user_id, prior_slice, popular, latest, batch, weights, online_rows=online_rows
@@ -511,18 +514,24 @@ class IncrementalUpdater:
             preserved = prior.loc[mask].copy()
         else:
             preserved = prior.iloc[0:0] if not prior.empty else prior
-        preserved = self._splice_online_rows(preserved, online_rows)
+        online_part, kept = self._split_online_preserved(preserved, online_rows)
 
         user_batch = self._signal_rows(batch[batch[USER_COLUMN].astype(str) == user_id], weights)
         has_signal = not user_batch.empty
+        preserved_ids: set[str] = set()
+        if not kept.empty:
+            preserved_ids.update(kept[ITEM_COLUMN].astype(str))
+        if not online_part.empty:
+            preserved_ids.update(online_part[ITEM_COLUMN].astype(str))
         boost_items = (
-            user_batch.sort_values("occurred_at", ascending=False)[ITEM_COLUMN]
+            user_batch.sort_values("occurred_at", ascending=False, kind="mergesort")[ITEM_COLUMN]
             .astype(str)
             .drop_duplicates()
             .tolist()
             if has_signal
             else []
         )
+        boost_items = [item_id for item_id in boost_items if item_id not in preserved_ids]
         boost_slots = max(1, int(self._top_k * _BOOST_SLOT_FRACTION)) if boost_items else 0
         boost = pd.DataFrame(
             [
@@ -540,10 +549,16 @@ class IncrementalUpdater:
             ]
         )
         preserve_cap = max(0, self._top_k - boost_slots)
-        if not preserved.empty:
-            if RANK_COLUMN in preserved.columns:
-                preserved = preserved.sort_values(RANK_COLUMN, kind="mergesort")
-            preserved = preserved.head(preserve_cap)
+        if not kept.empty:
+            if RANK_COLUMN in kept.columns:
+                kept = kept.sort_values(RANK_COLUMN, kind="mergesort")
+            kept = kept.head(preserve_cap)
+        preserved_parts = [frame for frame in (online_part, kept) if not frame.empty]
+        preserved = (
+            pd.concat(preserved_parts, ignore_index=True)
+            if preserved_parts
+            else empty_recommendations_frame()
+        )
 
         # Batch-global popular/latest only for users with signal or preserved rows
         # (unknown/zero-weight events must not rewrite popular-only users).
@@ -561,14 +576,17 @@ class IncrementalUpdater:
         combined[RANK_COLUMN] = range(1, len(combined) + 1)
         return combined[recommendation_output_columns(combined)].reset_index(drop=True)
 
-    def _splice_online_rows(self, preserved: pd.DataFrame, online_rows: pd.DataFrame | None) -> pd.DataFrame:
+    def _split_online_preserved(
+        self, preserved: pd.DataFrame, online_rows: pd.DataFrame | None
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+        empty = preserved.iloc[0:0] if not preserved.empty else preserved
         if online_rows is None or online_rows.empty:
-            return preserved
+            return empty, preserved
         online = online_rows.copy()
         if SOURCE_COLUMN in online.columns:
             online = online.loc[online[SOURCE_COLUMN].astype(str).map(_is_preserved_source)]
         if online.empty:
-            return preserved
+            return empty, preserved
         online_parts: set[str] = set()
         if SOURCE_COLUMN in online.columns:
             for label in online[SOURCE_COLUMN].astype(str):
@@ -583,11 +601,8 @@ class IncrementalUpdater:
             )
             kept = preserved.loc[~drop]
         else:
-            kept = preserved.iloc[0:0]
-        parts = [frame for frame in (online, kept) if not frame.empty]
-        if not parts:
-            return preserved.iloc[0:0] if not preserved.empty else preserved
-        return pd.concat(parts, ignore_index=True)
+            kept = empty
+        return online, kept
 
     def _cold_start_rows(
         self,
@@ -599,12 +614,14 @@ class IncrementalUpdater:
         if not variants:
             prior = collapse_mixed_variants(prior)
             return self._stamp_collapsed_variant(self._cold_start_one_list(prior, popular, latest), prior)
+        has_variant = VARIANT_COLUMN in prior.columns and not prior.empty
+        primary = FALLBACK_VARIANT if FALLBACK_VARIANT in variants else variants[0]
         parts = []
         for variant in variants:
             prior_slice = (
                 prior[prior[VARIANT_COLUMN].astype(str) == variant]
-                if VARIANT_COLUMN in prior.columns and not prior.empty
-                else prior
+                if has_variant
+                else (prior if variant == primary else empty_recommendations_frame())
             )
             merged = self._cold_start_one_list(prior_slice, popular, latest)
             if merged.empty:

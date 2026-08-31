@@ -27,6 +27,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Config page redacts `*_url` option keys and any value with embedded URL
   credentials.
 
+## [0.7.1] - 2026-08-28
+
+### Changed
+
+- ProcessPool fit and AutoML pickle the shared dataset/config once per worker,
+  not once per strategy or fold.
+- Blending expands identical per-user latest item/rank order with the same
+  vectorized path as `shared_latest`.
+- Content-fallback fit stores only the last 50 history items per user,
+  ordered by event datetime when present (the window recommend already scored).
+- Content-fallback recommend starts an inner user thread pool only on the
+  process main thread (not from a worker thread).
+- Online collaborative refresh uses `[job].max_workers` for strategy recommend
+  threads.
+- Importing `cicerone.job` no longer calls `logging.basicConfig` (`cicerone job`
+  and `python -m cicerone.job` still configure logging).
+- Ranking sorts use pandas `mergesort` so score ties follow item id (same as
+  weighted RRF).
+- Boost boolean/value_map factors use `item_true_mask` / vectorized map instead
+  of per-cell lambdas. `PRIMARY_METRIC_WEIGHTED` and the log format string live
+  in one constants module.
+
+### Fixed
+
+- Online rewrite skips sequential when torch is missing instead of dropping
+  sequential / RRF / blend rows that share a part.
+- Online artifact replace on S3 is refused; `[events.online]` requires db or
+  a local dataset path.
+- AutoML drops `content_fallback` from candidates when that strategy is off.
+- Experiment metrics use first exposure, events after exposure and before
+  promote, and ITT that ignores the promoted arm.
+- Three-plus variants promote the unique best mean (Bonferroni-adjusted
+  alpha).
+- Incremental boost keeps existing reasons when the event item is already
+  in the list.
+- Empty `_source_contribs` falls back to `source`; reasons are validated at
+  write.
+- Serve promote-state reads reuse the last successful value on failure.
+- Named variant filters ignore missing / NaN `variant` values.
+- Incremental merge without a `variant` column keeps the unlabelled prior
+  on control only.
+- Legacy exposures tables missing `experiment_id` are ignored.
+- Experiment time windows drop untimed events; invalid `promoted_at` blocks
+  promote. DB promote-state errors reuse the cached winner.
+
 ## [0.7.0] - 2026-08-28
 
 ### Added
