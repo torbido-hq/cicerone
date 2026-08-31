@@ -33,6 +33,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   instead of crashing ingest.
 - RabbitMQ publisher and ingest close the AMQP connection when channel
   setup fails.
+- RabbitMQ `[publish]` uses the configured routing key (empty is valid
+  for fanout); it no longer substitutes `user_id`.
 
 ### Security
 

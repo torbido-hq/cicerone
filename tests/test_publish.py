@@ -229,6 +229,27 @@ def test_rabbitmq_publisher_exchange(monkeypatch):
     publisher.close()
 
 
+def test_rabbitmq_publisher_queue_uses_queue_as_routing_key(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "recs"})
+    publisher.connect()
+    publisher.publish(_recs_frame())
+    assert [key for _exchange, key, _body in broker.published] == ["recs", "recs"]
+    publisher.close()
+
+
+def test_rabbitmq_publisher_exchange_empty_routing_key(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "exchange": "recs"})
+    publisher.connect()
+    publisher.publish(_recs_frame())
+    assert [(exchange, key) for exchange, key, _body in broker.published] == [
+        ("recs", ""),
+        ("recs", ""),
+    ]
+    publisher.close()
+
+
 def test_kafka_publisher_connect_failure(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
     broker.list_topics_error = RuntimeError("down")
