@@ -215,10 +215,9 @@ class RabbitMQEventSource(EventSource):
                     resolved.append((eid, tag))
         if not resolved:
             return
-        for _, tag in resolved:
+        for eid, tag in resolved:
             io.submit(partial(self._basic_ack, tag))
-        with self._lock:
-            for eid, tag in resolved:
+            with self._lock:
                 self._delivery_tags.pop(eid, None)
                 self._held_tags.discard(tag)
                 self._in_flight.discard(eid)

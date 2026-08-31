@@ -48,13 +48,8 @@ class EventsRuntime:
             dispose_recommendation_engines()
             return True
         finally:
-            publisher = self.publisher
+            _close_publisher(self.publisher)
             self.publisher = None
-            if publisher is not None:
-                try:
-                    publisher.close()
-                except Exception:
-                    logger.exception("Recommendation publisher close failed")
 
 
 def _combine_busy_checks(*checks: Callable[[], bool] | None) -> Callable[[], bool] | None:
@@ -118,6 +113,15 @@ def _assign_incremental_variant(
     return assigned
 
 
+def _close_publisher(publisher: RecommendationPublisher | None) -> None:
+    if publisher is None:
+        return
+    try:
+        publisher.close()
+    except Exception:
+        logger.exception("Recommendation publisher close failed")
+
+
 def start_events_runtime(
     settings: Settings,
     *,
@@ -160,76 +164,86 @@ def start_events_runtime(
 
     sink = build_output_sink(settings.output)
     publisher = build_publisher(settings)
-    online = None
-    if settings.events.online.enabled and settings.experiment.enabled:
-        logger.warning("Online collaborative refresh skipped while [experiment] is enabled")
-    elif settings.events.online.enabled:
-        from cicerone.events.online import OnlineTrainer
+    worker: EventWorker | None = None
+    try:
+        online = None
+        if settings.events.online.enabled and settings.experiment.enabled:
+            logger.warning("Online collaborative refresh skipped while [experiment] is enabled")
+        elif settings.events.online.enabled:
+            from cicerone.events.online import OnlineTrainer
 
-        online = OnlineTrainer(
+            online = OnlineTrainer(
+                sink=sink,
+                top_k=settings.top_k,
+                half_life_days=settings.half_life_days,
+                fit_partial_epochs=settings.events.online.fit_partial_epochs,
+                fit_min_events=settings.events.online.fit_min_events,
+                max_extra_interactions=settings.events.online.max_extra_interactions,
+                fence_check=(apply_lock.owned if apply_lock is not None else None),
+                explain=settings.explain,
+                max_workers=settings.max_workers,
+            )
+            online.ensure_loaded()
+            logger.info(
+                "Online collaborative refresh enabled (fit_partial_epochs=%d, fit_min_events=%d)",
+                settings.events.online.fit_partial_epochs,
+                settings.events.online.fit_min_events,
+            )
+        updater = IncrementalUpdater(
             sink=sink,
+            output_settings=settings.output,
+            feature_config=feature_config,
             top_k=settings.top_k,
-            half_life_days=settings.half_life_days,
-            fit_partial_epochs=settings.events.online.fit_partial_epochs,
-            fit_min_events=settings.events.online.fit_min_events,
-            max_extra_interactions=settings.events.online.max_extra_interactions,
+            busy_check=_throttled_busy_check(
+                combined_busy,
+                ttl_seconds=DEFAULT_EVENTS_RETRAIN_PROBE_TTL_SECONDS,
+            ),
+            write_busy_check=combined_busy,
             fence_check=(apply_lock.owned if apply_lock is not None else None),
-            explain=settings.explain,
-            max_workers=settings.max_workers,
+            on_success=reader.refresh,
+            online=online,
+            variant_names=experiment_variant_names(settings),
+            assign_variant=_assign_incremental_variant(settings),
+            explain_enabled=settings.explain.enabled,
+            publisher=publisher,
         )
-        online.ensure_loaded()
+        buffer = MicroBatchBuffer(
+            batch_size=settings.events.incremental.batch_size,
+            batch_window_seconds=settings.events.incremental.batch_window_seconds,
+        )
+        worker = EventWorker(
+            source,
+            buffer,
+            updater,
+            poll_interval_seconds=settings.events.incremental.poll_interval_seconds,
+            apply_lock=apply_lock,
+            poll_without_lock=poll_without_apply_lock(settings.events.kind, settings.events.options),
+        )
+        worker.start()
         logger.info(
-            "Online collaborative refresh enabled (fit_partial_epochs=%d, fit_min_events=%d)",
-            settings.events.online.fit_partial_epochs,
-            settings.events.online.fit_min_events,
-        )
-    updater = IncrementalUpdater(
-        sink=sink,
-        output_settings=settings.output,
-        feature_config=feature_config,
-        top_k=settings.top_k,
-        busy_check=_throttled_busy_check(
-            combined_busy,
-            ttl_seconds=DEFAULT_EVENTS_RETRAIN_PROBE_TTL_SECONDS,
-        ),
-        write_busy_check=combined_busy,
-        fence_check=(apply_lock.owned if apply_lock is not None else None),
-        on_success=reader.refresh,
-        online=online,
-        variant_names=experiment_variant_names(settings),
-        assign_variant=_assign_incremental_variant(settings),
-        explain_enabled=settings.explain.enabled,
-        publisher=publisher,
-    )
-    buffer = MicroBatchBuffer(
-        batch_size=settings.events.incremental.batch_size,
-        batch_window_seconds=settings.events.incremental.batch_window_seconds,
-    )
-    worker = EventWorker(
-        source,
-        buffer,
-        updater,
-        poll_interval_seconds=settings.events.incremental.poll_interval_seconds,
-        apply_lock=apply_lock,
-        poll_without_lock=poll_without_apply_lock(settings.events.kind, settings.events.options),
-    )
-    worker.start()
-    logger.info(
-        "Event worker started (kind=%s, batch_size=%d, window=%ss, poll=%ss, ha=%s)",
-        settings.events.kind,
-        settings.events.incremental.batch_size,
-        settings.events.incremental.batch_window_seconds,
-        settings.events.incremental.poll_interval_seconds,
-        apply_lock is not None,
-    )
-    if apply_lock is None:
-        logger.warning(
-            "Incremental events assume a single writer process "
-            "(kind=%s, output=%s); set events.ha = true and "
-            "job.trigger.lock_backend = postgres|redis for multi-replica apply",
+            "Event worker started (kind=%s, batch_size=%d, window=%ss, poll=%ss, ha=%s)",
             settings.events.kind,
-            settings.output.kind,
+            settings.events.incremental.batch_size,
+            settings.events.incremental.batch_window_seconds,
+            settings.events.incremental.poll_interval_seconds,
+            apply_lock is not None,
         )
-    return EventsRuntime(
-        webhook_source=webhook_source, worker=worker, apply_lock=apply_lock, publisher=publisher
-    )
+        if apply_lock is None:
+            logger.warning(
+                "Incremental events assume a single writer process "
+                "(kind=%s, output=%s); set events.ha = true and "
+                "job.trigger.lock_backend = postgres|redis for multi-replica apply",
+                settings.events.kind,
+                settings.output.kind,
+            )
+        return EventsRuntime(
+            webhook_source=webhook_source, worker=worker, apply_lock=apply_lock, publisher=publisher
+        )
+    except Exception:
+        if worker is not None:
+            try:
+                worker.stop()
+            except Exception:
+                logger.exception("Event worker stop after startup failure")
+        _close_publisher(publisher)
+        raise

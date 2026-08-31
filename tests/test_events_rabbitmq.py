@@ -72,6 +72,30 @@ def test_nack_allows_repoll(monkeypatch):
     assert broker.connection.channel_obj.nacked == []
 
 
+def test_ack_forgets_succeeded_tags_when_later_ack_fails(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.enqueue("cicerone.events", event_payload(event_id="e1"))
+    broker.enqueue("cicerone.events", event_payload(event_id="e2"))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    events = list(source.poll(10))
+    assert [event.event_id for event in events] == ["e1", "e2"]
+    original = broker.connection.channel_obj.basic_ack
+
+    def _ack(*, delivery_tag: int) -> None:
+        if delivery_tag == 2:
+            raise RuntimeError("ack 2")
+        original(delivery_tag=delivery_tag)
+
+    broker.connection.channel_obj.basic_ack = _ack  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="ack 2"):
+        source.ack([event.event_id for event in events])
+    source.nack(events)
+    again = list(source.poll(10))
+    assert [event.event_id for event in again] == ["e2"]
+    source.close()
+
+
 def test_missing_event_id_uses_delivery_tag(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     payload = event_payload()

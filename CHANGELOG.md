@@ -35,6 +35,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   setup fails.
 - RabbitMQ `[publish]` uses the configured routing key (empty is valid
   for fanout); it no longer substitutes `user_id`.
+- Serve `[publish]` is closed if events runtime startup fails after connect.
+- Kafka and RabbitMQ ingest drop local ack tracking before the broker
+  confirm so a failed ack cannot re-apply from the in-memory deque.
+- RabbitMQ `[publish]` connect errors report setup failure, not only an
+  unreachable URL.
 
 ### Security
 

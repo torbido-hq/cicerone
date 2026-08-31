@@ -60,7 +60,7 @@ class RabbitMQPublisher:
                     connection.close()
                 except Exception:
                     logger.exception("Failed to close RabbitMQ publisher connection after connect error")
-            raise ConfigError(f"publish.options.amqp_url is unreachable: {exc}") from exc
+            raise ConfigError(f"publish.options.amqp_url is unreachable or setup failed: {exc}") from exc
         self._connection = connection
         self._channel = channel
 

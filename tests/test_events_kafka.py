@@ -155,6 +155,20 @@ def test_ack_does_not_skip_earlier_offset(monkeypatch):
     assert broker.committed == [(0, 2)]
 
 
+def test_ack_drops_local_state_when_commit_fails(monkeypatch):
+    broker = install_fake_kafka(monkeypatch)
+    broker.add("cicerone.events", event_payload(event_id="e1"))
+    source = KafkaEventSource(_options())
+    source.connect()
+    events = list(source.poll(10))
+    broker.commit_error = RuntimeError("commit fail")
+    with pytest.raises(RuntimeError, match="commit fail"):
+        source.ack([events[0].event_id])
+    source.nack(events)
+    assert list(source.poll(10)) == []
+    source.close()
+
+
 def test_sasl_options_in_consumer_config(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
     source = KafkaEventSource(

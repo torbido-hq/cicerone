@@ -59,6 +59,7 @@ class FakeKafkaBroker:
         self.committed: list[tuple[int, int]] = []
         self.produced: list[tuple[str, bytes | None, bytes | str | None]] = []
         self.list_topics_error: Exception | None = None
+        self.commit_error: Exception | None = None
         self._seq = 0
 
     def add(
@@ -107,6 +108,8 @@ class FakeConsumer:
         asynchronous: bool = False,
     ) -> None:
         del asynchronous
+        if self.broker.commit_error is not None:
+            raise self.broker.commit_error
         if offsets:
             for tp in offsets:
                 self.broker.committed.append((int(tp.partition), int(tp.offset)))
