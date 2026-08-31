@@ -245,6 +245,15 @@ def test_rabbitmq_publisher_connect_failure(monkeypatch):
         publisher.connect()
 
 
+def test_rabbitmq_publisher_closes_connection_when_declare_fails(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.queue_declare_error = RuntimeError("no queue")
+    publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "q"})
+    with pytest.raises(ConfigError, match="unreachable"):
+        publisher.connect()
+    assert broker.connection.closed is True
+
+
 def test_build_publisher_unknown_kind():
     with pytest.raises(ConfigError, match="publish.kind"):
         build_publisher_from_kind("sns", {})

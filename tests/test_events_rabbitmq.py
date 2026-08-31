@@ -231,6 +231,15 @@ def test_connect_failure(monkeypatch):
         source.connect()
 
 
+def test_connect_closes_connection_when_declare_fails(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.queue_declare_error = RuntimeError("no queue")
+    source = RabbitMQEventSource(_options())
+    with pytest.raises(ConfigError, match="unreachable"):
+        source.connect()
+    assert broker.connection.closed is True
+
+
 def test_heartbeat_runs_on_io_thread(monkeypatch):
     import threading
 

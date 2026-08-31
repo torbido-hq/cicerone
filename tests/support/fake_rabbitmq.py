@@ -29,6 +29,8 @@ class FakeChannel:
 
     def queue_declare(self, queue: str, durable: bool = True, passive: bool = False) -> SimpleNamespace:
         del durable
+        if self.broker.queue_declare_error is not None:
+            raise self.broker.queue_declare_error
         if not passive:
             self.broker.queues.setdefault(queue, [])
         ready = len(self.broker.queues.get(queue, []))
@@ -97,6 +99,7 @@ class FakeRabbitBroker:
         self.queues: dict[str, list[FakeRabbitMessage]] = {}
         self.published: list[tuple[str, str, bytes]] = []
         self.connect_error: Exception | None = None
+        self.queue_declare_error: Exception | None = None
         self._tag = 0
 
     def enqueue(self, queue: str, body: bytes | str | dict[str, Any]) -> FakeRabbitMessage:

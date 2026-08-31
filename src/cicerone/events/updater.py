@@ -6,7 +6,7 @@ import logging
 from collections import OrderedDict
 from collections.abc import Callable, Collection, Sequence
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import Protocol
 
 import pandas as pd
 
@@ -37,6 +37,7 @@ from cicerone.io.recommendation_schema import (
     recommendation_output_columns,
 )
 from cicerone.locks import LockLostError
+from cicerone.publish.base import RecommendationPublisher
 from cicerone.reasons import dump_source_reasons
 from cicerone.weighting import event_row_weights
 
@@ -98,7 +99,7 @@ class IncrementalUpdater:
         online: OnlineRefresher | None = None,
         variant_names: Sequence[str] = (),
         explain_enabled: bool = True,
-        publisher: Any | None = None,
+        publisher: RecommendationPublisher | None = None,
     ):
         if user_cache_max_size < 1:
             raise ValueError("user_cache_max_size must be >= 1")

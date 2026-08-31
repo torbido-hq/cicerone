@@ -29,6 +29,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - RabbitMQ ingest runs AMQP on one I/O thread so apply heartbeats stay
   thread-safe.
 - Serve events runtime closes `[publish]` when the worker join times out.
+- Non-UTF-8 Kafka and RabbitMQ event payloads are skipped as poison
+  instead of crashing ingest.
+- RabbitMQ publisher and ingest close the AMQP connection when channel
+  setup fails.
 
 ### Security
 
