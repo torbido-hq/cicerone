@@ -325,6 +325,12 @@ def test_track_jsonl_append_skips_reread_when_warm(tmp_path, monkeypatch) -> Non
     assert {row["event_id"] for row in store.read_rows()} == {"imp-1", "imp-2"}
 
 
+def test_track_jsonl_second_store_respects_existing_event_ids(tmp_path) -> None:
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    assert TrackStore(output).append_rows([_row()]) == 1
+    assert TrackStore(output).append_rows([_row()]) == 0
+
+
 def test_track_jsonl_dedupes_duplicate_event_ids(tmp_path) -> None:
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     path = tmp_path / "track.jsonl"

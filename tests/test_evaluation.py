@@ -512,6 +512,28 @@ def test_evaluation_remaining_branches(monkeypatch) -> None:
     both["source"] = None
     filled = _annotate_source(both, recs)
     assert filled.iloc[0]["source"] == "personalized"
+    snapshots = pd.DataFrame(
+        [
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "source": "popular_fallback",
+                "variant": "control",
+                "generated_at": "2026-08-20T00:00:00Z",
+            },
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "source": "personalized",
+                "variant": "treatment",
+                "generated_at": "2026-08-28T00:00:00Z",
+            },
+        ]
+    )
+    later_imp = pd.DataFrame([{"user_id": "alice", "item_id": "ipa", "generated_at": "2026-08-28T00:00:00Z"}])
+    by_snap = _annotate_source(later_imp, snapshots)
+    assert by_snap.iloc[0]["source"] == "personalized"
+    assert by_snap.iloc[0]["variant"] == "treatment"
     missing_time = evaluate_tracking(
         track_rows=[{"kind": "impression", "user_id": "a", "item_id": "i"}],
         conversions=pd.DataFrame(),

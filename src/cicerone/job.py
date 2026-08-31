@@ -111,6 +111,22 @@ def _score_previous_run(
         logger.exception("Failed to load previous recommendations for eval")
         previous_recs = None
     store = TrackStore(settings.output)
+    history = None
+    try:
+        history = store.read_history()
+        if history is not None and history.empty:
+            history = None
+    except Exception:
+        logger.exception("Failed to read recommendation history")
+        history = None
+    recs_for_track = previous_recs
+    if recs_for_track is not None and previous_generated_at:
+        recs_for_track = recs_for_track.copy()
+        recs_for_track["generated_at"] = previous_generated_at
+    if history is not None:
+        recs_for_track = (
+            pd.concat([history, recs_for_track], ignore_index=True) if recs_for_track is not None else history
+        )
     track_payload = None
     served_payload = None
     if settings.track.enabled:
@@ -125,21 +141,13 @@ def _score_previous_run(
             track_payload = evaluate_tracking(
                 track_rows=store.read_rows(),
                 conversions=conversions,
-                recommendations=previous_recs,
+                recommendations=recs_for_track,
                 window_hours=settings.track.attribution_window_hours,
             ).as_dict()
         except Exception:
             logger.exception("Failed to compute track eval")
     if settings.eval.enabled and previous_recs is not None and previous_generated_at:
         try:
-            history = None
-            try:
-                history = store.read_history()
-                if history is not None and history.empty:
-                    history = None
-            except Exception:
-                logger.exception("Failed to read recommendation history")
-                history = None
             types = settings.eval.event_types or conversion_event_types(
                 settings.track.conversion_event_types,
                 primary_metric=settings.experiment.primary_metric,
