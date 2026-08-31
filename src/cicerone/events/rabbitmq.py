@@ -292,9 +292,14 @@ class RabbitMQEventSource(EventSource):
     def _open(self, pika: Any, io: _PikaIo) -> tuple[Any, Any]:
         connection = pika.BlockingConnection(pika.URLParameters(self._amqp_url))
         io._connection = connection
-        channel = connection.channel()
-        channel.basic_qos(prefetch_count=self._prefetch)
-        channel.queue_declare(queue=self._queue, durable=True)
+        try:
+            channel = connection.channel()
+            channel.basic_qos(prefetch_count=self._prefetch)
+            channel.queue_declare(queue=self._queue, durable=True)
+        except Exception:
+            io._connection = None
+            _close_quietly(connection, "connection")
+            raise
         return connection, channel
 
     def _pump_connection(self) -> None:

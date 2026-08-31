@@ -15,7 +15,10 @@ def decode_json_object(raw: Any) -> dict[str, Any]:
     if isinstance(raw, (bytes, bytearray)):
         if not raw:
             raise EventNormalizeError("event must be a JSON object")
-        text = raw.decode("utf-8")
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise EventNormalizeError("event must be a JSON object") from exc
     elif isinstance(raw, str):
         text = raw
     else:

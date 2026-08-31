@@ -6,7 +6,6 @@ import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
 
 from cicerone.config import Settings
 from cicerone.config.constants import (
@@ -26,7 +25,7 @@ from cicerone.feature_config import FeatureConfig
 from cicerone.io.base import RecommendationReader
 from cicerone.io.factory import build_output_sink
 from cicerone.locks import LockBackend, build_lock_backend, events_apply_lock_key
-from cicerone.publish import build_publisher
+from cicerone.publish import RecommendationPublisher, build_publisher
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +35,7 @@ class EventsRuntime:
     webhook_source: WebhookEventSource | None
     worker: EventWorker | None
     apply_lock: LockBackend | None = None
-    publisher: Any | None = None
+    publisher: RecommendationPublisher | None = None
 
     def stop(self) -> bool:
         stopped = True

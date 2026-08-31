@@ -48,12 +48,18 @@ class RabbitMQPublisher:
             import pika
         except ImportError as exc:
             raise _missing_extra() from exc
+        connection = None
         try:
             connection = pika.BlockingConnection(pika.URLParameters(self._amqp_url))
             channel = connection.channel()
             if self._exchange == "":
                 channel.queue_declare(queue=self._queue, durable=True)
         except Exception as exc:
+            if connection is not None:
+                try:
+                    connection.close()
+                except Exception:
+                    logger.exception("Failed to close RabbitMQ publisher connection after connect error")
             raise ConfigError(f"publish.options.amqp_url is unreachable: {exc}") from exc
         self._connection = connection
         self._channel = channel

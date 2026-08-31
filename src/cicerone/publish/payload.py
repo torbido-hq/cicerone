@@ -17,7 +17,12 @@ def user_recommendation_messages(df: pd.DataFrame) -> list[tuple[str, bytes]]:
     indexed[USER_COLUMN] = indexed[USER_COLUMN].astype(str)
     out: list[tuple[str, bytes]] = []
     for user_id, group in indexed.groupby(USER_COLUMN, sort=False):
-        records = json.loads(group.to_json(orient="records"))
-        payload = {"user_id": str(user_id), "recommendations": records}
-        out.append((str(user_id), json.dumps(payload, separators=(",", ":")).encode("utf-8")))
+        body = (
+            '{"user_id":'
+            + json.dumps(str(user_id))
+            + ',"recommendations":'
+            + group.to_json(orient="records")
+            + "}"
+        ).encode("utf-8")
+        out.append((str(user_id), body))
     return out

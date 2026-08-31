@@ -25,3 +25,5 @@ def test_decode_rejects_invalid():
         decode_json_object("[1]")
     with pytest.raises(EventNormalizeError):
         decode_json_object(1)
+    with pytest.raises(EventNormalizeError, match="JSON object"):
+        decode_json_object(b"\xff")

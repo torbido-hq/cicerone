@@ -6,7 +6,7 @@ import logging
 from collections import OrderedDict
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import Protocol
 
 import pandas as pd
 
@@ -28,6 +28,7 @@ from cicerone.io.base import OutputSink
 from cicerone.io.recommendation_reader import SOURCE_COLUMN, USER_COLUMN
 from cicerone.io.recommendation_schema import recommendation_output_columns
 from cicerone.locks import LockLostError
+from cicerone.publish.base import RecommendationPublisher
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         variant_names: Sequence[str] = (),
         assign_variant: Callable[[str], str | None] | None = None,
         explain_enabled: bool = True,
-        publisher: Any | None = None,
+        publisher: RecommendationPublisher | None = None,
     ):
         if user_cache_max_size < 1:
             raise ValueError("user_cache_max_size must be >= 1")
