@@ -45,6 +45,7 @@ logger = logging.getLogger(__name__)
 TRACK_FILENAME = "track.jsonl"
 EVAL_FILENAME = "track_eval.json"
 HISTORY_FILENAME = "recommendation_history.parquet"
+HISTORY_DIR = "recommendation_history"
 DEFAULT_TRACK_TABLE = "recommendation_track"
 DEFAULT_EVAL_TABLE = "recommendation_eval"
 DEFAULT_HISTORY_TABLE = "recommendation_history"
@@ -169,25 +170,60 @@ class TrackStore:
         if self._kind == "db":
             self._append_history_db(frame)
             return
-        existing = self.read_history()
-        merged = pd.concat([existing, frame], ignore_index=True) if not existing.empty else frame
         buf = BytesIO()
-        merged.to_parquet(buf, index=False)
-        self._write_bytes(HISTORY_FILENAME, buf.getvalue(), "application/octet-stream")
+        frame.to_parquet(buf, index=False)
+        part = f"{HISTORY_DIR}/{_history_part_name(generated_at)}"
+        self._write_bytes(part, buf.getvalue(), "application/octet-stream")
 
     def read_history(self) -> pd.DataFrame:
         if self._kind == "db":
             return self._read_history_db()
+        frames = self._read_legacy_history() + self._read_history_parts()
+        if not frames:
+            return pd.DataFrame(columns=list(HISTORY_COLUMNS))
+        return pd.concat(frames, ignore_index=True)
+
+    def _read_legacy_history(self) -> list[pd.DataFrame]:
         from cicerone.io.options import read_parquet
 
         try:
-            return read_parquet(self._options, HISTORY_FILENAME)
+            frame = read_parquet(self._options, HISTORY_FILENAME)
         except FileNotFoundError:
-            return pd.DataFrame(columns=list(HISTORY_COLUMNS))
+            return []
         except Exception as exc:
             if is_s3_not_found(exc):
-                return pd.DataFrame(columns=list(HISTORY_COLUMNS))
+                return []
             raise
+        return [] if frame.empty else [frame]
+
+    def _read_history_parts(self) -> list[pd.DataFrame]:
+        frames: list[pd.DataFrame] = []
+        backend = validate_storage_options(self._options)
+        if backend == "local":
+            root = Path(require_option(self._options, "path", "local")) / HISTORY_DIR
+            if not root.is_dir():
+                return []
+            paths = sorted(root.glob("*.parquet"))
+            for path in paths:
+                frame = pd.read_parquet(path)
+                if not frame.empty:
+                    frames.append(frame)
+            return frames
+        bucket = require_option(self._options, "bucket", "s3")
+        prefix = object_key(self._options, f"{HISTORY_DIR}/")
+        client = build_s3_client(self._options)
+        try:
+            keys = _list_s3_parquet_keys(client, bucket, prefix)
+        except Exception as exc:
+            if is_s3_not_found(exc):
+                return []
+            raise
+        for key in keys:
+            obj = client.get_object(Bucket=bucket, Key=key)
+            frame = pd.read_parquet(BytesIO(obj["Body"].read()))
+            if not frame.empty:
+                frames.append(frame)
+        return frames
 
     def _ensure_track_table(self, conn: Any, table: str) -> None:
         conn.execute(
@@ -436,6 +472,31 @@ def _existing_event_ids(conn: Any, table: str, event_ids: Sequence[str]) -> set[
         bindparam("ids", expanding=True)
     )
     return {str(row[0]) for row in conn.execute(stmt, {"ids": ids}) if row[0] is not None}
+
+
+def _history_part_name(generated_at: str) -> str:
+    slug = "".join(ch if ch.isalnum() or ch in "-+." else "-" for ch in generated_at.strip())
+    slug = slug.strip("-.") or "snapshot"
+    return f"{slug}.parquet"
+
+
+def _list_s3_parquet_keys(client: Any, bucket: str, prefix: str) -> list[str]:
+    keys: list[str] = []
+    token: str | None = None
+    while True:
+        kwargs: dict[str, Any] = {"Bucket": bucket, "Prefix": prefix}
+        if token:
+            kwargs["ContinuationToken"] = token
+        page = client.list_objects_v2(**kwargs)
+        for obj in page.get("Contents") or []:
+            key = str(obj.get("Key") or "")
+            if key.endswith(".parquet"):
+                keys.append(key)
+        if not page.get("IsTruncated"):
+            return keys
+        token = page.get("NextContinuationToken")
+        if not token:
+            return keys
 
 
 def _history_frame(recommendations: pd.DataFrame, generated_at: str) -> pd.DataFrame:

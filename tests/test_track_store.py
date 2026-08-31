@@ -108,6 +108,11 @@ def test_track_store_roundtrip_dataset(tmp_path) -> None:
     history = store.read_history()
     assert len(history) == 1
     assert str(history.iloc[0]["user_id"]) == "alice"
+    store.append_history(recs, generated_at="2026-08-29T03:00:00+00:00")
+    parts = list((tmp_path / "recommendation_history").glob("*.parquet"))
+    assert len(parts) == 2
+    assert all(len(pd.read_parquet(part)) == 1 for part in parts)
+    assert len(store.read_history()) == 2
 
 
 def test_track_store_roundtrip_sqlite(tmp_path) -> None:
@@ -243,6 +248,10 @@ def test_track_eval_roundtrip_s3() -> None:
         assert history.empty
         store.append_history(pd.DataFrame(), generated_at="t")
         assert store.read_history().empty
+        recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
+        store.append_history(recs, generated_at="2026-08-28T03:00:00+00:00")
+        store.append_history(recs, generated_at="2026-08-29T03:00:00+00:00")
+        assert len(store.read_history()) == 2
 
 
 def test_track_store_sqlite_missing_tables(tmp_path) -> None:
@@ -254,7 +263,27 @@ def test_track_store_sqlite_missing_tables(tmp_path) -> None:
     assert store.read_history().empty
 
 
-def test_history_frame_fills_optional_columns() -> None:
+def test_track_history_reads_legacy_single_file(tmp_path) -> None:
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    recs = pd.DataFrame(
+        [{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized", "variant": None}]
+    )
+    recs["generated_at"] = "2026-08-20T00:00:00+00:00"
+    recs.to_parquet(tmp_path / "recommendation_history.parquet", index=False)
+    store = TrackStore(output)
+    store.append_history(
+        pd.DataFrame([{"user_id": "bob", "item_id": "stout", "rank": 1, "source": "personalized"}]),
+        generated_at="2026-08-28T03:00:00+00:00",
+    )
+    users = set(store.read_history()["user_id"].astype(str))
+    assert users == {"alice", "bob"}
+
+
+def test_history_part_name_sanitizes_timestamp() -> None:
+    from cicerone.track.store import _history_part_name
+
+    assert _history_part_name("2026-08-28T03:00:00+00:00") == "2026-08-28T03-00-00+00-00.parquet"
+    assert _history_part_name("   ") == "snapshot.parquet"
     from cicerone.track.store import _history_frame
 
     frame = _history_frame(

@@ -190,7 +190,9 @@ def test_job_run_writes_track_and_served_eval(tmp_path, monkeypatch):
     job.run()
     report = json.loads((output_dir / "track_eval.json").read_text())
     assert "track_eval" in report
-    assert (output_dir / "recommendation_history.parquet").exists()
+    history_dir = output_dir / "recommendation_history"
+    assert history_dir.is_dir()
+    assert list(history_dir.glob("*.parquet"))
     assert report["track_eval"]["overall"]["n_impressions"] >= 1
 
 

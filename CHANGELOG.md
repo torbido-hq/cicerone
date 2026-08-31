@@ -68,6 +68,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   impression `event_id`, not every row with the same user and item.
 - Experiment CTR/conversion volume and outcomes ignore track rows from a
   different `experiment_id`; rows without an id still count.
+- Recommendation history writes one parquet file per job snapshot instead of
+  rewriting the full `recommendation_history.parquet`.
 
 ### Security
 
