@@ -35,7 +35,12 @@ ROBOTS_TXT = "User-agent: *\nDisallow: /\n"
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
 _TEMPLATES = Jinja2Templates(directory=str(_PACKAGE_DIR / "templates"))
+_TEMPLATES.env.globals["robots_tag"] = ROBOTS_TAG
 _EXPERIMENTS_PATH = "/dashboard/experiments"
+
+
+def _is_static_path(path: str) -> bool:
+    return path == "/static" or path.startswith("/static/")
 
 
 def _experiments_redirect(**query: str) -> RedirectResponse:
@@ -132,7 +137,7 @@ def create_app(
     ) -> Response:
         response = await call_next(request)
         response.headers["X-Robots-Tag"] = ROBOTS_TAG
-        if not request.url.path.startswith("/static"):
+        if not _is_static_path(request.url.path):
             response.headers.setdefault("Cache-Control", "private, no-store")
         return response
 

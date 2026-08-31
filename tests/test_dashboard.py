@@ -74,6 +74,10 @@ def test_dashboard_responses_are_not_indexable():
     assert static.headers["x-robots-tag"] == ROBOTS_TAG
     assert "no-store" not in static.headers.get("cache-control", "")
 
+    prefix_collision = client.get("/staticx")
+    assert prefix_collision.status_code == 404
+    assert "no-store" in prefix_collision.headers.get("cache-control", "")
+
 
 def test_dashboard_openapi_docs_are_disabled():
     app = create_app(_settings(), _FakeReader(None), _users_with("alice", "s3cret"))
@@ -140,6 +144,7 @@ def test_dashboard_page_renders_with_valid_credentials():
     assert 'href="/dashboard/config"' in response.text
     assert ">Config<" in response.text
     assert 'name="robots"' in response.text
+    assert f'content="{ROBOTS_TAG}"' in response.text
     assert "noindex" in response.text
     assert 'aria-label="Main"' in response.text
     assert 'id="main"' in response.text

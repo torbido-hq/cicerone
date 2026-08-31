@@ -6,7 +6,7 @@ from conftest import make_settings
 from fastapi.testclient import TestClient
 
 from cicerone.config import EventsSettings, IOSettings
-from cicerone.dashboard import create_app
+from cicerone.dashboard import ROBOTS_TAG, create_app
 from cicerone.dashboard_config import MISSING, REDACTED, _normalize, config_display
 
 
@@ -201,6 +201,7 @@ def test_config_page_renders_redacted_html(tmp_path):
     assert 'aria-label="Config sections"' in html
     assert 'aria-label="Main"' in html
     assert 'name="robots"' in html
+    assert f'content="{ROBOTS_TAG}"' in html
     assert "noindex" in html
     assert "[job]" in html
     assert 'data-config-hint-button="job.top_k"' in html

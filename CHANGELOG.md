@@ -14,6 +14,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Config keys and section titles can open a one-line hint; some include a
   Docs link to cicerone.dev.
 
+### Fixed
+
+- Dashboard `Cache-Control: private, no-store` skips only `/static` assets,
+  not other paths that happen to start with that prefix.
+
 ### Security
 
 - Dashboard pages send `X-Robots-Tag` and HTML `noindex` so crawlers skip
