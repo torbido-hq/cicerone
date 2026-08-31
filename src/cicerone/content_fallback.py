@@ -122,7 +122,7 @@ def _max_cosine_scores(cold_matrix, hist_matrix) -> np.ndarray:
 
 
 def _recommend_thread_workers(n_users: int, *, min_users: int, max_workers: int) -> int:
-    if n_users < min_users:
+    if n_users < min_users or threading.current_thread() is not threading.main_thread():
         return 1
     cpus = os.cpu_count() or 1
     return max(1, min(max_workers, cpus, n_users))

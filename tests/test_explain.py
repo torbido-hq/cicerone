@@ -190,6 +190,31 @@ def test_attach_reasons_uses_source_when_contribs_missing():
     assert parsed.matched_attributes == []
 
 
+def test_attach_reasons_uses_source_when_contribs_empty():
+    recs = pd.DataFrame(
+        [
+            {
+                Columns.User: "u1",
+                Columns.Item: "rec",
+                Columns.Rank: 1,
+                Columns.Score: 1.0,
+                "source": "popular_fallback",
+                SOURCE_CONTRIBS_COLUMN: [],
+            }
+        ]
+    )
+    out = attach_reasons(
+        recs,
+        items=None,
+        interactions=None,
+        feature_columns=[],
+        settings=ExplainSettings(enabled=True),
+    )
+    parsed = parse_reasons(out.iloc[0][REASONS_COLUMN])
+    assert parsed is not None
+    assert parsed.sources[0].label == "popular_fallback"
+
+
 def test_attach_reasons_disabled_drops_internal_columns():
     recs = pd.DataFrame(
         [

@@ -115,6 +115,18 @@ def test_variant_helpers_empty_and_no_control():
     assert filter_variant_rows(pd.DataFrame({"user_id": ["u1"]}), None).equals(
         pd.DataFrame({"user_id": ["u1"]})
     )
+    nan_rows = pd.DataFrame(
+        {
+            "user_id": ["u1", "u1"],
+            "item_id": ["keep", "drop"],
+            "rank": [1, 1],
+            "score": [0.9, 0.8],
+            "source": ["personalized", "personalized"],
+            "variant": ["control", float("nan")],
+        }
+    )
+    assert list(filter_variant_rows(nan_rows, "control")["item_id"].astype(str)) == ["keep"]
+    assert filter_variant_rows(nan_rows, "nan").empty
 
 
 def test_recommendations_filter_assigned_variant(tmp_path):

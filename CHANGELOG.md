@@ -26,6 +26,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   of per-cell lambdas. `PRIMARY_METRIC_WEIGHTED` and the log format string live
   in one constants module.
 
+### Fixed
+
+- Online rewrite skips sequential when torch is missing instead of dropping
+  sequential / RRF / blend rows that share a part.
+- Online artifact replace on S3 is refused; `[events.online]` requires db or
+  a local dataset path.
+- AutoML drops `content_fallback` from candidates when that strategy is off.
+- Experiment metrics use first exposure, events after exposure and before
+  promote, and ITT that ignores the promoted arm.
+- Three-plus variants promote the unique best mean (Bonferroni-adjusted
+  alpha).
+- Incremental boost keeps existing reasons when the event item is already
+  in the list.
+- Empty `_source_contribs` falls back to `source`; reasons are validated at
+  write.
+- Serve promote-state reads reuse the last successful value on failure.
+- Named variant filters ignore missing / NaN `variant` values.
+- Incremental merge without a `variant` column keeps the unlabelled prior
+  on control only.
+- Legacy exposures tables missing `experiment_id` are ignored.
+- Experiment time windows drop untimed events; invalid `promoted_at` blocks
+  promote. DB promote-state errors reuse the cached winner.
+
 ## [0.7.0] - 2026-08-28
 
 ### Added

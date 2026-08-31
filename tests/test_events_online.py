@@ -312,8 +312,9 @@ def test_online_trainer_skips_sequential_without_torch(
     trainer = _trainer(sink)
     result = trainer.refresh([_known_event("seq")])
     trainer.commit()
-    assert result.users_refreshed >= 1
-    assert "sequential" not in set(result.rows["source"].astype(str))
+    assert result.sequential_skipped is True
+    assert result.users_refreshed == 0
+    assert result.rows.empty
 
 
 def test_online_trainer_caps_extra_interactions(
@@ -427,6 +428,48 @@ def test_incremental_updater_splices_online_rows(tmp_path, feature_config: Featu
     assert list(frame[frame["user_id"] == "u2"]["item_id"]) == ["keep"]
     manifest = (out / "manifest.json").read_text()
     assert "online_users_refreshed" in manifest
+
+
+def test_incremental_updater_does_not_cap_online_by_old_ranks(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": f"s{i}", "rank": i, "score": 1.0, "source": "sequential"}
+            for i in range(1, 6)
+        ]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    online_rows = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "fresh-a", "rank": 10, "score": 2.0, "source": "personalized"},
+            {"user_id": "u1", "item_id": "fresh-b", "rank": 11, "score": 1.5, "source": "personalized"},
+        ]
+    )
+
+    class _FakeOnline:
+        def refresh(self, events):
+            del events
+            return OnlineRefreshResult(rows=online_rows, users_refreshed=1, fit_partial_epochs=1)
+
+        def invalidate(self) -> None:
+            return None
+
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        online=_FakeOnline(),
+    )
+    events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="rank-cap"))]
+    assert updater.apply(events) == 1
+    frame = load_recommendations_frame(settings.output)
+    u1 = set(frame[frame["user_id"] == "u1"]["item_id"].astype(str))
+    assert {"fresh-a", "fresh-b", "i9"} <= u1
 
 
 def test_incremental_updater_splices_overlapping_compound_sources(tmp_path, feature_config: FeatureConfig):
@@ -858,7 +901,7 @@ def test_incremental_updater_preserves_sequential_without_torch(
     frame = load_recommendations_frame(settings.output)
     u2 = frame[frame["user_id"].astype(str) == "u2"]
     assert "seq-keep" in set(u2["item_id"].astype(str))
-    assert "old" not in set(u2["item_id"].astype(str))
+    assert "old" in set(u2["item_id"].astype(str))
     assert "personalized" in set(u2["source"].astype(str))
 
 

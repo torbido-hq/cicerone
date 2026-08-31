@@ -11,6 +11,7 @@ from cicerone.automl import (
     _parse_candidates,
     _time_based_folds,
     evaluate_candidates,
+    exclude_content_fallback_from_candidates,
     select_best_candidate,
 )
 from cicerone.config import ConfigError
@@ -202,6 +203,40 @@ def test_evaluate_candidates_raises_without_enough_history_with_max_workers(samp
             n_splits=3,
             test_days=14,
             max_workers=4,
+        )
+
+
+def test_exclude_content_fallback_from_candidates_drops_solo_and_strips_fusion():
+    solo = Candidate(models=["content_fallback"])
+    fusion = Candidate(
+        models=["collaborative", "content_fallback", "popular"],
+        weights={"collaborative": 1.0, "content_fallback": 0.3, "popular": 0.3},
+    )
+    popular = Candidate(models=["popular"])
+    fallback_only_weights = Candidate(
+        models=["content_fallback", "popular"],
+        weights={"content_fallback": 1.0},
+    )
+    result = exclude_content_fallback_from_candidates([solo, fusion, popular, fallback_only_weights])
+    assert [c.models for c in result] == [["collaborative", "popular"], ["popular"], ["popular"]]
+    assert result[0].weights == {"collaborative": 1.0, "popular": 0.3}
+    assert result[2].weights is None
+
+
+def test_evaluate_candidates_excludes_content_fallback_when_disabled(sample_items, feature_config):
+    events = _spread_events(n_days=21)
+    with pytest.raises(ValueError, match="content_fallback"):
+        evaluate_candidates(
+            events,
+            None,
+            sample_items,
+            feature_config,
+            top_k=2,
+            half_life_days=90,
+            candidates=[{"models": ["content_fallback"]}],
+            n_splits=1,
+            test_days=7,
+            content_fallback_enabled=False,
         )
 
 

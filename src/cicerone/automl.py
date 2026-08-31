@@ -72,19 +72,26 @@ def sequential_automl_skip_reason(
 
 def exclude_sequential_from_candidates(candidates: list[Candidate]) -> list[Candidate]:
     """Drop sequential from each candidate; omit candidates that become empty."""
+    return _exclude_strategy_from_candidates(candidates, SEQUENTIAL_STRATEGY)
+
+
+def exclude_content_fallback_from_candidates(candidates: list[Candidate]) -> list[Candidate]:
+    """Drop content_fallback from each candidate; omit candidates that become empty."""
+    return _exclude_strategy_from_candidates(candidates, "content_fallback")
+
+
+def _exclude_strategy_from_candidates(candidates: list[Candidate], strategy: str) -> list[Candidate]:
     result: list[Candidate] = []
     for candidate in candidates:
-        if SEQUENTIAL_STRATEGY not in candidate.models:
+        if strategy not in candidate.models:
             result.append(candidate)
             continue
-        models = [name for name in candidate.models if name != SEQUENTIAL_STRATEGY]
+        models = [name for name in candidate.models if name != strategy]
         if not models:
             continue
         weights = None
         if candidate.weights is not None:
-            weights = {
-                name: weight for name, weight in candidate.weights.items() if name != SEQUENTIAL_STRATEGY
-            } or None
+            weights = {name: weight for name, weight in candidate.weights.items() if name != strategy} or None
         result.append(Candidate(models=models, weights=weights, rrf_k=candidate.rrf_k))
     return result
 
@@ -318,6 +325,13 @@ def evaluate_candidates(
             parsed_candidates = exclude_sequential_from_candidates(parsed_candidates)
             if not parsed_candidates:
                 raise ValueError("AutoML has no candidates left after excluding sequential; " + skip_reason)
+    if not content_fallback_enabled:
+        parsed_candidates = exclude_content_fallback_from_candidates(parsed_candidates)
+        if not parsed_candidates:
+            raise ValueError(
+                "AutoML has no candidates left after excluding content_fallback "
+                "(job.content_fallback.enabled is false)"
+            )
     folds = _time_based_folds(events, n_splits=n_splits, test_days=test_days)
     if not folds:
         raise ValueError(
