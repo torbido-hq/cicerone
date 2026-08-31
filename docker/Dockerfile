@@ -23,7 +23,7 @@ RUN pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt
 # --- frontend ----------------------------------------------------------------
 # Compiles dashboard Tailwind CSS into the wheel and runtime image.
 # Node exists only in this stage. Pin the tag so 26.x floats cannot drift.
-FROM node:26.7.0-slim AS frontend
+FROM node:26.8.1-slim AS frontend
 
 WORKDIR /build
 COPY package.json package-lock.json ./
