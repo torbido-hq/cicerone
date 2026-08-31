@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
-import fcntl
 import json
 import logging
 import threading
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None  # type: ignore[assignment]
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from io import BytesIO
@@ -311,11 +315,13 @@ class TrackStore:
         path = Path(require_option(self._options, "path", "local")) / ".track.jsonl.lock"
         path.parent.mkdir(parents=True, exist_ok=True)
         with self._append_lock, path.open("a") as handle:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
             try:
                 yield
             finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                if fcntl is not None:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     def _write_eval_db(self, payload: dict[str, Any]) -> None:
         table = sql_identifier(
