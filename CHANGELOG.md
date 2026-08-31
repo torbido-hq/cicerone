@@ -66,6 +66,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `cicerone.track` (in-process lock only on those platforms).
 - Rank/source/variant CTR slices count clicks and conversions by the matched
   impression `event_id`, not every row with the same user and item.
+- Experiment CTR/conversion volume and outcomes ignore track rows from a
+  different `experiment_id`; rows without an id still count.
 
 ### Security
 
