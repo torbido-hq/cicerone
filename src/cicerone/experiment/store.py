@@ -175,12 +175,12 @@ class ExperimentStore:
                     frame = pd.read_sql(text(f'SELECT * FROM "{table}" LIMIT 1'), engine)
                 except Exception:
                     logger.exception("Failed to read experiment state table %r", table)
-                    return None
+                    raise
             elif isinstance(exc, MISSING_TABLE_ERRORS) or is_missing_table_error(exc):
                 return None
             else:
                 logger.exception("Failed to read experiment state table %r", table)
-                return None
+                raise
         if frame.empty:
             return None
         return {str(key): _jsonish(value) for key, value in frame.iloc[0].to_dict().items()}

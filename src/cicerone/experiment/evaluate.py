@@ -88,7 +88,11 @@ def evaluate_experiment(
                 str(user_id),
                 variants,
             )
-    metric_events = _restrict_events(events, starts=starts, until=_as_timestamp(promoted_at))
+    until, invalid_until = _parse_cutoff(promoted_at)
+    if invalid_until:
+        metric_events = events.iloc[0:0]
+    else:
+        metric_events = _restrict_events(events, starts=starts, until=until)
     outcomes = user_outcome(
         metric_events, event_weights=event_weights, primary_metric=experiment.primary_metric
     )
@@ -125,6 +129,8 @@ def evaluate_experiment(
     decided = bool(comparisons) and all(item.decided for item in comparisons)
     if promoted_variant:
         blocked.append("promoted")
+    if invalid_until:
+        blocked.append("promoted_at")
     if not decided:
         blocked.append("undecided")
     elif _unique_best_mean(comparisons) is None:
@@ -140,6 +146,13 @@ def evaluate_experiment(
         can_promote=not blocked,
         promote_blocked_by=tuple(blocked),
     )
+
+
+def _parse_cutoff(value: object) -> tuple[pd.Timestamp | None, bool]:
+    if value is None or value == "":
+        return None, False
+    stamp = _as_timestamp(value)
+    return stamp, stamp is None
 
 
 def _as_timestamp(value: object) -> pd.Timestamp | None:
@@ -168,12 +181,13 @@ def _first_exposures(
             continue
         when = _as_timestamp(row.get("exposed_at"))
         previous = starts.get(user_id)
-        if user_id not in assigned or (when is not None and (previous is None or when < previous)):
+        if user_id not in assigned:
             assigned[user_id] = variant
             if when is not None:
                 starts[user_id] = when
-            elif user_id in starts:
-                del starts[user_id]
+        elif when is not None and previous is not None and when < previous:
+            assigned[user_id] = variant
+            starts[user_id] = when
     return assigned, starts
 
 
@@ -183,15 +197,22 @@ def _restrict_events(
     starts: dict[str, pd.Timestamp],
     until: pd.Timestamp | None,
 ) -> pd.DataFrame:
-    if events.empty or USER_COLUMN not in events.columns or "occurred_at" not in events.columns:
+    window = until is not None or bool(starts)
+    if events.empty or USER_COLUMN not in events.columns:
         return events
+    if "occurred_at" not in events.columns:
+        return events.iloc[0:0] if window else events
     frame = events.copy()
     frame[USER_COLUMN] = frame[USER_COLUMN].astype(str)
+    if not window:
+        return frame
     occurred = pd.to_datetime(frame["occurred_at"], utc=True, errors="coerce")
-    keep = occurred.isna() | (occurred < until) if until is not None else pd.Series(True, index=frame.index)
+    keep = occurred.notna()
+    if until is not None:
+        keep = keep & (occurred < until)
     if starts:
         start_at = frame[USER_COLUMN].map(starts)
-        keep = keep & (start_at.isna() | occurred.isna() | (occurred >= start_at))
+        keep = keep & (start_at.isna() | (occurred >= start_at))
     return frame.loc[keep]
 
 

@@ -46,6 +46,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Incremental merge without a `variant` column keeps the unlabelled prior
   on control only.
 - Legacy exposures tables missing `experiment_id` are ignored.
+- Experiment time windows drop untimed events; invalid `promoted_at` blocks
+  promote. DB promote-state errors reuse the cached winner.
 
 ## [0.7.0] - 2026-08-28
 

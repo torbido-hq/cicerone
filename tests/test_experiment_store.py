@@ -230,6 +230,20 @@ def test_promoted_variant_reuses_cache_when_read_fails(tmp_path, monkeypatch) ->
     assert store.promoted_variant("other") is None
 
 
+def test_promoted_variant_reuses_cache_when_db_read_raises(tmp_path, monkeypatch) -> None:
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    output = IOSettings(kind="db", options={"database_url": url})
+    store = ExperimentStore(output)
+    store.write_state(experiment_state("exp", promoted_variant="treatment"))
+    assert store.promoted_variant("exp") == "treatment"
+
+    def boom() -> None:
+        raise RuntimeError("store down")
+
+    monkeypatch.setattr(store, "_read_state_db", boom)
+    assert store.promoted_variant("exp") == "treatment"
+
+
 def test_read_exposures_missing_experiment_id_column_returns_empty(tmp_path) -> None:
     url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
     output = IOSettings(kind="db", options={"database_url": url})

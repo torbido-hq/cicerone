@@ -278,6 +278,7 @@ def test_evaluate_experiment_picks_best_mean_among_three_arms() -> None:
                 "user_id": f"{name}-u{i}",
                 "event_type": ("purchase" if name == "b" or (name == "a" and i % 2 == 0) else "view"),
                 "quantity": 1,
+                "occurred_at": "2026-01-02T00:00:00Z",
             }
             for name in ("control", "a", "b")
             for i in range(40)
@@ -290,6 +291,7 @@ def test_evaluate_experiment_picks_best_mean_among_three_arms() -> None:
             experiment_id="exp",
             variant=name,
             generated_at=None,
+            exposed_at=pd.Timestamp("2026-01-01T00:00:00Z"),
         )
         for name in ("control", "a", "b")
         for i in range(40)
@@ -342,6 +344,127 @@ def test_evaluate_experiment_cuts_events_after_promoted_at() -> None:
     totals = {item.control.name: item.control.total for item in report.comparisons}
     totals.update({item.treatment.name: item.treatment.total for item in report.comparisons})
     assert sum(totals.values()) == pytest.approx(1.0)
+
+
+def test_evaluate_experiment_keeps_first_exposure_without_timestamp() -> None:
+    experiment = ExperimentSettings(
+        enabled=True,
+        id="exp",
+        primary_metric="purchase",
+        variants=(
+            VariantSettings(name="control", traffic=0.5),
+            VariantSettings(name="treatment", traffic=0.5),
+        ),
+    )
+    events = pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": "2026-01-03T00:00:00Z",
+            }
+        ]
+    )
+    exposures = [
+        {
+            "user_id": "u1",
+            "experiment_id": "exp",
+            "variant": "control",
+            "generated_at": None,
+            "exposed_at": None,
+        },
+        exposure_row(
+            user_id="u1",
+            experiment_id="exp",
+            variant="treatment",
+            generated_at=None,
+            exposed_at=pd.Timestamp("2026-01-04T00:00:00Z"),
+        ),
+    ]
+    report = evaluate_experiment(
+        experiment=experiment,
+        recipes=(_recipe("control"), _recipe("treatment")),
+        events=events,
+        event_weights={"purchase": 1.0},
+        exposures=exposures,
+    )
+    assert report.comparisons[0].control.n_users == 1
+    assert report.comparisons[0].treatment.n_users == 0
+
+
+def test_evaluate_experiment_drops_untimed_events_when_windowed() -> None:
+    experiment = ExperimentSettings(
+        enabled=True,
+        id="exp",
+        primary_metric="purchase",
+        variants=(
+            VariantSettings(name="control", traffic=0.5),
+            VariantSettings(name="treatment", traffic=0.5),
+        ),
+    )
+    events = pd.DataFrame(
+        [
+            {"user_id": "u1", "event_type": "purchase", "quantity": 1, "occurred_at": None},
+            {
+                "user_id": "u1",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": "2026-01-03T00:00:00Z",
+            },
+        ]
+    )
+    exposures = [
+        exposure_row(
+            user_id="u1",
+            experiment_id="exp",
+            variant="control",
+            generated_at=None,
+            exposed_at=pd.Timestamp("2026-01-02T00:00:00Z"),
+        )
+    ]
+    report = evaluate_experiment(
+        experiment=experiment,
+        recipes=(_recipe("control"), _recipe("treatment")),
+        events=events,
+        event_weights={"purchase": 1.0},
+        exposures=exposures,
+    )
+    assert report.comparisons[0].control.total == pytest.approx(1.0)
+
+
+def test_evaluate_experiment_blocks_on_invalid_promoted_at() -> None:
+    experiment = ExperimentSettings(
+        enabled=True,
+        id="exp",
+        primary_metric="purchase",
+        variants=(
+            VariantSettings(name="control", traffic=0.5),
+            VariantSettings(name="treatment", traffic=0.5),
+        ),
+    )
+    events = pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": "2026-01-01T00:00:00Z",
+            }
+        ]
+    )
+    report = evaluate_experiment(
+        experiment=experiment,
+        recipes=(_recipe("control"), _recipe("treatment")),
+        events=events,
+        event_weights={"purchase": 1.0},
+        promoted_at="not-a-timestamp",
+    )
+    assert report.can_promote is False
+    assert "promoted_at" in report.promote_blocked_by
+    totals = {item.control.name: item.control.total for item in report.comparisons}
+    totals.update({item.treatment.name: item.treatment.total for item in report.comparisons})
+    assert sum(totals.values()) == pytest.approx(0.0)
 
 
 def test_evaluate_experiment_blocks_promote_on_guardrails() -> None:
