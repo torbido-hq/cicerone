@@ -117,6 +117,15 @@ def _frame(rows: Sequence[Mapping[str, Any]] | pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
+_JOIN_KEYS = (OCCURRED_AT, USER_COLUMN, ITEM_COLUMN)
+
+
+def _with_join_keys(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty or any(column not in frame.columns for column in _JOIN_KEYS):
+        return frame.iloc[0:0]
+    return frame.dropna(subset=list(_JOIN_KEYS))
+
+
 def _ratio(numerator: int, denominator: int) -> float:
     if denominator <= 0:
         return 0.0
@@ -222,10 +231,10 @@ def evaluate_tracking(
         return TrackEvalReport(overall=empty)
     impressions = rows[rows["kind"].astype(str) == TRACK_KIND_IMPRESSION].copy()
     clicks = rows[rows["kind"].astype(str) == TRACK_KIND_CLICK].copy()
-    if OCCURRED_AT not in impressions.columns:
+    impressions = _with_join_keys(impressions)
+    if impressions.empty:
         return TrackEvalReport(overall=empty)
-    impressions = impressions.dropna(subset=[OCCURRED_AT, USER_COLUMN, ITEM_COLUMN])
-    clicks = clicks.dropna(subset=[OCCURRED_AT, USER_COLUMN, ITEM_COLUMN]) if not clicks.empty else clicks
+    clicks = _with_join_keys(clicks)
     impressions = _annotate_source(impressions, recommendations)
     impressions = impressions.copy()
     if "event_id" not in impressions.columns:
@@ -235,10 +244,7 @@ def evaluate_tracking(
         clicks["event_id"] = [f"clk-{i}" for i in range(len(clicks))]
     matched_clicks = _merge_asof_events(clicks, impressions, window=window) if not clicks.empty else clicks
     conv = _frame(conversions)
-    if not conv.empty and "event_type" in conv.columns:
-        conv = conv.dropna(subset=[OCCURRED_AT, USER_COLUMN, ITEM_COLUMN])
-    else:
-        conv = pd.DataFrame()
+    conv = _with_join_keys(conv) if not conv.empty and "event_type" in conv.columns else pd.DataFrame()
     view_conv = _merge_asof_events(conv, impressions, window=window) if not conv.empty else conv
     click_base = matched_clicks if not matched_clicks.empty else clicks
     if not conv.empty and not click_base.empty:
@@ -300,30 +306,27 @@ def user_track_outcomes(
     window = timedelta(hours=float(window_hours))
     if impressions.empty:
         return report_users
-    impressions = impressions.dropna(subset=[OCCURRED_AT, USER_COLUMN, ITEM_COLUMN])
+    impressions = _with_join_keys(impressions)
+    if impressions.empty:
+        return report_users
+    clicks = _with_join_keys(clicks)
     if "event_id" not in impressions.columns:
         impressions = impressions.copy()
         impressions["event_id"] = [f"imp-{i}" for i in range(len(impressions))]
     if not clicks.empty and "event_id" not in clicks.columns:
         clicks = clicks.copy()
         clicks["event_id"] = [f"clk-{i}" for i in range(len(clicks))]
-    matched_clicks = (
-        _merge_asof_events(clicks.dropna(subset=[OCCURRED_AT]), impressions, window=window)
-        if not clicks.empty
-        else clicks
-    )
-    conv = _frame(conversions)
+    matched_clicks = _merge_asof_events(clicks, impressions, window=window) if not clicks.empty else clicks
+    conv = _with_join_keys(_frame(conversions))
     if attribution == "click":
         attributed = (
-            _merge_asof_events(conv.dropna(subset=[OCCURRED_AT]), matched_clicks, window=window)
+            _merge_asof_events(conv, matched_clicks, window=window)
             if not conv.empty and not matched_clicks.empty
             else conv.iloc[0:0]
         )
     else:
         attributed = (
-            _merge_asof_events(conv.dropna(subset=[OCCURRED_AT]), impressions, window=window)
-            if not conv.empty
-            else conv.iloc[0:0]
+            _merge_asof_events(conv, impressions, window=window) if not conv.empty else conv.iloc[0:0]
         )
     impression_counts = impressions.groupby(USER_COLUMN).size()
     click_counts = (

@@ -558,6 +558,33 @@ def test_evaluation_remaining_branches(monkeypatch) -> None:
         )
         == {}
     )
+    assert (
+        user_track_outcomes(
+            track_rows=[{"kind": "impression", "user_id": "alice", "item_id": "ipa"}],
+            conversions=pd.DataFrame(),
+            primary_metric="ctr",
+            attribution="impression",
+            window_hours=24,
+        )
+        == {}
+    )
+    assert (
+        user_track_outcomes(
+            track_rows=[
+                {
+                    "kind": "impression",
+                    "user_id": "alice",
+                    "item_id": "ipa",
+                    "occurred_at": "2026-08-28T12:00:00Z",
+                }
+            ],
+            conversions=pd.DataFrame([{"user_id": "alice", "item_id": "ipa", "event_type": "purchase"}]),
+            primary_metric="conversion",
+            attribution="impression",
+            window_hours=24,
+        )["alice"]
+        == 0.0
+    )
     outcomes = user_track_outcomes(
         track_rows=[
             {
