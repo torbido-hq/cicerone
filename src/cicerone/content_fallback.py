@@ -5,8 +5,10 @@ No free-text / TF-IDF — ``item_features`` are categoricals / lists.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import threading
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -65,8 +67,6 @@ def _feature_dict(
                 stripped = value.strip()
                 if stripped.startswith("[") and stripped.endswith("]"):
                     try:
-                        import json
-
                         parsed = json.loads(stripped)
                         values = list(parsed) if isinstance(parsed, list) else [value]
                     except (json.JSONDecodeError, TypeError):
@@ -170,14 +170,20 @@ class ContentFallbackModel:
         del dataset  # history/cold set come from interactions + items frames
         self._user_history = defaultdict(list)
         if self.interactions is not None and not self.interactions.empty:
-            user_col = interactions_user_column(self.interactions)
-            item_col = interactions_item_column(self.interactions)
+            frame = self.interactions
+            if Columns.Datetime in frame.columns:
+                frame = frame.sort_values(Columns.Datetime, kind="mergesort")
+            user_col = interactions_user_column(frame)
+            item_col = interactions_item_column(frame)
             for user_id, item_id in zip(
-                self.interactions[user_col].tolist(),
-                self.interactions[item_col].tolist(),
+                frame[user_col].astype(str).tolist(),
+                frame[item_col].astype(str).tolist(),
                 strict=True,
             ):
-                self._user_history[str(user_id)].append(str(item_id))
+                self._user_history[user_id].append(item_id)
+            for user_id, item_ids in self._user_history.items():
+                if len(item_ids) > _MAX_HISTORY_ITEMS:
+                    self._user_history[user_id] = item_ids[-_MAX_HISTORY_ITEMS:]
 
         if self.items is None or self.items.empty or not self.feature_columns:
             logger.info("Content fallback: no items/features — strategy will emit no rows")
@@ -299,7 +305,8 @@ class ContentFallbackModel:
             min_users=self.recommend_thread_min_users,
             max_workers=self.recommend_thread_max_workers,
         )
-        if workers > 1:
+        # Nested pools oversubscribe when strategy recommend already uses threads.
+        if workers > 1 and threading.current_thread() is threading.main_thread():
             with ThreadPoolExecutor(max_workers=workers) as pool:
                 user_rows = list(pool.map(_score_user, users))
         else:

@@ -115,12 +115,12 @@ def select_cold_start_fallback(
             return empty
         sentinel = (
             recommendations[recommendations[USER_COLUMN].astype(str) == COLD_START_USER_ID]
-            .sort_values(RANK_COLUMN)
+            .sort_values(RANK_COLUMN, kind="mergesort")
             .head(k)
             .reset_index(drop=True)
         )
     elif not sentinel.empty:
-        sentinel = sentinel.sort_values(RANK_COLUMN).head(k).reset_index(drop=True)
+        sentinel = sentinel.sort_values(RANK_COLUMN, kind="mergesort").head(k).reset_index(drop=True)
 
     if not sentinel.empty:
         return sentinel
@@ -133,7 +133,9 @@ def select_cold_start_fallback(
     sample_user = _pick_fallback_user(candidates)
     if sample_user is None:
         return empty
-    rows = candidates[candidates[USER_COLUMN].astype(str) == sample_user].sort_values(RANK_COLUMN)
+    rows = candidates[candidates[USER_COLUMN].astype(str) == sample_user].sort_values(
+        RANK_COLUMN, kind="mergesort"
+    )
     return rows.head(k).reset_index(drop=True)
 
 
@@ -144,7 +146,7 @@ def _index_recommendations_by_user(frame: pd.DataFrame) -> dict[str, pd.DataFram
     indexed = frame.copy()
     indexed[USER_COLUMN] = indexed[USER_COLUMN].astype(str)
     if RANK_COLUMN in indexed.columns:
-        indexed = indexed.sort_values(RANK_COLUMN)
+        indexed = indexed.sort_values(RANK_COLUMN, kind="mergesort")
     return {
         user_id: group.reset_index(drop=True) for user_id, group in indexed.groupby(USER_COLUMN, sort=False)
     }

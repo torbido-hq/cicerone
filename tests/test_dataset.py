@@ -15,25 +15,25 @@ from cicerone.feature_config import FeatureColumn
 
 
 def test_time_decay_multiplier_no_age_is_full_weight():
-    now = pd.Series([pd.Timestamp.utcnow()])
+    now = pd.Series([pd.Timestamp.now(tz="UTC")])
     decay = _time_decay_multiplier(now, half_life_days=90)
     assert decay.iloc[0] == pytest.approx(1.0, abs=1e-6)
 
 
 def test_time_decay_multiplier_half_life_is_half_weight():
-    occurred = pd.Series([pd.Timestamp.utcnow() - pd.Timedelta(days=90)])
+    occurred = pd.Series([pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=90)])
     decay = _time_decay_multiplier(occurred, half_life_days=90)
     assert decay.iloc[0] == pytest.approx(0.5, abs=1e-3)
 
 
 def test_time_decay_multiplier_future_timestamp_clips_to_full_weight():
-    occurred = pd.Series([pd.Timestamp.utcnow() + pd.Timedelta(days=10)])
+    occurred = pd.Series([pd.Timestamp.now(tz="UTC") + pd.Timedelta(days=10)])
     decay = _time_decay_multiplier(occurred, half_life_days=90)
     assert decay.iloc[0] == pytest.approx(1.0, abs=1e-6)
 
 
 def test_weighted_interactions_scales_purchase_by_quantity(feature_config):
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     events = pd.DataFrame(
         [
             {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},
@@ -48,7 +48,7 @@ def test_weighted_interactions_scales_purchase_by_quantity(feature_config):
 
 
 def test_weighted_interactions_aggregates_multiple_events_for_same_pair(feature_config):
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     events = pd.DataFrame(
         [
             {"user_id": "u1", "item_id": "i1", "event_type": "view", "quantity": 1, "occurred_at": now},
@@ -63,7 +63,7 @@ def test_weighted_interactions_aggregates_multiple_events_for_same_pair(feature_
 
 
 def test_weighted_interactions_defaults_missing_quantity_column(feature_config):
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     events = pd.DataFrame(
         [
             {
@@ -80,7 +80,7 @@ def test_weighted_interactions_defaults_missing_quantity_column(feature_config):
 
 
 def test_weighted_interactions_drops_unknown_event_types(feature_config, caplog):
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     events = pd.DataFrame(
         [
             {
@@ -100,7 +100,7 @@ def test_weighted_interactions_drops_unknown_event_types(feature_config, caplog)
 
 
 def test_weighted_interactions_drops_non_numeric_quantity_on_scaled_types(feature_config, caplog):
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     events = pd.DataFrame(
         [
             {
@@ -127,7 +127,7 @@ def test_weighted_interactions_drops_non_numeric_quantity_on_scaled_types(featur
 
 
 def test_weighted_interactions_caps_repeated_events(feature_config):
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     events = pd.DataFrame(
         [
             {"user_id": "u1", "item_id": "i1", "event_type": "view", "quantity": 1, "occurred_at": now}
@@ -142,7 +142,7 @@ def test_weighted_interactions_caps_repeated_events(feature_config):
 
 
 def test_weighted_interactions_negative_reviews_are_dropped(feature_config):
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     events = pd.DataFrame(
         [
             {

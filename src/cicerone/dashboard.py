@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from cicerone.config import Settings, load_settings
+from cicerone.config.constants import DEFAULT_LOG_FORMAT
 from cicerone.dashboard_experiments import clear_promotion, experiment_context, promote_winner
 from cicerone.dashboard_lookup import lookup_inspector
 from cicerone.dashboard_users import load_users
@@ -23,7 +24,7 @@ from cicerone.http_auth import require_basic_auth
 from cicerone.io.base import ManifestReader, RecommendationReader, UserHistoryReader
 from cicerone.io.factory import build_manifest_reader, build_recommendation_reader, build_user_history_reader
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logging.basicConfig(level=logging.INFO, format=DEFAULT_LOG_FORMAT)
 logger = logging.getLogger(__name__)
 
 _PACKAGE_DIR = Path(__file__).resolve().parent

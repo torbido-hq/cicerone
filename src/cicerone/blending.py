@@ -103,6 +103,7 @@ def collapse_best_rank(frame: pd.DataFrame) -> pd.DataFrame:
     out = frame.sort_values(
         [Columns.User, Columns.Item, Columns.Rank, Columns.Score],
         ascending=[True, True, True, False],
+        kind="mergesort",
     )
     return out.drop_duplicates(subset=[Columns.User, Columns.Item], keep="first").reset_index(drop=True)
 
@@ -130,7 +131,7 @@ def rank_latest_items(
     if frame.empty:
         return []
 
-    frame = frame.sort_values(["_date", item_col], ascending=[False, True]).head(top_k)
+    frame = frame.sort_values(["_date", item_col], ascending=[False, True], kind="mergesort").head(top_k)
     frame = frame.reset_index(drop=True)
     ranks = list(range(1, len(frame) + 1))
     scores = [float(len(frame) - i + 1) for i in ranks]  # synthetic; blend uses ranks
@@ -244,22 +245,26 @@ def _latest_index_frame(
     latest_index: Mapping[str, Sequence[tuple[str, int, float]]],
     target_users: Sequence[str],
 ) -> pd.DataFrame:
-    rows: list[dict[str, object]] = []
+    groups: dict[tuple[tuple[str, int], ...], tuple[list[str], tuple[tuple[str, int, float], ...]]] = {}
     for user_id in dict.fromkeys(target_users):
         ranking = latest_index.get(user_id)
         if not ranking:
             continue
-        for item_id, rank, _score in ranking:
-            rows.append(
-                {
-                    Columns.User: user_id,
-                    Columns.Item: str(item_id),
-                    Columns.Rank: float(rank),
-                    Columns.Score: 0.0,
-                    SOURCE_COLUMN: LATEST_SOURCE,
-                }
-            )
-    return pd.DataFrame(rows) if rows else _empty_recs()
+        ranked = tuple((str(item_id), int(rank), float(score)) for item_id, rank, score in ranking)
+        key = tuple((item_id, rank) for item_id, rank, _score in ranked)
+        if key in groups:
+            groups[key][0].append(str(user_id))
+        else:
+            groups[key] = ([str(user_id)], ranked)
+    if not groups:
+        return _empty_recs()
+    if len(groups) == 1:
+        users, ranked = next(iter(groups.values()))
+        return expand_latest_ranking(ranked, users)
+    return pd.concat(
+        [expand_latest_ranking(ranked, users) for users, ranked in groups.values()],
+        ignore_index=True,
+    )
 
 
 def blend_for_users(
@@ -349,7 +354,9 @@ def blend_for_users(
     combined[SOURCE_CONTRIBS_COLUMN] = combined[SOURCE_CONTRIBS_COLUMN].map(_ordered_contribs)
 
     combined = combined.sort_values(
-        [Columns.User, Columns.Score, Columns.Item], ascending=[True, False, True]
+        [Columns.User, Columns.Score, Columns.Item],
+        ascending=[True, False, True],
+        kind="mergesort",
     )
     combined[Columns.Rank] = combined.groupby(Columns.User).cumcount() + 1
     combined = combined.groupby(Columns.User, as_index=False).head(top_k)

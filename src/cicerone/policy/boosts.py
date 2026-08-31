@@ -12,8 +12,8 @@ from cicerone.feature_config import BoostRule
 from cicerone.ids import items_id_column
 from cicerone.policy.eligibility import warn_missing_column
 from cicerone.reasons import BOOST_HITS_COLUMN
-from cicerone.values import coerce_item_true
 from cicerone.values import is_missing as _is_missing
+from cicerone.values import item_true_mask
 
 logger = logging.getLogger(__name__)
 
@@ -28,16 +28,6 @@ def _warn_boost_without_items() -> None:
     logger.warning(
         "Boost rules are configured but items data is missing or empty — item boosts will not be applied"
     )
-
-
-def _boolean_factor(value: object, factor: float) -> float:
-    return factor if coerce_item_true(value) else 1.0
-
-
-def _value_map_factor(value: object, value_factors: dict[str, float]) -> float:
-    if _is_missing(value):
-        return 1.0
-    return float(value_factors.get(str(value), 1.0))
 
 
 def _numeric_factors(items: pd.DataFrame, column: str, weight: float) -> pd.Series:
@@ -59,9 +49,11 @@ def _boost_factor_series(items: pd.DataFrame, boost: BoostRule) -> pd.Series | N
         return None
     col = items[boost.item_column]
     if boost.kind == "boolean":
-        return col.map(lambda v, f=boost.factor: _boolean_factor(v, f)).astype(float)
+        return item_true_mask(col).astype(float) * (boost.factor - 1.0) + 1.0
     if boost.kind == "value_map":
-        return col.map(lambda v, vf=boost.value_factors: _value_map_factor(v, vf)).astype(float)
+        missing = col.map(_is_missing)
+        mapped = col.astype(str).map(boost.value_factors)
+        return mapped.where(~missing, 1.0).fillna(1.0).astype(float)
     if boost.kind == "numeric":
         return _numeric_factors(items, boost.item_column, boost.weight).astype(float)
     raise ValueError(f"Unknown boost kind {boost.kind!r} in rule {boost.name!r}")
@@ -136,6 +128,7 @@ def apply_boosts(
         out = out.sort_values(
             [Columns.User, Columns.Score, Columns.Item],
             ascending=[True, False, True],
+            kind="mergesort",
         )
         out[Columns.Rank] = out.groupby(Columns.User).cumcount() + 1
     return _truncate_recs(out, top_k)

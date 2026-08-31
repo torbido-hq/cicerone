@@ -14,6 +14,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from cicerone import __version__
 from cicerone.config import Settings, load_settings
+from cicerone.config.constants import DEFAULT_LOG_FORMAT
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
 from cicerone.experiment.assignment import resolve_assignment
@@ -44,7 +45,7 @@ from cicerone.serve.metrics import (
 )
 from cicerone.serve_schemas import ErrorDetail, HealthResponse, RecommendationItem, RecommendationsResponse
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logging.basicConfig(level=logging.INFO, format=DEFAULT_LOG_FORMAT)
 logger = logging.getLogger(__name__)
 
 SERVE_API_TITLE = "Cicerone Serve API"

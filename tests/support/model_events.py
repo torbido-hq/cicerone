@@ -4,7 +4,7 @@ import pandas as pd
 
 
 def synthetic_events() -> pd.DataFrame:
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     rows = []
     # Enough interactions for LightFM to fit.
     interactions = {

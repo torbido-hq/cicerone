@@ -429,7 +429,7 @@ class IncrementalUpdater:
         frame = frame.copy()
         frame[ITEM_COLUMN] = frame[ITEM_COLUMN].astype(str)
         latest = (
-            frame.sort_values("occurred_at", ascending=False)
+            frame.sort_values("occurred_at", ascending=False, kind="mergesort")
             .drop_duplicates(subset=[ITEM_COLUMN], keep="first")
             .head(self._top_k)
         )
@@ -516,7 +516,7 @@ class IncrementalUpdater:
         user_batch = self._signal_rows(batch[batch[USER_COLUMN].astype(str) == user_id], weights)
         has_signal = not user_batch.empty
         boost_items = (
-            user_batch.sort_values("occurred_at", ascending=False)[ITEM_COLUMN]
+            user_batch.sort_values("occurred_at", ascending=False, kind="mergesort")[ITEM_COLUMN]
             .astype(str)
             .drop_duplicates()
             .tolist()

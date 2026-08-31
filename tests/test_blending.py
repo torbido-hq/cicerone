@@ -448,7 +448,7 @@ def test_append_cold_start_rows_noop_when_no_popular():
 
 
 def test_train_and_recommend_with_blending_end_to_end(feature_config: FeatureConfig, sample_items):
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     items = sample_items.copy()
     items["published_at"] = [
         now - pd.Timedelta(days=30),
@@ -496,7 +496,7 @@ def test_train_and_recommend_with_blending_end_to_end(feature_config: FeatureCon
 
 
 def test_train_and_recommend_blending_without_date_column(feature_config: FeatureConfig, sample_items):
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now(tz="UTC")
     events = pd.DataFrame(
         [
             {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},
@@ -653,6 +653,57 @@ def test_blend_for_users_latest_by_user_avoids_cartesian_frame():
     by_user = {user: list(group[Columns.Item]) for user, group in out.groupby(Columns.User)}
     assert by_user["u1"] == ["a"]
     assert by_user["u2"] == ["b"]
+
+
+def test_blend_for_users_latest_by_user_shared_ranking_matches_shared_latest():
+    config = _blending(curve="linear", saturate_at=1.0, popular_share=0.5)
+    empty = pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, "source"])
+    ranking = [("a", 1, 2.0), ("b", 2, 1.0)]
+    users = [f"u{i}" for i in range(20)]
+    kwargs = dict(
+        personalized=empty,
+        popular=empty,
+        latest=None,
+        counts=dict.fromkeys(users, 0),
+        target_users=users,
+        config=config,
+        top_k=2,
+        latest_available=True,
+    )
+    indexed = blend_for_users(latest_by_user={user: ranking for user in users}, **kwargs)
+    shared = blend_for_users(shared_latest=ranking, **kwargs)
+    pd.testing.assert_frame_equal(
+        indexed.sort_values([Columns.User, Columns.Item]).reset_index(drop=True),
+        shared.sort_values([Columns.User, Columns.Item]).reset_index(drop=True),
+    )
+
+
+def test_blend_for_users_latest_by_user_groups_identical_ranks_despite_scores():
+    config = _blending(curve="linear", saturate_at=1.0, popular_share=0.5)
+    empty = pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, "source"])
+    users = ["u1", "u2"]
+    kwargs = dict(
+        personalized=empty,
+        popular=empty,
+        latest=None,
+        counts=dict.fromkeys(users, 0),
+        target_users=users,
+        config=config,
+        top_k=2,
+        latest_available=True,
+    )
+    indexed = blend_for_users(
+        latest_by_user={
+            "u1": [("a", 1, 9.0), ("b", 2, 3.0)],
+            "u2": [("a", 1, 0.2), ("b", 2, 0.1)],
+        },
+        **kwargs,
+    )
+    shared = blend_for_users(shared_latest=[("a", 1, 9.0), ("b", 2, 3.0)], **kwargs)
+    pd.testing.assert_frame_equal(
+        indexed.sort_values([Columns.User, Columns.Item]).reset_index(drop=True),
+        shared.sort_values([Columns.User, Columns.Item]).reset_index(drop=True),
+    )
 
 
 def test_blend_for_users_latest_by_user_normalizes_non_string_keys():

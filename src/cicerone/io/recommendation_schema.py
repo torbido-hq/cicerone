@@ -74,7 +74,7 @@ def collapse_mixed_variants(frame: Any) -> Any:
     pick = pick_fallback_variant(series.tolist())
     if pick is None:
         return frame
-    mask = series.map(lambda value: not is_missing(value) and str(value) == pick)
+    mask = ~series.map(is_missing) & series.astype(str).eq(pick)
     if bool(mask.all()):
         return frame
     return frame.loc[mask]

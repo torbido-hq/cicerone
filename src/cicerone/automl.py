@@ -9,7 +9,6 @@ from __future__ import annotations
 import logging
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
-from itertools import repeat
 from typing import Any
 
 import pandas as pd
@@ -250,6 +249,48 @@ def _evaluate_fold(
     return fold_metrics
 
 
+@dataclass
+class _EvalWorkerContext:
+    """Shared ProcessPool payload — pickled once per worker, not per fold."""
+
+    users: pd.DataFrame | None
+    items: pd.DataFrame | None
+    config: FeatureConfig
+    top_k: int
+    half_life_days: float
+    candidates: list[Candidate]
+    metrics: dict[str, MetricAtK]
+    model_configs: dict[str, dict[str, Any]] | None
+    content_fallback_enabled: bool
+
+
+_EVAL_WORKER: _EvalWorkerContext | None = None
+
+
+def _init_eval_worker(context: _EvalWorkerContext) -> None:
+    global _EVAL_WORKER
+    _EVAL_WORKER = context
+
+
+def _evaluate_fold_on_worker(train_events: pd.DataFrame, test_events: pd.DataFrame) -> list[dict[str, float]]:
+    ctx = _EVAL_WORKER
+    if ctx is None:
+        raise RuntimeError("AutoML worker is not initialized")
+    return _evaluate_fold(
+        train_events,
+        test_events,
+        ctx.users,
+        ctx.items,
+        ctx.config,
+        ctx.top_k,
+        ctx.half_life_days,
+        ctx.candidates,
+        ctx.metrics,
+        ctx.model_configs,
+        ctx.content_fallback_enabled,
+    )
+
+
 def evaluate_candidates(
     events: pd.DataFrame,
     users: pd.DataFrame | None,
@@ -294,21 +335,27 @@ def evaluate_candidates(
 
     metrics = _make_metrics(top_k, debias=debias)
     if max_workers > 1:
-        with ProcessPoolExecutor(max_workers=min(max_workers, len(folds))) as executor:
+        worker_context = _EvalWorkerContext(
+            users=users,
+            items=items,
+            config=config,
+            top_k=top_k,
+            half_life_days=half_life_days,
+            candidates=parsed_candidates,
+            metrics=metrics,
+            model_configs=model_configs,
+            content_fallback_enabled=content_fallback_enabled,
+        )
+        with ProcessPoolExecutor(
+            max_workers=min(max_workers, len(folds)),
+            initializer=_init_eval_worker,
+            initargs=(worker_context,),
+        ) as executor:
             fold_results = list(
                 executor.map(
-                    _evaluate_fold,
+                    _evaluate_fold_on_worker,
                     (train_events for train_events, _ in folds),
                     (test_events for _, test_events in folds),
-                    repeat(users),
-                    repeat(items),
-                    repeat(config),
-                    repeat(top_k),
-                    repeat(half_life_days),
-                    repeat(parsed_candidates),
-                    repeat(metrics),
-                    repeat(model_configs),
-                    repeat(content_fallback_enabled),
                 )
             )
     else:

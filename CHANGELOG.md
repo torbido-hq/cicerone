@@ -4,6 +4,28 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.1] - 2026-08-28
+
+### Changed
+
+- ProcessPool fit and AutoML pickle the shared dataset/config once per worker,
+  not once per strategy or fold.
+- Blending expands identical per-user latest item/rank order with the same
+  vectorized path as `shared_latest`.
+- Content-fallback fit stores only the last 50 history items per user,
+  ordered by event datetime when present (the window recommend already scored).
+- Content-fallback recommend starts an inner user thread pool only on the
+  process main thread (not from a worker thread).
+- Online collaborative refresh uses `[job].max_workers` for strategy recommend
+  threads.
+- Importing `cicerone.job` no longer calls `logging.basicConfig` (`cicerone job`
+  and `python -m cicerone.job` still configure logging).
+- Ranking sorts use pandas `mergesort` so score ties follow item id (same as
+  weighted RRF).
+- Boost boolean/value_map factors use `item_true_mask` / vectorized map instead
+  of per-cell lambdas. `PRIMARY_METRIC_WEIGHTED` and the log format string live
+  in one constants module.
+
 ## [0.7.0] - 2026-08-28
 
 ### Added
