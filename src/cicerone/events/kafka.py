@@ -166,8 +166,6 @@ class KafkaEventSource(EventSource):
                 partition: self._next_commit_offset(partition, extra_done=offsets)
                 for partition, offsets in done.items()
             }
-        self._commit_watermarks(consumer, watermarks)
-        with self._lock:
             for eid, message in resolved:
                 self._messages.pop(eid, None)
                 partition = int(message.partition())
@@ -176,6 +174,7 @@ class KafkaEventSource(EventSource):
                 self._max_offset[partition] = max(self._max_offset.get(partition, -1), offset)
                 self._in_flight.discard(eid)
                 self._pending_ids.discard(eid)
+        self._commit_watermarks(consumer, watermarks)
 
     def nack(self, events: Sequence[NormalizedEvent]) -> None:
         if not events:
