@@ -60,6 +60,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   recommendation snapshot (`generated_at`), not the first user-item row.
 - Local JSONL track ingest serializes appends with a file lock so concurrent
   writers cannot both accept the same `event_id`.
+- DB track ingest counts `accepted` from ids not already in the table when
+  the driver omits INSERT `rowcount`, so duplicates are not reported as new.
 
 ### Security
 

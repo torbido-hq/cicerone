@@ -117,6 +117,7 @@ def test_track_store_roundtrip_sqlite(tmp_path) -> None:
     assert store.read_rows() == []
     assert store.read_eval() is None
     assert store.append_rows([_row(), _row()]) == 1
+    assert store.append_rows([_row()]) == 0
     rows = store.read_rows()
     assert len(rows) == 1
     assert rows[0]["user_id"] == "alice"
@@ -131,30 +132,45 @@ def test_track_store_roundtrip_sqlite(tmp_path) -> None:
     assert len(store.read_rows()) == 2
 
 
-def test_track_store_sqlite_unknown_rowcount_falls_back(tmp_path) -> None:
+def test_track_store_sqlite_unknown_rowcount_does_not_over_accept(tmp_path) -> None:
     url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
     output = IOSettings(kind="db", options={"database_url": url})
     store = TrackStore(output)
+    engine = store._db_engine()
+    real_begin = engine.begin
 
-    class _Result:
-        rowcount = None
+    class _HideRowcount:
+        def __init__(self, inner: object) -> None:
+            object.__setattr__(self, "_inner", inner)
+            self.rowcount = None
+
+        def __iter__(self):
+            return iter(self._inner)  # type: ignore[arg-type]
+
+        def __getattr__(self, name: str):
+            return getattr(self._inner, name)
 
     class _Conn:
-        def execute(self, _sql, _params=None):
-            return _Result()
+        def __init__(self, inner: object) -> None:
+            self._inner = inner
+
+        def execute(self, *args, **kwargs):
+            return _HideRowcount(self._inner.execute(*args, **kwargs))  # type: ignore[union-attr]
 
         def __enter__(self):
-            return self
+            return _Conn(self._inner.__enter__())  # type: ignore[union-attr]
 
-        def __exit__(self, *_exc):
-            return False
+        def __exit__(self, *exc):
+            return self._inner.__exit__(*exc)  # type: ignore[union-attr]
 
-    class _Engine:
-        def begin(self):
-            return _Conn()
+        def __getattr__(self, name: str):
+            return getattr(self._inner, name)
 
-    store._engine = _Engine()  # type: ignore[assignment]
+    engine.begin = lambda: _Conn(real_begin())  # type: ignore[method-assign]
     assert store.append_rows([_row(event_id="imp-fallback")]) == 1
+    assert store.append_rows([_row(event_id="imp-fallback")]) == 0
+    mixed = store.append_rows([_row(event_id="imp-fallback"), _row(event_id="imp-2", item_id="ipa-002")])
+    assert mixed == 1
 
 
 def test_track_store_ignores_invalid_eval_json(tmp_path) -> None:

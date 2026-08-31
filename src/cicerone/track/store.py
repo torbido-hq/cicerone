@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import Engine, create_engine, text
+from sqlalchemy import Engine, bindparam, create_engine, text
 
 from cicerone.config.constants import ConfigError
 from cicerone.config.settings import IOSettings
@@ -238,11 +238,15 @@ class TrackStore:
             )
         with engine.begin() as conn:
             self._ensure_track_table(conn, table)
-            result = conn.execute(insert_sql, params)
+            existing = _existing_event_ids(conn, table, [row["event_id"] for row in params])
+            fresh = [row for row in params if not row["event_id"] or row["event_id"] not in existing]
+            if not fresh:
+                return 0
+            result = conn.execute(insert_sql, fresh)
             rowcount = result.rowcount
             if rowcount is not None and rowcount >= 0:
                 return int(rowcount)
-        return len(params)
+            return len(fresh)
 
     def _read_rows_db(self) -> list[dict[str, Any]]:
         table = sql_identifier(
@@ -416,6 +420,16 @@ class TrackStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("ab") as handle:
             handle.write(payload)
+
+
+def _existing_event_ids(conn: Any, table: str, event_ids: Sequence[str]) -> set[str]:
+    ids = [event_id for event_id in event_ids if event_id]
+    if not ids:
+        return set()
+    stmt = text(f'SELECT event_id FROM "{table}" WHERE event_id IN :ids').bindparams(
+        bindparam("ids", expanding=True)
+    )
+    return {str(row[0]) for row in conn.execute(stmt, {"ids": ids}) if row[0] is not None}
 
 
 def _history_frame(recommendations: pd.DataFrame, generated_at: str) -> pd.DataFrame:
