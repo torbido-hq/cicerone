@@ -209,7 +209,8 @@ bootstrap_servers = "${KAFKA_BOOTSTRAP_SERVERS}"
 topic = "cicerone.recommendations"
 ```
 
-RabbitMQ: `amqp_url` + `queue`, or `exchange` + optional `routing_key`.
+RabbitMQ: `amqp_url` + `queue`, or `exchange` + optional `routing_key`
+(empty is valid, e.g. fanout; omitted queue-mode key is the queue name).
 Payload: `{user_id, recommendations: [{user_id, item_id, rank, score, source, …}]}`.
 Kafka key is `user_id`. Publish failures fail the job/flush so events are
 nacked. Requires the matching extra.

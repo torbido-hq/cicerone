@@ -66,9 +66,8 @@ class RabbitMQPublisher:
 
     def publish(self, df: pd.DataFrame) -> None:
         channel = self._require()
-        for user_id, body in user_recommendation_messages(df):
-            routing_key = self._routing_key or user_id
-            channel.basic_publish(exchange=self._exchange, routing_key=routing_key, body=body)
+        for _, body in user_recommendation_messages(df):
+            channel.basic_publish(exchange=self._exchange, routing_key=self._routing_key, body=body)
 
     def close(self) -> None:
         channel = self._channel
