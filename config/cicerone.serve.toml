@@ -36,6 +36,8 @@ metrics_token = ""   # empty = open endpoint; bind to a trusted network or rever
 # Optional incremental event ingest. See docs/incremental-events.md.
 # Webhook: POST /events. DB: watermark poll. S3/R2: list/marker (or AWS SQS).
 # Redis Streams: kind = "redis_streams" (`cicerone-recommender[redis]`).
+# Kafka: kind = "kafka" (`cicerone-recommender[kafka]`).
+# RabbitMQ: kind = "rabbitmq" (`cicerone-recommender[rabbitmq]`).
 # [events]
 # enabled = true
 # kind = "webhook"
@@ -51,6 +53,14 @@ metrics_token = ""   # empty = open endpoint; bind to a trusted network or rever
 # fit_partial_epochs = 1          # 0 = frozen weights + history refresh only
 # fit_min_events = 100            # skip SGD until this many known-ID events
 # max_extra_interactions = 50000  # online-only rows on top of the last job artifact
+
+# Optional recs sidecar (batch job and incremental apply). Serve still reads [output].
+# [publish]
+# enabled = true
+# kind = "kafka"
+# [publish.options]
+# bootstrap_servers = "${KAFKA_BOOTSTRAP_SERVERS}"
+# topic = "cicerone.recommendations"
 
 # [input] is required by config.load_settings() even in serve mode (kept
 # generic/simple rather than special-casing it away) but is never read from

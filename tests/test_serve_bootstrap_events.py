@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from cicerone.config import EventsIncrementalSettings, EventsSettings, IOSettings, make_settings
 from cicerone.events.webhook import WebhookEventSource
@@ -65,6 +66,146 @@ def test_start_events_runtime_disabled_and_webhook(tmp_path, feature_config: Fea
     assert reader.refreshed == 1
     enabled.stop()
     assert enabled.worker._thread is None or not enabled.worker._thread.is_alive()
+
+
+def test_start_events_runtime_closes_publisher(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    closed = {"n": 0}
+
+    class _Pub:
+        def close(self) -> None:
+            closed["n"] += 1
+            raise RuntimeError("close failed")
+
+    class _Reader:
+        def refresh(self) -> None:
+            return None
+
+    from cicerone.serve import bootstrap_events as bootstrap
+
+    original = bootstrap.build_publisher
+    bootstrap.build_publisher = lambda _settings: _Pub()  # type: ignore[assignment]
+    try:
+        runtime = start_events_runtime(
+            make_settings(
+                output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+                events=EventsSettings(
+                    enabled=True,
+                    kind="webhook",
+                    incremental=EventsIncrementalSettings(
+                        batch_size=1, batch_window_seconds=60.0, poll_interval_seconds=0.05
+                    ),
+                ),
+            ),
+            feature_config=feature_config,
+            reader=_Reader(),  # type: ignore[arg-type]
+        )
+        runtime.stop()
+    finally:
+        bootstrap.build_publisher = original  # type: ignore[assignment]
+    assert closed["n"] == 1
+
+
+def test_stop_closes_publisher_when_worker_hangs(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    closed = {"n": 0}
+
+    class _Pub:
+        def close(self) -> None:
+            closed["n"] += 1
+
+    class _Reader:
+        def refresh(self) -> None:
+            return None
+
+    from cicerone.serve import bootstrap_events as bootstrap
+
+    original = bootstrap.build_publisher
+    bootstrap.build_publisher = lambda _settings: _Pub()  # type: ignore[assignment]
+    try:
+        runtime = start_events_runtime(
+            make_settings(
+                output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+                events=EventsSettings(
+                    enabled=True,
+                    kind="webhook",
+                    incremental=EventsIncrementalSettings(
+                        batch_size=1, batch_window_seconds=60.0, poll_interval_seconds=0.05
+                    ),
+                ),
+            ),
+            feature_config=feature_config,
+            reader=_Reader(),  # type: ignore[arg-type]
+        )
+        assert runtime.worker is not None
+        real_stop = runtime.worker.stop
+        runtime.worker.stop = lambda **_kwargs: False  # type: ignore[method-assign]
+        try:
+            assert runtime.stop() is False
+        finally:
+            runtime.worker.stop = real_stop  # type: ignore[method-assign]
+            runtime.worker.stop()
+        assert closed["n"] == 1
+        assert runtime.publisher is None
+    finally:
+        bootstrap.build_publisher = original  # type: ignore[assignment]
+
+
+def test_start_events_runtime_closes_publisher_on_startup_error(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    closed = {"n": 0}
+
+    class _Pub:
+        def close(self) -> None:
+            closed["n"] += 1
+
+    class _Reader:
+        def refresh(self) -> None:
+            return None
+
+    from cicerone.events.worker import EventWorker
+    from cicerone.serve import bootstrap_events as bootstrap
+
+    original_pub = bootstrap.build_publisher
+    original_start = EventWorker.start
+
+    def _boom(self) -> None:
+        raise RuntimeError("start fail")
+
+    bootstrap.build_publisher = lambda _settings: _Pub()  # type: ignore[assignment]
+    EventWorker.start = _boom  # type: ignore[method-assign]
+    try:
+        with pytest.raises(RuntimeError, match="start fail"):
+            start_events_runtime(
+                make_settings(
+                    output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+                    events=EventsSettings(
+                        enabled=True,
+                        kind="webhook",
+                        incremental=EventsIncrementalSettings(
+                            batch_size=1, batch_window_seconds=60.0, poll_interval_seconds=0.05
+                        ),
+                    ),
+                ),
+                feature_config=feature_config,
+                reader=_Reader(),  # type: ignore[arg-type]
+            )
+    finally:
+        bootstrap.build_publisher = original_pub  # type: ignore[assignment]
+        EventWorker.start = original_start  # type: ignore[method-assign]
+    assert closed["n"] == 1
 
 
 def test_start_events_runtime_without_feature_config(tmp_path):

@@ -13,11 +13,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Section chips, on/off badges, and nested panels.
 - Config keys and section titles can open a one-line hint; some include a
   Docs link to cicerone.dev.
+- Optional Kafka and RabbitMQ extras: `[events].kind = "kafka"` /
+  `"rabbitmq"` ingest (consumer group / queue) and `[publish]` to emit
+  per-user recommendation JSON after the `[output]` store write. Serve
+  still looks up from dataset/db. `pip install 'cicerone-recommender[kafka]'`
+  or `[rabbitmq]`. Prefer Redis Streams when you already run Redis for the
+  lock.
 
 ### Fixed
 
 - Dashboard `Cache-Control: private, no-store` skips only `/static` assets,
   not other paths that happen to start with that prefix.
+- Kafka ingest commits the contiguous per-partition watermark so an
+  out-of-order ack cannot skip an earlier offset.
+- RabbitMQ ingest runs AMQP on one I/O thread so apply heartbeats stay
+  thread-safe.
+- Serve events runtime closes `[publish]` when the worker join times out.
+- Non-UTF-8 Kafka and RabbitMQ event payloads are skipped as poison
+  instead of crashing ingest.
+- RabbitMQ publisher and ingest close the AMQP connection when channel
+  setup fails.
+- RabbitMQ `[publish]` uses the configured routing key (empty is valid
+  for fanout); it no longer substitutes `user_id`.
+- Serve `[publish]` is closed if events runtime startup fails after connect.
+- Kafka and RabbitMQ ingest drop local ack tracking before the broker
+  confirm so a failed ack cannot re-apply from the in-memory deque.
+- RabbitMQ `[publish]` connect errors report setup failure, not only an
+  unreachable URL.
 
 ### Security
 

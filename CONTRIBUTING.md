@@ -217,8 +217,9 @@ needs that approval and is pure process drag.
 
 The PyPI project is **`cicerone-recommender`** (`pip install
 cicerone-recommender`; `import cicerone`). The name `cicerone` is a
-different package. Optional extras `[redis]` and `[sequential]` match
-`requirements-redis.txt` / `requirements-sequential.txt`.
+different package. Optional extras `[redis]`, `[kafka]`, `[rabbitmq]`, and
+`[sequential]` match `requirements-redis.txt` / `requirements-kafka.txt` /
+`requirements-rabbitmq.txt` / `requirements-sequential.txt`.
 
 One-time PyPI setup (before the first upload): create a GitHub Environment
 named `pypi`, then a [pending trusted publisher](https://docs.pypi.org/trusted-publishers/)

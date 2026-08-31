@@ -48,6 +48,8 @@ dependencies = { file = ["requirements.txt"] }
 [tool.setuptools.dynamic.optional-dependencies]
 redis = { file = ["requirements-redis.txt"] }
 sequential = { file = ["requirements-sequential.txt"] }
+kafka = { file = ["requirements-kafka.txt"] }
+rabbitmq = { file = ["requirements-rabbitmq.txt"] }
 
 [tool.ruff]
 line-length = 110
@@ -73,6 +75,8 @@ omit = [
     "*/cicerone/__init__.py",
     "*/cicerone/io/__init__.py",
     "*/cicerone/events/__init__.py",
+    "*/cicerone/publish/__init__.py",
+    "*/cicerone/publish/base.py",
     "*/cicerone/model/__init__.py",
     "*/cicerone/config/__init__.py",
 ]

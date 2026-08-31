@@ -122,6 +122,8 @@ def test_events_apply_lock_key_distinct_from_retrain():
 
 def test_ingest_fanout_kinds():
     assert ingest_is_fanout("redis_streams") is True
+    assert ingest_is_fanout("kafka") is True
+    assert ingest_is_fanout("rabbitmq") is True
     assert ingest_is_fanout("webhook") is False
     assert ingest_is_fanout("db") is False
     assert ingest_is_fanout("s3", {"mode": "list"}) is False
@@ -131,6 +133,8 @@ def test_ingest_fanout_kinds():
     assert poll_without_apply_lock("db") is False
     assert poll_without_apply_lock("s3", {"mode": "list"}) is False
     assert poll_without_apply_lock("redis_streams") is True
+    assert poll_without_apply_lock("kafka") is True
+    assert poll_without_apply_lock("rabbitmq") is True
 
 
 def test_second_replica_skips_apply_under_lock(tmp_path, feature_config: FeatureConfig):

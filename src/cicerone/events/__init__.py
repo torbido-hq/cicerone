@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from cicerone.events.base import EventBackpressureError, EventSource, EventSourceHealth, NormalizedEvent
 from cicerone.events.db import DbEventSource
+from cicerone.events.kafka import KafkaEventSource
+from cicerone.events.rabbitmq import RabbitMQEventSource
 from cicerone.events.redis_streams import RedisStreamsEventSource
 from cicerone.events.registry import (
     build_event_source,
@@ -18,7 +20,9 @@ __all__ = [
     "EventBackpressureError",
     "EventSource",
     "EventSourceHealth",
+    "KafkaEventSource",
     "NormalizedEvent",
+    "RabbitMQEventSource",
     "RedisStreamsEventSource",
     "S3EventSource",
     "WebhookEventSource",

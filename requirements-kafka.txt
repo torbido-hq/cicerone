@@ -1,0 +1,3 @@
+# Optional Kafka extra (events.kind / publish.kind = kafka).
+# pip install 'cicerone-recommender[kafka]'
+confluent-kafka==2.15.0
