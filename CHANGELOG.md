@@ -27,7 +27,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Config page redacts `*_url` option keys and any value with embedded URL
   credentials.
 
-## [0.7.1] - 2026-08-28
+## [0.7.1] - 2026-08-31
 
 ### Changed
 
