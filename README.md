@@ -275,7 +275,13 @@ serve). It never loads lightfm/implicit/torch (it does import `rectools`).
   (default 20). When `[experiment]` is enabled, lookup shows the assigned
   variant (what serve would return). `GET /dashboard/experiments` compares
   recipes with always-valid CIs and catalog guardrails, and can **Promote**
-  a winner to 100% traffic. A missing event store does not hide recommendations. When `[events]` is
+  a winner to 100% traffic. `GET /dashboard/config` shows the Settings this
+  dashboard process loaded (and `features.toml` when present), with tokens,
+  URLs, and keys redacted. Section titles and known keys offer a one-line
+  hint (`?`), with a Docs link when cicerone.dev covers that setting.
+  Pages send `noindex` / `X-Robots-Tag` and
+  `GET /robots.txt` disallows `/` in case the process is reachable from
+  the public internet. A missing event store does not hide recommendations. When `[events]` is
   enabled, a panel shows the latest incremental flush from recent manifests
   (dataset outputs may clear it on the next full retrain). The status block
   auto-refreshes via

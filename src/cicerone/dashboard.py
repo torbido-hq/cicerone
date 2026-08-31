@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import os
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -11,11 +13,13 @@ from urllib.parse import urlencode, urlparse
 import uvicorn
 from croniter import CroniterError, croniter
 from fastapi import Depends, FastAPI, Form, Query, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+import cicerone.config as config_pkg
 from cicerone.config import Settings, load_settings
+from cicerone.dashboard_config import config_display
 from cicerone.dashboard_experiments import clear_promotion, experiment_context, promote_winner
 from cicerone.dashboard_lookup import lookup_inspector
 from cicerone.dashboard_users import load_users
@@ -26,9 +30,17 @@ from cicerone.io.factory import build_manifest_reader, build_recommendation_read
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
+ROBOTS_TAG = "noindex, nofollow, noarchive, nosnippet, noimageindex"
+ROBOTS_TXT = "User-agent: *\nDisallow: /\n"
+
 _PACKAGE_DIR = Path(__file__).resolve().parent
 _TEMPLATES = Jinja2Templates(directory=str(_PACKAGE_DIR / "templates"))
+_TEMPLATES.env.globals["robots_tag"] = ROBOTS_TAG
 _EXPERIMENTS_PATH = "/dashboard/experiments"
+
+
+def _is_static_path(path: str) -> bool:
+    return path == "/static" or path.startswith("/static/")
 
 
 def _experiments_redirect(**query: str) -> RedirectResponse:
@@ -113,14 +125,29 @@ def create_app(
     users: dict[str, str],
     recommendation_reader: RecommendationReader | None = None,
     history_reader: UserHistoryReader | None = None,
+    config_path: str | None = None,
 ) -> FastAPI:
-    app = FastAPI(title="cicerone-dashboard")
+    app = FastAPI(title="cicerone-dashboard", docs_url=None, redoc_url=None, openapi_url=None)
     app.mount("/static", StaticFiles(directory=str(_PACKAGE_DIR / "static")), name="static")
     auth = require_basic_auth(users)
+
+    @app.middleware("http")
+    async def anti_index_headers(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        response = await call_next(request)
+        response.headers["X-Robots-Tag"] = ROBOTS_TAG
+        if not _is_static_path(request.url.path):
+            response.headers.setdefault("Cache-Control", "private, no-store")
+        return response
 
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/robots.txt")
+    def robots() -> PlainTextResponse:
+        return PlainTextResponse(ROBOTS_TXT)
 
     def _status_context() -> dict[str, Any]:
         manifest = reader.read_latest()
@@ -182,6 +209,18 @@ def create_app(
             return _experiments_redirect(promote_error=error)
         return _experiments_redirect(message="Resumed split")
 
+    @app.get("/dashboard/config", dependencies=[Depends(auth)])
+    def config_page(request: Request):
+        return _TEMPLATES.TemplateResponse(
+            request,
+            "config.html",
+            config_display(
+                settings,
+                config_path=config_path,
+                usernames=tuple(users),
+            ),
+        )
+
     return app
 
 
@@ -208,7 +247,15 @@ def main() -> None:
     except Exception:
         logger.exception("Event store is not available; dashboard history pane will be disabled")
         history_reader = None
-    app = create_app(settings, reader, users, rec_reader, history_reader)
+    loaded_config_path = os.environ.get("CICERONE_CONFIG_PATH") or config_pkg.DEFAULT_CONFIG_PATH
+    app = create_app(
+        settings,
+        reader,
+        users,
+        rec_reader,
+        history_reader,
+        config_path=loaded_config_path,
+    )
     uvicorn.run(app, host=settings.dashboard.host, port=settings.dashboard.port)
 
 

@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en" class="h-full bg-slate-50">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cicerone — Configuration</title>
+  {% include "_privacy_meta.html" %}
+  <link rel="icon" type="image/svg+xml" href="/static/cicerone-icon.svg">
+  <link rel="stylesheet" href="/static/tailwind.css">
+</head>
+<body class="h-full">
+  {% set page_subtitle = "Configuration" %}
+  {% set nav_current = "config" %}
+  {% include "_header.html" %}
+  <main id="main" class="mx-auto max-w-6xl px-4 py-6" tabindex="-1">
+    <div class="mb-4 rounded-lg border border-sky-200 bg-sky-50 p-3 text-sm text-sky-950" role="note">
+      {{ split_note }}
+    </div>
+    <nav aria-label="Config sections" class="mb-4 flex flex-wrap gap-2">
+      {% for section in sections %}
+      <a
+        href="#config-{{ section.id }}"
+        data-config-jump="{{ section.id }}"
+        class="inline-flex min-h-9 items-center gap-1.5 rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-800 shadow-sm hover:border-slate-500 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2"
+      >
+        {{ section.title }}
+        {% if section.badge %}
+        <span class="sr-only"> ({{ section.badge }})</span>
+        {% if section.badge == "on" %}
+        <span aria-hidden="true" class="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[0.65rem] font-medium text-emerald-900">on</span>
+        {% elif section.badge == "off" %}
+        <span aria-hidden="true" class="rounded-full bg-slate-200 px-1.5 py-0.5 text-[0.65rem] font-medium text-slate-800">off</span>
+        {% else %}
+        <span aria-hidden="true" class="text-slate-700">{{ section.badge }}</span>
+        {% endif %}
+        {% endif %}
+      </a>
+      {% endfor %}
+    </nav>
+    {% from "_config_value.html" import render_value, hint_control with context %}
+    {% for section in sections %}
+    {% if section.id == "meta" %}
+    <section id="config-meta" class="mb-4 scroll-mt-4" data-config-section="meta" tabindex="-1" aria-labelledby="config-meta-heading">
+      <h2 id="config-meta-heading" class="sr-only">{{ section.title }}</h2>
+      <div class="grid gap-3 sm:grid-cols-3">
+        <dl class="rounded-lg border border-slate-200 border-l-4 border-l-sky-700 bg-white p-4">
+          <dt class="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-slate-600">
+            Mode{{ hint_control("meta.mode", "Mode") }}
+          </dt>
+          <dd class="mt-1 font-mono text-lg text-slate-900">{{ section.fields.mode }}</dd>
+        </dl>
+        <dl class="rounded-lg border border-slate-200 border-l-4 border-l-sky-700 bg-white p-4">
+          <dt class="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-slate-600">
+            Version{{ hint_control("meta.version", "Version") }}
+          </dt>
+          <dd class="mt-1 font-mono text-lg text-slate-900">{{ section.fields.version }}</dd>
+        </dl>
+        <dl class="rounded-lg border border-slate-200 border-l-4 border-l-sky-700 bg-white p-4">
+          <dt class="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-slate-600">
+            Config path{{ hint_control("meta.config_path", "Config path") }}
+          </dt>
+          <dd class="mt-1 font-mono text-sm text-slate-800 break-all">{{ section.fields.config_path }}</dd>
+        </dl>
+      </div>
+    </section>
+    {% else %}
+    <section
+      id="config-{{ section.id }}"
+      class="mb-4 scroll-mt-4 overflow-hidden rounded-lg border border-slate-200 border-l-4 border-l-sky-700 bg-white"
+      data-config-section="{{ section.id }}"
+      tabindex="-1"
+      aria-labelledby="config-{{ section.id }}-heading"
+    >
+      <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 bg-slate-50 px-4 py-3">
+        <div>
+          <div class="flex items-center gap-1.5">
+            <h2 id="config-{{ section.id }}-heading" class="text-base font-semibold text-slate-900">
+              {{ section.title }}{% if section.badge %} <span class="sr-only">({{ section.badge }})</span>{% endif %}
+            </h2>
+            {{ hint_control(section.id, section.title) }}
+          </div>
+          {% if section.toml %}<p class="font-mono text-xs text-slate-600">{{ section.toml }}</p>{% endif %}
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          {% if section.kind %}
+          <span class="font-mono text-xs text-slate-700">{{ section.kind }}</span>
+          {% endif %}
+          {% if section.badge %}
+          {% if section.badge == "on" %}
+          <span aria-hidden="true" class="inline-flex rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-900">on</span>
+          {% elif section.badge == "off" %}
+          <span aria-hidden="true" class="inline-flex rounded-full bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-800">off</span>
+          {% else %}
+          <span aria-hidden="true" class="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-800">{{ section.badge }}</span>
+          {% endif %}
+          {% endif %}
+        </div>
+      </div>
+      <div class="px-4 py-1">
+        {% if section.message %}
+        <p class="py-3 text-sm text-slate-700">{{ section.message }}</p>
+        {% endif %}
+        {% if section.fields %}
+        {{ render_value(section.fields, false, section.id ~ ".") }}
+        {% endif %}
+      </div>
+    </section>
+    {% endif %}
+    {% endfor %}
+  </main>
+</body>
+</html>

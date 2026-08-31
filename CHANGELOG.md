@@ -4,6 +4,29 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.0] - 2026-08-28
+
+### Added
+
+- Dashboard Configuration page (`GET /dashboard/config`) shows the loaded
+  Settings and `features.toml` with tokens, URLs, and keys redacted.
+  Section chips, on/off badges, and nested panels.
+- Config keys and section titles can open a one-line hint; some include a
+  Docs link to cicerone.dev.
+
+### Fixed
+
+- Dashboard `Cache-Control: private, no-store` skips only `/static` assets,
+  not other paths that happen to start with that prefix.
+
+### Security
+
+- Dashboard pages send `X-Robots-Tag` and HTML `noindex` so crawlers skip
+  them if the process is accidentally public; `GET /robots.txt` disallows
+  `/`, and OpenAPI `/docs` is off.
+- Config page redacts `*_url` option keys and any value with embedded URL
+  credentials.
+
 ## [0.7.0] - 2026-08-28
 
 ### Added
