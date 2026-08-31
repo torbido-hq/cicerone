@@ -100,6 +100,59 @@ def test_evaluate_tracking_ctr_and_conversion_window() -> None:
     assert late.overall.n_conversions_click == 0
 
 
+def test_evaluate_tracking_slices_by_impression_event_id() -> None:
+    rows = _track(
+        {
+            "kind": "impression",
+            "user_id": "alice",
+            "item_id": "ipa",
+            "rank": 1,
+            "occurred_at": "2026-08-28T12:00:00Z",
+            "event_id": "imp-rank-1",
+            "source": "personalized",
+            "variant": "control",
+        },
+        {
+            "kind": "impression",
+            "user_id": "alice",
+            "item_id": "ipa",
+            "rank": 5,
+            "occurred_at": "2026-08-28T12:10:00Z",
+            "event_id": "imp-rank-5",
+            "source": "popular_fallback",
+            "variant": "treatment",
+        },
+        {
+            "kind": "click",
+            "user_id": "alice",
+            "item_id": "ipa",
+            "occurred_at": "2026-08-28T12:11:00Z",
+            "event_id": "clk-1",
+        },
+    )
+    conversions = pd.DataFrame(
+        [
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "event_type": "purchase",
+                "occurred_at": "2026-08-28T12:12:00Z",
+            }
+        ]
+    )
+    report = evaluate_tracking(track_rows=rows, conversions=conversions, window_hours=24.0)
+    assert report.overall.n_impressions == 2
+    assert report.overall.n_clicks == 1
+    assert report.by_rank["1"].n_clicks == 0
+    assert report.by_rank["5"].n_clicks == 1
+    assert report.by_source["personalized"].n_clicks == 0
+    assert report.by_source["popular_fallback"].n_clicks == 1
+    assert report.by_variant["control"].n_clicks == 0
+    assert report.by_variant["treatment"].n_clicks == 1
+    assert report.by_rank["5"].n_conversions_click == 1
+    assert report.by_rank["1"].n_conversions_click == 0
+
+
 def test_evaluate_tracking_empty_and_helpers() -> None:
     empty = evaluate_tracking(track_rows=[], conversions=pd.DataFrame())
     assert empty.overall.n_impressions == 0

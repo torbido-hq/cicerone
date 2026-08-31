@@ -300,20 +300,35 @@ def evaluate_tracking(
     return TrackEvalReport(overall=overall, by_rank=by_rank, by_source=by_source, by_variant=by_variant)
 
 
+def _column_ids(frame: pd.DataFrame, column: str) -> set[str]:
+    if frame.empty or column not in frame.columns:
+        return set()
+    return {str(value) for value in frame[column].dropna()}
+
+
+def _slice_later_events(frame: pd.DataFrame, keys: pd.DataFrame, prior_ids: set[str]) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+    if prior_ids and "prior_event_id" in frame.columns:
+        matched = frame["prior_event_id"].notna() & frame["prior_event_id"].astype(str).isin(prior_ids)
+        return frame.loc[matched]
+    if USER_COLUMN not in frame.columns or ITEM_COLUMN not in frame.columns:
+        return frame
+    pair = keys.loc[:, [USER_COLUMN, ITEM_COLUMN]].drop_duplicates()
+    return frame.merge(pair, on=[USER_COLUMN, ITEM_COLUMN], how="inner")
+
+
 def _metrics_for_impression_slice(
     impressions: pd.DataFrame,
     matched_clicks: pd.DataFrame,
     view_conv: pd.DataFrame,
     click_conv: pd.DataFrame,
 ) -> SliceMetrics:
-    keys = impressions.loc[:, [USER_COLUMN, ITEM_COLUMN]].drop_duplicates()
-
-    def _subset(frame: pd.DataFrame) -> pd.DataFrame:
-        if frame.empty or USER_COLUMN not in frame.columns or ITEM_COLUMN not in frame.columns:
-            return frame
-        return frame.merge(keys, on=[USER_COLUMN, ITEM_COLUMN], how="inner")
-
-    return _slice_metrics(impressions, _subset(matched_clicks), _subset(view_conv), _subset(click_conv))
+    impression_ids = _column_ids(impressions, "event_id")
+    clicks = _slice_later_events(matched_clicks, impressions, impression_ids)
+    views = _slice_later_events(view_conv, impressions, impression_ids)
+    attributed = _slice_later_events(click_conv, clicks, _column_ids(clicks, "event_id"))
+    return _slice_metrics(impressions, clicks, views, attributed)
 
 
 def user_track_outcomes(

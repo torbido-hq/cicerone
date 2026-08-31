@@ -62,6 +62,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   writers cannot both accept the same `event_id`.
 - DB track ingest counts `accepted` from ids not already in the table when
   the driver omits INSERT `rowcount`, so duplicates are not reported as new.
+- Track JSONL ingest imports `fcntl` only when present so Windows can load
+  `cicerone.track` (in-process lock only on those platforms).
+- Rank/source/variant CTR slices count clicks and conversions by the matched
+  impression `event_id`, not every row with the same user and item.
 
 ### Security
 
