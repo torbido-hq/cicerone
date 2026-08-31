@@ -6,7 +6,7 @@ import logging
 import socket
 import threading
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Sequence, Set
 from datetime import datetime
 from typing import Any
 
@@ -36,7 +36,7 @@ def _missing_extra() -> ConfigError:
 
 
 class KafkaEventSource(EventSource):
-    """Consume JSON events from one topic; ack commits stored offsets."""
+    """Consume JSON events from one topic; ack advances the commit watermark."""
 
     def __init__(self, options: dict[str, Any]):
         validate_kafka_event_options(options)
@@ -54,11 +54,13 @@ class KafkaEventSource(EventSource):
         self._in_flight: set[str] = set()
         self._messages: dict[str, Any] = {}
         self._held_offsets: set[tuple[int, int]] = set()
+        self._max_offset: dict[int, int] = {}
+        self._topic_partition: Any | None = None
         self._last_event_at: datetime | None = None
 
     def connect(self) -> None:
         try:
-            from confluent_kafka import Consumer
+            from confluent_kafka import Consumer, TopicPartition
         except ImportError as exc:
             raise _missing_extra() from exc
 
@@ -83,6 +85,7 @@ class KafkaEventSource(EventSource):
         with self._lock:
             previous = self._consumer
             self._consumer = consumer
+            self._topic_partition = TopicPartition
             self._connected = True
         if previous is not None and previous is not consumer:
             try:
@@ -100,6 +103,8 @@ class KafkaEventSource(EventSource):
             self._in_flight.clear()
             self._messages.clear()
             self._held_offsets.clear()
+            self._max_offset.clear()
+            self._topic_partition = None
         if consumer is not None:
             try:
                 consumer.close()
@@ -152,12 +157,23 @@ class KafkaEventSource(EventSource):
                     resolved.append((eid, message))
         if not resolved:
             return
-        for _, message in resolved:
-            consumer.commit(message=message, asynchronous=False)
+        with self._lock:
+            done: dict[int, set[int]] = {}
+            for _, message in resolved:
+                partition = int(message.partition())
+                done.setdefault(partition, set()).add(int(message.offset()))
+            watermarks = {
+                partition: self._next_commit_offset(partition, extra_done=offsets)
+                for partition, offsets in done.items()
+            }
+        self._commit_watermarks(consumer, watermarks)
         with self._lock:
             for eid, message in resolved:
                 self._messages.pop(eid, None)
-                self._held_offsets.discard((int(message.partition()), int(message.offset())))
+                partition = int(message.partition())
+                offset = int(message.offset())
+                self._held_offsets.discard((partition, offset))
+                self._max_offset[partition] = max(self._max_offset.get(partition, -1), offset)
                 self._in_flight.discard(eid)
                 self._pending_ids.discard(eid)
 
@@ -208,6 +224,7 @@ class KafkaEventSource(EventSource):
         with self._lock:
             if held_key in self._held_offsets:
                 return None
+            self._max_offset[partition] = max(self._max_offset.get(partition, -1), offset)
         try:
             payload = decode_json_object(message.value())
         except EventNormalizeError as exc:
@@ -241,8 +258,34 @@ class KafkaEventSource(EventSource):
             return None
         return event
 
+    def _next_commit_offset(self, partition: int, *, extra_done: Set[int] | None = None) -> int | None:
+        done = extra_done or frozenset()
+        held = {offset for part, offset in self._held_offsets if part == partition} - done
+        max_seen = self._max_offset.get(partition, -1)
+        if done:
+            max_seen = max(max_seen, max(done))
+        if held:
+            nxt = min(held)
+            return None if nxt == 0 else nxt
+        if max_seen < 0:
+            return None
+        return max_seen + 1
+
+    def _commit_watermarks(self, consumer: Any, watermarks: dict[int, int | None]) -> None:
+        ctor = self._topic_partition
+        if ctor is None:
+            raise RuntimeError("KafkaEventSource is not connected")
+        for partition, nxt in watermarks.items():
+            if nxt is None:
+                continue
+            consumer.commit(offsets=[ctor(self._topic, partition, nxt)], asynchronous=False)
+
     def _commit_discard(self, consumer: Any, message: Any) -> None:
+        partition = int(message.partition())
+        offset = int(message.offset())
+        with self._lock:
+            nxt = self._next_commit_offset(partition, extra_done={offset})
         try:
-            consumer.commit(message=message, asynchronous=False)
+            self._commit_watermarks(consumer, {partition: nxt})
         except Exception:
             logger.exception("Failed to commit discarded Kafka message")

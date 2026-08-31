@@ -40,18 +40,22 @@ class EventsRuntime:
 
     def stop(self) -> bool:
         stopped = True
-        if self.worker is not None:
-            stopped = self.worker.stop()
-            if not stopped:
-                logger.warning("Event worker did not stop in time; skipping engine dispose")
-                return False
-        dispose_recommendation_engines()
-        if self.publisher is not None:
-            try:
-                self.publisher.close()
-            except Exception:
-                logger.exception("Recommendation publisher close failed")
-        return True
+        try:
+            if self.worker is not None:
+                stopped = self.worker.stop()
+                if not stopped:
+                    logger.warning("Event worker did not stop in time; skipping engine dispose")
+                    return False
+            dispose_recommendation_engines()
+            return True
+        finally:
+            publisher = self.publisher
+            self.publisher = None
+            if publisher is not None:
+                try:
+                    publisher.close()
+                except Exception:
+                    logger.exception("Recommendation publisher close failed")
 
 
 def _combine_busy_checks(*checks: Callable[[], bool] | None) -> Callable[[], bool] | None:

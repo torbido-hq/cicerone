@@ -229,3 +229,49 @@ def test_connect_failure(monkeypatch):
     source = RabbitMQEventSource(_options())
     with pytest.raises(ConfigError, match="unreachable"):
         source.connect()
+
+
+def test_heartbeat_runs_on_io_thread(monkeypatch):
+    import threading
+
+    broker = install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    ids: list[int] = []
+    original_get = broker.connection.channel_obj.basic_get
+    original_pump = broker.connection.process_data_events
+
+    def _get(*args, **kwargs):
+        ids.append(threading.get_ident())
+        return original_get(*args, **kwargs)
+
+    def _pump(*args, **kwargs):
+        ids.append(threading.get_ident())
+        return original_pump(*args, **kwargs)
+
+    broker.connection.channel_obj.basic_get = _get  # type: ignore[method-assign]
+    broker.connection.process_data_events = _pump  # type: ignore[method-assign]
+    source.poll(1)
+    done = threading.Event()
+
+    def _beat() -> None:
+        source.heartbeat([])
+        done.set()
+
+    threading.Thread(target=_beat, name="test-heartbeat").start()
+    assert done.wait(2.0)
+    io_ident = source._io._thread.ident if source._io is not None else None
+    source.close()
+    assert io_ident is not None
+    assert ids
+    assert all(ident == io_ident for ident in ids)
+
+
+def test_reconnect_closes_previous(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    first = broker.connection
+    source.connect()
+    assert first.closed is True
+    source.close()

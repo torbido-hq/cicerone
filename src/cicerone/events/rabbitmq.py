@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
+import queue
 import threading
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime
+from functools import partial
 from typing import Any
 
 from cicerone.amqp_options import prefetch_count, require_amqp_url, require_queue
@@ -18,6 +20,8 @@ from cicerone.events.normalize import EventNormalizeError, normalize_event
 logger = logging.getLogger(__name__)
 
 _EVENTS_PREFIX = "events.options"
+_IO_STOP = object()
+_IO_IDLE_SECONDS = 0.5
 
 
 def validate_rabbitmq_event_options(options: dict[str, Any]) -> None:
@@ -33,6 +37,56 @@ def _missing_extra() -> ConfigError:
     )
 
 
+class _PikaIo:
+    """Run BlockingConnection calls on one thread (pika is not thread-safe)."""
+
+    def __init__(self) -> None:
+        self._jobs: queue.Queue[Any] = queue.Queue()
+        self._thread = threading.Thread(target=self._loop, name="cicerone-amqp-io", daemon=True)
+        self._connection: Any | None = None
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def submit(self, fn: Callable[[], Any]) -> Any:
+        if not self._thread.is_alive():
+            raise RuntimeError("RabbitMQ I/O thread is not running")
+        reply: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
+        self._jobs.put((fn, reply))
+        status, payload = reply.get()
+        if status == "err":
+            raise payload
+        return payload
+
+    def stop(self) -> None:
+        self._jobs.put(_IO_STOP)
+        self._thread.join(timeout=5.0)
+
+    def _loop(self) -> None:
+        while True:
+            try:
+                job = self._jobs.get(timeout=_IO_IDLE_SECONDS)
+            except queue.Empty:
+                self._pump()
+                continue
+            if job is _IO_STOP:
+                return
+            fn, reply = job
+            try:
+                reply.put(("ok", fn()))
+            except Exception as exc:
+                reply.put(("err", exc))
+
+    def _pump(self) -> None:
+        connection = self._connection
+        if connection is None:
+            return
+        try:
+            connection.process_data_events(time_limit=0)
+        except Exception:
+            logger.exception("RabbitMQ I/O thread process_data_events failed")
+
+
 class RabbitMQEventSource(EventSource):
     """Consume JSON events from one queue; ack with ``basic_ack``."""
 
@@ -42,6 +96,7 @@ class RabbitMQEventSource(EventSource):
         self._queue = require_queue(options, prefix=_EVENTS_PREFIX)
         self._prefetch = prefetch_count(options, prefix=_EVENTS_PREFIX)
 
+        self._io: _PikaIo | None = None
         self._connection: Any | None = None
         self._channel: Any | None = None
         self._connected = False
@@ -59,27 +114,40 @@ class RabbitMQEventSource(EventSource):
         except ImportError as exc:
             raise _missing_extra() from exc
 
+        io = _PikaIo()
+        io.start()
         try:
-            connection = pika.BlockingConnection(pika.URLParameters(self._amqp_url))
-            channel = connection.channel()
-            channel.basic_qos(prefetch_count=self._prefetch)
-            channel.queue_declare(queue=self._queue, durable=True)
+            connection, channel = io.submit(partial(self._open, pika, io))
         except Exception as exc:
+            io.stop()
             raise ConfigError(f"events.options.amqp_url is unreachable: {exc}") from exc
 
         with self._lock:
-            previous_conn = self._connection
-            previous_chan = self._channel
+            previous_io = self._io
+            previous_channel = self._channel
+            previous_connection = self._connection
+            self._io = io
             self._connection = connection
             self._channel = channel
             self._connected = True
-        _close_quietly(previous_chan, "channel")
-        _close_quietly(previous_conn, "connection")
+        if previous_io is not None:
+            try:
+
+                def _close_previous() -> None:
+                    previous_io._connection = None
+                    _close_handles(previous_channel, previous_connection)
+
+                previous_io.submit(_close_previous)
+            except Exception:
+                logger.exception("Failed to close previous RabbitMQ connection")
+            previous_io.stop()
 
     def close(self) -> None:
         with self._lock:
+            io = self._io
             channel = self._channel
             connection = self._connection
+            self._io = None
             self._channel = None
             self._connection = None
             self._connected = False
@@ -88,13 +156,23 @@ class RabbitMQEventSource(EventSource):
             self._in_flight.clear()
             self._delivery_tags.clear()
             self._held_tags.clear()
-        _close_quietly(channel, "channel")
-        _close_quietly(connection, "connection")
+        if io is None:
+            return
+        try:
+
+            def _shutdown() -> None:
+                io._connection = None
+                _close_handles(channel, connection)
+
+            io.submit(_shutdown)
+        except Exception:
+            logger.exception("RabbitMQ close on I/O thread failed")
+        io.stop()
 
     def poll(self, max_events: int = 100) -> Sequence[NormalizedEvent]:
         if max_events < 1:
             return []
-        channel = self._require_channel()
+        io = self._require_io()
         out: list[NormalizedEvent] = []
         with self._lock:
             while self._pending and len(out) < max_events:
@@ -106,13 +184,13 @@ class RabbitMQEventSource(EventSource):
         remaining = max_events - len(out)
         while remaining > 0:
             try:
-                method, _properties, body = channel.basic_get(self._queue, auto_ack=False)
+                method, _properties, body = io.submit(self._basic_get)
             except Exception:
                 logger.exception("RabbitMQ basic_get failed")
                 break
             if method is None:
                 break
-            incoming = self._delivery_to_event(channel, method, body)
+            incoming = self._delivery_to_event(io, method, body)
             if incoming is None:
                 continue
             out.append(incoming)
@@ -127,7 +205,7 @@ class RabbitMQEventSource(EventSource):
     def ack(self, event_ids: Sequence[str]) -> None:
         if not event_ids:
             return
-        channel = self._require_channel()
+        io = self._require_io()
         with self._lock:
             resolved: list[tuple[str, int]] = []
             for event_id in event_ids:
@@ -138,7 +216,7 @@ class RabbitMQEventSource(EventSource):
         if not resolved:
             return
         for _, tag in resolved:
-            channel.basic_ack(delivery_tag=tag)
+            io.submit(partial(self._basic_ack, tag))
         with self._lock:
             for eid, tag in resolved:
                 self._delivery_tags.pop(eid, None)
@@ -161,26 +239,26 @@ class RabbitMQEventSource(EventSource):
 
     def heartbeat(self, events: Sequence[NormalizedEvent]) -> None:
         del events
-        with self._lock:
-            connection = self._connection
-        if connection is None:
+        io = self._io
+        if io is None:
             return
         try:
-            connection.process_data_events(time_limit=0)
+            io.submit(self._pump_connection)
         except Exception:
             logger.exception("RabbitMQ heartbeat process_data_events failed")
 
     def health(self) -> EventSourceHealth:
         with self._lock:
             connected = self._connected
+            io = self._io
             channel = self._channel
             local_held = len(self._pending_ids) + len(self._in_flight)
             last_event_at = self._last_event_at
-        if not connected or channel is None:
+        if not connected or io is None or channel is None:
             return EventSourceHealth(connected=False, lag=None, last_event_at=last_event_at)
         ready = 0
         try:
-            declared = channel.queue_declare(queue=self._queue, durable=True, passive=True)
+            declared = io.submit(self._passive_declare)
             ready = int(declared.method.message_count)
         except Exception:
             logger.exception("RabbitMQ queue_declare (passive) failed")
@@ -193,13 +271,45 @@ class RabbitMQEventSource(EventSource):
             detail=f"queue={self._queue}",
         )
 
-    def _require_channel(self) -> Any:
-        with self._lock:
-            if not self._connected or self._channel is None:
-                raise RuntimeError("RabbitMQEventSource is not connected")
-            return self._channel
+    def _basic_get(self) -> Any:
+        channel = self._channel
+        if channel is None:
+            return None, None, None
+        return channel.basic_get(self._queue, auto_ack=False)
 
-    def _delivery_to_event(self, channel: Any, method: Any, body: Any) -> NormalizedEvent | None:
+    def _basic_ack(self, tag: int) -> None:
+        channel = self._channel
+        if channel is None:
+            return
+        channel.basic_ack(delivery_tag=tag)
+
+    def _passive_declare(self) -> Any:
+        channel = self._channel
+        if channel is None:
+            raise RuntimeError("RabbitMQEventSource is not connected")
+        return channel.queue_declare(queue=self._queue, durable=True, passive=True)
+
+    def _open(self, pika: Any, io: _PikaIo) -> tuple[Any, Any]:
+        connection = pika.BlockingConnection(pika.URLParameters(self._amqp_url))
+        io._connection = connection
+        channel = connection.channel()
+        channel.basic_qos(prefetch_count=self._prefetch)
+        channel.queue_declare(queue=self._queue, durable=True)
+        return connection, channel
+
+    def _pump_connection(self) -> None:
+        connection = self._connection
+        if connection is None:
+            return
+        connection.process_data_events(time_limit=0)
+
+    def _require_io(self) -> _PikaIo:
+        with self._lock:
+            if not self._connected or self._io is None:
+                raise RuntimeError("RabbitMQEventSource is not connected")
+            return self._io
+
+    def _delivery_to_event(self, io: _PikaIo, method: Any, body: Any) -> NormalizedEvent | None:
         tag = int(method.delivery_tag)
         with self._lock:
             if tag in self._held_tags:
@@ -208,7 +318,7 @@ class RabbitMQEventSource(EventSource):
             payload = decode_json_object(body)
         except EventNormalizeError as exc:
             logger.warning("Skipping invalid RabbitMQ message %s: %s", tag, exc)
-            self._ack_discard(channel, tag)
+            self._ack_discard(io, tag)
             return None
         if payload.get("event_id") in (None, "") and payload.get("idempotency_key") in (None, ""):
             payload["event_id"] = str(tag)
@@ -216,7 +326,7 @@ class RabbitMQEventSource(EventSource):
             event = normalize_event(payload)
         except EventNormalizeError as exc:
             logger.warning("Skipping invalid RabbitMQ message %s: %s", tag, exc)
-            self._ack_discard(channel, tag)
+            self._ack_discard(io, tag)
             return None
         with self._lock:
             if event.event_id in self._delivery_tags:
@@ -232,15 +342,20 @@ class RabbitMQEventSource(EventSource):
                 self._held_tags.add(tag)
                 self._in_flight.add(event.event_id)
         if drop:
-            self._ack_discard(channel, tag)
+            self._ack_discard(io, tag)
             return None
         return event
 
-    def _ack_discard(self, channel: Any, tag: int) -> None:
+    def _ack_discard(self, io: _PikaIo, tag: int) -> None:
         try:
-            channel.basic_ack(delivery_tag=tag)
+            io.submit(partial(self._basic_ack, tag))
         except Exception:
             logger.exception("Failed to ack discarded RabbitMQ message")
+
+
+def _close_handles(channel: Any, connection: Any) -> None:
+    _close_quietly(channel, "channel")
+    _close_quietly(connection, "connection")
 
 
 def _close_quietly(handle: Any, label: str) -> None:

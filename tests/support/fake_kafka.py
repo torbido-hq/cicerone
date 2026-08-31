@@ -46,6 +46,13 @@ class FakeKafkaMessage:
         return self._topic
 
 
+class FakeTopicPartition:
+    def __init__(self, topic: str, partition: int, offset: int) -> None:
+        self.topic = topic
+        self.partition = partition
+        self.offset = offset
+
+
 class FakeKafkaBroker:
     def __init__(self) -> None:
         self.topics: dict[str, list[FakeKafkaMessage]] = {}
@@ -93,8 +100,17 @@ class FakeConsumer:
                 return messages[cursor]
         return None
 
-    def commit(self, message: FakeKafkaMessage | None = None, asynchronous: bool = False) -> None:
+    def commit(
+        self,
+        message: FakeKafkaMessage | None = None,
+        offsets: list[Any] | None = None,
+        asynchronous: bool = False,
+    ) -> None:
         del asynchronous
+        if offsets:
+            for tp in offsets:
+                self.broker.committed.append((int(tp.partition), int(tp.offset)))
+            return
         if message is not None:
             self.broker.committed.append((message.partition(), message.offset()))
 
@@ -146,5 +162,6 @@ def install_fake_kafka(
 
     module.Consumer = _consumer  # type: ignore[attr-defined]
     module.Producer = _producer  # type: ignore[attr-defined]
+    module.TopicPartition = FakeTopicPartition  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "confluent_kafka", module)
     return broker

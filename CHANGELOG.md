@@ -24,6 +24,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Dashboard `Cache-Control: private, no-store` skips only `/static` assets,
   not other paths that happen to start with that prefix.
+- Kafka ingest commits the contiguous per-partition watermark so an
+  out-of-order ack cannot skip an earlier offset.
+- RabbitMQ ingest runs AMQP on one I/O thread so apply heartbeats stay
+  thread-safe.
+- Serve events runtime closes `[publish]` when the worker join times out.
 
 ### Security
 
