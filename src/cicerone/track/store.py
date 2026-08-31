@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
-from collections.abc import Mapping, Sequence
+import threading
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -85,6 +88,8 @@ class TrackStore:
         self._options = output.options
         self._engine: Engine | None = None
         self._known_ids: set[str] | None = None
+        self._track_size: int | None = None
+        self._append_lock = threading.Lock()
 
     def _db_engine(self) -> Engine:
         if self._engine is None:
@@ -100,20 +105,22 @@ class TrackStore:
         if self._kind == "db":
             return self._append_rows_db(payload)
         require_appendable_track_log(self._output)
-        known = self._dataset_event_ids()
-        fresh: list[dict[str, Any]] = []
-        for row in payload:
-            event_id = str(row.get("event_id") or "")
-            if event_id and event_id in known:
-                continue
-            if event_id:
-                known.add(event_id)
-            fresh.append(row)
-        if not fresh:
-            return 0
-        encoded = "".join(json.dumps(row, separators=(",", ":")) + "\n" for row in fresh).encode("utf-8")
-        self._append_bytes(TRACK_FILENAME, encoded)
-        return len(fresh)
+        with self._dataset_append_lock():
+            known = self._refresh_known_ids()
+            fresh: list[dict[str, Any]] = []
+            for row in payload:
+                event_id = str(row.get("event_id") or "")
+                if event_id and event_id in known:
+                    continue
+                if event_id:
+                    known.add(event_id)
+                fresh.append(row)
+            if not fresh:
+                return 0
+            encoded = "".join(json.dumps(row, separators=(",", ":")) + "\n" for row in fresh).encode("utf-8")
+            self._append_bytes(TRACK_FILENAME, encoded)
+            self._track_size = (self._track_size or 0) + len(encoded)
+            return len(fresh)
 
     def read_rows(self, *, kind: str | None = None) -> list[dict[str, Any]]:
         rows = self._read_rows_db() if self._kind == "db" else self._read_rows_dataset()
@@ -279,11 +286,32 @@ class TrackStore:
             self._known_ids.discard("")
         return rows
 
-    def _dataset_event_ids(self) -> set[str]:
-        if self._known_ids is None:
-            self._read_rows_dataset()
+    def _track_file_size(self) -> int:
+        path = Path(require_option(self._options, "path", "local")) / TRACK_FILENAME
+        if not path.exists():
+            return 0
+        return path.stat().st_size
+
+    def _refresh_known_ids(self) -> set[str]:
+        size = self._track_file_size()
+        if self._known_ids is not None and self._track_size == size:
+            return self._known_ids
+        self._known_ids = None
+        self._read_rows_dataset()
         assert self._known_ids is not None
+        self._track_size = size
         return self._known_ids
+
+    @contextmanager
+    def _dataset_append_lock(self) -> Iterator[None]:
+        path = Path(require_option(self._options, "path", "local")) / ".track.jsonl.lock"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with self._append_lock, path.open("a") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     def _write_eval_db(self, payload: dict[str, Any]) -> None:
         table = sql_identifier(

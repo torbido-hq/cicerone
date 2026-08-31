@@ -192,6 +192,19 @@ def _merge_asof_events(
     return merged.loc[matched]
 
 
+def _coalesce_column(frame: pd.DataFrame, name: str) -> None:
+    extras = (f"{name}_rec", f"{name}_latest")
+    if name not in frame.columns:
+        for extra in extras:
+            if extra in frame.columns:
+                frame[name] = frame[extra]
+                return
+        return
+    for extra in extras:
+        if extra in frame.columns:
+            frame[name] = frame[name].where(frame[name].notna(), frame[extra])
+
+
 def _annotate_source(impressions: pd.DataFrame, recommendations: pd.DataFrame | None) -> pd.DataFrame:
     if impressions.empty:
         return impressions
@@ -206,14 +219,29 @@ def _annotate_source(impressions: pd.DataFrame, recommendations: pd.DataFrame | 
     keep = [USER_COLUMN, ITEM_COLUMN, SOURCE_COLUMN]
     if VARIANT_COLUMN in recs.columns:
         keep.append(VARIANT_COLUMN)
-    recs = recs.loc[:, [column for column in keep if column in recs.columns]].drop_duplicates(
-        subset=[USER_COLUMN, ITEM_COLUMN], keep="first"
-    )
-    merged = frame.merge(recs, on=[USER_COLUMN, ITEM_COLUMN], how="left", suffixes=("", "_rec"))
-    if SOURCE_COLUMN not in merged.columns and f"{SOURCE_COLUMN}_rec" in merged.columns:
-        merged[SOURCE_COLUMN] = merged[f"{SOURCE_COLUMN}_rec"]
-    elif f"{SOURCE_COLUMN}_rec" in merged.columns:
-        merged[SOURCE_COLUMN] = merged[SOURCE_COLUMN].fillna(merged[f"{SOURCE_COLUMN}_rec"])
+    if "generated_at" in recs.columns:
+        keep.append("generated_at")
+        recs["generated_at"] = pd.to_datetime(recs["generated_at"], utc=True, errors="coerce")
+    recs = recs.loc[:, [column for column in keep if column in recs.columns]]
+    latest = recs.drop_duplicates(subset=[USER_COLUMN, ITEM_COLUMN], keep="last")
+    if "generated_at" in recs.columns and "generated_at" in frame.columns:
+        frame["generated_at"] = pd.to_datetime(frame["generated_at"], utc=True, errors="coerce")
+        snap = recs.dropna(subset=["generated_at"]).drop_duplicates(
+            subset=[USER_COLUMN, ITEM_COLUMN, "generated_at"], keep="last"
+        )
+        merged = frame.merge(
+            snap, on=[USER_COLUMN, ITEM_COLUMN, "generated_at"], how="left", suffixes=("", "_rec")
+        )
+        fill = latest.drop(columns=["generated_at"], errors="ignore")
+        merged = merged.merge(fill, on=[USER_COLUMN, ITEM_COLUMN], how="left", suffixes=("", "_latest"))
+        _coalesce_column(merged, SOURCE_COLUMN)
+        if VARIANT_COLUMN in recs.columns:
+            _coalesce_column(merged, VARIANT_COLUMN)
+        return merged
+    merged = frame.merge(latest, on=[USER_COLUMN, ITEM_COLUMN], how="left", suffixes=("", "_rec"))
+    _coalesce_column(merged, SOURCE_COLUMN)
+    if VARIANT_COLUMN in recs.columns:
+        _coalesce_column(merged, VARIANT_COLUMN)
     return merged
 
 

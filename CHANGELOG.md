@@ -56,6 +56,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Experiment `ctr` / `conversion` use the track store only when
   `attribution` is `click` or `impression`. `user` stays event ITT;
   `recommended` stays a list join. Config rejects the other combinations.
+- Track source/variant slices join impressions to the matching
+  recommendation snapshot (`generated_at`), not the first user-item row.
+- Local JSONL track ingest serializes appends with a file lock so concurrent
+  writers cannot both accept the same `event_id`.
 
 ### Security
 
