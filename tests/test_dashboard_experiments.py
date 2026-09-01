@@ -4,10 +4,11 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 from conftest import make_settings
 from sqlalchemy import create_engine
 
-from cicerone.config import IOSettings
+from cicerone.config import ConfigError, IOSettings
 from cicerone.config.settings import ExperimentSettings, VariantSettings
 from cicerone.dashboard_experiments import clear_promotion, experiment_context, promote_winner
 from cicerone.experiment.evaluate import exposure_row
@@ -376,6 +377,31 @@ def test_experiment_context_recipes_from_manifest(tmp_path, monkeypatch):
     context = experiment_context(settings)
     assert context["error"] is None
     assert [recipe.name for recipe in context["recipes"]] == ["control", "treatment"]
+
+
+def test_experiment_context_manifest_policy_error_names_variant(tmp_path, monkeypatch):
+    settings = _settings(tmp_path, log_exposures=False)
+    monkeypatch.setattr("cicerone.dashboard_experiments.resolve_recipes", lambda *args, **kwargs: ())
+
+    class _Reader:
+        def read_latest(self):
+            return {
+                "experiment_variants": json.dumps(
+                    [
+                        {"name": "control", "traffic": 0.5, "models": ["popular"]},
+                        {
+                            "name": "treatment",
+                            "traffic": 0.5,
+                            "models": ["collaborative"],
+                            "eligibility": [1],
+                        },
+                    ]
+                )
+            }
+
+    monkeypatch.setattr("cicerone.dashboard_experiments.build_manifest_reader", lambda _output: _Reader())
+    with pytest.raises(ConfigError, match=r"experiment_variants\[treatment\]\.eligibility"):
+        experiment_context(settings)
 
 
 def test_experiment_context_manifest_recipes_invalid_json(tmp_path, monkeypatch):
