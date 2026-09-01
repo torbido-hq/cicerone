@@ -15,6 +15,7 @@ from contextlib import contextmanager
 from io import BytesIO
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pandas as pd
 from sqlalchemy import Engine, bindparam, create_engine, text
@@ -106,7 +107,7 @@ class TrackStore:
     def append_rows(self, rows: Sequence[Mapping[str, Any]]) -> int:
         if not rows:
             return 0
-        payload = [dict(row) for row in rows]
+        payload = [_row_with_event_id(row) for row in rows]
         if self._kind == "db":
             return self._append_rows_db(payload)
         require_appendable_track_log(self._output)
@@ -472,6 +473,13 @@ def _existing_event_ids(conn: Any, table: str, event_ids: Sequence[str]) -> set[
         bindparam("ids", expanding=True)
     )
     return {str(row[0]) for row in conn.execute(stmt, {"ids": ids}) if row[0] is not None}
+
+
+def _row_with_event_id(row: Mapping[str, Any]) -> dict[str, Any]:
+    item = dict(row)
+    if not str(item.get("event_id") or ""):
+        item["event_id"] = str(uuid4())
+    return item
 
 
 def _history_part_name(generated_at: str) -> str:

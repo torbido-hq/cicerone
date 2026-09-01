@@ -71,6 +71,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Recommendation history writes one parquet file per job snapshot instead of
   rewriting the full `recommendation_history.parquet`.
 - `experiment.primary_metric` `ctr` / `conversion` requires `track.enabled`.
+- Source/variant fallback uses the newest recommendation snapshot by
+  `generated_at`, not the last row in input order.
+- Track ingest assigns an `event_id` when the host omits one, so blank ids
+  cannot bypass idempotency.
 
 ### Security
 
