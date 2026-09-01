@@ -111,7 +111,12 @@ def _unique_policy_names(names: Sequence[object], *, label: str) -> tuple[str, .
 
 
 def _pick_named(inherited: Sequence[_T], names: Sequence[str], *, label: str) -> tuple[_T, ...]:
-    by_name = {rule.name: rule for rule in inherited}  # type: ignore[attr-defined]
+    by_name: dict[str, _T] = {}
+    for rule in inherited:
+        name = rule.name  # type: ignore[attr-defined]
+        if name in by_name:
+            raise ConfigError(f"{label} duplicate inherited rule name {name!r}")
+        by_name[name] = rule
     missing = [name for name in names if name not in by_name]
     if missing:
         raise ConfigError(f"{label} unknown rule name(s) {missing}")
