@@ -2,16 +2,10 @@
 
 from __future__ import annotations
 
+import importlib
+from typing import Any
+
 from cicerone.events.base import EventBackpressureError, EventSource, EventSourceHealth, NormalizedEvent
-from cicerone.events.db import DbEventSource
-from cicerone.events.redis_streams import RedisStreamsEventSource
-from cicerone.events.registry import (
-    build_event_source,
-    register_event_source,
-    registered_event_source_kinds,
-)
-from cicerone.events.s3 import S3EventSource
-from cicerone.events.webhook import WebhookEventSource
 
 __all__ = [
     "DbEventSource",
@@ -26,3 +20,23 @@ __all__ = [
     "register_event_source",
     "registered_event_source_kinds",
 ]
+
+_LAZY: dict[str, tuple[str, str]] = {
+    "DbEventSource": ("cicerone.events.db", "DbEventSource"),
+    "RedisStreamsEventSource": ("cicerone.events.redis_streams", "RedisStreamsEventSource"),
+    "S3EventSource": ("cicerone.events.s3", "S3EventSource"),
+    "WebhookEventSource": ("cicerone.events.webhook", "WebhookEventSource"),
+    "build_event_source": ("cicerone.events.registry", "build_event_source"),
+    "register_event_source": ("cicerone.events.registry", "register_event_source"),
+    "registered_event_source_kinds": ("cicerone.events.registry", "registered_event_source_kinds"),
+}
+
+
+def __getattr__(name: str) -> Any:
+    spec = _LAZY.get(name)
+    if spec is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module_name, attr = spec
+    value = getattr(importlib.import_module(module_name), attr)
+    globals()[name] = value
+    return value

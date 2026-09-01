@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import importlib
+from typing import Any
+
 from cicerone.config.constants import (
     AUTOML_DEFAULT_N_SPLITS,
     AUTOML_DEFAULT_PRIMARY_METRIC,
@@ -40,8 +43,6 @@ from cicerone.config.constants import (
     Mode,
     StrategyName,
 )
-from cicerone.config.events import coerce_events_settings, load_events_settings
-from cicerone.config.load import load_experiment_settings, load_settings, make_settings
 from cicerone.config.lock_url import (
     POSTGRES_LOCK_URL_REQUIRED,
     require_postgres_lock_url_parts,
@@ -134,3 +135,21 @@ __all__ = [
     "validate_model_weights",
     "validate_rrf_k",
 ]
+
+_LAZY: dict[str, tuple[str, str]] = {
+    "coerce_events_settings": ("cicerone.config.events", "coerce_events_settings"),
+    "load_events_settings": ("cicerone.config.events", "load_events_settings"),
+    "load_experiment_settings": ("cicerone.config.load", "load_experiment_settings"),
+    "load_settings": ("cicerone.config.load", "load_settings"),
+    "make_settings": ("cicerone.config.load", "make_settings"),
+}
+
+
+def __getattr__(name: str) -> Any:
+    spec = _LAZY.get(name)
+    if spec is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module_name, attr = spec
+    value = getattr(importlib.import_module(module_name), attr)
+    globals()[name] = value
+    return value

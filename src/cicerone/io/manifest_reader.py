@@ -15,9 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import MetaData, Table, create_engine, inspect, select
 
-from cicerone.io.db_store import DEFAULT_MANIFEST_TABLE
 from cicerone.io.options import (
     build_s3_client,
     is_s3_not_found,
@@ -64,6 +62,10 @@ class DatasetManifestReader:
 
 class DbManifestReader:
     def __init__(self, options: dict[str, Any]):
+        from sqlalchemy import create_engine
+
+        from cicerone.io.db_store import DEFAULT_MANIFEST_TABLE
+
         self._options = options
         self._table = sql_identifier(
             options.get("manifest_table", DEFAULT_MANIFEST_TABLE),
@@ -76,6 +78,8 @@ class DbManifestReader:
         return rows[0] if rows else None
 
     def read_recent(self, limit: int) -> list[dict[str, Any]]:
+        from sqlalchemy import MetaData, Table, inspect, select
+
         if not inspect(self._engine).has_table(self._table):
             return []
         table = Table(self._table, MetaData(), autoload_with=self._engine)

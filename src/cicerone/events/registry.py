@@ -6,17 +6,33 @@ from collections.abc import Callable
 from typing import Any
 
 from cicerone.events.base import EventSource
-from cicerone.events.db import DbEventSource
-from cicerone.events.redis_streams import RedisStreamsEventSource
-from cicerone.events.s3 import S3EventSource
 from cicerone.events.webhook import WebhookEventSource
 
 _EventSourceFactory = Callable[[dict[str, Any]], EventSource]
 
+
+def _db_source(options: dict[str, Any]) -> EventSource:
+    from cicerone.events.db import DbEventSource
+
+    return DbEventSource(options)
+
+
+def _redis_source(options: dict[str, Any]) -> EventSource:
+    from cicerone.events.redis_streams import RedisStreamsEventSource
+
+    return RedisStreamsEventSource(options)
+
+
+def _s3_source(options: dict[str, Any]) -> EventSource:
+    from cicerone.events.s3 import S3EventSource
+
+    return S3EventSource(options)
+
+
 _EVENT_SOURCES: dict[str, _EventSourceFactory] = {
-    "db": DbEventSource,
-    "redis_streams": RedisStreamsEventSource,
-    "s3": S3EventSource,
+    "db": _db_source,
+    "redis_streams": _redis_source,
+    "s3": _s3_source,
     "webhook": WebhookEventSource,
 }
 
