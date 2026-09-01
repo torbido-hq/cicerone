@@ -451,7 +451,10 @@ def _load_policy_spec(
     field_value = raw.get(field, _POLICY_MISSING)
     extra_value = raw.get(extra_field, _POLICY_MISSING) if extra_field else _POLICY_MISSING
     if field_value is not _POLICY_MISSING and extra_value is not _POLICY_MISSING:
-        raise ConfigError(f"experiment.variants[{name}] must not set both {field} and [[{extra_field}]]")
+        raise ConfigError(
+            f"experiment.variants[{name}] must not set both {field} "
+            f"and [[experiment.variants.{extra_field}]]"
+        )
     value = extra_value if extra_value is not _POLICY_MISSING else field_value
     if value is _POLICY_MISSING:
         return True

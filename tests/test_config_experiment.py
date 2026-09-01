@@ -327,7 +327,10 @@ def test_load_experiment_policy_names_and_tables(tmp_path):
 
 
 def test_load_experiment_rejects_boosts_bool_and_tables():
-    with pytest.raises(ConfigError, match="must not set both"):
+    with pytest.raises(
+        ConfigError,
+        match=r"must not set both boosts and \[\[experiment.variants.boost\]\]",
+    ):
         load_experiment_settings(
             {
                 "enabled": True,
