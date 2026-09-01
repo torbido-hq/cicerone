@@ -309,6 +309,8 @@ def test_recommend_tie_breaks_equal_scores_by_item_id():
     items = pd.DataFrame(
         [
             {"item_id": "i1", "category": "beer"},
+            {"item_id": "zd", "category": "beer"},
+            {"item_id": "zc", "category": "beer"},
             {"item_id": "zb", "category": "beer"},
             {"item_id": "za", "category": "beer"},
         ]

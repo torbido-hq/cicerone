@@ -456,6 +456,61 @@ def test_evaluate_experiment_drops_untimed_events_when_windowed() -> None:
     assert report.comparisons[0].control.total == pytest.approx(1.0)
 
 
+def test_evaluate_experiment_untimed_exposure_user_counts_zero_when_others_have_starts() -> None:
+    experiment = ExperimentSettings(
+        enabled=True,
+        id="exp",
+        primary_metric="purchase",
+        variants=(
+            VariantSettings(name="control", traffic=0.5),
+            VariantSettings(name="treatment", traffic=0.5),
+        ),
+    )
+    events = pd.DataFrame(
+        [
+            {
+                "user_id": "timed",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": "2026-01-03T00:00:00Z",
+            },
+            {
+                "user_id": "untimed",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": "2026-01-03T00:00:00Z",
+            },
+        ]
+    )
+    exposures = [
+        exposure_row(
+            user_id="timed",
+            experiment_id="exp",
+            variant="treatment",
+            generated_at=None,
+            exposed_at=pd.Timestamp("2026-01-02T00:00:00Z"),
+        ),
+        {
+            "user_id": "untimed",
+            "experiment_id": "exp",
+            "variant": "control",
+            "generated_at": None,
+            "exposed_at": None,
+        },
+    ]
+    report = evaluate_experiment(
+        experiment=experiment,
+        recipes=(_recipe("control"), _recipe("treatment")),
+        events=events,
+        event_weights={"purchase": 1.0},
+        exposures=exposures,
+    )
+    assert report.comparisons[0].control.n_users == 1
+    assert report.comparisons[0].control.total == pytest.approx(0.0)
+    assert report.comparisons[0].treatment.n_users == 1
+    assert report.comparisons[0].treatment.total == pytest.approx(1.0)
+
+
 def test_evaluate_experiment_blocks_on_invalid_promoted_at() -> None:
     experiment = ExperimentSettings(
         enabled=True,
