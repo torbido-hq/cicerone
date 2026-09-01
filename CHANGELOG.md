@@ -70,6 +70,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   different `experiment_id`; rows without an id still count.
 - Recommendation history writes one parquet file per job snapshot instead of
   rewriting the full `recommendation_history.parquet`.
+- `experiment.primary_metric` `ctr` / `conversion` requires `track.enabled`.
 
 ### Security
 

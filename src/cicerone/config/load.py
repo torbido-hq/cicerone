@@ -308,6 +308,9 @@ def _require_online_output_backend(settings: Settings) -> None:
 def _require_track_backend(settings: Settings) -> None:
     if settings.serve.log_impressions and not settings.track.enabled:
         raise ConfigError("serve.log_impressions requires track.enabled = true")
+    rec_metric = settings.experiment.primary_metric in {PRIMARY_METRIC_CTR, PRIMARY_METRIC_CONVERSION}
+    if settings.experiment.enabled and rec_metric and not settings.track.enabled:
+        raise ConfigError("experiment.primary_metric 'ctr'/'conversion' requires track.enabled = true")
     if not settings.track.enabled:
         return
     from cicerone.track.store import TRACK_LOG_HA_ERROR, require_appendable_track_log

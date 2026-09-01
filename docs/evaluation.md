@@ -99,10 +99,11 @@ attribution = "click"        # click | impression | user | recommended
 ```
 
 `user` keeps 0.7.0 intention-to-treat on all events. `click` / `impression`
-use the tracking store (`primary_metric` `ctr` / `conversion` require one of
-those). `recommended` counts only events whose `item_id` was on that user's
-list (no `/track` required). Promote stays fail-closed; CTR and conversion
-also require `track.min_impressions`.
+use the tracking store (`primary_metric` `ctr` / `conversion` require
+`track.enabled` and attribution `click` or `impression`). `recommended` counts
+only events whose `item_id` was on that user's list (no `/track` required).
+Promote stays fail-closed; CTR and conversion also require
+`track.min_impressions`.
 
 ## Production replay
 
