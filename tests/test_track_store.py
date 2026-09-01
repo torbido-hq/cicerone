@@ -379,6 +379,24 @@ def test_track_jsonl_append_without_fcntl(tmp_path, monkeypatch) -> None:
     assert store.append_rows([_row(event_id="imp-2", item_id="ipa-002")]) == 1
 
 
+def test_track_jsonl_assigns_event_id_when_missing(tmp_path) -> None:
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    row = {
+        "kind": "impression",
+        "user_id": "alice",
+        "item_id": "ipa-001",
+        "rank": 1,
+        "occurred_at": "2026-08-28T12:00:00Z",
+        "event_id": "",
+    }
+    store = TrackStore(output)
+    assert store.append_rows([row, dict(row)]) == 2
+    ids = [str(item["event_id"]) for item in store.read_rows()]
+    assert len(ids) == 2
+    assert all(ids)
+    assert ids[0] != ids[1]
+
+
 def test_track_jsonl_second_store_respects_existing_event_ids(tmp_path) -> None:
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     assert TrackStore(output).append_rows([_row()]) == 1
