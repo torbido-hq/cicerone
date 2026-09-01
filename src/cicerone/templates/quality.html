@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en" class="h-full bg-slate-50">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cicerone — Quality</title>
+  {% include "_privacy_meta.html" %}
+  <link rel="icon" type="image/svg+xml" href="/static/cicerone-icon.svg">
+  <link rel="stylesheet" href="/static/tailwind.css">
+</head>
+<body class="h-full">
+  {% set page_subtitle = "Quality" %}
+  {% set nav_current = "quality" %}
+  {% include "_header.html" %}
+  <main id="main" class="mx-auto max-w-6xl px-4 py-6" tabindex="-1">
+    {% if error %}
+    <div class="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800" role="status">{{ error }}</div>
+    {% endif %}
+    {% if empty_track %}
+    <section class="rounded-lg border border-slate-200 bg-white p-4 mb-4">
+      <h2 class="text-sm font-medium text-slate-800 mb-2">CTR and conversion</h2>
+      {% if not track_enabled %}
+      <p class="text-sm text-slate-700">Enable <code>[track]</code> and POST impressions and clicks to <code>/track</code> from the render path. Fetching <code>GET /recommendations</code> is not an impression unless <code>serve.log_impressions</code> is on.</p>
+      {% else %}
+      <p class="text-sm text-slate-700">No tracking metrics yet. POST <code>/track</code> when the widget renders, then wait for the next job (or dashboard refresh after a job writes <code>track_eval</code>).</p>
+      {% endif %}
+    </section>
+    {% elif track_eval %}
+    <section class="rounded-lg border border-slate-200 bg-white p-4 mb-4">
+      <h2 class="text-sm font-medium text-slate-800 mb-2">CTR and conversion</h2>
+      <p class="text-sm text-slate-600 mb-3">
+        Impressions: {{ track_eval.overall.n_impressions }}
+        · Clicks: {{ track_eval.overall.n_clicks }}
+        · Users: {{ track_eval.overall.n_users }}
+        · CTR: {{ "%.4f"|format(track_eval.overall.ctr) }}
+        · CVR (click): {{ "%.4f"|format(track_eval.overall.cvr_click) }}
+        · CVR (view): {{ "%.4f"|format(track_eval.overall.cvr_view) }}
+      </p>
+      {% if track_eval.by_rank %}
+      <h3 class="text-sm font-medium text-slate-800 mb-2">By rank</h3>
+      <table class="w-full text-sm border-collapse mb-4">
+        <thead>
+          <tr class="text-left text-slate-600 border-b border-slate-200">
+            <th scope="col" class="py-2 px-2">Rank</th>
+            <th scope="col" class="py-2 px-2">Impressions</th>
+            <th scope="col" class="py-2 px-2">CTR</th>
+            <th scope="col" class="py-2 px-2">CVR click</th>
+            <th scope="col" class="py-2 px-2">CVR view</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for rank, row in track_eval.by_rank.items() %}
+          <tr class="border-b border-slate-100">
+            <th scope="row" class="py-2 px-2 text-left font-medium text-slate-800">{{ rank }}</th>
+            <td class="py-2 px-2 text-slate-700">{{ row.n_impressions }}</td>
+            <td class="py-2 px-2 text-slate-700">{{ "%.4f"|format(row.ctr) }}</td>
+            <td class="py-2 px-2 text-slate-700">{{ "%.4f"|format(row.cvr_click) }}</td>
+            <td class="py-2 px-2 text-slate-700">{{ "%.4f"|format(row.cvr_view) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+      {% if track_eval.by_source %}
+      <h3 class="text-sm font-medium text-slate-800 mb-2">By source</h3>
+      <table class="w-full text-sm border-collapse mb-4">
+        <thead>
+          <tr class="text-left text-slate-600 border-b border-slate-200">
+            <th scope="col" class="py-2 px-2">Source</th>
+            <th scope="col" class="py-2 px-2">Impressions</th>
+            <th scope="col" class="py-2 px-2">CTR</th>
+            <th scope="col" class="py-2 px-2">CVR click</th>
+            <th scope="col" class="py-2 px-2">CVR view</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for source, row in track_eval.by_source.items() %}
+          <tr class="border-b border-slate-100">
+            <th scope="row" class="py-2 px-2 text-left font-medium text-slate-800">{{ source }}</th>
+            <td class="py-2 px-2 text-slate-700">{{ row.n_impressions }}</td>
+            <td class="py-2 px-2 text-slate-700">{{ "%.4f"|format(row.ctr) }}</td>
+            <td class="py-2 px-2 text-slate-700">{{ "%.4f"|format(row.cvr_click) }}</td>
+            <td class="py-2 px-2 text-slate-700">{{ "%.4f"|format(row.cvr_view) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+      {% if track_eval.by_variant %}
+      <h3 class="text-sm font-medium text-slate-800 mb-2">By variant</h3>
+      <table class="w-full text-sm border-collapse mb-4">
+        <thead>
+          <tr class="text-left text-slate-600 border-b border-slate-200">
+            <th scope="col" class="py-2 px-2">Variant</th>
+            <th scope="col" class="py-2 px-2">Impressions</th>
+            <th scope="col" class="py-2 px-2">CTR</th>
+            <th scope="col" class="py-2 px-2">CVR click</th>
+            <th scope="col" class="py-2 px-2">CVR view</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for variant, row in track_eval.by_variant.items() %}
+          <tr class="border-b border-slate-100">
+            <th scope="row" class="py-2 px-2 text-left font-medium text-slate-800">{{ variant }}</th>
+            <td class="py-2 px-2 text-slate-700">{{ row.n_impressions }}</td>
+            <td class="py-2 px-2 text-slate-700">{{ "%.4f"|format(row.ctr) }}</td>
+            <td class="py-2 px-2 text-slate-700">{{ "%.4f"|format(row.cvr_click) }}</td>
+            <td class="py-2 px-2 text-slate-700">{{ "%.4f"|format(row.cvr_view) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+    </section>
+    {% endif %}
+    {% if served_eval %}
+    <section class="rounded-lg border border-slate-200 bg-white p-4 mb-4">
+      <h2 class="text-sm font-medium text-slate-800 mb-2">Production replay</h2>
+      <p class="text-sm text-slate-600 mb-3">
+        Users scored: {{ served_eval.n_users }}
+        · With later events: {{ served_eval.n_users_with_events }}
+        {% if served_eval.generated_at %}· Lists from {{ served_eval.generated_at }}{% endif %}
+      </p>
+      {% if served_eval.metrics %}
+      <table class="w-full text-sm border-collapse mb-4">
+        <thead>
+          <tr class="text-left text-slate-600 border-b border-slate-200">
+            <th scope="col" class="py-2 px-2">Metric</th>
+            <th scope="col" class="py-2 px-2">Value</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for name, value in served_eval.metrics.items() %}
+          <tr class="border-b border-slate-100">
+            <th scope="row" class="py-2 px-2 text-left font-medium text-slate-800">{{ name }}</th>
+            <td class="py-2 px-2 text-slate-700">{{ "%.4f"|format(value) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+      {% if served_eval.by_source %}
+      <h3 class="text-sm font-medium text-slate-800 mb-2">Hit rate by source</h3>
+      <table class="w-full text-sm border-collapse">
+        <thead>
+          <tr class="text-left text-slate-600 border-b border-slate-200">
+            <th scope="col" class="py-2 px-2">Source</th>
+            <th scope="col" class="py-2 px-2">Metrics</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for source, metrics in served_eval.by_source.items() %}
+          <tr class="border-b border-slate-100">
+            <th scope="row" class="py-2 px-2 text-left font-medium text-slate-800">{{ source }}</th>
+            <td class="py-2 px-2 text-slate-700">
+              {% for name, value in metrics.items() %}{{ name }}={{ "%.4f"|format(value) }}{% if not loop.last %} · {% endif %}{% endfor %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+    </section>
+    {% elif eval_enabled %}
+    <p class="text-sm text-slate-700">Production replay is on; metrics appear after the next job scores the previous lists.</p>
+    {% endif %}
+  </main>
+</body>
+</html>

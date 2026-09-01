@@ -127,6 +127,122 @@ def test_job_publishes_recommendations_after_write(tmp_path, monkeypatch):
     assert closed["n"] == 1
 
 
+def test_job_run_writes_track_and_served_eval(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.utcnow()
+    events = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 2, "occurred_at": now},
+            {"user_id": "u1", "item_id": "i2", "event_type": "view", "quantity": 1, "occurred_at": now},
+            {
+                "user_id": "u2",
+                "item_id": "i1",
+                "event_type": "review_positive",
+                "quantity": 1,
+                "occurred_at": now,
+            },
+            {"user_id": "u2", "item_id": "i3", "event_type": "saved", "quantity": 1, "occurred_at": now},
+        ]
+    )
+    items = pd.DataFrame(
+        [
+            {"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True},
+            {"item_id": "i2", "category": "beer", "producer_id": "p2", "published": True, "in_stock": True},
+            {"item_id": "i3", "category": "wine", "producer_id": "p1", "published": True, "in_stock": True},
+        ]
+    )
+    events.to_parquet(input_dir / "events.parquet", index=False)
+    items.to_parquet(input_dir / "items.parquet", index=False)
+    extra = """
+        [track]
+        enabled = true
+        [job.eval]
+        enabled = true
+        """
+    config_path = _write_config(tmp_path, input_dir, output_dir, top_k=2, extra=extra)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
+    job.run()
+    from cicerone.config import IOSettings
+    from cicerone.track.normalize import normalize_track
+    from cicerone.track.store import TrackStore
+
+    recs = pd.read_parquet(output_dir / "recommendations.parquet")
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(output_dir)})
+    store = TrackStore(output)
+    row = recs.iloc[0]
+    store.append_rows(
+        [
+            normalize_track(
+                {
+                    "kind": "impression",
+                    "user_id": str(row["user_id"]),
+                    "item_id": str(row["item_id"]),
+                    "rank": 1,
+                    "occurred_at": pd.Timestamp.now(tz="UTC").isoformat(),
+                    "event_id": "imp-job-1",
+                }
+            ).as_row()
+        ]
+    )
+    job.run()
+    report = json.loads((output_dir / "track_eval.json").read_text())
+    assert "track_eval" in report
+    history_dir = output_dir / "recommendation_history"
+    assert history_dir.is_dir()
+    assert list(history_dir.glob("*.parquet"))
+    assert report["track_eval"]["overall"]["n_impressions"] >= 1
+
+
+def test_job_run_swallows_eval_persistence_errors(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.utcnow()
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 2, "occurred_at": now},
+            {"user_id": "u1", "item_id": "i2", "event_type": "view", "quantity": 1, "occurred_at": now},
+            {
+                "user_id": "u2",
+                "item_id": "i1",
+                "event_type": "review_positive",
+                "quantity": 1,
+                "occurred_at": now,
+            },
+            {"user_id": "u2", "item_id": "i3", "event_type": "saved", "quantity": 1, "occurred_at": now},
+        ]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    pd.DataFrame(
+        [
+            {"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True},
+            {"item_id": "i2", "category": "beer", "producer_id": "p2", "published": True, "in_stock": True},
+            {"item_id": "i3", "category": "wine", "producer_id": "p1", "published": True, "in_stock": True},
+        ]
+    ).to_parquet(input_dir / "items.parquet", index=False)
+    extra = """
+        [track]
+        enabled = true
+        [job.eval]
+        enabled = true
+        """
+    config_path = _write_config(tmp_path, input_dir, output_dir, top_k=2, extra=extra)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
+    monkeypatch.setattr(
+        "cicerone.track.store.TrackStore.write_eval",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("eval")),
+    )
+    monkeypatch.setattr(
+        "cicerone.track.store.TrackStore.append_history",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("history")),
+    )
+    job.run()
+    assert (output_dir / "recommendations.parquet").exists()
+
+
 def test_recommendation_user_count_excludes_cold_start():
     frame = pd.DataFrame(
         [

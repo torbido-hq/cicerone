@@ -441,3 +441,245 @@ def test_experiment_context_events_s3_missing(tmp_path, monkeypatch):
     monkeypatch.setattr("cicerone.dashboard_experiments.is_s3_not_found", lambda _exc: True)
     context = experiment_context(settings)
     assert context["report"] is not None
+
+
+def test_experiment_context_ctr_from_track_rows(tmp_path):
+    from cicerone.track.normalize import normalize_track
+    from cicerone.track.store import TrackStore
+
+    base = _settings(tmp_path, log_exposures=False)
+    _write_frames(
+        base,
+        events=[
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": "2026-08-28T12:10:00Z",
+            }
+        ],
+        recs=[
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                VARIANT_COLUMN: "control",
+            },
+            {
+                "user_id": "u2",
+                "item_id": "i2",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                VARIANT_COLUMN: "treatment",
+            },
+        ],
+    )
+    TrackStore(base.output).append_rows(
+        [
+            normalize_track(
+                {
+                    "kind": "impression",
+                    "user_id": "u1",
+                    "item_id": "i1",
+                    "rank": 1,
+                    "occurred_at": "2026-08-28T12:00:00Z",
+                    "event_id": "imp-u1",
+                }
+            ).as_row(),
+            normalize_track(
+                {
+                    "kind": "click",
+                    "user_id": "u1",
+                    "item_id": "i1",
+                    "occurred_at": "2026-08-28T12:01:00Z",
+                    "event_id": "clk-u1",
+                }
+            ).as_row(),
+        ]
+    )
+    settings = make_settings(
+        feature_config_path=str(REPO_FEATURES),
+        input=base.input,
+        output=base.output,
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="exp-1",
+            primary_metric="ctr",
+            attribution="click",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        track={"enabled": True},
+    )
+    context = experiment_context(settings)
+    assert context["report"] is not None
+    assert context["report"].primary_metric == "ctr"
+
+
+def test_experiment_context_skips_other_experiment_track_rows(tmp_path, monkeypatch):
+    from cicerone.track.normalize import normalize_track
+    from cicerone.track.store import TrackStore
+
+    def _impression(user_id: str, event_id: str, experiment_id: str | None = None) -> dict:
+        payload = {
+            "kind": "impression",
+            "user_id": user_id,
+            "item_id": "i1",
+            "rank": 1,
+            "occurred_at": "2026-08-28T12:00:00Z",
+            "event_id": event_id,
+        }
+        if experiment_id is not None:
+            payload["experiment_id"] = experiment_id
+        return normalize_track(payload).as_row()
+
+    base = _settings(tmp_path, log_exposures=False)
+    _write_frames(
+        base,
+        events=[{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1}],
+        recs=[
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                VARIANT_COLUMN: "control",
+            }
+        ],
+    )
+    TrackStore(base.output).append_rows(
+        [_impression(f"old-{i}", f"imp-old-{i}", "exp-old") for i in range(100)]
+        + [_impression("u1", "imp-now", "exp-1"), _impression("u-bare", "imp-bare")]
+    )
+    settings = make_settings(
+        feature_config_path=str(REPO_FEATURES),
+        input=base.input,
+        output=base.output,
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="exp-1",
+            primary_metric="ctr",
+            attribution="click",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        track={"enabled": True, "min_impressions": 100},
+    )
+    captured: dict[str, list] = {}
+
+    def _capture(**kwargs):
+        captured["rows"] = list(kwargs["track_rows"])
+        return {}
+
+    monkeypatch.setattr("cicerone.dashboard_experiments.user_track_outcomes", _capture)
+    context = experiment_context(settings)
+    ids = {str(row.get("experiment_id") or "") for row in captured["rows"]}
+    assert "exp-old" not in ids
+    assert ids == {"", "exp-1"}
+    assert context["report"] is not None
+    assert "volume" in context["report"].promote_blocked_by
+
+
+def test_experiment_context_track_read_error(tmp_path, monkeypatch):
+    base = _settings(tmp_path, log_exposures=False)
+    _write_frames(
+        base,
+        events=[{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1}],
+        recs=[
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                VARIANT_COLUMN: "control",
+            }
+        ],
+    )
+    settings = make_settings(
+        feature_config_path=str(REPO_FEATURES),
+        input=base.input,
+        output=base.output,
+        experiment=base.experiment,
+        track={"enabled": True},
+    )
+    monkeypatch.setattr(
+        "cicerone.track.store.TrackStore.read_rows",
+        lambda self: (_ for _ in ()).throw(RuntimeError("track")),
+    )
+    context = experiment_context(settings)
+    assert context["report"] is not None
+    assert context["report"].n_assigned >= 0
+
+
+def test_experiment_context_user_attribution_skips_track_outcomes(tmp_path, monkeypatch):
+    base = _settings(tmp_path, log_exposures=False)
+    _write_frames(
+        base,
+        events=[{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1}],
+        recs=[
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                VARIANT_COLUMN: "control",
+            }
+        ],
+    )
+    settings = make_settings(
+        feature_config_path=str(REPO_FEATURES),
+        input=base.input,
+        output=base.output,
+        experiment=base.experiment,
+        track={"enabled": True},
+    )
+    called = {"n": 0}
+
+    def _boom(**_kwargs):
+        called["n"] += 1
+        return {}
+
+    monkeypatch.setattr("cicerone.dashboard_experiments.user_track_outcomes", _boom)
+    context = experiment_context(settings)
+    assert context["report"] is not None
+    assert called["n"] == 0
+
+
+def test_experiment_context_events_full_parquet_fallback(tmp_path, monkeypatch):
+    settings = _settings(tmp_path, log_exposures=False)
+    _write_frames(
+        settings,
+        events=[{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1}],
+        recs=[
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                VARIANT_COLUMN: "control",
+            }
+        ],
+    )
+    calls = {"n": 0}
+
+    def _boom(*_args, **_kwargs):
+        calls["n"] += 1
+        raise RuntimeError("parquet")
+
+    monkeypatch.setattr("cicerone.dashboard_experiments.read_parquet", _boom)
+    monkeypatch.setattr("cicerone.dashboard_experiments.is_s3_not_found", lambda _exc: False)
+    context = experiment_context(settings)
+    assert context["report"] is not None
+    assert calls["n"] >= 2

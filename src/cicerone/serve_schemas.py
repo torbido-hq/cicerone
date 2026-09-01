@@ -128,3 +128,31 @@ class EventsIngestRequest(BaseModel):
 class EventsIngestResponse(BaseModel):
     accepted: int = Field(description="Number of events accepted into the source queue")
     event_ids: list[str] = Field(description="Assigned or provided event ids")
+
+
+class TrackEvent(BaseModel):
+    kind: str = Field(description="impression or click")
+    user_id: str = Field(description="User identifier")
+    item_id: str = Field(description="Shown or clicked item identifier")
+    rank: int | None = Field(default=None, ge=1, description="1-based slot in the rendered list")
+    occurred_at: str | int | float = Field(
+        description=(
+            "ISO-8601 timestamp with timezone (Z or explicit offset), or Unix epoch "
+            "seconds (UTC); converted to UTC"
+        ),
+        examples=["2026-08-28T12:00:00Z", 1724000000],
+    )
+    event_id: str | None = Field(default=None, description="Optional idempotency id")
+    idempotency_key: str | None = Field(default=None, description="Alias for event_id")
+    variant: str | None = Field(default=None, description="Experiment variant when known")
+    experiment_id: str | None = Field(default=None, description="Experiment id when known")
+    generated_at: str | None = Field(default=None, description="Recommendation batch timestamp")
+
+
+class TrackIngestRequest(BaseModel):
+    events: list[TrackEvent] = Field(description="Batch of impression/click events")
+
+
+class TrackIngestResponse(BaseModel):
+    accepted: int = Field(description="Number of new rows written (duplicates skipped)")
+    event_ids: list[str] = Field(description="Assigned or provided event ids")

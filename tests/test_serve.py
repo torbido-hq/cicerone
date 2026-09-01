@@ -276,6 +276,17 @@ def test_recommendations_respects_limit_query_param():
     assert len(response.json()["items"]) == 1
 
 
+def test_recommendations_accepts_k_alias():
+    app = create_app(
+        _settings(),
+        _FakeReader(_recs_df(), _items_df()),
+        feature_config=_feature_config(),
+    )
+    response = TestClient(app).get("/recommendations/u1?k=1", headers={"Authorization": "Bearer secret"})
+    assert response.status_code == 200
+    assert len(response.json()["items"]) == 1
+
+
 def test_recommendations_rejects_conflicting_limit_and_k():
     app = create_app(
         _settings(),

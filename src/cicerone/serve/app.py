@@ -5,7 +5,9 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Request, Response
@@ -14,7 +16,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from cicerone import __version__
 from cicerone.config import Settings, load_settings
-from cicerone.config.constants import DEFAULT_LOG_FORMAT
+from cicerone.config.constants import DEFAULT_LOG_FORMAT, TRACK_KIND_IMPRESSION
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
 from cicerone.experiment.assignment import resolve_assignment
@@ -44,6 +46,8 @@ from cicerone.serve.metrics import (
     update_events_source_health,
 )
 from cicerone.serve_schemas import ErrorDetail, HealthResponse, RecommendationItem, RecommendationsResponse
+from cicerone.track.routes import attach_track_ingest_openapi, mount_track_routes
+from cicerone.track.store import TrackStore
 
 logging.basicConfig(level=logging.INFO, format=DEFAULT_LOG_FORMAT)
 logger = logging.getLogger(__name__)
@@ -59,6 +63,9 @@ looks up rows already stored in the configured output (dataset parquet or DB).
 When `[events]` is enabled with `kind = "webhook"`, `POST /events` accepts
 interaction events for micro-batch incremental updates (write-through to the
 same output store). See `docs/incremental-events.md`.
+
+When `[track]` is enabled, `POST /track` accepts recommendation impressions
+and clicks (not used for training). See `docs/evaluation.md`.
 
 Interactive docs: `/docs` (Swagger UI) and `/redoc` (includes language
 code samples via ``x-codeSamples``). Machine-readable schema: `/openapi.json`.
@@ -155,6 +162,7 @@ def create_app(
     app.state.generated_at_cache = generated_at_cache
     app.state.events_worker = events_worker
     experiment_store = ExperimentStore(settings.output) if settings.experiment.enabled else None
+    track_store = TrackStore(settings.output) if settings.track.enabled else None
     missing_category_warned = False
 
     @app.middleware("http")
@@ -294,6 +302,26 @@ def create_app(
                     )
                 except Exception:
                     logger.exception("Failed to append experiment exposure for user_id=%r", user_id)
+        if settings.serve.log_impressions and track_store is not None and not filtered.empty:
+            try:
+                occurred = datetime.now(UTC).isoformat()
+                rows = [
+                    {
+                        "kind": TRACK_KIND_IMPRESSION,
+                        "user_id": user_id,
+                        "item_id": str(row.item_id),
+                        "rank": int(row.rank),
+                        "occurred_at": occurred,
+                        "event_id": str(uuid4()),
+                        "variant": variant,
+                        "experiment_id": experiment_id,
+                        "generated_at": generated_at,
+                    }
+                    for row in filtered.itertuples(index=False)
+                ]
+                track_store.append_rows(rows)
+            except Exception:
+                logger.exception("Failed to append serve impressions for user_id=%r", user_id)
 
         body = RecommendationsResponse(
             generated_at=generated_at,
@@ -317,6 +345,7 @@ def create_app(
         return body
 
     mount_events_routes(app, settings, event_source=event_source)
+    mount_track_routes(app, settings, store=track_store)
 
     def custom_openapi() -> dict:
         if app.openapi_schema is not None:
@@ -341,6 +370,7 @@ def create_app(
             }
         attach_code_samples(schema)
         attach_events_ingest_openapi(schema)
+        attach_track_ingest_openapi(schema)
         app.openapi_schema = schema
         return app.openapi_schema
 

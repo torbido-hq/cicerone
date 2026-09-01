@@ -19,6 +19,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   still looks up from dataset/db. `pip install 'cicerone-recommender[kafka]'`
   or `[rabbitmq]`. Prefer Redis Streams when you already run Redis for the
   lock.
+- `[track]` ingest: `POST /track` records recommendation impressions and clicks
+  off the training event path (db table or local JSONL). Hosts report what was
+  actually rendered; `GET /recommendations` is not an impression unless
+  `[serve].log_impressions` is on.
+- CTR and attributed conversion (view-through and click-through) with an
+  attribution window, sliced by rank, source, and variant. The job writes
+  `track_eval`; the dashboard Quality page shows it.
+- `[experiment].primary_metric` `ctr` / `conversion` and
+  `attribution = click | impression | user | recommended`, with a volume floor
+  (`track.min_impressions`) before promote.
+- Optional `[job.eval]` production replay (HitRate / NDCG / Recall of the
+  previous lists against later events) and append-only recommendation history
+  for windows that span jobs.
 
 ### Fixed
 
@@ -40,6 +53,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   confirm so a failed ack cannot re-apply from the in-memory deque.
 - RabbitMQ `[publish]` connect errors report setup failure, not only an
   unreachable URL.
+- Experiment `ctr` / `conversion` use the track store only when
+  `attribution` is `click` or `impression`. `user` stays event ITT;
+  `recommended` stays a list join. Config rejects the other combinations.
+- Track source/variant slices join impressions to the matching
+  recommendation snapshot (`generated_at`), not the first user-item row.
+- Local JSONL track ingest serializes appends with a file lock so concurrent
+  writers cannot both accept the same `event_id`.
+- DB track ingest counts `accepted` from ids not already in the table when
+  the driver omits INSERT `rowcount`, so duplicates are not reported as new.
+- Track JSONL ingest imports `fcntl` only when present so Windows can load
+  `cicerone.track` (in-process lock only on those platforms).
+- Rank/source/variant CTR slices count clicks and conversions by the matched
+  impression `event_id`, not every row with the same user and item.
+- Experiment CTR/conversion volume and outcomes ignore track rows from a
+  different `experiment_id`; rows without an id still count.
+- Recommendation history writes one parquet file per job snapshot instead of
+  rewriting the full `recommendation_history.parquet`.
+- `experiment.primary_metric` `ctr` / `conversion` requires `track.enabled`.
+- Source/variant fallback uses the newest recommendation snapshot by
+  `generated_at`, not the last row in input order.
+- Track ingest assigns an `event_id` when the host omits one, so blank ids
+  cannot bypass idempotency.
 
 ### Security
 
