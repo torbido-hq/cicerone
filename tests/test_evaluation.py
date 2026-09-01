@@ -734,3 +734,30 @@ def test_evaluation_remaining_branches(monkeypatch) -> None:
     )
     empty_asof = _merge_asof_events(later, earlier, window=timedelta(hours=24))
     assert empty_asof.empty
+
+
+def test_annotate_source_latest_uses_newest_generated_at() -> None:
+    from cicerone.evaluation import _annotate_source
+
+    snapshots = pd.DataFrame(
+        [
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "source": "personalized",
+                "variant": "treatment",
+                "generated_at": "2026-08-28T00:00:00Z",
+            },
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "source": "popular_fallback",
+                "variant": "control",
+                "generated_at": "2026-08-20T00:00:00Z",
+            },
+        ]
+    )
+    impressions = pd.DataFrame([{"user_id": "alice", "item_id": "ipa"}])
+    annotated = _annotate_source(impressions, snapshots)
+    assert annotated.iloc[0]["source"] == "personalized"
+    assert annotated.iloc[0]["variant"] == "treatment"

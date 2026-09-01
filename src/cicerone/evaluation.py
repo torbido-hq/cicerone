@@ -223,6 +223,8 @@ def _annotate_source(impressions: pd.DataFrame, recommendations: pd.DataFrame | 
         keep.append("generated_at")
         recs["generated_at"] = pd.to_datetime(recs["generated_at"], utc=True, errors="coerce")
     recs = recs.loc[:, [column for column in keep if column in recs.columns]]
+    if "generated_at" in recs.columns:
+        recs = recs.sort_values("generated_at", kind="mergesort", na_position="first")
     latest = recs.drop_duplicates(subset=[USER_COLUMN, ITEM_COLUMN], keep="last")
     if "generated_at" in recs.columns and "generated_at" in frame.columns:
         frame["generated_at"] = pd.to_datetime(frame["generated_at"], utc=True, errors="coerce")
