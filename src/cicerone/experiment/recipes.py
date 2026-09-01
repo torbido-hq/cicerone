@@ -142,9 +142,9 @@ def _resolve_policy_spec(
             return tuple(parse([dict(item) for item in items]))
         except (KeyError, TypeError, ValueError) as exc:
             raise ConfigError(f"{label}: {exc}") from exc
-    if any(isinstance(item, (str, Mapping)) for item in items):
-        raise ConfigError(f"{label} must be true, false, rule names, or rule tables")
-    return cast(tuple[_T, ...], items)
+    if all(isinstance(item, (BoostRule, EligibilityRule)) for item in items):
+        return cast(tuple[_T, ...], items)
+    raise ConfigError(f"{label} must be true, false, rule names, or rule tables")
 
 
 def union_models(recipes: Sequence[ResolvedRecipe]) -> list[str]:

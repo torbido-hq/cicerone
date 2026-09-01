@@ -17,6 +17,7 @@ from cicerone.experiment.recipes import (
     inherit_combiner,
     recipes_manifest_json,
     resolve_boost_policy,
+    resolve_eligibility_policy,
     resolve_recipes,
     union_models,
 )
@@ -305,3 +306,12 @@ def test_resolve_boost_policy_edge_shapes() -> None:
             inherited,
             label="boosts",
         )
+    with pytest.raises(ConfigError, match="must be true, false"):
+        resolve_boost_policy([1], inherited, label="boosts")
+    with pytest.raises(ConfigError, match="must be true, false"):
+        resolve_boost_policy((1,), inherited, label="boosts")
+    with pytest.raises(ConfigError, match="must be true, false"):
+        resolve_eligibility_policy([1], _features().eligibility, label="eligibility")
+    assert resolve_boost_policy(tuple(inherited), inherited, label="boosts") == tuple(inherited)
+    eligibility = tuple(_features().eligibility)
+    assert resolve_eligibility_policy(eligibility, eligibility, label="eligibility") == eligibility
