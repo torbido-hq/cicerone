@@ -49,7 +49,7 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
     except Exception:
         logger.exception("Failed to read experiment state")
         state = store.last_state(experiment.id) or _PROMOTE_STATE.get(experiment.id)
-    if state and state.get("experiment_id") == experiment.id:
+    if state and str(state.get("experiment_id") or "") == str(experiment.id):
         promoted = state.get("promoted_variant")
         promoted = str(promoted) if promoted else None
         promoted_at = state.get("promoted_at")

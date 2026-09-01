@@ -369,6 +369,34 @@ def test_experiment_context_reuses_cached_promote_state_on_read_failure(tmp_path
     assert experiment_context(settings)["promoted_variant"] == "treatment"
 
 
+def test_experiment_context_promoted_variant_when_state_experiment_id_is_int(tmp_path, monkeypatch):
+    settings = _settings(tmp_path, id="7")
+    _write_frames(
+        settings,
+        events=[{"user_id": "u1", "item_id": "i1", "event_type": "view", "quantity": 1}],
+        recs=[
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                VARIANT_COLUMN: "control",
+            }
+        ],
+    )
+
+    def _state(_self):
+        return {
+            "experiment_id": 7,
+            "promoted_variant": "treatment",
+            "promoted_at": "2026-09-02T00:00:00Z",
+        }
+
+    monkeypatch.setattr("cicerone.experiment.store.ExperimentStore.read_state", _state)
+    assert experiment_context(settings)["promoted_variant"] == "treatment"
+
+
 def test_experiment_context_recipes_from_manifest(tmp_path, monkeypatch):
     settings = _settings(tmp_path, log_exposures=False)
     _write_frames(

@@ -98,10 +98,13 @@ class ExperimentStore:
 
     def last_state(self, experiment_id: str) -> dict[str, Any] | None:
         """Last successful promote-state row for ``experiment_id``, if any."""
+        wanted = str(experiment_id)
         with self._promote_lock:
-            if self._promote_loaded and self._promote_experiment_id == experiment_id:
-                return None if self._promote_state is None else dict(self._promote_state)
-        return None
+            if not self._promote_loaded or self._promote_state is None:
+                return None
+            if str(self._promote_state.get("experiment_id") or "") != wanted:
+                return None
+            return dict(self._promote_state)
 
     def _remember_state(self, state: dict[str, Any] | None) -> None:
         with self._promote_lock:
@@ -118,23 +121,19 @@ class ExperimentStore:
 
     def promoted_variant(self, experiment_id: str) -> str | None:
         """Return the live promote winner; reuse the last successful read on failure."""
+        wanted = str(experiment_id)
         try:
             state = self.read_state()
         except Exception:
             logger.exception("Failed to read experiment promote state")
             with self._promote_lock:
-                if self._promote_loaded and self._promote_experiment_id == experiment_id:
+                if self._promote_loaded and self._promote_experiment_id == wanted:
                     return self._promote_value
             return None
-        value = None
-        if state and state.get("experiment_id") == experiment_id:
+        if state and str(state.get("experiment_id") or "") == wanted:
             promoted = state.get("promoted_variant")
-            value = str(promoted) if promoted else None
-        with self._promote_lock:
-            self._promote_loaded = True
-            self._promote_experiment_id = experiment_id
-            self._promote_value = value
-        return value
+            return str(promoted) if promoted else None
+        return None
 
     def write_state(self, state: Mapping[str, Any]) -> None:
         payload = dict(state)

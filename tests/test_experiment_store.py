@@ -287,6 +287,34 @@ def test_experiment_store_last_state_reuses_write_cache(tmp_path) -> None:
     assert store.last_state("other") is None
 
 
+def test_last_state_ignores_cache_when_promoted_variant_queries_other_id(tmp_path) -> None:
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    store = ExperimentStore(output)
+    store.write_state(
+        experiment_state("exp", promoted_variant="treatment", promoted_at="2026-09-02T00:00:00Z")
+    )
+    assert store.promoted_variant("other") is None
+    assert store.last_state("other") is None
+    cached = store.last_state("exp")
+    assert cached is not None
+    assert cached["promoted_variant"] == "treatment"
+
+
+def test_last_state_matches_non_string_experiment_id(tmp_path) -> None:
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    store = ExperimentStore(output)
+    store.write_state(
+        {
+            "experiment_id": 7,
+            "promoted_variant": "treatment",
+            "promoted_at": "2026-09-02T00:00:00Z",
+        }
+    )
+    cached = store.last_state("7")
+    assert cached is not None
+    assert cached["promoted_variant"] == "treatment"
+
+
 def test_read_exposures_missing_experiment_id_column_returns_empty(tmp_path) -> None:
     url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
     output = IOSettings(kind="db", options={"database_url": url})
