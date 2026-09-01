@@ -262,12 +262,12 @@ def _recipes(settings: Settings, feature_config: FeatureConfig | None) -> tuple[
                 boosts=resolve_boost_policy(
                     item.get("boosts", True),
                     feature_config.boosts,
-                    label="experiment_variants.boosts",
+                    label=f"experiment_variants[{item['name']}].boosts",
                 ),
                 eligibility=resolve_eligibility_policy(
                     item.get("eligibility", True),
                     feature_config.eligibility,
-                    label="experiment_variants.eligibility",
+                    label=f"experiment_variants[{item['name']}].eligibility",
                 ),
             )
             for item in parsed
