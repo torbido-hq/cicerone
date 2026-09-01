@@ -92,6 +92,32 @@ def test_log_impressions_requires_track(tmp_path):
         )
 
 
+def test_ctr_metric_requires_track(tmp_path):
+    with pytest.raises(ConfigError, match="ctr.*requires track.enabled"):
+        load_settings(
+            write_toml(
+                tmp_path,
+                """
+                [job]
+                """
+                + _minimal_io()
+                + """
+                [experiment]
+                enabled = true
+                id = "exp"
+                primary_metric = "ctr"
+                attribution = "click"
+                [[experiment.variants]]
+                name = "control"
+                traffic = 0.5
+                [[experiment.variants]]
+                name = "treatment"
+                traffic = 0.5
+                """,
+            )
+        )
+
+
 def test_load_settings_rejects_track_on_object_store(tmp_path):
     with pytest.raises(ConfigError, match="not atomic"):
         load_settings(
@@ -180,6 +206,8 @@ def test_load_experiment_attribution(tmp_path):
             """
             + _minimal_io()
             + """
+            [track]
+            enabled = true
             [experiment]
             enabled = true
             id = "exp"
