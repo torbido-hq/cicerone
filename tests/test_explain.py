@@ -56,6 +56,22 @@ def test_overlap_skips_self_and_unindexed_history():
     assert matched == [{"column": "style", "value": "lager"}]
 
 
+def test_overlap_dedupes_repeated_history_ids():
+    token_index = {
+        "rec": {"style=lager": 1.0},
+        "hist": {"style=lager": 1.0},
+    }
+    similar, matched = overlap_for_item(
+        item_id="rec",
+        history_ids=["hist", "hist", "hist"],
+        token_index=token_index,
+        max_similar_items=3,
+        max_attributes=5,
+    )
+    assert similar == [{"item_id": "hist", "score": 1.0}]
+    assert matched == [{"column": "style", "value": "lager"}]
+
+
 def test_attach_reasons_serializes_sources_and_overlap():
     recs = pd.DataFrame(
         [

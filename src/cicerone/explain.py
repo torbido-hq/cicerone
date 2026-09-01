@@ -90,8 +90,15 @@ def _user_history(
         items = history.setdefault(user_id, [])
         items.append(item_id)
     for user_id, items in history.items():
-        if len(items) > cap:
-            history[user_id] = items[-cap:]
+        unique: list[str] = []
+        seen: set[str] = set()
+        for item_id in reversed(items):
+            if item_id in seen:
+                continue
+            seen.add(item_id)
+            unique.append(item_id)
+        unique.reverse()
+        history[user_id] = unique[-cap:] if len(unique) > cap else unique
     return history
 
 
@@ -115,9 +122,11 @@ def overlap_for_item(
         return [], []
     rec_keys = set(rec_tokens)
     scored: list[tuple[str, float, set[str]]] = []
+    seen: set[str] = set()
     for history_id in history_ids:
-        if history_id == item_id:
+        if history_id == item_id or history_id in seen:
             continue
+        seen.add(history_id)
         hist_tokens = token_index.get(history_id)
         if not hist_tokens:
             continue

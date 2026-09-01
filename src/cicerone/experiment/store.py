@@ -82,6 +82,7 @@ class ExperimentStore:
         self._promote_loaded = False
         self._promote_experiment_id: str | None = None
         self._promote_value: str | None = None
+        self._promote_state: dict[str, Any] | None = None
 
     def _db_engine(self) -> Engine:
         if self._engine is None:
@@ -91,9 +92,29 @@ class ExperimentStore:
         return self._engine
 
     def read_state(self) -> dict[str, Any] | None:
-        if self._kind == "db":
-            return self._read_state_db()
-        return self._read_state_dataset()
+        state = self._read_state_db() if self._kind == "db" else self._read_state_dataset()
+        self._remember_state(state)
+        return state
+
+    def last_state(self, experiment_id: str) -> dict[str, Any] | None:
+        """Last successful promote-state row for ``experiment_id``, if any."""
+        with self._promote_lock:
+            if self._promote_loaded and self._promote_experiment_id == experiment_id:
+                return None if self._promote_state is None else dict(self._promote_state)
+        return None
+
+    def _remember_state(self, state: dict[str, Any] | None) -> None:
+        with self._promote_lock:
+            self._promote_loaded = True
+            if state and state.get("experiment_id"):
+                self._promote_experiment_id = str(state.get("experiment_id") or "")
+                promoted = state.get("promoted_variant")
+                self._promote_value = str(promoted) if promoted else None
+                self._promote_state = dict(state)
+            else:
+                self._promote_experiment_id = None
+                self._promote_value = None
+                self._promote_state = None
 
     def promoted_variant(self, experiment_id: str) -> str | None:
         """Return the live promote winner; reuse the last successful read on failure."""
@@ -127,6 +148,7 @@ class ExperimentStore:
             self._promote_loaded = True
             self._promote_experiment_id = str(payload.get("experiment_id") or "")
             self._promote_value = str(promoted) if promoted else None
+            self._promote_state = dict(payload)
 
     def append_exposures(self, rows: Sequence[Mapping[str, Any]]) -> None:
         if not rows:
@@ -166,7 +188,7 @@ class ExperimentStore:
         engine = self._db_engine()
         try:
             frame = pd.read_sql(
-                text(f'SELECT * FROM "{table}" ORDER BY promoted_at DESC LIMIT 1'),
+                text(f'SELECT * FROM "{table}" ORDER BY (promoted_at IS NULL), promoted_at DESC LIMIT 1'),
                 engine,
             )
         except Exception as exc:

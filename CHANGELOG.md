@@ -4,6 +4,28 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.2] - 2026-09-01
+
+### Fixed
+
+- Experiment promote-state reads order null `promoted_at` last (Postgres
+  `DESC` otherwise prefers the legacy null row).
+- Online LightFM skips `fit_partial` and artifact persist when sequential is
+  in the last artifact and torch is missing.
+- Online refresh rewrites every user in the pending extra window when
+  `fit_min_events` fires, not only the current batch.
+- Incremental write-through applies ranking boosts only to the assigned
+  experiment variant.
+- Experiment first-exposure uses a later timestamped row when the first log
+  line has no `exposed_at`; events before that start are dropped.
+- Empty or failed exposure logs stay exposure-conditional instead of
+  silently switching to ITT.
+- Dashboard promote reads reuse the last successful state when the store
+  fails (same fail-closed cache as serve).
+- Job target users stringify IDs so int/str duplicates do not split.
+- Explain similar-item overlap counts each history item once.
+- Content-fallback top-K ties follow item id.
+
 ## [0.7.1] - 2026-08-31
 
 ### Changed

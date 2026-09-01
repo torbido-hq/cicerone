@@ -129,6 +129,22 @@ def test_load_online_and_experiment_warns(tmp_path, caplog):
     assert any("online collaborative refresh will be skipped" in record.message for record in caplog.records)
 
 
+def test_make_settings_online_sequential_without_torch_warns(monkeypatch, caplog):
+    from cicerone.config import EventsOnlineSettings
+
+    monkeypatch.setattr("cicerone.model_config.sequential_extra_available", lambda: False)
+    with caplog.at_level(logging.WARNING, logger="cicerone.config.load"):
+        make_settings(
+            models=["collaborative", "sequential"],
+            events=EventsSettings(
+                enabled=True,
+                kind="webhook",
+                online=EventsOnlineSettings(enabled=True),
+            ),
+        )
+    assert any("torch extra is not installed" in record.message for record in caplog.records)
+
+
 def test_load_online_rejects_s3_output(tmp_path):
     path = write_toml(
         tmp_path,

@@ -202,6 +202,14 @@ class OnlineTrainer:
         )
         if artifact is None or working is None:
             return OnlineRefreshResult(rows=empty_online_rows())
+        models, fitted, skip_sequential = self._recommend_models(artifact)
+        if skip_sequential:
+            logger.info(
+                "Online refresh skipped (sequential in artifact, torch extra missing); "
+                "%d event(s) not rewritten",
+                len(events),
+            )
+            return OnlineRefreshResult(rows=empty_online_rows(), sequential_skipped=True)
 
         batch = events_to_dataframe(events)
         users = batch[USER_COLUMN].astype(str)
@@ -238,7 +246,6 @@ class OnlineTrainer:
         working = _dataset_with_interactions(maps, _merge_interaction_frames(self._job_raw, extra_raw))
         pending_fit += int(len(known))
 
-        models, fitted, skip_sequential = self._recommend_models(artifact)
         epochs_run = 0
         collaborative = fitted.get("collaborative")
         if (
@@ -255,31 +262,7 @@ class OnlineTrainer:
             fitted = {**fitted, "collaborative": collaborative}
             artifact = replace(artifact, fitted={**artifact.fitted, "collaborative": collaborative})
 
-        if skip_sequential:
-            artifact = replace(artifact, dataset=working, fitted={**artifact.fitted, **fitted})
-            self._pending = _PendingRefresh(
-                artifact=artifact,
-                working=working,
-                pending_fit_events=pending_fit,
-                extra_raw=extra_raw,
-                baseline_token=self._artifact_token,
-                baseline_digest=self._payload_digest,
-            )
-            logger.info(
-                "Online refresh skipped recommend (sequential in artifact, torch extra missing); "
-                "fit_partial=%d, %d known event(s)",
-                epochs_run,
-                len(known),
-            )
-            return OnlineRefreshResult(
-                rows=empty_online_rows(),
-                fit_partial_epochs=epochs_run,
-                events_dropped_unknown=dropped,
-                events_known=int(len(known)),
-                sequential_skipped=True,
-            )
-
-        target_users = sorted({str(user_id) for user_id in extra[Columns.User].unique()})
+        target_users = sorted({str(user_id) for user_id in extra_raw[Columns.User].unique()})
         built = BuiltDataset(
             dataset=working,
             interactions=working.get_raw_interactions(),

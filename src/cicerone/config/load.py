@@ -207,6 +207,7 @@ def make_settings(**overrides: Any) -> Settings:
     _require_exposure_log_backend(settings)
     _require_online_output_backend(settings)
     _warn_online_skipped_for_experiment(settings)
+    _warn_online_skipped_for_sequential(settings)
     return settings
 
 
@@ -263,6 +264,26 @@ def _warn_online_skipped_for_experiment(settings: Settings) -> None:
             "[events.online] is enabled while [experiment] is enabled; "
             "online collaborative refresh will be skipped"
         )
+
+
+def _warn_online_skipped_for_sequential(settings: Settings) -> None:
+    if not settings.events.online.enabled:
+        return
+    names = settings.models
+    if names is None:
+        from cicerone.config.constants import DEFAULT_MODELS
+
+        names = DEFAULT_MODELS
+    if "sequential" not in names:
+        return
+    from cicerone.model_config import sequential_extra_available
+
+    if sequential_extra_available():
+        return
+    logger.warning(
+        "[events.online] is enabled while job.models includes sequential "
+        "and the torch extra is not installed; online recommend will be skipped"
+    )
 
 
 def _coerce_experiment(value: Any) -> ExperimentSettings:
@@ -635,4 +656,5 @@ def load_settings(config_path: str | None = None) -> Settings:
     _require_exposure_log_backend(settings)
     _require_online_output_backend(settings)
     _warn_online_skipped_for_experiment(settings)
+    _warn_online_skipped_for_sequential(settings)
     return settings

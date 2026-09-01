@@ -77,9 +77,9 @@ def evaluate_experiment(
     variants = [(recipe.name, recipe.traffic) for recipe in recipes]
     names = [recipe.name for recipe in recipes]
     assigned: dict[str, str] = {}
-    exposure_conditional = bool(exposures)
+    exposure_conditional = exposures is not None
     starts: dict[str, pd.Timestamp] = {}
-    if exposures:
+    if exposures is not None:
         assigned, starts = _first_exposures(exposures, experiment_id=experiment.id, names=names)
     elif not events.empty and USER_COLUMN in events.columns:
         for user_id in events[USER_COLUMN].astype(str).unique():
@@ -185,7 +185,7 @@ def _first_exposures(
             assigned[user_id] = variant
             if when is not None:
                 starts[user_id] = when
-        elif when is not None and previous is not None and when < previous:
+        elif when is not None and (previous is None or when < previous):
             assigned[user_id] = variant
             starts[user_id] = when
     return assigned, starts
@@ -212,7 +212,7 @@ def _restrict_events(
         keep = keep & (occurred < until)
     if starts:
         start_at = frame[USER_COLUMN].map(starts)
-        keep = keep & (start_at.isna() | (occurred >= start_at))
+        keep = keep & start_at.notna() & (occurred >= start_at)
     return frame.loc[keep]
 
 

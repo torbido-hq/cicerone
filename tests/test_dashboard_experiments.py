@@ -11,7 +11,7 @@ from cicerone.config import IOSettings
 from cicerone.config.settings import ExperimentSettings, VariantSettings
 from cicerone.dashboard_experiments import clear_promotion, experiment_context, promote_winner
 from cicerone.experiment.evaluate import exposure_row
-from cicerone.experiment.store import ExperimentStore
+from cicerone.experiment.store import ExperimentStore, experiment_state
 from cicerone.io.recommendation_schema import VARIANT_COLUMN
 
 REPO_FEATURES = Path(__file__).resolve().parents[1] / "config" / "features.toml"
@@ -341,6 +341,32 @@ def test_experiment_context_tolerates_load_failures(tmp_path, monkeypatch):
     monkeypatch.setattr("cicerone.dashboard_experiments.load_items_catalog_size", _boom)
     context = experiment_context(settings)
     assert context["report"] is not None
+
+
+def test_experiment_context_reuses_cached_promote_state_on_read_failure(tmp_path, monkeypatch):
+    settings = _settings(tmp_path, id="exp-cache")
+    _write_frames(
+        settings,
+        events=[{"user_id": "u1", "item_id": "i1", "event_type": "view", "quantity": 1}],
+        recs=[
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                VARIANT_COLUMN: "control",
+            }
+        ],
+    )
+    ExperimentStore(settings.output).write_state(experiment_state("exp-cache", promoted_variant="treatment"))
+    assert experiment_context(settings)["promoted_variant"] == "treatment"
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("store down")
+
+    monkeypatch.setattr("cicerone.experiment.store.ExperimentStore.read_state", _boom)
+    assert experiment_context(settings)["promoted_variant"] == "treatment"
 
 
 def test_experiment_context_recipes_from_manifest(tmp_path, monkeypatch):
