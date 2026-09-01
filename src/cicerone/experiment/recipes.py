@@ -84,7 +84,7 @@ def resolve_boost_policy(
     *,
     label: str,
 ) -> tuple[BoostRule, ...]:
-    return _resolve_policy_spec(spec, inherited, parse_boost_rules, label=label)
+    return _resolve_policy_spec(spec, inherited, parse_boost_rules, label=label, rule_type=BoostRule)
 
 
 def resolve_eligibility_policy(
@@ -93,7 +93,9 @@ def resolve_eligibility_policy(
     *,
     label: str,
 ) -> tuple[EligibilityRule, ...]:
-    return _resolve_policy_spec(spec, inherited, parse_eligibility_rules, label=label)
+    return _resolve_policy_spec(
+        spec, inherited, parse_eligibility_rules, label=label, rule_type=EligibilityRule
+    )
 
 
 def _unique_policy_names(names: Sequence[object], *, label: str) -> tuple[str, ...]:
@@ -129,6 +131,7 @@ def _resolve_policy_spec(
     parse: Callable[[Sequence[Mapping[str, Any]]], Sequence[_T]],
     *,
     label: str,
+    rule_type: type[_T],
 ) -> tuple[_T, ...]:
     if spec is True:
         return tuple(inherited)
@@ -147,7 +150,7 @@ def _resolve_policy_spec(
             return tuple(parse([dict(item) for item in items]))
         except (KeyError, TypeError, ValueError) as exc:
             raise ConfigError(f"{label}: {exc}") from exc
-    if all(isinstance(item, (BoostRule, EligibilityRule)) for item in items):
+    if all(isinstance(item, rule_type) for item in items):
         return cast(tuple[_T, ...], items)
     raise ConfigError(f"{label} must be true, false, rule names, or rule tables")
 

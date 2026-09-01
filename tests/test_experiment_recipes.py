@@ -318,6 +318,10 @@ def test_resolve_boost_policy_edge_shapes() -> None:
         resolve_boost_policy((1,), inherited, label="boosts")
     with pytest.raises(ConfigError, match="must be true, false"):
         resolve_eligibility_policy([1], _features().eligibility, label="eligibility")
+    with pytest.raises(ConfigError, match="must be true, false"):
+        resolve_boost_policy(tuple(_features().eligibility), inherited, label="boosts")
+    with pytest.raises(ConfigError, match="must be true, false"):
+        resolve_eligibility_policy(tuple(inherited), _features().eligibility, label="eligibility")
     assert resolve_boost_policy(tuple(inherited), inherited, label="boosts") == tuple(inherited)
     eligibility = tuple(_features().eligibility)
     assert resolve_eligibility_policy(eligibility, eligibility, label="eligibility") == eligibility
