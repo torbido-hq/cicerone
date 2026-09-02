@@ -325,3 +325,15 @@ def test_resolve_boost_policy_edge_shapes() -> None:
     assert resolve_boost_policy(tuple(inherited), inherited, label="boosts") == tuple(inherited)
     eligibility = tuple(_features().eligibility)
     assert resolve_eligibility_policy(eligibility, eligibility, label="eligibility") == eligibility
+
+
+def test_resolve_boost_policy_rejects_duplicate_replacement_names() -> None:
+    with pytest.raises(ConfigError, match="duplicate rule name"):
+        resolve_boost_policy(
+            [
+                {"name": "featured", "kind": "boolean", "item_column": "featured", "factor": 1.2},
+                {"name": "featured", "kind": "boolean", "item_column": "sale", "factor": 1.1},
+            ],
+            _features().boosts,
+            label="boosts",
+        )

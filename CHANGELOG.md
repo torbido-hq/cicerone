@@ -44,10 +44,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `[[eligibility]]` rules (`boosts = ["featured"]` or
   `[[experiment.variants.boost]]` tables). Duplicate subset names are rejected.
 
+### Changed
+
+- Dashboard Configuration includes `[publish]`, `[track]`, and `[job.eval]`.
+  Experiments CI is labelled a mixture interval.
+
 ### Fixed
 
 - Served-eval `CatalogCoverage` uses the item catalog, not only recommended IDs.
 - `POST /track` Prometheus counts match accepted rows and record store failures.
+- CTR/conversion experiment arms use the track impression `variant` when
+  present; hash assignment is the fallback.
+- Empty track outcomes stay event ITT instead of zeros labelled ITT.
+- `attribution = click | impression` requires `primary_metric` `ctr` or
+  `conversion`.
+- Incremental `[publish]` runs after the output write and manifest update.
+- Kafka `[publish]` flushes the producer when the connect probe fails.
+- Track ingest without `event_id` is stable across retries of the same row.
+- Duplicate names in replacement `[[experiment.variants.boost]]` /
+  eligibility tables are rejected.
+- Dashboard Experiments surfaces variant policy `ConfigError` instead of
+  “No experiment variants to evaluate.”
 - Dashboard `Cache-Control: private, no-store` skips only `/static` assets,
   not other paths that happen to start with that prefix.
 - Kafka ingest commits the contiguous per-partition watermark so an
@@ -94,8 +111,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Dashboard pages send `X-Robots-Tag` and HTML `noindex` so crawlers skip
   them if the process is accidentally public; `GET /robots.txt` disallows
   `/`, and OpenAPI `/docs` is off.
-- Config page redacts `*_url` option keys and any value with embedded URL
-  credentials.
+- Config page redacts `*_url` option keys, `access_key_id` /
+  `aws_access_key_id`, and any value with embedded URL credentials.
 - `POST /track` rejects bodies larger than 1 MiB (or
   `events.options.max_body_bytes`).
 

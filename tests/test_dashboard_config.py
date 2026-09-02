@@ -87,7 +87,7 @@ def test_config_display_redacts_secrets_and_keeps_safe_values():
     assert trigger["fields"]["postgres_url"] == REDACTED
     assert incoming["fields"]["kind"] == "dataset"
     assert incoming["fields"]["options"]["bucket"] == "recs"
-    assert incoming["fields"]["options"]["access_key_id"] == "AKIATEST"
+    assert incoming["fields"]["options"]["access_key_id"] == REDACTED
     assert incoming["fields"]["options"]["secret_access_key"] == REDACTED
     assert incoming["fields"]["options"]["api_key"] == REDACTED
     assert incoming["fields"]["options"]["endpoint_url"] == REDACTED
@@ -106,6 +106,7 @@ def test_config_display_redacts_secrets_and_keeps_safe_values():
     assert _section(display, "track")["toml"] == "[track]"
     assert _section(display, "eval")["toml"] == "[job.eval]"
     assert isinstance(_section(display, "experiment")["fields"], dict)
+    assert "kafka" in display["hints"]["events.kind"]["text"]
     assert dashboard["fields"]["users"] == ["alice", "bob"]
     assert events["badge"] == "on"
     assert events["kind"] == "webhook"
@@ -182,7 +183,7 @@ def test_config_page_renders_redacted_html(tmp_path):
     assert "25" in html
     assert "cron_schedule" in html
     assert "dataset" in html
-    assert "AKIATEST" in html
+    assert "AKIATEST" not in html
     assert "recs" in html
     assert "[redacted]" in html
     assert "super-secret-serve" not in html

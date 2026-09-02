@@ -81,6 +81,7 @@ def evaluate_experiment(
     promoted_at: str | None = None,
     catalog_size: int | None = None,
     track_outcomes: dict[str, float] | None = None,
+    track_variants: dict[str, str] | None = None,
     n_impressions: int = 0,
     min_impressions: int = 0,
 ) -> ExperimentReport:
@@ -90,6 +91,8 @@ def evaluate_experiment(
     attribution = experiment.attribution
     rec_metric = experiment.primary_metric in {PRIMARY_METRIC_CTR, PRIMARY_METRIC_CONVERSION}
     starts: dict[str, pd.Timestamp] = {}
+    track_outcomes = track_outcomes or None
+    tagged = {str(user_id): str(variant) for user_id, variant in (track_variants or {}).items()}
     exposure_conditional = exposures is not None or (
         rec_metric and attribution in {ATTRIBUTION_CLICK, ATTRIBUTION_IMPRESSION} and bool(track_outcomes)
     )
@@ -97,7 +100,9 @@ def evaluate_experiment(
         assigned, starts = _first_exposures(exposures, experiment_id=experiment.id, names=names)
     elif track_outcomes and rec_metric:
         for user_id in track_outcomes:
-            assigned[str(user_id)] = assign_variant(experiment.id, str(user_id), variants)
+            uid = str(user_id)
+            variant = tagged.get(uid)
+            assigned[uid] = variant if variant in names else assign_variant(experiment.id, uid, variants)
     elif not events.empty and USER_COLUMN in events.columns:
         for user_id in events[USER_COLUMN].astype(str).unique():
             assigned[str(user_id)] = assign_variant(
@@ -114,11 +119,7 @@ def evaluate_experiment(
         from cicerone.evaluation import filter_events_to_recommended
 
         metric_events = filter_events_to_recommended(metric_events, recommendations, assigned=assigned)
-    if (
-        rec_metric
-        and attribution in {ATTRIBUTION_CLICK, ATTRIBUTION_IMPRESSION}
-        and track_outcomes is not None
-    ):
+    if rec_metric and attribution in {ATTRIBUTION_CLICK, ATTRIBUTION_IMPRESSION} and track_outcomes:
         outcomes = {str(user_id): float(value) for user_id, value in track_outcomes.items()}
     else:
         outcomes = user_outcome(

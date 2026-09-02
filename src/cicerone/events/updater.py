@@ -201,9 +201,6 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             return 0
         self._ensure_fence()
         n_users = self._sink.replace_recommendations_for_users(merged, user_ids=sorted(set(replace_ids)))
-        if self._publisher is not None:
-            self._publisher.publish(merged)
-
         now = datetime.now(UTC)
         manifest = {
             "triggered_by": "incremental",
@@ -223,6 +220,8 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             manifest["online_events_dropped_unknown"] = online_result.events_dropped_unknown
         self._ensure_fence()
         self._sink.write_manifest(manifest)
+        if self._publisher is not None:
+            self._publisher.publish(merged)
         self._store_users_in_cache(set(replace_ids), merged)
         if persist_online:
             self._commit_online()

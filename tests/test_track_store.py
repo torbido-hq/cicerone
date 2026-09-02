@@ -406,11 +406,10 @@ def test_track_jsonl_assigns_event_id_when_missing(tmp_path) -> None:
         "event_id": "",
     }
     store = TrackStore(output)
-    assert store.append_rows([row, dict(row)]) == 2
+    assert store.append_rows([row, dict(row)]) == 1
     ids = [str(item["event_id"]) for item in store.read_rows()]
-    assert len(ids) == 2
+    assert len(ids) == 1
     assert all(ids)
-    assert ids[0] != ids[1]
 
 
 def test_track_jsonl_second_store_respects_existing_event_ids(tmp_path) -> None:

@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 
 import pandas as pd
-import pytest
 from conftest import make_settings
 from sqlalchemy import create_engine
 
@@ -218,6 +217,17 @@ def test_experiment_context_missing_feature_config(tmp_path):
     context = experiment_context(settings)
     assert context["error"] == "No experiment variants to evaluate."
     assert promote_winner(settings, "control") == "Experiment report is not available"
+
+
+def test_experiment_context_surfaces_live_policy_config_error(tmp_path, monkeypatch):
+    settings = _settings(tmp_path, log_exposures=False)
+
+    def _boom(*_args, **_kwargs):
+        raise ConfigError("experiment.variants[treatment].boosts duplicate rule name 'featured'")
+
+    monkeypatch.setattr("cicerone.dashboard_experiments.resolve_recipes", _boom)
+    context = experiment_context(settings)
+    assert "duplicate rule name" in (context["error"] or "")
 
 
 def test_experiment_context_invalid_feature_config(tmp_path):
@@ -490,8 +500,8 @@ def test_experiment_context_manifest_policy_error_names_variant(tmp_path, monkey
             }
 
     monkeypatch.setattr("cicerone.dashboard_experiments.build_manifest_reader", lambda _output: _Reader())
-    with pytest.raises(ConfigError, match=r"experiment_variants\[treatment\]\.eligibility"):
-        experiment_context(settings)
+    context = experiment_context(settings)
+    assert "experiment_variants[treatment].eligibility" in (context["error"] or "")
 
 
 def test_experiment_context_manifest_recipes_invalid_json(tmp_path, monkeypatch):

@@ -120,7 +120,7 @@ assigned list (no `/track`). See [evaluation.md](evaluation.md).
 
 The dashboard **Experiments** page (`GET /dashboard/experiments`) shows:
 
-- Approximate always-valid CIs on the primary metric (a LIL-style radius for
+- Approximate mixture CIs on the primary metric (a LIL-style radius for
   peeking — not a full anytime-valid CS for heavy-tailed outcomes).
   Intention-to-treat on users who appear in the event window, or
   exposure-conditional when `log_exposures` is on (rows must match this

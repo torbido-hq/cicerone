@@ -60,6 +60,7 @@ class FakeKafkaBroker:
         self.produced: list[tuple[str, bytes | None, bytes | str | None]] = []
         self.list_topics_error: Exception | None = None
         self.commit_error: Exception | None = None
+        self.flush_calls: list[float | None] = []
         self._seq = 0
 
     def add(
@@ -142,7 +143,7 @@ class FakeProducer:
         self.broker.produce(topic, value, key)
 
     def flush(self, timeout: float | None = None) -> int:
-        del timeout
+        self.broker.flush_calls.append(timeout)
         return self.flush_remaining
 
     def list_topics(self, timeout: float | None = None) -> None:

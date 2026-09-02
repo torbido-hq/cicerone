@@ -147,9 +147,11 @@ def _resolve_policy_spec(
         return _pick_named(inherited, names, label=label)
     if all(isinstance(item, Mapping) for item in items):
         try:
-            return tuple(parse([dict(item) for item in items]))
+            rules = tuple(parse([dict(item) for item in items]))
         except (KeyError, TypeError, ValueError) as exc:
             raise ConfigError(f"{label}: {exc}") from exc
+        _unique_policy_names([rule.name for rule in rules], label=label)  # type: ignore[attr-defined]
+        return rules
     if all(isinstance(item, rule_type) for item in items):
         return cast(tuple[_T, ...], items)
     raise ConfigError(f"{label} must be true, false, rule names, or rule tables")

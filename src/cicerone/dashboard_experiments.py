@@ -12,7 +12,12 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 
 from cicerone.config import Settings
-from cicerone.config.constants import ATTRIBUTION_CLICK, ATTRIBUTION_IMPRESSION, TRACK_KIND_IMPRESSION
+from cicerone.config.constants import (
+    ATTRIBUTION_CLICK,
+    ATTRIBUTION_IMPRESSION,
+    TRACK_KIND_IMPRESSION,
+    ConfigError,
+)
 from cicerone.evaluation import conversion_event_types, user_track_outcomes
 from cicerone.events.store import load_items_catalog_size, load_recommendation_guardrail_rows
 from cicerone.experiment.evaluate import evaluate_experiment
@@ -46,6 +51,19 @@ def _track_rows_for_experiment(rows: Sequence[dict[str, Any]], experiment_id: st
     return matched
 
 
+def _track_variant_by_user(rows: Sequence[dict[str, Any]], names: set[str]) -> dict[str, str]:
+    assigned: dict[str, str] = {}
+    for row in rows:
+        if str(row.get("kind") or "") != TRACK_KIND_IMPRESSION:
+            continue
+        user_id = str(row.get("user_id") or "")
+        variant = str(row.get("variant") or "")
+        if not user_id or variant not in names or user_id in assigned:
+            continue
+        assigned[user_id] = variant
+    return assigned
+
+
 def experiment_context(settings: Settings) -> dict[str, Any]:
     experiment = settings.experiment
     if not experiment.enabled:
@@ -74,7 +92,16 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
         promoted_at = state.get("promoted_at")
         promoted_at = str(promoted_at) if promoted_at else None
     feature_config = _load_features(settings)
-    recipes = _recipes(settings, feature_config)
+    try:
+        recipes = _recipes(settings, feature_config)
+    except ConfigError as exc:
+        return {
+            "enabled": True,
+            "experiment": experiment,
+            "report": None,
+            "error": str(exc),
+            "promoted_variant": promoted,
+        }
     if not recipes:
         return {
             "enabled": True,
@@ -107,6 +134,7 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
         logger.exception("Failed to read items snapshot for experiment catalog size")
     weights = feature_config.event_weights if feature_config is not None else {}
     track_outcomes = None
+    track_variants = None
     n_impressions = 0
     if settings.track.enabled:
         try:
@@ -123,13 +151,18 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
             conversions = events
             if not conversions.empty and "event_type" in conversions.columns:
                 conversions = conversions[conversions["event_type"].astype(str).isin(set(types))]
-            track_outcomes = user_track_outcomes(
-                track_rows=track_rows,
-                conversions=conversions,
-                primary_metric=experiment.primary_metric,
-                attribution=experiment.attribution,
-                window_hours=settings.track.attribution_window_hours,
+            track_outcomes = (
+                user_track_outcomes(
+                    track_rows=track_rows,
+                    conversions=conversions,
+                    primary_metric=experiment.primary_metric,
+                    attribution=experiment.attribution,
+                    window_hours=settings.track.attribution_window_hours,
+                )
+                or None
             )
+            if track_outcomes:
+                track_variants = _track_variant_by_user(track_rows, {recipe.name for recipe in recipes})
     report = evaluate_experiment(
         experiment=experiment,
         recipes=recipes,
@@ -141,6 +174,7 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
         promoted_at=promoted_at,
         catalog_size=catalog_size,
         track_outcomes=track_outcomes,
+        track_variants=track_variants,
         n_impressions=n_impressions,
         min_impressions=settings.track.min_impressions if settings.track.enabled else 0,
     )
@@ -241,6 +275,8 @@ def _recipes(settings: Settings, feature_config: FeatureConfig | None) -> tuple[
         recipes = resolve_recipes(settings, feature_config, last_manifest=last)
         if recipes:
             return recipes
+    except ConfigError:
+        raise
     except Exception:
         logger.exception("Failed to resolve experiment recipes from config")
     if last and last.get("experiment_variants"):

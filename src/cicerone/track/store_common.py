@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any
-from uuid import uuid4
 
 import pandas as pd
 
 from cicerone.config.constants import ConfigError
 from cicerone.config.settings import IOSettings
 from cicerone.io.options import storage_backend
+from cicerone.track.normalize import assign_missing_event_id
 from cicerone.io.recommendation_schema import (
     ITEM_COLUMN,
     RANK_COLUMN,
@@ -62,10 +62,7 @@ def require_appendable_track_log(output: IOSettings) -> None:
 
 
 def _row_with_event_id(row: Mapping[str, Any]) -> dict[str, Any]:
-    item = dict(row)
-    if not str(item.get("event_id") or ""):
-        item["event_id"] = str(uuid4())
-    return item
+    return assign_missing_event_id(row)
 
 
 def _history_frame(recommendations: pd.DataFrame, generated_at: str) -> pd.DataFrame:

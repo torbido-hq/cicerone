@@ -61,6 +61,13 @@ def load_experiment_settings(raw: dict[str, Any] | None) -> ExperimentSettings:
             "experiment.primary_metric 'ctr'/'conversion' requires attribution "
             "'click' or 'impression' (user keeps event ITT; recommended joins the list)"
         )
+    if attribution in {ATTRIBUTION_CLICK, ATTRIBUTION_IMPRESSION} and primary_metric not in {
+        PRIMARY_METRIC_CTR,
+        PRIMARY_METRIC_CONVERSION,
+    }:
+        raise ConfigError(
+            "experiment.attribution 'click'/'impression' requires primary_metric 'ctr' or 'conversion'"
+        )
     if enabled:
         if not experiment_id:
             raise ConfigError("experiment.id is required when experiment.enabled = true")
@@ -177,9 +184,11 @@ def _load_policy_spec(
     if not all(isinstance(item, dict) for item in value):
         raise ConfigError(f"{label} must be true, false, a list of rule names, or an array of rule tables")
     try:
-        return tuple(parse_table([dict(item) for item in value]))
+        rules = tuple(parse_table([dict(item) for item in value]))
     except (KeyError, TypeError, ValueError) as exc:
         raise ConfigError(f"{label}: {exc}") from exc
+    _unique_policy_names([rule.name for rule in rules], label=label)  # type: ignore[attr-defined]
+    return rules
 
 
 def _normalize_traffic(variants: tuple[VariantSettings, ...]) -> tuple[VariantSettings, ...]:

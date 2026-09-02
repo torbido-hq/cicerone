@@ -44,6 +44,10 @@ class KafkaPublisher:
         try:
             producer.list_topics(timeout=10)
         except Exception as exc:
+            try:
+                producer.flush(1)
+            except Exception:
+                logger.exception("Kafka publisher flush after connect failure")
             raise ConfigError(f"publish.options.bootstrap_servers is unreachable: {exc}") from exc
         self._producer = producer
 

@@ -22,6 +22,8 @@ _SECRET_KEYS = frozenset(
         "auth_token",
         "metrics_token",
         "secret_access_key",
+        "access_key_id",
+        "aws_access_key_id",
         "database_url",
         "postgres_url",
         "redis_url",
@@ -42,11 +44,11 @@ _NESTED_SECTIONS: tuple[tuple[str, str, str], ...] = (
     ("serve", "Serve", "[serve]"),
     ("dashboard", "Dashboard", "[dashboard]"),
     ("events", "Events", "[events]"),
-    ("trigger", "Trigger", "[job.trigger]"),
-    ("experiment", "Experiment", "[experiment]"),
     ("publish", "Publish", "[publish]"),
     ("track", "Track", "[track]"),
     ("eval", "Eval", "[job.eval]"),
+    ("trigger", "Trigger", "[job.trigger]"),
+    ("experiment", "Experiment", "[experiment]"),
 )
 _JOB_SKIP = frozenset({key for key, _title, _toml in _NESTED_SECTIONS} | {"mode"})
 
@@ -147,7 +149,7 @@ HINTS: dict[str, dict[str, str]] = {
         "docs": f"{_DOCS}/incremental-events/",
     },
     "events.enabled": {"text": "Turn on the events worker."},
-    "events.kind": {"text": "webhook, db, s3, or redis_streams."},
+    "events.kind": {"text": "webhook, db, s3, redis_streams, kafka, or rabbitmq."},
     "events.online": {
         "text": "Continue LightFM for users who sent events since the last full fit.",
         "docs": f"{_DOCS}/incremental-events/#online-collaborative-refresh",
@@ -163,17 +165,26 @@ HINTS: dict[str, dict[str, str]] = {
     },
     "experiment.enabled": {"text": "Assign users to variants at serve and job time."},
     "publish": {
-        "text": "Emit per-user recommendation JSON after the output write.",
+        "text": "Emit per-user recommendation JSON after the output store write.",
         "docs": f"{_DOCS}/incremental-events/",
     },
+    "publish.enabled": {"text": "Turn on the recommendation publisher sidecar."},
+    "publish.kind": {"text": "kafka or rabbitmq. Serve still looks up from dataset/db."},
     "track": {
-        "text": "Host-reported impressions and clicks for CTR and conversion.",
+        "text": "Impression and click ingest for CTR/conversion, off the training event path.",
         "docs": f"{_DOCS}/evaluation/",
     },
-    "eval": {
-        "text": "Replay previous lists against later events (HitRate, coverage, novelty).",
-        "docs": f"{_DOCS}/evaluation/#production-replay",
+    "track.enabled": {
+        "text": (
+            "Accept POST /track. GET /recommendations is not an impression "
+            "unless serve.log_impressions is on."
+        ),
     },
+    "eval": {
+        "text": "Production replay of the previous lists against later events (HitRate / NDCG / Recall).",
+        "docs": f"{_DOCS}/evaluation/",
+    },
+    "eval.enabled": {"text": "Score the last written lists at the start of the next job."},
     "features": {
         "text": "Event weights, feature columns, eligibility, and boosts.",
         "docs": f"{_DOCS}/how-it-works/#interaction-weighting",

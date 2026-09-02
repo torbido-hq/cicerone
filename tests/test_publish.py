@@ -256,6 +256,7 @@ def test_kafka_publisher_connect_failure(monkeypatch):
     publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "t"})
     with pytest.raises(ConfigError, match="unreachable"):
         publisher.connect()
+    assert broker.flush_calls == [1]
 
 
 def test_rabbitmq_publisher_connect_failure(monkeypatch):
@@ -329,3 +330,4 @@ def test_updater_publish_failure_stops_apply(tmp_path, feature_config: FeatureCo
     with pytest.raises(RuntimeError, match="broker down"):
         updater.apply(events)
     assert updater.events_applied == 0
+    assert (out / "manifest.json").is_file()
