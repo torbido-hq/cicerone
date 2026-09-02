@@ -11,7 +11,7 @@ scikit-learn==1.9.0
 # Configurable I/O: static datasets (S3/R2-compatible or local files) or a
 # database (input can be read straight from a Postgres source; output can
 # be written to a Postgres table).
-boto3==1.43.56
+boto3==1.43.83
 pyarrow==25.0.1
 SQLAlchemy==2.0.52
 psycopg[binary]==3.3.4
