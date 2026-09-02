@@ -48,6 +48,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Dashboard Configuration includes `[publish]`, `[track]`, and `[job.eval]`.
   Experiments CI is labelled a mixture interval.
+- Dashboard Experiments loads events, recommendations, track, exposures, and
+  catalog size in parallel, and pushes event-type / experiment_id filters into
+  the store. Job eval and Quality live read only the history snapshots
+  referenced by track `generated_at`. Explain reasons scan interactions for
+  recommended users only.
 
 ### Fixed
 
@@ -65,6 +70,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   eligibility tables are rejected.
 - Dashboard Experiments surfaces variant policy `ConfigError` instead of
   “No experiment variants to evaluate.”
+- In-flight event apply nacks the batch if a later heartbeat fails, so a
+  long online refresh cannot ack after visibility is lost.
 - Dashboard `Cache-Control: private, no-store` skips only `/static` assets,
   not other paths that happen to start with that prefix.
 - Kafka ingest commits the contiguous per-partition watermark so an

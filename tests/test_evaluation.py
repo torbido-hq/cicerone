@@ -540,7 +540,7 @@ def test_score_previous_run_history_and_served_errors(tmp_path, monkeypatch) -> 
     )
     monkeypatch.setattr(
         "cicerone.track.store.TrackStore.read_history",
-        lambda self: (_ for _ in ()).throw(RuntimeError("history")),
+        lambda self, **_kwargs: (_ for _ in ()).throw(RuntimeError("history")),
     )
     track, served = _score_previous_run(settings, events, {"generated_at": "2026-08-28T03:00:00+00:00"})
     assert track is not None

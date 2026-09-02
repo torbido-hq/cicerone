@@ -18,7 +18,9 @@ from cicerone.track.store_common import (
     DEFAULT_HISTORY_TABLE,
     DEFAULT_TRACK_TABLE,
     HISTORY_COLUMNS,
+    _history_sql_filter,
     _jsonish,
+    _track_row_sql_filter,
 )
 
 logger = logging.getLogger(__name__)
@@ -95,14 +97,20 @@ class TrackDbBackend:
             conn.execute(insert_sql, fresh)
             return fresh
 
-    def _read_rows_db(self) -> list[dict[str, Any]]:
+    def _read_rows_db(
+        self,
+        *,
+        kind: str | None,
+        experiment_id: str | None,
+    ) -> list[dict[str, Any]]:
         table = sql_identifier(
             self._options.get("track_table", DEFAULT_TRACK_TABLE),
             option="track_table",
         )
         engine = self._db_engine()
+        clause, params = _track_row_sql_filter(kind=kind, experiment_id=experiment_id)
         try:
-            frame = pd.read_sql(text(f'SELECT * FROM "{table}"'), engine)
+            frame = pd.read_sql(text(f'SELECT * FROM "{table}"{clause}'), engine, params=params)
         except MISSING_TABLE_ERRORS:
             return []
         except Exception as exc:
@@ -165,13 +173,23 @@ class TrackDbBackend:
         )
         frame.to_sql(table, self._db_engine(), if_exists="append", index=False)
 
-    def _read_history_db(self) -> pd.DataFrame:
+    def _read_history_db(
+        self,
+        *,
+        generated_ats: set[str] | None,
+    ) -> pd.DataFrame:
         table = sql_identifier(
             self._options.get("history_table", DEFAULT_HISTORY_TABLE),
             option="history_table",
         )
         engine = self._db_engine()
+        clause, params = _history_sql_filter(generated_ats=generated_ats)
         try:
+            if params:
+                stmt = text(f'SELECT * FROM "{table}"{clause}')
+                if generated_ats:
+                    stmt = stmt.bindparams(bindparam("generated_ats", expanding=True))
+                return pd.read_sql(stmt, engine, params=params)
             return pd.read_sql(text(f'SELECT * FROM "{table}"'), engine)
         except MISSING_TABLE_ERRORS:
             return pd.DataFrame(columns=list(HISTORY_COLUMNS))

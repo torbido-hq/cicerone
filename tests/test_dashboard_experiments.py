@@ -740,7 +740,7 @@ def test_experiment_context_track_read_error(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         "cicerone.track.store.TrackStore.read_rows",
-        lambda self: (_ for _ in ()).throw(RuntimeError("track")),
+        lambda self, **_kwargs: (_ for _ in ()).throw(RuntimeError("track")),
     )
     context = experiment_context(settings)
     assert context["report"] is not None

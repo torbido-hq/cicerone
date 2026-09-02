@@ -31,7 +31,7 @@ _ONLINE_PERSIST_ATTEMPTS = 3
 
 
 class HeartbeatError(RuntimeError):
-    """Raised when the first in-flight heartbeat fails (apply must not proceed)."""
+    """Raised when an in-flight heartbeat fails (apply must not ack)."""
 
 
 def _call_heartbeat(
@@ -64,15 +64,23 @@ def inflight_heartbeat(
         yield
         return
     stop = threading.Event()
+    failed = threading.Event()
 
     def _loop() -> None:
         while not stop.wait(interval_seconds):
-            _call_heartbeat(beat, events)
+            try:
+                beat(events)
+            except Exception:
+                logger.exception("Event source heartbeat failed")
+                failed.set()
+                return
 
     thread = threading.Thread(target=_loop, name="cicerone-events-heartbeat", daemon=True)
     thread.start()
     try:
         yield
+        if failed.is_set():
+            raise HeartbeatError("Event source heartbeat failed")
     finally:
         stop.set()
         thread.join(timeout=max(1.0, interval_seconds))

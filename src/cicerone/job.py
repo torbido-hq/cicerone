@@ -112,14 +112,26 @@ def _score_previous_run(
         logger.exception("Failed to load previous recommendations for eval")
         previous_recs = None
     store = TrackStore(settings.output)
+    track_rows: list[dict[str, Any]] = []
+    if settings.track.enabled:
+        try:
+            track_rows = store.read_rows()
+        except Exception:
+            logger.exception("Failed to read track rows")
+            track_rows = []
+    wanted = {str(row.get("generated_at") or "") for row in track_rows}
+    wanted.discard("")
+    if previous_generated_at:
+        wanted.add(previous_generated_at)
     history = None
-    try:
-        history = store.read_history()
-        if history is not None and history.empty:
+    if settings.track.enabled and wanted:
+        try:
+            history = store.read_history(generated_ats=wanted)
+            if history is not None and history.empty:
+                history = None
+        except Exception:
+            logger.exception("Failed to read recommendation history")
             history = None
-    except Exception:
-        logger.exception("Failed to read recommendation history")
-        history = None
     recs_for_track = previous_recs
     if recs_for_track is not None and previous_generated_at:
         recs_for_track = recs_for_track.copy()
@@ -140,7 +152,7 @@ def _score_previous_run(
             if not conversions.empty and "event_type" in conversions.columns:
                 conversions = conversions[conversions["event_type"].astype(str).isin(set(types))]
             track_payload = evaluate_tracking(
-                track_rows=store.read_rows(),
+                track_rows=track_rows,
                 conversions=conversions,
                 recommendations=recs_for_track,
                 window_hours=settings.track.attribution_window_hours,
