@@ -79,17 +79,30 @@ def _throttled_busy_check(
     return _wrapped
 
 
-def _assign_incremental_variant(settings: Settings) -> Callable[[str], str | None] | None:
+def _assign_incremental_variant(
+    settings: Settings,
+    *,
+    ttl_seconds: float = DEFAULT_EVENTS_RETRAIN_PROBE_TTL_SECONDS,
+    clock: Callable[[], float] = time.monotonic,
+) -> Callable[[str], str | None] | None:
     if not settings.experiment.enabled:
         return None
     store = ExperimentStore(settings.output)
+    experiment_id = settings.experiment.id
+    cached_until = 0.0
+    cached: str | None = None
+
+    def winner() -> str | None:
+        nonlocal cached_until, cached
+        now = clock()
+        if ttl_seconds > 0 and now < cached_until:
+            return cached
+        cached = store.promoted_variant(experiment_id)
+        cached_until = now + ttl_seconds
+        return cached
 
     def assigned(user_id: str) -> str | None:
-        return resolve_assignment(
-            settings,
-            str(user_id),
-            promoted_variant=store.promoted_variant(settings.experiment.id),
-        )[1]
+        return resolve_assignment(settings, str(user_id), promoted_variant=winner())[1]
 
     return assigned
 
