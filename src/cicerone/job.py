@@ -112,8 +112,8 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
 
         built = build_dataset(events, users, items, feature_config, half_life_days=settings.half_life_days)
 
-        known_users = set(users[USER_COLUMN]) if users is not None else set()
-        target_users = sorted(set(events[USER_COLUMN]) | known_users)
+        known_users = {str(user_id) for user_id in users[USER_COLUMN]} if users is not None else set()
+        target_users = sorted({str(user_id) for user_id in events[USER_COLUMN]} | known_users)
 
         automl_result = None
         enabled_models, weights, rrf_k = settings.models, settings.model_weights, settings.rrf_k

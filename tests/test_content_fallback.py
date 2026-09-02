@@ -305,6 +305,35 @@ def test_recommend_respects_max_neighbors_cap():
     assert set(recs[Columns.Item]) <= {"i2", "i3"}
 
 
+def test_recommend_tie_breaks_equal_scores_by_item_id():
+    items = pd.DataFrame(
+        [
+            {"item_id": "i1", "category": "beer"},
+            {"item_id": "zd", "category": "beer"},
+            {"item_id": "zc", "category": "beer"},
+            {"item_id": "zb", "category": "beer"},
+            {"item_id": "za", "category": "beer"},
+        ]
+    )
+    interactions = pd.DataFrame(
+        {
+            Columns.User: ["u1"],
+            Columns.Item: ["i1"],
+            Columns.Weight: [1.0],
+            Columns.Datetime: [pd.Timestamp.now(tz="UTC")],
+        }
+    )
+    model = build_content_fallback_model(
+        feature_columns=[FeatureColumn(column="category", type="categorical")],
+        max_neighbors=2,
+        items=items,
+        interactions=interactions,
+    )
+    model.fit(_DummyDataset())
+    recs = model.recommend(users=["u1"], dataset=_DummyDataset(), k=2, filter_viewed=True)
+    assert list(recs[Columns.Item].astype(str)) == ["za", "zb"]
+
+
 def test_fit_raises_clear_error_when_interactions_missing_id_columns():
     items = pd.DataFrame([{"item_id": "i1", "category": "beer"}])
     interactions = pd.DataFrame({"user": ["u1"], "product": ["i1"]})

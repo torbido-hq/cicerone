@@ -24,6 +24,7 @@ from cicerone.io.recommendation_schema import USER_COLUMN
 logger = logging.getLogger(__name__)
 
 _EVENT_METRIC_COLUMNS = (USER_COLUMN, "event_type", "quantity", "occurred_at")
+_PROMOTE_STATE: dict[str, dict[str, Any]] = {}
 
 
 def experiment_context(settings: Settings) -> dict[str, Any]:
@@ -41,13 +42,18 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
     promoted_at = None
     try:
         state = store.read_state()
-        if state and state.get("experiment_id") == experiment.id:
-            promoted = state.get("promoted_variant")
-            promoted = str(promoted) if promoted else None
-            promoted_at = state.get("promoted_at")
-            promoted_at = str(promoted_at) if promoted_at else None
+        if state and str(state.get("experiment_id") or "") == str(experiment.id):
+            _PROMOTE_STATE[experiment.id] = dict(state)
+        else:
+            _PROMOTE_STATE.pop(experiment.id, None)
     except Exception:
         logger.exception("Failed to read experiment state")
+        state = store.last_state(experiment.id) or _PROMOTE_STATE.get(experiment.id)
+    if state and str(state.get("experiment_id") or "") == str(experiment.id):
+        promoted = state.get("promoted_variant")
+        promoted = str(promoted) if promoted else None
+        promoted_at = state.get("promoted_at")
+        promoted_at = str(promoted_at) if promoted_at else None
     feature_config = _load_features(settings)
     recipes = _recipes(settings, feature_config)
     if not recipes:
@@ -74,7 +80,7 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
         exposures = store.read_exposures(experiment_id=experiment.id) if experiment.log_exposures else None
     except Exception:
         logger.exception("Failed to read experiment exposures")
-        exposures = None
+        exposures = [] if experiment.log_exposures else None
     catalog_size = None
     try:
         catalog_size = load_items_catalog_size(settings.output)
@@ -117,18 +123,18 @@ def promote_winner(settings: Settings, variant: str) -> str | None:
         return "Experiment is not ready to promote (" + ", ".join(report.promote_blocked_by) + ")"
     if report.winner and report.winner != variant:
         return f"Winner is {report.winner!r}, not {variant!r}"
-    ExperimentStore(settings.output).write_state(
-        experiment_state(settings.experiment.id, promoted_variant=variant)
-    )
+    payload = experiment_state(settings.experiment.id, promoted_variant=variant)
+    ExperimentStore(settings.output).write_state(payload)
+    _PROMOTE_STATE[settings.experiment.id] = dict(payload)
     return None
 
 
 def clear_promotion(settings: Settings) -> str | None:
     if not settings.experiment.enabled:
         return "No experiment is enabled"
-    ExperimentStore(settings.output).write_state(
-        experiment_state(settings.experiment.id, promoted_variant=None)
-    )
+    payload = experiment_state(settings.experiment.id, promoted_variant=None)
+    ExperimentStore(settings.output).write_state(payload)
+    _PROMOTE_STATE[settings.experiment.id] = dict(payload)
     return None
 
 

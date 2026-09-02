@@ -156,6 +156,28 @@ def test_evaluate_experiment_itt_and_exposure_conditional() -> None:
     assert skipped.n_assigned == 0
 
 
+def test_evaluate_experiment_empty_exposures_stays_conditional() -> None:
+    experiment = ExperimentSettings(
+        enabled=True,
+        id="exp",
+        primary_metric="purchase",
+        variants=(
+            VariantSettings(name="control", traffic=0.5),
+            VariantSettings(name="treatment", traffic=0.5),
+        ),
+    )
+    events = pd.DataFrame([{"user_id": "u1", "event_type": "purchase", "quantity": 1}])
+    report = evaluate_experiment(
+        experiment=experiment,
+        recipes=(_recipe("control"), _recipe("treatment")),
+        events=events,
+        event_weights={"purchase": 1.0},
+        exposures=[],
+    )
+    assert report.exposure_conditional is True
+    assert report.n_assigned == 0
+
+
 def test_evaluate_experiment_blocks_promote_when_already_promoted() -> None:
     experiment = ExperimentSettings(
         enabled=True,
@@ -346,7 +368,7 @@ def test_evaluate_experiment_cuts_events_after_promoted_at() -> None:
     assert sum(totals.values()) == pytest.approx(1.0)
 
 
-def test_evaluate_experiment_keeps_first_exposure_without_timestamp() -> None:
+def test_evaluate_experiment_timestamped_exposure_replaces_untimed_first() -> None:
     experiment = ExperimentSettings(
         enabled=True,
         id="exp",
@@ -389,8 +411,9 @@ def test_evaluate_experiment_keeps_first_exposure_without_timestamp() -> None:
         event_weights={"purchase": 1.0},
         exposures=exposures,
     )
-    assert report.comparisons[0].control.n_users == 1
-    assert report.comparisons[0].treatment.n_users == 0
+    assert report.comparisons[0].control.n_users == 0
+    assert report.comparisons[0].treatment.n_users == 1
+    assert report.comparisons[0].treatment.total == pytest.approx(0.0)
 
 
 def test_evaluate_experiment_drops_untimed_events_when_windowed() -> None:
@@ -431,6 +454,61 @@ def test_evaluate_experiment_drops_untimed_events_when_windowed() -> None:
         exposures=exposures,
     )
     assert report.comparisons[0].control.total == pytest.approx(1.0)
+
+
+def test_evaluate_experiment_untimed_exposure_user_counts_zero_when_others_have_starts() -> None:
+    experiment = ExperimentSettings(
+        enabled=True,
+        id="exp",
+        primary_metric="purchase",
+        variants=(
+            VariantSettings(name="control", traffic=0.5),
+            VariantSettings(name="treatment", traffic=0.5),
+        ),
+    )
+    events = pd.DataFrame(
+        [
+            {
+                "user_id": "timed",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": "2026-01-03T00:00:00Z",
+            },
+            {
+                "user_id": "untimed",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": "2026-01-03T00:00:00Z",
+            },
+        ]
+    )
+    exposures = [
+        exposure_row(
+            user_id="timed",
+            experiment_id="exp",
+            variant="treatment",
+            generated_at=None,
+            exposed_at=pd.Timestamp("2026-01-02T00:00:00Z"),
+        ),
+        {
+            "user_id": "untimed",
+            "experiment_id": "exp",
+            "variant": "control",
+            "generated_at": None,
+            "exposed_at": None,
+        },
+    ]
+    report = evaluate_experiment(
+        experiment=experiment,
+        recipes=(_recipe("control"), _recipe("treatment")),
+        events=events,
+        event_weights={"purchase": 1.0},
+        exposures=exposures,
+    )
+    assert report.comparisons[0].control.n_users == 1
+    assert report.comparisons[0].control.total == pytest.approx(0.0)
+    assert report.comparisons[0].treatment.n_users == 1
+    assert report.comparisons[0].treatment.total == pytest.approx(1.0)
 
 
 def test_evaluate_experiment_blocks_on_invalid_promoted_at() -> None:

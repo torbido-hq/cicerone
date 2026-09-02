@@ -244,6 +244,77 @@ def test_promoted_variant_reuses_cache_when_db_read_raises(tmp_path, monkeypatch
     assert store.promoted_variant("exp") == "treatment"
 
 
+def test_experiment_store_prefers_timestamped_promote_over_null(tmp_path) -> None:
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    output = IOSettings(kind="db", options={"database_url": url})
+    store = ExperimentStore(output)
+    store.write_state(experiment_state("exp", promoted_variant="control"))
+    engine = store._db_engine()
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE experiment_state"))
+        conn.execute(
+            text(
+                "CREATE TABLE experiment_state (experiment_id TEXT, promoted_variant TEXT, promoted_at TEXT)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO experiment_state (experiment_id, promoted_variant, promoted_at) "
+                "VALUES ('exp', 'legacy', NULL)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO experiment_state (experiment_id, promoted_variant, promoted_at) "
+                "VALUES ('exp', 'winner', '2026-09-01T00:00:00+00:00')"
+            )
+        )
+    state = store.read_state()
+    assert state is not None
+    assert state["promoted_variant"] == "winner"
+
+
+def test_experiment_store_last_state_reuses_write_cache(tmp_path) -> None:
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    store = ExperimentStore(output)
+    store.write_state(
+        experiment_state("exp", promoted_variant="treatment", promoted_at="2026-09-01T00:00:00Z")
+    )
+    cached = store.last_state("exp")
+    assert cached is not None
+    assert cached["promoted_variant"] == "treatment"
+    assert cached["promoted_at"] == "2026-09-01T00:00:00Z"
+    assert store.last_state("other") is None
+
+
+def test_last_state_ignores_cache_when_promoted_variant_queries_other_id(tmp_path) -> None:
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    store = ExperimentStore(output)
+    store.write_state(
+        experiment_state("exp", promoted_variant="treatment", promoted_at="2026-09-02T00:00:00Z")
+    )
+    assert store.promoted_variant("other") is None
+    assert store.last_state("other") is None
+    cached = store.last_state("exp")
+    assert cached is not None
+    assert cached["promoted_variant"] == "treatment"
+
+
+def test_last_state_matches_non_string_experiment_id(tmp_path) -> None:
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    store = ExperimentStore(output)
+    store.write_state(
+        {
+            "experiment_id": 7,
+            "promoted_variant": "treatment",
+            "promoted_at": "2026-09-02T00:00:00Z",
+        }
+    )
+    cached = store.last_state("7")
+    assert cached is not None
+    assert cached["promoted_variant"] == "treatment"
+
+
 def test_read_exposures_missing_experiment_id_column_returns_empty(tmp_path) -> None:
     url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
     output = IOSettings(kind="db", options={"database_url": url})

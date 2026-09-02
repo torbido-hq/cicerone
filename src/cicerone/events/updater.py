@@ -33,6 +33,7 @@ from cicerone.io.recommendation_schema import (
     REASONS_COLUMN,
     VARIANT_COLUMN,
     collapse_mixed_variants,
+    filter_variant_rows,
     pick_fallback_variant,
     recommendation_output_columns,
 )
@@ -97,6 +98,7 @@ class IncrementalUpdater:
         user_cache_max_size: int = DEFAULT_USER_CACHE_MAX_SIZE,
         online: OnlineRefresher | None = None,
         variant_names: Sequence[str] = (),
+        assign_variant: Callable[[str], str | None] | None = None,
         explain_enabled: bool = True,
     ):
         if user_cache_max_size < 1:
@@ -115,6 +117,7 @@ class IncrementalUpdater:
         self._user_cache_max_size = user_cache_max_size
         self._cached_by_user: OrderedDict[str, pd.DataFrame] = OrderedDict()
         self._variant_names = tuple(str(name) for name in variant_names)
+        self._assign_variant = assign_variant
         self._explain_enabled = explain_enabled
 
     @property
@@ -467,15 +470,24 @@ class IncrementalUpdater:
             return self._stamp_collapsed_variant(merged, prior)
         has_variant = VARIANT_COLUMN in prior.columns and not prior.empty
         primary = FALLBACK_VARIANT if FALLBACK_VARIANT in variants else variants[0]
+        assigned = self._assigned_variant(user_id) or primary
+        empty_batch = batch.iloc[0:0]
         parts = []
         for variant in variants:
             prior_slice = (
-                prior[prior[VARIANT_COLUMN].astype(str) == variant]
+                filter_variant_rows(prior, variant)
                 if has_variant
                 else (prior if variant == primary else empty_recommendations_frame())
             )
+            inject = variant == assigned
             merged = self._merge_one_list(
-                user_id, prior_slice, popular, latest, batch, weights, online_rows=online_rows
+                user_id,
+                prior_slice,
+                popular if inject else popular.iloc[0:0],
+                latest if inject else latest.iloc[0:0],
+                batch if inject else empty_batch,
+                weights if inject else None,
+                online_rows=online_rows if inject else None,
             )
             if merged.empty:
                 continue
@@ -488,6 +500,15 @@ class IncrementalUpdater:
 
     def _variants_for(self) -> tuple[str, ...]:
         return self._variant_names
+
+    def _assigned_variant(self, user_id: str) -> str | None:
+        if self._assign_variant is not None:
+            name = self._assign_variant(user_id)
+            return str(name) if name else None
+        variants = self._variant_names
+        if not variants:
+            return None
+        return FALLBACK_VARIANT if FALLBACK_VARIANT in variants else variants[0]
 
     def _stamp_collapsed_variant(self, merged: pd.DataFrame, prior: pd.DataFrame) -> pd.DataFrame:
         if merged.empty or VARIANT_COLUMN not in prior.columns or prior.empty:

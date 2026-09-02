@@ -310,9 +310,12 @@ def test_online_trainer_skips_sequential_without_torch(
     )
     monkeypatch.setattr("cicerone.events.online.sequential_extra_available", lambda: False)
     trainer = _trainer(sink)
+    calls = _spy_fit_partial(monkeypatch, trainer._artifact.fitted["collaborative"])
     result = trainer.refresh([_known_event("seq")])
     trainer.commit()
     assert result.sequential_skipped is True
+    assert result.fit_partial_epochs == 0
+    assert calls["n"] == 0
     assert result.users_refreshed == 0
     assert result.rows.empty
 
@@ -575,7 +578,8 @@ def test_incremental_updater_splices_online_rows_across_variants(tmp_path, featu
         items = set(rows["item_id"].astype(str))
         assert "fresh" not in items
         assert f"old-{variant}" in items
-        assert "i9" in items
+    assert "i9" in set(u1[u1["variant"] == "control"]["item_id"].astype(str))
+    assert "i9" not in set(u1[u1["variant"] == "treatment"]["item_id"].astype(str))
 
 
 def test_incremental_updater_busy_invalidates_online(tmp_path, feature_config: FeatureConfig):
@@ -791,6 +795,23 @@ def test_online_trainer_accumulates_fit_min_events(
     trainer.commit()
     assert second.fit_partial_epochs == 1
     assert calls["n"] == 1
+
+
+def test_online_trainer_fit_min_events_rewrites_prior_batch_users(
+    tmp_path, feature_config, sample_events, sample_users, sample_items, monkeypatch
+):
+    sink, _enabled = _write_artifact(tmp_path, feature_config, sample_events, sample_users, sample_items)
+    trainer = _trainer(sink, min_events=2)
+    calls = _spy_fit_partial(monkeypatch, trainer._artifact.fitted["collaborative"])
+    first = trainer.refresh([_known_event("prior-u2")])
+    assert first.fit_partial_epochs == 0
+    other = normalize_event(event_payload(user_id="u1", item_id="i1", event_id="trigger-u1"))
+    second = trainer.refresh([other])
+    trainer.commit()
+    assert second.fit_partial_epochs == 1
+    assert calls["n"] == 1
+    users = set(second.rows["user_id"].astype(str)) if not second.rows.empty else set()
+    assert {"u1", "u2"} <= users
 
 
 def test_online_trainer_skips_download_when_fingerprint_unchanged(

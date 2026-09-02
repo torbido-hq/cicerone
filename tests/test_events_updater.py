@@ -793,10 +793,12 @@ def test_incremental_updater_preserves_variants(tmp_path, feature_config: Featur
     frame = load_recommendations_frame(settings.output)
     u1 = frame[frame["user_id"] == "u1"]
     assert set(u1["variant"].astype(str)) == {"control", "treatment"}
-    for variant in ("control", "treatment"):
-        rows = u1[u1["variant"] == variant]
-        assert "i9" in set(rows["item_id"].astype(str))
-        assert f"old-{variant}" in set(rows["item_id"].astype(str))
+    control_items = set(u1[u1["variant"] == "control"]["item_id"].astype(str))
+    treatment_items = set(u1[u1["variant"] == "treatment"]["item_id"].astype(str))
+    assert "i9" in control_items
+    assert "old-control" in control_items
+    assert "i9" not in treatment_items
+    assert "old-treatment" in treatment_items
     cold = frame[frame["user_id"] == COLD_START_USER_ID]
     assert set(cold["variant"].astype(str)) == {"control", "treatment"}
 

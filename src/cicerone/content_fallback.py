@@ -284,12 +284,15 @@ class ContentFallbackModel:
             positive = np.flatnonzero(scores > 0)
             if positive.size == 0:
                 return []
-            if take >= positive.size:
-                order = positive[np.argsort(-scores[positive], kind="mergesort")]
-            else:
-                pos_scores = scores[positive]
-                top_local = np.argpartition(pos_scores, -take)[-take:]
-                order = positive[top_local[np.argsort(-pos_scores[top_local], kind="mergesort")]]
+            pos_scores = scores[positive]
+            picked_ids = np.array([str(item) for item in cold_ids_arr[positive]])
+            if take < positive.size:
+                kth = np.partition(pos_scores, -take)[-take]
+                keep = pos_scores >= kth
+                positive = positive[keep]
+                pos_scores = pos_scores[keep]
+                picked_ids = picked_ids[keep]
+            order = positive[np.lexsort((picked_ids, -pos_scores))[:take]]
             return [
                 {
                     Columns.User: user,

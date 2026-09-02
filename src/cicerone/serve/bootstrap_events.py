@@ -19,7 +19,7 @@ from cicerone.events.store import dispose_recommendation_engines
 from cicerone.events.updater import IncrementalUpdater
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
-from cicerone.experiment.assignment import experiment_variant_names
+from cicerone.experiment.assignment import experiment_variant_names, resolve_assignment
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.base import RecommendationReader
 from cicerone.io.factory import build_output_sink
@@ -156,6 +156,11 @@ def start_events_runtime(
         on_success=reader.refresh,
         online=online,
         variant_names=experiment_variant_names(settings),
+        assign_variant=(
+            (lambda user_id: resolve_assignment(settings, str(user_id))[1])
+            if settings.experiment.enabled
+            else None
+        ),
         explain_enabled=settings.explain.enabled,
     )
     buffer = MicroBatchBuffer(
