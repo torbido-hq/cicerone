@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.7.2] - 2026-09-02
 
+### Changed
+
+- I/O factories and the event-source registry import SQLAlchemy, boto3, and
+  Redis backends only when that kind is selected. Local parquet helpers no
+  longer import boto3 at module load.
+
 ### Fixed
 
 - Experiment promote-state reads order null `promoted_at` last (Postgres
@@ -25,6 +31,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Job target users stringify IDs so int/str duplicates do not split.
 - Explain similar-item overlap counts each history item once.
 - Content-fallback top-K ties follow item id.
+
+### Removed
+
+- Unused `s3fs` pin. S3 reads and writes use boto3 and pyarrow.
 
 ## [0.7.1] - 2026-08-31
 

@@ -18,9 +18,6 @@ updates:
       # Docker / CI remain on Python 3.11; numpy>=2.5 needs Python>=3.12.
       - dependency-name: "numpy"
         update-types: ["version-update:semver-major"]
-      # aiobotocore 3.9 pins botocore<1.43.57; boto3 must stay compatible.
-      - dependency-name: "boto3"
-        versions: [">=1.43.57"]
       # scipy>=1.18 needs Python>=3.12 and numpy>=2. Stay on 1.17.x for 3.11 CI.
       - dependency-name: "scipy"
         versions: [">=1.18.0"]

@@ -9,12 +9,9 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-import boto3
 import pandas as pd
-from botocore.config import Config
-from botocore.exceptions import ClientError
 
-from cicerone.config import ConfigError
+from cicerone.config.constants import ConfigError
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +41,8 @@ def sql_identifier(name: str, *, option: str) -> str:
 
 
 def is_s3_not_found(exc: BaseException) -> bool:
+    from botocore.exceptions import ClientError
+
     if not isinstance(exc, ClientError):
         return False
     code = exc.response.get("Error", {}).get("Code")
@@ -51,6 +50,9 @@ def is_s3_not_found(exc: BaseException) -> bool:
 
 
 def build_s3_client(options: dict[str, Any]):
+    import boto3
+    from botocore.config import Config
+
     return boto3.client(
         "s3",
         endpoint_url=options.get("endpoint_url"),
