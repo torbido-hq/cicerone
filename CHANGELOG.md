@@ -4,6 +4,18 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.2] - 2026-09-01
+
+### Changed
+
+- I/O factories and the event-source registry import SQLAlchemy, boto3, and
+  Redis backends only when that kind is selected. Local parquet helpers no
+  longer import boto3 at module load.
+
+### Removed
+
+- Unused `s3fs` pin. S3 reads and writes use boto3 and pyarrow.
+
 ## [0.7.1] - 2026-08-31
 
 ### Changed
