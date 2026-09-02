@@ -45,6 +45,18 @@ logger = logging.getLogger(__name__)
 
 _MAX_ERROR_LENGTH = 500
 
+
+def _target_user_ids(events: pd.DataFrame, users: pd.DataFrame | None) -> list[str]:
+    columns = [events[USER_COLUMN]]
+    if users is not None:
+        columns.append(users[USER_COLUMN])
+    ids: set[str] = set()
+    for column in columns:
+        for user_id in column.dropna():
+            ids.add(str(user_id))
+    return sorted(ids)
+
+
 _MANIFEST_DEFAULTS: dict[str, Any] = {
     "triggered_by": None,
     "lock_backend": None,
@@ -112,8 +124,7 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
 
         built = build_dataset(events, users, items, feature_config, half_life_days=settings.half_life_days)
 
-        known_users = {str(user_id) for user_id in users[USER_COLUMN]} if users is not None else set()
-        target_users = sorted({str(user_id) for user_id in events[USER_COLUMN]} | known_users)
+        target_users = _target_user_ids(events, users)
 
         automl_result = None
         enabled_models, weights, rrf_k = settings.models, settings.model_weights, settings.rrf_k

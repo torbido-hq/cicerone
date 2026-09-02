@@ -29,6 +29,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Dashboard promote reads reuse the last successful state when the store
   fails (same fail-closed cache as serve).
 - Job target users stringify IDs so int/str duplicates do not split.
+- Job target users skip missing IDs so NaN does not become a literal `"nan"`
+  user.
+- Incremental write-through uses the promoted experiment winner, same as serve.
 - Explain similar-item overlap counts each history item once.
 - Content-fallback top-K ties follow item id.
 
