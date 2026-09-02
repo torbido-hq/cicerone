@@ -150,7 +150,7 @@ def test_assign_incremental_variant_caches_promote_read_and_follows_live_winner(
     assert reads["n"] == 2
 
 
-def test_start_events_runtime_assign_variant_follows_promoted_winner(tmp_path, feature_config):
+def test_start_events_runtime_assign_variant_caches_winner_within_ttl(tmp_path, feature_config):
     settings = _experiment_settings(tmp_path)
     pd.DataFrame(
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
