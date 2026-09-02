@@ -20,6 +20,7 @@ from cicerone.events.updater import IncrementalUpdater
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
 from cicerone.experiment.assignment import experiment_variant_names, resolve_assignment
+from cicerone.experiment.store import ExperimentStore
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.base import RecommendationReader
 from cicerone.io.factory import build_output_sink
@@ -76,6 +77,21 @@ def _throttled_busy_check(
         return cached_value
 
     return _wrapped
+
+
+def _assign_incremental_variant(settings: Settings) -> Callable[[str], str | None] | None:
+    if not settings.experiment.enabled:
+        return None
+    store = ExperimentStore(settings.output)
+
+    def assigned(user_id: str) -> str | None:
+        return resolve_assignment(
+            settings,
+            str(user_id),
+            promoted_variant=store.promoted_variant(settings.experiment.id),
+        )[1]
+
+    return assigned
 
 
 def start_events_runtime(
@@ -156,11 +172,7 @@ def start_events_runtime(
         on_success=reader.refresh,
         online=online,
         variant_names=experiment_variant_names(settings),
-        assign_variant=(
-            (lambda user_id: resolve_assignment(settings, str(user_id))[1])
-            if settings.experiment.enabled
-            else None
-        ),
+        assign_variant=_assign_incremental_variant(settings),
         explain_enabled=settings.explain.enabled,
     )
     buffer = MicroBatchBuffer(

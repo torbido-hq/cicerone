@@ -9,7 +9,7 @@ import pytest
 
 from cicerone import job
 from cicerone.blending import COLD_START_USER_ID
-from cicerone.job import _recommendation_user_count
+from cicerone.job import _recommendation_user_count, _target_user_ids
 from cicerone.model import RRF_K
 
 REPO_FEATURES_CONFIG = Path(__file__).resolve().parents[1] / "config" / "features.toml"
@@ -94,6 +94,14 @@ def test_job_run_end_to_end_with_local_dataset_backend(tmp_path, monkeypatch):
     assert manifest["artifact_written"] is False
     assert manifest["artifact_schema_version"] is None
     assert not (output_dir / "model.artifact").exists()
+
+
+def test_target_user_ids_skip_missing_values():
+    events = pd.DataFrame({"user_id": ["u1", float("nan"), pd.NA, "u2"]})
+    users = pd.DataFrame({"user_id": ["u3", float("nan"), None]})
+    assert _target_user_ids(events, users) == ["u1", "u2", "u3"]
+    assert _target_user_ids(events, None) == ["u1", "u2"]
+    assert "nan" not in _target_user_ids(events, users)
 
 
 def test_recommendation_user_count_excludes_cold_start():

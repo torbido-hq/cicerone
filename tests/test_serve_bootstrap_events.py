@@ -3,7 +3,9 @@ from __future__ import annotations
 import pandas as pd
 
 from cicerone.config import EventsIncrementalSettings, EventsSettings, IOSettings, make_settings
+from cicerone.config.settings import ExperimentSettings, VariantSettings
 from cicerone.events.webhook import WebhookEventSource
+from cicerone.experiment.store import ExperimentStore, experiment_state
 from cicerone.feature_config import FeatureConfig
 from cicerone.serve.bootstrap_events import start_events_runtime
 
@@ -93,6 +95,49 @@ def test_start_events_runtime_without_feature_config(tmp_path):
         reader=_Reader(),  # type: ignore[arg-type]
     )
     assert runtime.worker is not None
+    runtime.stop()
+
+
+def test_start_events_runtime_assign_variant_follows_promoted_winner(tmp_path, feature_config):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        events=EventsSettings(
+            enabled=True,
+            kind="webhook",
+            incremental=EventsIncrementalSettings(
+                batch_size=1, batch_window_seconds=60.0, poll_interval_seconds=0.05
+            ),
+        ),
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="exp-1",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+    )
+    ExperimentStore(settings.output).write_state(experiment_state("exp-1", promoted_variant="treatment"))
+
+    class _Reader:
+        def refresh(self) -> None:
+            return None
+
+    runtime = start_events_runtime(
+        settings,
+        feature_config=feature_config,
+        reader=_Reader(),  # type: ignore[arg-type]
+    )
+    assert runtime.worker is not None
+    assigned = runtime.worker._updater._assign_variant
+    assert assigned is not None
+    assert assigned("u1") == "treatment"
+    assert assigned("u2") == "treatment"
     runtime.stop()
 
 
