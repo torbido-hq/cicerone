@@ -42,9 +42,9 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
     promoted_at = None
     try:
         state = store.read_state()
-        if state and str(state.get("experiment_id") or "") == experiment.id:
+        if state and str(state.get("experiment_id") or "") == str(experiment.id):
             _PROMOTE_STATE[experiment.id] = dict(state)
-        elif state is None:
+        else:
             _PROMOTE_STATE.pop(experiment.id, None)
     except Exception:
         logger.exception("Failed to read experiment state")

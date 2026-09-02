@@ -369,6 +369,42 @@ def test_experiment_context_reuses_cached_promote_state_on_read_failure(tmp_path
     assert experiment_context(settings)["promoted_variant"] == "treatment"
 
 
+def test_experiment_context_clears_promote_cache_when_store_returns_other_experiment(tmp_path, monkeypatch):
+    settings = _settings(tmp_path, id="exp-cache")
+    _write_frames(
+        settings,
+        events=[{"user_id": "u1", "item_id": "i1", "event_type": "view", "quantity": 1}],
+        recs=[
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                VARIANT_COLUMN: "control",
+            }
+        ],
+    )
+    ExperimentStore(settings.output).write_state(experiment_state("exp-cache", promoted_variant="treatment"))
+    assert experiment_context(settings)["promoted_variant"] == "treatment"
+
+    def _other(_self):
+        return {
+            "experiment_id": "other-exp",
+            "promoted_variant": "control",
+            "promoted_at": "2026-09-02T00:00:00Z",
+        }
+
+    monkeypatch.setattr("cicerone.experiment.store.ExperimentStore.read_state", _other)
+    assert experiment_context(settings)["promoted_variant"] is None
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("store down")
+
+    monkeypatch.setattr("cicerone.experiment.store.ExperimentStore.read_state", _boom)
+    assert experiment_context(settings)["promoted_variant"] is None
+
+
 def test_experiment_context_promoted_variant_when_state_experiment_id_is_int(tmp_path, monkeypatch):
     settings = _settings(tmp_path, id="7")
     _write_frames(
