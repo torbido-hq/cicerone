@@ -76,6 +76,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   before the run.
 - Incremental popular/latest write-through is the assigned (or promoted)
   variant only; docs matched that.
+- History parquet `since` skips older part files by parsing the slugged
+  filename (`:` → `-`).
 - Dashboard `Cache-Control: private, no-store` skips only `/static` assets,
   not other paths that happen to start with that prefix.
 - Kafka ingest commits the contiguous per-partition watermark so an

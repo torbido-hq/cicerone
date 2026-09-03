@@ -296,10 +296,16 @@ def test_track_history_reads_legacy_single_file(tmp_path) -> None:
 
 
 def test_history_part_name_sanitizes_timestamp() -> None:
-    from cicerone.track.store import _history_part_name
+    from cicerone.track.store import _history_part_name, _history_stem_before, _unslug_history_stem
 
     assert _history_part_name("2026-08-28T03:00:00+00:00") == "2026-08-28T03-00-00+00-00.parquet"
     assert _history_part_name("   ") == "snapshot.parquet"
+    assert _unslug_history_stem("2026-08-28T03-00-00+00-00") == "2026-08-28T03:00:00+00:00"
+    assert _unslug_history_stem("2026-08-28T03-00-00Z") == "2026-08-28T03:00:00Z"
+    assert _unslug_history_stem("2026-08-28T03-00-00-05-00") == "2026-08-28T03:00:00-05:00"
+    assert _unslug_history_stem("2026-08-28T03-00-00.123+00-00") == "2026-08-28T03:00:00.123+00:00"
+    assert _history_stem_before("2026-08-28T03-00-00+00-00", "2026-08-29T00:00:00+00:00")
+    assert not _history_stem_before("2026-08-29T03-00-00+00-00", "2026-08-29T00:00:00+00:00")
     from cicerone.track.store import _history_frame
 
     frame = _history_frame(
@@ -526,6 +532,49 @@ def test_track_read_history_generated_ats_skips_other_parts(tmp_path) -> None:
     assert str(history.iloc[0]["generated_at"]) == "2026-08-29T03:00:00+00:00"
     assert store.read_history(generated_ats=[]).empty
     assert len(store.read_history(since="2026-08-29T00:00:00+00:00")) == 1
+
+
+def test_track_read_history_since_skips_older_part_files(tmp_path) -> None:
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
+    store = TrackStore(output)
+    store.append_history(recs, generated_at="2026-08-28T03:00:00+00:00")
+    store.append_history(recs, generated_at="2026-08-29T03:00:00+00:00")
+    old = tmp_path / "recommendation_history" / "2026-08-28T03-00-00+00-00.parquet"
+    old.write_bytes(b"not parquet")
+    history = store.read_history(since="2026-08-29T00:00:00+00:00")
+    assert len(history) == 1
+    assert str(history.iloc[0]["generated_at"]) == "2026-08-29T03:00:00+00:00"
+
+
+def test_track_read_history_s3_since_skips_older_parts() -> None:
+    import boto3
+    from moto import mock_aws
+
+    with mock_aws():
+        client = boto3.client("s3", region_name="us-east-1")
+        client.create_bucket(Bucket="recs")
+        output = IOSettings(
+            kind="dataset",
+            options={
+                "storage_backend": "s3",
+                "bucket": "recs",
+                "access_key_id": "test",
+                "secret_access_key": "test",
+            },
+        )
+        recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
+        store = TrackStore(output)
+        store.append_history(recs, generated_at="2026-08-28T03:00:00+00:00")
+        store.append_history(recs, generated_at="2026-08-29T03:00:00+00:00")
+        client.put_object(
+            Bucket="recs",
+            Key="recommendation_history/2026-08-28T03-00-00+00-00.parquet",
+            Body=b"not parquet",
+        )
+        history = store.read_history(since="2026-08-29T00:00:00+00:00")
+        assert len(history) == 1
+        assert str(history.iloc[0]["generated_at"]) == "2026-08-29T03:00:00+00:00"
 
 
 def test_track_read_history_sqlite_generated_ats(tmp_path) -> None:
