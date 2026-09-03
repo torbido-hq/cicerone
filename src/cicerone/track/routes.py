@@ -32,6 +32,22 @@ logger = logging.getLogger(__name__)
 TRACK_PATH = "/track"
 
 
+def _record_accepted_ingest(rows: list[dict[str, Any]], accepted: int) -> None:
+    if accepted <= 0:
+        return
+    if accepted == len(rows):
+        counts: dict[str, int] = {}
+        for row in rows:
+            kind = str(row.get("kind") or "other")
+            counts[kind] = counts.get(kind, 0) + 1
+        for kind, count in counts.items():
+            record_track_ingest(kind=kind, status="accepted", count=count)
+        return
+    kinds = {str(row.get("kind") or "other") for row in rows}
+    kind = kinds.pop() if len(kinds) == 1 else "other"
+    record_track_ingest(kind=kind, status="accepted", count=accepted)
+
+
 def attach_track_ingest_openapi(schema: dict[str, Any]) -> None:
     post = schema.get("paths", {}).get(TRACK_PATH, {}).get("post")
     if not isinstance(post, dict):
@@ -105,12 +121,10 @@ def mount_track_routes(
         except TrackNormalizeError as exc:
             record_track_ingest(kind="other", status="error")
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        counts: dict[str, int] = {}
-        for row in rows:
-            kind = str(row.get("kind") or "other")
-            counts[kind] = counts.get(kind, 0) + 1
-        for kind, count in counts.items():
-            record_track_ingest(kind=kind, status="accepted", count=count)
+        except Exception:
+            record_track_ingest(kind="other", status="error")
+            raise
+        _record_accepted_ingest(rows, accepted)
         return TrackIngestResponse(
             accepted=accepted,
             event_ids=[str(row["event_id"]) for row in rows],

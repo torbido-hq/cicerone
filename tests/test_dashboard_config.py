@@ -99,6 +99,12 @@ def test_config_display_redacts_secrets_and_keeps_safe_values():
     assert isinstance(job["fields"]["automl"], dict)
     assert "enabled" in job["fields"]["automl"]
     assert isinstance(job["fields"]["explain"], dict)
+    assert "publish" not in job["fields"]
+    assert "track" not in job["fields"]
+    assert "eval" not in job["fields"]
+    assert _section(display, "publish")["toml"] == "[publish]"
+    assert _section(display, "track")["toml"] == "[track]"
+    assert _section(display, "eval")["toml"] == "[job.eval]"
     assert isinstance(_section(display, "experiment")["fields"], dict)
     assert dashboard["fields"]["users"] == ["alice", "bob"]
     assert events["badge"] == "on"

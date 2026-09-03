@@ -123,11 +123,53 @@ def test_post_track_idempotent(tmp_path):
     app = create_app(_settings(tmp_path), _FakeReader(_recs_df()))
     client = TestClient(app)
     headers = {"Authorization": "Bearer secret"}
+    from prometheus_client import generate_latest
+    from support.prometheus_metrics import metric_value
+
     first = client.post("/track", headers=headers, json=_impression())
+    after_first = metric_value(
+        generate_latest().decode(),
+        "cicerone_track_ingest_total",
+        {"kind": "impression", "status": "accepted"},
+    )
     second = client.post("/track", headers=headers, json=_impression())
+    after_second = metric_value(
+        generate_latest().decode(),
+        "cicerone_track_ingest_total",
+        {"kind": "impression", "status": "accepted"},
+    )
     assert first.status_code == 202
     assert first.json()["accepted"] == 1
     assert second.json()["accepted"] == 0
+    assert after_second == after_first
+
+
+def test_post_track_records_error_when_append_fails(tmp_path, monkeypatch):
+    from prometheus_client import generate_latest
+    from support.prometheus_metrics import metric_value
+
+    monkeypatch.setattr(
+        "cicerone.track.store.TrackStore.append_rows",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("store")),
+    )
+    before = metric_value(
+        generate_latest().decode(),
+        "cicerone_track_ingest_total",
+        {"kind": "other", "status": "error"},
+    )
+    app = create_app(_settings(tmp_path), _FakeReader(_recs_df()))
+    response = TestClient(app, raise_server_exceptions=False).post(
+        "/track",
+        headers={"Authorization": "Bearer secret"},
+        json=_impression(),
+    )
+    after = metric_value(
+        generate_latest().decode(),
+        "cicerone_track_ingest_total",
+        {"kind": "other", "status": "error"},
+    )
+    assert response.status_code == 500
+    assert after == before + 1
 
 
 def test_track_route_absent_when_disabled(tmp_path):

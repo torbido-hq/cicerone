@@ -44,6 +44,9 @@ _NESTED_SECTIONS: tuple[tuple[str, str, str], ...] = (
     ("events", "Events", "[events]"),
     ("trigger", "Trigger", "[job.trigger]"),
     ("experiment", "Experiment", "[experiment]"),
+    ("publish", "Publish", "[publish]"),
+    ("track", "Track", "[track]"),
+    ("eval", "Eval", "[job.eval]"),
 )
 _JOB_SKIP = frozenset({key for key, _title, _toml in _NESTED_SECTIONS} | {"mode"})
 
@@ -159,6 +162,18 @@ HINTS: dict[str, dict[str, str]] = {
         "docs": f"{_DOCS}/experiments/",
     },
     "experiment.enabled": {"text": "Assign users to variants at serve and job time."},
+    "publish": {
+        "text": "Emit per-user recommendation JSON after the output write.",
+        "docs": f"{_DOCS}/incremental-events/",
+    },
+    "track": {
+        "text": "Host-reported impressions and clicks for CTR and conversion.",
+        "docs": f"{_DOCS}/evaluation/",
+    },
+    "eval": {
+        "text": "Replay previous lists against later events (HitRate, coverage, novelty).",
+        "docs": f"{_DOCS}/evaluation/#production-replay",
+    },
     "features": {
         "text": "Event weights, feature columns, eligibility, and boosts.",
         "docs": f"{_DOCS}/how-it-works/#interaction-weighting",

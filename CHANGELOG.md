@@ -46,6 +46,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Served-eval `CatalogCoverage` uses the item catalog, not only recommended IDs.
+- `POST /track` Prometheus counts match accepted rows and record store failures.
 - Dashboard `Cache-Control: private, no-store` skips only `/static` assets,
   not other paths that happen to start with that prefix.
 - Kafka ingest commits the contiguous per-partition watermark so an
