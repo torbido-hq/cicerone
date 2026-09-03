@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
@@ -98,7 +98,7 @@ def normalize_track(payload: Any) -> NormalizedTrack:
             kind=kind,
             user_id=user_id,
             item_id=item_id,
-            occurred_at=occurred_at,
+            occurred_at=_occurred_stamp(occurred_at),
             rank=rank,
             variant=variant,
             experiment_id=experiment_id,
@@ -121,14 +121,6 @@ def assign_missing_event_id(row: Mapping[str, Any]) -> dict[str, Any]:
     item = dict(row)
     if str(item.get("event_id") or ""):
         return item
-    occurred = item.get("occurred_at")
-    if isinstance(occurred, datetime):
-        when = occurred
-    else:
-        try:
-            when = parse_occurred_at(occurred)
-        except EventNormalizeError:
-            when = datetime.now(UTC)
     rank_raw = item.get("rank")
     try:
         rank = int(rank_raw) if rank_raw not in (None, "") else None
@@ -138,7 +130,7 @@ def assign_missing_event_id(row: Mapping[str, Any]) -> dict[str, Any]:
         kind=str(item.get("kind") or ""),
         user_id=str(item.get("user_id") or ""),
         item_id=str(item.get("item_id") or ""),
-        occurred_at=when,
+        occurred_at=_occurred_stamp(item.get("occurred_at")),
         rank=rank,
         variant=_optional_str(item, "variant"),
         experiment_id=_optional_str(item, "experiment_id"),
@@ -147,12 +139,23 @@ def assign_missing_event_id(row: Mapping[str, Any]) -> dict[str, Any]:
     return item
 
 
+def _occurred_stamp(value: Any) -> str:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if value in (None, ""):
+        return ""
+    try:
+        return parse_occurred_at(value).isoformat()
+    except EventNormalizeError:
+        return str(value)
+
+
 def _stable_event_id(
     *,
     kind: str,
     user_id: str,
     item_id: str,
-    occurred_at: datetime,
+    occurred_at: str,
     rank: int | None,
     variant: str | None,
     experiment_id: str | None,
@@ -162,7 +165,7 @@ def _stable_event_id(
         kind,
         user_id,
         item_id,
-        occurred_at.isoformat(),
+        occurred_at,
         "" if rank is None else str(rank),
         variant or "",
         experiment_id or "",

@@ -809,3 +809,27 @@ def test_experiment_context_events_full_parquet_fallback(tmp_path, monkeypatch):
     context = experiment_context(settings)
     assert context["report"] is not None
     assert calls["n"] >= 2
+
+
+def test_track_variant_by_user_uses_earliest_impression() -> None:
+    from cicerone.dashboard_experiments import _track_variant_by_user
+
+    names = {"control", "treatment"}
+    later_first = [
+        {
+            "kind": "impression",
+            "user_id": "u1",
+            "variant": "treatment",
+            "occurred_at": "2026-08-29T12:00:00Z",
+            "event_id": "b",
+        },
+        {
+            "kind": "impression",
+            "user_id": "u1",
+            "variant": "control",
+            "occurred_at": "2026-08-29T10:00:00Z",
+            "event_id": "a",
+        },
+    ]
+    assert _track_variant_by_user(later_first, names) == {"u1": "control"}
+    assert _track_variant_by_user(list(reversed(later_first)), names) == {"u1": "control"}

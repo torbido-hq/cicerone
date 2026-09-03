@@ -56,17 +56,27 @@ def _track_rows_for_experiment(rows: Sequence[dict[str, Any]], experiment_id: st
     return matched
 
 
+def _impression_sort_key(row: dict[str, Any]) -> tuple[str, str]:
+    occurred = str(row.get("occurred_at") or "")
+    stamp = pd.to_datetime(occurred, utc=True, errors="coerce")
+    when = stamp.isoformat() if pd.notna(stamp) else occurred
+    return (when, str(row.get("event_id") or ""))
+
+
 def _track_variant_by_user(rows: Sequence[dict[str, Any]], names: set[str]) -> dict[str, str]:
-    assigned: dict[str, str] = {}
+    chosen: dict[str, tuple[tuple[str, str], str]] = {}
     for row in rows:
         if str(row.get("kind") or "") != TRACK_KIND_IMPRESSION:
             continue
         user_id = str(row.get("user_id") or "")
         variant = str(row.get("variant") or "")
-        if not user_id or variant not in names or user_id in assigned:
+        if not user_id or variant not in names:
             continue
-        assigned[user_id] = variant
-    return assigned
+        key = _impression_sort_key(row)
+        prev = chosen.get(user_id)
+        if prev is None or key < prev[0]:
+            chosen[user_id] = (key, variant)
+    return {user_id: variant for user_id, (_key, variant) in chosen.items()}
 
 
 def experiment_context(settings: Settings) -> dict[str, Any]:

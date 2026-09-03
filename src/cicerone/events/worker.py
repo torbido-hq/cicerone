@@ -79,11 +79,11 @@ def inflight_heartbeat(
     thread.start()
     try:
         yield
-        if failed.is_set():
-            raise HeartbeatError("Event source heartbeat failed")
     finally:
         stop.set()
         thread.join(timeout=max(1.0, interval_seconds))
+    if failed.is_set() or thread.is_alive():
+        raise HeartbeatError("Event source heartbeat failed")
 
 
 class EventWorker:

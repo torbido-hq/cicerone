@@ -307,6 +307,18 @@ def test_track_history_reads_legacy_single_file(tmp_path) -> None:
     assert users == {"alice", "bob"}
 
 
+def test_track_read_history_generated_ats_skips_legacy_without_stamp(tmp_path) -> None:
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
+    recs.to_parquet(tmp_path / "recommendation_history.parquet", index=False)
+    store = TrackStore(output)
+    store.append_history(recs, generated_at="2026-08-29T03:00:00+00:00")
+    history = store.read_history(generated_ats=["2026-08-29T03:00:00+00:00"])
+    assert len(history) == 1
+    assert str(history.iloc[0]["generated_at"]) == "2026-08-29T03:00:00+00:00"
+    assert str(history.iloc[0]["user_id"]) == "alice"
+
+
 def test_history_part_name_sanitizes_timestamp() -> None:
     from cicerone.track.store import _history_part_name, _history_stem_before, _unslug_history_stem
 
@@ -430,6 +442,22 @@ def test_track_jsonl_assigns_event_id_when_missing(tmp_path) -> None:
     assert all(ids)
 
 
+def test_assign_missing_event_id_hashes_raw_occurred_at() -> None:
+    from cicerone.track.normalize import assign_missing_event_id
+
+    row = {
+        "kind": "click",
+        "user_id": "alice",
+        "item_id": "ipa-001",
+        "occurred_at": "not-a-time",
+        "event_id": "",
+    }
+    first = assign_missing_event_id(row)
+    second = assign_missing_event_id(dict(row))
+    assert first["event_id"]
+    assert first["event_id"] == second["event_id"]
+
+
 def test_track_jsonl_second_store_respects_existing_event_ids(tmp_path) -> None:
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     assert TrackStore(output).append_rows([_row()]) == 1
@@ -531,6 +559,26 @@ def test_track_read_rows_filters_sqlite(tmp_path) -> None:
     assert {row["event_id"] for row in matched} == {"a", "untagged"}
     recent = store.read_rows(since="2026-08-28T12:00:00Z")
     assert {row["event_id"] for row in recent} == {"b", "untagged"}
+
+
+def test_track_read_rows_sqlite_since_uses_instant(tmp_path) -> None:
+    url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
+    output = IOSettings(kind="db", options={"database_url": url})
+    store = TrackStore(output)
+    offset = {
+        "kind": "impression",
+        "user_id": "alice",
+        "item_id": "ipa-001",
+        "rank": 1,
+        "occurred_at": "2026-08-29T00:30:00-05:00",
+        "event_id": "offset",
+        "variant": None,
+        "experiment_id": None,
+        "generated_at": None,
+    }
+    store.append_rows([_row(event_id="early", occurred_at="2026-08-28T12:00:00Z"), offset])
+    recent = store.read_rows(since="2026-08-29T05:00:00+00:00")
+    assert {row["event_id"] for row in recent} == {"offset"}
 
 
 def test_track_read_history_generated_ats_skips_other_parts(tmp_path) -> None:

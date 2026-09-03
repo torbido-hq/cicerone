@@ -67,12 +67,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Kafka `[publish]` flushes the producer when the connect probe fails.
 - Track ingest without `event_id` is stable across retries of the same row.
 - Stable track `event_id` hashes fields as JSON so `|` in ids cannot collide.
+- Missing track `event_id` with a bad `occurred_at` hashes the raw stamp, not
+  the clock.
+- Track `since` compares instants, not lexicographic timestamp strings.
+- Snapshot history reads ignore legacy parquet that has no `generated_at`.
+- History part files are read in sorted order.
+- CTR track variants take the earliest impression per user.
 - Duplicate names in replacement `[[experiment.variants.boost]]` /
   eligibility tables are rejected.
 - Dashboard Experiments surfaces variant policy `ConfigError` instead of
   “No experiment variants to evaluate.”
 - In-flight event apply nacks the batch if a later heartbeat fails, so a
-  long online refresh cannot ack after visibility is lost.
+  long online refresh cannot ack after visibility is lost. The beat thread
+  is joined before ack.
 - Job writes a failed manifest when `[publish]` connect or config raises
   before the run.
 - Incremental popular/latest write-through is the assigned (or promoted)
