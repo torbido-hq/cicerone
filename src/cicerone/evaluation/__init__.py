@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from cicerone.evaluation.metrics import SliceMetrics, _merge_asof_events
+from cicerone.evaluation.metrics import OCCURRED_AT, SliceMetrics, _merge_asof_events
 from cicerone.evaluation.served import (
     ServedEvalReport,
     _recs_from_history,
@@ -11,6 +11,7 @@ from cicerone.evaluation.served import (
     replay_ks,
 )
 from cicerone.evaluation.tracking import (
+    DEFAULT_CONVERSION_TYPE,
     TrackEvalReport,
     _annotate_source,
     conversion_event_types,
@@ -19,6 +20,8 @@ from cicerone.evaluation.tracking import (
 )
 
 __all__ = [
+    "DEFAULT_CONVERSION_TYPE",
+    "OCCURRED_AT",
     "ServedEvalReport",
     "SliceMetrics",
     "TrackEvalReport",

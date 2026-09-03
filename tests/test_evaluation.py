@@ -5,6 +5,8 @@ import pytest
 
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.evaluation import (
+    DEFAULT_CONVERSION_TYPE,
+    OCCURRED_AT,
     conversion_event_types,
     evaluate_served,
     evaluate_tracking,
@@ -12,6 +14,11 @@ from cicerone.evaluation import (
     replay_ks,
     user_track_outcomes,
 )
+
+
+def test_evaluation_package_reexports_prior_constants() -> None:
+    assert OCCURRED_AT == "occurred_at"
+    assert DEFAULT_CONVERSION_TYPE == "purchase"
 
 
 def _track(*rows: dict) -> list[dict]:
