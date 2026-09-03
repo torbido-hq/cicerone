@@ -110,7 +110,7 @@ def _ranking_metric_defs(k: int) -> dict[str, object]:
 
 
 def _catalog_metric_defs(k: int, *, with_prev: bool) -> dict[str, object]:
-    metrics: dict[str, object] = {f"CatalogCoverage@{k}": CatalogCoverage(k=k)}
+    metrics: dict[str, object] = {f"CatalogCoverage@{k}": CatalogCoverage(k=k, normalize=True)}
     if with_prev:
         metrics[f"MeanInvUserFreq@{k}"] = MeanInvUserFreq(k=k)
         metrics[f"AvgRecPopularity@{k}"] = AvgRecPopularity(k=k)
