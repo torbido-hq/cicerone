@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -9,6 +10,7 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, ValidationError
 
 from cicerone.config import Settings
+from cicerone.config.constants import DEFAULT_EVENTS_MAX_BODY_BYTES
 from cicerone.events.base import EventBackpressureError
 from cicerone.events.normalize import EventNormalizeError
 from cicerone.events.webhook import WebhookEventSource
@@ -24,6 +26,37 @@ from cicerone.serve_schemas import (
 logger = logging.getLogger(__name__)
 
 EVENTS_PATH = "/events"
+
+
+def _max_body_bytes(settings: Settings) -> int:
+    raw = settings.events.options.get("max_body_bytes", DEFAULT_EVENTS_MAX_BODY_BYTES)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_EVENTS_MAX_BODY_BYTES
+    return value if value >= 1 else DEFAULT_EVENTS_MAX_BODY_BYTES
+
+
+async def _read_limited_json(request: Request, max_bytes: int) -> object:
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            declared = int(content_length)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Request body must be JSON") from None
+        if declared > max_bytes:
+            raise HTTPException(status_code=413, detail="Request body too large")
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(status_code=413, detail="Request body too large")
+        chunks.append(chunk)
+    try:
+        return json.loads(b"".join(chunks))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise HTTPException(status_code=400, detail="Request body must be JSON") from exc
 
 
 def _rewrite_json_schema_defs(node: Any) -> Any:
@@ -124,14 +157,12 @@ def mount_events_routes(
                 ),
             },
             401: {"model": ErrorDetail, "description": "Missing or invalid bearer token"},
+            413: {"model": ErrorDetail, "description": "Request body too large"},
             429: {"model": ErrorDetail, "description": "Event backlog full"},
         },
     )
     async def post_events(request: Request) -> EventsIngestResponse:
-        try:
-            body = await request.json()
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail="Request body must be JSON") from exc
+        body = await _read_limited_json(request, _max_body_bytes(settings))
         payloads = _payloads_from_body(body)
         try:
             # Validate shape with the OpenAPI models (single or batch).

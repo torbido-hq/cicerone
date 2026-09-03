@@ -304,3 +304,60 @@ def test_post_events_backpressure_429():
     assert set(body) == {"detail"}
     assert isinstance(body["detail"], str)
     assert "backlog full" in body["detail"]
+
+
+def test_post_events_rejects_oversized_body():
+    source = WebhookEventSource({})
+    app = create_app(
+        _settings(events=EventsSettings(enabled=True, kind="webhook", options={"max_body_bytes": 64})),
+        _FakeReader(_recs_df()),
+        event_source=source,
+    )
+    response = TestClient(app).post(
+        "/events",
+        headers={"Authorization": "Bearer secret", "content-type": "application/json"},
+        content=b'{"user_id":"' + b"u" * 200 + b'","item_id":"i1","event_type":"view"}',
+    )
+    assert response.status_code == 413
+
+
+def test_post_events_rejects_invalid_json():
+    source = WebhookEventSource({})
+    app = create_app(_settings(), _FakeReader(_recs_df()), event_source=source)
+    response = TestClient(app).post(
+        "/events",
+        headers={"Authorization": "Bearer secret", "content-type": "application/json"},
+        content=b"not-json",
+    )
+    assert response.status_code == 400
+
+
+def test_post_events_rejects_invalid_utf8_body():
+    source = WebhookEventSource({})
+    app = create_app(_settings(), _FakeReader(_recs_df()), event_source=source)
+    response = TestClient(app).post(
+        "/events",
+        headers={"Authorization": "Bearer secret", "content-type": "application/json"},
+        content=b"\xff\xfe",
+    )
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Request body must be JSON"}
+
+
+def test_post_events_rejects_oversized_content_length():
+    source = WebhookEventSource({})
+    app = create_app(
+        _settings(events=EventsSettings(enabled=True, kind="webhook", options={"max_body_bytes": 64})),
+        _FakeReader(_recs_df()),
+        event_source=source,
+    )
+    response = TestClient(app).post(
+        "/events",
+        headers={
+            "Authorization": "Bearer secret",
+            "content-type": "application/json",
+            "content-length": "9999",
+        },
+        content=b"{}",
+    )
+    assert response.status_code == 413

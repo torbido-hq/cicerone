@@ -69,6 +69,24 @@ def test_database_input_reads_custom_query():
     assert list(events["user_id"]) == ["u1"]
 
 
+def test_database_input_rejects_unsafe_events_query():
+    source = DatabaseInputSource({"database_url": TEST_DATABASE_URL, "events_query": "DELETE FROM events"})
+    with pytest.raises(ValueError, match="events_query"):
+        source.read_events()
+
+
+def test_database_input_does_not_log_custom_sql(caplog):
+    engine = create_engine(TEST_DATABASE_URL)
+    pd.DataFrame([{"user_id": "u1", "item_id": "i1"}]).to_sql("custom_events", engine, index=False)
+    source = DatabaseInputSource(
+        {"database_url": TEST_DATABASE_URL, "events_query": 'SELECT * FROM "custom_events"'}
+    )
+    with caplog.at_level(logging.INFO, logger="cicerone.io.db_store"):
+        source.read_events()
+    assert "SELECT" not in caplog.text
+    assert "configured query" in caplog.text
+
+
 def test_database_input_optional_tables_missing_return_none():
     source = DatabaseInputSource({"database_url": TEST_DATABASE_URL})
 

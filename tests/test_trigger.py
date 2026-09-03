@@ -217,6 +217,19 @@ def test_trigger_endpoint_health_requires_no_auth():
     assert response.status_code == 200
 
 
+def test_trigger_docs_are_disabled():
+    client = TestClient(create_app(_settings(), _FakeGuard()))
+    assert client.get("/docs").status_code == 404
+    assert client.get("/redoc").status_code == 404
+    assert client.get("/openapi.json").status_code == 404
+
+
+def test_trigger_security_headers_on_health():
+    response = TestClient(create_app(_settings(), _FakeGuard())).get("/health")
+    assert response.headers["x-frame-options"] == "DENY"
+    assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
+
+
 def test_poll_input_forever_disabled_for_db_input(caplog):
     input_settings = IOSettings(kind="db", options={"database_url": "postgresql+psycopg://u:p@h/d"})
     guard = _FakeGuard()

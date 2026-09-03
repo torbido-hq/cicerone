@@ -14,7 +14,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from cicerone import __version__
 from cicerone.config import Settings, load_settings
-from cicerone.config.constants import DEFAULT_LOG_FORMAT
+from cicerone.config.constants import DEFAULT_LOG_FORMAT, DEFAULT_SERVE_MAX_K
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
 from cicerone.experiment.assignment import resolve_assignment
@@ -22,6 +22,7 @@ from cicerone.experiment.evaluate import exposure_row
 from cicerone.experiment.store import ExperimentStore
 from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.http_auth import optional_bearer_deps
+from cicerone.http_security import SecurityHeadersMiddleware, token_equals
 from cicerone.io.base import ManifestReader, RecommendationReader
 from cicerone.io.recommendation_reader import SOURCE_COLUMN
 from cicerone.io.recommendation_schema import has_variant_column
@@ -143,6 +144,7 @@ def create_app(
         version=SERVE_API_VERSION,
         description=SERVE_API_DESCRIPTION,
     )
+    app.add_middleware(SecurityHeadersMiddleware)
     dependencies = optional_bearer_deps(settings.serve.auth_token)
     availability_filters = list(feature_config.item_availability_filters) if feature_config else []
     category_column = settings.serve.category_column
@@ -196,7 +198,9 @@ def create_app(
         @app.get("/metrics", tags=["metrics"], include_in_schema=False)
         def metrics(request: Request) -> Response:
             metrics_token = settings.serve.metrics_token
-            if metrics_token and request.headers.get(METRICS_TOKEN_HEADER) != metrics_token:
+            if not metrics_token or not token_equals(
+                request.headers.get(METRICS_TOKEN_HEADER), metrics_token
+            ):
                 raise HTTPException(status_code=401, detail="Invalid or missing metrics token")
             update_cache_age_gauge()
             # Event source lag/connected are refreshed by the worker loop (not on scrape).
@@ -219,8 +223,12 @@ def create_app(
     def get_recommendations(
         user_id: str,
         response: Response,
-        limit: int | None = Query(default=None, gt=0, description="Top-K rows to return"),
-        k: int | None = Query(default=None, gt=0, description="Alias for limit (back-compat)"),
+        limit: int | None = Query(
+            default=None, gt=0, le=DEFAULT_SERVE_MAX_K, description="Top-K rows to return"
+        ),
+        k: int | None = Query(
+            default=None, gt=0, le=DEFAULT_SERVE_MAX_K, description="Alias for limit (back-compat)"
+        ),
         category: str | None = Query(
             default=None,
             description="Keep only items whose configured category column matches this value",
@@ -241,6 +249,7 @@ def create_app(
             top_k = k
         else:
             top_k = settings.serve.default_k
+        top_k = min(top_k, DEFAULT_SERVE_MAX_K)
         items, available_ids, ids_by_category = items_cache.get()
         can_filter = bool(
             items is not None

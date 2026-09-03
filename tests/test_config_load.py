@@ -1221,7 +1221,7 @@ def test_load_settings_serve_mode_with_auth_token(tmp_path, monkeypatch):
     assert settings.serve_default_k == 5
     assert settings.serve_refresh_interval_seconds == 30.0
     assert settings.serve_category_column == "category"
-    assert settings.serve_metrics_enabled is True
+    assert settings.serve_metrics_enabled is False
     assert settings.serve_metrics_token is None
 
 
@@ -1235,6 +1235,7 @@ def test_load_settings_serve_metrics_token(tmp_path, monkeypatch):
 
         [serve]
         auth_token = "secret"
+        metrics_enabled = true
         metrics_token = "${{MY_METRICS_TOKEN}}"
         {_base_io_toml()}
         """,
@@ -1265,6 +1266,40 @@ def test_load_settings_serve_metrics_disabled(tmp_path):
     assert settings.serve_metrics_enabled is False
 
 
+def test_load_settings_serve_metrics_enabled_requires_token(tmp_path):
+    config_path = write_toml(
+        tmp_path,
+        f"""
+        [job]
+        mode = "serve"
+
+        [serve]
+        auth_token = "secret"
+        metrics_enabled = true
+        {_base_io_toml()}
+        """,
+    )
+    with pytest.raises(ConfigError, match="serve.metrics_token is required"):
+        load_settings(config_path)
+
+
+def test_load_settings_serve_default_k_rejects_over_cap(tmp_path):
+    config_path = write_toml(
+        tmp_path,
+        f"""
+        [job]
+        mode = "serve"
+
+        [serve]
+        auth_token = "secret"
+        default_k = 101
+        {_base_io_toml()}
+        """,
+    )
+    with pytest.raises(ConfigError, match="serve.default_k"):
+        load_settings(config_path)
+
+
 def test_load_settings_serve_defaults(tmp_path, monkeypatch):
     monkeypatch.setenv("MY_SERVE_TOKEN", "secret-token")
     config_path = write_toml(
@@ -1286,7 +1321,7 @@ def test_load_settings_serve_defaults(tmp_path, monkeypatch):
     assert settings.serve_default_k == 10
     assert settings.serve_refresh_interval_seconds == 60.0
     assert settings.serve_category_column == "category"
-    assert settings.serve_metrics_enabled is True
+    assert settings.serve_metrics_enabled is False
     assert settings.serve_metrics_token is None
 
 

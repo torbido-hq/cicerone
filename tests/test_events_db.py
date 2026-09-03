@@ -703,6 +703,8 @@ def test_db_rejects_timezone_less_initial_watermark(tmp_path):
         "DELETE FROM events",
         "SELECT 1; DROP TABLE events",
         "INSERT INTO events SELECT * FROM events",
+        "SELECT * FROM events INTO dump",
+        "SELECT pg_read_file('/etc/passwd')",
         "",
         "   ",
     ],

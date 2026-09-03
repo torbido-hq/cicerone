@@ -34,7 +34,7 @@ from sqlalchemy import (
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from cicerone.io.db_errors import is_missing_column_error
-from cicerone.io.options import require_option, sql_identifier
+from cicerone.io.options import readonly_select, require_option, sql_identifier
 from cicerone.io.recommendation_schema import (
     REASONS_COLUMN,
     VARIANT_COLUMN,
@@ -133,14 +133,20 @@ class DatabaseInputSource:
         self._options = options
         self._engine = create_engine(require_option(options, "database_url", "db"), pool_pre_ping=True)
 
+    def _configured_query(self, key: str) -> str | None:
+        query = self._options.get(key)
+        if query is None:
+            return None
+        return readonly_select(query, option=f"input.options.{key}")
+
     def _read(self, query: str | None, table: str) -> pd.DataFrame:
         sql = query or f'SELECT * FROM "{table}"'
-        logger.info("Reading from database: %s", sql if query else f'table "{table}"')
+        logger.info("Reading from database: %s", "configured query" if query else f'table "{table}"')
         return pd.read_sql(text(sql), self._engine)
 
     def read_events(self) -> pd.DataFrame:
         return self._read(
-            self._options.get("events_query"),
+            self._configured_query("events_query"),
             sql_identifier(self._options.get("events_table", DEFAULT_EVENTS_TABLE), option="events_table"),
         )
 
@@ -161,14 +167,14 @@ class DatabaseInputSource:
 
     def read_users(self) -> pd.DataFrame | None:
         return self._read_optional(
-            self._options.get("users_query"),
+            self._configured_query("users_query"),
             sql_identifier(self._options.get("users_table", DEFAULT_USERS_TABLE), option="users_table"),
             "users",
         )
 
     def read_items(self) -> pd.DataFrame | None:
         return self._read_optional(
-            self._options.get("items_query"),
+            self._configured_query("items_query"),
             sql_identifier(self._options.get("items_table", DEFAULT_ITEMS_TABLE), option="items_table"),
             "items",
         )
@@ -190,12 +196,15 @@ class DatabaseInputSource:
         if limit is not None:
             sql += " LIMIT :limit"
             params["limit"] = int(limit)
-        logger.info("Reading from database: user-filtered %s", "query" if query else f'table "{table}"')
+        logger.info(
+            "Reading from database: user-filtered %s",
+            "configured query" if query else f'table "{table}"',
+        )
         return pd.read_sql(text(sql), self._engine, params=params)
 
     def get_events_for_user(self, user_id: str, limit: int) -> pd.DataFrame:
         table = sql_identifier(self._options.get("events_table", DEFAULT_EVENTS_TABLE), option="events_table")
-        query = self._options.get("events_query")
+        query = self._configured_query("events_query")
         sql_limit = max(int(limit) * _SQL_HISTORY_OVERFETCH, int(limit))
         try:
             frame = self._select_user_rows(query, table, user_id, limit=sql_limit, order_occurred_at=True)
@@ -204,7 +213,7 @@ class DatabaseInputSource:
         return newest_events(filter_rows_for_user(frame, user_id), limit)
 
     def get_user(self, user_id: str) -> dict[str, Any] | None:
-        query = self._options.get("users_query")
+        query = self._configured_query("users_query")
         table = sql_identifier(self._options.get("users_table", DEFAULT_USERS_TABLE), option="users_table")
         if query is None and not inspect(self._engine).has_table(table):
             return None

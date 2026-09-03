@@ -30,8 +30,9 @@ port = 8000
 default_k = 10
 refresh_interval_seconds = 60
 category_column = "category"
-metrics_enabled = true
-metrics_token = ""   # empty = open endpoint; bind to a trusted network or reverse proxy
+metrics_enabled = false
+# metrics_token is required when metrics_enabled = true
+# metrics_token = "${METRICS_TOKEN}"
 
 # Optional incremental event ingest. See docs/incremental-events.md.
 # Webhook: POST /events. DB: watermark poll. S3/R2: list/marker (or AWS SQS).
