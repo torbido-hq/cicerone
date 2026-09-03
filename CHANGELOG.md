@@ -66,6 +66,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Incremental `[publish]` runs after the output write and manifest update.
 - Kafka `[publish]` flushes the producer when the connect probe fails.
 - Track ingest without `event_id` is stable across retries of the same row.
+- Stable track `event_id` hashes fields as JSON so `|` in ids cannot collide.
 - Duplicate names in replacement `[[experiment.variants.boost]]` /
   eligibility tables are rejected.
 - Dashboard Experiments surfaces variant policy `ConfigError` instead of

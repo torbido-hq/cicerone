@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -167,7 +168,7 @@ def _stable_event_id(
         experiment_id or "",
         generated_at or "",
     )
-    return str(uuid5(NAMESPACE_URL, "|".join(parts)))
+    return str(uuid5(NAMESPACE_URL, json.dumps(parts, separators=(",", ":"))))
 
 
 __all__ = [

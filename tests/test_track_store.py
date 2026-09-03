@@ -93,6 +93,18 @@ def test_normalize_track_requires_kind_and_rank():
         )
 
 
+def test_stable_event_id_does_not_collide_on_pipe_in_ids() -> None:
+    base = {
+        "kind": "impression",
+        "rank": 1,
+        "occurred_at": "2026-08-28T12:00:00Z",
+    }
+    left = normalize_track({**base, "user_id": "a|b", "item_id": "c"})
+    right = normalize_track({**base, "user_id": "a", "item_id": "b|c"})
+    assert left.event_id != right.event_id
+    assert normalize_track({**base, "user_id": "a|b", "item_id": "c"}).event_id == left.event_id
+
+
 def test_track_store_roundtrip_dataset(tmp_path) -> None:
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     store = TrackStore(output)
