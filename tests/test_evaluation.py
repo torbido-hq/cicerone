@@ -271,6 +271,7 @@ def test_evaluate_served_hit_rate_and_history() -> None:
     assert report is not None
     assert report.n_users == 1
     assert report.metrics["HitRate@1"] == pytest.approx(1.0)
+    assert "MAP@1" in report.metrics
     old_recs = pd.DataFrame(
         [
             {

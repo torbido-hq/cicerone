@@ -423,9 +423,11 @@ if omitted:
   features for cold-start. Personalized, warm users only. Hyperparameters
   via `[model.collaborative]` (RecTools `model_from_config` schema).
 - `item_based`: `ImplicitItemKNNWrapperModel` (rectools) — item-item
-  similarity (`TFIDFRecommender`). Personalized, warm users only. Neighbor
-  count is RecTools `model.item_based.model.K` (default `20`); the legacy
-  `[job.item_based].k_neighbors` key is still accepted and translated.
+  similarity (`TFIDFRecommender` by default; `CosineRecommender` or
+  `BM25Recommender` via `[model.item_based.model].cls`). Personalized, warm
+  users only. Neighbor count is RecTools `model.item_based.model.K` (default
+  `20`); the legacy `[job.item_based].k_neighbors` key is still accepted and
+  translated.
 - `sequential`: RecTools `SASRecModel` (default), `BERT4RecModel`, or
   `HSTUModel` — transformer next-item model. Personalized, interacting users
   only. Opt-in (`job.models`); not in the default chain. Requires
@@ -439,6 +441,12 @@ if omitted:
   `Dataset.construct`), so HSTU relative-time bias is weak. AutoML skips this
   strategy when the extra is missing or median distinct items/user is below
   `[job.sequential].min_median_interactions` (default `5`).
+- `ease`: RecTools `EASEModel` — dense item–item autoencoder. Personalized,
+  interacting users only. Opt-in. Hyperparameters via `[model.ease]`.
+- `als`: RecTools `ImplicitALSWrapperModel` (`pm-implicit` ALS) with
+  `fit_features_together` so side features on the dataset participate.
+  Personalized, interacting users only. Opt-in. `[events.online]` does not
+  refresh ALS; keep LightFM as `collaborative` if you need `fit_partial`.
 - `content_fallback`: feature-similarity recommendations for **zero-interaction
   items** (one-hot over `item_features`, cosine vs user history). Personalized,
   warm users only. Off by default — set `[job.content_fallback].enabled = true`
@@ -447,9 +455,14 @@ if omitted:
 - `popular`: `PopularModel` (rectools) — global popularity. Non-personalized,
   runs for every target user and backfills any warm user without enough
   personalized results. Optional `[model.popular]`.
+- `popular_in_category`: RecTools `PopularInCategoryModel` — mixes popularity
+  across an item category feature (`[model.popular_in_category].category_feature`,
+  default `category`). Non-personalized. Opt-in.
 - `latest`: `PopularModel` restricted to the last two weeks of interactions —
   trending/recently active items. Non-personalized, same backfill role as
   `popular`. Optional `[model.latest]` (`period = { days = 14 }`).
+- `random`: RecTools `RandomModel` — uniform catalog samples. Opt-in sanity
+  baseline.
 
 Strategy construction and hyperparameters live in `cicerone.model_config`
 + `cicerone.model` (`strategies` / `fit` / `recommend` / `combine`). What

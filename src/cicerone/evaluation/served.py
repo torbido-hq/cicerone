@@ -8,7 +8,18 @@ from dataclasses import dataclass
 from typing import Any
 
 import pandas as pd
-from rectools.metrics import MAP, NDCG, Recall, calc_metrics
+from rectools.metrics import (
+    MAP,
+    MRR,
+    NDCG,
+    AvgRecPopularity,
+    CatalogCoverage,
+    HitRate,
+    MeanInvUserFreq,
+    Precision,
+    Recall,
+    calc_metrics,
+)
 
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.evaluation.metrics import OCCURRED_AT, _frame, _ratio
@@ -87,6 +98,55 @@ def _hit_rate(reco: pd.DataFrame, relevant: pd.DataFrame, *, k: int) -> float:
     return _ratio(hits, scored)
 
 
+def _ranking_metric_defs(k: int) -> dict[str, object]:
+    return {
+        f"HitRate@{k}": HitRate(k=k),
+        f"MAP@{k}": MAP(k=k),
+        f"NDCG@{k}": NDCG(k=k),
+        f"Recall@{k}": Recall(k=k),
+        f"MRR@{k}": MRR(k=k),
+        f"Precision@{k}": Precision(k=k),
+    }
+
+
+def _catalog_metric_defs(k: int, *, with_prev: bool) -> dict[str, object]:
+    metrics: dict[str, object] = {f"CatalogCoverage@{k}": CatalogCoverage(k=k)}
+    if with_prev:
+        metrics[f"MeanInvUserFreq@{k}"] = MeanInvUserFreq(k=k)
+        metrics[f"AvgRecPopularity@{k}"] = AvgRecPopularity(k=k)
+    return metrics
+
+
+def _prev_interactions(events: pd.DataFrame, generated_at: str | None) -> pd.DataFrame:
+    if events.empty or generated_at is None or OCCURRED_AT not in events.columns:
+        return events.iloc[0:0]
+    start = pd.to_datetime(generated_at, utc=True, errors="coerce")
+    if pd.isna(start):
+        return events.iloc[0:0]
+    frame = events.loc[events[OCCURRED_AT] <= start, [USER_COLUMN, ITEM_COLUMN]].drop_duplicates()
+    if frame.empty:
+        return frame
+    frame = frame.copy()
+    frame["weight"] = 1.0
+    return frame
+
+
+def _served_catalog(
+    catalog: pd.DataFrame | Sequence[object] | None,
+    recs: pd.DataFrame,
+    events: pd.DataFrame,
+) -> list[str]:
+    if isinstance(catalog, pd.DataFrame) and not catalog.empty and ITEM_COLUMN in catalog.columns:
+        return list(dict.fromkeys(catalog[ITEM_COLUMN].astype(str)))
+    if catalog is not None and not isinstance(catalog, pd.DataFrame):
+        return list(dict.fromkeys(str(item) for item in catalog))
+    seen: list[str] = []
+    for frame in (events, recs):
+        if frame is not None and not frame.empty and ITEM_COLUMN in frame.columns:
+            seen.extend(frame[ITEM_COLUMN].astype(str))
+    return list(dict.fromkeys(seen))
+
+
 def evaluate_served(
     recommendations: pd.DataFrame,
     events: pd.DataFrame,
@@ -95,6 +155,7 @@ def evaluate_served(
     ks: Sequence[int],
     event_types: Sequence[str],
     history: pd.DataFrame | None = None,
+    catalog: pd.DataFrame | Sequence[object] | None = None,
 ) -> ServedEvalReport | None:
     if recommendations is None or recommendations.empty:
         return None
@@ -104,8 +165,8 @@ def evaluate_served(
     recs = recs[recs[USER_COLUMN] != COLD_START_USER_ID]
     if recs.empty:
         return None
-    window_events = _frame(events)
-    if window_events.empty:
+    all_events = _frame(events)
+    if all_events.empty:
         return ServedEvalReport(
             n_users=int(recs[USER_COLUMN].nunique()),
             n_users_with_events=0,
@@ -113,6 +174,7 @@ def evaluate_served(
             by_source={},
             generated_at=generated_at,
         )
+    window_events = all_events
     if generated_at and OCCURRED_AT in window_events.columns:
         start = pd.to_datetime(generated_at, utc=True, errors="coerce")
         if pd.notna(start):
@@ -134,32 +196,51 @@ def evaluate_served(
     relevant = window_events.loc[:, [USER_COLUMN, ITEM_COLUMN]].drop_duplicates()
     n_users = int(recs[USER_COLUMN].nunique())
     n_with_events = int(relevant[USER_COLUMN].nunique()) if not relevant.empty else 0
+    prev = _prev_interactions(all_events, generated_at)
+    catalog_ids = _served_catalog(catalog, recs, all_events)
     metrics: dict[str, float] = {}
     for k in ks:
-        metrics[f"HitRate@{k}"] = _hit_rate(recs, relevant, k=k)
         if not relevant.empty and not recs.empty:
             reco_k = recs[recs[RANK_COLUMN] <= k] if RANK_COLUMN in recs.columns else recs
             interactions = relevant.copy()
             interactions["weight"] = 1.0
+            extra: dict[str, object] = {}
+            extra.update(_catalog_metric_defs(k, with_prev=not prev.empty))
             try:
                 computed = calc_metrics(
-                    {
-                        f"MAP@{k}": MAP(k=k),
-                        f"NDCG@{k}": NDCG(k=k),
-                        f"Recall@{k}": Recall(k=k),
-                    },
+                    {**_ranking_metric_defs(k), **extra},
                     reco=reco_k,
                     interactions=interactions,
+                    catalog=catalog_ids,
+                    prev_interactions=prev if not prev.empty else None,
                 )
                 metrics.update({key: float(value) for key, value in computed.items()})
             except Exception:
                 logger.exception("RecTools calc_metrics failed for k=%s", k)
+                metrics[f"HitRate@{k}"] = _hit_rate(recs, relevant, k=k)
+        else:
+            metrics[f"HitRate@{k}"] = _hit_rate(recs, relevant, k=k)
     by_source: dict[str, dict[str, float]] = {}
     if SOURCE_COLUMN in recs.columns:
         for source, group in recs.groupby(SOURCE_COLUMN, dropna=True):
             source_metrics: dict[str, float] = {}
             for k in ks:
-                source_metrics[f"HitRate@{k}"] = _hit_rate(group, relevant, k=k)
+                if not relevant.empty and not group.empty:
+                    reco_k = group[group[RANK_COLUMN] <= k] if RANK_COLUMN in group.columns else group
+                    interactions = relevant.copy()
+                    interactions["weight"] = 1.0
+                    try:
+                        computed = calc_metrics(
+                            {f"HitRate@{k}": HitRate(k=k)},
+                            reco=reco_k,
+                            interactions=interactions,
+                        )
+                        source_metrics.update({key: float(value) for key, value in computed.items()})
+                    except Exception:
+                        logger.exception("RecTools HitRate failed for source=%s k=%s", source, k)
+                        source_metrics[f"HitRate@{k}"] = _hit_rate(group, relevant, k=k)
+                else:
+                    source_metrics[f"HitRate@{k}"] = _hit_rate(group, relevant, k=k)
             by_source[str(source)] = source_metrics
     return ServedEvalReport(
         n_users=n_users,

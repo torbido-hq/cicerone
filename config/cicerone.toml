@@ -25,12 +25,18 @@ feature_config_path = "/app/config/features.toml"
 # Recommendation strategies to fit and combine, in priority order (earlier
 # entries win ties for the same user/item pair). Defaults to
 # ["collaborative", "item_based", "popular"] if omitted. Available:
-# "collaborative" (LightFM, hybrid CF), "item_based" (item-item KNN),
+# "collaborative" (LightFM, hybrid CF; optional loss = "bpr" / "logistic" /
+# "warp-kos" under [model.collaborative.model]), "item_based" (item-item KNN;
+# nested model.cls can be TFIDFRecommender, CosineRecommender, or
+# BM25Recommender),
 # "sequential" (SASRec / BERT4Rec / HSTU; pip install 'cicerone-recommender[sequential]'
-# or requirements-sequential.txt), "content_fallback" (feature similarity for
+# or requirements-sequential.txt), "ease" (EASE), "als" (implicit ALS + features),
+# "content_fallback" (feature similarity for
 # zero-interaction items; also gated by [job.content_fallback].enabled),
-# "popular" (global popularity fallback), "latest" (trending in the last two
-# weeks). Sequential is opt-in (not in the default models list). Sequences
+# "popular" (global popularity fallback), "popular_in_category" (diversity mix
+# by an item category feature), "latest" (trending in the last two weeks),
+# "random" (sanity baseline). Sequential, ease, als, popular_in_category, and
+# random are opt-in (not in the default models list). Sequences
 # are unique items ordered by last interaction (see README).
 # models = ["collaborative", "item_based", "popular", "latest"]
 
@@ -47,7 +53,7 @@ feature_config_path = "/app/config/features.toml"
 # num_threads = 4
 # [model.collaborative.model]
 # no_components = 64
-# loss = "warp"
+# loss = "warp"  # or "bpr" / "logistic" / "warp-kos"
 # learning_rate = 0.05
 # item_alpha = 1.0e-6
 # user_alpha = 1.0e-6
@@ -56,16 +62,36 @@ feature_config_path = "/app/config/features.toml"
 # [model.item_based]
 # cls = "ImplicitItemKNNWrapperModel"
 # [model.item_based.model]
-# cls = "TFIDFRecommender"
+# cls = "TFIDFRecommender"  # or CosineRecommender / BM25Recommender
 # K = 20
+#
+# [model.ease]
+# cls = "EASEModel"
+# regularization = 500.0
+#
+# [model.als]
+# cls = "ImplicitALSWrapperModel"
+# fit_features_together = true
+# [model.als.model]
+# factors = 64
+# iterations = 15
 #
 # [model.popular]
 # cls = "PopularModel"
+#
+# [model.popular_in_category]
+# cls = "PopularInCategoryModel"
+# category_feature = "category"
+# mixing_strategy = "group"
 #
 # [model.latest]
 # cls = "PopularModel"
 # popularity = "n_interactions"
 # period = { days = 14 }
+#
+# [model.random]
+# cls = "RandomModel"
+# random_state = 42
 #
 # Optional sequential strategy (SASRec default; BERT4Rec / HSTU via architecture).
 # Requires: pip install 'cicerone-recommender[sequential]'

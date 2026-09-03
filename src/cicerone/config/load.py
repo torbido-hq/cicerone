@@ -243,6 +243,7 @@ def make_settings(**overrides: Any) -> Settings:
     settings = Settings(**base)
     _require_exposure_log_backend(settings)
     _require_online_output_backend(settings)
+    _require_online_collaborative_lightfm(settings)
     _require_track_backend(settings)
     _warn_online_skipped_for_experiment(settings)
     _warn_online_skipped_for_sequential(settings)
@@ -281,6 +282,20 @@ ONLINE_OUTPUT_ERROR = (
     'events.online.enabled requires output kind = "db" or a local dataset path; '
     "S3 object replace is not compare-and-swap"
 )
+
+
+def _require_online_collaborative_lightfm(settings: Settings) -> None:
+    if not settings.events.online.enabled:
+        return
+    from cicerone.model_config import LIGHTFM_WRAPPER_CLS, collaborative_cls
+
+    cls = collaborative_cls(settings.model_configs.get("collaborative"))
+    if cls != LIGHTFM_WRAPPER_CLS:
+        raise ConfigError(
+            "events.online.enabled requires [model.collaborative].cls = "
+            f"{LIGHTFM_WRAPPER_CLS!r}; got {cls!r}. Use ease or als as their own "
+            "job.models names instead of swapping the collaborative slot"
+        )
 
 
 def _require_online_output_backend(settings: Settings) -> None:
@@ -617,6 +632,7 @@ def load_settings(config_path: str | None = None) -> Settings:
     )
     _require_exposure_log_backend(settings)
     _require_online_output_backend(settings)
+    _require_online_collaborative_lightfm(settings)
     _require_track_backend(settings)
     _warn_online_skipped_for_experiment(settings)
     _warn_online_skipped_for_sequential(settings)

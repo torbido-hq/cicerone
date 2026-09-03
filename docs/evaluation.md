@@ -116,6 +116,7 @@ enabled = true
 ```
 
 At the start of the next job, previous recommendation rows are scored against
-later events (`HitRate` / `NDCG` / `Recall` @K, plus hit rate by `source`).
-This is not CTR. Recommendation snapshots (`recommendation_history`) let the
-window span more than one job.
+later events (`HitRate` / `MAP` / `NDCG` / `Recall` / `MRR` / `Precision` @K,
+plus catalog coverage and novelty when prior interactions exist, and hit rate
+by `source`). This is not CTR. Recommendation snapshots
+(`recommendation_history`) let the window span more than one job.

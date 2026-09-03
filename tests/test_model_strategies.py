@@ -65,6 +65,10 @@ def test_sequential_strategy_is_personalized_and_requires_interactions():
     assert STRATEGIES["sequential"].personalized is True
     assert STRATEGIES["sequential"].requires_interactions is True
     assert STRATEGIES["sequential"].source_label == "sequential"
+    assert STRATEGIES["ease"].requires_interactions is True
+    assert STRATEGIES["als"].source_label == "als"
+    assert STRATEGIES["popular_in_category"].personalized is False
+    assert STRATEGIES["random"].personalized is False
     assert DEFAULT_MODELS == ["collaborative", "item_based", "popular"]
 
 

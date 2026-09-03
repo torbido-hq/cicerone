@@ -94,6 +94,11 @@ EVENTS_APPLY_BUSY_TOTAL = Counter(
     "Incremental flushes skipped because a lock was busy",
     ["reason"],
 )
+TRACK_INGEST_TOTAL = Counter(
+    "cicerone_track_ingest_total",
+    "POST /track ingest outcomes",
+    ["kind", "status"],
+)
 UP = Gauge("cicerone_up", "Serve process liveness (always 1 while running)")
 UP.set(1)
 
@@ -103,14 +108,20 @@ _RETRAIN_SOURCES = frozenset({"webhook", "poll", "cron", "s3-poll", "manual"})
 _EVENTS_FLUSH_STATUSES = frozenset({"success", "busy", "error"})
 _EVENTS_LOCK_STATUSES = frozenset({"acquired", "skip"})
 _EVENTS_APPLY_BUSY_REASONS = frozenset({"lock", "retrain"})
+_TRACK_KINDS = frozenset({"impression", "click", "other"})
+_TRACK_STATUSES = frozenset({"accepted", "error"})
 
 _SOURCE_TO_METRIC: dict[str, str] = {
     "personalized": "collaborative",
     "blended": "collaborative",
     "item_based": "item_based",
     "sequential": "sequential",
+    "ease": "ease",
+    "als": "als",
     "popular_fallback": "popular",
+    "popular_in_category": "popular_in_category",
     "latest": "latest",
+    "random": "random",
 }
 
 _last_successful_refresh_at: float | None = None
@@ -202,3 +213,11 @@ def record_events_apply_busy(*, reason: str) -> None:
 def update_events_source_health(*, connected: bool, lag: int | None) -> None:
     EVENTS_SOURCE_CONNECTED.set(1 if connected else 0)
     EVENTS_SOURCE_LAG.set(-1 if lag is None else max(0, int(lag)))
+
+
+def record_track_ingest(*, kind: str, status: str, count: int = 1) -> None:
+    if count <= 0:
+        return
+    label_kind = kind if kind in _TRACK_KINDS else "other"
+    label_status = status if status in _TRACK_STATUSES else "error"
+    TRACK_INGEST_TOTAL.labels(kind=label_kind, status=label_status).inc(count)

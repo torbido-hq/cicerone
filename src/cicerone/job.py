@@ -95,6 +95,7 @@ def _score_previous_run(
     settings: Settings,
     events: pd.DataFrame,
     last_manifest: dict[str, Any] | None,
+    items: pd.DataFrame | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     if not settings.track.enabled and not settings.eval.enabled:
         return None, None
@@ -159,6 +160,7 @@ def _score_previous_run(
                 ks=replay_ks(settings.eval.ks, top_k=settings.top_k),
                 event_types=types,
                 history=history,
+                catalog=items,
             )
             served_payload = report.as_dict() if report is not None else None
         except Exception:
@@ -217,7 +219,7 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
             last_manifest = build_manifest_reader(settings.output).read_latest()
         except Exception:
             logger.exception("Failed to read last manifest")
-        track_eval_payload, served_eval_payload = _score_previous_run(settings, events, last_manifest)
+        track_eval_payload, served_eval_payload = _score_previous_run(settings, events, last_manifest, items)
 
         built = build_dataset(events, users, items, feature_config, half_life_days=settings.half_life_days)
 

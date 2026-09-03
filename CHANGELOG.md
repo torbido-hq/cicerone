@@ -29,9 +29,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `[experiment].primary_metric` `ctr` / `conversion` and
   `attribution = click | impression | user | recommended`, with a volume floor
   (`track.min_impressions`) before promote.
-- Optional `[job.eval]` production replay (HitRate / NDCG / Recall of the
-  previous lists against later events) and append-only recommendation history
-  for windows that span jobs.
+- Optional `[job.eval]` production replay (HitRate / NDCG / Recall / MRR /
+  Precision / catalog coverage / novelty of the previous lists against later
+  events) and append-only recommendation history for windows that span jobs.
+- Opt-in RecTools strategies `ease` (`EASEModel`), `als`
+  (`ImplicitALSWrapperModel` with item/user features), `popular_in_category`,
+  and `random`. `[model.collaborative]` stays LightFM; `[events.online]`
+  rejects a swapped collaborative `cls`.
+- Item-KNN can use RecTools `CosineRecommender` or `BM25Recommender` via
+  `[model.item_based.model].cls`. LightFM `loss` (`warp` / `bpr` / `logistic`
+  / `warp-kos`) is the same `[model.collaborative.model]` passthrough.
+- Serve Prometheus `cicerone_track_ingest_total` for `POST /track`.
 - Experiment variants can inherit, drop, subset, or replace `[[boost]]` /
   `[[eligibility]]` rules (`boosts = ["featured"]` or
   `[[experiment.variants.boost]]` tables). Duplicate subset names are rejected.

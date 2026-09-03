@@ -71,7 +71,7 @@ HINTS: dict[str, dict[str, str]] = {
         "docs": f"{_DOCS}/how-it-works/",
     },
     "job.models": {
-        "text": "Which ranking strategies to fit this run.",
+        "text": "Which ranking strategies to fit this run (LightFM, KNN, optional EASE/ALS/sequential).",
         "docs": f"{_DOCS}/how-it-works/#strategies",
     },
     "job.model_weights": {

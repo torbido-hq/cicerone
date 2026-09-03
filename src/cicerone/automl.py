@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import pandas as pd
-from rectools.metrics import MAP, NDCG, Recall, calc_metrics
+from rectools.metrics import MAP, MRR, NDCG, HitRate, Precision, Recall, calc_metrics
 from rectools.metrics.base import MetricAtK
 from rectools.metrics.debias import DebiasConfig
 
@@ -34,7 +34,12 @@ from cicerone.model import (
     train_and_recommend,
 )
 from cicerone.model.constants import RANDOM_STATE
-from cicerone.model_config import SEQUENTIAL_EXTRA_HINT, SEQUENTIAL_STRATEGY, sequential_extra_available
+from cicerone.model_config import (
+    SEQUENTIAL_EXTRA_HINT,
+    SEQUENTIAL_STRATEGY,
+    popular_in_category_feature,
+    sequential_extra_available,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +83,25 @@ def exclude_sequential_from_candidates(candidates: list[Candidate]) -> list[Cand
 def exclude_content_fallback_from_candidates(candidates: list[Candidate]) -> list[Candidate]:
     """Drop content_fallback from each candidate; omit candidates that become empty."""
     return _exclude_strategy_from_candidates(candidates, "content_fallback")
+
+
+def exclude_popular_in_category_from_candidates(candidates: list[Candidate]) -> list[Candidate]:
+    """Drop popular_in_category from each candidate; omit candidates that become empty."""
+    return _exclude_strategy_from_candidates(candidates, "popular_in_category")
+
+
+def popular_in_category_automl_skip_reason(
+    items: pd.DataFrame | None,
+    *,
+    model_configs: dict[str, dict[str, Any]] | None,
+) -> str | None:
+    """Why popular_in_category should be dropped from AutoML, or ``None`` to keep it."""
+    feature = popular_in_category_feature((model_configs or {}).get("popular_in_category"))
+    if items is None or items.empty:
+        return "items frame is missing"
+    if feature not in items.columns:
+        return f"items has no {feature!r} column for PopularInCategoryModel"
+    return None
 
 
 def _exclude_strategy_from_candidates(candidates: list[Candidate], strategy: str) -> list[Candidate]:
@@ -207,12 +231,15 @@ def _time_based_folds(
 
 
 def _make_metrics(top_k: int, *, debias: bool = False) -> dict[str, MetricAtK]:
-    # rectools.metrics — not a custom MAP/NDCG/Recall implementation.
+    # rectools.metrics — not a custom MAP/NDCG/Recall/HitRate implementation.
     debias_config = DebiasConfig(random_state=RANDOM_STATE) if debias else None
     return {
         f"MAP@{top_k}": MAP(k=top_k, debias_config=debias_config),
         f"NDCG@{top_k}": NDCG(k=top_k, debias_config=debias_config),
         f"Recall@{top_k}": Recall(k=top_k, debias_config=debias_config),
+        f"HitRate@{top_k}": HitRate(k=top_k, debias_config=debias_config),
+        f"MRR@{top_k}": MRR(k=top_k, debias_config=debias_config),
+        f"Precision@{top_k}": Precision(k=top_k, debias_config=debias_config),
     }
 
 
@@ -332,6 +359,14 @@ def evaluate_candidates(
                 "AutoML has no candidates left after excluding content_fallback "
                 "(job.content_fallback.enabled is false)"
             )
+    pic_skip = popular_in_category_automl_skip_reason(items, model_configs=model_configs)
+    if pic_skip is not None and any(
+        "popular_in_category" in candidate.models for candidate in parsed_candidates
+    ):
+        logger.info("Excluding popular_in_category from AutoML candidate pool: %s", pic_skip)
+        parsed_candidates = exclude_popular_in_category_from_candidates(parsed_candidates)
+        if not parsed_candidates:
+            raise ValueError("AutoML has no candidates left after excluding popular_in_category; " + pic_skip)
     folds = _time_based_folds(events, n_splits=n_splits, test_days=test_days)
     if not folds:
         raise ValueError(

@@ -16,6 +16,9 @@ logger = logging.getLogger(__name__)
 LATEST_WINDOW_DAYS = 14
 
 SEQUENTIAL_STRATEGY = "sequential"
+POPULAR_IN_CATEGORY_STRATEGY = "popular_in_category"
+LIGHTFM_WRAPPER_CLS = "LightFMWrapperModel"
+DEFAULT_CATEGORY_FEATURE = "category"
 SEQUENTIAL_ARCHITECTURES: dict[str, str] = {
     "sasrec": "SASRecModel",
     "bert4rec": "BERT4RecModel",
@@ -30,12 +33,16 @@ RECTOOLS_STRATEGY_NAMES: tuple[str, ...] = (
     "collaborative",
     "item_based",
     "sequential",
+    "ease",
+    "als",
     "popular",
+    "popular_in_category",
     "latest",
+    "random",
 )
 
 DEFAULT_COLLABORATIVE_CONFIG: dict[str, Any] = {
-    "cls": "LightFMWrapperModel",
+    "cls": LIGHTFM_WRAPPER_CLS,
     "epochs": 30,
     "num_threads": 4,
     "model": {
@@ -58,6 +65,34 @@ DEFAULT_ITEM_BASED_CONFIG: dict[str, Any] = {
 
 DEFAULT_POPULAR_CONFIG: dict[str, Any] = {
     "cls": "PopularModel",
+}
+
+DEFAULT_EASE_CONFIG: dict[str, Any] = {
+    "cls": "EASEModel",
+    "regularization": 500.0,
+}
+
+DEFAULT_ALS_CONFIG: dict[str, Any] = {
+    "cls": "ImplicitALSWrapperModel",
+    "fit_features_together": True,
+    "model": {
+        "factors": 64,
+        "regularization": 0.1,
+        "iterations": 15,
+        "random_state": 42,
+    },
+}
+
+DEFAULT_POPULAR_IN_CATEGORY_CONFIG: dict[str, Any] = {
+    "cls": "PopularInCategoryModel",
+    "category_feature": DEFAULT_CATEGORY_FEATURE,
+    "mixing_strategy": "group",
+    "popularity": "n_interactions",
+}
+
+DEFAULT_RANDOM_CONFIG: dict[str, Any] = {
+    "cls": "RandomModel",
+    "random_state": 42,
 }
 
 DEFAULT_LATEST_CONFIG: dict[str, Any] = {
@@ -176,8 +211,12 @@ def default_model_configs() -> dict[str, dict[str, Any]]:
         "collaborative": deepcopy(DEFAULT_COLLABORATIVE_CONFIG),
         "item_based": deepcopy(DEFAULT_ITEM_BASED_CONFIG),
         "sequential": deepcopy(DEFAULT_SEQUENTIAL_CONFIG),
+        "ease": deepcopy(DEFAULT_EASE_CONFIG),
+        "als": deepcopy(DEFAULT_ALS_CONFIG),
         "popular": deepcopy(DEFAULT_POPULAR_CONFIG),
+        "popular_in_category": deepcopy(DEFAULT_POPULAR_IN_CATEGORY_CONFIG),
         "latest": deepcopy(DEFAULT_LATEST_CONFIG),
+        "random": deepcopy(DEFAULT_RANDOM_CONFIG),
     }
 
 
@@ -295,4 +334,29 @@ def resolve_model_configs(
         if "cls" not in cfg:
             raise ConfigError(f"[model.{name}] is missing required key 'cls'")
 
+    _require_popular_in_category_feature(configs[POPULAR_IN_CATEGORY_STRATEGY])
     return configs
+
+
+def collaborative_cls(config: dict[str, Any] | None) -> str:
+    """RecTools wrapper class for the collaborative slot (default LightFM)."""
+    if not config:
+        return LIGHTFM_WRAPPER_CLS
+    cls = config.get("cls", LIGHTFM_WRAPPER_CLS)
+    return str(cls) if cls is not None else LIGHTFM_WRAPPER_CLS
+
+
+def popular_in_category_feature(config: dict[str, Any] | None) -> str:
+    if not config:
+        return DEFAULT_CATEGORY_FEATURE
+    value = config.get("category_feature", DEFAULT_CATEGORY_FEATURE)
+    return DEFAULT_CATEGORY_FEATURE if value is None else str(value)
+
+
+def _require_popular_in_category_feature(config: dict[str, Any]) -> None:
+    from cicerone.config import ConfigError
+
+    feature = popular_in_category_feature(config)
+    if not feature.strip():
+        raise ConfigError("[model.popular_in_category].category_feature must be a non-empty string")
+    config["category_feature"] = feature

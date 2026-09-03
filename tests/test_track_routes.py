@@ -61,6 +61,38 @@ def test_post_track_single_and_batch(tmp_path):
     assert {row["event_id"] for row in store.read_rows()} == {"imp-1", "imp-2", "imp-3"}
 
 
+def test_post_track_increments_prometheus(tmp_path):
+    from prometheus_client import generate_latest
+    from support.prometheus_metrics import metric_value
+
+    from cicerone.serve.metrics import record_track_ingest
+
+    before = metric_value(
+        generate_latest().decode(),
+        "cicerone_track_ingest_total",
+        {"kind": "impression", "status": "accepted"},
+    )
+    app = create_app(_settings(tmp_path), _FakeReader(_recs_df()))
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer secret"}
+    assert client.post("/track", headers=headers, json=_impression()).status_code == 202
+    after = metric_value(
+        generate_latest().decode(),
+        "cicerone_track_ingest_total",
+        {"kind": "impression", "status": "accepted"},
+    )
+    assert after == before + 1
+    record_track_ingest(kind="click", status="accepted")
+    assert (
+        metric_value(
+            generate_latest().decode(),
+            "cicerone_track_ingest_total",
+            {"kind": "click", "status": "accepted"},
+        )
+        >= 1
+    )
+
+
 def test_post_track_auth_and_validation(tmp_path):
     app = create_app(_settings(tmp_path), _FakeReader(_recs_df()))
     client = TestClient(app)
