@@ -332,6 +332,18 @@ def test_post_events_rejects_invalid_json():
     assert response.status_code == 400
 
 
+def test_post_events_rejects_invalid_utf8_body():
+    source = WebhookEventSource({})
+    app = create_app(_settings(), _FakeReader(_recs_df()), event_source=source)
+    response = TestClient(app).post(
+        "/events",
+        headers={"Authorization": "Bearer secret", "content-type": "application/json"},
+        content=b"\xff\xfe",
+    )
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Request body must be JSON"}
+
+
 def test_post_events_rejects_oversized_content_length():
     source = WebhookEventSource({})
     app = create_app(

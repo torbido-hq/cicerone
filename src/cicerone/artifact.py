@@ -140,6 +140,14 @@ def _zip_member_allowed(name: str) -> bool:
     return rest.endswith(_RECTOOLS_SUFFIX) or rest.endswith(_PICKLE_SUFFIX)
 
 
+def _model_zip_path(name: str, fmt: str) -> str:
+    if fmt == "rectools":
+        return f"{_MODELS_DIR}{name}{_RECTOOLS_SUFFIX}"
+    if fmt == "pickle":
+        return f"{_MODELS_DIR}{name}{_PICKLE_SUFFIX}"
+    raise ValueError(f"Artifact has unknown model format {fmt!r} for strategy {name!r}")
+
+
 def _assert_safe_artifact_zip(zf: zipfile.ZipFile) -> set[str]:
     names = zf.namelist()
     if len(names) != len(set(names)):
@@ -152,6 +160,28 @@ def _assert_safe_artifact_zip(zf: zipfile.ZipFile) -> set[str]:
     if _META_NAME not in unique or _BUNDLE_NAME not in unique:
         raise ValueError("Artifact zip is missing meta.json or bundle.pkl")
     return unique
+
+
+def _assert_declared_model_members(
+    names: set[str], models: list[str], model_formats: object
+) -> dict[str, str]:
+    if not isinstance(model_formats, dict):
+        raise ValueError("Artifact is missing model_formats")
+    actual = {name for name in names if name.startswith(_MODELS_DIR)}
+    expected: dict[str, str] = {}
+    for name in models:
+        fmt = model_formats.get(name)
+        if not isinstance(fmt, str):
+            raise ValueError(f"Artifact is missing model format for strategy {name!r}")
+        expected[name] = _model_zip_path(name, fmt)
+    expected_paths = set(expected.values())
+    extra = actual - expected_paths
+    if extra:
+        raise ValueError(f"Artifact zip has unexpected member {sorted(extra)[0]!r}")
+    for name, path in expected.items():
+        if path not in actual:
+            raise ValueError(f"Artifact is missing serialized model for strategy {name!r}")
+    return expected
 
 
 def loads_artifact(payload: bytes) -> ModelArtifact:
@@ -168,30 +198,16 @@ def loads_artifact(payload: bytes) -> ModelArtifact:
                     f"this build expects {ARTIFACT_SCHEMA_VERSION}"
                 )
             models = list(meta["models"])
-            model_files = {name for name in names if name.startswith(_MODELS_DIR)}
-            allowed_stems = set(models)
-            for path in model_files:
-                stem = path[len(_MODELS_DIR) :]
-                strategy = stem
-                for suffix in (_RECTOOLS_SUFFIX, _PICKLE_SUFFIX):
-                    if stem.endswith(suffix):
-                        strategy = stem[: -len(suffix)]
-                        break
-                if strategy not in allowed_stems:
-                    raise ValueError(f"Artifact zip has unexpected member {path!r}")
+            expected_paths = _assert_declared_model_members(names, models, meta.get("model_formats"))
             bundle = pickle.loads(zf.read(_BUNDLE_NAME))
             fitted: dict[str, RecommenderModel] = {}
-            model_formats = meta.get("model_formats") or {}
             for name in models:
-                fmt = model_formats.get(name)
-                rectools_path = f"{_MODELS_DIR}{name}{_RECTOOLS_SUFFIX}"
-                pickle_path = f"{_MODELS_DIR}{name}{_PICKLE_SUFFIX}"
-                if fmt == "rectools" or (fmt is None and rectools_path in names):
-                    fitted[name] = _load_rectools_model(zf.read(rectools_path))
-                elif fmt == "pickle" or pickle_path in names:
-                    fitted[name] = pickle.loads(zf.read(pickle_path))
+                path = expected_paths[name]
+                blob = zf.read(path)
+                if path.endswith(_RECTOOLS_SUFFIX):
+                    fitted[name] = _load_rectools_model(blob)
                 else:
-                    raise ValueError(f"Artifact is missing serialized model for strategy {name!r}")
+                    fitted[name] = pickle.loads(blob)
             return ModelArtifact(
                 schema_version=schema_version,
                 created_at=datetime.fromisoformat(str(meta["created_at"])),

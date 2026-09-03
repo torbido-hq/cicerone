@@ -176,6 +176,34 @@ def test_loads_artifact_rejects_path_traversal_member():
         loads_artifact(out.getvalue())
 
 
+def test_loads_artifact_rejects_both_formats_for_declared_model(
+    feature_config, sample_events, sample_users, sample_items
+):
+    import io
+    import zipfile
+
+    built = build_dataset(sample_events, sample_users, sample_items, feature_config, half_life_days=90)
+    _, fitted = fit_strategies(built, ["u1"], enabled_models=["popular"])
+    artifact = build_artifact(
+        fitted=fitted,
+        built=built,
+        feature_config=feature_config,
+        models=["popular"],
+        model_weights=None,
+        rrf_k=None,
+    )
+    buffer = io.BytesIO(dumps_artifact(artifact))
+    out = io.BytesIO()
+    with zipfile.ZipFile(buffer, "r") as src, zipfile.ZipFile(out, "w") as dest:
+        names = set(src.namelist())
+        for info in src.infolist():
+            dest.writestr(info, src.read(info.filename))
+        extra = "models/popular.pkl" if "models/popular.rectools" in names else "models/popular.rectools"
+        dest.writestr(extra, b"extra")
+    with pytest.raises(ValueError, match="unexpected member"):
+        loads_artifact(out.getvalue())
+
+
 def test_fit_strategies_populates_cache(feature_config, sample_events, sample_users, sample_items):
     built = build_dataset(sample_events, sample_users, sample_items, feature_config, half_life_days=90)
     cache: dict = {}

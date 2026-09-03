@@ -55,7 +55,7 @@ async def _read_limited_json(request: Request, max_bytes: int) -> object:
         chunks.append(chunk)
     try:
         return json.loads(b"".join(chunks))
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise HTTPException(status_code=400, detail="Request body must be JSON") from exc
 
 
