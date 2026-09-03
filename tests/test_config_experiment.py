@@ -34,7 +34,7 @@ def test_load_experiment_defaults_disabled(tmp_path):
 
 
 def test_load_experiment_variants_and_remainder_traffic(tmp_path, caplog):
-    with caplog.at_level(logging.WARNING, logger="cicerone.config.load"):
+    with caplog.at_level(logging.WARNING, logger="cicerone.config.experiment"):
         settings = load_settings(
             write_toml(
                 tmp_path,

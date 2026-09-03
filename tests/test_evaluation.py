@@ -5,6 +5,8 @@ import pytest
 
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.evaluation import (
+    DEFAULT_CONVERSION_TYPE,
+    OCCURRED_AT,
     conversion_event_types,
     evaluate_served,
     evaluate_tracking,
@@ -12,6 +14,11 @@ from cicerone.evaluation import (
     replay_ks,
     user_track_outcomes,
 )
+
+
+def test_evaluation_package_reexports_prior_constants() -> None:
+    assert OCCURRED_AT == "occurred_at"
+    assert DEFAULT_CONVERSION_TYPE == "purchase"
 
 
 def _track(*rows: dict) -> list[dict]:
@@ -707,7 +714,8 @@ def test_evaluation_remaining_branches(monkeypatch) -> None:
     )
     assert _recs_from_history(hist, events).empty
     monkeypatch.setattr(
-        "cicerone.evaluation.calc_metrics", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("x"))
+        "cicerone.evaluation.served.calc_metrics",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("x")),
     )
     failed = evaluate_served(
         pd.DataFrame([{"user_id": "alice", "item_id": "ipa", "rank": 1, "source": "personalized"}]),

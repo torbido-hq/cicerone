@@ -10,6 +10,22 @@ from cicerone.track.normalize import TrackNormalizeError, normalize_track
 from cicerone.track.store import TrackStore, require_appendable_track_log
 
 
+def test_store_reexports_prior_constants() -> None:
+    from cicerone.track.store import (
+        DEFAULT_EVAL_TABLE,
+        DEFAULT_HISTORY_TABLE,
+        DEFAULT_TRACK_TABLE,
+        TRACK_COLUMNS,
+        TRACK_LOG_BACKEND_ERROR,
+    )
+
+    assert DEFAULT_TRACK_TABLE == "recommendation_track"
+    assert DEFAULT_EVAL_TABLE == "recommendation_eval"
+    assert DEFAULT_HISTORY_TABLE == "recommendation_history"
+    assert "kind" in TRACK_COLUMNS
+    assert "output kind" in TRACK_LOG_BACKEND_ERROR
+
+
 def _row(**overrides):
     payload = {
         "kind": "impression",
@@ -371,7 +387,7 @@ def test_track_jsonl_append_skips_reread_when_warm(tmp_path, monkeypatch) -> Non
 
 
 def test_track_jsonl_append_without_fcntl(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr("cicerone.track.store.fcntl", None)
+    monkeypatch.setattr("cicerone.track.store_dataset.fcntl", None)
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     store = TrackStore(output)
     assert store.append_rows([_row()]) == 1
@@ -418,7 +434,7 @@ def test_track_store_sqlite_missing_table_error_helper(tmp_path, monkeypatch) ->
     store = TrackStore(output)
     store.append_rows([_row()])
     monkeypatch.setattr(pd, "read_sql", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("x")))
-    monkeypatch.setattr("cicerone.track.store.is_missing_table_error", lambda _exc: True)
+    monkeypatch.setattr("cicerone.track.store_db.is_missing_table_error", lambda _exc: True)
     assert store.read_rows() == []
     assert store.read_eval() is None
     assert store.read_history().empty
@@ -438,7 +454,7 @@ def test_track_history_non_s3_error_reraises(tmp_path, monkeypatch) -> None:
         "cicerone.io.options.read_parquet",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("corrupt")),
     )
-    monkeypatch.setattr("cicerone.track.store.is_s3_not_found", lambda _exc: False)
+    monkeypatch.setattr("cicerone.track.store_dataset.is_s3_not_found", lambda _exc: False)
     with pytest.raises(RuntimeError, match="corrupt"):
         TrackStore(output).read_history()
 
@@ -451,7 +467,7 @@ def test_track_read_bytes_s3_generic_error(monkeypatch) -> None:
         def get_object(self, **_kwargs):
             raise RuntimeError("network")
 
-    monkeypatch.setattr("cicerone.track.store.build_s3_client", lambda _options: _Boom())
+    monkeypatch.setattr("cicerone.track.store_dataset.build_s3_client", lambda _options: _Boom())
     with mock_aws():
         boto3.client("s3", region_name="us-east-1").create_bucket(Bucket="recs")
         output = IOSettings(
