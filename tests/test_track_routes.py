@@ -142,6 +142,8 @@ def test_track_openapi_documents_structured_validation_400(tmp_path):
     refs = {item.get("$ref") for item in content_schema.get("anyOf", [])}
     assert "#/components/schemas/ErrorDetail" in refs
     assert "#/components/schemas/ValidationErrorDetail" in refs
+    track_413 = schema["paths"]["/track"]["post"]["responses"]["413"]
+    assert track_413["content"]["application/json"]["schema"]["$ref"] == ("#/components/schemas/ErrorDetail")
     again = TestClient(app).get("/openapi.json").json()
     assert again["info"]["title"]
 
@@ -155,6 +157,49 @@ def test_post_track_non_json_payload(tmp_path):
     )
     assert resp.status_code == 400
     assert resp.json() == {"detail": "Request body must be JSON"}
+
+
+def test_post_track_rejects_oversized_body(tmp_path):
+    app = create_app(
+        _settings(tmp_path, events=EventsSettings(options={"max_body_bytes": 64})),
+        _FakeReader(_recs_df()),
+    )
+    response = TestClient(app).post(
+        "/track",
+        headers={"Authorization": "Bearer secret", "content-type": "application/json"},
+        content=b'{"kind":"impression","user_id":"' + b"u" * 200 + b'","item_id":"i1","rank":1}',
+    )
+    assert response.status_code == 413
+    assert response.json() == {"detail": "Request body too large"}
+
+
+def test_post_track_rejects_deeply_nested_json(tmp_path):
+    app = create_app(_settings(tmp_path), _FakeReader(_recs_df()))
+    nested = b"[" * 3000 + b"0" + b"]" * 3000
+    response = TestClient(app).post(
+        "/track",
+        headers={"Authorization": "Bearer secret", "content-type": "application/json"},
+        content=nested,
+    )
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Request body must be JSON"}
+
+
+def test_post_track_rejects_oversized_content_length(tmp_path):
+    app = create_app(
+        _settings(tmp_path, events=EventsSettings(options={"max_body_bytes": 64})),
+        _FakeReader(_recs_df()),
+    )
+    response = TestClient(app).post(
+        "/track",
+        headers={
+            "Authorization": "Bearer secret",
+            "content-type": "application/json",
+            "content-length": "9999",
+        },
+        content=b"{}",
+    )
+    assert response.status_code == 413
 
 
 def test_get_does_not_log_impressions_by_default(tmp_path):

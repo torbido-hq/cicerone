@@ -86,6 +86,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `/`, and OpenAPI `/docs` is off.
 - Config page redacts `*_url` option keys and any value with embedded URL
   credentials.
+- `POST /track` rejects bodies larger than 1 MiB (or
+  `events.options.max_body_bytes`).
 
 ## [0.7.3] - 2026-09-03
 

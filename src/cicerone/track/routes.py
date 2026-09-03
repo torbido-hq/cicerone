@@ -10,7 +10,12 @@ from pydantic import ValidationError
 
 from cicerone.config import Settings
 from cicerone.http_auth import optional_bearer_deps
-from cicerone.serve.events_routes import _payloads_from_body, _put_pydantic_schema
+from cicerone.serve.events_routes import (
+    _max_body_bytes,
+    _payloads_from_body,
+    _put_pydantic_schema,
+    _read_limited_json,
+)
 from cicerone.serve_schemas import (
     ErrorDetail,
     TrackEvent,
@@ -75,13 +80,11 @@ def mount_track_routes(
                 "description": "Invalid track payload",
             },
             401: {"model": ErrorDetail, "description": "Missing or invalid bearer token"},
+            413: {"model": ErrorDetail, "description": "Request body too large"},
         },
     )
     async def post_track(request: Request) -> TrackIngestResponse:
-        try:
-            body = await request.json()
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail="Request body must be JSON") from exc
+        body = await _read_limited_json(request, _max_body_bytes(settings))
         payloads = _payloads_from_body(body)
         try:
             if isinstance(body, dict) and "events" in body:

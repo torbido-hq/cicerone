@@ -33,7 +33,8 @@ enabled = true
 
 `kind` is `impression` or `click`. Send one row per shown item (or a list /
 `{"events":[...]}`). Optional `variant`, `experiment_id`, `generated_at`,
-`event_id` (idempotency).
+`event_id` (idempotency). Bodies larger than 1 MiB (or
+`events.options.max_body_bytes`) return 413.
 
 Storage is next to `[output]`: local `track.jsonl`, or a
 `recommendation_track` db table. Object-store JSONL append is refused.
