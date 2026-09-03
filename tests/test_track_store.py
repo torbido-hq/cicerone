@@ -10,6 +10,22 @@ from cicerone.track.normalize import TrackNormalizeError, normalize_track
 from cicerone.track.store import TrackStore, require_appendable_track_log
 
 
+def test_store_reexports_prior_constants() -> None:
+    from cicerone.track.store import (
+        DEFAULT_EVAL_TABLE,
+        DEFAULT_HISTORY_TABLE,
+        DEFAULT_TRACK_TABLE,
+        TRACK_COLUMNS,
+        TRACK_LOG_BACKEND_ERROR,
+    )
+
+    assert DEFAULT_TRACK_TABLE == "recommendation_track"
+    assert DEFAULT_EVAL_TABLE == "recommendation_eval"
+    assert DEFAULT_HISTORY_TABLE == "recommendation_history"
+    assert "kind" in TRACK_COLUMNS
+    assert "output kind" in TRACK_LOG_BACKEND_ERROR
+
+
 def _row(**overrides):
     payload = {
         "kind": "impression",
