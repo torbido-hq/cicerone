@@ -559,7 +559,7 @@ def test_incremental_updater_caches_frame_across_applies(tmp_path, feature_confi
         loads["n"] += 1
         return real_load(output, user_ids)
 
-    monkeypatch.setattr("cicerone.events.updater.load_recommendations_for_users", counting_load)
+    monkeypatch.setattr("cicerone.events.updater_cache.load_recommendations_for_users", counting_load)
     updater = IncrementalUpdater(
         sink=build_output_sink(settings.output),
         output_settings=settings.output,
@@ -589,7 +589,7 @@ def test_incremental_updater_busy_invalidates_cache(tmp_path, feature_config, mo
         loads["n"] += 1
         return real_load(output, user_ids)
 
-    monkeypatch.setattr("cicerone.events.updater.load_recommendations_for_users", counting_load)
+    monkeypatch.setattr("cicerone.events.updater_cache.load_recommendations_for_users", counting_load)
     busy = {"v": False}
     updater = IncrementalUpdater(
         sink=build_output_sink(settings.output),
