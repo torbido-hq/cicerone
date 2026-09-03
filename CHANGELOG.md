@@ -72,6 +72,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Track `since` compares instants, not lexicographic timestamp strings.
 - History reads with `generated_ats` or `since` ignore legacy parquet that
   has no `generated_at`.
+- Filtered history reads skip the legacy `recommendation_history.parquet`
+  file, so a corrupt leftover cannot fail a snapshot-scoped or `since` read.
 - History part files are read in sorted order.
 - CTR track variants take the earliest impression per user.
 - Duplicate names in replacement `[[experiment.variants.boost]]` /

@@ -174,7 +174,10 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
         if self._kind == "db":
             frame = self._read_history_db(generated_ats=wanted)
             return _filter_history(frame, generated_ats=wanted, since=since)
-        frames = self._read_legacy_history() + self._read_history_parts(generated_ats=wanted, since=since)
+        frames = []
+        if wanted is None and since is None:
+            frames.extend(self._read_legacy_history())
+        frames.extend(self._read_history_parts(generated_ats=wanted, since=since))
         if not frames:
             return pd.DataFrame(columns=list(HISTORY_COLUMNS))
         return _filter_history(pd.concat(frames, ignore_index=True), generated_ats=wanted, since=since)

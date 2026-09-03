@@ -330,6 +330,18 @@ def test_track_read_history_since_skips_legacy_without_stamp(tmp_path) -> None:
     assert str(history.iloc[0]["generated_at"]) == "2026-08-29T03:00:00+00:00"
 
 
+def test_track_read_history_filtered_skips_unreadable_legacy(tmp_path) -> None:
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    (tmp_path / "recommendation_history.parquet").write_bytes(b"not parquet")
+    store = TrackStore(output)
+    recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
+    store.append_history(recs, generated_at="2026-08-29T03:00:00+00:00")
+    history = store.read_history(generated_ats=["2026-08-29T03:00:00+00:00"])
+    assert len(history) == 1
+    assert str(history.iloc[0]["user_id"]) == "alice"
+    assert len(store.read_history(since="2026-08-29T00:00:00+00:00")) == 1
+
+
 def test_history_part_name_sanitizes_timestamp() -> None:
     from cicerone.track.store import _history_part_name, _history_stem_before, _unslug_history_stem
 

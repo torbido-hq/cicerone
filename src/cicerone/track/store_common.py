@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
+from functools import lru_cache
 from typing import Any
 
 import pandas as pd
@@ -102,10 +103,16 @@ def _iso_utc(value: str | None) -> str | None:
     return stamp.isoformat()
 
 
+@lru_cache(maxsize=8)
+def _since_stamp(since: str) -> pd.Timestamp | None:
+    stamp = pd.to_datetime(since, utc=True, errors="coerce")
+    return None if pd.isna(stamp) else stamp
+
+
 def _stamp_before(value: str, since: str) -> bool:
     stamp = pd.to_datetime(value, utc=True, errors="coerce")
-    start = pd.to_datetime(since, utc=True, errors="coerce")
-    if pd.isna(stamp) or pd.isna(start):
+    start = _since_stamp(since)
+    if pd.isna(stamp) or start is None:
         return False
     return bool(stamp < start)
 
