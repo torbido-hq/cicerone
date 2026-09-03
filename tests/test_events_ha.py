@@ -728,6 +728,25 @@ def test_ha_worker_nacks_when_later_heartbeat_raises(tmp_path, feature_config: F
     assert source.health().lag == 1
 
 
+def test_inflight_heartbeat_preserves_apply_error():
+    from cicerone.events.worker import inflight_heartbeat
+
+    class _Src:
+        def __init__(self) -> None:
+            self.n = 0
+
+        def heartbeat(self, events):  # type: ignore[no-untyped-def]
+            del events
+            self.n += 1
+            if self.n > 1:
+                raise RuntimeError("lost visibility")
+
+    source = _Src()
+    with pytest.raises(ValueError, match="apply boom"), inflight_heartbeat(source, [], 0.02):
+        time.sleep(0.06)
+        raise ValueError("apply boom")
+
+
 def test_ha_online_skips_persist_when_write_busy_after_apply(tmp_path, feature_config: FeatureConfig):
     _out, settings = _seed_out(tmp_path)
     source = WebhookEventSource({})

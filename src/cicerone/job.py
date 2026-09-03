@@ -124,7 +124,7 @@ def _score_previous_run(
     if previous_generated_at:
         wanted.add(previous_generated_at)
     history = None
-    if settings.track.enabled and wanted:
+    if wanted:
         try:
             history = store.read_history(generated_ats=wanted)
             if history is not None and history.empty:

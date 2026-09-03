@@ -81,6 +81,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - In-flight event apply nacks the batch if a later heartbeat fails, so a
   long online refresh cannot ack after visibility is lost. The beat thread
   is joined before ack.
+- Job `[eval]` still reads recommendation history when `[track]` is off.
+- Incremental `[publish]` failures after a successful write are logged; the
+  apply still acks.
 - Job writes a failed manifest when `[publish]` connect or config raises
   before the run.
 - Incremental popular/latest write-through is the assigned (or promoted)

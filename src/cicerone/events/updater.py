@@ -221,7 +221,10 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         self._ensure_fence()
         self._sink.write_manifest(manifest)
         if self._publisher is not None:
-            self._publisher.publish(merged)
+            try:
+                self._publisher.publish(merged)
+            except Exception:
+                logger.exception("Incremental publish failed after successful write")
         self._store_users_in_cache(set(replace_ids), merged)
         if persist_online:
             self._commit_online()

@@ -77,12 +77,14 @@ def inflight_heartbeat(
 
     thread = threading.Thread(target=_loop, name="cicerone-events-heartbeat", daemon=True)
     thread.start()
+    completed = False
     try:
         yield
+        completed = True
     finally:
         stop.set()
         thread.join(timeout=max(1.0, interval_seconds))
-    if failed.is_set() or thread.is_alive():
+    if completed and (failed.is_set() or thread.is_alive()):
         raise HeartbeatError("Event source heartbeat failed")
 
 
