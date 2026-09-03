@@ -144,12 +144,65 @@ def test_post_track_idempotent(tmp_path):
     assert after_second == after_first
 
 
+def test_post_track_counts_accepted_kinds_in_mixed_partial_batch(tmp_path):
+    from prometheus_client import generate_latest
+    from support.prometheus_metrics import metric_value
+
+    app = create_app(_settings(tmp_path), _FakeReader(_recs_df()))
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer secret"}
+    client.post("/track", headers=headers, json=_impression())
+    before_imp = metric_value(
+        generate_latest().decode(),
+        "cicerone_track_ingest_total",
+        {"kind": "impression", "status": "accepted"},
+    )
+    before_click = metric_value(
+        generate_latest().decode(),
+        "cicerone_track_ingest_total",
+        {"kind": "click", "status": "accepted"},
+    )
+    before_other = metric_value(
+        generate_latest().decode(),
+        "cicerone_track_ingest_total",
+        {"kind": "other", "status": "accepted"},
+    )
+    mixed = client.post(
+        "/track",
+        headers=headers,
+        json=[
+            _impression(),
+            _impression(kind="click", event_id="clk-1", rank=None),
+        ],
+    )
+    assert mixed.status_code == 202
+    assert mixed.json()["accepted"] == 1
+    after_imp = metric_value(
+        generate_latest().decode(),
+        "cicerone_track_ingest_total",
+        {"kind": "impression", "status": "accepted"},
+    )
+    after_click = metric_value(
+        generate_latest().decode(),
+        "cicerone_track_ingest_total",
+        {"kind": "click", "status": "accepted"},
+    )
+    after_other = metric_value(
+        generate_latest().decode(),
+        "cicerone_track_ingest_total",
+        {"kind": "other", "status": "accepted"},
+    )
+    assert after_imp == before_imp
+    assert after_click == before_click + 1
+    assert after_other == before_other
+
+
 def test_post_track_records_error_when_append_fails(tmp_path, monkeypatch):
     from prometheus_client import generate_latest
     from support.prometheus_metrics import metric_value
 
     monkeypatch.setattr(
-        "cicerone.track.store.TrackStore.append_rows",
+        "cicerone.track.store.TrackStore.append_accepted_rows",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("store")),
     )
     before = metric_value(

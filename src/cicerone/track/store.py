@@ -67,9 +67,9 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
         self._track_size: int | None = None
         self._append_lock = threading.Lock()
 
-    def append_rows(self, rows: Sequence[Mapping[str, Any]]) -> int:
+    def append_accepted_rows(self, rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
         if not rows:
-            return 0
+            return []
         payload = [_row_with_event_id(row) for row in rows]
         if self._kind == "db":
             return self._append_rows_db(payload)
@@ -85,11 +85,14 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
                     known.add(event_id)
                 fresh.append(row)
             if not fresh:
-                return 0
+                return []
             encoded = "".join(json.dumps(row, separators=(",", ":")) + "\n" for row in fresh).encode("utf-8")
             self._append_bytes(TRACK_FILENAME, encoded)
             self._track_size = (self._track_size or 0) + len(encoded)
-            return len(fresh)
+            return fresh
+
+    def append_rows(self, rows: Sequence[Mapping[str, Any]]) -> int:
+        return len(self.append_accepted_rows(rows))
 
     def read_rows(self, *, kind: str | None = None) -> list[dict[str, Any]]:
         rows = self._read_rows_db() if self._kind == "db" else self._read_rows_dataset()
