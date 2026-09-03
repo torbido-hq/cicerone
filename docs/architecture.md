@@ -143,13 +143,13 @@ Test modules mirror the packages (same pattern as `tests/test_io_*.py`):
    produces top-K recommendations. When `[job.content_fallback].enabled` is true,
    `content_fallback` is inserted before the first non-personalized
    strategy if not already listed. Personalized strategies
-   (`collaborative`, `item_based`, `sequential`, `content_fallback`) only run for "warm"
+   (`collaborative`, `item_based`, `sequential`, `ease`, `als`, `content_fallback`) only run for "warm"
    users, but they do not agree on what warm means: `collaborative` scores any
    user present in the dataset, including feature-only users with no
-   interactions, while `item_based`, `sequential`, and `content_fallback` set
+   interactions, while `item_based`, `sequential`, `ease`, `als`, and `content_fallback` set
    `requires_interactions` and are filtered down to users who actually
    interacted (see the cold-start note below); non-personalized strategies (`popular`,
-   `latest`) run for every target user and backfill any warm user who didn't
+   `popular_in_category`, `latest`, `random`) run for every target user and backfill any warm user who didn't
    get enough personalized results after eligibility filtering. Before
    `recommend()`, `policy.resolve_eligibility()` merges
    `item_availability_filters` sugar with explicit `[[eligibility]]` rules.

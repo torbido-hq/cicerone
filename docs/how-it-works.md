@@ -66,9 +66,13 @@ for warm users; `popular` / `latest` backfill. Hyperparameters stay in
 | `collaborative` | Hybrid matrix factorization + metadata | Warm users (interactions **or** features) | none |
 | `item_based` | Item–item KNN on interaction vectors | Users with interactions | none |
 | `sequential` | Transformer next-item on ordered history | Users with interactions | `cicerone-recommender[sequential]` |
+| `ease` | Dense item–item autoencoder (EASE) | Users with interactions | none |
+| `als` | Implicit ALS, optional side features | Users with interactions | none |
 | `content_fallback` | Cosine over item category features | Users with interactions; **cold catalog items** | none (in-repo) |
 | `popular` | Global interaction counts | Everyone (non-personalized) | none |
+| `popular_in_category` | Popularity mixed across item categories | Everyone (non-personalized) | none |
 | `latest` | Popularity in a recency window | Everyone (non-personalized) | none |
+| `random` | Uniform random items (sanity baseline) | Everyone (non-personalized) | none |
 
 ### `collaborative` — LightFM
 
@@ -80,6 +84,12 @@ get personalized rows.
 That is the difference vs `item_based` / `sequential` (those need
 interaction history) and vs `popular` (no user vector at all). Cicerone
 treats “warm” as *present in the dataset* — interactions **or** features.
+
+WARP is the default LightFM loss. `[model.collaborative.model].loss` can be
+`bpr`, `logistic`, or `warp-kos` without changing the strategy name. Do not
+set `[model.collaborative].cls` to another RecTools model when
+`[events.online]` is on — online refresh is LightFM `fit_partial`. Use
+`ease` or `als` as their own `job.models` names instead.
 
 Paper: [Kula, *Metadata Embeddings for User and Item Cold-start Recommendations*, 2015](https://arxiv.org/abs/1507.08439).
 WARP loss: [Weston, Bengio & Usunier, IJCAI 2011](https://www.ijcai.org/Proceedings/11/Papers/460.pdf).
@@ -97,8 +107,24 @@ No latent factors, no time order, no item metadata. Independent of
 Feature-only users skip this strategy.
 
 Paper: [Sarwar et al., *Item-Based Collaborative Filtering Recommendation Algorithms*, WWW 2001](https://files.grouplens.org/papers/www10_sarwar.pdf).
-Cicerone's neighbor model is TF-IDF item-item kNN, not that paper's cosine
-over raw co-purchase counts.
+Cicerone's neighbor model defaults to TF-IDF item-item kNN, not that paper's cosine
+over raw co-purchase counts. `[model.item_based.model].cls` can be
+`CosineRecommender` or `BM25Recommender` (same RecTools wrapper).
+
+### `ease` — EASE
+
+Opt-in. RecTools [`EASEModel`](https://rectools.readthedocs.io/en/stable/api/rectools.models.ease.EASEModel.html):
+a dense item–item linear autoencoder. Strong implicit-feedback baseline;
+memory grows with catalog size. Users need interaction history (no
+feature-only cold start). Online LightFM refresh does not update this
+model.
+
+### `als` — implicit ALS
+
+Opt-in. RecTools [`ImplicitALSWrapperModel`](https://rectools.readthedocs.io/en/stable/api/rectools.models.implicit_als.ImplicitALSWrapperModel.html)
+over `pm-implicit` ALS. Cicerone default sets `fit_features_together = true`
+so the user/item features already on the RecTools `Dataset` participate.
+Still requires interactions at recommend time. Not used by `[events.online]`.
 
 ### `sequential` — SASRec, BERT4Rec, or HSTU
 
@@ -154,6 +180,20 @@ continues LightFM on IDs already in the last artifact and rewrites
 personalized / item-KNN / content-fallback rows for affected users. `GET
 /recommendations` still does not re-fit. See
 [Incremental vs full retrain](#incremental-vs-full-retrain).
+
+### `popular_in_category`
+
+Opt-in RecTools
+[`PopularInCategoryModel`](https://rectools.readthedocs.io/en/stable/api/rectools.models.popular_in_cat.PopularInCategoryModel.html).
+Mixes per-category popularity (`mixing_strategy = "group"` by default) using
+`[model.popular_in_category].category_feature` (default `category`, which
+must exist on items). AutoML drops this candidate when the items frame is
+missing that column.
+
+### `random`
+
+Opt-in RecTools `RandomModel`. Uniform catalog samples for experiment or
+AutoML sanity checks. Do not ship it as the only production strategy.
 
 ## Combining strategies
 

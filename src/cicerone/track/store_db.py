@@ -52,7 +52,7 @@ class TrackDbBackend:
             )
         )
 
-    def _append_rows_db(self, rows: list[dict[str, Any]]) -> int:
+    def _append_rows_db(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         table = sql_identifier(
             self._options.get("track_table", DEFAULT_TRACK_TABLE),
             option="track_table",
@@ -91,12 +91,9 @@ class TrackDbBackend:
             existing = _existing_event_ids(conn, table, [row["event_id"] for row in params])
             fresh = [row for row in params if not row["event_id"] or row["event_id"] not in existing]
             if not fresh:
-                return 0
-            result = conn.execute(insert_sql, fresh)
-            rowcount = result.rowcount
-            if rowcount is not None and rowcount >= 0:
-                return int(rowcount)
-            return len(fresh)
+                return []
+            conn.execute(insert_sql, fresh)
+            return fresh
 
     def _read_rows_db(self) -> list[dict[str, Any]]:
         table = sql_identifier(

@@ -16,6 +16,7 @@ from cicerone.serve.events_routes import (
     _put_pydantic_schema,
     _read_limited_json,
 )
+from cicerone.serve.metrics import record_track_ingest
 from cicerone.serve_schemas import (
     ErrorDetail,
     TrackEvent,
@@ -29,6 +30,15 @@ from cicerone.track.store import TrackStore
 logger = logging.getLogger(__name__)
 
 TRACK_PATH = "/track"
+
+
+def _record_accepted_ingest(rows: list[dict[str, Any]]) -> None:
+    counts: dict[str, int] = {}
+    for row in rows:
+        kind = str(row.get("kind") or "other")
+        counts[kind] = counts.get(kind, 0) + 1
+    for kind, count in counts.items():
+        record_track_ingest(kind=kind, status="accepted", count=count)
 
 
 def attach_track_ingest_openapi(schema: dict[str, Any]) -> None:
@@ -84,7 +94,11 @@ def mount_track_routes(
         },
     )
     async def post_track(request: Request) -> TrackIngestResponse:
-        body = await _read_limited_json(request, _max_body_bytes(settings))
+        try:
+            body = await _read_limited_json(request, _max_body_bytes(settings))
+        except HTTPException:
+            record_track_ingest(kind="other", status="error")
+            raise
         payloads = _payloads_from_body(body)
         try:
             if isinstance(body, dict) and "events" in body:
@@ -93,13 +107,19 @@ def mount_track_routes(
                 for payload in payloads:
                     TrackEvent.model_validate(payload)
             rows = [normalize_track(payload).as_row() for payload in payloads]
-            accepted = track_store.append_rows(rows)
+            accepted_rows = track_store.append_accepted_rows(rows)
         except ValidationError as exc:
+            record_track_ingest(kind="other", status="error")
             raise HTTPException(status_code=400, detail=exc.errors()) from exc
         except TrackNormalizeError as exc:
+            record_track_ingest(kind="other", status="error")
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception:
+            record_track_ingest(kind="other", status="error")
+            raise
+        _record_accepted_ingest(accepted_rows)
         return TrackIngestResponse(
-            accepted=accepted,
+            accepted=len(accepted_rows),
             event_ids=[str(row["event_id"]) for row in rows],
         )
 

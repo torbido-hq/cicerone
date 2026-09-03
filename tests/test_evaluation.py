@@ -271,6 +271,7 @@ def test_evaluate_served_hit_rate_and_history() -> None:
     assert report is not None
     assert report.n_users == 1
     assert report.metrics["HitRate@1"] == pytest.approx(1.0)
+    assert "MAP@1" in report.metrics
     old_recs = pd.DataFrame(
         [
             {
@@ -305,6 +306,31 @@ def test_evaluate_served_hit_rate_and_history() -> None:
     )
     assert replayed is not None
     assert replayed.metrics["HitRate@1"] == pytest.approx(1.0)
+
+
+def test_evaluate_served_catalog_coverage_uses_item_catalog() -> None:
+    recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa", "rank": 1, "source": "personalized"}])
+    events = pd.DataFrame(
+        [
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "event_type": "purchase",
+                "occurred_at": "2026-08-28T12:00:00Z",
+            }
+        ]
+    )
+    items = pd.DataFrame([{"item_id": "ipa"}, {"item_id": "stout"}, {"item_id": "lager"}])
+    report = evaluate_served(
+        recs,
+        events,
+        generated_at=None,
+        ks=(1,),
+        event_types=("purchase",),
+        catalog=items,
+    )
+    assert report is not None
+    assert report.metrics["CatalogCoverage@1"] == pytest.approx(1.0 / 3.0)
 
 
 def test_evaluate_served_history_without_generated_at() -> None:

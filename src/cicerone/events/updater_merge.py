@@ -33,6 +33,8 @@ _PRESERVE_LABELS = frozenset(
         "personalized",
         "item_based",
         "sequential",
+        "ease",
+        "als",
         "content_fallback",
         "blended",
     }

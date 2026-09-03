@@ -47,10 +47,11 @@ class RecommendationItem(BaseModel):
     score: float = Field(description="Score from the batch job (strategy- or blend-specific)")
     source: str = Field(
         description=(
-            "Origin label: personalized, item_based, sequential, content_fallback, popular_fallback, "
-            "latest, or blended when more than one list voted. An incremental flush labels only its "
-            "event-derived boost rows incremental; preserved and refilled rows keep their own labels. "
-            "Weighted fusion joins labels in models order, e.g. popular_fallback+latest."
+            "Origin label: personalized, item_based, sequential, ease, als, content_fallback, "
+            "popular_fallback, popular_in_category, latest, random, or blended when more than one "
+            "list voted. An incremental flush labels only its event-derived boost rows incremental; "
+            "preserved and refilled rows keep their own labels. Weighted fusion joins labels in "
+            "models order, e.g. popular_fallback+latest."
         ),
         examples=["blended"],
     )

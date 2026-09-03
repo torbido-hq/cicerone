@@ -11,9 +11,13 @@ STRATEGY_NAMES: tuple[str, ...] = (
     "collaborative",
     "item_based",
     "sequential",
+    "ease",
+    "als",
     "content_fallback",
     "popular",
+    "popular_in_category",
     "latest",
+    "random",
 )
 DEFAULT_MODELS: list[str] = ["collaborative", "item_based", "popular"]
 # Reciprocal rank fusion constant (Cormack et al., 2009); default for rrf_k.
