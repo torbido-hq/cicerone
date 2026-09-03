@@ -160,10 +160,10 @@ __all__ = [
 _LAZY: dict[str, tuple[str, str]] = {
     "coerce_events_settings": ("cicerone.config.events", "coerce_events_settings"),
     "load_events_settings": ("cicerone.config.events", "load_events_settings"),
-    "load_eval_settings": ("cicerone.config.load", "load_eval_settings"),
-    "load_experiment_settings": ("cicerone.config.load", "load_experiment_settings"),
+    "load_eval_settings": ("cicerone.config.track", "load_eval_settings"),
+    "load_experiment_settings": ("cicerone.config.experiment", "load_experiment_settings"),
     "load_settings": ("cicerone.config.load", "load_settings"),
-    "load_track_settings": ("cicerone.config.load", "load_track_settings"),
+    "load_track_settings": ("cicerone.config.track", "load_track_settings"),
     "make_settings": ("cicerone.config.load", "make_settings"),
 }
 

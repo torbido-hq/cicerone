@@ -707,7 +707,8 @@ def test_evaluation_remaining_branches(monkeypatch) -> None:
     )
     assert _recs_from_history(hist, events).empty
     monkeypatch.setattr(
-        "cicerone.evaluation.calc_metrics", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("x"))
+        "cicerone.evaluation.served.calc_metrics",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("x")),
     )
     failed = evaluate_served(
         pd.DataFrame([{"user_id": "alice", "item_id": "ipa", "rank": 1, "source": "personalized"}]),
