@@ -10,6 +10,7 @@ from cicerone.io.options import (
     S3_NOT_FOUND_CODES,
     is_s3_not_found,
     object_key,
+    readonly_select,
     storage_backend,
     validate_storage_options,
 )
@@ -69,3 +70,22 @@ def test_storage_backend_rejects_unknown():
 def test_validate_storage_options_rejects_unknown_backend():
     with pytest.raises(ConfigError, match="Unknown storage_backend"):
         validate_storage_options({"storage_backend": "gcs", "path": "/tmp"})
+
+
+def test_readonly_select_accepts_simple_select():
+    assert readonly_select("SELECT * FROM events;", option="q") == "SELECT * FROM events"
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "DELETE FROM events",
+        "SELECT 1; DROP TABLE events",
+        "SELECT * FROM events INTO dump",
+        "SELECT pg_read_file('/etc/passwd')",
+        "",
+    ],
+)
+def test_readonly_select_rejects_writes(query):
+    with pytest.raises(ValueError, match="q"):
+        readonly_select(query, option="q")

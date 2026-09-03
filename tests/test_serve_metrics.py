@@ -17,7 +17,18 @@ from cicerone.serve.metrics import METRICS_TOKEN_HEADER
 
 
 def _settings(**overrides) -> Settings:
-    return make_settings(**{"mode": "serve", "serve_auth_token": "secret", **overrides})
+    defaults = {
+        "mode": "serve",
+        "serve_auth_token": "secret",
+        "serve_metrics_enabled": True,
+        "serve_metrics_token": "metrics-secret",
+    }
+    defaults.update(overrides)
+    return make_settings(**defaults)
+
+
+def _metrics_headers() -> dict[str, str]:
+    return {METRICS_TOKEN_HEADER: "metrics-secret"}
 
 
 class _FakeReader:
@@ -57,7 +68,7 @@ def _recs_df() -> pd.DataFrame:
 
 def test_metrics_returns_prometheus_text_format():
     app = create_app(_settings(), _FakeReader(_recs_df()))
-    response = TestClient(app).get("/metrics")
+    response = TestClient(app).get("/metrics", headers=_metrics_headers())
     assert response.status_code == 200
     assert response.headers["content-type"].startswith(CONTENT_TYPE_LATEST)
     assert "cicerone_up" in response.text
@@ -69,7 +80,7 @@ def test_metrics_returns_prometheus_text_format():
 
 def test_metrics_disabled_returns_not_found():
     app = create_app(_settings(serve_metrics_enabled=False), _FakeReader(_recs_df()))
-    response = TestClient(app).get("/metrics")
+    response = TestClient(app).get("/metrics", headers=_metrics_headers())
     assert response.status_code == 404
 
 
@@ -77,20 +88,20 @@ def test_metrics_token_required_when_configured():
     app = create_app(_settings(serve_metrics_token="metrics-secret"), _FakeReader(_recs_df()))
     client = TestClient(app)
     assert client.get("/metrics").status_code == 401
-    response = client.get("/metrics", headers={METRICS_TOKEN_HEADER: "metrics-secret"})
+    response = client.get("/metrics", headers=_metrics_headers())
     assert response.status_code == 200
 
 
 def test_metrics_does_not_require_bearer_token():
     app = create_app(_settings(), _FakeReader(_recs_df()))
-    response = TestClient(app).get("/metrics")
+    response = TestClient(app).get("/metrics", headers=_metrics_headers())
     assert response.status_code == 200
 
 
 def test_metrics_endpoint_excluded_from_request_counters():
     app = create_app(_settings(), _FakeReader(_recs_df()))
     client = TestClient(app)
-    before = client.get("/metrics").text
+    before = client.get("/metrics", headers=_metrics_headers()).text
     before_metrics_requests = sum(
         value
         for labels, value in metric_samples(before, "cicerone_requests_total")
@@ -98,9 +109,9 @@ def test_metrics_endpoint_excluded_from_request_counters():
     )
 
     for _ in range(3):
-        assert client.get("/metrics").status_code == 200
+        assert client.get("/metrics", headers=_metrics_headers()).status_code == 200
 
-    after = client.get("/metrics").text
+    after = client.get("/metrics", headers=_metrics_headers()).text
     after_metrics_requests = sum(
         value
         for labels, value in metric_samples(after, "cicerone_requests_total")
@@ -113,7 +124,7 @@ def test_metrics_endpoint_excluded_from_request_counters():
 def test_recommend_request_increments_request_and_source_metrics():
     app = create_app(_settings(), _FakeReader(_recs_df()))
     client = TestClient(app)
-    before = client.get("/metrics").text
+    before = client.get("/metrics", headers=_metrics_headers()).text
     before_requests = metric_value(
         before,
         "cicerone_requests_total",
@@ -125,7 +136,7 @@ def test_recommend_request_increments_request_and_source_metrics():
     response = client.get("/recommendations/u1", headers={"Authorization": "Bearer secret"})
     assert response.status_code == 200
 
-    after = client.get("/metrics").text
+    after = client.get("/metrics", headers=_metrics_headers()).text
     assert (
         metric_value(
             after,
@@ -151,7 +162,11 @@ def test_cache_refresh_metrics_on_success_and_failure(tmp_path: Path):
     recs.to_parquet(tmp_path / "recommendations.parquet", index=False)
 
     # Snapshot counters before constructing the reader (its __init__ calls refresh).
-    probe = TestClient(create_app(_settings(), _FakeReader(_recs_df()))).get("/metrics").text
+    probe = (
+        TestClient(create_app(_settings(), _FakeReader(_recs_df())))
+        .get("/metrics", headers=_metrics_headers())
+        .text
+    )
     before_success = metric_value(probe, "cicerone_cache_refresh_total", {"status": "success"})
     before_failure = metric_value(probe, "cicerone_cache_refresh_total", {"status": "failure"})
 
@@ -160,14 +175,14 @@ def test_cache_refresh_metrics_on_success_and_failure(tmp_path: Path):
     time.sleep(0.01)
 
     app = create_app(_settings(), reader)
-    metrics = TestClient(app).get("/metrics").text
+    metrics = TestClient(app).get("/metrics", headers=_metrics_headers()).text
     assert metric_value(metrics, "cicerone_cache_refresh_total", {"status": "success"}) >= before_success + 2
     age = metric_samples(metrics, "cicerone_cache_age_seconds")
     assert any(value >= 0 for _, value in age)
 
     (tmp_path / "recommendations.parquet").unlink()
     reader.refresh()
-    metrics_after_failure = TestClient(app).get("/metrics").text
+    metrics_after_failure = TestClient(app).get("/metrics", headers=_metrics_headers()).text
     assert (
         metric_value(metrics_after_failure, "cicerone_cache_refresh_total", {"status": "failure"})
         == before_failure + 1
@@ -192,14 +207,14 @@ def test_cache_hit_and_miss_counters(tmp_path: Path):
 
     app = create_app(_settings(), reader)
     client = TestClient(app)
-    before = client.get("/metrics").text
+    before = client.get("/metrics", headers=_metrics_headers()).text
     before_hits = metric_value(before, "cicerone_cache_hits_total")
     before_misses = metric_value(before, "cicerone_cache_misses_total")
 
     client.get("/recommendations/u1", headers={"Authorization": "Bearer secret"})
     client.get("/recommendations/unknown", headers={"Authorization": "Bearer secret"})
 
-    after = client.get("/metrics").text
+    after = client.get("/metrics", headers=_metrics_headers()).text
     assert metric_value(after, "cicerone_cache_hits_total") == before_hits + 1
     assert metric_value(after, "cicerone_cache_misses_total") == before_misses + 1
 
@@ -309,7 +324,7 @@ def test_metrics_endpoint_refreshes_events_source_health():
     )
     worker.refresh_source_health_metrics()
     app = create_app(settings, _FakeReader(_recs_df()), events_worker=worker)
-    body = TestClient(app).get("/metrics").text
+    body = TestClient(app).get("/metrics", headers=_metrics_headers()).text
     assert "cicerone_events_source_lag" in body
     assert metric_value(body, "cicerone_events_source_connected") == 1.0
     assert metric_value(body, "cicerone_events_source_lag") == 1.0
@@ -320,7 +335,7 @@ def test_metrics_endpoint_resets_events_gauges_without_worker():
     from cicerone.serve import metrics as metrics_mod
 
     metrics_mod.update_events_source_health(connected=True, lag=9)
-    body = TestClient(app).get("/metrics").text
+    body = TestClient(app).get("/metrics", headers=_metrics_headers()).text
     assert metric_value(body, "cicerone_events_source_connected") == 0.0
     assert metric_value(body, "cicerone_events_source_lag") == -1.0
 

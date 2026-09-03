@@ -282,12 +282,11 @@ serve-only image.
   Integrators can call the same contract via `serve_client.ServeClient`, the
   snippets in `examples/serve/`, or the `x-codeSamples` embedded in OpenAPI /
   ReDoc (Ruby, Python, JavaScript, Shell).
-- When `[serve].metrics_enabled` (default `true`), `GET /metrics` exposes
+- When `[serve].metrics_enabled` (default `false`), `GET /metrics` exposes
   Prometheus text-format process metrics (request volume/latency, cache
-  health, recommendation source tiers, `cicerone_up`). It does **not** use
-  the recommendation bearer token; optional `[serve].metrics_token` gates it
-  via the `X-Metrics-Token` header. When the token is empty, bind serve to a
-  trusted network or reverse proxy. Metrics are per replica (default
+  health, recommendation source tiers, `cicerone_up`). A non-empty
+  `[serve].metrics_token` is required; scrapes send `X-Metrics-Token`. It does
+  **not** use the recommendation bearer token. Metrics are per replica (default
   `prometheus-client` registry; no multiprocess mode) — cross-replica
   aggregation is Prometheus's job via scrape targets.
 

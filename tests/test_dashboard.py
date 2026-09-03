@@ -514,6 +514,14 @@ def _recs_client(
     return TestClient(app)
 
 
+def _csrf_token(client: TestClient) -> str:
+    from cicerone.http_security import CSRF_COOKIE
+
+    response = client.get("/dashboard/experiments", auth=("alice", "s3cret"))
+    assert response.status_code == 200
+    return str(client.cookies[CSRF_COOKIE])
+
+
 def test_recommendations_partial_requires_auth():
     response = _recs_client(_FakeRecReader(_recs_df())).get("/partials/recommendations")
 
@@ -951,9 +959,11 @@ def test_dashboard_promote_unknown_variant_redirects():
             VariantSettings(name="treatment", traffic=0.5),
         ),
     )
-    response = _recs_client(experiment=experiment).post(
+    client = _recs_client(experiment=experiment)
+    token = _csrf_token(client)
+    response = client.post(
         "/dashboard/experiments/promote",
-        data={"variant": "ghost"},
+        data={"variant": "ghost", "csrf_token": token},
         auth=("alice", "s3cret"),
         follow_redirects=False,
     )
@@ -974,9 +984,11 @@ def test_dashboard_promote_hostile_variant_stays_on_experiments():
             VariantSettings(name="treatment", traffic=0.5),
         ),
     )
-    response = _recs_client(experiment=experiment).post(
+    client = _recs_client(experiment=experiment)
+    token = _csrf_token(client)
+    response = client.post(
         "/dashboard/experiments/promote",
-        data={"variant": "https://evil.example/phish"},
+        data={"variant": "https://evil.example/phish", "csrf_token": token},
         auth=("alice", "s3cret"),
         follow_redirects=False,
     )
@@ -1022,9 +1034,11 @@ def test_dashboard_promote_success_redirects(monkeypatch):
             VariantSettings(name="treatment", traffic=0.5),
         ),
     )
-    response = _recs_client(experiment=experiment).post(
+    client = _recs_client(experiment=experiment)
+    token = _csrf_token(client)
+    response = client.post(
         "/dashboard/experiments/promote",
-        data={"variant": "control"},
+        data={"variant": "control", "csrf_token": token},
         auth=("alice", "s3cret"),
         follow_redirects=False,
     )
@@ -1049,11 +1063,14 @@ def test_dashboard_unpromote_resumes_split(tmp_path):
             VariantSettings(name="treatment", traffic=0.5),
         ),
     )
-    response = _recs_client(
+    client = _recs_client(
         experiment=experiment,
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
-    ).post(
+    )
+    token = _csrf_token(client)
+    response = client.post(
         "/dashboard/experiments/unpromote",
+        data={"csrf_token": token},
         auth=("alice", "s3cret"),
         follow_redirects=False,
     )
@@ -1062,10 +1079,57 @@ def test_dashboard_unpromote_resumes_split(tmp_path):
 
 
 def test_dashboard_unpromote_disabled_experiment_redirects():
-    response = _recs_client().post(
+    client = _recs_client()
+    token = _csrf_token(client)
+    response = client.post(
         "/dashboard/experiments/unpromote",
+        data={"csrf_token": token},
         auth=("alice", "s3cret"),
         follow_redirects=False,
     )
     assert response.status_code == 303
     assert "promote_error=" in response.headers["location"]
+
+
+def test_dashboard_promote_rejects_missing_csrf():
+    from cicerone.config.settings import ExperimentSettings, VariantSettings
+
+    experiment = ExperimentSettings(
+        enabled=True,
+        id="exp-1",
+        variants=(
+            VariantSettings(name="control", traffic=0.5),
+            VariantSettings(name="treatment", traffic=0.5),
+        ),
+    )
+    client = _recs_client(experiment=experiment)
+    _csrf_token(client)
+    response = client.post(
+        "/dashboard/experiments/promote",
+        data={"variant": "control"},
+        auth=("alice", "s3cret"),
+        follow_redirects=False,
+    )
+    assert response.status_code == 403
+
+
+def test_dashboard_docs_are_disabled():
+    client = _recs_client()
+    assert client.get("/docs").status_code == 404
+    assert client.get("/redoc").status_code == 404
+    assert client.get("/openapi.json").status_code == 404
+
+
+def test_dashboard_security_headers_on_health():
+    response = TestClient(create_app(_settings(), _FakeReader(None), _users_with("alice", "s3cret"))).get(
+        "/health"
+    )
+    assert response.headers["x-frame-options"] == "DENY"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
+
+
+def test_dashboard_malformed_bcrypt_hash_is_unauthorized():
+    app = create_app(_settings(), _FakeReader(None), {"alice": "not-a-valid-bcrypt-hash"})
+    response = TestClient(app).get("/dashboard", auth=("alice", "s3cret"))
+    assert response.status_code == 401

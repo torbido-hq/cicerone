@@ -44,6 +44,7 @@
       {% if promoted_variant %}
       <p class="text-sm text-sky-800 mb-3">Promoted variant: <span class="font-medium">{{ promoted_variant }}</span> (100% traffic at serve).</p>
       <form action="/dashboard/experiments/unpromote" method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2">
           Resume split
         </button>
@@ -99,6 +100,7 @@
       {% endif %}
       {% if report.can_promote and report.winner and not promoted_variant %}
       <form action="/dashboard/experiments/promote" method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="hidden" name="variant" value="{{ report.winner }}">
         <button type="submit" class="rounded bg-slate-800 px-3 py-1.5 text-sm text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2">
           Promote {{ report.winner }}

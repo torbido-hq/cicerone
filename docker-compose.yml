@@ -76,7 +76,7 @@ services:
       TRIGGER_AUTH_TOKEN: ${TRIGGER_AUTH_TOKEN:-}
     command: ["start", "--config", "/app/config/cicerone.toml"]
     ports:
-      - "8080:8080" # only listens if [job.trigger].enabled = true
+      - "127.0.0.1:8080:8080" # only listens if [job.trigger].enabled = true
     volumes:
       - ./config:/app/config:ro
     restart: unless-stopped
@@ -99,7 +99,7 @@ services:
       SERVE_AUTH_TOKEN: ${SERVE_AUTH_TOKEN:-}
     command: ["start", "--config", "/app/config/cicerone.serve.toml"]
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
       - ./config:/app/config:ro
     restart: unless-stopped
@@ -121,7 +121,7 @@ services:
       OUTPUT_DATABASE_URL: ${OUTPUT_DATABASE_URL:-}
     command: ["dashboard", "--config", "/app/config/cicerone.dashboard.toml"]
     ports:
-      - "8090:8090"
+      - "127.0.0.1:8090:8090"
     volumes:
       # Read-write (unlike recommender/serve above): `cicerone users`
       # (run via `docker compose run --rm dashboard users add <username>`)

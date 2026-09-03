@@ -48,7 +48,7 @@ class ServeSettings:
     default_k: int = 10
     refresh_interval_seconds: float = 60.0
     category_column: str = "category"
-    metrics_enabled: bool = True
+    metrics_enabled: bool = False
     metrics_token: str | None = None
 
 

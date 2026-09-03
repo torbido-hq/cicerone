@@ -16,6 +16,12 @@ from cicerone.config.constants import ConfigError
 logger = logging.getLogger(__name__)
 
 _SQL_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_READONLY_SELECT_FORBIDDEN = re.compile(
+    r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|"
+    r"COPY|CALL|EXEC|EXECUTE|MERGE|REPLACE|ATTACH|DETACH|"
+    r"INTO|LOAD|DO|VACUUM|LOCK|pg_read_file|lo_export|lo_import)\b",
+    re.IGNORECASE,
+)
 S3_NOT_FOUND_CODES = frozenset({"NoSuchKey", "404", "NotFound"})
 STORAGE_BACKENDS = frozenset({"s3", "local"})
 
@@ -38,6 +44,22 @@ def sql_identifier(name: str, *, option: str) -> str:
             f"{option} must be a simple SQL identifier matching [A-Za-z_][A-Za-z0-9_]*, got {name!r}"
         )
     return name
+
+
+def readonly_select(query: str, *, option: str) -> str:
+    """Deploy-time SQL: a single SELECT with a keyword denylist (not a parser)."""
+    if not isinstance(query, str):
+        raise ValueError(f"{option} must be a string")
+    cleaned = query.strip().rstrip(";").strip()
+    if not cleaned:
+        raise ValueError(f"{option} must be a non-empty SELECT")
+    if ";" in cleaned:
+        raise ValueError(f"{option} must be a single statement")
+    if not re.match(r"(?is)\ASELECT\b", cleaned):
+        raise ValueError(f"{option} must be a SELECT statement")
+    if _READONLY_SELECT_FORBIDDEN.search(cleaned):
+        raise ValueError(f"{option} must be a read-only SELECT")
+    return cleaned
 
 
 def is_s3_not_found(exc: BaseException) -> bool:

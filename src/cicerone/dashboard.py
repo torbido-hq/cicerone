@@ -21,6 +21,13 @@ from cicerone.dashboard_experiments import clear_promotion, experiment_context, 
 from cicerone.dashboard_lookup import lookup_inspector
 from cicerone.dashboard_users import load_users
 from cicerone.http_auth import require_basic_auth
+from cicerone.http_security import (
+    CSRF_FORM_FIELD,
+    SecurityHeadersMiddleware,
+    csrf_token_for,
+    require_csrf,
+    set_csrf_cookie,
+)
 from cicerone.io.base import ManifestReader, RecommendationReader, UserHistoryReader
 from cicerone.io.factory import build_manifest_reader, build_recommendation_reader, build_user_history_reader
 
@@ -91,6 +98,14 @@ def page_title(
     return " · ".join(parts)
 
 
+def _html(request: Request, template: str, context: dict[str, Any]):
+    token = csrf_token_for(request)
+    context = {**context, "csrf_token": token}
+    response = _TEMPLATES.TemplateResponse(request, template, context)
+    set_csrf_cookie(request, response, token)
+    return response
+
+
 def _incremental_status(history: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Most recent incremental write-through run from manifest history (newest first)."""
     for run in history:
@@ -115,7 +130,13 @@ def create_app(
     recommendation_reader: RecommendationReader | None = None,
     history_reader: UserHistoryReader | None = None,
 ) -> FastAPI:
-    app = FastAPI(title="cicerone-dashboard")
+    app = FastAPI(
+        title="cicerone-dashboard",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
+    app.add_middleware(SecurityHeadersMiddleware)
     app.mount("/static", StaticFiles(directory=str(_PACKAGE_DIR / "static")), name="static")
     auth = require_basic_auth(users)
 
@@ -158,7 +179,7 @@ def create_app(
             manifest=context["manifest"],
             staleness=context["staleness"],
         )
-        return _TEMPLATES.TemplateResponse(request, "dashboard.html", context)
+        return _html(request, "dashboard.html", context)
 
     @app.get("/dashboard/experiments", dependencies=[Depends(auth)])
     def experiments(
@@ -167,17 +188,26 @@ def create_app(
         context = experiment_context(settings)
         context["message"] = message or None
         context["promote_error"] = promote_error or None
-        return _TEMPLATES.TemplateResponse(request, "experiments.html", context)
+        return _html(request, "experiments.html", context)
 
     @app.post("/dashboard/experiments/promote", dependencies=[Depends(auth)])
-    def experiments_promote(variant: str = Form(...)):
+    def experiments_promote(
+        request: Request,
+        variant: str = Form(...),
+        csrf_token: str = Form("", alias=CSRF_FORM_FIELD),
+    ):
+        require_csrf(request, csrf_token)
         error = promote_winner(settings, variant.strip())
         if error:
             return _experiments_redirect(promote_error=error)
         return _experiments_redirect(message=f"Promoted {variant.strip()}")
 
     @app.post("/dashboard/experiments/unpromote", dependencies=[Depends(auth)])
-    def experiments_unpromote():
+    def experiments_unpromote(
+        request: Request,
+        csrf_token: str = Form("", alias=CSRF_FORM_FIELD),
+    ):
+        require_csrf(request, csrf_token)
         error = clear_promotion(settings)
         if error:
             return _experiments_redirect(promote_error=error)

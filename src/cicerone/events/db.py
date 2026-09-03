@@ -19,7 +19,7 @@ from cicerone.config import ConfigError
 from cicerone.events.base import EventSource, EventSourceHealth, NormalizedEvent
 from cicerone.events.normalize import normalize_event, parse_occurred_at
 from cicerone.io.db_store import DEFAULT_EVENTS_TABLE
-from cicerone.io.options import require_option, sql_identifier
+from cicerone.io.options import readonly_select, require_option, sql_identifier
 
 logger = logging.getLogger(__name__)
 
@@ -87,25 +87,10 @@ _POSTGRES_IDENTITY_SORT = (
     " THEN 'ctid:' || chr(31) || chr(31) || replace(substring(event_id from 6), ' ', '')"
     " ELSE chr(31) || event_id END"
 )
-_EVENTS_QUERY_FORBIDDEN = re.compile(
-    r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|"
-    r"COPY|CALL|EXEC|EXECUTE|MERGE|REPLACE|ATTACH|DETACH)\b",
-    re.IGNORECASE,
-)
 
 
 def _validate_events_query(query: str) -> str:
-    # Trusted deploy-time config only (same trust model as input.options.events_query).
-    cleaned = query.strip().rstrip(";").strip()
-    if not cleaned:
-        raise ValueError("events.options.events_query must be a non-empty SELECT")
-    if ";" in cleaned:
-        raise ValueError("events.options.events_query must be a single statement")
-    if not re.match(r"(?is)\ASELECT\b", cleaned):
-        raise ValueError("events.options.events_query must be a SELECT statement")
-    if _EVENTS_QUERY_FORBIDDEN.search(cleaned):
-        raise ValueError("events.options.events_query must be a read-only SELECT")
-    return cleaned
+    return readonly_select(query, option="events.options.events_query")
 
 
 def _db_occurred_at(value: Any) -> datetime:

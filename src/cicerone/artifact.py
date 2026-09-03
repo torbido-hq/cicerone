@@ -129,14 +129,37 @@ def dumps_artifact(artifact: ModelArtifact) -> bytes:
     return buffer.getvalue()
 
 
+def _zip_member_allowed(name: str) -> bool:
+    if name in {_META_NAME, _BUNDLE_NAME}:
+        return True
+    if not name.startswith(_MODELS_DIR):
+        return False
+    rest = name[len(_MODELS_DIR) :]
+    if not rest or "/" in rest or rest in {".", ".."}:
+        return False
+    return rest.endswith(_RECTOOLS_SUFFIX) or rest.endswith(_PICKLE_SUFFIX)
+
+
+def _assert_safe_artifact_zip(zf: zipfile.ZipFile) -> set[str]:
+    names = zf.namelist()
+    if len(names) != len(set(names)):
+        raise ValueError("Artifact zip has duplicate members")
+    for name in names:
+        parts = name.split("/")
+        if ".." in parts or name.startswith("/") or "\\" in name or not _zip_member_allowed(name):
+            raise ValueError(f"Artifact zip has unexpected member {name!r}")
+    unique = set(names)
+    if _META_NAME not in unique or _BUNDLE_NAME not in unique:
+        raise ValueError("Artifact zip is missing meta.json or bundle.pkl")
+    return unique
+
+
 def loads_artifact(payload: bytes) -> ModelArtifact:
-    """Deserialize a trusted ModelArtifact."""
+    """Deserialize a trusted v3 ModelArtifact zip. Legacy bare pickle is refused."""
     try:
         buffer = io.BytesIO(payload)
         with zipfile.ZipFile(buffer, mode="r") as zf:
-            names = set(zf.namelist())
-            if _META_NAME not in names or _BUNDLE_NAME not in names:
-                raise ValueError("Artifact zip is missing meta.json or bundle.pkl")
+            names = _assert_safe_artifact_zip(zf)
             meta: dict[str, Any] = json.loads(zf.read(_META_NAME).decode("utf-8"))
             schema_version = int(meta["schema_version"])
             if schema_version != ARTIFACT_SCHEMA_VERSION:
@@ -144,10 +167,22 @@ def loads_artifact(payload: bytes) -> ModelArtifact:
                     f"Unsupported artifact schema_version {schema_version}; "
                     f"this build expects {ARTIFACT_SCHEMA_VERSION}"
                 )
+            models = list(meta["models"])
+            model_files = {name for name in names if name.startswith(_MODELS_DIR)}
+            allowed_stems = set(models)
+            for path in model_files:
+                stem = path[len(_MODELS_DIR) :]
+                strategy = stem
+                for suffix in (_RECTOOLS_SUFFIX, _PICKLE_SUFFIX):
+                    if stem.endswith(suffix):
+                        strategy = stem[: -len(suffix)]
+                        break
+                if strategy not in allowed_stems:
+                    raise ValueError(f"Artifact zip has unexpected member {path!r}")
             bundle = pickle.loads(zf.read(_BUNDLE_NAME))
             fitted: dict[str, RecommenderModel] = {}
             model_formats = meta.get("model_formats") or {}
-            for name in meta["models"]:
+            for name in models:
                 fmt = model_formats.get(name)
                 rectools_path = f"{_MODELS_DIR}{name}{_RECTOOLS_SUFFIX}"
                 pickle_path = f"{_MODELS_DIR}{name}{_PICKLE_SUFFIX}"
@@ -160,7 +195,7 @@ def loads_artifact(payload: bytes) -> ModelArtifact:
             return ModelArtifact(
                 schema_version=schema_version,
                 created_at=datetime.fromisoformat(str(meta["created_at"])),
-                models=tuple(meta["models"]),
+                models=tuple(models),
                 model_weights=(
                     dict(meta["model_weights"]) if meta.get("model_weights") is not None else None
                 ),
@@ -172,19 +207,7 @@ def loads_artifact(payload: bytes) -> ModelArtifact:
                 users=bundle.get("users"),
             )
     except zipfile.BadZipFile as exc:
-        # Legacy schema v2 was a bare pickle of ModelArtifact.
-        try:
-            artifact = pickle.loads(payload)
-        except Exception:
-            raise TypeError("Artifact payload is neither a v3 zip nor a legacy pickle") from exc
-        if not isinstance(artifact, ModelArtifact):
-            raise TypeError(
-                f"Artifact payload did not unpickle to ModelArtifact, got {type(artifact).__name__}"
-            ) from None
-        raise ValueError(
-            f"Unsupported artifact schema_version {artifact.schema_version}; "
-            f"this build expects {ARTIFACT_SCHEMA_VERSION}"
-        ) from None
+        raise TypeError("Artifact payload is not a v3 zip") from exc
 
 
 def save_artifact(path: Path | str, artifact: ModelArtifact) -> None:

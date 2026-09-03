@@ -23,6 +23,7 @@ from cicerone.config.constants import (
     DEFAULT_LOCK_TTL_SECONDS,
     DEFAULT_MAX_WORKERS,
     DEFAULT_SEQUENTIAL_MIN_MEDIAN_INTERACTIONS,
+    DEFAULT_SERVE_MAX_K,
     EXPERIMENT_COMBINERS,
     LOCK_BACKENDS,
     MODES,
@@ -149,6 +150,13 @@ def _coerce_nested(
         if flat_key in overrides:
             updates[field_name] = overrides.pop(flat_key)
     return replace(base, **updates) if updates else base
+
+
+def _serve_default_k(serve_raw: dict[str, Any]) -> int:
+    value = require_positive_int(int(serve_raw.get("default_k", 10)), name="serve.default_k")
+    if value > DEFAULT_SERVE_MAX_K:
+        raise ConfigError(f"serve.default_k must be <= {DEFAULT_SERVE_MAX_K}, got {value}")
+    return value
 
 
 def make_settings(**overrides: Any) -> Settings:
@@ -461,6 +469,11 @@ def load_settings(config_path: str | None = None) -> Settings:
         if serve_raw.get("metrics_token")
         else None
     )
+    if isinstance(serve_metrics_token, str):
+        serve_metrics_token = serve_metrics_token.strip() or None
+    serve_metrics_enabled = bool(serve_raw.get("metrics_enabled", False))
+    if serve_metrics_enabled and not serve_metrics_token:
+        raise ConfigError("serve.metrics_token is required when serve.metrics_enabled = true")
 
     trigger_raw = job.get("trigger", {})
     trigger_enabled = bool(trigger_raw.get("enabled", False))
@@ -603,13 +616,13 @@ def load_settings(config_path: str | None = None) -> Settings:
             host=serve_raw.get("host", "0.0.0.0"),
             port=int(serve_raw.get("port", 8000)),
             auth_token=serve_auth_token,
-            default_k=require_positive_int(int(serve_raw.get("default_k", 10)), name="serve.default_k"),
+            default_k=_serve_default_k(serve_raw),
             refresh_interval_seconds=require_positive_float(
                 float(serve_raw.get("refresh_interval_seconds", 60)),
                 name="serve.refresh_interval_seconds",
             ),
             category_column=str(serve_raw.get("category_column", "category")),
-            metrics_enabled=bool(serve_raw.get("metrics_enabled", True)),
+            metrics_enabled=serve_metrics_enabled,
             metrics_token=serve_metrics_token,
         ),
         trigger=TriggerSettings(

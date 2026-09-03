@@ -552,14 +552,13 @@ curl -s -H "Authorization: Bearer $SERVE_TOKEN" \
 curl -s -H "Authorization: Bearer $SERVE_TOKEN" \
   "http://localhost:8000/recommendations/nobody?limit=5"
 
-# Prometheus metrics (no bearer token; optional X-Metrics-Token if configured)
-curl -s "http://localhost:8000/metrics" | head
+# Prometheus metrics (X-Metrics-Token required when metrics_enabled = true)
+curl -s -H "X-Metrics-Token: $METRICS_TOKEN" "http://localhost:8000/metrics" | head
 ```
 
-`GET /metrics` is enabled by default (`[serve].metrics_enabled = true`). It
-does not require the recommendation bearer token. Set `[serve].metrics_token`
-and send `X-Metrics-Token: …` if you want a separate scrape secret; when
-empty, treat the endpoint as network-boundary protected.
+`GET /metrics` is off unless `[serve].metrics_enabled = true` with a
+non-empty `metrics_token`. It does not use the recommendation bearer token.
+Scrapers send `X-Metrics-Token: …`.
 
 Optional `POST /events` (webhook incremental ingest) is off until you set
 `[events]` — the next step walks through that. OpenAPI (Swagger UI) is at

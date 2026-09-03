@@ -4,6 +4,31 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.3] - 2026-09-03
+
+### Changed
+
+- Serve `GET /metrics` is off unless `[serve].metrics_enabled = true` and a
+  non-empty `metrics_token` is set. Scrapes must send `X-Metrics-Token`.
+- Compose publishes serve `:8000`, trigger `:8080`, and dashboard `:8090` on
+  `127.0.0.1` only (same as Postgres).
+
+### Fixed
+
+- Dashboard promote / resume-split POSTs require a CSRF cookie + form token.
+- Dashboard and trigger no longer expose `/docs`, `/redoc`, or `/openapi.json`.
+- Serve `limit` / `k` and `default_k` cap at 100. `POST /events` rejects bodies
+  larger than 1 MiB (or `events.options.max_body_bytes`).
+- Input `events_query` / `users_query` / `items_query` use the same read-only
+  SELECT gate as `events.options.events_query`. Custom SQL is not logged.
+- Model artifacts refuse legacy bare pickle and unexpected zip members.
+- Malformed dashboard bcrypt hashes fail closed as 401, not 500.
+
+### Security
+
+- Serve, dashboard, and trigger send `X-Content-Type-Options`, `X-Frame-Options`,
+  `Referrer-Policy`, and `CSP frame-ancestors 'none'` (HSTS on HTTPS).
+
 ## [0.7.2] - 2026-09-02
 
 ### Changed
