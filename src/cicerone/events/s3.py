@@ -20,6 +20,7 @@ from cicerone.events.s3_parse import (
     _DEFAULT_LIST_PAGE_SIZE,
     _DEFAULT_SQS_CLIENT_TIMEOUT_SECONDS,
     _DEFAULT_SQS_LAG_CACHE_TTL_SECONDS,
+    _LOAD_FAILURE_SKIP_AFTER,  # noqa: F401
     _SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS,
     _SQS_NACK_VISIBILITY_TIMEOUT_SECONDS,
     _as_int,
@@ -29,10 +30,9 @@ from cicerone.events.s3_parse import (
     _optional_aws_region,
     _positive_float,
     _positive_int,
+    _s3_records_from_sqs_body,  # noqa: F401
     validate_s3_event_options,
 )
-from cicerone.events.s3_parse import _LOAD_FAILURE_SKIP_AFTER as _LOAD_FAILURE_SKIP_AFTER
-from cicerone.events.s3_parse import _s3_records_from_sqs_body as _s3_records_from_sqs_body
 from cicerone.events.s3_sqs import S3SqsPoll
 from cicerone.io.options import build_s3_client, require_option
 
