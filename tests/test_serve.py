@@ -191,12 +191,11 @@ def test_items_filter_cache_retries_when_version_moves_during_rebuild():
 
 def test_health_requires_no_auth():
     app = create_app(_settings(), _FakeReader(_recs_df()))
-    client = TestClient(app)
+    response = TestClient(app).get("/health")
 
-    assert client.get("/health").status_code == 200
-    headers = client.get("/health").headers
-    assert headers["x-frame-options"] == "DENY"
-    assert "frame-ancestors 'none'" in headers["content-security-policy"]
+    assert response.status_code == 200
+    assert response.headers["x-frame-options"] == "DENY"
+    assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
 
 
 def test_recommendations_requires_auth():
