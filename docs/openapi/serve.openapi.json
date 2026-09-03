@@ -1134,6 +1134,16 @@
               }
             },
             "description": "Missing or invalid bearer token"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Request body too large"
           }
         },
         "security": [

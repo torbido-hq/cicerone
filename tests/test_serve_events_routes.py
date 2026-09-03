@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import asyncio
+
+import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 from test_serve import _FakeReader, _recs_df
 
 from cicerone.config import EventsSettings, make_settings
+from cicerone.config.constants import DEFAULT_EVENTS_MAX_BODY_BYTES
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.serve import create_app
+from cicerone.serve.events_routes import _max_body_bytes, _read_limited_json
 from cicerone.serve_schemas import ValidationErrorDetail
 
 
@@ -361,3 +368,60 @@ def test_post_events_rejects_oversized_content_length():
         content=b"{}",
     )
     assert response.status_code == 413
+
+
+def _asgi_request(body: bytes, extra_headers: list[tuple[bytes, bytes]] | None = None) -> Request:
+    sent = False
+
+    async def receive() -> dict[str, object]:
+        nonlocal sent
+        if sent:
+            return {"type": "http.disconnect"}
+        sent = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    headers = [(b"content-type", b"application/json"), *(extra_headers or [])]
+    return Request(
+        {
+            "type": "http",
+            "asgi": {"spec_version": "2.3", "version": "3.0"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/",
+            "raw_path": b"/",
+            "query_string": b"",
+            "headers": headers,
+            "client": ("127.0.0.1", 123),
+            "server": ("testserver", 80),
+        },
+        receive,
+    )
+
+
+def test_max_body_bytes_falls_back_when_invalid_or_nonpositive():
+    assert _max_body_bytes(_settings(events=EventsSettings(options={"max_body_bytes": "nope"}))) == (
+        DEFAULT_EVENTS_MAX_BODY_BYTES
+    )
+    assert _max_body_bytes(_settings(events=EventsSettings(options={"max_body_bytes": 0}))) == (
+        DEFAULT_EVENTS_MAX_BODY_BYTES
+    )
+
+
+def test_read_limited_json_parses_and_rejects_oversize_without_content_length():
+    parsed = asyncio.run(_read_limited_json(_asgi_request(b'{"ok":true}'), 64))
+    assert parsed == {"ok": True}
+    with pytest.raises(HTTPException) as oversize:
+        asyncio.run(_read_limited_json(_asgi_request(b'{"user_id":"' + b"u" * 200 + b'"}'), 64))
+    assert oversize.value.status_code == 413
+    with pytest.raises(HTTPException) as invalid_length:
+        asyncio.run(
+            _read_limited_json(
+                _asgi_request(b"{}", extra_headers=[(b"content-length", b"abc")]),
+                64,
+            )
+        )
+    assert invalid_length.value.status_code == 400
+    with pytest.raises(HTTPException) as bad_utf8:
+        asyncio.run(_read_limited_json(_asgi_request(b"\xff\xfe"), 64))
+    assert bad_utf8.value.status_code == 400
