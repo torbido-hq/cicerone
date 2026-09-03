@@ -72,6 +72,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   “No experiment variants to evaluate.”
 - In-flight event apply nacks the batch if a later heartbeat fails, so a
   long online refresh cannot ack after visibility is lost.
+- Job writes a failed manifest when `[publish]` connect or config raises
+  before the run.
+- Incremental popular/latest write-through is the assigned (or promoted)
+  variant only; docs matched that.
 - Dashboard `Cache-Control: private, no-store` skips only `/static` assets,
   not other paths that happen to start with that prefix.
 - Kafka ingest commits the contiguous per-partition watermark so an

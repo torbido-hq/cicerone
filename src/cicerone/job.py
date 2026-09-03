@@ -204,7 +204,7 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
     settings = load_settings()
     feature_config = load_feature_config(settings.feature_config_path)
     sink = build_output_sink(settings.output)
-    publisher = build_publisher(settings)
+    publisher = None
 
     manifest = dict(_MANIFEST_DEFAULTS)
     manifest["triggered_by"] = triggered_by
@@ -216,6 +216,7 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
     recommendations: pd.DataFrame | None = None
 
     try:
+        publisher = build_publisher(settings)
         source = build_input_source(settings.input)
         events, users, items = _read_input(source)
 

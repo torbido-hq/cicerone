@@ -555,6 +555,24 @@ def test_job_run_raises_on_failure(tmp_path, monkeypatch):
     assert "events.parquet" in manifest["error"]
 
 
+def test_job_run_records_publisher_init_failure(tmp_path, monkeypatch):
+    from cicerone.config import ConfigError
+
+    config_path = _write_config(tmp_path, tmp_path, tmp_path)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
+    monkeypatch.setattr(
+        "cicerone.job.build_publisher",
+        lambda _settings: (_ for _ in ()).throw(
+            ConfigError("publish.options.bootstrap_servers is unreachable")
+        ),
+    )
+    with pytest.raises(ConfigError, match="bootstrap_servers"):
+        job.run()
+    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    assert manifest["status"] == "failed"
+    assert "bootstrap_servers" in manifest["error"]
+
+
 def test_job_run_truncates_an_overly_long_error_message(tmp_path, monkeypatch):
     # Manifest error is persisted/shown as-is — must stay bounded.
     config_path = _write_config(tmp_path, tmp_path, tmp_path)
