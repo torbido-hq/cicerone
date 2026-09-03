@@ -17,19 +17,19 @@ from sqlalchemy import Engine, create_engine, text
 from cicerone.config import ConfigError
 from cicerone.events.base import EventSource, EventSourceHealth, NormalizedEvent
 from cicerone.events.db_identity import (
-    _SQLITE_IDENTITY_SORT,
+    _SQLITE_IDENTITY_SORT,  # noqa: F401
     _cursor_key,
     _cursor_key_from_payload,
     _cursor_tuple,
     _db_occurred_at,
     _identity_bind_sort_key,
-    _identity_sort_key,
+    _identity_sort_key,  # noqa: F401
     _identity_sql_sort_expr,
-    _is_numeric_identity,
+    _is_numeric_identity,  # noqa: F401
     _occurred_at_predicates,
-    _row_identity,
+    _row_identity,  # noqa: F401
     _row_to_event,
-    _stable_event_id,
+    _stable_event_id,  # noqa: F401
 )
 from cicerone.io.db_store import DEFAULT_EVENTS_TABLE
 from cicerone.io.options import readonly_select, require_option, sql_identifier
