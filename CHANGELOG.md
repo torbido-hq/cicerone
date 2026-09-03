@@ -70,7 +70,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Missing track `event_id` with a bad `occurred_at` hashes the raw stamp, not
   the clock.
 - Track `since` compares instants, not lexicographic timestamp strings.
-- Snapshot history reads ignore legacy parquet that has no `generated_at`.
+- History reads with `generated_ats` or `since` ignore legacy parquet that
+  has no `generated_at`.
 - History part files are read in sorted order.
 - CTR track variants take the earliest impression per user.
 - Duplicate names in replacement `[[experiment.variants.boost]]` /
