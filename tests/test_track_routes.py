@@ -173,6 +173,18 @@ def test_post_track_rejects_oversized_body(tmp_path):
     assert response.json() == {"detail": "Request body too large"}
 
 
+def test_post_track_rejects_deeply_nested_json(tmp_path):
+    app = create_app(_settings(tmp_path), _FakeReader(_recs_df()))
+    nested = b"[" * 3000 + b"0" + b"]" * 3000
+    response = TestClient(app).post(
+        "/track",
+        headers={"Authorization": "Bearer secret", "content-type": "application/json"},
+        content=nested,
+    )
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Request body must be JSON"}
+
+
 def test_post_track_rejects_oversized_content_length(tmp_path):
     app = create_app(
         _settings(tmp_path, events=EventsSettings(options={"max_body_bytes": 64})),

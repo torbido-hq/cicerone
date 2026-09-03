@@ -425,3 +425,11 @@ def test_read_limited_json_parses_and_rejects_oversize_without_content_length():
     with pytest.raises(HTTPException) as bad_utf8:
         asyncio.run(_read_limited_json(_asgi_request(b"\xff\xfe"), 64))
     assert bad_utf8.value.status_code == 400
+
+
+def test_read_limited_json_rejects_deeply_nested_json():
+    nested = b"[" * 3000 + b"0" + b"]" * 3000
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(_read_limited_json(_asgi_request(nested), len(nested) + 1))
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Request body must be JSON"
