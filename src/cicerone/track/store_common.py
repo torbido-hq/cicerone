@@ -11,7 +11,6 @@ import pandas as pd
 from cicerone.config.constants import ConfigError
 from cicerone.config.settings import IOSettings
 from cicerone.io.options import storage_backend
-from cicerone.track.normalize import assign_missing_event_id
 from cicerone.io.recommendation_schema import (
     ITEM_COLUMN,
     RANK_COLUMN,
@@ -19,6 +18,7 @@ from cicerone.io.recommendation_schema import (
     USER_COLUMN,
     VARIANT_COLUMN,
 )
+from cicerone.track.normalize import assign_missing_event_id
 
 TRACK_FILENAME = "track.jsonl"
 EVAL_FILENAME = "track_eval.json"
