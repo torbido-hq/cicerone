@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from conftest import make_settings
 from fastapi.testclient import TestClient
 
@@ -35,11 +37,16 @@ def _settings(tmp_path, **overrides):
     )
 
 
+_QUALITY_CURRENT = re.compile(
+    r'<a\b[^>]*href="/dashboard/quality"[^>]*aria-current="page"[^>]*>\s*Quality\s*</a>',
+    re.DOTALL,
+)
+
+
 def _assert_quality_chrome(response) -> None:
     assert response.status_code == 200
     assert "<title>Cicerone — Quality</title>" in response.text
-    assert 'aria-current="page"' in response.text
-    assert ">Quality<" in response.text
+    assert _QUALITY_CURRENT.search(response.text)
     assert 'href="/dashboard"' in response.text
     assert 'href="/dashboard/experiments"' in response.text
     assert 'href="/dashboard/config"' in response.text
