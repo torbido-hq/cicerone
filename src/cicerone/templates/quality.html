@@ -17,8 +17,8 @@
     <div class="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800" role="status">{{ error }}</div>
     {% endif %}
     {% if empty_track %}
-    <section class="rounded-lg border border-slate-200 bg-white p-4 mb-4">
-      <h2 class="text-sm font-medium text-slate-800 mb-2">CTR and conversion</h2>
+    <section class="rounded-lg border border-slate-200 bg-white p-4 mb-4" aria-labelledby="quality-track-heading">
+      <h2 id="quality-track-heading" class="text-sm font-medium text-slate-800 mb-2">CTR and conversion</h2>
       {% if not track_enabled %}
       <p class="text-sm text-slate-700">Enable <code>[track]</code> and POST impressions and clicks to <code>/track</code> from the render path. Fetching <code>GET /recommendations</code> is not an impression unless <code>serve.log_impressions</code> is on.</p>
       {% else %}
@@ -26,8 +26,8 @@
       {% endif %}
     </section>
     {% elif track_eval %}
-    <section class="rounded-lg border border-slate-200 bg-white p-4 mb-4">
-      <h2 class="text-sm font-medium text-slate-800 mb-2">CTR and conversion</h2>
+    <section class="rounded-lg border border-slate-200 bg-white p-4 mb-4" aria-labelledby="quality-track-heading">
+      <h2 id="quality-track-heading" class="text-sm font-medium text-slate-800 mb-2">CTR and conversion</h2>
       <p class="text-sm text-slate-600 mb-3">
         Impressions: {{ track_eval.overall.n_impressions }}
         · Clicks: {{ track_eval.overall.n_clicks }}
@@ -38,7 +38,9 @@
       </p>
       {% if track_eval.by_rank %}
       <h3 class="text-sm font-medium text-slate-800 mb-2">By rank</h3>
-      <table class="w-full text-sm border-collapse mb-4">
+      <div class="overflow-x-auto mb-4">
+      <table class="w-full text-sm border-collapse">
+        <caption class="sr-only">CTR and conversion by rank</caption>
         <thead>
           <tr class="text-left text-slate-600 border-b border-slate-200">
             <th scope="col" class="py-2 px-2">Rank</th>
@@ -60,10 +62,13 @@
           {% endfor %}
         </tbody>
       </table>
+      </div>
       {% endif %}
       {% if track_eval.by_source %}
       <h3 class="text-sm font-medium text-slate-800 mb-2">By source</h3>
-      <table class="w-full text-sm border-collapse mb-4">
+      <div class="overflow-x-auto mb-4">
+      <table class="w-full text-sm border-collapse">
+        <caption class="sr-only">CTR and conversion by source</caption>
         <thead>
           <tr class="text-left text-slate-600 border-b border-slate-200">
             <th scope="col" class="py-2 px-2">Source</th>
@@ -85,10 +90,13 @@
           {% endfor %}
         </tbody>
       </table>
+      </div>
       {% endif %}
       {% if track_eval.by_variant %}
       <h3 class="text-sm font-medium text-slate-800 mb-2">By variant</h3>
-      <table class="w-full text-sm border-collapse mb-4">
+      <div class="overflow-x-auto mb-4">
+      <table class="w-full text-sm border-collapse">
+        <caption class="sr-only">CTR and conversion by variant</caption>
         <thead>
           <tr class="text-left text-slate-600 border-b border-slate-200">
             <th scope="col" class="py-2 px-2">Variant</th>
@@ -110,19 +118,22 @@
           {% endfor %}
         </tbody>
       </table>
+      </div>
       {% endif %}
     </section>
     {% endif %}
     {% if served_eval %}
-    <section class="rounded-lg border border-slate-200 bg-white p-4 mb-4">
-      <h2 class="text-sm font-medium text-slate-800 mb-2">Production replay</h2>
+    <section class="rounded-lg border border-slate-200 bg-white p-4 mb-4" aria-labelledby="quality-replay-heading">
+      <h2 id="quality-replay-heading" class="text-sm font-medium text-slate-800 mb-2">Production replay</h2>
       <p class="text-sm text-slate-600 mb-3">
         Users scored: {{ served_eval.n_users }}
         · With later events: {{ served_eval.n_users_with_events }}
         {% if served_eval.generated_at %}· Lists from {{ served_eval.generated_at }}{% endif %}
       </p>
       {% if served_eval.metrics %}
-      <table class="w-full text-sm border-collapse mb-4">
+      <div class="overflow-x-auto mb-4">
+      <table class="w-full text-sm border-collapse">
+        <caption class="sr-only">Production replay ranking metrics</caption>
         <thead>
           <tr class="text-left text-slate-600 border-b border-slate-200">
             <th scope="col" class="py-2 px-2">Metric</th>
@@ -138,10 +149,13 @@
           {% endfor %}
         </tbody>
       </table>
+      </div>
       {% endif %}
       {% if served_eval.by_source %}
       <h3 class="text-sm font-medium text-slate-800 mb-2">Hit rate by source</h3>
+      <div class="overflow-x-auto">
       <table class="w-full text-sm border-collapse">
+        <caption class="sr-only">Production replay hit rate by source</caption>
         <thead>
           <tr class="text-left text-slate-600 border-b border-slate-200">
             <th scope="col" class="py-2 px-2">Source</th>
@@ -159,6 +173,7 @@
           {% endfor %}
         </tbody>
       </table>
+      </div>
       {% endif %}
     </section>
     {% elif eval_enabled %}
