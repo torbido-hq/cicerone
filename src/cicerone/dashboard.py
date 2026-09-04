@@ -220,7 +220,7 @@ def create_app(
 
     @app.get("/dashboard/quality", dependencies=[Depends(auth)])
     def quality(request: Request):
-        return _TEMPLATES.TemplateResponse(request, "quality.html", quality_context(settings))
+        return _html(request, "quality.html", quality_context(settings))
 
     @app.post("/dashboard/experiments/promote", dependencies=[Depends(auth)])
     def experiments_promote(

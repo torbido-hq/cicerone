@@ -4,7 +4,8 @@ from conftest import make_settings
 from fastapi.testclient import TestClient
 
 from cicerone.config import IOSettings
-from cicerone.dashboard import create_app
+from cicerone.dashboard import ROBOTS_TAG, create_app
+from cicerone.http_security import CSRF_COOKIE
 from cicerone.track.store import TrackStore
 
 
@@ -34,12 +35,27 @@ def _settings(tmp_path, **overrides):
     )
 
 
+def _assert_quality_chrome(response) -> None:
+    assert response.status_code == 200
+    assert "<title>Cicerone — Quality</title>" in response.text
+    assert 'aria-current="page"' in response.text
+    assert ">Quality<" in response.text
+    assert 'href="/dashboard"' in response.text
+    assert 'href="/dashboard/experiments"' in response.text
+    assert 'href="/dashboard/config"' in response.text
+    assert 'aria-label="Main"' in response.text
+    assert 'name="robots"' in response.text
+    assert f'content="{ROBOTS_TAG}"' in response.text
+    assert CSRF_COOKIE in response.cookies
+
+
 def test_quality_page_empty_when_track_off(tmp_path):
     app = create_app(_settings(tmp_path), _FakeReader(), _users_with("alice", "s3cret"))
     response = TestClient(app).get("/dashboard/quality", auth=("alice", "s3cret"))
-    assert response.status_code == 200
+    _assert_quality_chrome(response)
     assert "[track]" in response.text
     assert "/track" in response.text
+    assert 'aria-labelledby="quality-track-heading"' in response.text
 
 
 def test_quality_page_requires_auth(tmp_path):
@@ -81,10 +97,11 @@ def test_quality_page_shows_stored_metrics(tmp_path):
     )
     app = create_app(settings, _FakeReader(), _users_with("alice", "s3cret"))
     response = TestClient(app).get("/dashboard/quality", auth=("alice", "s3cret"))
-    assert response.status_code == 200
+    _assert_quality_chrome(response)
     assert "Impressions: 10" in response.text
     assert "By rank" in response.text
     assert "0.2000" in response.text
+    assert "CTR and conversion by rank" in response.text
 
 
 def test_quality_page_live_metrics_from_track_rows(tmp_path):
@@ -231,11 +248,16 @@ def test_quality_page_shows_stored_served_eval(tmp_path):
     )
     app = create_app(settings, _FakeReader(), _users_with("alice", "s3cret"))
     response = TestClient(app).get("/dashboard/quality", auth=("alice", "s3cret"))
-    assert response.status_code == 200
+    _assert_quality_chrome(response)
     assert "By source" in response.text
     assert "By variant" in response.text
     assert "Production replay" in response.text
     assert "HitRate@10" in response.text
+    assert "CTR and conversion by source" in response.text
+    assert "CTR and conversion by variant" in response.text
+    assert "Production replay ranking metrics" in response.text
+    assert "Production replay hit rate by source" in response.text
+    assert 'aria-labelledby="quality-replay-heading"' in response.text
 
 
 def test_quality_eval_enabled_empty_replay_copy(tmp_path):
@@ -294,6 +316,75 @@ def test_quality_live_eval_with_conversions(tmp_path):
     context = quality_context(settings)
     assert context["track_eval"]["overall"]["n_impressions"] == 1
     assert context["track_eval"]["overall"]["n_conversions_view"] == 1
+
+
+def test_quality_live_eval_joins_history_when_current_recs_missing(tmp_path):
+    import pandas as pd
+
+    from cicerone.dashboard_quality import quality_context
+    from cicerone.track.normalize import normalize_track
+
+    settings = _settings(tmp_path, track={"enabled": True})
+    stamp = "2026-08-28T03:00:00+00:00"
+    store = TrackStore(settings.output)
+    store.append_rows(
+        [
+            normalize_track(
+                {
+                    "kind": "impression",
+                    "user_id": "u1",
+                    "item_id": "i1",
+                    "rank": 1,
+                    "occurred_at": "2026-08-28T12:00:00Z",
+                    "generated_at": stamp,
+                    "event_id": "imp-hist",
+                }
+            ).as_row()
+        ]
+    )
+    store.append_history(
+        pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "source": "personalized"}]),
+        generated_at=stamp,
+    )
+    context = quality_context(settings)
+    assert context["empty_track"] is False
+    assert context["track_eval"]["by_source"]["personalized"]["n_impressions"] == 1
+
+
+def test_quality_live_eval_concats_history_with_current_recs(tmp_path):
+    import pandas as pd
+
+    from cicerone.dashboard_quality import quality_context
+    from cicerone.track.normalize import normalize_track
+
+    settings = _settings(tmp_path, track={"enabled": True})
+    stamp = "2026-08-28T03:00:00+00:00"
+    store = TrackStore(settings.output)
+    store.append_rows(
+        [
+            normalize_track(
+                {
+                    "kind": "impression",
+                    "user_id": "u1",
+                    "item_id": "hist-item",
+                    "rank": 1,
+                    "occurred_at": "2026-08-28T12:00:00Z",
+                    "generated_at": stamp,
+                    "event_id": "imp-hist-concat",
+                }
+            ).as_row()
+        ]
+    )
+    store.append_history(
+        pd.DataFrame([{"user_id": "u1", "item_id": "hist-item", "rank": 1, "source": "personalized"}]),
+        generated_at=stamp,
+    )
+    pd.DataFrame([{"user_id": "u2", "item_id": "live-item", "rank": 1, "source": "popular"}]).to_parquet(
+        tmp_path / "recommendations.parquet", index=False
+    )
+    context = quality_context(settings)
+    assert context["empty_track"] is False
+    assert context["track_eval"]["by_source"]["personalized"]["n_impressions"] == 1
 
 
 def test_quality_context_no_impressions_malformed_overall(tmp_path):
