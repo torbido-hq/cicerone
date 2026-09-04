@@ -173,6 +173,7 @@ def test_job_run_writes_track_and_served_eval(tmp_path, monkeypatch):
     config_path = _write_config(tmp_path, input_dir, output_dir, top_k=2, extra=extra)
     monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
     job.run()
+    previous_generated_at = json.loads((output_dir / "manifest.json").read_text())["generated_at"]
     from cicerone.config import IOSettings
     from cicerone.track.normalize import normalize_track
     from cicerone.track.store import TrackStore
@@ -198,6 +199,7 @@ def test_job_run_writes_track_and_served_eval(tmp_path, monkeypatch):
     job.run()
     report = json.loads((output_dir / "track_eval.json").read_text())
     assert "track_eval" in report
+    assert report["generated_at"] == previous_generated_at
     history_dir = output_dir / "recommendation_history"
     assert history_dir.is_dir()
     assert list(history_dir.glob("*.parquet"))

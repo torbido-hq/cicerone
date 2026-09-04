@@ -65,6 +65,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Quality as-of uses the scored previous run's timestamp, not the job that
+  just finished.
 - Track ingest is idempotent without a host `event_id` (stable JSON hashes,
   assigned ids, JSONL file lock, `accepted` from ids not already stored).
   `since` compares instants. Slices join the matching recommendation snapshot
