@@ -218,6 +218,9 @@ and blending are set, blending wins and the job logs a warning.
 To compare two combiners (or two model lists) on live traffic, use
 `[experiment]` — a sticky user hash onto whole recipes, not a post-hoc
 source attribution chart. See [experiments.md](experiments.md).
+CTR and conversion of what the host actually showed come from host-reported
+impressions and clicks (`POST /track`), not `POST /events`. See
+[evaluation.md](evaluation.md).
 
 ## Policies
 

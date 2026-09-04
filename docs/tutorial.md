@@ -781,8 +781,12 @@ docker compose up --build
   see the README's [Configuration](../README.md#configuration-configciceronetoml)
   section.
 - Sticky A/B tests of ranking recipes: [experiments.md](experiments.md).
-- Production incremental ingest (db / s3 / Redis Streams, HA, online
-  LightFM): [incremental-events.md](incremental-events.md).
+- Impressions, CTR/CVR, the dashboard Quality page, and production replay:
+  [evaluation.md](evaluation.md). The header also links to **Quality** and
+  **Config** once `[track]` is on (Quality) or the process has loaded TOML
+  (Config).
+- Production incremental ingest (db / s3 / Redis Streams / Kafka /
+  RabbitMQ, HA, online LightFM): [incremental-events.md](incremental-events.md).
 - Run the test suite (`docker compose -f docker-compose.ci.yml up --build
   --abort-on-container-exit --exit-code-from test test`) if you're contributing
   code — see [CONTRIBUTING.md](../CONTRIBUTING.md). That suite includes a

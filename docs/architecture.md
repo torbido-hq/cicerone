@@ -45,7 +45,7 @@ clicks, CTR, and conversion, see [evaluation.md](evaluation.md).
 | `automl.py` | Optional: backtests candidate models/weights/`rrf_k` configs over time-based folds of event history and picks the best one |
 | `experiment/` | Sticky A/B assignment, per-variant recipes, sequential stats, guardrails, promote state / exposure log |
 | `track/` | Impression/click ingest (`POST /track`), JSONL/db store, rec history snapshots |
-| `evaluation.py` | CTR/CVR attribution and production replay of written lists |
+| `evaluation/` | CTR/CVR attribution and production replay (`metrics.py`, `served.py`, `tracking.py`) |
 | `cli.py` | `cicerone` console script (`start` (alias `run`) / `job` / `serve` / `dashboard` / `scheduler` / `users` / `export-openapi`; `--config`, `--log-level`, `--log-format`) |
 | `packaging.py` | Wheel checks for the Docker `package` stage (`python -m cicerone.packaging`) |
 | `job.py` | Orchestrates one end-to-end run (source → dataset → model → sink) |

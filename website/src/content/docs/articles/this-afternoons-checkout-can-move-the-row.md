@@ -2,7 +2,7 @@
 title: This afternoon's checkout can move the row
 description: Stripe webhook to Cicerone 0.7 online LightFM. Known-ID purchases write through. GET stays a lookup.
 date: 2026-08-28
-lastUpdated: 2026-08-29
+lastUpdated: 2026-09-04
 excerpt: A paid Checkout can update an existing recommendation row after a flush. LightFM rewrite still needs known IDs. GET stays a lookup.
 authors:
   - nicholas
@@ -11,6 +11,8 @@ authors:
 A paid Stripe Checkout can update an **existing** recommendation row. The checkout request never loads a model. The update is asynchronous: Node maps the webhook, `POST`s Cicerone's event contract, and Cicerone holds the purchase in an in-memory queue until a micro-batch flush. That is write-through recommendation state, not request-path ranking. `GET /recommendations` stays a lookup.
 
 [Cicerone](https://cicerone.dev) 0.7 is the job that already fitted [LightFM](https://making.lyst.com/lightfm/docs/home.html) and wrote the table. The [nightly table](/articles/a-nightly-table-next-to-your-orders/) walkthrough leaves personalized ranks until 03:00 UTC; that remains the right default. This article is the optional `[events.online]` path: Node verifies the Stripe signature and `POST`s Cicerone's event contract. There is no recommendations SDK.
+
+As of 0.8.0, when `[experiment]` is on, incremental popular/latest refresh is the **assigned or promoted variant only**; other variants keep their last batch lists. Impressions and clicks of what the host rendered are `POST /track`, not `POST /events` — see [evaluation](/evaluation/).
 
 Skip this path when:
 
