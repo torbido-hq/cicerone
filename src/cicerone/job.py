@@ -112,14 +112,26 @@ def _score_previous_run(
         logger.exception("Failed to load previous recommendations for eval")
         previous_recs = None
     store = TrackStore(settings.output)
+    track_rows: list[dict[str, Any]] = []
+    if settings.track.enabled:
+        try:
+            track_rows = store.read_rows()
+        except Exception:
+            logger.exception("Failed to read track rows")
+            track_rows = []
+    wanted = {str(row.get("generated_at") or "") for row in track_rows}
+    wanted.discard("")
+    if previous_generated_at:
+        wanted.add(previous_generated_at)
     history = None
-    try:
-        history = store.read_history()
-        if history is not None and history.empty:
+    if wanted:
+        try:
+            history = store.read_history(generated_ats=wanted)
+            if history is not None and history.empty:
+                history = None
+        except Exception:
+            logger.exception("Failed to read recommendation history")
             history = None
-    except Exception:
-        logger.exception("Failed to read recommendation history")
-        history = None
     recs_for_track = previous_recs
     if recs_for_track is not None and previous_generated_at:
         recs_for_track = recs_for_track.copy()
@@ -140,7 +152,7 @@ def _score_previous_run(
             if not conversions.empty and "event_type" in conversions.columns:
                 conversions = conversions[conversions["event_type"].astype(str).isin(set(types))]
             track_payload = evaluate_tracking(
-                track_rows=store.read_rows(),
+                track_rows=track_rows,
                 conversions=conversions,
                 recommendations=recs_for_track,
                 window_hours=settings.track.attribution_window_hours,
@@ -192,7 +204,7 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
     settings = load_settings()
     feature_config = load_feature_config(settings.feature_config_path)
     sink = build_output_sink(settings.output)
-    publisher = build_publisher(settings)
+    publisher = None
 
     manifest = dict(_MANIFEST_DEFAULTS)
     manifest["triggered_by"] = triggered_by
@@ -204,6 +216,7 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
     recommendations: pd.DataFrame | None = None
 
     try:
+        publisher = build_publisher(settings)
         source = build_input_source(settings.input)
         events, users, items = _read_input(source)
 

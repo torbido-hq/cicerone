@@ -18,7 +18,8 @@ torch-free. New catalog IDs still wait for a full retrain.
 
 The incremental path always refreshes **popular / latest slices** (and recency
 boosts) for affected users plus `__cold_start__`. When `[experiment]` is
-on, that popular/latest refresh runs **in every variant**. Online LightFM
+on, that popular/latest refresh runs only on the **assigned** (or promoted)
+variant; other variants keep their last batch lists. Online LightFM
 rewrite is skipped while `[experiment]` is on so arms stay isolated.
 [how-it-works.md](how-it-works.md) explains the split. Experiments:
 [experiments.md](experiments.md).
@@ -81,7 +82,7 @@ poll_interval_seconds = 1
 Optional `[events.online]` continues LightFM on the last model artifact and
 rewrites personalized / item-KNN / content-fallback rows for **affected
 users only**. While `[experiment]` is on, that rewrite is skipped so arms
-stay isolated (popular/latest still refresh every variant).
+stay isolated (popular/latest still refresh only the assigned variant).
 `GET /recommendations` is still a lookup.
 
 ```toml

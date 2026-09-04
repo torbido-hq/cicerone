@@ -93,6 +93,18 @@ def test_normalize_track_requires_kind_and_rank():
         )
 
 
+def test_stable_event_id_does_not_collide_on_pipe_in_ids() -> None:
+    base = {
+        "kind": "impression",
+        "rank": 1,
+        "occurred_at": "2026-08-28T12:00:00Z",
+    }
+    left = normalize_track({**base, "user_id": "a|b", "item_id": "c"})
+    right = normalize_track({**base, "user_id": "a", "item_id": "b|c"})
+    assert left.event_id != right.event_id
+    assert normalize_track({**base, "user_id": "a|b", "item_id": "c"}).event_id == left.event_id
+
+
 def test_track_store_roundtrip_dataset(tmp_path) -> None:
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     store = TrackStore(output)
@@ -295,11 +307,52 @@ def test_track_history_reads_legacy_single_file(tmp_path) -> None:
     assert users == {"alice", "bob"}
 
 
+def test_track_read_history_generated_ats_skips_legacy_without_stamp(tmp_path) -> None:
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
+    recs.to_parquet(tmp_path / "recommendation_history.parquet", index=False)
+    store = TrackStore(output)
+    store.append_history(recs, generated_at="2026-08-29T03:00:00+00:00")
+    history = store.read_history(generated_ats=["2026-08-29T03:00:00+00:00"])
+    assert len(history) == 1
+    assert str(history.iloc[0]["generated_at"]) == "2026-08-29T03:00:00+00:00"
+    assert str(history.iloc[0]["user_id"]) == "alice"
+
+
+def test_track_read_history_since_skips_legacy_without_stamp(tmp_path) -> None:
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
+    recs.to_parquet(tmp_path / "recommendation_history.parquet", index=False)
+    store = TrackStore(output)
+    store.append_history(recs, generated_at="2026-08-29T03:00:00+00:00")
+    history = store.read_history(since="2026-08-29T00:00:00+00:00")
+    assert len(history) == 1
+    assert str(history.iloc[0]["generated_at"]) == "2026-08-29T03:00:00+00:00"
+
+
+def test_track_read_history_filtered_skips_unreadable_legacy(tmp_path) -> None:
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    (tmp_path / "recommendation_history.parquet").write_bytes(b"not parquet")
+    store = TrackStore(output)
+    recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
+    store.append_history(recs, generated_at="2026-08-29T03:00:00+00:00")
+    history = store.read_history(generated_ats=["2026-08-29T03:00:00+00:00"])
+    assert len(history) == 1
+    assert str(history.iloc[0]["user_id"]) == "alice"
+    assert len(store.read_history(since="2026-08-29T00:00:00+00:00")) == 1
+
+
 def test_history_part_name_sanitizes_timestamp() -> None:
-    from cicerone.track.store import _history_part_name
+    from cicerone.track.store import _history_part_name, _history_stem_before, _unslug_history_stem
 
     assert _history_part_name("2026-08-28T03:00:00+00:00") == "2026-08-28T03-00-00+00-00.parquet"
     assert _history_part_name("   ") == "snapshot.parquet"
+    assert _unslug_history_stem("2026-08-28T03-00-00+00-00") == "2026-08-28T03:00:00+00:00"
+    assert _unslug_history_stem("2026-08-28T03-00-00Z") == "2026-08-28T03:00:00Z"
+    assert _unslug_history_stem("2026-08-28T03-00-00-05-00") == "2026-08-28T03:00:00-05:00"
+    assert _unslug_history_stem("2026-08-28T03-00-00.123+00-00") == "2026-08-28T03:00:00.123+00:00"
+    assert _history_stem_before("2026-08-28T03-00-00+00-00", "2026-08-29T00:00:00+00:00")
+    assert not _history_stem_before("2026-08-29T03-00-00+00-00", "2026-08-29T00:00:00+00:00")
     from cicerone.track.store import _history_frame
 
     frame = _history_frame(
@@ -406,11 +459,26 @@ def test_track_jsonl_assigns_event_id_when_missing(tmp_path) -> None:
         "event_id": "",
     }
     store = TrackStore(output)
-    assert store.append_rows([row, dict(row)]) == 2
+    assert store.append_rows([row, dict(row)]) == 1
     ids = [str(item["event_id"]) for item in store.read_rows()]
-    assert len(ids) == 2
+    assert len(ids) == 1
     assert all(ids)
-    assert ids[0] != ids[1]
+
+
+def test_assign_missing_event_id_hashes_raw_occurred_at() -> None:
+    from cicerone.track.normalize import assign_missing_event_id
+
+    row = {
+        "kind": "click",
+        "user_id": "alice",
+        "item_id": "ipa-001",
+        "occurred_at": "not-a-time",
+        "event_id": "",
+    }
+    first = assign_missing_event_id(row)
+    second = assign_missing_event_id(dict(row))
+    assert first["event_id"]
+    assert first["event_id"] == second["event_id"]
 
 
 def test_track_jsonl_second_store_respects_existing_event_ids(tmp_path) -> None:
@@ -481,3 +549,124 @@ def test_track_read_bytes_s3_generic_error(monkeypatch) -> None:
         )
         with pytest.raises(RuntimeError, match="network"):
             TrackStore(output).read_eval()
+
+
+def test_track_read_rows_filters_experiment_and_since(tmp_path) -> None:
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    store = TrackStore(output)
+    store.append_rows(
+        [
+            _row(event_id="a", experiment_id="exp-a", occurred_at="2026-08-28T10:00:00Z"),
+            _row(event_id="b", experiment_id="exp-b", occurred_at="2026-08-28T12:00:00Z"),
+            _row(event_id="untagged", experiment_id="", occurred_at="2026-08-28T13:00:00Z"),
+        ]
+    )
+    matched = store.read_rows(experiment_id="exp-a")
+    assert {row["event_id"] for row in matched} == {"a", "untagged"}
+    recent = store.read_rows(since="2026-08-28T12:00:00Z")
+    assert {row["event_id"] for row in recent} == {"b", "untagged"}
+
+
+def test_track_read_rows_filters_sqlite(tmp_path) -> None:
+    url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
+    output = IOSettings(kind="db", options={"database_url": url})
+    store = TrackStore(output)
+    store.append_rows(
+        [
+            _row(event_id="a", experiment_id="exp-a", occurred_at="2026-08-28T10:00:00Z"),
+            _row(event_id="b", experiment_id="exp-b", occurred_at="2026-08-28T12:00:00Z"),
+            _row(event_id="untagged", experiment_id="", occurred_at="2026-08-28T13:00:00Z"),
+        ]
+    )
+    matched = store.read_rows(experiment_id="exp-a")
+    assert {row["event_id"] for row in matched} == {"a", "untagged"}
+    recent = store.read_rows(since="2026-08-28T12:00:00Z")
+    assert {row["event_id"] for row in recent} == {"b", "untagged"}
+
+
+def test_track_read_rows_sqlite_since_uses_instant(tmp_path) -> None:
+    url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
+    output = IOSettings(kind="db", options={"database_url": url})
+    store = TrackStore(output)
+    offset = {
+        "kind": "impression",
+        "user_id": "alice",
+        "item_id": "ipa-001",
+        "rank": 1,
+        "occurred_at": "2026-08-29T00:30:00-05:00",
+        "event_id": "offset",
+        "variant": None,
+        "experiment_id": None,
+        "generated_at": None,
+    }
+    store.append_rows([_row(event_id="early", occurred_at="2026-08-28T12:00:00Z"), offset])
+    recent = store.read_rows(since="2026-08-29T05:00:00+00:00")
+    assert {row["event_id"] for row in recent} == {"offset"}
+
+
+def test_track_read_history_generated_ats_skips_other_parts(tmp_path) -> None:
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
+    store = TrackStore(output)
+    store.append_history(recs, generated_at="2026-08-28T03:00:00+00:00")
+    store.append_history(recs, generated_at="2026-08-29T03:00:00+00:00")
+    history = store.read_history(generated_ats=["2026-08-29T03:00:00+00:00"])
+    assert len(history) == 1
+    assert str(history.iloc[0]["generated_at"]) == "2026-08-29T03:00:00+00:00"
+    assert store.read_history(generated_ats=[]).empty
+    assert len(store.read_history(since="2026-08-29T00:00:00+00:00")) == 1
+
+
+def test_track_read_history_since_skips_older_part_files(tmp_path) -> None:
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
+    store = TrackStore(output)
+    store.append_history(recs, generated_at="2026-08-28T03:00:00+00:00")
+    store.append_history(recs, generated_at="2026-08-29T03:00:00+00:00")
+    old = tmp_path / "recommendation_history" / "2026-08-28T03-00-00+00-00.parquet"
+    old.write_bytes(b"not parquet")
+    history = store.read_history(since="2026-08-29T00:00:00+00:00")
+    assert len(history) == 1
+    assert str(history.iloc[0]["generated_at"]) == "2026-08-29T03:00:00+00:00"
+
+
+def test_track_read_history_s3_since_skips_older_parts() -> None:
+    import boto3
+    from moto import mock_aws
+
+    with mock_aws():
+        client = boto3.client("s3", region_name="us-east-1")
+        client.create_bucket(Bucket="recs")
+        output = IOSettings(
+            kind="dataset",
+            options={
+                "storage_backend": "s3",
+                "bucket": "recs",
+                "access_key_id": "test",
+                "secret_access_key": "test",
+            },
+        )
+        recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
+        store = TrackStore(output)
+        store.append_history(recs, generated_at="2026-08-28T03:00:00+00:00")
+        store.append_history(recs, generated_at="2026-08-29T03:00:00+00:00")
+        client.put_object(
+            Bucket="recs",
+            Key="recommendation_history/2026-08-28T03-00-00+00-00.parquet",
+            Body=b"not parquet",
+        )
+        history = store.read_history(since="2026-08-29T00:00:00+00:00")
+        assert len(history) == 1
+        assert str(history.iloc[0]["generated_at"]) == "2026-08-29T03:00:00+00:00"
+
+
+def test_track_read_history_sqlite_generated_ats(tmp_path) -> None:
+    url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
+    output = IOSettings(kind="db", options={"database_url": url})
+    recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
+    store = TrackStore(output)
+    store.append_history(recs, generated_at="2026-08-28T03:00:00+00:00")
+    store.append_history(recs, generated_at="2026-08-29T03:00:00+00:00")
+    history = store.read_history(generated_ats=["2026-08-29T03:00:00+00:00"])
+    assert len(history) == 1
+    assert len(store.read_history(since="2026-08-29T00:00:00+00:00")) == 1

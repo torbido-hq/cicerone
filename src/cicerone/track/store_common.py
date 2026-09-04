@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
+from functools import lru_cache
 from typing import Any
-from uuid import uuid4
 
 import pandas as pd
 
@@ -18,6 +19,7 @@ from cicerone.io.recommendation_schema import (
     USER_COLUMN,
     VARIANT_COLUMN,
 )
+from cicerone.track.normalize import assign_missing_event_id
 
 TRACK_FILENAME = "track.jsonl"
 EVAL_FILENAME = "track_eval.json"
@@ -62,10 +64,7 @@ def require_appendable_track_log(output: IOSettings) -> None:
 
 
 def _row_with_event_id(row: Mapping[str, Any]) -> dict[str, Any]:
-    item = dict(row)
-    if not str(item.get("event_id") or ""):
-        item["event_id"] = str(uuid4())
-    return item
+    return assign_missing_event_id(row)
 
 
 def _history_frame(recommendations: pd.DataFrame, generated_at: str) -> pd.DataFrame:
@@ -93,3 +92,121 @@ def _jsonish(value: Any) -> Any:
     if pd.isna(value):  # type: ignore[arg-type]
         return None
     return value
+
+
+def _iso_utc(value: str | None) -> str | None:
+    if not value:
+        return None
+    stamp = pd.to_datetime(value, utc=True, errors="coerce")
+    if pd.isna(stamp):
+        return value
+    return stamp.isoformat()
+
+
+@lru_cache(maxsize=8)
+def _since_stamp(since: str) -> pd.Timestamp | None:
+    stamp = pd.to_datetime(since, utc=True, errors="coerce")
+    return None if pd.isna(stamp) else stamp
+
+
+def _stamp_before(value: str, since: str) -> bool:
+    stamp = pd.to_datetime(value, utc=True, errors="coerce")
+    start = _since_stamp(since)
+    if pd.isna(stamp) or start is None:
+        return False
+    return bool(stamp < start)
+
+
+_HISTORY_STEM = re.compile(
+    r"^(?P<date>\d{4}-\d{2}-\d{2}T)"
+    r"(?P<h>\d{2})-(?P<m>\d{2})-(?P<s>\d{2})"
+    r"(?P<frac>\.\d+)?"
+    r"(?P<tz>Z|[+-]\d{2}-\d{2})?$"
+)
+
+
+def _unslug_history_stem(stem: str) -> str:
+    match = _HISTORY_STEM.fullmatch(stem)
+    if not match:
+        return stem
+    restored = f"{match['date']}{match['h']}:{match['m']}:{match['s']}{match['frac'] or ''}"
+    tz = match["tz"]
+    if tz and tz != "Z":
+        return f"{restored}{tz[:3]}:{tz[4:]}"
+    return f"{restored}{tz or ''}"
+
+
+def _history_stem_before(stem: str, since: str) -> bool:
+    return _stamp_before(_unslug_history_stem(stem), since)
+
+
+def _row_matches(
+    row: Mapping[str, Any],
+    *,
+    kind: str | None,
+    experiment_id: str | None,
+    since: str | None,
+) -> bool:
+    if kind is not None and str(row.get("kind") or "") != kind:
+        return False
+    if experiment_id:
+        row_id = str(row.get("experiment_id") or "")
+        if row_id and row_id != experiment_id:
+            return False
+    occurred = str(row.get("occurred_at") or "")
+    return not (since and occurred and _stamp_before(occurred, since))
+
+
+def _track_row_sql_filter(
+    *,
+    kind: str | None,
+    experiment_id: str | None,
+) -> tuple[str, dict[str, Any]]:
+    clauses: list[str] = []
+    params: dict[str, Any] = {}
+    if kind is not None:
+        clauses.append("kind = :kind")
+        params["kind"] = kind
+    if experiment_id:
+        clauses.append("(experiment_id IS NULL OR experiment_id = '' OR experiment_id = :experiment_id)")
+        params["experiment_id"] = experiment_id
+    if not clauses:
+        return "", {}
+    return " WHERE " + " AND ".join(clauses), params
+
+
+def _history_sql_filter(
+    *,
+    generated_ats: set[str] | None,
+) -> tuple[str, dict[str, Any]]:
+    clauses: list[str] = []
+    params: dict[str, Any] = {}
+    if generated_ats:
+        clauses.append("generated_at IN :generated_ats")
+        params["generated_ats"] = sorted(generated_ats)
+    if not clauses:
+        return "", {}
+    return " WHERE " + " AND ".join(clauses), params
+
+
+def _filter_history(
+    frame: pd.DataFrame,
+    *,
+    generated_ats: set[str] | None,
+    since: str | None,
+) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+    if "generated_at" not in frame.columns:
+        if generated_ats is not None or since:
+            return pd.DataFrame(columns=list(HISTORY_COLUMNS))
+        return frame
+    keep = pd.Series(True, index=frame.index)
+    if generated_ats is not None:
+        keep &= frame["generated_at"].astype(str).isin(generated_ats)
+    if since:
+        stamps = pd.to_datetime(frame["generated_at"], utc=True, errors="coerce")
+        start = pd.to_datetime(since, utc=True, errors="coerce")
+        if pd.notna(start):
+            keep &= stamps >= start
+    return frame.loc[keep].reset_index(drop=True)

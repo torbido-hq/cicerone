@@ -24,7 +24,7 @@ from cicerone.io.options import (
     require_option,
     validate_storage_options,
 )
-from cicerone.track.store_common import HISTORY_DIR, HISTORY_FILENAME, TRACK_FILENAME
+from cicerone.track.store_common import HISTORY_DIR, HISTORY_FILENAME, TRACK_FILENAME, _history_stem_before
 
 
 class TrackDatasetBackend:
@@ -46,14 +46,25 @@ class TrackDatasetBackend:
             raise
         return [] if frame.empty else [frame]
 
-    def _read_history_parts(self) -> list[pd.DataFrame]:
+    def _read_history_parts(
+        self,
+        *,
+        generated_ats: set[str] | None,
+        since: str | None,
+    ) -> list[pd.DataFrame]:
         frames: list[pd.DataFrame] = []
         backend = validate_storage_options(self._options)
         if backend == "local":
             root = Path(require_option(self._options, "path", "local")) / HISTORY_DIR
             if not root.is_dir():
                 return []
-            paths = sorted(root.glob("*.parquet"))
+            if generated_ats is not None:
+                paths = sorted(root / _history_part_name(stamp) for stamp in generated_ats)
+                paths = [path for path in paths if path.is_file()]
+            else:
+                paths = sorted(root.glob("*.parquet"))
+                if since:
+                    paths = [path for path in paths if not _history_stem_before(path.stem, since)]
             for path in paths:
                 frame = pd.read_parquet(path)
                 if not frame.empty:
@@ -68,6 +79,12 @@ class TrackDatasetBackend:
             if is_s3_not_found(exc):
                 return []
             raise
+        if generated_ats is not None:
+            wanted_names = {_history_part_name(stamp) for stamp in generated_ats}
+            keys = [key for key in keys if Path(key).name in wanted_names]
+        elif since:
+            keys = [key for key in keys if not _history_stem_before(Path(key).stem, since)]
+        keys = sorted(keys)
         for key in keys:
             obj = client.get_object(Bucket=bucket, Key=key)
             frame = pd.read_parquet(BytesIO(obj["Body"].read()))

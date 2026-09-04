@@ -77,6 +77,12 @@ def _live_track_eval(settings: Settings, store: TrackStore) -> dict[str, Any] | 
         recs = load_recommendations_frame(settings.output)
         if recs is not None and recs.empty:
             recs = None
+        wanted = {str(row.get("generated_at") or "") for row in rows}
+        wanted.discard("")
+        if wanted:
+            history = store.read_history(generated_ats=wanted)
+            if history is not None and not history.empty:
+                recs = pd.concat([history, recs], ignore_index=True) if recs is not None else history
     except Exception:
         logger.exception("Failed to load conversions for live Quality metrics")
     try:

@@ -181,6 +181,101 @@ def test_evaluate_experiment_empty_exposures_stays_conditional() -> None:
     assert report.n_assigned == 0
 
 
+def test_evaluate_experiment_empty_track_outcomes_stays_itt() -> None:
+    experiment = ExperimentSettings(
+        enabled=True,
+        id="exp",
+        primary_metric="ctr",
+        attribution="click",
+        variants=(
+            VariantSettings(name="control", traffic=0.5),
+            VariantSettings(name="treatment", traffic=0.5),
+        ),
+    )
+    events = pd.DataFrame(
+        [
+            {"user_id": "u1", "event_type": "purchase", "quantity": 1, "occurred_at": "2026-08-28T12:00:00Z"},
+            {"user_id": "u2", "event_type": "purchase", "quantity": 1, "occurred_at": "2026-08-28T12:00:00Z"},
+        ]
+    )
+    recs = pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                "variant": "control",
+            },
+            {
+                "user_id": "u2",
+                "item_id": "i2",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                "variant": "treatment",
+            },
+        ]
+    )
+    report = evaluate_experiment(
+        experiment=experiment,
+        recipes=(_recipe("control"), _recipe("treatment")),
+        events=events,
+        event_weights={"purchase": 1.0},
+        recommendations=recs,
+        track_outcomes={},
+    )
+    assert report.exposure_conditional is False
+    assert report.n_assigned == 2
+
+
+def test_evaluate_experiment_ctr_uses_track_variant() -> None:
+    experiment = ExperimentSettings(
+        enabled=True,
+        id="exp",
+        primary_metric="ctr",
+        attribution="click",
+        variants=(
+            VariantSettings(name="control", traffic=0.5),
+            VariantSettings(name="treatment", traffic=0.5),
+        ),
+    )
+    recs = pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                "variant": "control",
+            },
+            {
+                "user_id": "u2",
+                "item_id": "i2",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                "variant": "treatment",
+            },
+        ]
+    )
+    report = evaluate_experiment(
+        experiment=experiment,
+        recipes=(_recipe("control"), _recipe("treatment")),
+        events=pd.DataFrame(),
+        event_weights={},
+        recommendations=recs,
+        track_outcomes={"u1": 1.0, "u2": 0.0},
+        track_variants={"u1": "treatment", "u2": "control"},
+        n_impressions=100,
+        min_impressions=1,
+    )
+    assert report.comparisons[0].treatment.mean == pytest.approx(1.0)
+    assert report.comparisons[0].control.mean == pytest.approx(0.0)
+
+
 def test_evaluate_experiment_blocks_promote_when_already_promoted() -> None:
     experiment = ExperimentSettings(
         enabled=True,

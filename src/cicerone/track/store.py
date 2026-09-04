@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from io import BytesIO
 from typing import Any
 
@@ -25,9 +25,14 @@ from cicerone.track.store_common import (
     TRACK_FILENAME,
     TRACK_LOG_BACKEND_ERROR,  # noqa: F401
     TRACK_LOG_HA_ERROR,
+    _filter_history,
     _history_frame,
+    _history_stem_before,  # noqa: F401
+    _iso_utc,
     _jsonish,
+    _row_matches,
     _row_with_event_id,
+    _unslug_history_stem,  # noqa: F401
     require_appendable_track_log,
 )
 from cicerone.track.store_dataset import TrackDatasetBackend, _history_part_name
@@ -50,7 +55,9 @@ __all__ = [
     "TrackStore",
     "_history_frame",
     "_history_part_name",
+    "_history_stem_before",
     "_jsonish",
+    "_unslug_history_stem",
     "require_appendable_track_log",
 ]
 
@@ -94,8 +101,18 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
     def append_rows(self, rows: Sequence[Mapping[str, Any]]) -> int:
         return len(self.append_accepted_rows(rows))
 
-    def read_rows(self, *, kind: str | None = None) -> list[dict[str, Any]]:
-        rows = self._read_rows_db() if self._kind == "db" else self._read_rows_dataset()
+    def read_rows(
+        self,
+        *,
+        kind: str | None = None,
+        experiment_id: str | None = None,
+        since: str | None = None,
+    ) -> list[dict[str, Any]]:
+        since = _iso_utc(since)
+        if self._kind == "db":
+            rows = self._read_rows_db(kind=kind, experiment_id=experiment_id)
+        else:
+            rows = self._read_rows_dataset()
         seen: set[str] = set()
         unique: list[dict[str, Any]] = []
         for row in rows:
@@ -104,7 +121,7 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
                 continue
             if event_id:
                 seen.add(event_id)
-            if kind is not None and str(row.get("kind") or "") != kind:
+            if not _row_matches(row, kind=kind, experiment_id=experiment_id, since=since):
                 continue
             unique.append(row)
         return unique
@@ -142,10 +159,25 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
         part = f"{HISTORY_DIR}/{_history_part_name(generated_at)}"
         self._write_bytes(part, buf.getvalue(), "application/octet-stream")
 
-    def read_history(self) -> pd.DataFrame:
+    def read_history(
+        self,
+        *,
+        generated_ats: Collection[str] | None = None,
+        since: str | None = None,
+    ) -> pd.DataFrame:
+        wanted = {str(stamp) for stamp in generated_ats} if generated_ats is not None else None
+        if wanted is not None:
+            wanted.discard("")
+            if not wanted:
+                return pd.DataFrame(columns=list(HISTORY_COLUMNS))
+        since = _iso_utc(since)
         if self._kind == "db":
-            return self._read_history_db()
-        frames = self._read_legacy_history() + self._read_history_parts()
+            frame = self._read_history_db(generated_ats=wanted)
+            return _filter_history(frame, generated_ats=wanted, since=since)
+        frames = []
+        if wanted is None and since is None:
+            frames.extend(self._read_legacy_history())
+        frames.extend(self._read_history_parts(generated_ats=wanted, since=since))
         if not frames:
             return pd.DataFrame(columns=list(HISTORY_COLUMNS))
-        return pd.concat(frames, ignore_index=True)
+        return _filter_history(pd.concat(frames, ignore_index=True), generated_ats=wanted, since=since)

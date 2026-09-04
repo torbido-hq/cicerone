@@ -144,7 +144,7 @@ def test_quality_live_eval_read_rows_error(tmp_path, monkeypatch):
     settings = _settings(tmp_path, track={"enabled": True})
     monkeypatch.setattr(
         "cicerone.track.store.TrackStore.read_rows",
-        lambda self: (_ for _ in ()).throw(RuntimeError("rows")),
+        lambda self, **_kwargs: (_ for _ in ()).throw(RuntimeError("rows")),
     )
     context = quality_context(settings)
     assert context["empty_track"] is True

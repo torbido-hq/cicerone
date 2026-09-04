@@ -204,6 +204,48 @@ def test_job_run_writes_track_and_served_eval(tmp_path, monkeypatch):
     assert report["track_eval"]["overall"]["n_impressions"] >= 1
 
 
+def test_score_previous_run_reads_history_when_track_disabled(tmp_path, monkeypatch):
+    from cicerone.config import EvalSettings, IOSettings, TrackSettings, make_settings
+    from cicerone.job import _score_previous_run
+
+    out = tmp_path / "out"
+    out.mkdir()
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        track=TrackSettings(enabled=False),
+        eval=EvalSettings(enabled=True, event_types=("purchase",), ks=(1,)),
+    )
+    recs = pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"}]
+    )
+    history = recs.copy()
+    history["generated_at"] = "2026-08-28T03:00:00+00:00"
+    calls: list[set[str] | None] = []
+
+    monkeypatch.setattr("cicerone.job.load_recommendations_frame", lambda _output: recs)
+
+    def _read_history(self, *, generated_ats=None, since=None):
+        calls.append(generated_ats)
+        return history
+
+    monkeypatch.setattr("cicerone.job.TrackStore.read_history", _read_history)
+    monkeypatch.setattr("cicerone.job.TrackStore.read_rows", lambda self: [])
+    events = pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": pd.Timestamp("2026-08-28T04:00:00+00:00"),
+            }
+        ]
+    )
+    _track, served = _score_previous_run(settings, events, {"generated_at": "2026-08-28T03:00:00+00:00"})
+    assert calls == [{"2026-08-28T03:00:00+00:00"}]
+    assert served is not None
+
+
 def test_job_run_swallows_eval_persistence_errors(tmp_path, monkeypatch):
     input_dir = tmp_path / "in"
     output_dir = tmp_path / "out"
@@ -553,6 +595,24 @@ def test_job_run_raises_on_failure(tmp_path, monkeypatch):
     manifest = json.loads((tmp_path / "manifest.json").read_text())
     assert manifest["status"] == "failed"
     assert "events.parquet" in manifest["error"]
+
+
+def test_job_run_records_publisher_init_failure(tmp_path, monkeypatch):
+    from cicerone.config import ConfigError
+
+    config_path = _write_config(tmp_path, tmp_path, tmp_path)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
+    monkeypatch.setattr(
+        "cicerone.job.build_publisher",
+        lambda _settings: (_ for _ in ()).throw(
+            ConfigError("publish.options.bootstrap_servers is unreachable")
+        ),
+    )
+    with pytest.raises(ConfigError, match="bootstrap_servers"):
+        job.run()
+    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    assert manifest["status"] == "failed"
+    assert "bootstrap_servers" in manifest["error"]
 
 
 def test_job_run_truncates_an_overly_long_error_message(tmp_path, monkeypatch):

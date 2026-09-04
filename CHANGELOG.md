@@ -44,10 +44,54 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `[[eligibility]]` rules (`boosts = ["featured"]` or
   `[[experiment.variants.boost]]` tables). Duplicate subset names are rejected.
 
+### Changed
+
+- Dashboard Configuration includes `[publish]`, `[track]`, and `[job.eval]`.
+  Experiments CI is labelled a mixture interval.
+- Dashboard Experiments loads events, recommendations, track, exposures, and
+  catalog size in parallel, and pushes event-type / experiment_id filters into
+  the store. Job eval and Quality live read only the history snapshots
+  referenced by track `generated_at`. Explain reasons scan interactions for
+  recommended users only.
+
 ### Fixed
 
 - Served-eval `CatalogCoverage` uses the item catalog, not only recommended IDs.
 - `POST /track` Prometheus counts match accepted rows and record store failures.
+- CTR/conversion experiment arms use the track impression `variant` when
+  present; hash assignment is the fallback.
+- Empty track outcomes stay event ITT instead of zeros labelled ITT.
+- `attribution = click | impression` requires `primary_metric` `ctr` or
+  `conversion`.
+- Incremental `[publish]` runs after the output write and manifest update.
+- Kafka `[publish]` flushes the producer when the connect probe fails.
+- Track ingest without `event_id` is stable across retries of the same row.
+- Stable track `event_id` hashes fields as JSON so `|` in ids cannot collide.
+- Missing track `event_id` with a bad `occurred_at` hashes the raw stamp, not
+  the clock.
+- Track `since` compares instants, not lexicographic timestamp strings.
+- History reads with `generated_ats` or `since` ignore legacy parquet that
+  has no `generated_at`.
+- Filtered history reads skip the legacy `recommendation_history.parquet`
+  file, so a corrupt leftover cannot fail a snapshot-scoped or `since` read.
+- History part files are read in sorted order.
+- CTR track variants take the earliest impression per user.
+- Duplicate names in replacement `[[experiment.variants.boost]]` /
+  eligibility tables are rejected.
+- Dashboard Experiments surfaces variant policy `ConfigError` instead of
+  “No experiment variants to evaluate.”
+- In-flight event apply nacks the batch if a later heartbeat fails, so a
+  long online refresh cannot ack after visibility is lost. The beat thread
+  is joined before ack.
+- Job `[eval]` still reads recommendation history when `[track]` is off.
+- Incremental `[publish]` failures after a successful write are logged; the
+  apply still acks.
+- Job writes a failed manifest when `[publish]` connect or config raises
+  before the run.
+- Incremental popular/latest write-through is the assigned (or promoted)
+  variant only; docs matched that.
+- History parquet `since` skips older part files by parsing the slugged
+  filename (`:` → `-`).
 - Dashboard `Cache-Control: private, no-store` skips only `/static` assets,
   not other paths that happen to start with that prefix.
 - Kafka ingest commits the contiguous per-partition watermark so an
@@ -94,8 +138,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Dashboard pages send `X-Robots-Tag` and HTML `noindex` so crawlers skip
   them if the process is accidentally public; `GET /robots.txt` disallows
   `/`, and OpenAPI `/docs` is off.
-- Config page redacts `*_url` option keys and any value with embedded URL
-  credentials.
+- Config page redacts `*_url` option keys, `access_key_id` /
+  `aws_access_key_id`, and any value with embedded URL credentials.
 - `POST /track` rejects bodies larger than 1 MiB (or
   `events.options.max_body_bytes`).
 

@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 
 import pandas as pd
-import pytest
 from conftest import make_settings
 from sqlalchemy import create_engine
 
@@ -218,6 +217,17 @@ def test_experiment_context_missing_feature_config(tmp_path):
     context = experiment_context(settings)
     assert context["error"] == "No experiment variants to evaluate."
     assert promote_winner(settings, "control") == "Experiment report is not available"
+
+
+def test_experiment_context_surfaces_live_policy_config_error(tmp_path, monkeypatch):
+    settings = _settings(tmp_path, log_exposures=False)
+
+    def _boom(*_args, **_kwargs):
+        raise ConfigError("experiment.variants[treatment].boosts duplicate rule name 'featured'")
+
+    monkeypatch.setattr("cicerone.dashboard_experiments.resolve_recipes", _boom)
+    context = experiment_context(settings)
+    assert "duplicate rule name" in (context["error"] or "")
 
 
 def test_experiment_context_invalid_feature_config(tmp_path):
@@ -490,8 +500,8 @@ def test_experiment_context_manifest_policy_error_names_variant(tmp_path, monkey
             }
 
     monkeypatch.setattr("cicerone.dashboard_experiments.build_manifest_reader", lambda _output: _Reader())
-    with pytest.raises(ConfigError, match=r"experiment_variants\[treatment\]\.eligibility"):
-        experiment_context(settings)
+    context = experiment_context(settings)
+    assert "experiment_variants[treatment].eligibility" in (context["error"] or "")
 
 
 def test_experiment_context_manifest_recipes_invalid_json(tmp_path, monkeypatch):
@@ -730,7 +740,7 @@ def test_experiment_context_track_read_error(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         "cicerone.track.store.TrackStore.read_rows",
-        lambda self: (_ for _ in ()).throw(RuntimeError("track")),
+        lambda self, **_kwargs: (_ for _ in ()).throw(RuntimeError("track")),
     )
     context = experiment_context(settings)
     assert context["report"] is not None
@@ -799,3 +809,27 @@ def test_experiment_context_events_full_parquet_fallback(tmp_path, monkeypatch):
     context = experiment_context(settings)
     assert context["report"] is not None
     assert calls["n"] >= 2
+
+
+def test_track_variant_by_user_uses_earliest_impression() -> None:
+    from cicerone.dashboard_experiments import _track_variant_by_user
+
+    names = {"control", "treatment"}
+    later_first = [
+        {
+            "kind": "impression",
+            "user_id": "u1",
+            "variant": "treatment",
+            "occurred_at": "2026-08-29T12:00:00Z",
+            "event_id": "b",
+        },
+        {
+            "kind": "impression",
+            "user_id": "u1",
+            "variant": "control",
+            "occurred_at": "2026-08-29T10:00:00Z",
+            "event_id": "a",
+        },
+    ]
+    assert _track_variant_by_user(later_first, names) == {"u1": "control"}
+    assert _track_variant_by_user(list(reversed(later_first)), names) == {"u1": "control"}

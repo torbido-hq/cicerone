@@ -256,6 +256,7 @@ def test_kafka_publisher_connect_failure(monkeypatch):
     publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "t"})
     with pytest.raises(ConfigError, match="unreachable"):
         publisher.connect()
+    assert broker.flush_calls == [1]
 
 
 def test_rabbitmq_publisher_connect_failure(monkeypatch):
@@ -303,7 +304,7 @@ def test_publish_empty_frame_is_noop(monkeypatch):
     publisher.close()
 
 
-def test_updater_publish_failure_stops_apply(tmp_path, feature_config: FeatureConfig):
+def test_updater_publish_failure_does_not_stop_apply(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()
     pd.DataFrame(
@@ -326,6 +327,7 @@ def test_updater_publish_failure_stops_apply(tmp_path, feature_config: FeatureCo
         publisher=_Boom(),
     )
     events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
-    with pytest.raises(RuntimeError, match="broker down"):
-        updater.apply(events)
-    assert updater.events_applied == 0
+    assert updater.apply(events) == 1
+    assert updater.events_applied == 1
+    manifest = json.loads((out / "manifest.json").read_text())
+    assert manifest["status"] == "success"

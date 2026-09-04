@@ -483,3 +483,24 @@ def test_load_experiment_empty_policy_list_drops():
         }
     )
     assert settings.variants[1].boosts == ()
+
+
+def test_load_experiment_rejects_duplicate_replacement_names():
+    with pytest.raises(ConfigError, match="duplicate rule name"):
+        load_experiment_settings(
+            {
+                "enabled": True,
+                "id": "exp",
+                "variants": [
+                    {"name": "control", "traffic": 0.5},
+                    {
+                        "name": "treatment",
+                        "traffic": 0.5,
+                        "boost": [
+                            {"name": "featured", "kind": "boolean", "item_column": "featured", "factor": 1.2},
+                            {"name": "featured", "kind": "boolean", "item_column": "sale", "factor": 1.1},
+                        ],
+                    },
+                ],
+            }
+        )

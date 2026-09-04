@@ -93,7 +93,8 @@ impressions through `POST /events`.
 
 ## Incremental events
 
-Popular/latest write-through refreshes **every variant** for affected users.
+Popular/latest write-through refreshes only the **assigned** (or promoted)
+variant for affected users; other variants keep their last batch lists.
 `[events.online]` LightFM rewrite is **skipped** while `[experiment]` is on
 (so arms stay isolated; load/serve log a warning). Without an experiment, it
 rewrites personalized / item-KNN / content-fallback rows for affected users.
@@ -102,9 +103,9 @@ See [incremental-events.md](incremental-events.md).
 ## Recipe vs measurement
 
 Per-variant `boosts` / `eligibility` change what is on the served list.
-Dashboard metrics still join `[input]` events to the hashed variant
-(intention-to-treat); a purchase from search or email is not proof the
-treatment list worked.
+Dashboard metrics for `attribution = "user"` still join `[input]` events to
+the hashed variant (intention-to-treat). For `ctr` / `conversion`, the
+impression `variant` is used when present.
 
 ## Metrics and promote
 
@@ -120,7 +121,7 @@ assigned list (no `/track`). See [evaluation.md](evaluation.md).
 
 The dashboard **Experiments** page (`GET /dashboard/experiments`) shows:
 
-- Approximate always-valid CIs on the primary metric (a LIL-style radius for
+- Approximate mixture CIs on the primary metric (a LIL-style radius for
   peeking — not a full anytime-valid CS for heavy-tailed outcomes).
   Intention-to-treat on users who appear in the event window, or
   exposure-conditional when `log_exposures` is on (rows must match this
