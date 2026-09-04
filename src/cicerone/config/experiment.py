@@ -8,9 +8,14 @@ from dataclasses import replace
 from typing import Any, TypeVar
 
 from cicerone.config.constants import (
+    ALLOCATION_FIXED,
+    ALLOCATION_THOMPSON,
     ATTRIBUTION_CLICK,
     ATTRIBUTION_IMPRESSION,
     DEFAULT_EXPERIMENT_ALPHA,
+    DEFAULT_THOMPSON_EXPLORE_TRAFFIC,
+    DEFAULT_THOMPSON_ROTATE_MIN_PROB,
+    EXPERIMENT_ALLOCATIONS,
     EXPERIMENT_ATTRIBUTIONS,
     EXPERIMENT_COMBINERS,
     PRIMARY_METRIC_CONVERSION,
@@ -19,7 +24,12 @@ from cicerone.config.constants import (
     ConfigError,
 )
 from cicerone.config.settings import ExperimentSettings, VariantSettings
-from cicerone.config.validation import require_open_unit_interval, validate_model_weights, validate_rrf_k
+from cicerone.config.validation import (
+    require_open_unit_interval,
+    require_unit_interval,
+    validate_model_weights,
+    validate_rrf_k,
+)
 from cicerone.feature_config import parse_boost_rules, parse_eligibility_rules
 
 logger = logging.getLogger(__name__)
@@ -49,6 +59,13 @@ def load_experiment_settings(raw: dict[str, Any] | None) -> ExperimentSettings:
     alpha = float(data.get("alpha", DEFAULT_EXPERIMENT_ALPHA))
     automl_challenger = bool(data.get("automl_challenger", False))
     attribution = str(data.get("attribution") or "user").strip().lower() or "user"
+    allocation = str(data.get("allocation") or ALLOCATION_FIXED).strip().lower() or ALLOCATION_FIXED
+    if allocation not in EXPERIMENT_ALLOCATIONS:
+        raise ConfigError(
+            f"experiment.allocation must be one of {list(EXPERIMENT_ALLOCATIONS)}, got {allocation!r}"
+        )
+    explore_traffic = float(data.get("explore_traffic", DEFAULT_THOMPSON_EXPLORE_TRAFFIC))
+    rotate_min_prob = float(data.get("rotate_min_prob", DEFAULT_THOMPSON_ROTATE_MIN_PROB))
     if attribution not in EXPERIMENT_ATTRIBUTIONS:
         raise ConfigError(
             f"experiment.attribution must be one of {list(EXPERIMENT_ATTRIBUTIONS)}, got {attribution!r}"
@@ -82,6 +99,15 @@ def load_experiment_settings(raw: dict[str, Any] | None) -> ExperimentSettings:
         require_open_unit_interval(alpha, name="experiment.alpha")
         if not primary_metric:
             raise ConfigError("experiment.primary_metric must be a non-empty string")
+        if allocation == ALLOCATION_THOMPSON:
+            require_unit_interval(explore_traffic, name="experiment.explore_traffic")
+            require_open_unit_interval(rotate_min_prob, name="experiment.rotate_min_prob")
+            if primary_metric != PRIMARY_METRIC_CONVERSION:
+                raise ConfigError("experiment.allocation 'thompson' requires primary_metric 'conversion'")
+            if attribution not in {ATTRIBUTION_CLICK, ATTRIBUTION_IMPRESSION}:
+                raise ConfigError(
+                    "experiment.allocation 'thompson' requires attribution 'click' or 'impression'"
+                )
     return ExperimentSettings(
         enabled=enabled,
         id=experiment_id,
@@ -91,6 +117,9 @@ def load_experiment_settings(raw: dict[str, Any] | None) -> ExperimentSettings:
         automl_challenger=automl_challenger,
         alpha=alpha,
         attribution=attribution,
+        allocation=allocation,
+        explore_traffic=explore_traffic,
+        rotate_min_prob=rotate_min_prob,
     )
 
 

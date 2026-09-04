@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
@@ -833,3 +834,263 @@ def test_track_variant_by_user_uses_earliest_impression() -> None:
     ]
     assert _track_variant_by_user(later_first, names) == {"u1": "control"}
     assert _track_variant_by_user(list(reversed(later_first)), names) == {"u1": "control"}
+
+
+def test_experiment_context_thompson_view(tmp_path):
+    from cicerone.config.constants import ALLOCATION_THOMPSON
+
+    settings = _settings(tmp_path, log_exposures=False)
+    settings = replace(
+        settings,
+        experiment=replace(
+            settings.experiment,
+            allocation=ALLOCATION_THOMPSON,
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+                VariantSettings(name="blend", traffic=0.0),
+            ),
+        ),
+        track=replace(settings.track, enabled=True, min_impressions=100),
+    )
+    ExperimentStore(settings.output).write_state(
+        experiment_state(
+            "exp-1",
+            promoted_variant=None,
+            champion="control",
+            challenger="treatment",
+            arms={
+                "control": {"successes": 2, "failures": 8},
+                "treatment": {"successes": 1, "failures": 9},
+                "blend": {"successes": 0, "failures": 0},
+            },
+            p_best={"control": 0.7, "treatment": 0.2, "blend": 0.1},
+            pair_impressions=40,
+        )
+    )
+    recs = [
+        {
+            "user_id": f"u{i}",
+            "item_id": f"i{i % 10}",
+            "rank": 1,
+            "score": 1.0,
+            "source": "personalized",
+            VARIANT_COLUMN: "control" if i < 6 else "treatment",
+        }
+        for i in range(12)
+    ]
+    events = [
+        {"user_id": f"u{i}", "item_id": f"i{i % 10}", "event_type": "view", "quantity": 1} for i in range(12)
+    ]
+    _write_frames(settings, events=events, recs=recs)
+    context = experiment_context(settings)
+    thompson = context["thompson"]
+    assert thompson is not None
+    assert thompson["champion"] == "control"
+    assert thompson["challenger"] == "treatment"
+    by_name = {arm["name"]: arm for arm in thompson["arms"]}
+    assert by_name["control"]["cvr_pct"] == 20.0
+    assert by_name["control"]["p_best"] == 0.7
+    assert by_name["control"]["role"] == "champion"
+    assert by_name["blend"]["role"] == "parked"
+    assert thompson["volume_pct"] == 40.0
+    assert thompson["volume_max"] == 100
+
+
+def test_thompson_view_volume_max_when_floor_is_zero() -> None:
+    from cicerone.config.constants import ALLOCATION_THOMPSON
+    from cicerone.dashboard_experiments import _thompson_view
+
+    experiment = ExperimentSettings(
+        enabled=True,
+        id="exp-1",
+        allocation=ALLOCATION_THOMPSON,
+        variants=(
+            VariantSettings(name="control", traffic=0.5),
+            VariantSettings(name="treatment", traffic=0.5),
+        ),
+    )
+    view = _thompson_view(
+        {"champion": "control", "challenger": "treatment", "pair_impressions": 12},
+        experiment,
+        0,
+    )
+    assert view is not None
+    assert view["min_impressions"] == 0
+    assert view["volume_max"] == 12
+    assert view["volume_pct"] == 100.0
+    empty = _thompson_view(
+        {"champion": "control", "challenger": "treatment", "pair_impressions": 0},
+        experiment,
+        0,
+    )
+    assert empty is not None
+    assert empty["volume_max"] == 1
+
+
+def test_promote_and_resume_keep_thompson_fields(tmp_path):
+    settings = _settings(tmp_path)
+    events = []
+    recs = []
+    exposures = []
+    for i in range(40):
+        events.append(
+            {
+                "user_id": f"c{i}",
+                "item_id": f"i{i % 10}",
+                "event_type": "view",
+                "quantity": 1,
+                "occurred_at": "2026-01-02T00:00:00Z",
+            }
+        )
+        events.append(
+            {
+                "user_id": f"t{i}",
+                "item_id": f"i{i % 10}",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": "2026-01-02T00:00:00Z",
+            }
+        )
+        recs.append(
+            {
+                "user_id": f"c{i}",
+                "item_id": f"i{i % 10}",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                VARIANT_COLUMN: "control",
+            }
+        )
+        recs.append(
+            {
+                "user_id": f"t{i}",
+                "item_id": f"i{(i + 3) % 10}",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                VARIANT_COLUMN: "treatment",
+            }
+        )
+        exposures.append(
+            exposure_row(
+                user_id=f"c{i}",
+                experiment_id="exp-1",
+                variant="control",
+                generated_at=None,
+                exposed_at=pd.Timestamp("2026-01-01T00:00:00Z"),
+            )
+        )
+        exposures.append(
+            exposure_row(
+                user_id=f"t{i}",
+                experiment_id="exp-1",
+                variant="treatment",
+                generated_at=None,
+                exposed_at=pd.Timestamp("2026-01-01T00:00:00Z"),
+            )
+        )
+    ExperimentStore(settings.output).write_state(
+        experiment_state("exp-1", promoted_variant=None, champion="control", challenger="treatment")
+    )
+    _write_frames(settings, events=events, recs=recs, exposures=exposures)
+    assert promote_winner(settings, "treatment") is None
+    state = ExperimentStore(settings.output).read_state()
+    assert state is not None
+    assert state["promoted_variant"] == "treatment"
+    assert state["champion"] == "control"
+    assert state["challenger"] == "treatment"
+    assert clear_promotion(settings) is None
+    cleared = ExperimentStore(settings.output).read_state()
+    assert cleared is not None
+    assert cleared["promoted_variant"] is None
+    assert cleared["champion"] == "control"
+
+
+def test_thompson_ship_ignores_undecided(tmp_path):
+    from cicerone.config.constants import ALLOCATION_THOMPSON
+
+    settings = _settings(tmp_path, log_exposures=False)
+    settings = replace(settings, experiment=replace(settings.experiment, allocation=ALLOCATION_THOMPSON))
+    recs = [
+        {
+            "user_id": f"u{i}",
+            "item_id": f"i{i % 10}",
+            "rank": 1,
+            "score": 1.0,
+            "source": "personalized",
+            VARIANT_COLUMN: "control" if i < 6 else "treatment",
+        }
+        for i in range(12)
+    ]
+    events = [
+        {"user_id": f"u{i}", "item_id": f"i{i % 10}", "event_type": "view", "quantity": 1} for i in range(12)
+    ]
+    ExperimentStore(settings.output).write_state(
+        experiment_state("exp-1", promoted_variant=None, champion="control", challenger="treatment")
+    )
+    _write_frames(settings, events=events, recs=recs)
+    context = experiment_context(settings)
+    assert "undecided" in context["report"].promote_blocked_by
+    assert context["can_ship"] is True
+    assert context["ship_variant"] == "control"
+    assert promote_winner(settings, "control") is None
+    state = ExperimentStore(settings.output).read_state()
+    assert state is not None
+    assert state["promoted_variant"] == "control"
+
+
+def test_thompson_ship_ignores_parked_empty_lists(tmp_path):
+    from cicerone.config.constants import ALLOCATION_THOMPSON
+    from cicerone.dashboard_experiments import _eval_recipes
+    from cicerone.experiment.recipes import ResolvedRecipe
+    from cicerone.feature_config import BlendingConfig
+
+    settings = _settings(tmp_path, log_exposures=False)
+    settings = replace(
+        settings,
+        experiment=replace(
+            settings.experiment,
+            allocation=ALLOCATION_THOMPSON,
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+                VariantSettings(name="blend", traffic=0.0),
+            ),
+        ),
+    )
+    blending = BlendingConfig(enabled=False)
+    recipes = (
+        ResolvedRecipe("control", 0.5, ("popular",), None, None, "priority", blending, True, True),
+        ResolvedRecipe("treatment", 0.5, ("popular",), None, None, "priority", blending, True, True),
+        ResolvedRecipe("blend", 0.0, ("popular",), None, None, "priority", blending, True, True),
+    )
+    filtered = _eval_recipes(
+        recipes,
+        settings.experiment,
+        {"champion": "control", "challenger": "treatment"},
+    )
+    assert [item.name for item in filtered] == ["control", "treatment"]
+    recs = [
+        {
+            "user_id": f"u{i}",
+            "item_id": f"i{i % 10}",
+            "rank": 1,
+            "score": 1.0,
+            "source": "personalized",
+            VARIANT_COLUMN: "control" if i < 6 else "treatment",
+        }
+        for i in range(12)
+    ]
+    events = [
+        {"user_id": f"u{i}", "item_id": f"i{i % 10}", "event_type": "view", "quantity": 1} for i in range(12)
+    ]
+    ExperimentStore(settings.output).write_state(
+        experiment_state("exp-1", promoted_variant=None, champion="control", challenger="treatment")
+    )
+    _write_frames(settings, events=events, recs=recs)
+    context = experiment_context(settings)
+    assert "guardrails" not in context["ship_blocked"]
+    assert {item.variant for item in context["report"].guardrails} == {"control", "treatment"}
+    assert context["can_ship"] is True
+    assert context["ship_variant"] == "control"

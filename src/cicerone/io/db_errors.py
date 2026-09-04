@@ -11,7 +11,11 @@ def db_error_message(exc: BaseException) -> str:
 
 def is_missing_column_error(exc: BaseException) -> bool:
     message = db_error_message(exc)
-    return "no such column" in message or ("column" in message and "does not exist" in message)
+    return (
+        "no such column" in message
+        or "no column named" in message
+        or ("column" in message and "does not exist" in message)
+    )
 
 
 def is_missing_table_error(exc: BaseException) -> bool:

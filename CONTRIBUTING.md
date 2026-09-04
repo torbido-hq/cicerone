@@ -111,10 +111,10 @@ docker run --rm cicerone-test mypy src
 ## Dependency vulnerability scanning
 
 [pip-audit](https://github.com/pypa/pip-audit) checks `requirements.txt`/
-`requirements-dev.txt` pins against known CVEs:
+`requirements-dev.txt` / `requirements-bandits.txt` pins against known CVEs:
 
 ```sh
-docker run --rm cicerone-test pip-audit -r requirements.txt -r requirements-dev.txt
+docker run --rm cicerone-test pip-audit -r requirements.txt -r requirements-dev.txt -r requirements-bandits.txt
 ```
 
 If a vulnerability is found with no available fix yet, don't suppress it
@@ -217,9 +217,10 @@ needs that approval and is pure process drag.
 
 The PyPI project is **`cicerone-recommender`** (`pip install
 cicerone-recommender`; `import cicerone`). The name `cicerone` is a
-different package. Optional extras `[redis]`, `[kafka]`, `[rabbitmq]`, and
-`[sequential]` match `requirements-redis.txt` / `requirements-kafka.txt` /
-`requirements-rabbitmq.txt` / `requirements-sequential.txt`.
+different package. Optional extras `[redis]`, `[kafka]`, `[rabbitmq]`,
+`[sequential]`, and `[bandits]` match `requirements-redis.txt` /
+`requirements-kafka.txt` / `requirements-rabbitmq.txt` /
+`requirements-sequential.txt` / `requirements-bandits.txt`.
 
 One-time PyPI setup (before the first upload): create a GitHub Environment
 named `pypi`, then a [pending trusted publisher](https://docs.pypi.org/trusted-publishers/)

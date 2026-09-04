@@ -74,8 +74,8 @@ def _slice_metrics(
 ) -> SliceMetrics:
     n_impressions = int(len(impressions))
     n_clicks = int(len(matched_clicks))
-    n_view = int(len(view_conversions))
-    n_click = int(len(click_conversions))
+    n_view = min(int(len(view_conversions)), n_impressions)
+    n_click = min(int(len(click_conversions)), n_impressions)
     users = set()
     if not impressions.empty and USER_COLUMN in impressions.columns:
         users.update(impressions[USER_COLUMN].astype(str))

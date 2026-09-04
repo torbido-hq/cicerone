@@ -43,6 +43,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Experiment variants can inherit, drop, subset, or replace `[[boost]]` /
   `[[eligibility]]` rules (`boosts = ["featured"]` or
   `[[experiment.variants.boost]]` tables). Duplicate subset names are rejected.
+- Job-time Thompson sampling (`allocation = "thompson"`) writes a sticky
+  champion/challenger pair from live CVR via Fidelity MABWiser. Requires
+  `cicerone-recommender[bandits]`. Serve still hashes; Ship is Promote.
 
 ### Changed
 

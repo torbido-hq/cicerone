@@ -43,7 +43,7 @@ WORKDIR /app
 RUN pip install --no-cache-dir build==1.5.0 twine==7.0.0
 
 COPY pyproject.toml MANIFEST.in LICENSE README.md CHANGELOG.md ./
-COPY requirements.txt requirements-redis.txt requirements-sequential.txt requirements-kafka.txt requirements-rabbitmq.txt ./
+COPY requirements.txt requirements-redis.txt requirements-sequential.txt requirements-kafka.txt requirements-rabbitmq.txt requirements-bandits.txt ./
 COPY src/ ./src/
 COPY --from=frontend /build/tailwind.css ./src/cicerone/static/tailwind.css
 
@@ -96,7 +96,7 @@ USER root
 COPY requirements-dev.txt ./
 RUN pip install --no-cache-dir -r requirements-dev.txt
 COPY pyproject.toml MANIFEST.in ./
-COPY requirements-redis.txt requirements-sequential.txt requirements-kafka.txt requirements-rabbitmq.txt ./
+COPY requirements-redis.txt requirements-sequential.txt requirements-kafka.txt requirements-rabbitmq.txt requirements-bandits.txt ./
 COPY src/ ./src/
 COPY --from=frontend /build/tailwind.css ./src/cicerone/static/tailwind.css
 COPY tests/ ./tests/
@@ -107,6 +107,7 @@ COPY examples/serve/ ./examples/serve/
 # Canonical Postgres defaults — parsed by tests/support/postgres_defaults.py at runtime.
 COPY docker/postgres/defaults.env ./docker/postgres/defaults.env
 ENV PYTHONPATH=/app/src
+RUN pip install --no-cache-dir -r requirements-bandits.txt
 RUN chown -R cicerone:cicerone /app
 USER cicerone
 ENTRYPOINT []

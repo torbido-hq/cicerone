@@ -163,7 +163,7 @@ def user_track_outcomes(
     attribution: str,
     window_hours: float,
 ) -> dict[str, float]:
-    """Per-user CTR or attributed conversion counts for experiment assignment."""
+    """Per-user CTR or attributed CVR (conversions / impressions) for experiments."""
     report_users: dict[str, float] = {}
     rows = _frame(track_rows)
     if rows.empty or "kind" not in rows.columns:
@@ -209,5 +209,6 @@ def user_track_outcomes(
         if primary_metric == "ctr":
             report_users[user] = n_clicks / float(n_imp) if n_imp else 0.0
         else:
-            report_users[user] = n_conv
+            capped = min(n_conv, float(n_imp))
+            report_users[user] = capped / float(n_imp) if n_imp else 0.0
     return report_users

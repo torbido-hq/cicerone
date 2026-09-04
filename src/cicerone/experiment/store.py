@@ -57,17 +57,81 @@ def require_appendable_exposure_log(output: IOSettings) -> None:
     raise ConfigError(EXPOSURE_LOG_BACKEND_ERROR)
 
 
+STATE_CORE_KEYS: tuple[str, ...] = ("experiment_id", "promoted_variant", "promoted_at")
+
+
 def experiment_state(
     experiment_id: str,
     *,
     promoted_variant: str | None,
     promoted_at: str | None = None,
+    **extra: Any,
 ) -> dict[str, Any]:
-    return {
+    payload: dict[str, Any] = {
         "experiment_id": experiment_id,
         "promoted_variant": promoted_variant,
-        "promoted_at": promoted_at or (datetime.now(UTC).isoformat() if promoted_variant else None),
+        "promoted_at": promoted_at
+        if promoted_at is not None
+        else (datetime.now(UTC).isoformat() if promoted_variant else None),
     }
+    for key, value in extra.items():
+        if key not in STATE_CORE_KEYS and key != "payload":
+            payload[key] = value
+    return payload
+
+
+def merge_experiment_state(
+    previous: Mapping[str, Any] | None,
+    *,
+    experiment_id: str,
+    promoted_variant: str | None,
+    promoted_at: str | None = None,
+    **extra: Any,
+) -> dict[str, Any]:
+    merged = dict(previous or {})
+    merged.update(
+        experiment_state(
+            experiment_id,
+            promoted_variant=promoted_variant,
+            promoted_at=promoted_at,
+            **extra,
+        )
+    )
+    return merged
+
+
+def active_pair_from_state(state: Mapping[str, Any] | None) -> tuple[str, str] | None:
+    if not state:
+        return None
+    champion = str(state.get("champion") or "")
+    challenger = str(state.get("challenger") or "")
+    if champion and challenger:
+        return champion, challenger
+    return None
+
+
+def _state_payload_json(state: Mapping[str, Any]) -> str:
+    extra = {key: value for key, value in state.items() if key not in STATE_CORE_KEYS and key != "payload"}
+    return json.dumps(extra, separators=(",", ":"))
+
+
+def _hydrate_state_row(row: dict[str, Any]) -> dict[str, Any]:
+    raw = row.pop("payload", None)
+    parsed: dict[str, Any] | None = None
+    if isinstance(raw, dict):
+        parsed = raw
+    elif isinstance(raw, str) and raw.strip():
+        try:
+            loaded = json.loads(raw)
+        except json.JSONDecodeError:
+            loaded = None
+        if isinstance(loaded, dict):
+            parsed = loaded
+    if parsed:
+        for key, value in parsed.items():
+            if key not in STATE_CORE_KEYS and key != "payload":
+                row[key] = value
+    return row
 
 
 class ExperimentStore:
@@ -121,6 +185,10 @@ class ExperimentStore:
 
     def promoted_variant(self, experiment_id: str) -> str | None:
         """Return the live promote winner; reuse the last successful read on failure."""
+        return self.assignment_overlay(experiment_id)[0]
+
+    def assignment_overlay(self, experiment_id: str) -> tuple[str | None, tuple[str, str] | None]:
+        """Return ``(promoted_variant, active_pair)``; reuse the last successful read on failure."""
         wanted = str(experiment_id)
         try:
             state = self.read_state()
@@ -128,12 +196,12 @@ class ExperimentStore:
             logger.exception("Failed to read experiment promote state")
             with self._promote_lock:
                 if self._promote_loaded and self._promote_experiment_id == wanted:
-                    return self._promote_value
-            return None
+                    return self._promote_value, active_pair_from_state(self._promote_state)
+            return None, None
         if state and str(state.get("experiment_id") or "") == wanted:
             promoted = state.get("promoted_variant")
-            return str(promoted) if promoted else None
-        return None
+            return (str(promoted) if promoted else None), active_pair_from_state(state)
+        return None, None
 
     def write_state(self, state: Mapping[str, Any]) -> None:
         payload = dict(state)
@@ -204,7 +272,9 @@ class ExperimentStore:
                 raise
         if frame.empty:
             return None
-        return {str(key): _jsonish(value) for key, value in frame.iloc[0].to_dict().items()}
+        return _hydrate_state_row(
+            {str(key): _jsonish(value) for key, value in frame.iloc[0].to_dict().items()}
+        )
 
     def _write_state_db(self, state: dict[str, Any]) -> None:
         table = sql_identifier(
@@ -223,24 +293,34 @@ class ExperimentStore:
             f'CREATE TABLE IF NOT EXISTS "{table}" ('
             "experiment_id TEXT PRIMARY KEY, "
             "promoted_variant TEXT, "
-            "promoted_at TEXT"
+            "promoted_at TEXT, "
+            "payload TEXT"
             ")"
         )
         params = {
             "experiment_id": experiment_id,
             "promoted_variant": promoted_variant,
             "promoted_at": promoted_at,
+            "payload": _state_payload_json(state),
         }
+        insert_sql = text(
+            f'INSERT INTO "{table}" (experiment_id, promoted_variant, promoted_at, payload) '
+            "VALUES (:experiment_id, :promoted_variant, :promoted_at, :payload)"
+        )
         with engine.begin() as conn:
             conn.execute(create_sql)
-            conn.execute(text(f'DELETE FROM "{table}"'))
-            conn.execute(
-                text(
-                    f'INSERT INTO "{table}" (experiment_id, promoted_variant, promoted_at) '
-                    "VALUES (:experiment_id, :promoted_variant, :promoted_at)"
-                ),
-                params,
-            )
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(f'DELETE FROM "{table}"'))
+                conn.execute(insert_sql, params)
+        except Exception as exc:
+            if not is_missing_column_error(exc):
+                raise
+            with engine.begin() as conn:
+                conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN payload TEXT'))
+            with engine.begin() as conn:
+                conn.execute(text(f'DELETE FROM "{table}"'))
+                conn.execute(insert_sql, params)
 
     def _append_exposures_db(self, rows: Sequence[Mapping[str, Any]]) -> None:
         table = sql_identifier(

@@ -131,10 +131,12 @@ def _route_endpoint(request: Request) -> str:
     return request.url.path
 
 
-def _promoted_variant(settings: Settings, store: ExperimentStore | None) -> str | None:
+def _assignment_overlay(
+    settings: Settings, store: ExperimentStore | None
+) -> tuple[str | None, tuple[str, str] | None]:
     if store is None or not settings.experiment.enabled:
-        return None
-    return store.promoted_variant(settings.experiment.id)
+        return None, None
+    return store.assignment_overlay(settings.experiment.id)
 
 
 def create_app(
@@ -265,8 +267,9 @@ def create_app(
             and (category is not None or (exclude_unavailable and availability_filters))
         )
         fetch_k = max(top_k * 5, top_k) if can_filter else top_k
+        promoted, active_pair = _assignment_overlay(settings, experiment_store)
         experiment_id, variant = resolve_assignment(
-            settings, user_id, promoted_variant=_promoted_variant(settings, experiment_store)
+            settings, user_id, promoted_variant=promoted, active_pair=active_pair
         )
         recs = reader.get_recommendations(user_id, fetch_k, variant=variant)
         used_fallback = False

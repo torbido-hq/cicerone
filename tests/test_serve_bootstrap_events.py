@@ -270,13 +270,13 @@ def test_assign_incremental_variant_caches_promote_read_and_follows_live_winner(
     store = ExperimentStore(settings.output)
     store.write_state(experiment_state("exp-1", promoted_variant="treatment"))
     reads = {"n": 0}
-    original = ExperimentStore.promoted_variant
+    original = ExperimentStore.assignment_overlay
 
-    def counting(self, experiment_id: str) -> str | None:
+    def counting(self, experiment_id: str):
         reads["n"] += 1
         return original(self, experiment_id)
 
-    monkeypatch.setattr(ExperimentStore, "promoted_variant", counting)
+    monkeypatch.setattr(ExperimentStore, "assignment_overlay", counting)
     now = {"t": 0.0}
     assigned = _assign_incremental_variant(settings, clock=lambda: now["t"])
     assert assigned is not None

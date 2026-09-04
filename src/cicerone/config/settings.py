@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from cicerone.config.constants import (
+    ALLOCATION_FIXED,
     AUTOML_DEFAULT_N_SPLITS,
     AUTOML_DEFAULT_PRIMARY_METRIC,
     AUTOML_DEFAULT_TEST_DAYS,
@@ -24,6 +25,8 @@ from cicerone.config.constants import (
     DEFAULT_EXPLAIN_MAX_SIMILAR_ITEMS,
     DEFAULT_LOCK_KEY,
     DEFAULT_LOCK_TTL_SECONDS,
+    DEFAULT_THOMPSON_EXPLORE_TRAFFIC,
+    DEFAULT_THOMPSON_ROTATE_MIN_PROB,
     DEFAULT_TRACK_ATTRIBUTION_WINDOW_HOURS,
     DEFAULT_TRACK_MIN_IMPRESSIONS,
     PRIMARY_METRIC_WEIGHTED,
@@ -156,6 +159,9 @@ class ExperimentSettings:
     automl_challenger: bool = False
     alpha: float = DEFAULT_EXPERIMENT_ALPHA
     attribution: str = "user"
+    allocation: str = ALLOCATION_FIXED
+    explore_traffic: float = DEFAULT_THOMPSON_EXPLORE_TRAFFIC
+    rotate_min_prob: float = DEFAULT_THOMPSON_ROTATE_MIN_PROB
 
 
 @dataclass(frozen=True)

@@ -16,7 +16,7 @@ from cicerone.artifact import ARTIFACT_SCHEMA_VERSION, build_artifact, dumps_art
 from cicerone.automl import evaluate_candidates, select_best_candidate
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import Settings, load_settings
-from cicerone.config.constants import DEFAULT_LOG_FORMAT
+from cicerone.config.constants import ALLOCATION_THOMPSON, DEFAULT_LOG_FORMAT
 from cicerone.dataset import build_dataset
 from cicerone.evaluation import (
     conversion_event_types,
@@ -24,7 +24,7 @@ from cicerone.evaluation import (
     evaluate_tracking,
     replay_ks,
 )
-from cicerone.events.store import load_recommendations_frame
+from cicerone.events.store import load_items_catalog_size, load_recommendations_frame
 from cicerone.experiment import (
     ResolvedRecipe,
     apply_recipe,
@@ -32,10 +32,18 @@ from cicerone.experiment import (
     resolve_recipes,
     union_models,
 )
+from cicerone.experiment.guardrails import evaluate_guardrails
+from cicerone.experiment.store import ExperimentStore, merge_experiment_state
+from cicerone.experiment.thompson import (
+    allocate_thompson,
+    select_active_recipes,
+    track_rows_since,
+    window_trials_from_slices,
+)
 from cicerone.feature_config import load_feature_config
 from cicerone.io.base import InputSource
 from cicerone.io.factory import build_input_source, build_manifest_reader, build_output_sink
-from cicerone.io.recommendation_schema import USER_COLUMN, VARIANT_COLUMN
+from cicerone.io.recommendation_schema import USER_COLUMN, VARIANT_COLUMN, filter_variant_rows
 from cicerone.locks import LockLostError
 from cicerone.model import (
     DEFAULT_MODELS,
@@ -193,6 +201,115 @@ def _ensure_fence(fence_check: Callable[[], bool] | None) -> None:
         raise LockLostError("retrain lock lost before write")
 
 
+def _select_thompson_recipes(
+    settings: Settings,
+    recipes: tuple[ResolvedRecipe, ...],
+    events: pd.DataFrame,
+) -> tuple[ResolvedRecipe, ...]:
+    if len(recipes) < 2:
+        return recipes
+    experiment = settings.experiment
+    store = ExperimentStore(settings.output)
+    try:
+        previous = store.read_state()
+    except Exception:
+        logger.exception("Thompson allocation fail closed: could not read experiment state")
+        return recipes
+    if previous and str(previous.get("experiment_id") or "") != experiment.id:
+        previous = None
+    promoted = str(previous["promoted_variant"]) if previous and previous.get("promoted_variant") else None
+    try:
+        track_rows = TrackStore(settings.output).read_rows(experiment_id=experiment.id)
+    except Exception:
+        logger.exception("Thompson allocation fail closed: could not read track rows")
+        return recipes
+    has_pair = bool(previous and previous.get("champion") and previous.get("challenger"))
+    if not track_rows and not has_pair:
+        logger.warning("Thompson allocation fail closed: empty track")
+        return recipes
+    window_started = ""
+    if previous is not None and has_pair:
+        window_started = str(previous.get("window_started_at") or "")
+    window_rows = track_rows_since(track_rows, window_started or None)
+    names = [recipe.name for recipe in recipes]
+    try:
+        types = conversion_event_types(
+            settings.track.conversion_event_types,
+            primary_metric=experiment.primary_metric,
+        )
+        conversions = events
+        if not conversions.empty and "event_type" in conversions.columns:
+            conversions = conversions[conversions["event_type"].astype(str).isin(set(types))]
+        report = evaluate_tracking(
+            track_rows=window_rows,
+            conversions=conversions,
+            window_hours=settings.track.attribution_window_hours,
+        )
+        window_trials = window_trials_from_slices(
+            report.by_variant, attribution=experiment.attribution, names=names
+        )
+        recs = None
+        try:
+            recs = load_recommendations_frame(settings.output)
+        except Exception:
+            logger.exception("Failed to load recommendations for Thompson guardrails")
+        guardrails_ok = False
+        if recs is not None and not recs.empty and VARIANT_COLUMN in recs.columns:
+            catalog_size = None
+            try:
+                catalog_size = load_items_catalog_size(settings.output)
+            except Exception:
+                logger.exception("Failed to load catalog size for Thompson guardrails")
+            pair_names: tuple[str, ...] = tuple(names)
+            if previous is not None and has_pair:
+                pair_names = (str(previous.get("champion")), str(previous.get("challenger")))
+            guardrails_ok = all(
+                evaluate_guardrails(
+                    filter_variant_rows(recs, name),
+                    variant=name,
+                    catalog_size=catalog_size,
+                ).ok
+                for name in pair_names
+                if name
+            )
+        allocation = allocate_thompson(
+            names=names,
+            previous=previous,
+            window_trials=window_trials,
+            min_impressions=settings.track.min_impressions,
+            rotate_min_prob=experiment.rotate_min_prob,
+            promoted_variant=promoted,
+            guardrails_ok=guardrails_ok,
+        )
+        selected = select_active_recipes(
+            recipes,
+            champion=allocation.champion,
+            challenger=allocation.challenger,
+            explore_traffic=experiment.explore_traffic,
+        )
+        store.write_state(
+            merge_experiment_state(
+                previous,
+                experiment_id=experiment.id,
+                promoted_variant=promoted,
+                promoted_at=(
+                    str(previous["promoted_at"]) if previous and previous.get("promoted_at") else None
+                ),
+                **allocation.as_state(),
+            )
+        )
+        logger.info(
+            "Thompson allocation: champion=%s challenger=%s rotated=%s",
+            allocation.champion,
+            allocation.challenger,
+            allocation.rotated,
+        )
+        return selected
+    except Exception:
+        logger.exception("Thompson allocation fail closed")
+        return recipes
+
+
 def _recommendation_user_count(recommendations: pd.DataFrame) -> int:
     if recommendations.empty or USER_COLUMN not in recommendations.columns:
         return 0
@@ -295,6 +412,14 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
                 len(recipes),
                 ",".join(recipe.name for recipe in recipes),
             )
+            if settings.experiment.allocation == ALLOCATION_THOMPSON:
+                recipes = _select_thompson_recipes(settings, recipes, events)
+                logger.info(
+                    "Experiment %s after allocation: %d variant(s) %s",
+                    settings.experiment.id,
+                    len(recipes),
+                    ",".join(recipe.name for recipe in recipes),
+                )
 
         recommend_cache: RecommendCache = {}
         if recipes:
