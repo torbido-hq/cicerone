@@ -125,12 +125,14 @@ def _thompson_view(
         )
     pair_impressions = int(payload.get("pair_impressions") or 0)
     floor = max(0, int(min_impressions))
+    volume_max = max(floor, pair_impressions, 1)
     return {
         "champion": champion,
         "challenger": challenger,
         "arms": arms,
         "pair_impressions": pair_impressions,
         "min_impressions": floor,
+        "volume_max": volume_max,
         "volume_pct": min(100.0, 100.0 * pair_impressions / floor) if floor else 100.0,
     }
 

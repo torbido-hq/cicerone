@@ -894,6 +894,38 @@ def test_experiment_context_thompson_view(tmp_path):
     assert by_name["control"]["role"] == "champion"
     assert by_name["blend"]["role"] == "parked"
     assert thompson["volume_pct"] == 40.0
+    assert thompson["volume_max"] == 100
+
+
+def test_thompson_view_volume_max_when_floor_is_zero() -> None:
+    from cicerone.config.constants import ALLOCATION_THOMPSON
+    from cicerone.dashboard_experiments import _thompson_view
+
+    experiment = ExperimentSettings(
+        enabled=True,
+        id="exp-1",
+        allocation=ALLOCATION_THOMPSON,
+        variants=(
+            VariantSettings(name="control", traffic=0.5),
+            VariantSettings(name="treatment", traffic=0.5),
+        ),
+    )
+    view = _thompson_view(
+        {"champion": "control", "challenger": "treatment", "pair_impressions": 12},
+        experiment,
+        0,
+    )
+    assert view is not None
+    assert view["min_impressions"] == 0
+    assert view["volume_max"] == 12
+    assert view["volume_pct"] == 100.0
+    empty = _thompson_view(
+        {"champion": "control", "challenger": "treatment", "pair_impressions": 0},
+        experiment,
+        0,
+    )
+    assert empty is not None
+    assert empty["volume_max"] == 1
 
 
 def test_promote_and_resume_keep_thompson_fields(tmp_path):

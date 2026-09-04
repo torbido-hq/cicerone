@@ -140,15 +140,6 @@ def pick_champion_name(names: Sequence[str], promoted_variant: str | None = None
     return str(names[0])
 
 
-def _binary_trials(arm: str, counts: ArmCounts) -> tuple[np.ndarray, np.ndarray]:
-    n = counts.impressions
-    if n <= 0:
-        return _EMPTY, _EMPTY_REWARDS
-    decisions = np.full(n, arm, dtype=object)
-    rewards = np.concatenate([np.ones(counts.successes, dtype=float), np.zeros(counts.failures, dtype=float)])
-    return decisions, rewards
-
-
 def _fit_mab(
     arms: Sequence[str],
     counts: Mapping[str, ArmCounts],
@@ -162,15 +153,12 @@ def _fit_mab(
         kwargs["seed"] = int(seed)
     mab = MAB(list(arms), LearningPolicy.ThompsonSampling(), **kwargs)
     mab.fit(_EMPTY, _EMPTY_REWARDS)
-    chunks_d: list[np.ndarray] = []
-    chunks_r: list[np.ndarray] = []
+    policy = mab._imp
     for name in arms:
-        decisions, rewards = _binary_trials(name, counts.get(name, ArmCounts(0, 0)))
-        if len(decisions):
-            chunks_d.append(decisions)
-            chunks_r.append(rewards)
-    if chunks_d:
-        mab.partial_fit(np.concatenate(chunks_d), np.concatenate(chunks_r))
+        arm = counts.get(name, ArmCounts(0, 0))
+        # Beta(1+s, 1+f) without expanding one trial per impression.
+        policy.arm_to_success_count[name] = 1 + arm.successes
+        policy.arm_to_fail_count[name] = 1 + arm.failures
     return mab
 
 
