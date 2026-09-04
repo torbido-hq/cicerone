@@ -65,6 +65,22 @@ def _matched_state(settings: Settings, store: ExperimentStore) -> dict[str, Any]
     return None
 
 
+def _eval_recipes(
+    recipes: tuple[ResolvedRecipe, ...],
+    experiment: ExperimentSettings,
+    state: Mapping[str, Any] | None,
+) -> tuple[ResolvedRecipe, ...]:
+    if experiment.allocation != ALLOCATION_THOMPSON or not state:
+        return recipes
+    champion = str(state.get("champion") or "")
+    challenger = str(state.get("challenger") or "")
+    wanted = {name for name in (champion, challenger) if name}
+    if not wanted:
+        return recipes
+    filtered = tuple(recipe for recipe in recipes if recipe.name in wanted)
+    return filtered or recipes
+
+
 def _ship_blocked(report: Any, experiment: ExperimentSettings) -> tuple[str, ...]:
     blocked = tuple(report.promote_blocked_by)
     if experiment.allocation == ALLOCATION_THOMPSON:
@@ -272,7 +288,7 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
                 track_variants = _track_variant_by_user(track_rows, {recipe.name for recipe in recipes})
     report = evaluate_experiment(
         experiment=experiment,
-        recipes=recipes,
+        recipes=_eval_recipes(recipes, experiment, state),
         events=events,
         event_weights=weights,
         recommendations=recs,

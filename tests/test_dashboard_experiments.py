@@ -1006,3 +1006,59 @@ def test_thompson_ship_ignores_undecided(tmp_path):
     state = ExperimentStore(settings.output).read_state()
     assert state is not None
     assert state["promoted_variant"] == "control"
+
+
+def test_thompson_ship_ignores_parked_empty_lists(tmp_path):
+    from cicerone.config.constants import ALLOCATION_THOMPSON
+    from cicerone.dashboard_experiments import _eval_recipes
+    from cicerone.experiment.recipes import ResolvedRecipe
+    from cicerone.feature_config import BlendingConfig
+
+    settings = _settings(tmp_path, log_exposures=False)
+    settings = replace(
+        settings,
+        experiment=replace(
+            settings.experiment,
+            allocation=ALLOCATION_THOMPSON,
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+                VariantSettings(name="blend", traffic=0.0),
+            ),
+        ),
+    )
+    blending = BlendingConfig(enabled=False)
+    recipes = (
+        ResolvedRecipe("control", 0.5, ("popular",), None, None, "priority", blending, True, True),
+        ResolvedRecipe("treatment", 0.5, ("popular",), None, None, "priority", blending, True, True),
+        ResolvedRecipe("blend", 0.0, ("popular",), None, None, "priority", blending, True, True),
+    )
+    filtered = _eval_recipes(
+        recipes,
+        settings.experiment,
+        {"champion": "control", "challenger": "treatment"},
+    )
+    assert [item.name for item in filtered] == ["control", "treatment"]
+    recs = [
+        {
+            "user_id": f"u{i}",
+            "item_id": f"i{i % 10}",
+            "rank": 1,
+            "score": 1.0,
+            "source": "personalized",
+            VARIANT_COLUMN: "control" if i < 6 else "treatment",
+        }
+        for i in range(12)
+    ]
+    events = [
+        {"user_id": f"u{i}", "item_id": f"i{i % 10}", "event_type": "view", "quantity": 1} for i in range(12)
+    ]
+    ExperimentStore(settings.output).write_state(
+        experiment_state("exp-1", promoted_variant=None, champion="control", challenger="treatment")
+    )
+    _write_frames(settings, events=events, recs=recs)
+    context = experiment_context(settings)
+    assert "guardrails" not in context["ship_blocked"]
+    assert {item.variant for item in context["report"].guardrails} == {"control", "treatment"}
+    assert context["can_ship"] is True
+    assert context["ship_variant"] == "control"
