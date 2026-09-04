@@ -96,19 +96,20 @@ def _assign_incremental_variant(
     store = ExperimentStore(settings.output)
     experiment_id = settings.experiment.id
     cached_until = 0.0
-    cached: str | None = None
+    cached: tuple[str | None, tuple[str, str] | None] = (None, None)
 
-    def winner() -> str | None:
+    def overlay() -> tuple[str | None, tuple[str, str] | None]:
         nonlocal cached_until, cached
         now = clock()
         if ttl_seconds > 0 and now < cached_until:
             return cached
-        cached = store.promoted_variant(experiment_id)
+        cached = store.assignment_overlay(experiment_id)
         cached_until = now + ttl_seconds
         return cached
 
     def assigned(user_id: str) -> str | None:
-        return resolve_assignment(settings, str(user_id), promoted_variant=winner())[1]
+        promoted, pair = overlay()
+        return resolve_assignment(settings, str(user_id), promoted_variant=promoted, active_pair=pair)[1]
 
     return assigned
 

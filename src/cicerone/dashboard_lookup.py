@@ -124,8 +124,10 @@ def lookup_recommendations(
     k = lookup_k(settings.top_k, settings.dashboard.lookup_k)
     experiment_id, variant = None, None
     if settings.experiment.enabled:
-        promoted = ExperimentStore(settings.output).promoted_variant(settings.experiment.id)
-        experiment_id, variant = resolve_assignment(settings, user_id, promoted_variant=promoted)
+        promoted, active_pair = ExperimentStore(settings.output).assignment_overlay(settings.experiment.id)
+        experiment_id, variant = resolve_assignment(
+            settings, user_id, promoted_variant=promoted, active_pair=active_pair
+        )
     try:
         recs, used_fallback = _load_rows(recommendation_reader, user_id, k, variant=variant)
         if not has_variant_column(recs):

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from cicerone.config.constants import (
+    ALLOCATION_THOMPSON,
     AUTOML_DEFAULT_N_SPLITS,
     AUTOML_DEFAULT_PRIMARY_METRIC,
     AUTOML_DEFAULT_TEST_DAYS,
@@ -245,6 +246,7 @@ def make_settings(**overrides: Any) -> Settings:
     _require_online_output_backend(settings)
     _require_online_collaborative_lightfm(settings)
     _require_track_backend(settings)
+    _require_thompson_allocation(settings)
     _warn_online_skipped_for_experiment(settings)
     _warn_online_skipped_for_sequential(settings)
     return settings
@@ -324,6 +326,16 @@ def _require_track_backend(settings: Settings) -> None:
     require_appendable_track_log(settings.output)
     if settings.events.ha and settings.output.kind != "db":
         raise ConfigError(TRACK_LOG_HA_ERROR)
+
+
+def _require_thompson_allocation(settings: Settings) -> None:
+    if not settings.experiment.enabled or settings.experiment.allocation != ALLOCATION_THOMPSON:
+        return
+    from cicerone.experiment.thompson import require_bandits_extra
+
+    require_bandits_extra()
+    if not settings.track.enabled:
+        raise ConfigError("experiment.allocation 'thompson' requires track.enabled = true")
 
 
 def _warn_online_skipped_for_experiment(settings: Settings) -> None:
@@ -634,6 +646,7 @@ def load_settings(config_path: str | None = None) -> Settings:
     _require_online_output_backend(settings)
     _require_online_collaborative_lightfm(settings)
     _require_track_backend(settings)
+    _require_thompson_allocation(settings)
     _warn_online_skipped_for_experiment(settings)
     _warn_online_skipped_for_sequential(settings)
     return settings

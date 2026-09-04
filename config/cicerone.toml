@@ -400,6 +400,9 @@ prefix = "recommendations/latest"
 # enabled = true
 # id = "rrf-vs-blend-2026-08"
 # primary_metric = "purchase"  # event_type, or "weighted"
+# # allocation = "fixed"       # or "thompson" (needs pip install 'cicerone-recommender[bandits]')
+# # explore_traffic = 0.5      # challenger share when allocation = thompson
+# # rotate_min_prob = 0.9      # P(champion is best) before a new challenger
 # # log_exposures = false
 # # automl_challenger = false
 # # alpha = 0.05

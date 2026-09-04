@@ -62,6 +62,41 @@ lexicographically first remaining name; blank/NaN names are ignored) on
 **serve reads and incremental write-through** until the next job rewrite.
 Do not mix lists.
 
+## Thompson at retrain
+
+`allocation = "thompson"` (default remains `"fixed"`) is a **job-time**
+conversion instrument, not a request-path bandit. Each `job.run()` keeps one
+**champion** and one **challenger**, updates Bernoulli posteriors from tracked
+CVR (`primary_metric = "conversion"` with `attribution = "click"` or
+`"impression"`), and writes **only those two** recipe lists. Serve still hashes
+the user onto the active pair (or 100% to a **Ship** / Promote winner).
+
+Requires `[track]` and `pip install 'cicerone-recommender[bandits]'` (Fidelity
+[MABWiser](https://github.com/fidelity/mabwiser) `LearningPolicy.ThompsonSampling()`).
+Config load is a `ConfigError` without the extra or with track off. At runtime
+the job fail-closes to `allocation = "fixed"` (writes every named recipe) if
+track is empty and there is no stored pair.
+
+The pair stays sticky until `track.min_impressions` on that pair. Then if
+P(champion is best) is at least `rotate_min_prob` and catalog guardrails pass,
+the champion stays and MABWiser samples the next challenger from the remaining
+names. Do not rewrite TOML `traffic` every night — that remaps users.
+
+```toml
+[experiment]
+enabled = true
+id = "ranking-cvr"
+primary_metric = "conversion"
+attribution = "click"
+allocation = "thompson"   # needs pip install 'cicerone-recommender[bandits]'
+# explore_traffic = 0.5
+# rotate_min_prob = 0.9
+```
+
+The Experiments page shows CVR %, P(best), “now testing A vs B”, and a volume
+meter. **Ship** remains the explicit 100% action; Thompson does not auto-promote.
+`automl_challenger` stays a separate offline-MAP loop.
+
 ## Job
 
 The job fits the **union** of variant models once, then combines/blends each

@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from test_serve import _FakeManifest, _FakeReader, _feature_config, _settings
 
 from cicerone.config import IOSettings
-from cicerone.config.settings import ExperimentSettings, VariantSettings
+from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
 from cicerone.experiment.assignment import assign_variant
 from cicerone.serve import create_app
 
@@ -238,6 +238,95 @@ def test_recommendations_promoted_variant_read_errors(tmp_path, monkeypatch):
     )
     again = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"})
     assert again.status_code == 200
+
+
+def test_recommendations_hash_active_thompson_pair(tmp_path):
+    from cicerone.config.constants import ALLOCATION_THOMPSON
+    from cicerone.experiment.store import ExperimentStore, experiment_state
+
+    recs = pd.concat(
+        [
+            _variant_recs(),
+            pd.DataFrame(
+                [
+                    {
+                        "user_id": "u1",
+                        "item_id": "blend-item",
+                        "rank": 1,
+                        "score": 0.7,
+                        "source": "personalized",
+                        "variant": "blend",
+                    }
+                ]
+            ),
+        ],
+        ignore_index=True,
+    )
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    ExperimentStore(output).write_state(
+        experiment_state("rrf-vs-blend", promoted_variant=None, champion="control", challenger="blend")
+    )
+    app = create_app(
+        _settings(
+            experiment=_experiment_settings(
+                allocation=ALLOCATION_THOMPSON,
+                explore_traffic=1.0,
+                variants=(
+                    VariantSettings(name="control", traffic=0.34),
+                    VariantSettings(name="treatment", traffic=0.33),
+                    VariantSettings(name="blend", traffic=0.33),
+                ),
+            ),
+            output=output,
+            track=TrackSettings(enabled=True),
+        ),
+        _FakeReader(recs),
+        manifest_reader=_FakeManifest(),
+        feature_config=_feature_config(),
+    )
+    body = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
+    assert body["variant"] == "blend"
+    assert [row["item_id"] for row in body["items"]] == ["blend-item"]
+
+
+def test_recommendations_promoted_overrides_thompson_pair(tmp_path):
+    from cicerone.config.constants import ALLOCATION_THOMPSON
+    from cicerone.experiment.store import ExperimentStore, experiment_state
+
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    ExperimentStore(output).write_state(
+        experiment_state(
+            "rrf-vs-blend",
+            promoted_variant="treatment",
+            champion="control",
+            challenger="control",
+        )
+    )
+    app = create_app(
+        _settings(
+            experiment=_experiment_settings(allocation=ALLOCATION_THOMPSON, explore_traffic=1.0),
+            output=output,
+            track=TrackSettings(enabled=True),
+        ),
+        _FakeReader(_variant_recs()),
+        manifest_reader=_FakeManifest(),
+        feature_config=_feature_config(),
+    )
+    body = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
+    assert body["variant"] == "treatment"
+
+
+def test_serve_assignment_does_not_import_mabwiser():
+    import sys
+
+    before = {name for name in sys.modules if name.split(".")[0] == "mabwiser"}
+    from cicerone.experiment.assignment import resolve_assignment
+    from cicerone.serve.app import create_app as _create_app
+
+    _ = resolve_assignment
+    _ = _create_app
+    after = {name for name in sys.modules if name.split(".")[0] == "mabwiser"}
+    assert after == before
 
 
 def test_recommendations_exposure_append_error_still_serves(tmp_path, monkeypatch):

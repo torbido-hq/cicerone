@@ -664,6 +664,7 @@ pip install 'cicerone-recommender[redis]'        # lock backend / Redis Streams
 pip install 'cicerone-recommender[kafka]'        # events.kind / publish.kind = kafka
 pip install 'cicerone-recommender[rabbitmq]'     # events.kind / publish.kind = rabbitmq
 pip install 'cicerone-recommender[sequential]'   # SASRec / BERT4Rec / HSTU
+pip install 'cicerone-recommender[bandits]'      # experiment.allocation = thompson
 ```
 
 Then, with your own TOML. Example files default to image paths

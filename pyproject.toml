@@ -50,6 +50,7 @@ redis = { file = ["requirements-redis.txt"] }
 sequential = { file = ["requirements-sequential.txt"] }
 kafka = { file = ["requirements-kafka.txt"] }
 rabbitmq = { file = ["requirements-rabbitmq.txt"] }
+bandits = { file = ["requirements-bandits.txt"] }
 
 [tool.ruff]
 line-length = 110

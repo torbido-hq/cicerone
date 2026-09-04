@@ -80,7 +80,9 @@ Clicks use the same contract with `kind: "click"`.
   `track.conversion_event_types` (default `purchase`, or
   `[experiment].primary_metric` when that is an event type), attributed to a
   prior impression (view-through) or click (click-through).
-- **CVR** — attributed conversions / impressions.
+- **CVR** — attributed conversions / impressions (capped so conversions cannot
+  exceed impressions). Experiment `primary_metric = "conversion"` scores this
+  **rate** per user, not a conversion count.
 
 The job writes a compact `track_eval` report (overall, by rank, by `source`,
 by variant). The dashboard **Quality** page reads it.
@@ -104,7 +106,8 @@ use the tracking store (`primary_metric` `ctr` / `conversion` require
 `track.enabled` and attribution `click` or `impression`). `recommended` counts
 only events whose `item_id` was on that user's list (no `/track` required).
 Promote stays fail-closed; CTR and conversion also require
-`track.min_impressions`.
+`track.min_impressions`. `allocation = "thompson"` uses the same CVR rate at
+retrain time (see [experiments.md](experiments.md#thompson-at-retrain)).
 
 ## Production replay
 

@@ -6,6 +6,7 @@ include requirements-redis.txt
 include requirements-sequential.txt
 include requirements-kafka.txt
 include requirements-rabbitmq.txt
+include requirements-bandits.txt
 graft src/cicerone/static
 graft src/cicerone/templates
 include src/cicerone/serve/python_detect.sh

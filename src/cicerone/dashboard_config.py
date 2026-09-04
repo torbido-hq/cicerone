@@ -164,6 +164,12 @@ HINTS: dict[str, dict[str, str]] = {
         "docs": f"{_DOCS}/experiments/",
     },
     "experiment.enabled": {"text": "Assign users to variants at serve and job time."},
+    "experiment.allocation": {
+        "text": "fixed hashes TOML traffic; thompson writes a champion/challenger pair each job.",
+        "docs": f"{_DOCS}/experiments/",
+    },
+    "experiment.explore_traffic": {"text": "Share of serve traffic hashed onto the Thompson challenger."},
+    "experiment.rotate_min_prob": {"text": "P(champion is best) required before sampling a new challenger."},
     "publish": {
         "text": "Emit per-user recommendation JSON after the output store write.",
         "docs": f"{_DOCS}/incremental-events/",

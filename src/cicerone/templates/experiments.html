@@ -32,6 +32,51 @@
         · {% if report.exposure_conditional %}exposure-conditional{% else %}ITT on users with events{% endif %}
         · α={{ experiment.alpha }}
       </p>
+      {% if thompson and thompson.champion and thompson.challenger %}
+      <p class="text-sm text-slate-800 mb-3">
+        Now testing <span class="font-medium">{{ thompson.challenger }}</span>
+        vs champion <span class="font-medium">{{ thompson.champion }}</span>.
+      </p>
+      <p class="text-sm text-slate-600 mb-1">
+        Pair volume: {{ thompson.pair_impressions }} / {{ thompson.min_impressions }} impressions
+        before challenger rotation.
+      </p>
+      <div class="h-2 rounded bg-slate-200 mb-4" role="meter"
+           aria-label="Impressions toward challenger rotation"
+           aria-valuemin="0"
+           aria-valuemax="{{ thompson.min_impressions }}"
+           aria-valuenow="{{ thompson.pair_impressions }}">
+        <div class="h-2 rounded bg-slate-800" style="width: {{ thompson.volume_pct }}%"></div>
+      </div>
+      <table class="w-full text-sm border-collapse mb-4">
+        <caption class="sr-only">Thompson conversion</caption>
+        <thead>
+          <tr class="text-left text-slate-600 border-b border-slate-200">
+            <th scope="col" class="py-2 px-2">Recipe</th>
+            <th scope="col" class="py-2 px-2">Impressions</th>
+            <th scope="col" class="py-2 px-2">Conversions</th>
+            <th scope="col" class="py-2 px-2">CVR</th>
+            <th scope="col" class="py-2 px-2">P(best)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for arm in thompson.arms %}
+          <tr class="border-b border-slate-100">
+            <th scope="row" class="py-2 px-2 text-left font-medium text-slate-800">
+              {{ arm.name }}
+              {% if arm.role != "parked" %}
+              <span class="ml-1 font-normal text-slate-500">({{ arm.role }})</span>
+              {% endif %}
+            </th>
+            <td class="py-2 px-2 text-slate-700">{{ arm.impressions }}</td>
+            <td class="py-2 px-2 text-slate-700">{{ arm.conversions }}</td>
+            <td class="py-2 px-2 text-slate-700">{{ "%.1f"|format(arm.cvr_pct) }}%</td>
+            <td class="py-2 px-2 text-slate-700">{{ "%.0f"|format(arm.p_best * 100) }}%</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
       {% if promoted_variant %}
       <p class="text-sm text-sky-800 mb-3">Promoted variant: <span class="font-medium">{{ promoted_variant }}</span> (100% traffic at serve).</p>
       <form action="/dashboard/experiments/unpromote" method="post">
@@ -90,16 +135,18 @@
         </tbody>
       </table>
       {% endif %}
-      {% if report.can_promote and report.winner and not promoted_variant %}
+      {% if can_ship and ship_variant and not promoted_variant %}
       <form action="/dashboard/experiments/promote" method="post">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <input type="hidden" name="variant" value="{{ report.winner }}">
+        <input type="hidden" name="variant" value="{{ ship_variant }}">
         <button type="submit" class="rounded bg-slate-800 px-3 py-1.5 text-sm text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2">
-          Promote {{ report.winner }}
+          {% if experiment.allocation == "thompson" %}Ship{% else %}Promote{% endif %} {{ ship_variant }}
         </button>
       </form>
-      {% elif not report.can_promote %}
-      <p class="text-sm text-slate-600">Promote blocked: {{ report.promote_blocked_by|join(", ") }}.</p>
+      {% elif not promoted_variant and ship_blocked %}
+        {% if experiment.allocation != "thompson" or ship_blocked != ("undecided",) %}
+      <p class="text-sm text-slate-600">Promote blocked: {{ ship_blocked|join(", ") }}.</p>
+        {% endif %}
       {% endif %}
     </section>
     {% endif %}

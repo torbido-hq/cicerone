@@ -41,11 +41,13 @@ def test_optional_extras_match_requirements_files():
     assert extras["sequential"]["file"] == ["requirements-sequential.txt"]
     assert extras["kafka"]["file"] == ["requirements-kafka.txt"]
     assert extras["rabbitmq"]["file"] == ["requirements-rabbitmq.txt"]
+    assert extras["bandits"]["file"] == ["requirements-bandits.txt"]
     root = _PYPROJECT.parent
     assert (root / "requirements-redis.txt").is_file()
     assert (root / "requirements-sequential.txt").is_file()
     assert (root / "requirements-kafka.txt").is_file()
     assert (root / "requirements-rabbitmq.txt").is_file()
+    assert (root / "requirements-bandits.txt").is_file()
 
 
 def test_console_script_entry_point():
@@ -201,6 +203,7 @@ def test_sdist_includes_requirement_pins():
         "requirements-sequential.txt",
         "requirements-kafka.txt",
         "requirements-rabbitmq.txt",
+        "requirements-bandits.txt",
         "LICENSE",
         "python_detect.sh",
     ):

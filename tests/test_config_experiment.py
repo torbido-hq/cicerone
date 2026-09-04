@@ -31,6 +31,7 @@ def test_load_experiment_defaults_disabled(tmp_path):
     assert settings.experiment.variants == ()
     assert settings.experiment.log_exposures is False
     assert settings.experiment.automl_challenger is False
+    assert settings.experiment.allocation == "fixed"
 
 
 def test_load_experiment_variants_and_remainder_traffic(tmp_path, caplog):
@@ -504,3 +505,123 @@ def test_load_experiment_rejects_duplicate_replacement_names():
                 ],
             }
         )
+
+
+def test_load_experiment_rejects_unknown_allocation():
+    with pytest.raises(ConfigError, match="allocation"):
+        load_experiment_settings(
+            {
+                "enabled": True,
+                "id": "exp",
+                "allocation": "epsilon-greedy",
+                "variants": [{"name": "a", "traffic": 0.5}, {"name": "b", "traffic": 0.5}],
+            }
+        )
+
+
+def test_load_experiment_thompson_requires_conversion_and_attribution():
+    with pytest.raises(ConfigError, match="primary_metric 'conversion'"):
+        load_experiment_settings(
+            {
+                "enabled": True,
+                "id": "exp",
+                "allocation": "thompson",
+                "primary_metric": "ctr",
+                "attribution": "click",
+                "variants": [{"name": "a", "traffic": 0.5}, {"name": "b", "traffic": 0.5}],
+            }
+        )
+    with pytest.raises(ConfigError, match="attribution 'click' or 'impression'"):
+        load_experiment_settings(
+            {
+                "enabled": True,
+                "id": "exp",
+                "allocation": "thompson",
+                "primary_metric": "conversion",
+                "attribution": "user",
+                "variants": [{"name": "a", "traffic": 0.5}, {"name": "b", "traffic": 0.5}],
+            }
+        )
+
+
+def test_load_settings_thompson_requires_extra_and_track(tmp_path, monkeypatch):
+    monkeypatch.setattr("cicerone.experiment.thompson.bandits_extra_available", lambda: False)
+    with pytest.raises(ConfigError, match="bandits"):
+        load_settings(
+            write_toml(
+                tmp_path,
+                """
+            [job]
+            """
+                + _minimal_io()
+                + """
+            [track]
+            enabled = true
+            [experiment]
+            enabled = true
+            id = "ranking-cvr"
+            primary_metric = "conversion"
+            attribution = "click"
+            allocation = "thompson"
+            [[experiment.variants]]
+            name = "control"
+            traffic = 0.5
+            [[experiment.variants]]
+            name = "treatment"
+            traffic = 0.5
+            """,
+            )
+        )
+    monkeypatch.setattr("cicerone.experiment.thompson.bandits_extra_available", lambda: True)
+    with pytest.raises(ConfigError, match="track.enabled"):
+        load_settings(
+            write_toml(
+                tmp_path,
+                """
+            [job]
+            """
+                + _minimal_io()
+                + """
+            [experiment]
+            enabled = true
+            id = "ranking-cvr"
+            primary_metric = "conversion"
+            attribution = "click"
+            allocation = "thompson"
+            [[experiment.variants]]
+            name = "control"
+            traffic = 0.5
+            [[experiment.variants]]
+            name = "treatment"
+            traffic = 0.5
+            """,
+            )
+        )
+    settings = load_settings(
+        write_toml(
+            tmp_path,
+            """
+        [job]
+        """
+            + _minimal_io()
+            + """
+        [track]
+        enabled = true
+        [experiment]
+        enabled = true
+        id = "ranking-cvr"
+        primary_metric = "conversion"
+        attribution = "click"
+        allocation = "thompson"
+        [[experiment.variants]]
+        name = "control"
+        traffic = 0.5
+        [[experiment.variants]]
+        name = "treatment"
+        traffic = 0.5
+        """,
+        )
+    )
+    assert settings.experiment.allocation == "thompson"
+    assert settings.experiment.explore_traffic == pytest.approx(0.5)
+    assert settings.experiment.rotate_min_prob == pytest.approx(0.9)
