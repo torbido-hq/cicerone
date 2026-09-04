@@ -4,21 +4,10 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.8.0] - 2026-08-28
+## [0.8.0] - 2026-09-04
 
 ### Added
 
-- Dashboard Configuration page (`GET /dashboard/config`) shows the loaded
-  Settings and `features.toml` with tokens, URLs, and keys redacted.
-  Section chips, on/off badges, and nested panels.
-- Config keys and section titles can open a one-line hint; some include a
-  Docs link to cicerone.dev.
-- Optional Kafka and RabbitMQ extras: `[events].kind = "kafka"` /
-  `"rabbitmq"` ingest (consumer group / queue) and `[publish]` to emit
-  per-user recommendation JSON after the `[output]` store write. Serve
-  still looks up from dataset/db. `pip install 'cicerone-recommender[kafka]'`
-  or `[rabbitmq]`. Prefer Redis Streams when you already run Redis for the
-  lock.
 - `[track]` ingest: `POST /track` records recommendation impressions and clicks
   off the training event path (db table or local JSONL). Hosts report what was
   actually rendered; `GET /recommendations` is not an impression unless
@@ -32,6 +21,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Optional `[job.eval]` production replay (HitRate / NDCG / Recall / MRR /
   Precision / catalog coverage / novelty of the previous lists against later
   events) and append-only recommendation history for windows that span jobs.
+- Dashboard Configuration page (`GET /dashboard/config`) shows the loaded
+  Settings and `features.toml` with tokens, URLs, and keys redacted.
+  Section chips, on/off badges, and nested panels.
+- Config keys and section titles can open a one-line hint; some include a
+  Docs link to cicerone.dev.
+- Optional Kafka and RabbitMQ extras: `[events].kind = "kafka"` /
+  `"rabbitmq"` ingest (consumer group / queue) and `[publish]` to emit
+  per-user recommendation JSON after the `[output]` store write. Serve
+  still looks up from dataset/db. `pip install 'cicerone-recommender[kafka]'`
+  or `[rabbitmq]`. Prefer Redis Streams when you already run Redis for the
+  lock.
 - Opt-in RecTools strategies `ease` (`EASEModel`), `als`
   (`ImplicitALSWrapperModel` with item/user features), `popular_in_category`,
   and `random`. `[model.collaborative]` stays LightFM; `[events.online]`
@@ -59,82 +59,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- Served-eval `CatalogCoverage` uses the item catalog, not only recommended IDs.
-- `POST /track` Prometheus counts match accepted rows and record store failures.
-- CTR/conversion experiment arms use the track impression `variant` when
-  present; hash assignment is the fallback.
-- Empty track outcomes stay event ITT instead of zeros labelled ITT.
-- `attribution = click | impression` requires `primary_metric` `ctr` or
-  `conversion`.
-- Incremental `[publish]` runs after the output write and manifest update.
-- Kafka `[publish]` flushes the producer when the connect probe fails.
-- Track ingest without `event_id` is stable across retries of the same row.
-- Stable track `event_id` hashes fields as JSON so `|` in ids cannot collide.
-- Missing track `event_id` with a bad `occurred_at` hashes the raw stamp, not
-  the clock.
-- Track `since` compares instants, not lexicographic timestamp strings.
-- History reads with `generated_ats` or `since` ignore legacy parquet that
-  has no `generated_at`.
-- Filtered history reads skip the legacy `recommendation_history.parquet`
-  file, so a corrupt leftover cannot fail a snapshot-scoped or `since` read.
-- History part files are read in sorted order.
-- CTR track variants take the earliest impression per user.
-- Duplicate names in replacement `[[experiment.variants.boost]]` /
-  eligibility tables are rejected.
-- Dashboard Experiments surfaces variant policy `ConfigError` instead of
-  “No experiment variants to evaluate.”
-- In-flight event apply nacks the batch if a later heartbeat fails, so a
-  long online refresh cannot ack after visibility is lost. The beat thread
-  is joined before ack.
-- Job `[eval]` still reads recommendation history when `[track]` is off.
-- Incremental `[publish]` failures after a successful write are logged; the
-  apply still acks.
-- Job writes a failed manifest when `[publish]` connect or config raises
-  before the run.
+- Track ingest is idempotent without a host `event_id` (stable JSON hashes,
+  assigned ids, JSONL file lock, `accepted` from ids not already stored).
+  `since` compares instants. Slices join the matching recommendation snapshot
+  and count by impression `event_id`. Prometheus counts match accepted rows.
+- Recommendation history writes one parquet file per job snapshot. Filtered
+  and `since` reads skip legacy unstamped files and parse slugged part names.
+- Incremental `[publish]` runs after the output write; connect or config
+  failures fail the job. Apply still acks after a successful write.
+- Kafka and RabbitMQ ingest commit or ack after flush (contiguous watermark;
+  poison non-UTF-8 skipped; AMQP on one I/O thread). Publish uses the
+  configured routing key and reports setup failure.
 - Incremental popular/latest write-through is the assigned (or promoted)
-  variant only; docs matched that.
-- History parquet `since` skips older part files by parsing the slugged
-  filename (`:` → `-`).
-- Dashboard `Cache-Control: private, no-store` skips only `/static` assets,
-  not other paths that happen to start with that prefix.
-- Kafka ingest commits the contiguous per-partition watermark so an
-  out-of-order ack cannot skip an earlier offset.
-- RabbitMQ ingest runs AMQP on one I/O thread so apply heartbeats stay
-  thread-safe.
-- Serve events runtime closes `[publish]` when the worker join times out.
-- Non-UTF-8 Kafka and RabbitMQ event payloads are skipped as poison
-  instead of crashing ingest.
-- RabbitMQ publisher and ingest close the AMQP connection when channel
-  setup fails.
-- RabbitMQ `[publish]` uses the configured routing key (empty is valid
-  for fanout); it no longer substitutes `user_id`.
-- Serve `[publish]` is closed if events runtime startup fails after connect.
-- Kafka and RabbitMQ ingest drop local ack tracking before the broker
-  confirm so a failed ack cannot re-apply from the in-memory deque.
-- RabbitMQ `[publish]` connect errors report setup failure, not only an
-  unreachable URL.
-- Experiment `ctr` / `conversion` use the track store only when
-  `attribution` is `click` or `impression`. `user` stays event ITT;
-  `recommended` stays a list join. Config rejects the other combinations.
-- Track source/variant slices join impressions to the matching
-  recommendation snapshot (`generated_at`), not the first user-item row.
-- Local JSONL track ingest serializes appends with a file lock so concurrent
-  writers cannot both accept the same `event_id`.
-- DB track ingest counts `accepted` from ids not already in the table when
-  the driver omits INSERT `rowcount`, so duplicates are not reported as new.
-- Track JSONL ingest imports `fcntl` only when present so Windows can load
-  `cicerone.track` (in-process lock only on those platforms).
-- Rank/source/variant CTR slices count clicks and conversions by the matched
-  impression `event_id`, not every row with the same user and item.
-- Experiment CTR/conversion volume and outcomes ignore track rows from a
-  different `experiment_id`; rows without an id still count.
-- Recommendation history writes one parquet file per job snapshot instead of
-  rewriting the full `recommendation_history.parquet`.
-- `experiment.primary_metric` `ctr` / `conversion` requires `track.enabled`.
-- Source/variant fallback uses the newest recommendation snapshot by
-  `generated_at`, not the last row in input order.
-- Track ingest assigns an `event_id` when the host omits one, so blank ids
-  cannot bypass idempotency.
+  variant only.
+- Experiment `ctr` / `conversion` use the track store only for `click` or
+  `impression` attribution, require `track.enabled`, and take the impression
+  `variant` when present. Empty track stays event ITT.
+- Served-eval `CatalogCoverage` uses the item catalog. Experiments surfaces
+  variant policy `ConfigError` instead of an empty-variant message. Job
+  `[eval]` still reads recommendation history when `[track]` is off.
+- In-flight event apply nacks the batch if a later heartbeat fails. Dashboard
+  `Cache-Control` skips only `/static` assets.
 
 ### Security
 
