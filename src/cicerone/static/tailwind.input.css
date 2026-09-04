@@ -17,15 +17,8 @@
   display: inline;
 }
 
-[data-config-hint] {
-  margin: auto;
-  width: min(20rem, calc(100vw - 2rem));
-  padding: 0.75rem 1rem;
-  border: 1px solid #e2e8f0;
-  border-radius: 0.5rem;
-  background: #fff;
-  color: #0f172a;
-  box-shadow: 0 10px 15px -3px rgb(15 23 42 / 0.12);
+[data-config-page]:not(:has([data-explain-keys]:checked)) [data-field-hint] {
+  display: none;
 }
 
 @media (forced-colors: active) {

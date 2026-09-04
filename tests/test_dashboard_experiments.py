@@ -647,6 +647,7 @@ def test_experiment_context_ctr_from_track_rows(tmp_path):
     context = experiment_context(settings)
     assert context["report"] is not None
     assert context["report"].primary_metric == "ctr"
+    assert context["lift_label"] == "CTR lift"
 
 
 def test_experiment_context_skips_other_experiment_track_rows(tmp_path, monkeypatch):

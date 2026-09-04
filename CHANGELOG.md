@@ -49,6 +49,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Dashboard Config hints are in-flow disclosures; Explain keys reveals per-key
+  help. Quality shows CTR as percents with click and conversion counts and an
+  as-of time. Experiments promote confirms before sending 100% traffic and
+  uses a one-shot flash cookie.
+- Dashboard header wraps on narrow viewports, underlines the current page,
+  marks Quality and Experiments as off when unused, and offers Sign out.
 - Dashboard Configuration includes `[publish]`, `[track]`, and `[job.eval]`.
   Experiments CI is labelled a mixture interval.
 - Dashboard Experiments loads events, recommendations, track, exposures, and

@@ -321,7 +321,16 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
         "can_ship": bool(ship_variant),
         "ship_variant": ship_variant,
         "ship_blocked": blocked,
+        "lift_label": _lift_label(report.primary_metric),
     }
+
+
+def _lift_label(metric: str) -> str:
+    if metric == PRIMARY_METRIC_CTR:
+        return "CTR lift"
+    if metric == PRIMARY_METRIC_CONVERSION:
+        return "Conversion lift"
+    return "Mean lift"
 
 
 def promote_winner(settings: Settings, variant: str) -> str | None:

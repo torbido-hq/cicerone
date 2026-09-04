@@ -607,7 +607,13 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
         if manifest.get("status") == "success" and (settings.track.enabled or settings.eval.enabled):
             store = TrackStore(settings.output)
             try:
-                store.write_eval({"track_eval": track_eval_payload, "served_eval": served_eval_payload})
+                store.write_eval(
+                    {
+                        "generated_at": manifest["generated_at"],
+                        "track_eval": track_eval_payload,
+                        "served_eval": served_eval_payload,
+                    }
+                )
             except Exception:
                 logger.exception("Failed to write track eval")
             if recommendations is not None:

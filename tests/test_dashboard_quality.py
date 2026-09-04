@@ -38,14 +38,14 @@ def _settings(tmp_path, **overrides):
 
 
 _QUALITY_CURRENT = re.compile(
-    r'<a\b[^>]*href="/dashboard/quality"[^>]*aria-current="page"[^>]*>\s*Quality\s*</a>',
+    r'<a\b[^>]*href="/dashboard/quality"[^>]*aria-current="page"[^>]*>\s*Quality',
     re.DOTALL,
 )
 
 
 def _assert_quality_chrome(response) -> None:
     assert response.status_code == 200
-    assert "<title>Cicerone — Quality</title>" in response.text
+    assert "<title>Quality · Cicerone dashboard</title>" in response.text
     assert _QUALITY_CURRENT.search(response.text)
     assert 'href="/dashboard"' in response.text
     assert 'href="/dashboard/experiments"' in response.text
@@ -74,6 +74,7 @@ def test_quality_page_shows_stored_metrics(tmp_path):
     settings = _settings(tmp_path, track={"enabled": True})
     TrackStore(settings.output).write_eval(
         {
+            "generated_at": "2026-09-04T12:00:00+00:00",
             "track_eval": {
                 "overall": {
                     "n_impressions": 10,
@@ -99,16 +100,20 @@ def test_quality_page_shows_stored_metrics(tmp_path):
                 },
                 "by_source": {},
                 "by_variant": {},
-            }
+            },
         }
     )
     app = create_app(settings, _FakeReader(), _users_with("alice", "s3cret"))
     response = TestClient(app).get("/dashboard/quality", auth=("alice", "s3cret"))
     _assert_quality_chrome(response)
-    assert "Impressions: 10" in response.text
+    assert "Impressions" in response.text
+    assert ">10<" in response.text
     assert "By rank" in response.text
-    assert "0.2000" in response.text
+    assert "20.00%" in response.text
     assert "CTR and conversion by rank" in response.text
+    assert ">Clicks<" in response.text
+    assert "2026-09-04T12:00:00+00:00" in response.text
+    assert "As of" in response.text
 
 
 def test_quality_page_live_metrics_from_track_rows(tmp_path):
@@ -132,7 +137,9 @@ def test_quality_page_live_metrics_from_track_rows(tmp_path):
     app = create_app(settings, _FakeReader(), _users_with("alice", "s3cret"))
     response = TestClient(app).get("/dashboard/quality", auth=("alice", "s3cret"))
     assert response.status_code == 200
-    assert "Impressions: 1" in response.text
+    assert "Impressions" in response.text
+    assert ">1<" in response.text
+    assert "Live from the track store." in response.text
 
 
 def test_quality_live_eval_error_falls_back_to_empty(tmp_path, monkeypatch):
@@ -265,6 +272,45 @@ def test_quality_page_shows_stored_served_eval(tmp_path):
     assert "Production replay ranking metrics" in response.text
     assert "Production replay hit rate by source" in response.text
     assert 'aria-labelledby="quality-replay-heading"' in response.text
+    assert ">HitRate@10<" in response.text
+    assert "name=0.5000" not in response.text
+
+
+def test_quality_as_of_falls_back_to_served_eval(tmp_path):
+    from cicerone.dashboard_quality import quality_context
+
+    settings = _settings(tmp_path, track={"enabled": True})
+    TrackStore(settings.output).write_eval(
+        {
+            "track_eval": {
+                "overall": {
+                    "n_impressions": 2,
+                    "n_clicks": 1,
+                    "n_conversions_click": 0,
+                    "n_conversions_view": 0,
+                    "ctr": 0.5,
+                    "cvr_click": 0.0,
+                    "cvr_view": 0.0,
+                    "n_users": 1,
+                }
+            },
+            "served_eval": {"generated_at": "2026-09-01T00:00:00+00:00", "metrics": {"HitRate@10": 0.1}},
+        }
+    )
+    context = quality_context(settings)
+    assert context["track_as_of"] == "2026-09-01T00:00:00+00:00"
+    assert context["replay_metric_names"] == ["HitRate@10"]
+
+
+def test_replay_metric_names_unions_sources():
+    from cicerone.dashboard_quality import _replay_metric_names
+
+    assert _replay_metric_names(None) == []
+    assert _replay_metric_names({"metrics": {"NDCG@10": 0.2}, "by_source": {"a": {"Recall@10": 0.1}}}) == [
+        "NDCG@10",
+        "Recall@10",
+    ]
+    assert _replay_metric_names({"by_source": {"a": "bad"}}) == []
 
 
 def test_quality_eval_enabled_empty_replay_copy(tmp_path):
