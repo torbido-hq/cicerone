@@ -1105,6 +1105,57 @@ def test_select_thompson_recipes_fail_closed_paths(tmp_path, monkeypatch):
     assert _select_thompson_recipes(settings, recipes, pd.DataFrame()) == recipes
 
 
+def test_select_thompson_recipes_fail_closed_on_state_read_does_not_clear_promote(tmp_path, monkeypatch):
+    from unittest.mock import MagicMock
+
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+    from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
+    from cicerone.experiment.recipes import ResolvedRecipe
+    from cicerone.feature_config import BlendingConfig
+    from cicerone.job import _select_thompson_recipes
+
+    blending = BlendingConfig(enabled=False)
+    recipes = (
+        ResolvedRecipe("control", 0.5, ("popular",), None, None, "priority", blending, True, True),
+        ResolvedRecipe("treatment", 0.5, ("popular",), None, None, "priority", blending, True, True),
+    )
+    settings = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="ranking-cvr",
+            allocation="thompson",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        track=TrackSettings(enabled=True),
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    monkeypatch.setattr(
+        "cicerone.job.ExperimentStore.read_state",
+        lambda self: (_ for _ in ()).throw(RuntimeError("state")),
+    )
+    monkeypatch.setattr(
+        "cicerone.job.TrackStore.read_rows",
+        lambda *args, **kwargs: [
+            {
+                "user_id": "u-1",
+                "item_id": "i-1",
+                "kind": "impression",
+                "occurred_at": "2026-09-01T00:00:00Z",
+                "variant": "control",
+            }
+        ],
+    )
+    writer = MagicMock()
+    monkeypatch.setattr("cicerone.job.ExperimentStore.write_state", writer)
+    assert _select_thompson_recipes(settings, recipes, pd.DataFrame()) == recipes
+    writer.assert_not_called()
+
+
 def test_select_thompson_recipes_survives_recs_and_catalog_errors(tmp_path, monkeypatch):
     from conftest import make_settings
 

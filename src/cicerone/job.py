@@ -213,8 +213,8 @@ def _select_thompson_recipes(
     try:
         previous = store.read_state()
     except Exception:
-        logger.exception("Failed to read experiment state for Thompson allocation")
-        previous = None
+        logger.exception("Thompson allocation fail closed: could not read experiment state")
+        return recipes
     if previous and str(previous.get("experiment_id") or "") != experiment.id:
         previous = None
     promoted = str(previous["promoted_variant"]) if previous and previous.get("promoted_variant") else None

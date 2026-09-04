@@ -254,6 +254,39 @@ def test_user_track_outcomes_conversion_is_rate_not_count() -> None:
     assert conv["alice"] == pytest.approx(0.5)
 
 
+def test_evaluate_tracking_caps_conversions_at_impressions() -> None:
+    rows = _track(
+        {
+            "kind": "impression",
+            "user_id": "alice",
+            "item_id": "ipa",
+            "rank": 1,
+            "occurred_at": "2026-08-28T12:00:00Z",
+            "event_id": "imp-1",
+        }
+    )
+    conversions = pd.DataFrame(
+        [
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "event_type": "purchase",
+                "occurred_at": "2026-08-28T12:10:00Z",
+            },
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "event_type": "purchase",
+                "occurred_at": "2026-08-28T12:20:00Z",
+            },
+        ]
+    )
+    report = evaluate_tracking(track_rows=rows, conversions=conversions, window_hours=24)
+    assert report.overall.n_impressions == 1
+    assert report.overall.n_conversions_view == 1
+    assert report.overall.cvr_view == pytest.approx(1.0)
+
+
 def test_filter_events_to_recommended_excludes_cold_start() -> None:
     recs = pd.DataFrame(
         [
