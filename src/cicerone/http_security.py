@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hmac
 import secrets
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 from fastapi import HTTPException, Request, Response, status
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -91,10 +91,11 @@ def set_flash_cookie(
 def parse_flash_cookie(raw: str | None) -> tuple[str | None, str | None]:
     if not raw:
         return None, None
-    if raw.startswith("ok:"):
-        return raw[3:] or None, None
-    if raw.startswith("err:"):
-        return None, raw[4:] or None
+    value = unquote(raw.strip().strip('"'))
+    if value.startswith("ok:"):
+        return _flash_text(value[3:]) or None, None
+    if value.startswith("err:"):
+        return None, _flash_text(value[4:]) or None
     return None, None
 
 

@@ -142,6 +142,33 @@ def test_quality_page_live_metrics_from_track_rows(tmp_path):
     assert "Live from the track store." in response.text
 
 
+def test_quality_live_label_when_stored_eval_lacks_track_eval(tmp_path):
+    from cicerone.dashboard_quality import quality_context
+    from cicerone.track.normalize import normalize_track
+
+    settings = _settings(tmp_path, track={"enabled": True})
+    store = TrackStore(settings.output)
+    store.write_eval({"served_eval": {"metrics": {"HitRate@10": 0.1}}})
+    store.append_rows(
+        [
+            normalize_track(
+                {
+                    "kind": "impression",
+                    "user_id": "u1",
+                    "item_id": "i1",
+                    "rank": 1,
+                    "occurred_at": "2026-08-28T12:00:00Z",
+                    "event_id": "imp-live-fallback",
+                }
+            ).as_row()
+        ]
+    )
+    context = quality_context(settings)
+    assert context["track_live"] is True
+    assert context["track_as_of"] is None
+    assert context["track_eval"]["overall"]["n_impressions"] == 1
+
+
 def test_quality_live_eval_error_falls_back_to_empty(tmp_path, monkeypatch):
     from cicerone.dashboard_quality import quality_context
     from cicerone.track.normalize import normalize_track

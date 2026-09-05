@@ -82,6 +82,11 @@ def test_flash_cookie_round_trip():
     assert "Promoted control" in header
     assert parse_flash_cookie("ok:Promoted control") == ("Promoted control", None)
     assert parse_flash_cookie("err:Unknown variant") == (None, "Unknown variant")
+    assert parse_flash_cookie('"ok:Promoted control"') == ("Promoted control", None)
+    assert parse_flash_cookie("ok:Promoted%20control") == ("Promoted control", None)
+    assert parse_flash_cookie("ok%3APromoted%20control") == ("Promoted control", None)
+    assert parse_flash_cookie("ok:hi\x00there") == ("hithere", None)
+    assert parse_flash_cookie("ok:" + "x" * 500) == ("x" * 400, None)
     assert parse_flash_cookie(None) == (None, None)
     assert parse_flash_cookie("ok:") == (None, None)
     assert parse_flash_cookie("err:") == (None, None)
