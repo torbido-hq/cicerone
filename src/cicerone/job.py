@@ -331,6 +331,7 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
     track_eval_payload: dict[str, Any] | None = None
     served_eval_payload: dict[str, Any] | None = None
     recommendations: pd.DataFrame | None = None
+    eval_generated_at: str | None = None
 
     try:
         publisher = build_publisher(settings)
@@ -349,6 +350,8 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
             last_manifest = build_manifest_reader(settings.output).read_latest()
         except Exception:
             logger.exception("Failed to read last manifest")
+        if last_manifest and last_manifest.get("generated_at"):
+            eval_generated_at = str(last_manifest["generated_at"])
         track_eval_payload, served_eval_payload = _score_previous_run(settings, events, last_manifest, items)
 
         built = build_dataset(events, users, items, feature_config, half_life_days=settings.half_life_days)
@@ -607,7 +610,13 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
         if manifest.get("status") == "success" and (settings.track.enabled or settings.eval.enabled):
             store = TrackStore(settings.output)
             try:
-                store.write_eval({"track_eval": track_eval_payload, "served_eval": served_eval_payload})
+                store.write_eval(
+                    {
+                        "generated_at": eval_generated_at,
+                        "track_eval": track_eval_payload,
+                        "served_eval": served_eval_payload,
+                    }
+                )
             except Exception:
                 logger.exception("Failed to write track eval")
             if recommendations is not None:

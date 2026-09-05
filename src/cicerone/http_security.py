@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import hmac
 import secrets
-from urllib.parse import urlparse
+from urllib.parse import quote, unquote, urlparse
 
 from fastapi import HTTPException, Request, Response, status
 from starlette.middleware.base import BaseHTTPMiddleware
 
 CSRF_COOKIE = "cicerone_csrf"
 CSRF_FORM_FIELD = "csrf_token"
+FLASH_COOKIE = "cicerone_flash"
+FLASH_COOKIE_PATH = "/dashboard"
 
 _SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
@@ -58,6 +60,47 @@ def set_csrf_cookie(request: Request, response: Response, token: str) -> None:
         secure=request.url.scheme == "https",
         path="/",
     )
+
+
+def _flash_text(message: str) -> str:
+    return "".join(ch for ch in message if ch >= " " and ch != "\x7f")[:400]
+
+
+def set_flash_cookie(
+    request: Request,
+    response: Response,
+    *,
+    ok: str | None = None,
+    error: str | None = None,
+) -> None:
+    message = ok or error
+    if not message:
+        return
+    kind = "ok" if ok else "err"
+    response.set_cookie(
+        FLASH_COOKIE,
+        f"{kind}:{quote(_flash_text(message), safe='')}",
+        httponly=True,
+        samesite="strict",
+        secure=request.url.scheme == "https",
+        path=FLASH_COOKIE_PATH,
+        max_age=120,
+    )
+
+
+def parse_flash_cookie(raw: str | None) -> tuple[str | None, str | None]:
+    if not raw:
+        return None, None
+    value = unquote(raw.strip().strip('"'))
+    if value.startswith("ok:"):
+        return _flash_text(value[3:]) or None, None
+    if value.startswith("err:"):
+        return None, _flash_text(value[4:]) or None
+    return None, None
+
+
+def clear_flash_cookie(response: Response) -> None:
+    response.delete_cookie(FLASH_COOKIE, path=FLASH_COOKIE_PATH)
 
 
 def require_csrf(request: Request, form_token: str) -> None:

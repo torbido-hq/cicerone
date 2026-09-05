@@ -17,6 +17,10 @@ def _settings(**overrides) -> Settings:
     return make_settings(**{"dashboard_enabled": True, **overrides})
 
 
+def _flash_cookie(response) -> str:
+    return (response.cookies.get("cicerone_flash") or "").strip('"')
+
+
 class _FakeReader:
     def __init__(self, latest: dict | None, history: list[dict] | None = None):
         self._latest = latest
@@ -149,8 +153,11 @@ def test_dashboard_page_renders_with_valid_credentials():
     assert 'href="/dashboard/experiments"' in response.text
     assert 'href="/dashboard/quality"' in response.text
     assert 'href="/dashboard/config"' in response.text
-    assert ">Quality<" in response.text
+    assert ">Quality" in response.text
     assert ">Config<" in response.text
+    assert "Sign out" in response.text
+    assert "flex-wrap" in response.text
+    assert 'href="/dashboard/logout"' in response.text
     assert 'name="robots"' in response.text
     assert f'content="{ROBOTS_TAG}"' in response.text
     assert "noindex" in response.text
@@ -950,7 +957,11 @@ def test_recommendations_partial_no_events_badge():
 def test_dashboard_experiments_page_disabled():
     response = _recs_client().get("/dashboard/experiments", auth=("alice", "s3cret"))
     assert response.status_code == 200
-    assert "No experiment is enabled" in response.text
+    assert "No experiment is running." in response.text
+    assert "How to enable one" in response.text
+    assert "<title>Experiments · Cicerone dashboard</title>" in response.text
+    assert "Sign out" in response.text
+    assert ">off<" in response.text
     assert 'href="/dashboard/experiments"' in response.text
     assert 'href="/dashboard/quality"' in response.text
     assert 'href="/dashboard/config"' in response.text
@@ -1061,9 +1072,8 @@ def test_dashboard_promote_unknown_variant_redirects():
         follow_redirects=False,
     )
     assert response.status_code == 303
-    location = response.headers["location"]
-    assert location.startswith("/dashboard/experiments?")
-    assert "promote_error=" in location
+    assert response.headers["location"] == "/dashboard/experiments"
+    assert _flash_cookie(response).startswith("err:")
 
 
 def test_dashboard_promote_hostile_variant_stays_on_experiments():
@@ -1087,21 +1097,14 @@ def test_dashboard_promote_hostile_variant_stays_on_experiments():
     )
     assert response.status_code == 303
     location = response.headers["location"]
-    assert location.startswith("/dashboard/experiments?")
-    assert "://" not in location.split("?", 1)[0]
+    assert location == "/dashboard/experiments"
+    assert "://" not in location
 
 
-def test_experiments_redirect_rejects_absolute_target(monkeypatch):
-    from urllib.parse import ParseResult
+def test_experiments_redirect_stays_on_experiments_path():
+    from cicerone.dashboard import _experiments_redirect
 
-    import cicerone.dashboard as dash
-
-    monkeypatch.setattr(
-        dash,
-        "urlparse",
-        lambda _url: ParseResult("https", "evil.example", "/dashboard/experiments", "", "", ""),
-    )
-    response = dash._experiments_redirect(promote_error="x")
+    response = _experiments_redirect(promote_error="x")
     assert response.status_code == 303
     assert response.headers["location"] == "/dashboard/experiments"
 
@@ -1136,10 +1139,10 @@ def test_dashboard_promote_success_redirects(monkeypatch):
         follow_redirects=False,
     )
     assert response.status_code == 303
-    location = response.headers["location"]
-    assert location.startswith("/dashboard/experiments?")
-    assert "Promoted" in location
-    assert "control" in location
+    assert response.headers["location"] == "/dashboard/experiments"
+    flash = _flash_cookie(response)
+    assert flash.startswith("ok:Promoted")
+    assert "control" in flash
 
 
 def test_dashboard_unpromote_resumes_split(tmp_path):
@@ -1168,7 +1171,8 @@ def test_dashboard_unpromote_resumes_split(tmp_path):
         follow_redirects=False,
     )
     assert response.status_code == 303
-    assert "Resumed" in response.headers["location"]
+    assert response.headers["location"] == "/dashboard/experiments"
+    assert "Resumed" in (response.cookies.get("cicerone_flash") or "")
 
 
 def test_dashboard_unpromote_disabled_experiment_redirects():
@@ -1181,7 +1185,8 @@ def test_dashboard_unpromote_disabled_experiment_redirects():
         follow_redirects=False,
     )
     assert response.status_code == 303
-    assert "promote_error=" in response.headers["location"]
+    assert response.headers["location"] == "/dashboard/experiments"
+    assert _flash_cookie(response).startswith("err:")
 
 
 def test_dashboard_promote_rejects_missing_csrf():
@@ -1226,3 +1231,40 @@ def test_dashboard_malformed_bcrypt_hash_is_unauthorized():
     app = create_app(_settings(), _FakeReader(None), {"alice": "not-a-valid-bcrypt-hash"})
     response = TestClient(app).get("/dashboard", auth=("alice", "s3cret"))
     assert response.status_code == 401
+
+
+def test_dashboard_logout_returns_401():
+    app = create_app(_settings(), _FakeReader(None), _users_with("alice", "s3cret"))
+    response = TestClient(app).get("/dashboard/logout")
+    assert response.status_code == 401
+    assert response.headers["www-authenticate"] == "Basic"
+    assert "Signed out" in response.text
+    assert "clear the saved password" in response.text
+
+
+def test_experiments_flash_cookie_is_one_shot():
+    client = _recs_client()
+    client.cookies.set("cicerone_flash", "ok:Promoted control")
+    first = client.get("/dashboard/experiments", auth=("alice", "s3cret"))
+    assert first.status_code == 200
+    assert "Promoted control" in first.text
+    assert "cicerone_flash" in first.headers.get("set-cookie", "").lower()
+    client.cookies.pop("cicerone_flash", None)
+    second = client.get("/dashboard/experiments", auth=("alice", "s3cret"))
+    assert "Promoted control" not in second.text
+
+
+def test_as_percent_formats_rates():
+    from cicerone.dashboard import _as_percent, _chrome
+    from cicerone.dashboard_experiments import _lift_label
+
+    assert _as_percent(0.2) == "20.00%"
+    assert _as_percent("0.0123") == "1.23%"
+    assert _as_percent(None) == "—"
+    assert _as_percent("nope") == "—"
+    chrome = _chrome(_settings())
+    assert chrome["nav_quality_available"] is False
+    assert chrome["nav_experiments_available"] is False
+    assert _lift_label("ctr") == "CTR lift"
+    assert _lift_label("conversion") == "Conversion lift"
+    assert _lift_label("weighted") == "Mean lift"

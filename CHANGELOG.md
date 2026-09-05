@@ -49,6 +49,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Dashboard Config hints are in-flow disclosures; Explain keys reveals per-key
+  help. Quality shows CTR as percents with click and conversion counts and an
+  as-of time. Experiments promote confirms before sending 100% traffic and
+  uses a one-shot flash cookie.
+- Dashboard header wraps on narrow viewports, underlines the current page,
+  marks Quality and Experiments as off when unused, and offers Sign out.
 - Dashboard Configuration includes `[publish]`, `[track]`, and `[job.eval]`.
   Experiments CI is labelled a mixture interval.
 - Dashboard Experiments loads events, recommendations, track, exposures, and
@@ -59,6 +65,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Quality as-of uses the scored previous run's timestamp, not the job that
+  just finished.
+- Quality labels live track metrics when a stored eval has no usable
+  track_eval.
+- Quality omits as-of when CTR/CVR is computed live from the track store.
 - Track ingest is idempotent without a host `event_id` (stable JSON hashes,
   assigned ids, JSONL file lock, `accepted` from ids not already stored).
   `since` compares instants. Slices join the matching recommendation snapshot
