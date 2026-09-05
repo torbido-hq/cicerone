@@ -99,10 +99,17 @@ meter. **Ship** remains the explicit 100% action; Thompson does not auto-promote
 
 ## Job
 
-The job fits the **union** of variant models once, then combines/blends each
-recipe into top-K and tags `variant`. One recommendations table. The run
-manifest records `experiment_id` and `experiment_variants` (JSON recipes) so a
-later AutoML challenger can use the last successful recipe as control.
+The job fits the **union** of variant models once. What it writes depends on
+`[experiment].allocation`:
+
+- `fixed` (default) — combine/blend **each** named recipe into top-K and tag
+  `variant`.
+- `thompson` — write only the live champion/challenger pair (see
+  [Thompson at retrain](#thompson-at-retrain)).
+
+One recommendations table. The run manifest records `experiment_id` and
+`experiment_variants` (JSON recipes) so a later AutoML challenger can use the
+last successful recipe as control.
 
 Existing tables without a `variant` column still serve (no experiment). Adding
 the column to an existing DB table is `ALTER TABLE … ADD COLUMN variant TEXT`.

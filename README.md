@@ -40,21 +40,23 @@ up to your own data doesn't require touching any code.
 ## Features
 
 - **Batch recommender** — cron-scheduled train + top-K write (dataset or DB I/O)
-- **Hybrid strategies** — collaborative (LightFM), item-based KNN, optional SASRec/BERT4Rec/HSTU, optional content cold-item fallback, popular, latest
+- **Hybrid strategies** — collaborative (LightFM), item-based KNN, optional SASRec/BERT4Rec/HSTU, EASE, ALS, optional content cold-item fallback, popular, popular-in-category, latest, random
 - **Priority, RRF, or blending** — combine strategies by order, weighted ranks, or per-user mix
-- **A/B experiments** — sticky user assignment across whole ranking recipes; sequential CIs, catalog guardrails, optional AutoML challenger, dashboard promote
+- **A/B experiments** — sticky user assignment across whole ranking recipes; sequential CIs, catalog guardrails, optional AutoML challenger or job-time Thompson, dashboard promote
+- **Evaluation** — host-reported impressions and clicks (`POST /track`), CTR/CVR on the Quality page, optional production replay ([docs/evaluation.md](docs/evaluation.md))
 - **AutoML** — time-fold backtest to pick models/weights per run
 - **Business policies** — TOML eligibility filters and score boosts
 - **Serve mode** — read-only HTTP API over precomputed recommendations
   (`limit` / `category` / `exclude_unavailable`, cold-start fallback;
   OpenAPI at `/docs` + thin `ServeClient`)
-- **Incremental events** — write-through of popular/latest between retrains;
+- **Incremental events** — write-through of popular/latest between retrains
+  (webhook, DB, S3, Redis Streams, Kafka, or RabbitMQ);
   optional `[events.online]` continues LightFM for affected users
   ([docs/incremental-events.md](docs/incremental-events.md))
 - **CLI / PyPI** — `cicerone` console script; `pip install cicerone-recommender`
   (import name `cicerone`; the PyPI name `cicerone` is a different project)
 - **Retrain trigger** — webhook (+ optional input poll) alongside cron
-- **Dashboard** — Basic-Auth status page for run success/failure, history, user-id lookup, and experiment promote
+- **Dashboard** — Basic-Auth Status, Quality, Experiments, Config, and user-id lookup
 - **Model artifacts** — optional versioned fitted-model bundle for offline reload
 
 > **Why "Cicerone"?** In the world of beer, a [Cicerone](https://www.cicerone.org)
@@ -548,11 +550,13 @@ recomputed. Scoring is unchanged.
 
 `[experiment]` runs a sticky A/B test of whole ranking recipes (models +
 combiner + blending knobs + optional boost/eligibility policy), not per-source
-CTR of a mixed cascade. The job fits the union of variant models once, writes
-extra `variant` rows, and serve hashes `user_id` onto one list. The dashboard
-Experiments page shows always-valid CIs and catalog guardrails, and can
-promote a winner to 100% traffic. Optional `automl_challenger` uses the last
-successful manifest as control and this run's AutoML pick as treatment.
+CTR of a mixed cascade. The job fits the union of variant models once. With
+`allocation = "fixed"` (default) it writes every named recipe; `allocation =
+"thompson"` writes only the live champion/challenger pair. Serve hashes
+`user_id` onto one list. The dashboard Experiments page shows always-valid
+CIs and catalog guardrails, and can promote a winner to 100% traffic.
+Optional `automl_challenger` uses the last successful manifest as control
+and this run's AutoML pick as treatment.
 
 ```toml
 [experiment]
