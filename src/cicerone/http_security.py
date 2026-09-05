@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hmac
 import secrets
-from urllib.parse import unquote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
 from fastapi import HTTPException, Request, Response, status
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -79,7 +79,7 @@ def set_flash_cookie(
     kind = "ok" if ok else "err"
     response.set_cookie(
         FLASH_COOKIE,
-        f"{kind}:{_flash_text(message)}",
+        f"{kind}:{quote(_flash_text(message), safe='')}",
         httponly=True,
         samesite="strict",
         secure=request.url.scheme == "https",

@@ -17,8 +17,11 @@
   display: inline;
 }
 
-[data-config-page]:not(:has([data-explain-keys]:checked)) [data-field-hint] {
+[data-config-page] [data-field-hint] {
   display: none;
+}
+[data-config-page]:has([data-explain-keys]:checked) [data-field-hint] {
+  display: block;
 }
 
 @media (forced-colors: active) {
