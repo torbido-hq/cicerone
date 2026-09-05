@@ -148,7 +148,15 @@ def test_quality_live_label_when_stored_eval_lacks_track_eval(tmp_path):
 
     settings = _settings(tmp_path, track={"enabled": True})
     store = TrackStore(settings.output)
-    store.write_eval({"served_eval": {"metrics": {"HitRate@10": 0.1}}})
+    store.write_eval(
+        {
+            "generated_at": "2026-09-04T12:00:00+00:00",
+            "served_eval": {
+                "generated_at": "2026-09-01T00:00:00+00:00",
+                "metrics": {"HitRate@10": 0.1},
+            },
+        }
+    )
     store.append_rows(
         [
             normalize_track(
@@ -167,6 +175,13 @@ def test_quality_live_label_when_stored_eval_lacks_track_eval(tmp_path):
     assert context["track_live"] is True
     assert context["track_as_of"] is None
     assert context["track_eval"]["overall"]["n_impressions"] == 1
+    app = create_app(settings, _FakeReader(), _users_with("alice", "s3cret"))
+    response = TestClient(app).get("/dashboard/quality", auth=("alice", "s3cret"))
+    _assert_quality_chrome(response)
+    assert "Live from the track store." in response.text
+    assert "As of" not in response.text
+    assert "2026-09-04T12:00:00+00:00" not in response.text
+    assert "Lists from" in response.text
 
 
 def test_quality_live_eval_error_falls_back_to_empty(tmp_path, monkeypatch):

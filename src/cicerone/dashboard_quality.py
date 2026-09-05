@@ -36,17 +36,16 @@ def quality_context(settings: Settings) -> dict[str, Any]:
         used_live_track = track_eval is not None
     empty_track = (not settings.track.enabled) or _no_impressions(track_eval)
     track_as_of = None
-    track_live = False
-    if isinstance(report, dict):
-        raw_as_of = report.get("generated_at")
-        if isinstance(raw_as_of, str) and raw_as_of:
-            track_as_of = raw_as_of
-    if track_as_of is None and isinstance(served_eval, dict):
-        raw_served_at = served_eval.get("generated_at")
-        if isinstance(raw_served_at, str) and raw_served_at:
-            track_as_of = raw_served_at
-    if track_as_of is None and used_live_track:
-        track_live = True
+    track_live = used_live_track
+    if not used_live_track:
+        if isinstance(report, dict):
+            raw_as_of = report.get("generated_at")
+            if isinstance(raw_as_of, str) and raw_as_of:
+                track_as_of = raw_as_of
+        if track_as_of is None and isinstance(served_eval, dict):
+            raw_served_at = served_eval.get("generated_at")
+            if isinstance(raw_served_at, str) and raw_served_at:
+                track_as_of = raw_served_at
     return {
         "track_enabled": settings.track.enabled,
         "eval_enabled": settings.eval.enabled,

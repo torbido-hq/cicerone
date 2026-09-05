@@ -69,6 +69,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   just finished.
 - Quality labels live track metrics when a stored eval has no usable
   track_eval.
+- Quality omits as-of when CTR/CVR is computed live from the track store.
 - Track ingest is idempotent without a host `event_id` (stable JSON hashes,
   assigned ids, JSONL file lock, `accepted` from ids not already stored).
   `since` compares instants. Slices join the matching recommendation snapshot
