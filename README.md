@@ -552,7 +552,8 @@ recomputed. Scoring is unchanged.
 combiner + blending knobs + optional boost/eligibility policy), not per-source
 CTR of a mixed cascade. The job fits the union of variant models once. With
 `allocation = "fixed"` (default) it writes every named recipe; `allocation =
-"thompson"` writes only the live champion/challenger pair. Serve hashes
+"thompson"` normally writes only the live pair (empty track and no stored
+pair fall back to `fixed`). Serve hashes
 `user_id` onto one list. The dashboard Experiments page shows always-valid
 CIs and catalog guardrails, and can promote a winner to 100% traffic.
 Optional `automl_challenger` uses the last successful manifest as control

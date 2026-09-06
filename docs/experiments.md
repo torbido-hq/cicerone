@@ -104,7 +104,8 @@ The job fits the **union** of variant models once. What it writes depends on
 
 - `fixed` (default) — combine/blend **each** named recipe into top-K and tag
   `variant`.
-- `thompson` — write only the live champion/challenger pair (see
+- `thompson` — normally writes only the live pair; with empty tracking and no
+  stored pair, it falls back to `fixed` and writes every named recipe (see
   [Thompson at retrain](#thompson-at-retrain)).
 
 One recommendations table. The run manifest records `experiment_id` and
