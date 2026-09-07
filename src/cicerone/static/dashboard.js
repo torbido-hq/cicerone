@@ -289,6 +289,33 @@
       const status = qs("#status");
       if (status && window.htmx) window.htmx.trigger(status, "refresh");
     }
+
+    const hashId = window.location.hash.replace(/^#/, "");
+    if (hashId) {
+      const hashed = document.getElementById(hashId);
+      if (hashed instanceof HTMLElement && hashed.hasAttribute("data-config-section")) {
+        hashed.focus({ preventScroll: true });
+      }
+    }
+
+    document.querySelectorAll("[data-config-jump]").forEach(function (link) {
+      link.addEventListener("click", function () {
+        const id = link.getAttribute("data-config-jump");
+        const target = id && qs('[data-config-section="' + id + '"]');
+        if (target instanceof HTMLElement) {
+          window.setTimeout(function () {
+            target.focus({ preventScroll: true });
+          }, 0);
+        }
+      });
+    });
+
+    document.querySelectorAll("form[data-confirm]").forEach(function (form) {
+      form.addEventListener("submit", function (event) {
+        const message = form.getAttribute("data-confirm");
+        if (message && !window.confirm(message)) event.preventDefault();
+      });
+    });
   }
 
   if (document.readyState === "loading") {

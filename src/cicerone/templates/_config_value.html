@@ -1,22 +1,25 @@
-{% macro hint_control(path, label) %}
+{% macro hint_body(info) %}
+  <p class="text-sm text-slate-800">{{ info.text }}</p>
+  {% if info.docs %}
+  <p class="mt-2 text-sm">
+    <a href="{{ info.docs }}" class="font-medium text-sky-800 underline decoration-sky-300 underline-offset-2 hover:text-sky-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2">Docs on cicerone.dev</a>
+  </p>
+  {% endif %}
+{% endmacro %}
+
+{% macro hint_control(path, label, field=false) %}
   {% set info = hints.get(path) if hints is defined else none %}
   {% if info %}
-  {% set hint_id = "config-hint-" ~ path|replace(".", "-") %}
-  <button
-    type="button"
-    class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-slate-300 bg-white text-xs font-medium text-slate-700 hover:border-slate-500 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2"
-    popovertarget="{{ hint_id }}"
-    data-config-hint-button="{{ path }}"
-    aria-label="About {{ label }}"
-  >?</button>
-  <div id="{{ hint_id }}" popover data-config-hint>
-    <p class="text-sm text-slate-800">{{ info.text }}</p>
-    {% if info.docs %}
-    <p class="mt-2 text-sm">
-      <a href="{{ info.docs }}" class="font-medium text-sky-800 underline decoration-sky-300 underline-offset-2 hover:text-sky-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2">Docs</a>
-    </p>
-    {% endif %}
-  </div>
+  <details {% if field %}data-field-hint{% endif %} data-config-hint class="relative">
+    <summary
+      class="inline-flex h-8 w-8 shrink-0 cursor-pointer list-none items-center justify-center rounded-full border border-slate-300 bg-white text-xs font-medium text-slate-700 hover:border-slate-500 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2 [&::-webkit-details-marker]:hidden"
+      data-config-hint-button="{{ path }}"
+      aria-label="About {{ label }}"
+    >?</summary>
+    <div class="mt-2 max-w-sm rounded-md border border-slate-200 bg-white p-3">
+      {{ hint_body(info) }}
+    </div>
+  </details>
   {% endif %}
 {% endmacro %}
 
@@ -39,7 +42,7 @@
   <div class="grid grid-cols-1 gap-1 py-2.5 sm:grid-cols-[minmax(9rem,16rem)_1fr] sm:items-start sm:gap-4">
     <dt class="flex items-center gap-1.5">
       <span class="font-mono text-xs text-slate-600">{{ key }}</span>
-      {{ hint_control(path, key) }}
+      {{ hint_control(path, key, true) }}
     </dt>
     <dd class="min-w-0">{{ render_value(child, true, prefix ~ key ~ ".") }}</dd>
   </div>

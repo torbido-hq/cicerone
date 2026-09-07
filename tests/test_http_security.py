@@ -5,7 +5,15 @@ from fastapi import HTTPException
 from starlette.requests import Request
 from starlette.responses import Response
 
-from cicerone.http_security import CSRF_COOKIE, require_csrf, set_csrf_cookie, token_equals
+from cicerone.http_security import (
+    CSRF_COOKIE,
+    FLASH_COOKIE,
+    parse_flash_cookie,
+    require_csrf,
+    set_csrf_cookie,
+    set_flash_cookie,
+    token_equals,
+)
 from cicerone.io.options import readonly_select
 
 
@@ -61,6 +69,38 @@ def test_set_csrf_cookie_skips_when_already_set():
     response = Response()
     set_csrf_cookie(request, response, "tok")
     assert "set-cookie" not in {key.lower() for key in response.headers}
+
+
+def test_flash_cookie_round_trip():
+    from cicerone.http_security import _flash_text, clear_flash_cookie
+
+    request = _request()
+    response = Response()
+    set_flash_cookie(request, response, ok="Promoted control")
+    header = response.headers.get("set-cookie", "")
+    assert FLASH_COOKIE in header
+    assert "Promoted%20control" in header
+    raw = header.split(f"{FLASH_COOKIE}=", 1)[1].split(";", 1)[0]
+    assert parse_flash_cookie(raw) == ("Promoted control", None)
+    assert parse_flash_cookie("ok:Promoted control") == ("Promoted control", None)
+    assert parse_flash_cookie("err:Unknown variant") == (None, "Unknown variant")
+    assert parse_flash_cookie('"ok:Promoted control"') == ("Promoted control", None)
+    assert parse_flash_cookie("ok:Promoted%20control") == ("Promoted control", None)
+    assert parse_flash_cookie("ok%3APromoted%20control") == ("Promoted control", None)
+    assert parse_flash_cookie("ok:hi\x00there") == ("hithere", None)
+    assert parse_flash_cookie("ok:" + "x" * 500) == ("x" * 400, None)
+    assert parse_flash_cookie(None) == (None, None)
+    assert parse_flash_cookie("ok:") == (None, None)
+    assert parse_flash_cookie("err:") == (None, None)
+    assert parse_flash_cookie("nope") == (None, None)
+    empty = Response()
+    set_flash_cookie(request, empty)
+    assert "set-cookie" not in {key.lower() for key in empty.headers}
+    assert _flash_text("x" * 500) == "x" * 400
+    assert _flash_text("h\x00i") == "hi"
+    cleared = Response()
+    clear_flash_cookie(cleared)
+    assert FLASH_COOKIE in cleared.headers.get("set-cookie", "")
 
 
 def test_readonly_select_rejects_non_string():

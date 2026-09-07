@@ -3,10 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Cicerone — Experiments</title>
+  <title>{{ page_title }}</title>
   {% include "_privacy_meta.html" %}
   <link rel="icon" type="image/svg+xml" href="/static/cicerone-icon.svg">
   <link rel="stylesheet" href="/static/tailwind.css">
+  {% include "_dashboard_scripts.html" %}
 </head>
 <body class="h-full">
   {% set page_subtitle = "Experiments" %}
@@ -20,7 +21,11 @@
     <div class="mb-4 rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800" role="alert">{{ promote_error }}</div>
     {% endif %}
     {% if not enabled %}
-    <p class="text-sm text-slate-700">No experiment is enabled in the loaded config.</p>
+    <p class="text-sm text-slate-700">No experiment is running.</p>
+    <details class="mt-2">
+      <summary class="cursor-pointer text-sm text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2">How to enable one</summary>
+      <p class="mt-2 text-sm text-slate-700">Set <code>[experiment].enabled = true</code> in the config this dashboard loaded, then restart the dashboard process.</p>
+    </details>
     {% elif error %}
     <div class="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800" role="status">{{ error }}</div>
     {% elif report %}
@@ -29,8 +34,14 @@
       <p class="text-sm text-slate-600 mb-3">
         Primary metric: <span class="font-medium text-slate-800">{{ report.primary_metric }}</span>
         · Assigned users: {{ report.n_assigned }}
-        · {% if report.exposure_conditional %}exposure-conditional{% else %}ITT on users with events{% endif %}
-        · α={{ experiment.alpha }}
+      </p>
+      <p class="text-sm text-slate-600 mb-3">
+        {% if report.exposure_conditional %}
+        Scored on users who saw a recommendation (exposure).
+        {% else %}
+        Scored on assigned users who had later events (intent-to-treat).
+        {% endif %}
+        Mixture confidence interval uses α={{ experiment.alpha }}.
       </p>
       {% if thompson and thompson.champion and thompson.challenger %}
       <p class="text-sm text-slate-800 mb-3">
@@ -48,7 +59,8 @@
            aria-valuenow="{{ thompson.pair_impressions }}">
         <div class="h-2 rounded bg-slate-800" style="width: {{ thompson.volume_pct }}%"></div>
       </div>
-      <table class="w-full text-sm border-collapse mb-4">
+      <div class="overflow-x-auto mb-4">
+      <table class="w-full text-sm border-collapse">
         <caption class="sr-only">Thompson conversion</caption>
         <thead>
           <tr class="text-left text-slate-600 border-b border-slate-200">
@@ -76,24 +88,27 @@
           {% endfor %}
         </tbody>
       </table>
+      </div>
       {% endif %}
       {% if promoted_variant %}
-      <p class="text-sm text-sky-800 mb-3">Promoted variant: <span class="font-medium">{{ promoted_variant }}</span> (100% traffic at serve).</p>
-      <form action="/dashboard/experiments/unpromote" method="post">
+      <p class="text-sm text-sky-800 mb-3">Promoted variant: <span class="font-medium">{{ promoted_variant }}</span> (100% of serve traffic until you resume the split).</p>
+      <form action="/dashboard/experiments/unpromote" method="post" data-confirm="Resume the experiment split? {{ promoted_variant }} will no longer get 100% of traffic.">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button type="submit" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2">
+        <button type="submit" class="min-h-10 rounded border border-slate-300 bg-white px-4 py-2 text-sm text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2">
           Resume split
         </button>
       </form>
       {% endif %}
-      <table class="w-full text-sm border-collapse mb-4">
+      <div class="overflow-x-auto mb-4">
+      <table class="w-full text-sm border-collapse">
         <caption class="sr-only">Variant comparison</caption>
         <thead>
           <tr class="text-left text-slate-600 border-b border-slate-200">
             <th scope="col" class="py-2 px-2">Treatment</th>
-            <th scope="col" class="py-2 px-2">Δ mean</th>
+            <th scope="col" class="py-2 px-2">{{ lift_label }}</th>
             <th scope="col" class="py-2 px-2">Mixture CI</th>
-            <th scope="col" class="py-2 px-2">Users</th>
+            <th scope="col" class="py-2 px-2">Treatment users</th>
+            <th scope="col" class="py-2 px-2">Control users</th>
             <th scope="col" class="py-2 px-2">Status</th>
           </tr>
         </thead>
@@ -103,15 +118,18 @@
             <th scope="row" class="py-2 px-2 text-left font-medium text-slate-800">{{ item.treatment.name }} vs {{ item.control.name }}</th>
             <td class="py-2 px-2 text-slate-700">{{ "%.4f"|format(item.difference) }}</td>
             <td class="py-2 px-2 text-slate-700">[{{ "%.4f"|format(item.ci_low) }}, {{ "%.4f"|format(item.ci_high) }}]</td>
-            <td class="py-2 px-2 text-slate-700">{{ item.treatment.n_users }} / {{ item.control.n_users }}</td>
+            <td class="py-2 px-2 text-slate-700">{{ item.treatment.n_users }}</td>
+            <td class="py-2 px-2 text-slate-700">{{ item.control.n_users }}</td>
             <td class="py-2 px-2 text-slate-700">{% if item.decided %}{{ item.winner }}{% else %}undecided{% endif %}</td>
           </tr>
           {% endfor %}
         </tbody>
       </table>
+      </div>
       {% if report.guardrails %}
       <h3 class="text-sm font-medium text-slate-800 mb-2">Guardrails</h3>
-      <table class="w-full text-sm border-collapse mb-4">
+      <div class="overflow-x-auto mb-4">
+      <table class="w-full text-sm border-collapse">
         <caption class="sr-only">Guardrails</caption>
         <thead>
           <tr class="text-left text-slate-600 border-b border-slate-200">
@@ -134,18 +152,20 @@
           {% endfor %}
         </tbody>
       </table>
+      </div>
       {% endif %}
       {% if can_ship and ship_variant and not promoted_variant %}
-      <form action="/dashboard/experiments/promote" method="post">
+      <p class="mb-2 text-sm text-slate-700">This sends 100% of serve traffic to {{ ship_variant }} until you resume the split.</p>
+      <form action="/dashboard/experiments/promote" method="post" data-confirm="Send 100% of traffic to {{ ship_variant }}?">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="hidden" name="variant" value="{{ ship_variant }}">
-        <button type="submit" class="rounded bg-slate-800 px-3 py-1.5 text-sm text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2">
+        <button type="submit" class="min-h-10 rounded bg-slate-800 px-4 py-2 text-sm text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2">
           {% if experiment.allocation == "thompson" %}Ship{% else %}Promote{% endif %} {{ ship_variant }}
         </button>
       </form>
       {% elif not promoted_variant and ship_blocked %}
         {% if experiment.allocation != "thompson" or ship_blocked != ("undecided",) %}
-      <p class="text-sm text-slate-600">Promote blocked: {{ ship_blocked|join(", ") }}.</p>
+      <p class="text-sm text-slate-600">Promote is blocked: {{ ship_blocked|join(", ") }}.</p>
         {% endif %}
       {% endif %}
     </section>

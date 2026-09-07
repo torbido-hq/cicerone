@@ -1,32 +1,38 @@
   {% set current = nav_current|default("") %}
+  {% set quality_on = true if nav_quality_available is not defined else nav_quality_available %}
+  {% set experiments_on = true if nav_experiments_available is not defined else nav_experiments_available %}
   <a href="#main" class="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-10 focus:rounded focus:bg-white focus:px-3 focus:py-2 focus:text-sm focus:font-medium focus:text-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-800 focus:ring-offset-2">
     Skip to content
   </a>
   <header class="border-b border-slate-200 bg-white">
-    <div class="mx-auto max-w-6xl px-4 py-3 flex items-center gap-4">
+    <div class="mx-auto max-w-6xl px-4 py-3 flex flex-wrap items-center gap-x-4 gap-y-2">
       <h1><img src="/static/cicerone-logo.svg" alt="Cicerone" class="h-12 w-auto"></h1>
       <p class="text-sm text-slate-600 border-l border-slate-200 pl-4">{{ page_subtitle }}</p>
-      <nav class="ml-auto flex items-center gap-2 text-sm" aria-label="Main">
+      <nav class="ml-auto flex flex-wrap items-center gap-2 text-sm" aria-label="Main">
         <a
           href="/dashboard"
-          class="inline-flex min-h-9 items-center rounded px-2 {% if current == 'status' %}font-medium text-slate-900{% else %}text-slate-700 hover:text-slate-900{% endif %} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2"
+          class="inline-flex min-h-9 items-center rounded px-2 {% if current == 'status' %}font-medium text-slate-900 underline decoration-2 underline-offset-4{% else %}text-slate-700 hover:text-slate-900{% endif %} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2"
           {% if current == "status" %}aria-current="page"{% endif %}
         >Status</a>
         <a
           href="/dashboard/quality"
-          class="inline-flex min-h-9 items-center rounded px-2 {% if current == 'quality' %}font-medium text-slate-900{% else %}text-slate-700 hover:text-slate-900{% endif %} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2"
+          class="inline-flex min-h-9 items-center rounded px-2 {% if current == 'quality' %}font-medium text-slate-900 underline decoration-2 underline-offset-4{% else %}text-slate-700 hover:text-slate-900{% endif %} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2"
           {% if current == "quality" %}aria-current="page"{% endif %}
-        >Quality</a>
+        >Quality{% if not quality_on %}<span class="sr-only"> (off)</span><span aria-hidden="true" class="ml-1 text-xs font-normal text-slate-500">off</span>{% endif %}</a>
         <a
           href="/dashboard/experiments"
-          class="inline-flex min-h-9 items-center rounded px-2 {% if current == 'experiments' %}font-medium text-slate-900{% else %}text-slate-700 hover:text-slate-900{% endif %} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2"
+          class="inline-flex min-h-9 items-center rounded px-2 {% if current == 'experiments' %}font-medium text-slate-900 underline decoration-2 underline-offset-4{% else %}text-slate-700 hover:text-slate-900{% endif %} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2"
           {% if current == "experiments" %}aria-current="page"{% endif %}
-        >Experiments</a>
+        >Experiments{% if not experiments_on %}<span class="sr-only"> (off)</span><span aria-hidden="true" class="ml-1 text-xs font-normal text-slate-500">off</span>{% endif %}</a>
         <a
           href="/dashboard/config"
-          class="inline-flex min-h-9 items-center rounded px-2 {% if current == 'config' %}font-medium text-slate-900{% else %}text-slate-700 hover:text-slate-900{% endif %} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2"
+          class="inline-flex min-h-9 items-center rounded px-2 {% if current == 'config' %}font-medium text-slate-900 underline decoration-2 underline-offset-4{% else %}text-slate-700 hover:text-slate-900{% endif %} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2"
           {% if current == "config" %}aria-current="page"{% endif %}
         >Config</a>
+        <a
+          href="/dashboard/logout"
+          class="inline-flex min-h-9 items-center rounded px-2 text-slate-700 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2"
+        >Sign out</a>
       </nav>
     </div>
   </header>

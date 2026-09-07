@@ -176,7 +176,7 @@ def test_config_page_renders_redacted_html(tmp_path):
 
     assert response.status_code == 200
     html = response.text
-    assert "<title>Cicerone — Configuration</title>" in html
+    assert "<title>Configuration · Cicerone dashboard</title>" in html
     assert 'href="/dashboard/config"' in html
     assert 'data-config-section="job"' in html
     assert ">top_k<" in html
@@ -215,7 +215,12 @@ def test_config_page_renders_redacted_html(tmp_path):
     assert 'aria-label="About top_k"' in html
     assert "How many items the job writes for each user." in html
     assert "https://cicerone.dev/how-it-works/" in html
-    assert 'popovertarget="config-hint-job-top_k"' in html
+    assert "Docs on cicerone.dev" in html
+    assert "Explain keys" in html
+    assert "data-explain-keys" in html
+    assert "data-field-hint" in html
+    assert "popovertarget" not in html
+    assert "<details" in html
 
 
 def test_config_page_unset_token_is_em_dash(tmp_path):

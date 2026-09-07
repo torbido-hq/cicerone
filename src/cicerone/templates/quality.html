@@ -3,10 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Cicerone — Quality</title>
+  <title>{{ page_title }}</title>
   {% include "_privacy_meta.html" %}
   <link rel="icon" type="image/svg+xml" href="/static/cicerone-icon.svg">
   <link rel="stylesheet" href="/static/tailwind.css">
+  {% include "_dashboard_scripts.html" %}
 </head>
 <body class="h-full">
   {% set page_subtitle = "Quality" %}
@@ -16,26 +17,44 @@
     {% if error %}
     <div class="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800" role="status">{{ error }}</div>
     {% endif %}
-    {% if empty_track %}
+    {% if empty_track and not served_eval %}
     <section class="rounded-lg border border-slate-200 bg-white p-4 mb-4" aria-labelledby="quality-track-heading">
       <h2 id="quality-track-heading" class="text-sm font-medium text-slate-800 mb-2">CTR and conversion</h2>
-      {% if not track_enabled %}
-      <p class="text-sm text-slate-700">Enable <code>[track]</code> and POST impressions and clicks to <code>/track</code> from the render path. Fetching <code>GET /recommendations</code> is not an impression unless <code>serve.log_impressions</code> is on.</p>
-      {% else %}
-      <p class="text-sm text-slate-700">No tracking metrics yet. POST <code>/track</code> when the widget renders, then wait for the next job (or dashboard refresh after a job writes <code>track_eval</code>).</p>
-      {% endif %}
+      <p class="text-sm text-slate-700">No impressions yet.</p>
+      <details class="mt-2">
+        <summary class="cursor-pointer text-sm text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2">How to collect them</summary>
+        <p class="mt-2 text-sm text-slate-700">
+          {% if not track_enabled %}
+          Enable <code>[track]</code> and POST impressions and clicks to <code>/track</code> from the render path. Fetching <code>GET /recommendations</code> is not an impression unless <code>serve.log_impressions</code> is on.
+          {% else %}
+          POST <code>/track</code> when the widget renders, then wait for the next job (or refresh after a job writes <code>track_eval</code>).
+          {% endif %}
+        </p>
+      </details>
     </section>
     {% elif track_eval %}
     <section class="rounded-lg border border-slate-200 bg-white p-4 mb-4" aria-labelledby="quality-track-heading">
       <h2 id="quality-track-heading" class="text-sm font-medium text-slate-800 mb-2">CTR and conversion</h2>
-      <p class="text-sm text-slate-600 mb-3">
-        Impressions: {{ track_eval.overall.n_impressions }}
-        · Clicks: {{ track_eval.overall.n_clicks }}
-        · Users: {{ track_eval.overall.n_users }}
-        · CTR: {{ "%.4f"|format(track_eval.overall.ctr) }}
-        · CVR (click): {{ "%.4f"|format(track_eval.overall.cvr_click) }}
-        · CVR (view): {{ "%.4f"|format(track_eval.overall.cvr_view) }}
+      {% if track_as_of %}
+      <p class="mb-3 text-sm text-slate-600">
+        As of
+        <time
+          datetime="{{ track_as_of }}"
+          data-controller="time-ago"
+          data-time-ago-value="{{ track_as_of }}"
+        >{{ track_as_of }}</time>
       </p>
+      {% elif track_live %}
+      <p class="mb-3 text-sm text-slate-600">Live from the track store.</p>
+      {% endif %}
+      <dl class="mb-3 grid grid-cols-2 gap-2 text-sm text-slate-700 sm:grid-cols-3">
+        <div><dt class="text-slate-600">Impressions</dt><dd class="font-medium text-slate-800">{{ track_eval.overall.n_impressions }}</dd></div>
+        <div><dt class="text-slate-600">Clicks</dt><dd class="font-medium text-slate-800">{{ track_eval.overall.n_clicks }}</dd></div>
+        <div><dt class="text-slate-600">Users</dt><dd class="font-medium text-slate-800">{{ track_eval.overall.n_users }}</dd></div>
+        <div><dt class="text-slate-600">CTR</dt><dd class="font-medium text-slate-800">{{ track_eval.overall.ctr|as_percent }}</dd></div>
+        <div><dt class="text-slate-600">CVR (click)</dt><dd class="font-medium text-slate-800">{{ track_eval.overall.cvr_click|as_percent }}</dd></div>
+        <div><dt class="text-slate-600">CVR (view)</dt><dd class="font-medium text-slate-800">{{ track_eval.overall.cvr_view|as_percent }}</dd></div>
+      </dl>
       {% if track_eval.by_rank %}
       <h3 class="text-sm font-medium text-slate-800 mb-2">By rank</h3>
       <div class="overflow-x-auto mb-4">
@@ -45,6 +64,9 @@
           <tr class="text-left text-slate-600 border-b border-slate-200">
             <th scope="col" class="py-2 px-2">Rank</th>
             <th scope="col" class="py-2 px-2">Impressions</th>
+            <th scope="col" class="py-2 px-2">Clicks</th>
+            <th scope="col" class="py-2 px-2">Conv click</th>
+            <th scope="col" class="py-2 px-2">Conv view</th>
             <th scope="col" class="py-2 px-2">CTR</th>
             <th scope="col" class="py-2 px-2">CVR click</th>
             <th scope="col" class="py-2 px-2">CVR view</th>
@@ -55,9 +77,12 @@
           <tr class="border-b border-slate-100">
             <th scope="row" class="py-2 px-2 text-left font-medium text-slate-800">{{ rank }}</th>
             <td class="py-2 px-2 text-slate-700">{{ row.n_impressions }}</td>
-            <td class="py-2 px-2 text-slate-700">{{ "%.4f"|format(row.ctr) }}</td>
-            <td class="py-2 px-2 text-slate-700">{{ "%.4f"|format(row.cvr_click) }}</td>
-            <td class="py-2 px-2 text-slate-700">{{ "%.4f"|format(row.cvr_view) }}</td>
+            <td class="py-2 px-2 text-slate-700">{{ row.n_clicks }}</td>
+            <td class="py-2 px-2 text-slate-700">{{ row.n_conversions_click }}</td>
+            <td class="py-2 px-2 text-slate-700">{{ row.n_conversions_view }}</td>
+            <td class="py-2 px-2 text-slate-700">{{ row.ctr|as_percent }}</td>
+            <td class="py-2 px-2 text-slate-700">{{ row.cvr_click|as_percent }}</td>
+            <td class="py-2 px-2 text-slate-700">{{ row.cvr_view|as_percent }}</td>
           </tr>
           {% endfor %}
         </tbody>
@@ -73,6 +98,9 @@
           <tr class="text-left text-slate-600 border-b border-slate-200">
             <th scope="col" class="py-2 px-2">Source</th>
             <th scope="col" class="py-2 px-2">Impressions</th>
+            <th scope="col" class="py-2 px-2">Clicks</th>
+            <th scope="col" class="py-2 px-2">Conv click</th>
+            <th scope="col" class="py-2 px-2">Conv view</th>
             <th scope="col" class="py-2 px-2">CTR</th>
             <th scope="col" class="py-2 px-2">CVR click</th>
             <th scope="col" class="py-2 px-2">CVR view</th>
@@ -83,9 +111,12 @@
           <tr class="border-b border-slate-100">
             <th scope="row" class="py-2 px-2 text-left font-medium text-slate-800">{{ source }}</th>
             <td class="py-2 px-2 text-slate-700">{{ row.n_impressions }}</td>
-            <td class="py-2 px-2 text-slate-700">{{ "%.4f"|format(row.ctr) }}</td>
-            <td class="py-2 px-2 text-slate-700">{{ "%.4f"|format(row.cvr_click) }}</td>
-            <td class="py-2 px-2 text-slate-700">{{ "%.4f"|format(row.cvr_view) }}</td>
+            <td class="py-2 px-2 text-slate-700">{{ row.n_clicks }}</td>
+            <td class="py-2 px-2 text-slate-700">{{ row.n_conversions_click }}</td>
+            <td class="py-2 px-2 text-slate-700">{{ row.n_conversions_view }}</td>
+            <td class="py-2 px-2 text-slate-700">{{ row.ctr|as_percent }}</td>
+            <td class="py-2 px-2 text-slate-700">{{ row.cvr_click|as_percent }}</td>
+            <td class="py-2 px-2 text-slate-700">{{ row.cvr_view|as_percent }}</td>
           </tr>
           {% endfor %}
         </tbody>
@@ -101,6 +132,9 @@
           <tr class="text-left text-slate-600 border-b border-slate-200">
             <th scope="col" class="py-2 px-2">Variant</th>
             <th scope="col" class="py-2 px-2">Impressions</th>
+            <th scope="col" class="py-2 px-2">Clicks</th>
+            <th scope="col" class="py-2 px-2">Conv click</th>
+            <th scope="col" class="py-2 px-2">Conv view</th>
             <th scope="col" class="py-2 px-2">CTR</th>
             <th scope="col" class="py-2 px-2">CVR click</th>
             <th scope="col" class="py-2 px-2">CVR view</th>
@@ -111,9 +145,12 @@
           <tr class="border-b border-slate-100">
             <th scope="row" class="py-2 px-2 text-left font-medium text-slate-800">{{ variant }}</th>
             <td class="py-2 px-2 text-slate-700">{{ row.n_impressions }}</td>
-            <td class="py-2 px-2 text-slate-700">{{ "%.4f"|format(row.ctr) }}</td>
-            <td class="py-2 px-2 text-slate-700">{{ "%.4f"|format(row.cvr_click) }}</td>
-            <td class="py-2 px-2 text-slate-700">{{ "%.4f"|format(row.cvr_view) }}</td>
+            <td class="py-2 px-2 text-slate-700">{{ row.n_clicks }}</td>
+            <td class="py-2 px-2 text-slate-700">{{ row.n_conversions_click }}</td>
+            <td class="py-2 px-2 text-slate-700">{{ row.n_conversions_view }}</td>
+            <td class="py-2 px-2 text-slate-700">{{ row.ctr|as_percent }}</td>
+            <td class="py-2 px-2 text-slate-700">{{ row.cvr_click|as_percent }}</td>
+            <td class="py-2 px-2 text-slate-700">{{ row.cvr_view|as_percent }}</td>
           </tr>
           {% endfor %}
         </tbody>
@@ -125,11 +162,22 @@
     {% if served_eval %}
     <section class="rounded-lg border border-slate-200 bg-white p-4 mb-4" aria-labelledby="quality-replay-heading">
       <h2 id="quality-replay-heading" class="text-sm font-medium text-slate-800 mb-2">Production replay</h2>
-      <p class="text-sm text-slate-600 mb-3">
-        Users scored: {{ served_eval.n_users }}
-        · With later events: {{ served_eval.n_users_with_events }}
-        {% if served_eval.generated_at %}· Lists from {{ served_eval.generated_at }}{% endif %}
-      </p>
+      <dl class="mb-3 grid grid-cols-2 gap-2 text-sm text-slate-700 sm:grid-cols-3">
+        <div><dt class="text-slate-600">Users scored</dt><dd class="font-medium text-slate-800">{{ served_eval.n_users }}</dd></div>
+        <div><dt class="text-slate-600">With later events</dt><dd class="font-medium text-slate-800">{{ served_eval.n_users_with_events }}</dd></div>
+        {% if served_eval.generated_at %}
+        <div>
+          <dt class="text-slate-600">Lists from</dt>
+          <dd class="font-medium text-slate-800">
+            <time
+              datetime="{{ served_eval.generated_at }}"
+              data-controller="time-ago"
+              data-time-ago-value="{{ served_eval.generated_at }}"
+            >{{ served_eval.generated_at }}</time>
+          </dd>
+        </div>
+        {% endif %}
+      </dl>
       {% if served_eval.metrics %}
       <div class="overflow-x-auto mb-4">
       <table class="w-full text-sm border-collapse">
@@ -159,16 +207,18 @@
         <thead>
           <tr class="text-left text-slate-600 border-b border-slate-200">
             <th scope="col" class="py-2 px-2">Source</th>
-            <th scope="col" class="py-2 px-2">Metrics</th>
+            {% for name in replay_metric_names %}
+            <th scope="col" class="py-2 px-2">{{ name }}</th>
+            {% endfor %}
           </tr>
         </thead>
         <tbody>
           {% for source, metrics in served_eval.by_source.items() %}
           <tr class="border-b border-slate-100">
             <th scope="row" class="py-2 px-2 text-left font-medium text-slate-800">{{ source }}</th>
-            <td class="py-2 px-2 text-slate-700">
-              {% for name, value in metrics.items() %}{{ name }}={{ "%.4f"|format(value) }}{% if not loop.last %} · {% endif %}{% endfor %}
-            </td>
+            {% for name in replay_metric_names %}
+            <td class="py-2 px-2 text-slate-700">{% if name in metrics %}{{ "%.4f"|format(metrics[name]) }}{% else %}—{% endif %}</td>
+            {% endfor %}
           </tr>
           {% endfor %}
         </tbody>
