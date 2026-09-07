@@ -780,7 +780,8 @@ docker compose up --build
 - Point input/output at S3-compatible object storage (R2, AWS S3, MinIO) —
   see the README's [Configuration](../README.md#configuration-configciceronetoml)
   section.
-- Sticky A/B tests of ranking recipes: [experiments.md](experiments.md).
+- Sticky A/B tests of ranking recipes (optional job-time Thompson):
+  [experiments.md](experiments.md).
 - Impressions, CTR/CVR, the dashboard Quality page, and production replay:
   [evaluation.md](evaluation.md). The header also links to **Quality** and
   **Config** once `[track]` is on (Quality) or the process has loaded TOML
