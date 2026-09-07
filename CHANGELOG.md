@@ -62,6 +62,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the store. Job eval and Quality live read only the history snapshots
   referenced by track `generated_at`. Explain reasons scan interactions for
   recommended users only.
+- Bump `boto3` 1.43.83 → 1.43.88, `psycopg` 3.3.4 → 3.3.5, and `ruff`
+  0.16.5 → 0.16.6.
 
 ### Fixed
 
