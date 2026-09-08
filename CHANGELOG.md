@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.8.0] - 2026-09-07
+## [0.8.0] - 2026-09-08
 
 ### Added
 
@@ -45,7 +45,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `[[experiment.variants.boost]]` tables). Duplicate subset names are rejected.
 - Job-time Thompson sampling (`allocation = "thompson"`) writes a sticky
   champion/challenger pair from live CVR via Fidelity MABWiser. Requires
-  `cicerone-recommender[bandits]`. Serve still hashes; Ship is Promote.
+  `cicerone-recommender[bandits]`. Read errors or empty track fail closed
+  to fixed (every named recipe). Serve still hashes; Ship is Promote.
 
 ### Changed
 
@@ -62,6 +63,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the store. Job eval and Quality live read only the history snapshots
   referenced by track `generated_at`. Explain reasons scan interactions for
   recommended users only.
+- Bump `boto3` 1.43.83 → 1.43.88, `psycopg` 3.3.4 → 3.3.5, and `ruff`
+  0.16.5 → 0.16.6.
 
 ### Fixed
 
