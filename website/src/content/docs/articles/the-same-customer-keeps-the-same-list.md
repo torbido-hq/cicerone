@@ -148,7 +148,7 @@ For fixed allocation, Promote is refused when a CI is still undecided, two arms 
 
 The [checkout](/articles/this-afternoons-checkout-can-move-the-row/) post can still flush popular / latest. The webhook does **not** rank the catalog.
 
-Only the **assigned** (or promoted) variant is rewritten. The other list stays on last night’s job slice. Online LightFM is **not** started while the experiment is on (`Online collaborative refresh skipped while [experiment] is enabled`). Personalized ranks stay on the last `job.run()`.
+Only the assigned (or promoted) variant receives the popular/latest inject. The other list stays on last night’s job slice. Online LightFM is **not** started while the experiment is on (`Online collaborative refresh skipped while [experiment] is enabled`). Personalized ranks stay on the last `job.run()`.
 
 That is write-through on one slice. It is not request-path inference.
 
@@ -166,9 +166,7 @@ Alice was `blend` on Monday and `blend` on Sunday. Tuesday’s job rewrote her t
 
 Change `id`, traffic, or order if you **mean** to rematch live assignment. Change names only if you mean to relabel a stable bucket. Change recipe knobs if you mean to rewrite that list and keep the people.
 
-If `log_exposures` was off, the dashboard can still walk Alice to the other arm in a CSV when you edit today’s TOML. That is the report. It is not serve.
-
-The customer keeps the same assignment. The assigned list does not keep last night’s SKUs.
+If `log_exposures` was off, the dashboard can still walk Alice to the other arm in the report when you edit today’s TOML. That is the report. It is not serve.
 
 The customer keeps the same list. The list does not keep last night’s SKUs.
 
