@@ -12,7 +12,7 @@ A paid Stripe Checkout can update an **existing** recommendation row. The checko
 
 [Cicerone](https://cicerone.dev) 0.7 is the job that already fitted [LightFM](https://making.lyst.com/lightfm/docs/home.html) and wrote the table. The [nightly table](/articles/a-nightly-table-next-to-your-orders/) walkthrough leaves personalized ranks until 03:00 UTC; that remains the right default. This article is the optional `[events.online]` path: Node verifies the Stripe signature and `POST`s Cicerone's event contract. There is no recommendations SDK.
 
-As of 0.8.0, when `[experiment]` is on, incremental popular/latest refresh is the **assigned or promoted variant only**; other variants keep their last batch lists. Impressions and clicks of what the host rendered are `POST /track`, not `POST /events` — see [evaluation](/evaluation/).
+As of 0.8.0, when `[experiment]` is on, incremental popular/latest refresh is the **assigned or promoted variant only**; other variants keep their last batch lists. The assignment story is [The same customer keeps the same list](/articles/the-same-customer-keeps-the-same-list/). Impressions and clicks of what the host rendered are `POST /track`, not `POST /events` — see [evaluation](/evaluation/).
 
 Skip this path when:
 
