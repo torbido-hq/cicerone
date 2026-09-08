@@ -242,6 +242,23 @@ def test_reconnect_closes_previous(monkeypatch):
     source.close()
 
 
+def test_reconnect_resets_ack_maps(monkeypatch):
+    broker = install_fake_kafka(monkeypatch)
+    broker.add("cicerone.events", event_payload(event_id="old"))
+    source = KafkaEventSource(_options())
+    source.connect()
+    first = list(source.poll(1))
+    assert [event.event_id for event in first] == ["old"]
+    assert source._held_offsets
+    source.connect()
+    assert source._held_offsets == set()
+    assert source._messages == {}
+    again = list(source.poll(1))
+    assert [event.event_id for event in again] == ["old"]
+    source.ack([again[0].event_id])
+    source.close()
+
+
 def test_poll_exception_returns_partial(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
     broker.add("cicerone.events", event_payload(event_id="e1"))

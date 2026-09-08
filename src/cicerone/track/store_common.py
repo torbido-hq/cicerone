@@ -175,6 +175,26 @@ def _track_row_sql_filter(
     return " WHERE " + " AND ".join(clauses), params
 
 
+def _history_sql_literals(generated_ats: set[str]) -> list[str]:
+    keys: set[str] = set()
+    for item in generated_ats:
+        text = str(item).strip()
+        if text:
+            keys.add(text)
+        stamp = _utc_stamp(item)
+        if stamp is None:
+            continue
+        iso = stamp.isoformat()
+        keys.add(iso)
+        if iso.endswith("+00:00"):
+            keys.add(iso[:-6] + "Z")
+            keys.add(iso.replace("T", " "))
+        elif iso.endswith("Z"):
+            keys.add(iso[:-1] + "+00:00")
+            keys.add(iso[:-1].replace("T", " ") + "+00:00")
+    return sorted(keys)
+
+
 def _history_sql_filter(
     *,
     generated_ats: set[str] | None,
@@ -183,10 +203,28 @@ def _history_sql_filter(
     params: dict[str, Any] = {}
     if generated_ats:
         clauses.append("generated_at IN :generated_ats")
-        params["generated_ats"] = sorted(generated_ats)
+        params["generated_ats"] = _history_sql_literals(generated_ats)
     if not clauses:
         return "", {}
     return " WHERE " + " AND ".join(clauses), params
+
+
+def _utc_stamp(value: object) -> pd.Timestamp | None:
+    stamp = pd.to_datetime(value, utc=True, errors="coerce")
+    if pd.isna(stamp):
+        return None
+    return stamp
+
+
+def _stamps_equal(left: object, right: object) -> bool:
+    first = _utc_stamp(left)
+    second = _utc_stamp(right)
+    return first is not None and second is not None and first == second
+
+
+def _history_part_matches(stem: str, generated_ats: set[str]) -> bool:
+    restored = _unslug_history_stem(stem)
+    return any(_stamps_equal(restored, stamp) for stamp in generated_ats)
 
 
 def _filter_history(
@@ -203,7 +241,9 @@ def _filter_history(
         return frame
     keep = pd.Series(True, index=frame.index)
     if generated_ats is not None:
-        keep &= frame["generated_at"].astype(str).isin(generated_ats)
+        wanted = {stamp.value for stamp in (_utc_stamp(item) for item in generated_ats) if stamp is not None}
+        stamps = pd.to_datetime(frame["generated_at"], utc=True, errors="coerce")
+        keep &= stamps.map(lambda value: False if pd.isna(value) else value.value in wanted)
     if since:
         stamps = pd.to_datetime(frame["generated_at"], utc=True, errors="coerce")
         start = pd.to_datetime(since, utc=True, errors="coerce")

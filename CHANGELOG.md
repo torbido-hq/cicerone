@@ -4,6 +4,20 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.1] - 2026-09-08
+
+### Fixed
+
+- Production replay scores the served experiment variant, not the union of all lists.
+- Click-through CVR ignores unmatched clicks.
+- JSONL track idempotency records ids only after a successful append.
+- Thompson writes the champion/challenger pair after the recommendation write.
+- Kafka and RabbitMQ reconnect clear in-flight ack maps.
+- History snapshot lookup compares instants; unmatched `generated_at` does not take a later job.
+- Quality live CTR prefers history snapshots and clears the load-error banner when live metrics succeed.
+- Dashboard config redacts webhook URLs that have no userinfo.
+- Experiments manifest recipe parse treats malformed items as missing recipes.
+
 ## [0.8.0] - 2026-09-08
 
 ### Added

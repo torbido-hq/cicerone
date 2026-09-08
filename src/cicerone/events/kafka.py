@@ -87,6 +87,12 @@ class KafkaEventSource(EventSource):
             self._consumer = consumer
             self._topic_partition = TopicPartition
             self._connected = True
+            self._pending.clear()
+            self._pending_ids.clear()
+            self._in_flight.clear()
+            self._messages.clear()
+            self._held_offsets.clear()
+            self._max_offset.clear()
         if previous is not None and previous is not consumer:
             try:
                 previous.close()

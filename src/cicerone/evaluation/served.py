@@ -59,6 +59,16 @@ def replay_ks(configured: Sequence[int], *, top_k: int) -> tuple[int, ...]:
     return tuple(sorted(values))
 
 
+def filter_recs_to_assigned(
+    recommendations: pd.DataFrame,
+    assigned: Mapping[str, str] | None,
+) -> pd.DataFrame:
+    if recommendations.empty or not assigned or VARIANT_COLUMN not in recommendations.columns:
+        return recommendations
+    expected = recommendations[USER_COLUMN].astype(str).map(assigned)
+    return recommendations.loc[expected.isna() | (recommendations[VARIANT_COLUMN].astype(str) == expected)]
+
+
 def filter_events_to_recommended(
     events: pd.DataFrame,
     recommendations: pd.DataFrame,
@@ -71,9 +81,7 @@ def filter_events_to_recommended(
     recs[USER_COLUMN] = recs[USER_COLUMN].astype(str)
     recs[ITEM_COLUMN] = recs[ITEM_COLUMN].astype(str)
     recs = recs[recs[USER_COLUMN] != COLD_START_USER_ID]
-    if assigned and VARIANT_COLUMN in recs.columns:
-        expected = recs[USER_COLUMN].map(assigned)
-        recs = recs.loc[expected.isna() | (recs[VARIANT_COLUMN].astype(str) == expected)]
+    recs = filter_recs_to_assigned(recs, assigned)
     keys = recs.loc[:, [USER_COLUMN, ITEM_COLUMN]].drop_duplicates()
     frame = events.copy()
     frame[USER_COLUMN] = frame[USER_COLUMN].astype(str)
@@ -156,6 +164,7 @@ def evaluate_served(
     event_types: Sequence[str],
     history: pd.DataFrame | None = None,
     catalog: pd.DataFrame | Sequence[object] | None = None,
+    assigned: Mapping[str, str] | None = None,
 ) -> ServedEvalReport | None:
     if recommendations is None or recommendations.empty:
         return None
@@ -163,6 +172,7 @@ def evaluate_served(
     recs[USER_COLUMN] = recs[USER_COLUMN].astype(str)
     recs[ITEM_COLUMN] = recs[ITEM_COLUMN].astype(str)
     recs = recs[recs[USER_COLUMN] != COLD_START_USER_ID]
+    recs = filter_recs_to_assigned(recs, assigned)
     if recs.empty:
         return None
     all_events = _frame(events)
@@ -191,6 +201,7 @@ def evaluate_served(
         hist_recs = _recs_from_history(combined, window_events)
         if not hist_recs.empty:
             hist_recs = hist_recs[hist_recs[USER_COLUMN] != COLD_START_USER_ID]
+            hist_recs = filter_recs_to_assigned(hist_recs, assigned)
         if not hist_recs.empty:
             recs = hist_recs
     relevant = window_events.loc[:, [USER_COLUMN, ITEM_COLUMN]].drop_duplicates()

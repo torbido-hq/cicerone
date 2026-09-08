@@ -505,6 +505,43 @@ def test_experiment_context_manifest_policy_error_names_variant(tmp_path, monkey
     assert "experiment_variants[treatment].eligibility" in (context["error"] or "")
 
 
+def test_experiment_context_manifest_recipes_malformed_item(tmp_path, monkeypatch):
+    settings = _settings(tmp_path, log_exposures=False)
+    monkeypatch.setattr("cicerone.dashboard_experiments.resolve_recipes", lambda *args, **kwargs: ())
+
+    class _Reader:
+        def read_latest(self):
+            return {"experiment_variants": json.dumps([{"traffic": 0.5}])}
+
+    monkeypatch.setattr("cicerone.dashboard_experiments.build_manifest_reader", lambda _output: _Reader())
+    context = experiment_context(settings)
+    assert context["error"] == "No experiment variants to evaluate."
+
+
+def test_experiment_context_manifest_recipes_skips_malformed_keeps_good(tmp_path, monkeypatch):
+    from cicerone.dashboard_experiments import _recipes
+    from cicerone.feature_config import load_feature_config
+
+    settings = _settings(tmp_path, log_exposures=False)
+    monkeypatch.setattr("cicerone.dashboard_experiments.resolve_recipes", lambda *args, **kwargs: ())
+
+    class _Reader:
+        def read_latest(self):
+            return {
+                "experiment_variants": json.dumps(
+                    [
+                        {"name": "control", "traffic": 0.5, "models": ["popular"]},
+                        {"traffic": 0.5},
+                        {"name": "treatment", "traffic": 0.5, "models": ["collaborative"]},
+                    ]
+                )
+            }
+
+    monkeypatch.setattr("cicerone.dashboard_experiments.build_manifest_reader", lambda _output: _Reader())
+    recipes = _recipes(settings, load_feature_config(REPO_FEATURES))
+    assert [recipe.name for recipe in recipes] == ["control", "treatment"]
+
+
 def test_experiment_context_manifest_recipes_invalid_json(tmp_path, monkeypatch):
     settings = _settings(tmp_path, log_exposures=False)
     monkeypatch.setattr("cicerone.dashboard_experiments.resolve_recipes", lambda *args, **kwargs: ())

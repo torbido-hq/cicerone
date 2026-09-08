@@ -30,10 +30,11 @@ _SECRET_KEYS = frozenset(
         "endpoint_url",
         "queue_url",
         "password",
+        "webhook",
     }
 )
 _SECRET_KEY_RE = re.compile(
-    r"(secret|password|token|auth|credential|api_key|private_key|url)",
+    r"(secret|password|token|auth|credential|api_key|private_key|url|webhook|hook)",
     re.IGNORECASE,
 )
 _USERINFO_IN_URL_RE = re.compile(r"://[^/\s]+@")

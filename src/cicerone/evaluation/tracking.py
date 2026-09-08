@@ -87,11 +87,21 @@ def _annotate_source(impressions: pd.DataFrame, recommendations: pd.DataFrame | 
         merged = frame.merge(
             snap, on=[USER_COLUMN, ITEM_COLUMN, "generated_at"], how="left", suffixes=("", "_rec")
         )
-        fill = latest.drop(columns=["generated_at"], errors="ignore")
-        merged = merged.merge(fill, on=[USER_COLUMN, ITEM_COLUMN], how="left", suffixes=("", "_latest"))
         _coalesce_column(merged, SOURCE_COLUMN)
         if VARIANT_COLUMN in recs.columns:
             _coalesce_column(merged, VARIANT_COLUMN)
+        need_fill = merged["generated_at"].isna()
+        if need_fill.any():
+            fill = latest.drop(columns=["generated_at"], errors="ignore")
+            filled = merged.loc[need_fill].merge(
+                fill, on=[USER_COLUMN, ITEM_COLUMN], how="left", suffixes=("", "_latest")
+            )
+            _coalesce_column(filled, SOURCE_COLUMN)
+            if VARIANT_COLUMN in recs.columns:
+                _coalesce_column(filled, VARIANT_COLUMN)
+            for column in (SOURCE_COLUMN, VARIANT_COLUMN):
+                if column in filled.columns:
+                    merged.loc[need_fill, column] = filled[column].to_numpy()
         return merged
     merged = frame.merge(latest, on=[USER_COLUMN, ITEM_COLUMN], how="left", suffixes=("", "_rec"))
     _coalesce_column(merged, SOURCE_COLUMN)
@@ -129,9 +139,8 @@ def evaluate_tracking(
     conv = _frame(conversions)
     conv = _with_join_keys(conv) if not conv.empty and "event_type" in conv.columns else pd.DataFrame()
     view_conv = _merge_asof_events(conv, impressions, window=window) if not conv.empty else conv
-    click_base = matched_clicks if not matched_clicks.empty else clicks
-    if not conv.empty and not click_base.empty:
-        click_conv = _merge_asof_events(conv, click_base, window=window)
+    if not conv.empty and not matched_clicks.empty:
+        click_conv = _merge_asof_events(conv, matched_clicks, window=window)
     else:
         click_conv = conv.iloc[0:0]
     overall = _slice_metrics(impressions, matched_clicks, view_conv, click_conv)

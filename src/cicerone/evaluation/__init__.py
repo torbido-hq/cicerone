@@ -8,6 +8,7 @@ from cicerone.evaluation.served import (
     _recs_from_history,
     evaluate_served,
     filter_events_to_recommended,
+    filter_recs_to_assigned,
     replay_ks,
 )
 from cicerone.evaluation.tracking import (
@@ -32,6 +33,7 @@ __all__ = [
     "evaluate_served",
     "evaluate_tracking",
     "filter_events_to_recommended",
+    "filter_recs_to_assigned",
     "replay_ks",
     "user_track_outcomes",
 ]

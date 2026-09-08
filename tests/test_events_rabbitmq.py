@@ -308,3 +308,22 @@ def test_reconnect_closes_previous(monkeypatch):
     source.connect()
     assert first.closed is True
     source.close()
+
+
+def test_reconnect_resets_ack_maps(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.enqueue("cicerone.events", event_payload(event_id="old"))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    first = list(source.poll(1))
+    assert [event.event_id for event in first] == ["old"]
+    assert source._held_tags
+    source.connect()
+    assert source._held_tags == set()
+    assert source._delivery_tags == {}
+    broker.enqueue("cicerone.events", event_payload(event_id="new"))
+    second = list(source.poll(10))
+    assert [event.event_id for event in second] == ["new"]
+    source.ack([first[0].event_id])
+    source.ack([second[0].event_id])
+    source.close()

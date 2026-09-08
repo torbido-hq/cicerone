@@ -865,3 +865,106 @@ def test_annotate_source_latest_uses_newest_generated_at() -> None:
     annotated = _annotate_source(impressions, snapshots)
     assert annotated.iloc[0]["source"] == "personalized"
     assert annotated.iloc[0]["variant"] == "treatment"
+
+
+def test_evaluate_served_uses_assigned_variant_only() -> None:
+    recs = pd.DataFrame(
+        [
+            {
+                "user_id": "alice",
+                "item_id": "control-item",
+                "rank": 1,
+                "source": "personalized",
+                "variant": "control",
+            },
+            {
+                "user_id": "alice",
+                "item_id": "treat-item",
+                "rank": 1,
+                "source": "personalized",
+                "variant": "treatment",
+            },
+        ]
+    )
+    events = pd.DataFrame(
+        [
+            {
+                "user_id": "alice",
+                "item_id": "treat-item",
+                "event_type": "purchase",
+                "occurred_at": "2026-08-28T12:00:00Z",
+            }
+        ]
+    )
+    report = evaluate_served(
+        recs,
+        events,
+        generated_at="2026-08-28T03:00:00+00:00",
+        ks=(1,),
+        event_types=("purchase",),
+        assigned={"alice": "control"},
+    )
+    assert report is not None
+    assert report.metrics["HitRate@1"] == pytest.approx(0.0)
+
+
+def test_evaluate_tracking_orphan_click_does_not_count_click_through() -> None:
+    rows = _track(
+        {
+            "kind": "impression",
+            "user_id": "alice",
+            "item_id": "ipa",
+            "rank": 1,
+            "occurred_at": "2026-08-28T12:00:00Z",
+            "event_id": "imp-1",
+        },
+        {
+            "kind": "click",
+            "user_id": "bob",
+            "item_id": "other",
+            "occurred_at": "2026-08-28T12:05:00Z",
+            "event_id": "clk-orphan",
+        },
+    )
+    conversions = pd.DataFrame(
+        [
+            {
+                "user_id": "bob",
+                "item_id": "other",
+                "event_type": "purchase",
+                "occurred_at": "2026-08-28T12:10:00Z",
+            }
+        ]
+    )
+    report = evaluate_tracking(track_rows=rows, conversions=conversions, window_hours=24.0)
+    assert report.overall.n_impressions == 1
+    assert report.overall.n_clicks == 0
+    assert report.overall.n_conversions_click == 0
+
+
+def test_annotate_source_unmatched_generated_at_does_not_take_later_snap() -> None:
+    from cicerone.evaluation import _annotate_source
+
+    snapshots = pd.DataFrame(
+        [
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "source": "popular_fallback",
+                "variant": "control",
+                "generated_at": "2026-08-20T00:00:00Z",
+            },
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "source": "personalized",
+                "variant": "treatment",
+                "generated_at": "2026-08-28T00:00:00Z",
+            },
+        ]
+    )
+    impressions = pd.DataFrame(
+        [{"user_id": "alice", "item_id": "ipa", "generated_at": "2026-08-21T00:00:00Z"}]
+    )
+    annotated = _annotate_source(impressions, snapshots)
+    assert pd.isna(annotated.iloc[0].get("source")) or annotated.iloc[0]["source"] != "personalized"
