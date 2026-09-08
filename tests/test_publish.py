@@ -44,6 +44,14 @@ def test_user_recommendation_messages_empty():
     assert user_recommendation_messages(pd.DataFrame({"item_id": ["i1"]})) == []
 
 
+def test_user_recommendation_messages_rejects_nan():
+    frame = pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": float("nan"), "source": "popular"}]
+    )
+    with pytest.raises(ValueError, match="not JSON compliant"):
+        user_recommendation_messages(frame)
+
+
 def test_user_recommendation_messages_keeps_reasons_and_variant():
     frame = pd.DataFrame(
         [

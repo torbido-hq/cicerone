@@ -17,6 +17,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Quality live CTR prefers history snapshots and clears the load-error banner when live metrics succeed.
 - Dashboard config redacts webhook URLs that have no userinfo.
 - Experiments manifest recipe parse treats malformed items as missing recipes.
+- Inheriting all experiment boost/eligibility rules rejects duplicate names, same as a named subset.
+- The recommendation publish sidecar rejects NaN scores instead of emitting non-JSON.
 
 ## [0.8.0] - 2026-09-08
 

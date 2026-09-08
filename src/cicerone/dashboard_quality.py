@@ -101,16 +101,14 @@ def _live_track_eval(settings: Settings, store: TrackStore) -> dict[str, Any] | 
     conversions = pd.DataFrame()
     recs = None
     try:
-        from cicerone.dashboard_experiments import _load_metric_events
+        from cicerone.dashboard_experiments import load_metric_events
         from cicerone.events.store import load_recommendations_frame
 
-        events = _load_metric_events(settings)
         types = conversion_event_types(
             settings.track.conversion_event_types,
             primary_metric=settings.experiment.primary_metric,
         )
-        if not events.empty and "event_type" in events.columns:
-            conversions = events[events["event_type"].astype(str).isin(set(types))]
+        conversions = load_metric_events(settings, event_types=types)
         recs = load_recommendations_frame(settings.output)
         if recs is not None and recs.empty:
             recs = None

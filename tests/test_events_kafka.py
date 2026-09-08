@@ -44,7 +44,7 @@ def test_validate_requires_core_options():
 
 
 def test_optional_int_validation():
-    from cicerone.kafka_options import optional_int
+    from cicerone.option_parse import optional_int
 
     assert optional_int({}, "n", 3, prefix="x", minimum=1) == 3
     with pytest.raises(ConfigError, match="integer"):
