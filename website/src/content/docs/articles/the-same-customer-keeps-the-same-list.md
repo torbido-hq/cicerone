@@ -44,7 +44,7 @@ You get **one** `[experiment]` per config file. That is not a database lock. Old
 
 The [nightly table](/articles/a-nightly-table-next-to-your-orders/) post creates `unique (user_id, item_id)`. That is correct for **one** list. It is **wrong** for two.
 
-`variant` is optional in the schema. Cicerone does **not** create a uniqueness constraint. The same `(user_id, item_id)` **will** appear twice, once per recipe, when those lists overlap. A host unique `(user_id, item_id)` rejects the second list. The job fails after the first variant writes. Use `unique (user_id, item_id, variant)`.
+`variant` is optional in the schema. Cicerone does **not** create a uniqueness constraint. The same `(user_id, item_id)` **will** appear twice, once per recipe, when those lists overlap. A host unique `(user_id, item_id)` rejects the overlapping rows. Cicerone writes every variant in one replace; that write fails and the previous table stays. Use `unique (user_id, item_id, variant)`.
 
 If the column is missing, the job raises `RecommendationSchemaError`. Serve still returns rows and nulls `experiment_id` / `variant`. You are not running this experiment.
 
@@ -53,8 +53,7 @@ If the column is missing, the job raises `RecommendationSchemaError`. Serve stil
 ```toml
 [job]
 models = ["als", "popular"]
-combiner = "priority"
-k = 20
+top_k = 20
 
 [experiment]
 id = "homepage-v1"
@@ -62,10 +61,12 @@ enabled = true
 primary_metric = "purchase"
 attribution = "user"
 
-[experiment.variants.control]
+[[experiment.variants]]
+name = "control"
 traffic = 0.5
 
-[experiment.variants.blend]
+[[experiment.variants]]
+name = "blend"
 traffic = 0.5
 models = ["als", "bpr", "popular"]
 combiner = "blend"
@@ -120,7 +121,7 @@ The nightly `SELECT … ORDER BY rank` does not assign. Either call serve, or ke
 
 Splitting traffic is easy. Knowing whether the **recipe** caused better purchases is the hard part.
 
-Default `primary_metric = "purchase"` and `attribution = "user"`: a purchase from `[input]` counts for whoever that user is assigned to, whether or not they opened `/recommendations`. That is the honest homepage metric. It is also noisy.
+This walkthrough uses `primary_metric = "purchase"` and `attribution = "user"`: a purchase from `[input]` counts for whoever that user is assigned to, whether or not they opened `/recommendations`. That is the honest homepage metric. It is also noisy. The config default metric is `weighted`, not `purchase`.
 
 | `attribution` | What it counts |
 | --- | --- |
@@ -131,7 +132,7 @@ Default `primary_metric = "purchase"` and `attribution = "user"`: a purchase fro
 
 `ctr` / `conversion` need `[track]` and `click` / `impression`. `min_impressions` is 100 **impression rows**, not GET hits.
 
-**Do this before you trust a week of `user` numbers:** set `log_exposures = true`. Without it, the dashboard hashes historical purchasers against **today’s** `id`, traffic, and order. Change any of those and Alice can move arms **in the report**. Serve did not rematch her live traffic. The evaluator rematched the CSV. With the flag on, the first exposure for this `experiment_id` pins her; events before that stamp are dropped. An empty exposure log assigns nobody.
+**Do this before you trust a week of `user` numbers:** set `log_exposures = true`. Without it, the dashboard hashes historical purchasers against **today’s** `id`, traffic, and order. Change any of those and Alice can move arms **in the report**. Serve did not rematch her live traffic. The evaluator rematched the CSV. With the flag on, the earliest `exposed_at` for this `experiment_id` pins her (a later-arriving row with an earlier stamp can replace the pin); events before that stamp are dropped. An empty exposure log assigns nobody.
 
 The interval on the dashboard is a Robbins–Siegmund **mixture bound** on the mean difference, not a full anytime-valid confidence sequence and not a LIL CS. Alpha is split across non-control arms (`alpha / max(1, n−1)`). Peeking is the point. Do not quote a paper this binary does not implement.
 
@@ -141,13 +142,13 @@ A week later `blend` wins. You click **Promote**. Tomorrow every `GET` reads the
 
 Resume puts the hash back. The job does **not** copy `blend` into `[job]`. After you disable the experiment you still have whatever `[job]` always was, plus leftover variant rows.
 
-Promote is refused when a CI is still undecided, two arms tie on the mean, a guardrail fails, volume is short, the winner is already promoted, or `promoted_at` is set and unparsable. State lives in `experiment_state.json` or the `experiment_state` table (`experiment_id`, `promoted_variant`, `promoted_at`). Later jobs merge it. If you rename the winner away, Promote’s name is gone and serve hashes again.
+Promote is refused when a CI is still undecided, two arms tie on the mean, a guardrail fails, the winner is already promoted, or `promoted_at` is set and unparsable. `ctr` / `conversion` also need enough impression rows (`min_impressions`). State lives in `experiment_state.json` or the `experiment_state` table (`experiment_id`, `promoted_variant`, `promoted_at`). Promote survives later jobs. If you rename the winner away, Promote’s name is gone and serve hashes again.
 
 ## What happens if someone checks out this afternoon
 
 The [checkout](/articles/this-afternoons-checkout-can-move-the-row/) post can still flush popular / latest. The webhook does **not** rank the catalog.
 
-Only the **assigned** (or promoted) variant is rewritten. The other list stays on last night’s job slice. Online LightFM is **not** started while the experiment is on (`Online collaborative refresh skipped because an experiment is enabled`). Personalized ranks stay on the last `job.run()`.
+Only the **assigned** (or promoted) variant is rewritten. The other list stays on last night’s job slice. Online LightFM is **not** started while the experiment is on (`Online collaborative refresh skipped while [experiment] is enabled`). Personalized ranks stay on the last `job.run()`.
 
 That is write-through on one slice. It is not request-path inference.
 
@@ -173,19 +174,19 @@ The customer keeps the same list. The list does not keep last night’s SKUs.
 
 **Traffic.** Names unique. At least two variants unless `automl_challenger = true`. Sum > 1 is `ConfigError`. Sum < 1: remainder is added to the **last** variant, plus a warning. `0.5` / `0.3` becomes `0.5` / `0.5`. `0.4` / `0.4` becomes `0.4` / `0.6`.
 
-**Inheritance.** Combiner fallback: blend if blending is on, else RRF if `model_weights` is set, else priority. Boosts and eligibility inherit unless you set `inherit_job_boosts` / `inherit_job_eligibility` to `false`. You can also list a subset.
+**Inheritance.** Combiner fallback: blend if blending is on, else RRF if `model_weights` is set, else priority. Boosts and eligibility default to inherit (`boosts` / `eligibility = true`). `false` drops them. A name list keeps a subset.
 
 **Experiment off.** `resolve_assignment` is `(None, None)`. Promote is ignored. Leftover rows are **filtered** to `control` if that name exists, else `sorted(variant names)[0]`. Not a `DELETE`. Incremental follows the same rule when `variant_names == ()`.
 
 **Guardrails (defaults).** Fallback-rate cap `0.5` (`popular_fallback` / `latest` / `incremental` and `+` mixes). Top-item share cap `0.4`. Distinct-item floor: `5`, or `min(5, max(1, catalog_size // 20))` if the catalog is known. Empty list fails. Missing `variant` column blocks Promote.
 
-**Promote / Resume.** Dashboard or `experiment promote` / `experiment resume`. Missing winner name → hash again. Experiment disabled → leftover rows collapse as above.
+**Promote / Resume.** Dashboard Promote and Resume split. Missing winner name → hash again. Experiment disabled → leftover rows collapse as above.
 
 **Failures.**
 
 | What you did | What happens |
 | --- | --- |
-| Unique `(user_id, item_id)` | Second variant insert dies. |
+| Unique `(user_id, item_id)` | One replace fails; previous table stays. |
 | No `variant` column | Job: `RecommendationSchemaError`. Serve: rows, null experiment fields. |
 | `enabled = false`, rows remain | Filtered to `control` or `sorted(names)[0]`. |
 | Rename after a job | Hash slice unchanged. New name has no rows until the next job. |
