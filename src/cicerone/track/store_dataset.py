@@ -65,12 +65,7 @@ class TrackDatasetBackend:
             if not root.is_dir():
                 return []
             if generated_ats is not None:
-                exact = {_history_part_name(stamp) for stamp in generated_ats}
-                paths = [
-                    path
-                    for path in sorted(root.glob("*.parquet"))
-                    if path.name in exact or _history_part_matches(path.stem, generated_ats)
-                ]
+                paths = _local_history_paths(root, generated_ats)
             else:
                 paths = sorted(root.glob("*.parquet"))
                 if since:
@@ -83,26 +78,19 @@ class TrackDatasetBackend:
         bucket = require_option(self._options, "bucket", "s3")
         prefix = object_key(self._options, f"{HISTORY_DIR}/")
         client = build_s3_client(self._options)
+        if generated_ats is not None:
+            return _s3_history_frames(client, bucket, prefix, self._options, generated_ats)
         try:
             keys = _list_s3_parquet_keys(client, bucket, prefix)
         except Exception as exc:
             if is_s3_not_found(exc):
                 return []
             raise
-        if generated_ats is not None:
-            wanted_names = {_history_part_name(stamp) for stamp in generated_ats}
-            keys = [
-                key
-                for key in keys
-                if Path(key).name in wanted_names or _history_part_matches(Path(key).stem, generated_ats)
-            ]
-        elif since:
+        if since:
             keys = [key for key in keys if not _history_stem_before(Path(key).stem, since)]
-        keys = sorted(keys)
-        for key in keys:
-            obj = client.get_object(Bucket=bucket, Key=key)
-            frame = pd.read_parquet(BytesIO(obj["Body"].read()))
-            if not frame.empty:
+        for key in sorted(keys):
+            frame = _s3_parquet_frame(client, bucket, key)
+            if frame is not None:
                 frames.append(frame)
         return frames
 
@@ -200,6 +188,69 @@ def _history_part_name(generated_at: str) -> str:
     slug = "".join(ch if ch.isalnum() or ch in "-+." else "-" for ch in generated_at.strip())
     slug = slug.strip("-.") or "snapshot"
     return f"{slug}.parquet"
+
+
+def _local_history_paths(root: Path, generated_ats: set[str]) -> list[Path]:
+    exact = [root / _history_part_name(stamp) for stamp in generated_ats]
+    if exact and all(path.is_file() for path in exact):
+        return sorted(exact)
+    wanted_names = {_history_part_name(stamp) for stamp in generated_ats}
+    return [
+        path
+        for path in sorted(root.glob("*.parquet"))
+        if path.name in wanted_names or _history_part_matches(path.stem, generated_ats)
+    ]
+
+
+def _s3_parquet_frame(client: Any, bucket: str, key: str) -> pd.DataFrame | None:
+    try:
+        obj = client.get_object(Bucket=bucket, Key=key)
+    except Exception as exc:
+        if is_s3_not_found(exc):
+            return None
+        raise
+    frame = pd.read_parquet(BytesIO(obj["Body"].read()))
+    return None if frame.empty else frame
+
+
+def _s3_history_frames(
+    client: Any,
+    bucket: str,
+    prefix: str,
+    options: dict[str, Any],
+    generated_ats: set[str],
+) -> list[pd.DataFrame]:
+    frames: list[pd.DataFrame] = []
+    loaded: set[str] = set()
+    missing: set[str] = set()
+    for stamp in generated_ats:
+        key = object_key(options, f"{HISTORY_DIR}/{_history_part_name(stamp)}")
+        frame = _s3_parquet_frame(client, bucket, key)
+        if frame is None:
+            missing.add(stamp)
+            continue
+        loaded.add(key)
+        frames.append(frame)
+    if not missing:
+        return frames
+    try:
+        keys = _list_s3_parquet_keys(client, bucket, prefix)
+    except Exception as exc:
+        if is_s3_not_found(exc):
+            return frames
+        raise
+    missing_names = {_history_part_name(stamp) for stamp in missing}
+    extra = [
+        key
+        for key in keys
+        if key not in loaded
+        and (Path(key).name in missing_names or _history_part_matches(Path(key).stem, missing))
+    ]
+    for key in sorted(extra):
+        frame = _s3_parquet_frame(client, bucket, key)
+        if frame is not None:
+            frames.append(frame)
+    return frames
 
 
 def _list_s3_parquet_keys(client: Any, bucket: str, prefix: str) -> list[str]:

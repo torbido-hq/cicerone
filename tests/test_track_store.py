@@ -697,3 +697,74 @@ def test_track_read_history_generated_ats_matches_z_and_offset(tmp_path) -> None
     store.append_history(recs, generated_at="2026-08-28T03:00:00+00:00")
     history = store.read_history(generated_ats=["2026-08-28T03:00:00Z"])
     assert len(history) == 1
+
+
+def test_track_read_history_generated_ats_skips_glob_when_exact_name_exists(tmp_path, monkeypatch) -> None:
+    from pathlib import Path
+
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
+    store = TrackStore(output)
+    store.append_history(recs, generated_at="2026-08-29T03:00:00+00:00")
+    history_dir = tmp_path / "recommendation_history"
+    original = Path.glob
+
+    def _glob(self: Path, pattern: str, *args, **kwargs):
+        if self.resolve() == history_dir.resolve():
+            raise AssertionError("glob should not run when exact history parts exist")
+        return original(self, pattern, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "glob", _glob)
+    history = store.read_history(generated_ats=["2026-08-29T03:00:00+00:00"])
+    assert len(history) == 1
+
+
+def test_track_read_history_s3_generated_ats_skips_list_when_exact_key_exists(monkeypatch) -> None:
+    import boto3
+    from moto import mock_aws
+
+    from cicerone.track import store_dataset
+
+    with mock_aws():
+        boto3.client("s3", region_name="us-east-1").create_bucket(Bucket="recs")
+        output = IOSettings(
+            kind="dataset",
+            options={
+                "storage_backend": "s3",
+                "bucket": "recs",
+                "access_key_id": "test",
+                "secret_access_key": "test",
+            },
+        )
+        recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
+        store = TrackStore(output)
+        store.append_history(recs, generated_at="2026-08-29T03:00:00+00:00")
+
+        def _no_list(*_args, **_kwargs):
+            raise AssertionError("list should not run when exact history keys exist")
+
+        monkeypatch.setattr(store_dataset, "_list_s3_parquet_keys", _no_list)
+        history = store.read_history(generated_ats=["2026-08-29T03:00:00+00:00"])
+        assert len(history) == 1
+
+
+def test_track_read_history_s3_generated_ats_matches_z_and_offset() -> None:
+    import boto3
+    from moto import mock_aws
+
+    with mock_aws():
+        boto3.client("s3", region_name="us-east-1").create_bucket(Bucket="recs")
+        output = IOSettings(
+            kind="dataset",
+            options={
+                "storage_backend": "s3",
+                "bucket": "recs",
+                "access_key_id": "test",
+                "secret_access_key": "test",
+            },
+        )
+        recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
+        store = TrackStore(output)
+        store.append_history(recs, generated_at="2026-08-28T03:00:00+00:00")
+        history = store.read_history(generated_ats=["2026-08-28T03:00:00Z"])
+        assert len(history) == 1
