@@ -24,10 +24,13 @@ from cicerone.config.constants import (
 from cicerone.dataset import build_dataset
 from cicerone.evaluation import (
     conversion_event_types,
+    conversion_events_for_settings,
     evaluate_served,
     evaluate_tracking,
+    generated_ats_from_track,
     replay_ks,
 )
+from cicerone.evaluation.context import concat_history, stamp_recommendations
 from cicerone.events.store import load_items_catalog_size, load_recommendations_frame
 from cicerone.experiment import (
     ResolvedRecipe,
@@ -187,10 +190,7 @@ def _score_previous_run(
         except Exception:
             logger.exception("Failed to read track rows")
             track_rows = []
-    wanted = {str(row.get("generated_at") or "") for row in track_rows}
-    wanted.discard("")
-    if previous_generated_at:
-        wanted.add(previous_generated_at)
+    wanted = generated_ats_from_track(track_rows, previous_generated_at)
     history = None
     if wanted:
         try:
@@ -200,25 +200,12 @@ def _score_previous_run(
         except Exception:
             logger.exception("Failed to read recommendation history")
             history = None
-    recs_for_track = previous_recs
-    if recs_for_track is not None and previous_generated_at:
-        recs_for_track = recs_for_track.copy()
-        recs_for_track["generated_at"] = previous_generated_at
-    if history is not None:
-        recs_for_track = (
-            pd.concat([history, recs_for_track], ignore_index=True) if recs_for_track is not None else history
-        )
+    recs_for_track = concat_history(history, stamp_recommendations(previous_recs, previous_generated_at))
     track_payload = None
     served_payload = None
     if settings.track.enabled:
         try:
-            types = conversion_event_types(
-                settings.track.conversion_event_types,
-                primary_metric=settings.experiment.primary_metric,
-            )
-            conversions = events
-            if not conversions.empty and "event_type" in conversions.columns:
-                conversions = conversions[conversions["event_type"].astype(str).isin(set(types))]
+            conversions = conversion_events_for_settings(events, settings)
             track_payload = evaluate_tracking(
                 track_rows=track_rows,
                 conversions=conversions,
@@ -294,13 +281,7 @@ def _select_thompson_recipes(
     window_rows = track_rows_since(track_rows, window_started or None)
     names = [recipe.name for recipe in recipes]
     try:
-        types = conversion_event_types(
-            settings.track.conversion_event_types,
-            primary_metric=experiment.primary_metric,
-        )
-        conversions = events
-        if not conversions.empty and "event_type" in conversions.columns:
-            conversions = conversions[conversions["event_type"].astype(str).isin(set(types))]
+        conversions = conversion_events_for_settings(events, settings)
         recs = None
         try:
             recs = load_recommendations_frame(settings.output)

@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 import pandas as pd
-from sqlalchemy import bindparam, create_engine, text
 
 from cicerone.config import ExperimentSettings, Settings
 from cicerone.config.constants import (
@@ -23,7 +22,12 @@ from cicerone.config.constants import (
     TRACK_KIND_IMPRESSION,
     ConfigError,
 )
-from cicerone.evaluation import conversion_event_types, user_track_outcomes
+from cicerone.evaluation import (
+    conversion_event_types,
+    conversion_events_for_settings,
+    user_track_outcomes,
+)
+from cicerone.evaluation.context import load_metric_events as _load_metric_events
 from cicerone.events.store import load_items_catalog_size, load_recommendation_guardrail_rows
 from cicerone.experiment.evaluate import evaluate_experiment
 from cicerone.experiment.recipes import (
@@ -35,15 +39,11 @@ from cicerone.experiment.recipes import (
 from cicerone.experiment.store import ExperimentStore, merge_experiment_state
 from cicerone.experiment.thompson import ArmCounts, parse_arm_counts
 from cicerone.feature_config import FeatureConfig, load_feature_config
-from cicerone.io.db_store import DEFAULT_EVENTS_TABLE
-from cicerone.io.factory import build_input_source, build_manifest_reader
-from cicerone.io.options import is_s3_not_found, read_parquet, require_option, sql_identifier
-from cicerone.io.recommendation_schema import USER_COLUMN
+from cicerone.io.factory import build_manifest_reader
 from cicerone.track.store import TrackStore
 
 logger = logging.getLogger(__name__)
 
-_EVENT_METRIC_COLUMNS = (USER_COLUMN, "item_id", "event_type", "quantity", "occurred_at")
 _PROMOTE_STATE: dict[str, dict[str, Any]] = {}
 _T = TypeVar("_T")
 _THOMPSON_SHIP_IGNORE = frozenset({"undecided", "split_winners"})
@@ -137,16 +137,6 @@ def _thompson_view(
     }
 
 
-def _track_rows_for_experiment(rows: Sequence[dict[str, Any]], experiment_id: str) -> list[dict[str, Any]]:
-    matched: list[dict[str, Any]] = []
-    for row in rows:
-        row_id = str(row.get("experiment_id") or "")
-        if row_id and row_id != experiment_id:
-            continue
-        matched.append(row)
-    return matched
-
-
 def _impression_sort_key(row: dict[str, Any]) -> tuple[str, str]:
     occurred = str(row.get("occurred_at") or "")
     stamp = pd.to_datetime(occurred, utc=True, errors="coerce")
@@ -226,7 +216,7 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
         events_f = pool.submit(
             _try_load,
             "read events for experiment metrics",
-            lambda: load_metric_events(settings, event_types=event_types),
+            lambda: _load_metric_events(settings, event_types=event_types),
             pd.DataFrame(),
         )
         recs_f = pool.submit(
@@ -267,15 +257,9 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
     track_variants = None
     n_impressions = 0
     if settings.track.enabled:
-        track_rows = _track_rows_for_experiment(track_rows, experiment.id)
         n_impressions = sum(1 for row in track_rows if str(row.get("kind") or "") == TRACK_KIND_IMPRESSION)
         if experiment.attribution in {ATTRIBUTION_CLICK, ATTRIBUTION_IMPRESSION}:
-            types = conversion_event_types(
-                settings.track.conversion_event_types, primary_metric=experiment.primary_metric
-            )
-            conversions = events
-            if not conversions.empty and "event_type" in conversions.columns:
-                conversions = conversions[conversions["event_type"].astype(str).isin(set(types))]
+            conversions = conversion_events_for_settings(events, settings)
             track_outcomes = (
                 user_track_outcomes(
                     track_rows=track_rows,
@@ -392,60 +376,6 @@ def _metric_event_types(settings: Settings, experiment: ExperimentSettings) -> t
     if experiment.primary_metric != PRIMARY_METRIC_WEIGHTED:
         return (experiment.primary_metric,)
     return None
-
-
-def _filter_event_types(frame: pd.DataFrame, event_types: Sequence[str] | None) -> pd.DataFrame:
-    if not event_types or frame.empty or "event_type" not in frame.columns:
-        return frame
-    return frame[frame["event_type"].astype(str).isin(set(event_types))]
-
-
-def load_metric_events(settings: Settings, *, event_types: Sequence[str] | None = None) -> pd.DataFrame:
-    inp = settings.input
-    types = tuple(event_types) if event_types else None
-    if inp.kind == "dataset":
-        try:
-            filters = [("event_type", "in", list(types))] if types else None
-            frame = read_parquet(
-                inp.options, "events.parquet", columns=list(_EVENT_METRIC_COLUMNS), filters=filters
-            )
-        except FileNotFoundError:
-            return pd.DataFrame(columns=list(_EVENT_METRIC_COLUMNS))
-        except Exception as exc:
-            if is_s3_not_found(exc):
-                return pd.DataFrame(columns=list(_EVENT_METRIC_COLUMNS))
-            try:
-                frame = read_parquet(inp.options, "events.parquet")
-            except Exception:
-                frame = build_input_source(inp).read_events()
-        keep = [column for column in _EVENT_METRIC_COLUMNS if column in frame.columns]
-        frame = frame.loc[:, keep] if keep else frame
-        return _filter_event_types(frame, types)
-    if inp.kind == "db" and not inp.options.get("events_query"):
-        table = sql_identifier(
-            inp.options.get("events_table", DEFAULT_EVENTS_TABLE),
-            option="events_table",
-        )
-        engine = create_engine(require_option(inp.options, "database_url", "db"), pool_pre_ping=True)
-        quoted = ", ".join(f'"{column}"' for column in _EVENT_METRIC_COLUMNS)
-        try:
-            if types:
-                stmt = text(f'SELECT {quoted} FROM "{table}" WHERE "event_type" IN :types').bindparams(
-                    bindparam("types", expanding=True)
-                )
-                return pd.read_sql(stmt, engine, params={"types": list(types)})
-            return pd.read_sql(text(f'SELECT {quoted} FROM "{table}"'), engine)
-        except Exception:
-            frame = build_input_source(inp).read_events()
-            keep = [column for column in _EVENT_METRIC_COLUMNS if column in frame.columns]
-            frame = frame.loc[:, keep] if keep else frame
-            return _filter_event_types(frame, types)
-        finally:
-            engine.dispose()
-    frame = build_input_source(inp).read_events()
-    keep = [column for column in _EVENT_METRIC_COLUMNS if column in frame.columns]
-    frame = frame.loc[:, keep] if keep else frame
-    return _filter_event_types(frame, types)
 
 
 def _load_features(settings: Settings) -> FeatureConfig | None:

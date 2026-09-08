@@ -244,7 +244,7 @@ def test_quality_live_eval_conversion_load_error_still_scores(tmp_path, monkeypa
         ]
     )
     monkeypatch.setattr(
-        "cicerone.dashboard_experiments.load_metric_events",
+        "cicerone.dashboard_quality.load_metric_events",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("events")),
     )
     context = quality_context(settings)

@@ -587,7 +587,7 @@ def test_experiment_context_events_query_falls_back(tmp_path, monkeypatch):
         def read_events(self):
             return pd.DataFrame([{"user_id": "u1", "event_type": "purchase", "quantity": 1}])
 
-    monkeypatch.setattr("cicerone.dashboard_experiments.build_input_source", lambda _inp: _Source())
+    monkeypatch.setattr("cicerone.evaluation.context.build_input_source", lambda _inp: _Source())
     context = experiment_context(settings)
     assert context["report"] is not None
 
@@ -601,8 +601,8 @@ def test_experiment_context_events_s3_missing(tmp_path, monkeypatch):
     def _raise(*_args, **_kwargs):
         raise _S3Missing("missing")
 
-    monkeypatch.setattr("cicerone.dashboard_experiments.read_parquet", _raise)
-    monkeypatch.setattr("cicerone.dashboard_experiments.is_s3_not_found", lambda _exc: True)
+    monkeypatch.setattr("cicerone.evaluation.context.read_parquet", _raise)
+    monkeypatch.setattr("cicerone.evaluation.context.is_s3_not_found", lambda _exc: True)
     context = experiment_context(settings)
     assert context["report"] is not None
 
@@ -843,8 +843,8 @@ def test_experiment_context_events_full_parquet_fallback(tmp_path, monkeypatch):
         calls["n"] += 1
         raise RuntimeError("parquet")
 
-    monkeypatch.setattr("cicerone.dashboard_experiments.read_parquet", _boom)
-    monkeypatch.setattr("cicerone.dashboard_experiments.is_s3_not_found", lambda _exc: False)
+    monkeypatch.setattr("cicerone.evaluation.context.read_parquet", _boom)
+    monkeypatch.setattr("cicerone.evaluation.context.is_s3_not_found", lambda _exc: False)
     context = experiment_context(settings)
     assert context["report"] is not None
     assert calls["n"] >= 2

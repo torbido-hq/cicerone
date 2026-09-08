@@ -58,6 +58,21 @@ def conversion_event_types(
     return (primary_metric,)
 
 
+def filter_events_by_types(frame: pd.DataFrame, event_types: Sequence[str] | None) -> pd.DataFrame:
+    if not event_types or frame.empty or "event_type" not in frame.columns:
+        return frame
+    return frame[frame["event_type"].astype(str).isin(set(event_types))]
+
+
+def conversion_events(
+    events: pd.DataFrame,
+    configured: Sequence[str],
+    *,
+    primary_metric: str,
+) -> pd.DataFrame:
+    return filter_events_by_types(events, conversion_event_types(configured, primary_metric=primary_metric))
+
+
 def _annotate_source(impressions: pd.DataFrame, recommendations: pd.DataFrame | None) -> pd.DataFrame:
     if impressions.empty:
         return impressions
@@ -110,6 +125,44 @@ def _annotate_source(impressions: pd.DataFrame, recommendations: pd.DataFrame | 
     return merged
 
 
+@dataclass(frozen=True)
+class _ClickFrames:
+    impressions: pd.DataFrame
+    clicks: pd.DataFrame
+    matched_clicks: pd.DataFrame
+    window: timedelta
+
+
+def _prepare_click_frames(
+    track_rows: Sequence[Mapping[str, Any]] | pd.DataFrame,
+    *,
+    window_hours: float,
+    recommendations: pd.DataFrame | None = None,
+    annotate_source: bool = False,
+) -> _ClickFrames | None:
+    rows = _frame(track_rows)
+    window = timedelta(hours=float(window_hours))
+    if rows.empty or "kind" not in rows.columns:
+        return None
+    impressions = rows[rows["kind"].astype(str) == TRACK_KIND_IMPRESSION].copy()
+    clicks = rows[rows["kind"].astype(str) == TRACK_KIND_CLICK].copy()
+    impressions = _with_join_keys(impressions)
+    if impressions.empty:
+        return None
+    clicks = _with_join_keys(clicks)
+    if annotate_source:
+        impressions = _annotate_source(impressions, recommendations)
+        impressions = impressions.copy()
+    if "event_id" not in impressions.columns:
+        impressions = impressions.copy()
+        impressions["event_id"] = [f"imp-{i}" for i in range(len(impressions))]
+    if not clicks.empty and "event_id" not in clicks.columns:
+        clicks = clicks.copy()
+        clicks["event_id"] = [f"clk-{i}" for i in range(len(clicks))]
+    matched_clicks = _merge_asof_events(clicks, impressions, window=window) if not clicks.empty else clicks
+    return _ClickFrames(impressions, clicks, matched_clicks, window)
+
+
 def evaluate_tracking(
     *,
     track_rows: Sequence[Mapping[str, Any]] | pd.DataFrame,
@@ -117,25 +170,18 @@ def evaluate_tracking(
     recommendations: pd.DataFrame | None = None,
     window_hours: float = 24.0,
 ) -> TrackEvalReport:
-    rows = _frame(track_rows)
-    window = timedelta(hours=float(window_hours))
     empty = SliceMetrics(0, 0, 0, 0, 0.0, 0.0, 0.0, 0)
-    if rows.empty or "kind" not in rows.columns:
+    prepared = _prepare_click_frames(
+        track_rows,
+        window_hours=window_hours,
+        recommendations=recommendations,
+        annotate_source=True,
+    )
+    if prepared is None:
         return TrackEvalReport(overall=empty)
-    impressions = rows[rows["kind"].astype(str) == TRACK_KIND_IMPRESSION].copy()
-    clicks = rows[rows["kind"].astype(str) == TRACK_KIND_CLICK].copy()
-    impressions = _with_join_keys(impressions)
-    if impressions.empty:
-        return TrackEvalReport(overall=empty)
-    clicks = _with_join_keys(clicks)
-    impressions = _annotate_source(impressions, recommendations)
-    impressions = impressions.copy()
-    if "event_id" not in impressions.columns:
-        impressions["event_id"] = [f"imp-{i}" for i in range(len(impressions))]
-    if not clicks.empty and "event_id" not in clicks.columns:
-        clicks = clicks.copy()
-        clicks["event_id"] = [f"clk-{i}" for i in range(len(clicks))]
-    matched_clicks = _merge_asof_events(clicks, impressions, window=window) if not clicks.empty else clicks
+    impressions = prepared.impressions
+    matched_clicks = prepared.matched_clicks
+    window = prepared.window
     conv = _frame(conversions)
     conv = _with_join_keys(conv) if not conv.empty and "event_type" in conv.columns else pd.DataFrame()
     view_conv = _merge_asof_events(conv, impressions, window=window) if not conv.empty else conv
@@ -174,25 +220,12 @@ def user_track_outcomes(
 ) -> dict[str, float]:
     """Per-user CTR or attributed CVR (conversions / impressions) for experiments."""
     report_users: dict[str, float] = {}
-    rows = _frame(track_rows)
-    if rows.empty or "kind" not in rows.columns:
+    prepared = _prepare_click_frames(track_rows, window_hours=window_hours)
+    if prepared is None:
         return report_users
-    impressions = rows[rows["kind"].astype(str) == TRACK_KIND_IMPRESSION]
-    clicks = rows[rows["kind"].astype(str) == TRACK_KIND_CLICK]
-    window = timedelta(hours=float(window_hours))
-    if impressions.empty:
-        return report_users
-    impressions = _with_join_keys(impressions)
-    if impressions.empty:
-        return report_users
-    clicks = _with_join_keys(clicks)
-    if "event_id" not in impressions.columns:
-        impressions = impressions.copy()
-        impressions["event_id"] = [f"imp-{i}" for i in range(len(impressions))]
-    if not clicks.empty and "event_id" not in clicks.columns:
-        clicks = clicks.copy()
-        clicks["event_id"] = [f"clk-{i}" for i in range(len(clicks))]
-    matched_clicks = _merge_asof_events(clicks, impressions, window=window) if not clicks.empty else clicks
+    impressions = prepared.impressions
+    matched_clicks = prepared.matched_clicks
+    window = prepared.window
     conv = _with_join_keys(_frame(conversions))
     if attribution == "click":
         attributed = (

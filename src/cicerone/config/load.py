@@ -242,14 +242,7 @@ def make_settings(**overrides: Any) -> Settings:
         if k_from_cfg is not None:
             base["item_based_k_neighbors"] = k_from_cfg
     settings = Settings(**base)
-    _require_exposure_log_backend(settings)
-    _require_online_output_backend(settings)
-    _require_online_collaborative_lightfm(settings)
-    _require_track_backend(settings)
-    _require_thompson_allocation(settings)
-    _warn_online_skipped_for_experiment(settings)
-    _warn_online_skipped_for_sequential(settings)
-    return settings
+    return _finalize_settings(settings)
 
 
 def _load_io_settings(raw: dict[str, Any], section_name: str) -> IOSettings:
@@ -268,6 +261,17 @@ def _load_lookup_user_attrs(raw: object) -> tuple[str, ...]:
     if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
         raise ConfigError("dashboard.lookup_user_attrs must be a list of strings")
     return tuple(dict.fromkeys(item.strip() for item in raw if item.strip() and item.strip() != "user_id"))
+
+
+def _finalize_settings(settings: Settings) -> Settings:
+    _require_exposure_log_backend(settings)
+    _require_online_output_backend(settings)
+    _require_online_collaborative_lightfm(settings)
+    _require_track_backend(settings)
+    _require_thompson_allocation(settings)
+    _warn_online_skipped_for_experiment(settings)
+    _warn_online_skipped_for_sequential(settings)
+    return settings
 
 
 def _require_exposure_log_backend(settings: Settings) -> None:
@@ -642,11 +646,4 @@ def load_settings(config_path: str | None = None) -> Settings:
         track=load_track_settings(raw.get("track") or {}),
         eval=load_eval_settings(job.get("eval") or {}),
     )
-    _require_exposure_log_backend(settings)
-    _require_online_output_backend(settings)
-    _require_online_collaborative_lightfm(settings)
-    _require_track_backend(settings)
-    _require_thompson_allocation(settings)
-    _warn_online_skipped_for_experiment(settings)
-    _warn_online_skipped_for_sequential(settings)
-    return settings
+    return _finalize_settings(settings)
