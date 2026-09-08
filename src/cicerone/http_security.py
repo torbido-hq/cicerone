@@ -86,7 +86,11 @@ def set_flash_cookie(
     ok: str | None = None,
     error: str | None = None,
 ) -> None:
-    encoded = _FLASH_OK_COOKIE.get(ok) if ok else _FLASH_ERR_COOKIE.get(error)
+    encoded = None
+    if ok:
+        encoded = _FLASH_OK_COOKIE.get(ok)
+    elif error:
+        encoded = _FLASH_ERR_COOKIE.get(error)
     if encoded is None:
         return
     response.set_cookie(
