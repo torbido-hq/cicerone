@@ -140,7 +140,9 @@ def test_post_track_idempotent(tmp_path):
     )
     assert first.status_code == 202
     assert first.json()["accepted"] == 1
+    assert first.json()["event_ids"] == ["imp-1"]
     assert second.json()["accepted"] == 0
+    assert second.json()["event_ids"] == []
     assert after_second == after_first
 
 
@@ -177,6 +179,7 @@ def test_post_track_counts_accepted_kinds_in_mixed_partial_batch(tmp_path):
     )
     assert mixed.status_code == 202
     assert mixed.json()["accepted"] == 1
+    assert mixed.json()["event_ids"] == ["clk-1"]
     after_imp = metric_value(
         generate_latest().decode(),
         "cicerone_track_ingest_total",

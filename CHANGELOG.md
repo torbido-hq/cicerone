@@ -77,6 +77,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   assigned ids, JSONL file lock, `accepted` from ids not already stored).
   `since` compares instants. Slices join the matching recommendation snapshot
   and count by impression `event_id`. Prometheus counts match accepted rows.
+- `POST /track` `event_ids` lists newly written rows only, matching
+  `accepted`.
 - Recommendation history writes one parquet file per job snapshot. Filtered
   and `since` reads skip legacy unstamped files and parse slugged part names.
 - Incremental `[publish]` runs after the output write. Connect, config, or
@@ -104,6 +106,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `aws_access_key_id`, and any value with embedded URL credentials.
 - `POST /track` rejects bodies larger than 1 MiB (or
   `events.options.max_body_bytes`).
+- Dashboard flash cookies are an allowlist; form variant names never enter
+  `Set-Cookie`.
 
 ## [0.7.3] - 2026-09-03
 

@@ -156,4 +156,4 @@ class TrackIngestRequest(BaseModel):
 
 class TrackIngestResponse(BaseModel):
     accepted: int = Field(description="Number of new rows written (duplicates skipped)")
-    event_ids: list[str] = Field(description="Assigned or provided event ids")
+    event_ids: list[str] = Field(description="Event ids of newly written rows")

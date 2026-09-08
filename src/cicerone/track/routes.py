@@ -120,7 +120,7 @@ def mount_track_routes(
         _record_accepted_ingest(accepted_rows)
         return TrackIngestResponse(
             accepted=len(accepted_rows),
-            event_ids=[str(row["event_id"]) for row in rows],
+            event_ids=[str(row["event_id"]) for row in accepted_rows],
         )
 
     return track_store
