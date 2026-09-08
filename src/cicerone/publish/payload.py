@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+from contextlib import suppress
 
 import pandas as pd
 
@@ -11,6 +12,9 @@ from cicerone.io.recommendation_schema import USER_COLUMN, recommendation_output
 
 
 def _json_cell(value: object) -> object:
+    if hasattr(value, "item") and not isinstance(value, (bytes, bytearray, str, pd.Timestamp)):
+        with suppress(ValueError, AttributeError):
+            value = value.item()
     if isinstance(value, float) and math.isnan(value):
         return value
     try:
@@ -21,11 +25,6 @@ def _json_cell(value: object) -> object:
         return None
     if isinstance(value, pd.Timestamp):
         return value.isoformat()
-    if hasattr(value, "item") and not isinstance(value, (bytes, bytearray, str)):
-        try:
-            return value.item()
-        except (ValueError, AttributeError):
-            return value
     return value
 
 

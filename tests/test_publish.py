@@ -52,6 +52,18 @@ def test_user_recommendation_messages_rejects_nan():
         user_recommendation_messages(frame)
 
 
+def test_user_recommendation_messages_rejects_numpy_nan():
+    import numpy as np
+
+    frame = pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": np.float64("nan"), "source": "popular"}]
+    )
+    frame["score"] = frame["score"].astype(object)
+    frame.at[0, "score"] = np.float64("nan")
+    with pytest.raises(ValueError, match="not JSON compliant"):
+        user_recommendation_messages(frame)
+
+
 def test_user_recommendation_messages_encodes_optional_missing_as_null():
     frame = pd.DataFrame(
         [
