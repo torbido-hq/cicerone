@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hmac
 import secrets
-from urllib.parse import quote, unquote, urlparse
+from urllib.parse import unquote, urlparse
 
 from fastapi import HTTPException, Request, Response, status
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -13,16 +13,19 @@ CSRF_COOKIE = "cicerone_csrf"
 CSRF_FORM_FIELD = "csrf_token"
 FLASH_COOKIE = "cicerone_flash"
 FLASH_COOKIE_PATH = "/dashboard"
-FLASH_OK = frozenset({"Promoted", "Resumed split"})
-FLASH_ERR = frozenset(
-    {
-        "Unknown variant",
-        "Experiment report is not available",
-        "Experiment is not ready to promote",
-        "That variant is not the winner",
-        "No experiment is enabled",
-    }
-)
+_FLASH_OK_COOKIE = {
+    "Promoted": "ok:Promoted",
+    "Resumed split": "ok:Resumed%20split",
+}
+_FLASH_ERR_COOKIE = {
+    "Unknown variant": "err:Unknown%20variant",
+    "Experiment report is not available": "err:Experiment%20report%20is%20not%20available",
+    "Experiment is not ready to promote": "err:Experiment%20is%20not%20ready%20to%20promote",
+    "That variant is not the winner": "err:That%20variant%20is%20not%20the%20winner",
+    "No experiment is enabled": "err:No%20experiment%20is%20enabled",
+}
+FLASH_OK = frozenset(_FLASH_OK_COOKIE)
+FLASH_ERR = frozenset(_FLASH_ERR_COOKIE)
 
 _SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
@@ -83,16 +86,12 @@ def set_flash_cookie(
     ok: str | None = None,
     error: str | None = None,
 ) -> None:
-    message = ok or error
-    if not message:
+    encoded = _FLASH_OK_COOKIE.get(ok) if ok else _FLASH_ERR_COOKIE.get(error)
+    if encoded is None:
         return
-    allowed = FLASH_OK if ok else FLASH_ERR
-    if message not in allowed:
-        return
-    kind = "ok" if ok else "err"
     response.set_cookie(
         FLASH_COOKIE,
-        f"{kind}:{quote(message, safe='')}",
+        encoded,
         httponly=True,
         samesite="strict",
         secure=request.url.scheme == "https",

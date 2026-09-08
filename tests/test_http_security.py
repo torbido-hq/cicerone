@@ -79,7 +79,13 @@ def test_flash_cookie_round_trip():
     set_flash_cookie(request, response, ok="Promoted")
     header = response.headers.get("set-cookie", "")
     assert FLASH_COOKIE in header
-    assert "Promoted" in header
+    assert "ok:Promoted" in header
+    resumed = Response()
+    set_flash_cookie(request, resumed, ok="Resumed split")
+    assert "ok:Resumed%20split" in resumed.headers.get("set-cookie", "")
+    unknown = Response()
+    set_flash_cookie(request, unknown, error="Unknown variant")
+    assert "err:Unknown%20variant" in unknown.headers.get("set-cookie", "")
     raw = header.split(f"{FLASH_COOKIE}=", 1)[1].split(";", 1)[0]
     assert parse_flash_cookie(raw) == ("Promoted", None)
     rejected = Response()
