@@ -67,6 +67,7 @@ from cicerone.model import (
 from cicerone.model.recommend import RecommendCache
 from cicerone.publish import build_publisher
 from cicerone.track.store import TrackStore
+from cicerone.track.store_common import _utc_stamp
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +90,7 @@ def _replay_assignments(
     if len(names) <= 1:
         return None
     assigned: dict[str, str] = {}
-    timed: list[tuple[tuple[str, str], str, str]] = []
+    timed: list[tuple[tuple[int, str], str, str]] = []
     for row in track_rows:
         if str(row.get("kind") or "") != TRACK_KIND_IMPRESSION:
             continue
@@ -97,10 +98,10 @@ def _replay_assignments(
         variant = str(row.get("variant") or "")
         if not user_id or variant not in names:
             continue
-        occurred = str(row.get("occurred_at") or "")
-        stamp = pd.to_datetime(occurred, utc=True, errors="coerce")
-        when = stamp.isoformat() if pd.notna(stamp) else occurred
-        timed.append(((when, str(row.get("event_id") or "")), user_id, variant))
+        stamp = _utc_stamp(row.get("occurred_at"))
+        if stamp is None:
+            continue
+        timed.append(((int(stamp.value), str(row.get("event_id") or "")), user_id, variant))
     for _key, user_id, variant in sorted(timed, key=lambda item: item[0]):
         assigned.setdefault(user_id, variant)
     if settings.experiment.enabled:

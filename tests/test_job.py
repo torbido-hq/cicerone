@@ -294,7 +294,7 @@ def test_replay_assignments_prefers_first_impression_then_hash(tmp_path):
             {
                 "kind": "impression",
                 "user_id": "alice",
-                "variant": "control",
+                "variant": "treatment",
                 "occurred_at": "not-a-time",
                 "event_id": "bad",
             },
