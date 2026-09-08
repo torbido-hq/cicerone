@@ -7,7 +7,7 @@ authors:
   - nicholas
 ---
 
-You want half your signed-in traffic on last night’s recipe and half on a challenger. You write an `if` on the homepage. The same person comes back tomorrow and lands on the other side. You did not A/B test two ranking recipes. You randomized a page load.
+You want half your signed-in traffic on one ranking recipe and half on a challenger. You write an `if` on the homepage. The same person comes back tomorrow and lands on the other side. You did not A/B test two ranking recipes. You randomized a page load.
 
 The [nightly table](/articles/a-nightly-table-next-to-your-orders/) walkthrough already ends with a homemade split: hash `user_id`, bestsellers to one half, the personalized `SELECT` to the other. The instinct is right. A cookie rematches when it is cleared. A per-request coin flip rematches every load. That split is not “which model won this rank.” It is which recipe the customer is in.
 
@@ -72,13 +72,13 @@ models = ["als", "bpr", "popular"]
 combiner = "blend"
 ```
 
-Control inherits `[job]` if you omit `models` / `combiner`. Traffic must be ≥ 0 and sum to at most 1; leftover mass goes to the last variant (see Reference).
+Control inherits `[job]` if you omit `models` / `combiner`. Traffic must be ≥ 0 and sum to at most 1; if it is below 1, the remainder goes to the last variant (see Reference).
 
 `job.run()` unions models, fits once, then recommends once per recipe. It concatenates the frames and writes one table.
 
 ## How sticky assignment works
 
-Alice and Bob both `GET /recommendations/{user_id}`. Same experiment. Different users. Each lands on **one** list and stays there until you change the experiment, not until they clear a cookie.
+Alice and Bob both `GET /recommendations/{user_id}`. Same experiment. Different users. Each gets a deterministic bucket. As long as the experiment ID, traffic, and variant order stay the same, that bucket keeps resolving to the same variant. Clearing a cookie does not rematch them.
 
 Serve does **not** take `?variant=`. It hashes:
 
@@ -121,7 +121,7 @@ The nightly `SELECT … ORDER BY rank` does not assign. Either call serve, or ke
 
 Splitting traffic is easy. Knowing whether the **recipe** caused better purchases is the hard part.
 
-This walkthrough uses `primary_metric = "purchase"` and `attribution = "user"`: a purchase from `[input]` counts for whoever that user is assigned to, whether or not they opened `/recommendations`. That is the honest homepage metric. It is also noisy. The config default metric is `weighted`, not `purchase`.
+This walkthrough uses `primary_metric = "purchase"` and `attribution = "user"`: a purchase from `[input]` counts for whoever that user is assigned to, whether or not they opened `/recommendations`. That measures the customer outcome directly. It is also noisy. The config default metric is `weighted`, not `purchase`.
 
 | `attribution` | What it counts |
 | --- | --- |
@@ -168,9 +168,14 @@ Change `id`, traffic, or order if you **mean** to rematch live assignment. Chang
 
 If `log_exposures` was off, the dashboard can still walk Alice to the other arm in a CSV when you edit today’s TOML. That is the report. It is not serve.
 
+The customer keeps the same assignment. The assigned list does not keep last night’s SKUs.
+
 The customer keeps the same list. The list does not keep last night’s SKUs.
 
-## Reference
+<details>
+<summary>Reference</summary>
+
+The knobs and failure modes if you are wiring this up. The product page is [experiments](/experiments/).
 
 **Traffic.** Names unique. At least two variants unless `automl_challenger = true`. Sum > 1 is `ConfigError`. Sum < 1: remainder is added to the **last** variant, plus a warning. `0.5` / `0.3` becomes `0.5` / `0.5`. `0.4` / `0.4` becomes `0.4` / `0.6`.
 
@@ -192,3 +197,5 @@ The customer keeps the same list. The list does not keep last night’s SKUs.
 | Rename after a job | Hash slice unchanged. New name has no rows until the next job. |
 | Promote, then rename the winner | `promoted_variant` missing → hash again. |
 | Thompson extra | Needs `[track]` + `cicerone-recommender[bandits]`. Not 100% ship. |
+
+</details>
