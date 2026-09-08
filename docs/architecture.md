@@ -123,7 +123,7 @@ Test modules mirror the packages (same pattern as `tests/test_io_*.py`):
 
 ## Data flow
 
-![Architecture: dataset or database input into job.run, then dataset build and train, then dataset or database output; optional EventSource write-through](images/architecture-flow.svg)
+![Architecture: dataset or database input into job.run, then dataset build and train, then dataset or database output; optional EventSource write-through](/images/architecture-flow.svg)
 
 1. `job.run()` loads `Settings` (`config.load_settings`) and `FeatureConfig`
    (`feature_config.load_feature_config`), builds the configured
