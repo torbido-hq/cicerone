@@ -79,8 +79,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and count by impression `event_id`. Prometheus counts match accepted rows.
 - Recommendation history writes one parquet file per job snapshot. Filtered
   and `since` reads skip legacy unstamped files and parse slugged part names.
-- Incremental `[publish]` runs after the output write; connect or config
-  failures fail the job. Apply still acks after a successful write.
+- Incremental `[publish]` runs after the output write. Connect, config, or
+  publish failures fail the job or incremental tick so the batch is nacked.
 - Kafka and RabbitMQ ingest commit or ack after flush (contiguous watermark;
   poison non-UTF-8 skipped; AMQP on one I/O thread). Publish uses the
   configured routing key and reports setup failure.

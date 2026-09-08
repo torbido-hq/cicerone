@@ -1142,7 +1142,7 @@ def test_dashboard_promote_success_redirects(monkeypatch):
     assert response.headers["location"] == "/dashboard/experiments"
     flash = _flash_cookie(response)
     assert flash.startswith("ok:Promoted")
-    assert "control" in flash
+    assert "control" not in flash
 
 
 def test_dashboard_unpromote_resumes_split(tmp_path):

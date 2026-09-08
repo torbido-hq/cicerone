@@ -13,6 +13,16 @@ CSRF_COOKIE = "cicerone_csrf"
 CSRF_FORM_FIELD = "csrf_token"
 FLASH_COOKIE = "cicerone_flash"
 FLASH_COOKIE_PATH = "/dashboard"
+FLASH_OK = frozenset({"Promoted", "Resumed split"})
+FLASH_ERR = frozenset(
+    {
+        "Unknown variant",
+        "Experiment report is not available",
+        "Experiment is not ready to promote",
+        "That variant is not the winner",
+        "No experiment is enabled",
+    }
+)
 
 _SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
@@ -76,10 +86,13 @@ def set_flash_cookie(
     message = ok or error
     if not message:
         return
+    allowed = FLASH_OK if ok else FLASH_ERR
+    if message not in allowed:
+        return
     kind = "ok" if ok else "err"
     response.set_cookie(
         FLASH_COOKIE,
-        f"{kind}:{quote(_flash_text(message), safe='')}",
+        f"{kind}:{quote(message, safe='')}",
         httponly=True,
         samesite="strict",
         secure=request.url.scheme == "https",

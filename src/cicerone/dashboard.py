@@ -28,6 +28,7 @@ from cicerone.http_auth import require_basic_auth
 from cicerone.http_security import (
     CSRF_FORM_FIELD,
     FLASH_COOKIE,
+    FLASH_ERR,
     SecurityHeadersMiddleware,
     clear_flash_cookie,
     csrf_token_for,
@@ -83,6 +84,18 @@ def _chrome(settings: Settings) -> dict[str, Any]:
         "nav_quality_available": bool(settings.track.enabled or settings.eval.enabled),
         "nav_experiments_available": bool(settings.experiment.enabled),
     }
+
+
+def _flash_error(error: str) -> str:
+    if error in FLASH_ERR:
+        return error
+    if error.startswith("Unknown variant"):
+        return "Unknown variant"
+    if error.startswith("Experiment is not ready to promote"):
+        return "Experiment is not ready to promote"
+    if error.startswith("Winner is"):
+        return "That variant is not the winner"
+    return "Experiment report is not available"
 
 
 def _experiments_redirect(
@@ -279,8 +292,8 @@ def create_app(
         require_csrf(request, csrf_token)
         error = promote_winner(settings, variant.strip())
         if error:
-            return _experiments_redirect(request, promote_error=error)
-        return _experiments_redirect(request, message=f"Promoted {variant.strip()}")
+            return _experiments_redirect(request, promote_error=_flash_error(error))
+        return _experiments_redirect(request, message="Promoted")
 
     @app.post("/dashboard/experiments/unpromote", dependencies=[Depends(auth)])
     def experiments_unpromote(
@@ -290,7 +303,7 @@ def create_app(
         require_csrf(request, csrf_token)
         error = clear_promotion(settings)
         if error:
-            return _experiments_redirect(request, promote_error=error)
+            return _experiments_redirect(request, promote_error=_flash_error(error))
         return _experiments_redirect(request, message="Resumed split")
 
     @app.get("/dashboard/config", dependencies=[Depends(auth)])

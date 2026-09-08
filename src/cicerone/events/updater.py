@@ -225,6 +225,8 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
                 self._publisher.publish(merged)
             except Exception:
                 logger.exception("Incremental publish failed after successful write")
+                self._abort_online()
+                raise
         self._store_users_in_cache(set(replace_ids), merged)
         if persist_online:
             self._commit_online()

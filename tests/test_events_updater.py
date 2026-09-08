@@ -865,3 +865,41 @@ def test_incremental_updater_collapses_leftover_variants_when_experiment_off(
     cold = frame[frame["user_id"] == COLD_START_USER_ID]
     assert set(cold["variant"].astype(str)) == {"control"}
     assert "cold-treatment" not in set(cold["item_id"].astype(str))
+
+
+def test_incremental_updater_publish_failure_raises(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    called = {"n": 0}
+
+    class _Boom:
+        def connect(self) -> None:
+            return None
+
+        def publish(self, _df: pd.DataFrame) -> None:
+            raise RuntimeError("broker down")
+
+        def close(self) -> None:
+            return None
+
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        on_success=lambda: called.__setitem__("n", called["n"] + 1),
+        publisher=_Boom(),
+    )
+    events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
+    with pytest.raises(RuntimeError, match="broker down"):
+        updater.apply(events)
+    assert called["n"] == 0
+    frame = load_recommendations_frame(settings.output)
+    assert "i9" in set(frame[frame["user_id"] == "u1"]["item_id"].astype(str))

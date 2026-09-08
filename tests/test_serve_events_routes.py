@@ -433,3 +433,17 @@ def test_read_limited_json_rejects_deeply_nested_json():
         asyncio.run(_read_limited_json(_asgi_request(nested), len(nested) + 1))
     assert exc.value.status_code == 400
     assert exc.value.detail == "Request body must be JSON"
+
+
+def test_read_limited_json_does_not_map_unexpected_errors_to_400(monkeypatch):
+    import json as json_mod
+
+    from cicerone.serve import events_routes
+
+    def _boom(_raw: bytes) -> object:
+        raise RuntimeError("internal")
+
+    monkeypatch.setattr(events_routes.json, "loads", _boom)
+    monkeypatch.setattr(json_mod, "loads", _boom)
+    with pytest.raises(RuntimeError, match="internal"):
+        asyncio.run(_read_limited_json(_asgi_request(b'{"ok":true}'), 64))
