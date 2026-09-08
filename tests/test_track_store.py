@@ -669,6 +669,7 @@ def test_track_read_history_sqlite_generated_ats(tmp_path) -> None:
     store.append_history(recs, generated_at="2026-08-29T03:00:00+00:00")
     history = store.read_history(generated_ats=["2026-08-29T03:00:00+00:00"])
     assert len(history) == 1
+    assert len(store.read_history(generated_ats=["2026-08-29T03:00:00Z"])) == 1
     assert len(store.read_history(since="2026-08-29T00:00:00+00:00")) == 1
 
 

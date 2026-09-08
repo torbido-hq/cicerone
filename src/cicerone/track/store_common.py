@@ -175,6 +175,26 @@ def _track_row_sql_filter(
     return " WHERE " + " AND ".join(clauses), params
 
 
+def _history_sql_literals(generated_ats: set[str]) -> list[str]:
+    keys: set[str] = set()
+    for item in generated_ats:
+        text = str(item).strip()
+        if text:
+            keys.add(text)
+        stamp = _utc_stamp(item)
+        if stamp is None:
+            continue
+        iso = stamp.isoformat()
+        keys.add(iso)
+        if iso.endswith("+00:00"):
+            keys.add(iso[:-6] + "Z")
+            keys.add(iso.replace("T", " "))
+        elif iso.endswith("Z"):
+            keys.add(iso[:-1] + "+00:00")
+            keys.add(iso[:-1].replace("T", " ") + "+00:00")
+    return sorted(keys)
+
+
 def _history_sql_filter(
     *,
     generated_ats: set[str] | None,
@@ -183,7 +203,7 @@ def _history_sql_filter(
     params: dict[str, Any] = {}
     if generated_ats:
         clauses.append("generated_at IN :generated_ats")
-        params["generated_ats"] = sorted(generated_ats)
+        params["generated_ats"] = _history_sql_literals(generated_ats)
     if not clauses:
         return "", {}
     return " WHERE " + " AND ".join(clauses), params

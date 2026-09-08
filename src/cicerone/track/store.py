@@ -174,7 +174,7 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
                 return pd.DataFrame(columns=list(HISTORY_COLUMNS))
         since = _iso_utc(since)
         if self._kind == "db":
-            frame = self._read_history_db(generated_ats=None)
+            frame = self._read_history_db(generated_ats=wanted)
             return _filter_history(frame, generated_ats=wanted, since=since)
         frames = []
         if wanted is None and since is None:
