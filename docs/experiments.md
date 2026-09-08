@@ -3,10 +3,10 @@
 # Experiments
 
 Cicerone tests **whole ranking recipes** (models + combiner + optional blending
-knobs), not which `source` in a mixed cascade got the click. The unit of
-assignment is a user. Serve stays a lookup: the job writes extra recommendation
-rows tagged with `variant`, and `GET /recommendations/{user_id}` hashes the
-user onto one of those lists.
+knobs and boost/eligibility policy), not which `source` in a mixed cascade got
+the click. The unit of assignment is a user. Serve stays a lookup: the job
+writes extra recommendation rows tagged with `variant`, and
+`GET /recommendations/{user_id}` hashes the user onto one of those lists.
 
 One experiment at a time. Overlapping layers, request-path bandits, and
 GrowthBook/Statsig as a required dependency are out of scope.
@@ -32,14 +32,22 @@ name = "treatment"
 traffic = 0.5
 models = ["collaborative", "item_based", "popular", "latest"]
 combiner = "blend"            # priority | rrf | blend
-# boosts = true
+# boosts = true               # inherit [[boost]] from features.toml
+# boosts = false              # drop all boosts
+# boosts = ["featured"]       # named subset of features.toml
+# [[experiment.variants.boost]]
+# name = "new-arrivals"       # replacement rules for this variant only
+# kind = "boolean"
+# item_column = "is_new"
+# factor = 1.3
 # eligibility = true
 ```
 
 Validation: unique names; traffic ≥ 0 and sums to at most 1 (any remainder
 is assigned to the last variant). Recipe overrides are the knobs `[job]`
-already has, plus optional `boosts = false` / `eligibility = false` to drop
-policy rules for that variant.
+already has, plus optional `boosts` / `eligibility` (inherit, drop, named
+subset, or replacement `[[experiment.variants.boost]]` /
+`[[experiment.variants.eligibility]]` tables).
 
 ## Assignment
 
@@ -54,12 +62,55 @@ lexicographically first remaining name; blank/NaN names are ignored) on
 **serve reads and incremental write-through** until the next job rewrite.
 Do not mix lists.
 
+## Thompson at retrain
+
+`allocation = "thompson"` (default remains `"fixed"`) is a **job-time**
+conversion instrument, not a request-path bandit. Each `job.run()` keeps one
+**champion** and one **challenger**, updates Bernoulli posteriors from tracked
+CVR (`primary_metric = "conversion"` with `attribution = "click"` or
+`"impression"`), and writes **only those two** recipe lists. Serve still hashes
+the user onto the active pair (or 100% to a **Ship** / Promote winner).
+
+Requires `[track]` and `pip install 'cicerone-recommender[bandits]'` (Fidelity
+[MABWiser](https://github.com/fidelity/mabwiser) `LearningPolicy.ThompsonSampling()`).
+Config load is a `ConfigError` without the extra or with track off. At runtime
+the job fail-closes to `allocation = "fixed"` (writes every named recipe) if
+track is empty and there is no stored pair.
+
+The pair stays sticky until `track.min_impressions` on that pair. Then if
+P(champion is best) is at least `rotate_min_prob` and catalog guardrails pass,
+the champion stays and MABWiser samples the next challenger from the remaining
+names. Do not rewrite TOML `traffic` every night — that remaps users.
+
+```toml
+[experiment]
+enabled = true
+id = "ranking-cvr"
+primary_metric = "conversion"
+attribution = "click"
+allocation = "thompson"   # needs pip install 'cicerone-recommender[bandits]'
+# explore_traffic = 0.5
+# rotate_min_prob = 0.9
+```
+
+The Experiments page shows CVR %, P(best), “now testing A vs B”, and a volume
+meter. **Ship** remains the explicit 100% action; Thompson does not auto-promote.
+`automl_challenger` stays a separate offline-MAP loop.
+
 ## Job
 
-The job fits the **union** of variant models once, then combines/blends each
-recipe into top-K and tags `variant`. One recommendations table. The run
-manifest records `experiment_id` and `experiment_variants` (JSON recipes) so a
-later AutoML challenger can use the last successful recipe as control.
+The job fits the **union** of variant models once. What it writes depends on
+`[experiment].allocation`:
+
+- `fixed` (default) — combine/blend **each** named recipe into top-K and tag
+  `variant`.
+- `thompson` — normally writes only the live pair; with empty tracking and no
+  stored pair, it falls back to `fixed` and writes every named recipe (see
+  [Thompson at retrain](#thompson-at-retrain)).
+
+One recommendations table. The run manifest records `experiment_id` and
+`experiment_variants` (JSON recipes) so a later AutoML challenger can use the
+last successful recipe as control.
 
 Existing tables without a `variant` column still serve (no experiment). Adding
 the column to an existing DB table is `ALTER TABLE … ADD COLUMN variant TEXT`.
@@ -79,23 +130,41 @@ lookups.
 exposures require **db** output (two replicas must not append the same local
 file). Default off: serve stays read-only.
 
+Impression and click tracking (CTR / conversion of shown items) is a separate
+`POST /track` contract. See [evaluation.md](evaluation.md). Do not send
+impressions through `POST /events`.
+
 ## Incremental events
 
-Popular/latest write-through refreshes **every variant** for affected users.
+Popular/latest write-through refreshes only the **assigned** (or promoted)
+variant for affected users; other variants keep their last batch lists.
 `[events.online]` LightFM rewrite is **skipped** while `[experiment]` is on
 (so arms stay isolated; load/serve log a warning). Without an experiment, it
 rewrites personalized / item-KNN / content-fallback rows for affected users.
 See [incremental-events.md](incremental-events.md).
 
+## Recipe vs measurement
+
+Per-variant `boosts` / `eligibility` change what is on the served list.
+Dashboard metrics for `attribution = "user"` still join `[input]` events to
+the hashed variant (intention-to-treat). For `ctr` / `conversion`, the
+impression `variant` is used when present.
+
 ## Metrics and promote
 
 Deterministic assignment means ingested `[events]` join a variant without a
-new impression protocol. Counts and weighted sums (`features.toml`
-`[event_weights]`) are **descriptive** until the sequential test decides.
+new impression protocol when `attribution = "user"`. Counts and weighted sums
+(`features.toml` `[event_weights]`) are **descriptive** until the sequential
+test decides.
+
+To A/B the lists themselves, set `primary_metric = "ctr"` or `"conversion"`
+and `attribution = "click"` or `"impression"` after wiring `[track]`.
+`attribution = "recommended"` counts only events whose item was on the
+assigned list (no `/track`). See [evaluation.md](evaluation.md).
 
 The dashboard **Experiments** page (`GET /dashboard/experiments`) shows:
 
-- Approximate always-valid CIs on the primary metric (a LIL-style radius for
+- Approximate mixture CIs on the primary metric (a LIL-style radius for
   peeking — not a full anytime-valid CS for heavy-tailed outcomes).
   Intention-to-treat on users who appear in the event window, or
   exposure-conditional when `log_exposures` is on (rows must match this

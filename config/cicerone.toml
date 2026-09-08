@@ -25,12 +25,18 @@ feature_config_path = "/app/config/features.toml"
 # Recommendation strategies to fit and combine, in priority order (earlier
 # entries win ties for the same user/item pair). Defaults to
 # ["collaborative", "item_based", "popular"] if omitted. Available:
-# "collaborative" (LightFM, hybrid CF), "item_based" (item-item KNN),
+# "collaborative" (LightFM, hybrid CF; optional loss = "bpr" / "logistic" /
+# "warp-kos" under [model.collaborative.model]), "item_based" (item-item KNN;
+# nested model.cls can be TFIDFRecommender, CosineRecommender, or
+# BM25Recommender),
 # "sequential" (SASRec / BERT4Rec / HSTU; pip install 'cicerone-recommender[sequential]'
-# or requirements-sequential.txt), "content_fallback" (feature similarity for
+# or requirements-sequential.txt), "ease" (EASE), "als" (implicit ALS + features),
+# "content_fallback" (feature similarity for
 # zero-interaction items; also gated by [job.content_fallback].enabled),
-# "popular" (global popularity fallback), "latest" (trending in the last two
-# weeks). Sequential is opt-in (not in the default models list). Sequences
+# "popular" (global popularity fallback), "popular_in_category" (diversity mix
+# by an item category feature), "latest" (trending in the last two weeks),
+# "random" (sanity baseline). Sequential, ease, als, popular_in_category, and
+# random are opt-in (not in the default models list). Sequences
 # are unique items ordered by last interaction (see README).
 # models = ["collaborative", "item_based", "popular", "latest"]
 
@@ -47,7 +53,7 @@ feature_config_path = "/app/config/features.toml"
 # num_threads = 4
 # [model.collaborative.model]
 # no_components = 64
-# loss = "warp"
+# loss = "warp"  # or "bpr" / "logistic" / "warp-kos"
 # learning_rate = 0.05
 # item_alpha = 1.0e-6
 # user_alpha = 1.0e-6
@@ -56,16 +62,36 @@ feature_config_path = "/app/config/features.toml"
 # [model.item_based]
 # cls = "ImplicitItemKNNWrapperModel"
 # [model.item_based.model]
-# cls = "TFIDFRecommender"
+# cls = "TFIDFRecommender"  # or CosineRecommender / BM25Recommender
 # K = 20
+#
+# [model.ease]
+# cls = "EASEModel"
+# regularization = 500.0
+#
+# [model.als]
+# cls = "ImplicitALSWrapperModel"
+# fit_features_together = true
+# [model.als.model]
+# factors = 64
+# iterations = 15
 #
 # [model.popular]
 # cls = "PopularModel"
+#
+# [model.popular_in_category]
+# cls = "PopularInCategoryModel"
+# category_feature = "category"
+# mixing_strategy = "group"
 #
 # [model.latest]
 # cls = "PopularModel"
 # popularity = "n_interactions"
 # period = { days = 14 }
+#
+# [model.random]
+# cls = "RandomModel"
+# random_state = 42
 #
 # Optional sequential strategy (SASRec default; BERT4Rec / HSTU via architecture).
 # Requires: pip install 'cicerone-recommender[sequential]'
@@ -314,6 +340,44 @@ prefix = "recommendations/latest"
 # # block_ms = 0
 # # claim_idle_ms = 300000
 
+# Kafka consumer group. Requires: pip install 'cicerone-recommender[kafka]'
+# Raise max.poll.interval.ms on the broker/client if apply can exceed 5 minutes.
+# [events]
+# enabled = true
+# kind = "kafka"
+# [events.options]
+# bootstrap_servers = "${KAFKA_BOOTSTRAP_SERVERS}"
+# topic = "cicerone.events"
+# group_id = "cicerone"
+# # consumer_name = "serve-1"       # default: hostname
+# # security_protocol = "SASL_SSL"
+# # sasl_mechanism = "PLAIN"
+# # sasl_username = "${KAFKA_USERNAME}"
+# # sasl_password = "${KAFKA_PASSWORD}"
+
+# RabbitMQ queue. Requires: pip install 'cicerone-recommender[rabbitmq]'
+# [events]
+# enabled = true
+# kind = "rabbitmq"
+# [events.options]
+# amqp_url = "${RABBITMQ_URL}"
+# queue = "cicerone.events"
+# # prefetch = 100
+
+# Optional: after [output] writes, also emit per-user recommendation JSON
+# to Kafka or RabbitMQ. Serve still reads [output]. Independent of [events].
+# [publish]
+# enabled = true
+# kind = "kafka"   # kafka | rabbitmq
+# [publish.options]
+# bootstrap_servers = "${KAFKA_BOOTSTRAP_SERVERS}"
+# topic = "cicerone.recommendations"
+# # RabbitMQ instead:
+# # amqp_url = "${RABBITMQ_URL}"
+# # queue = "cicerone.recommendations"
+# # exchange = ""
+# # routing_key = ""
+
 # Optional: a small, standalone read-only status page over job run history
 # (its own container/port, independent of [job].mode -- see the README's
 # Dashboard section). Protected by HTTP Basic Auth (a handful of named
@@ -336,6 +400,9 @@ prefix = "recommendations/latest"
 # enabled = true
 # id = "rrf-vs-blend-2026-08"
 # primary_metric = "purchase"  # event_type, or "weighted"
+# # allocation = "fixed"       # or "thompson" (needs pip install 'cicerone-recommender[bandits]')
+# # explore_traffic = 0.5      # challenger share when allocation = thompson
+# # rotate_min_prob = 0.9      # P(champion is best) before a new challenger
 # # log_exposures = false
 # # automl_challenger = false
 # # alpha = 0.05
@@ -347,8 +414,24 @@ prefix = "recommendations/latest"
 # traffic = 0.5
 # combiner = "blend"  # priority | rrf | blend
 # # models = ["collaborative", "item_based", "popular", "latest"]
-# # boosts = true
+# # boosts = true            # inherit features.toml; false drops; ["name"] subsets
 # # eligibility = true
+# # [[experiment.variants.boost]]
+# # name = "new-arrivals"
+# # kind = "boolean"
+# # item_column = "is_new"
+# # factor = 1.3
+
+# Impression/click tracking and production replay. See docs/evaluation.md.
+# [track]
+# enabled = true
+# attribution_window_hours = 24
+# conversion_event_types = ["purchase"]
+# min_impressions = 100
+# [job.eval]
+# enabled = true
+# # event_types = ["purchase"]
+# # ks = [5, 10]
 
 # --- "db" kind example (commented out) ----------------------------------
 # [input]

@@ -171,7 +171,12 @@ def attach_reasons(
 
     out = recs.copy()
     want_overlap = settings.max_similar_items > 0 or settings.max_attributes > 0
-    history = _user_history(interactions) if want_overlap else {}
+    scoped = interactions
+    if interactions is not None and not interactions.empty and Columns.User in out.columns:
+        rec_users = set(out[Columns.User].astype(str))
+        user_col = interactions_user_column(interactions)
+        scoped = interactions.loc[interactions[user_col].astype(str).isin(rec_users)]
+    history = _user_history(scoped) if want_overlap else {}
     keep_ids: set[str] | None = None
     if want_overlap:
         keep_ids = set(out[Columns.Item].astype(str))

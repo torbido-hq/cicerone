@@ -8,13 +8,17 @@ from conftest import make_settings
 from fastapi.testclient import TestClient
 
 from cicerone.config import Settings
-from cicerone.dashboard import create_app, main
+from cicerone.dashboard import ROBOTS_TAG, ROBOTS_TXT, create_app, main
 from cicerone.dashboard_lookup import HISTORY_UNAVAILABLE, LOOKUP_FAILED, MISSING
 from cicerone.http_auth import require_basic_auth
 
 
 def _settings(**overrides) -> Settings:
     return make_settings(**{"dashboard_enabled": True, **overrides})
+
+
+def _flash_cookie(response) -> str:
+    return (response.cookies.get("cicerone_flash") or "").strip('"')
 
 
 class _FakeReader:
@@ -40,6 +44,58 @@ def test_health_requires_no_auth():
     client = TestClient(app)
 
     assert client.get("/health").status_code == 200
+
+
+def test_robots_txt_disallows_all_without_auth():
+    app = create_app(_settings(), _FakeReader(None), _users_with("alice", "s3cret"))
+    client = TestClient(app)
+
+    response = client.get("/robots.txt")
+
+    assert response.status_code == 200
+    assert response.text == ROBOTS_TXT
+    assert response.headers["x-robots-tag"] == ROBOTS_TAG
+    assert "no-store" in response.headers["cache-control"]
+
+
+def test_dashboard_responses_are_not_indexable():
+    app = create_app(_settings(), _FakeReader(None), _users_with("alice", "s3cret"))
+    client = TestClient(app)
+    auth = ("alice", "s3cret")
+
+    for path in (
+        "/health",
+        "/dashboard",
+        "/dashboard/config",
+        "/dashboard/quality",
+        "/dashboard/experiments",
+    ):
+        response = client.get(path, auth=auth)
+        assert response.status_code == 200, path
+        assert response.headers["x-robots-tag"] == ROBOTS_TAG
+        assert "no-store" in response.headers["cache-control"]
+
+    unauthorized = client.get("/dashboard")
+    assert unauthorized.status_code == 401
+    assert unauthorized.headers["x-robots-tag"] == ROBOTS_TAG
+
+    static = client.get("/static/cicerone-logo.svg")
+    assert static.status_code == 200
+    assert static.headers["x-robots-tag"] == ROBOTS_TAG
+    assert "no-store" not in static.headers.get("cache-control", "")
+
+    prefix_collision = client.get("/staticx")
+    assert prefix_collision.status_code == 404
+    assert "no-store" in prefix_collision.headers.get("cache-control", "")
+
+
+def test_dashboard_openapi_docs_are_disabled():
+    app = create_app(_settings(), _FakeReader(None), _users_with("alice", "s3cret"))
+    client = TestClient(app)
+
+    assert client.get("/docs").status_code == 404
+    assert client.get("/redoc").status_code == 404
+    assert client.get("/openapi.json").status_code == 404
 
 
 def test_dashboard_page_requires_auth():
@@ -94,6 +150,20 @@ def test_dashboard_page_renders_with_valid_credentials():
     assert 'hx-trigger="load, refresh, every' not in response.text
     assert "<title>Cicerone dashboard</title>" in response.text
     assert 'id="recommendation-results" class="mt-3"' in response.text
+    assert 'href="/dashboard/experiments"' in response.text
+    assert 'href="/dashboard/quality"' in response.text
+    assert 'href="/dashboard/config"' in response.text
+    assert ">Quality" in response.text
+    assert ">Config<" in response.text
+    assert "Sign out" in response.text
+    assert "flex-wrap" in response.text
+    assert 'href="/dashboard/logout"' in response.text
+    assert 'name="robots"' in response.text
+    assert f'content="{ROBOTS_TAG}"' in response.text
+    assert "noindex" in response.text
+    assert 'aria-label="Main"' in response.text
+    assert 'id="main"' in response.text
+    assert "Skip to content" in response.text
 
 
 def test_status_partial_renders_latest_manifest():
@@ -258,14 +328,16 @@ def test_main_raises_when_no_users_configured(tmp_path, monkeypatch):
 def test_main_starts_when_recommendation_reader_fails(monkeypatch):
     captured: dict[str, object] = {}
 
-    def fake_create_app(settings, reader, users, rec_reader=None, history_reader=None):
+    def fake_create_app(settings, reader, users, rec_reader=None, history_reader=None, **kwargs):
         captured["rec_reader"] = rec_reader
         captured["history_reader"] = history_reader
+        captured["config_path"] = kwargs.get("config_path")
         return object()
 
     def boom(_output):
         raise RuntimeError("bad store")
 
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", "/tmp/cicerone.dashboard.toml")
     monkeypatch.setattr("cicerone.dashboard.load_settings", lambda: _settings())
     monkeypatch.setattr("cicerone.dashboard.load_users", lambda _path: {"alice": "hash"})
     monkeypatch.setattr("cicerone.dashboard.build_manifest_reader", lambda _output: _FakeReader(None))
@@ -279,12 +351,13 @@ def test_main_starts_when_recommendation_reader_fails(monkeypatch):
     main()
 
     assert captured["rec_reader"] is None
+    assert captured["config_path"] == "/tmp/cicerone.dashboard.toml"
 
 
 def test_main_starts_when_history_reader_fails(monkeypatch):
     captured: dict[str, object] = {}
 
-    def fake_create_app(settings, reader, users, rec_reader=None, history_reader=None):
+    def fake_create_app(settings, reader, users, rec_reader=None, history_reader=None, **_kwargs):
         captured["history_reader"] = history_reader
         return object()
 
@@ -305,6 +378,31 @@ def test_main_starts_when_history_reader_fails(monkeypatch):
     main()
 
     assert captured["history_reader"] is None
+
+
+def test_main_uses_package_default_config_path(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_create_app(settings, reader, users, rec_reader=None, history_reader=None, **kwargs):
+        captured["config_path"] = kwargs.get("config_path")
+        return object()
+
+    monkeypatch.delenv("CICERONE_CONFIG_PATH", raising=False)
+    monkeypatch.setattr("cicerone.config.DEFAULT_CONFIG_PATH", "/patched/cicerone.toml")
+    monkeypatch.setattr("cicerone.dashboard.load_settings", lambda: _settings())
+    monkeypatch.setattr("cicerone.dashboard.load_users", lambda _path: {"alice": "hash"})
+    monkeypatch.setattr("cicerone.dashboard.build_manifest_reader", lambda _output: _FakeReader(None))
+    monkeypatch.setattr("cicerone.dashboard.build_recommendation_reader", lambda _output: object())
+    monkeypatch.setattr("cicerone.dashboard.build_user_history_reader", lambda _input: object())
+    monkeypatch.setattr("cicerone.dashboard.create_app", fake_create_app)
+    monkeypatch.setattr(
+        "cicerone.dashboard.uvicorn",
+        type("_Uvicorn", (), {"run": staticmethod(lambda *_a, **_k: None)}),
+    )
+
+    main()
+
+    assert captured["config_path"] == "/patched/cicerone.toml"
 
 
 def test_require_basic_auth_used_directly_rejects_unknown_user():
@@ -859,8 +957,14 @@ def test_recommendations_partial_no_events_badge():
 def test_dashboard_experiments_page_disabled():
     response = _recs_client().get("/dashboard/experiments", auth=("alice", "s3cret"))
     assert response.status_code == 200
-    assert "No experiment is enabled" in response.text
+    assert "No experiment is running." in response.text
+    assert "How to enable one" in response.text
+    assert "<title>Experiments · Cicerone dashboard</title>" in response.text
+    assert "Sign out" in response.text
+    assert ">off<" in response.text
     assert 'href="/dashboard/experiments"' in response.text
+    assert 'href="/dashboard/quality"' in response.text
+    assert 'href="/dashboard/config"' in response.text
 
 
 def test_dashboard_lookup_shows_assigned_variant():
@@ -968,9 +1072,8 @@ def test_dashboard_promote_unknown_variant_redirects():
         follow_redirects=False,
     )
     assert response.status_code == 303
-    location = response.headers["location"]
-    assert location.startswith("/dashboard/experiments?")
-    assert "promote_error=" in location
+    assert response.headers["location"] == "/dashboard/experiments"
+    assert _flash_cookie(response).startswith("err:")
 
 
 def test_dashboard_promote_hostile_variant_stays_on_experiments():
@@ -994,21 +1097,14 @@ def test_dashboard_promote_hostile_variant_stays_on_experiments():
     )
     assert response.status_code == 303
     location = response.headers["location"]
-    assert location.startswith("/dashboard/experiments?")
-    assert "://" not in location.split("?", 1)[0]
+    assert location == "/dashboard/experiments"
+    assert "://" not in location
 
 
-def test_experiments_redirect_rejects_absolute_target(monkeypatch):
-    from urllib.parse import ParseResult
+def test_experiments_redirect_stays_on_experiments_path():
+    from cicerone.dashboard import _experiments_redirect
 
-    import cicerone.dashboard as dash
-
-    monkeypatch.setattr(
-        dash,
-        "urlparse",
-        lambda _url: ParseResult("https", "evil.example", "/dashboard/experiments", "", "", ""),
-    )
-    response = dash._experiments_redirect(promote_error="x")
+    response = _experiments_redirect(promote_error="x")
     assert response.status_code == 303
     assert response.headers["location"] == "/dashboard/experiments"
 
@@ -1043,10 +1139,10 @@ def test_dashboard_promote_success_redirects(monkeypatch):
         follow_redirects=False,
     )
     assert response.status_code == 303
-    location = response.headers["location"]
-    assert location.startswith("/dashboard/experiments?")
-    assert "Promoted" in location
-    assert "control" in location
+    assert response.headers["location"] == "/dashboard/experiments"
+    flash = _flash_cookie(response)
+    assert flash.startswith("ok:Promoted")
+    assert "control" not in flash
 
 
 def test_dashboard_unpromote_resumes_split(tmp_path):
@@ -1075,7 +1171,8 @@ def test_dashboard_unpromote_resumes_split(tmp_path):
         follow_redirects=False,
     )
     assert response.status_code == 303
-    assert "Resumed" in response.headers["location"]
+    assert response.headers["location"] == "/dashboard/experiments"
+    assert "Resumed" in (response.cookies.get("cicerone_flash") or "")
 
 
 def test_dashboard_unpromote_disabled_experiment_redirects():
@@ -1088,7 +1185,8 @@ def test_dashboard_unpromote_disabled_experiment_redirects():
         follow_redirects=False,
     )
     assert response.status_code == 303
-    assert "promote_error=" in response.headers["location"]
+    assert response.headers["location"] == "/dashboard/experiments"
+    assert _flash_cookie(response).startswith("err:")
 
 
 def test_dashboard_promote_rejects_missing_csrf():
@@ -1133,3 +1231,40 @@ def test_dashboard_malformed_bcrypt_hash_is_unauthorized():
     app = create_app(_settings(), _FakeReader(None), {"alice": "not-a-valid-bcrypt-hash"})
     response = TestClient(app).get("/dashboard", auth=("alice", "s3cret"))
     assert response.status_code == 401
+
+
+def test_dashboard_logout_returns_401():
+    app = create_app(_settings(), _FakeReader(None), _users_with("alice", "s3cret"))
+    response = TestClient(app).get("/dashboard/logout")
+    assert response.status_code == 401
+    assert response.headers["www-authenticate"] == "Basic"
+    assert "Signed out" in response.text
+    assert "clear the saved password" in response.text
+
+
+def test_experiments_flash_cookie_is_one_shot():
+    client = _recs_client()
+    client.cookies.set("cicerone_flash", "ok:Promoted control")
+    first = client.get("/dashboard/experiments", auth=("alice", "s3cret"))
+    assert first.status_code == 200
+    assert "Promoted control" in first.text
+    assert "cicerone_flash" in first.headers.get("set-cookie", "").lower()
+    client.cookies.pop("cicerone_flash", None)
+    second = client.get("/dashboard/experiments", auth=("alice", "s3cret"))
+    assert "Promoted control" not in second.text
+
+
+def test_as_percent_formats_rates():
+    from cicerone.dashboard import _as_percent, _chrome
+    from cicerone.dashboard_experiments import _lift_label
+
+    assert _as_percent(0.2) == "20.00%"
+    assert _as_percent("0.0123") == "1.23%"
+    assert _as_percent(None) == "—"
+    assert _as_percent("nope") == "—"
+    chrome = _chrome(_settings())
+    assert chrome["nav_quality_available"] is False
+    assert chrome["nav_experiments_available"] is False
+    assert _lift_label("ctr") == "CTR lift"
+    assert _lift_label("conversion") == "Conversion lift"
+    assert _lift_label("weighted") == "Mean lift"

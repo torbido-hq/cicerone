@@ -60,6 +60,13 @@ const PAGES = [
     description:
       "Sticky A/B tests of ranking recipes, sequential stats, guardrails, and promote.",
   },
+  {
+    source: "evaluation.md",
+    out: "evaluation.md",
+    title: "Evaluation",
+    description:
+      "Impression and click tracking, CTR/CVR attribution, Quality dashboard, and production replay.",
+  },
 ];
 
 function rewrite(source) {

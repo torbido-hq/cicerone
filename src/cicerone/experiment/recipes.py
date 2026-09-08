@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
-from dataclasses import dataclass, replace
-from typing import Any
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import asdict, dataclass, replace
+from typing import Any, TypeVar, cast
 
 from cicerone.config.constants import DEFAULT_MODELS, RRF_K, STRATEGY_NAMES, ConfigError
 from cicerone.config.settings import Settings, VariantSettings
@@ -13,7 +13,11 @@ from cicerone.config.validation import validate_model_weights, validate_rrf_k
 from cicerone.feature_config import (
     BLENDING_CURVES,
     BlendingConfig,
+    BoostRule,
+    EligibilityRule,
     FeatureConfig,
+    parse_boost_rules,
+    parse_eligibility_rules,
 )
 
 COMBINER_PRIORITY = "priority"
@@ -34,8 +38,8 @@ class ResolvedRecipe:
     rrf_k: float | None
     combiner: str
     blending: BlendingConfig
-    boosts: bool
-    eligibility: bool
+    boosts: tuple[BoostRule, ...]
+    eligibility: tuple[EligibilityRule, ...]
 
     def manifest_dict(self) -> dict[str, Any]:
         return {
@@ -45,8 +49,8 @@ class ResolvedRecipe:
             "weights": self.weights,
             "rrf_k": self.rrf_k,
             "combiner": self.combiner,
-            "boosts": self.boosts,
-            "eligibility": self.eligibility,
+            "boosts": [asdict(rule) for rule in self.boosts],
+            "eligibility": [asdict(rule) for rule in self.eligibility],
         }
 
 
@@ -63,14 +67,94 @@ def default_models(settings: Settings) -> list[str]:
 
 
 def apply_recipe(feature_config: FeatureConfig, recipe: ResolvedRecipe) -> FeatureConfig:
-    boosts = list(feature_config.boosts) if recipe.boosts else []
-    eligibility = list(feature_config.eligibility) if recipe.eligibility else []
     return replace(
         feature_config,
         blending=recipe.blending,
-        boosts=boosts,
-        eligibility=eligibility,
+        boosts=list(recipe.boosts),
+        eligibility=list(recipe.eligibility),
     )
+
+
+_T = TypeVar("_T")
+
+
+def resolve_boost_policy(
+    spec: object,
+    inherited: Sequence[BoostRule],
+    *,
+    label: str,
+) -> tuple[BoostRule, ...]:
+    return _resolve_policy_spec(spec, inherited, parse_boost_rules, label=label, rule_type=BoostRule)
+
+
+def resolve_eligibility_policy(
+    spec: object,
+    inherited: Sequence[EligibilityRule],
+    *,
+    label: str,
+) -> tuple[EligibilityRule, ...]:
+    return _resolve_policy_spec(
+        spec, inherited, parse_eligibility_rules, label=label, rule_type=EligibilityRule
+    )
+
+
+def _unique_policy_names(names: Sequence[object], *, label: str) -> tuple[str, ...]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in names:
+        name = str(raw).strip()
+        if not name:
+            raise ConfigError(f"{label} rule name must be non-empty")
+        if name in seen:
+            raise ConfigError(f"{label} duplicate rule name {name!r}")
+        seen.add(name)
+        out.append(name)
+    return tuple(out)
+
+
+def _pick_named(inherited: Sequence[_T], names: Sequence[str], *, label: str) -> tuple[_T, ...]:
+    by_name: dict[str, _T] = {}
+    for rule in inherited:
+        name = rule.name  # type: ignore[attr-defined]
+        if name in by_name:
+            raise ConfigError(f"{label} duplicate inherited rule name {name!r}")
+        by_name[name] = rule
+    missing = [name for name in names if name not in by_name]
+    if missing:
+        raise ConfigError(f"{label} unknown rule name(s) {missing}")
+    return tuple(by_name[name] for name in names)
+
+
+def _resolve_policy_spec(
+    spec: object,
+    inherited: Sequence[_T],
+    parse: Callable[[Sequence[Mapping[str, Any]]], Sequence[_T]],
+    *,
+    label: str,
+    rule_type: type[_T],
+) -> tuple[_T, ...]:
+    if spec is True:
+        return tuple(inherited)
+    if spec is False:
+        return ()
+    if not isinstance(spec, (list, tuple)):
+        raise ConfigError(f"{label} must be true, false, rule names, or rule tables")
+    items = tuple(spec)
+    if not items:
+        return ()
+    if all(isinstance(item, str) for item in items):
+        names = _unique_policy_names(items, label=label)
+        return _pick_named(inherited, names, label=label)
+    if all(isinstance(item, Mapping) for item in items):
+        try:
+            rules = tuple(parse([dict(item) for item in items]))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ConfigError(f"{label}: {exc}") from exc
+        _unique_policy_names([rule.name for rule in rules], label=label)  # type: ignore[attr-defined]
+        return rules
+    if all(isinstance(item, rule_type) for item in items):
+        return cast(tuple[_T, ...], items)
+    raise ConfigError(f"{label} must be true, false, rule names, or rule tables")
 
 
 def union_models(recipes: Sequence[ResolvedRecipe]) -> list[str]:
@@ -231,8 +315,16 @@ def _resolve_one(
         rrf_k=rrf_k,
         combiner=combiner,
         blending=blending,
-        boosts=variant.boosts,
-        eligibility=variant.eligibility,
+        boosts=resolve_boost_policy(
+            variant.boosts,
+            feature_config.boosts,
+            label=f"experiment.variants[{variant.name}].boosts",
+        ),
+        eligibility=resolve_eligibility_policy(
+            variant.eligibility,
+            feature_config.eligibility,
+            label=f"experiment.variants[{variant.name}].eligibility",
+        ),
     )
 
 

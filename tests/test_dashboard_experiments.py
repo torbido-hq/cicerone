@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
 from conftest import make_settings
 from sqlalchemy import create_engine
 
-from cicerone.config import IOSettings
+from cicerone.config import ConfigError, IOSettings
 from cicerone.config.settings import ExperimentSettings, VariantSettings
 from cicerone.dashboard_experiments import clear_promotion, experiment_context, promote_winner
 from cicerone.experiment.evaluate import exposure_row
@@ -217,6 +218,17 @@ def test_experiment_context_missing_feature_config(tmp_path):
     context = experiment_context(settings)
     assert context["error"] == "No experiment variants to evaluate."
     assert promote_winner(settings, "control") == "Experiment report is not available"
+
+
+def test_experiment_context_surfaces_live_policy_config_error(tmp_path, monkeypatch):
+    settings = _settings(tmp_path, log_exposures=False)
+
+    def _boom(*_args, **_kwargs):
+        raise ConfigError("experiment.variants[treatment].boosts duplicate rule name 'featured'")
+
+    monkeypatch.setattr("cicerone.dashboard_experiments.resolve_recipes", _boom)
+    context = experiment_context(settings)
+    assert "duplicate rule name" in (context["error"] or "")
 
 
 def test_experiment_context_invalid_feature_config(tmp_path):
@@ -468,6 +480,31 @@ def test_experiment_context_recipes_from_manifest(tmp_path, monkeypatch):
     assert [recipe.name for recipe in context["recipes"]] == ["control", "treatment"]
 
 
+def test_experiment_context_manifest_policy_error_names_variant(tmp_path, monkeypatch):
+    settings = _settings(tmp_path, log_exposures=False)
+    monkeypatch.setattr("cicerone.dashboard_experiments.resolve_recipes", lambda *args, **kwargs: ())
+
+    class _Reader:
+        def read_latest(self):
+            return {
+                "experiment_variants": json.dumps(
+                    [
+                        {"name": "control", "traffic": 0.5, "models": ["popular"]},
+                        {
+                            "name": "treatment",
+                            "traffic": 0.5,
+                            "models": ["collaborative"],
+                            "eligibility": [1],
+                        },
+                    ]
+                )
+            }
+
+    monkeypatch.setattr("cicerone.dashboard_experiments.build_manifest_reader", lambda _output: _Reader())
+    context = experiment_context(settings)
+    assert "experiment_variants[treatment].eligibility" in (context["error"] or "")
+
+
 def test_experiment_context_manifest_recipes_invalid_json(tmp_path, monkeypatch):
     settings = _settings(tmp_path, log_exposures=False)
     monkeypatch.setattr("cicerone.dashboard_experiments.resolve_recipes", lambda *args, **kwargs: ())
@@ -531,3 +568,530 @@ def test_experiment_context_events_s3_missing(tmp_path, monkeypatch):
     monkeypatch.setattr("cicerone.dashboard_experiments.is_s3_not_found", lambda _exc: True)
     context = experiment_context(settings)
     assert context["report"] is not None
+
+
+def test_experiment_context_ctr_from_track_rows(tmp_path):
+    from cicerone.track.normalize import normalize_track
+    from cicerone.track.store import TrackStore
+
+    base = _settings(tmp_path, log_exposures=False)
+    _write_frames(
+        base,
+        events=[
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": "2026-08-28T12:10:00Z",
+            }
+        ],
+        recs=[
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                VARIANT_COLUMN: "control",
+            },
+            {
+                "user_id": "u2",
+                "item_id": "i2",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                VARIANT_COLUMN: "treatment",
+            },
+        ],
+    )
+    TrackStore(base.output).append_rows(
+        [
+            normalize_track(
+                {
+                    "kind": "impression",
+                    "user_id": "u1",
+                    "item_id": "i1",
+                    "rank": 1,
+                    "occurred_at": "2026-08-28T12:00:00Z",
+                    "event_id": "imp-u1",
+                }
+            ).as_row(),
+            normalize_track(
+                {
+                    "kind": "click",
+                    "user_id": "u1",
+                    "item_id": "i1",
+                    "occurred_at": "2026-08-28T12:01:00Z",
+                    "event_id": "clk-u1",
+                }
+            ).as_row(),
+        ]
+    )
+    settings = make_settings(
+        feature_config_path=str(REPO_FEATURES),
+        input=base.input,
+        output=base.output,
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="exp-1",
+            primary_metric="ctr",
+            attribution="click",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        track={"enabled": True},
+    )
+    context = experiment_context(settings)
+    assert context["report"] is not None
+    assert context["report"].primary_metric == "ctr"
+    assert context["lift_label"] == "CTR lift"
+
+
+def test_experiment_context_skips_other_experiment_track_rows(tmp_path, monkeypatch):
+    from cicerone.track.normalize import normalize_track
+    from cicerone.track.store import TrackStore
+
+    def _impression(user_id: str, event_id: str, experiment_id: str | None = None) -> dict:
+        payload = {
+            "kind": "impression",
+            "user_id": user_id,
+            "item_id": "i1",
+            "rank": 1,
+            "occurred_at": "2026-08-28T12:00:00Z",
+            "event_id": event_id,
+        }
+        if experiment_id is not None:
+            payload["experiment_id"] = experiment_id
+        return normalize_track(payload).as_row()
+
+    base = _settings(tmp_path, log_exposures=False)
+    _write_frames(
+        base,
+        events=[{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1}],
+        recs=[
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                VARIANT_COLUMN: "control",
+            }
+        ],
+    )
+    TrackStore(base.output).append_rows(
+        [_impression(f"old-{i}", f"imp-old-{i}", "exp-old") for i in range(100)]
+        + [_impression("u1", "imp-now", "exp-1"), _impression("u-bare", "imp-bare")]
+    )
+    settings = make_settings(
+        feature_config_path=str(REPO_FEATURES),
+        input=base.input,
+        output=base.output,
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="exp-1",
+            primary_metric="ctr",
+            attribution="click",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        track={"enabled": True, "min_impressions": 100},
+    )
+    captured: dict[str, list] = {}
+
+    def _capture(**kwargs):
+        captured["rows"] = list(kwargs["track_rows"])
+        return {}
+
+    monkeypatch.setattr("cicerone.dashboard_experiments.user_track_outcomes", _capture)
+    context = experiment_context(settings)
+    ids = {str(row.get("experiment_id") or "") for row in captured["rows"]}
+    assert "exp-old" not in ids
+    assert ids == {"", "exp-1"}
+    assert context["report"] is not None
+    assert "volume" in context["report"].promote_blocked_by
+
+
+def test_experiment_context_track_read_error(tmp_path, monkeypatch):
+    base = _settings(tmp_path, log_exposures=False)
+    _write_frames(
+        base,
+        events=[{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1}],
+        recs=[
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                VARIANT_COLUMN: "control",
+            }
+        ],
+    )
+    settings = make_settings(
+        feature_config_path=str(REPO_FEATURES),
+        input=base.input,
+        output=base.output,
+        experiment=base.experiment,
+        track={"enabled": True},
+    )
+    monkeypatch.setattr(
+        "cicerone.track.store.TrackStore.read_rows",
+        lambda self, **_kwargs: (_ for _ in ()).throw(RuntimeError("track")),
+    )
+    context = experiment_context(settings)
+    assert context["report"] is not None
+    assert context["report"].n_assigned >= 0
+
+
+def test_experiment_context_user_attribution_skips_track_outcomes(tmp_path, monkeypatch):
+    base = _settings(tmp_path, log_exposures=False)
+    _write_frames(
+        base,
+        events=[{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1}],
+        recs=[
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                VARIANT_COLUMN: "control",
+            }
+        ],
+    )
+    settings = make_settings(
+        feature_config_path=str(REPO_FEATURES),
+        input=base.input,
+        output=base.output,
+        experiment=base.experiment,
+        track={"enabled": True},
+    )
+    called = {"n": 0}
+
+    def _boom(**_kwargs):
+        called["n"] += 1
+        return {}
+
+    monkeypatch.setattr("cicerone.dashboard_experiments.user_track_outcomes", _boom)
+    context = experiment_context(settings)
+    assert context["report"] is not None
+    assert called["n"] == 0
+
+
+def test_experiment_context_events_full_parquet_fallback(tmp_path, monkeypatch):
+    settings = _settings(tmp_path, log_exposures=False)
+    _write_frames(
+        settings,
+        events=[{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1}],
+        recs=[
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                VARIANT_COLUMN: "control",
+            }
+        ],
+    )
+    calls = {"n": 0}
+
+    def _boom(*_args, **_kwargs):
+        calls["n"] += 1
+        raise RuntimeError("parquet")
+
+    monkeypatch.setattr("cicerone.dashboard_experiments.read_parquet", _boom)
+    monkeypatch.setattr("cicerone.dashboard_experiments.is_s3_not_found", lambda _exc: False)
+    context = experiment_context(settings)
+    assert context["report"] is not None
+    assert calls["n"] >= 2
+
+
+def test_track_variant_by_user_uses_earliest_impression() -> None:
+    from cicerone.dashboard_experiments import _track_variant_by_user
+
+    names = {"control", "treatment"}
+    later_first = [
+        {
+            "kind": "impression",
+            "user_id": "u1",
+            "variant": "treatment",
+            "occurred_at": "2026-08-29T12:00:00Z",
+            "event_id": "b",
+        },
+        {
+            "kind": "impression",
+            "user_id": "u1",
+            "variant": "control",
+            "occurred_at": "2026-08-29T10:00:00Z",
+            "event_id": "a",
+        },
+    ]
+    assert _track_variant_by_user(later_first, names) == {"u1": "control"}
+    assert _track_variant_by_user(list(reversed(later_first)), names) == {"u1": "control"}
+
+
+def test_experiment_context_thompson_view(tmp_path):
+    from cicerone.config.constants import ALLOCATION_THOMPSON
+
+    settings = _settings(tmp_path, log_exposures=False)
+    settings = replace(
+        settings,
+        experiment=replace(
+            settings.experiment,
+            allocation=ALLOCATION_THOMPSON,
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+                VariantSettings(name="blend", traffic=0.0),
+            ),
+        ),
+        track=replace(settings.track, enabled=True, min_impressions=100),
+    )
+    ExperimentStore(settings.output).write_state(
+        experiment_state(
+            "exp-1",
+            promoted_variant=None,
+            champion="control",
+            challenger="treatment",
+            arms={
+                "control": {"successes": 2, "failures": 8},
+                "treatment": {"successes": 1, "failures": 9},
+                "blend": {"successes": 0, "failures": 0},
+            },
+            p_best={"control": 0.7, "treatment": 0.2, "blend": 0.1},
+            pair_impressions=40,
+        )
+    )
+    recs = [
+        {
+            "user_id": f"u{i}",
+            "item_id": f"i{i % 10}",
+            "rank": 1,
+            "score": 1.0,
+            "source": "personalized",
+            VARIANT_COLUMN: "control" if i < 6 else "treatment",
+        }
+        for i in range(12)
+    ]
+    events = [
+        {"user_id": f"u{i}", "item_id": f"i{i % 10}", "event_type": "view", "quantity": 1} for i in range(12)
+    ]
+    _write_frames(settings, events=events, recs=recs)
+    context = experiment_context(settings)
+    thompson = context["thompson"]
+    assert thompson is not None
+    assert thompson["champion"] == "control"
+    assert thompson["challenger"] == "treatment"
+    by_name = {arm["name"]: arm for arm in thompson["arms"]}
+    assert by_name["control"]["cvr_pct"] == 20.0
+    assert by_name["control"]["p_best"] == 0.7
+    assert by_name["control"]["role"] == "champion"
+    assert by_name["blend"]["role"] == "parked"
+    assert thompson["volume_pct"] == 40.0
+    assert thompson["volume_max"] == 100
+
+
+def test_thompson_view_volume_max_when_floor_is_zero() -> None:
+    from cicerone.config.constants import ALLOCATION_THOMPSON
+    from cicerone.dashboard_experiments import _thompson_view
+
+    experiment = ExperimentSettings(
+        enabled=True,
+        id="exp-1",
+        allocation=ALLOCATION_THOMPSON,
+        variants=(
+            VariantSettings(name="control", traffic=0.5),
+            VariantSettings(name="treatment", traffic=0.5),
+        ),
+    )
+    view = _thompson_view(
+        {"champion": "control", "challenger": "treatment", "pair_impressions": 12},
+        experiment,
+        0,
+    )
+    assert view is not None
+    assert view["min_impressions"] == 0
+    assert view["volume_max"] == 12
+    assert view["volume_pct"] == 100.0
+    empty = _thompson_view(
+        {"champion": "control", "challenger": "treatment", "pair_impressions": 0},
+        experiment,
+        0,
+    )
+    assert empty is not None
+    assert empty["volume_max"] == 1
+
+
+def test_promote_and_resume_keep_thompson_fields(tmp_path):
+    settings = _settings(tmp_path)
+    events = []
+    recs = []
+    exposures = []
+    for i in range(40):
+        events.append(
+            {
+                "user_id": f"c{i}",
+                "item_id": f"i{i % 10}",
+                "event_type": "view",
+                "quantity": 1,
+                "occurred_at": "2026-01-02T00:00:00Z",
+            }
+        )
+        events.append(
+            {
+                "user_id": f"t{i}",
+                "item_id": f"i{i % 10}",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": "2026-01-02T00:00:00Z",
+            }
+        )
+        recs.append(
+            {
+                "user_id": f"c{i}",
+                "item_id": f"i{i % 10}",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                VARIANT_COLUMN: "control",
+            }
+        )
+        recs.append(
+            {
+                "user_id": f"t{i}",
+                "item_id": f"i{(i + 3) % 10}",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                VARIANT_COLUMN: "treatment",
+            }
+        )
+        exposures.append(
+            exposure_row(
+                user_id=f"c{i}",
+                experiment_id="exp-1",
+                variant="control",
+                generated_at=None,
+                exposed_at=pd.Timestamp("2026-01-01T00:00:00Z"),
+            )
+        )
+        exposures.append(
+            exposure_row(
+                user_id=f"t{i}",
+                experiment_id="exp-1",
+                variant="treatment",
+                generated_at=None,
+                exposed_at=pd.Timestamp("2026-01-01T00:00:00Z"),
+            )
+        )
+    ExperimentStore(settings.output).write_state(
+        experiment_state("exp-1", promoted_variant=None, champion="control", challenger="treatment")
+    )
+    _write_frames(settings, events=events, recs=recs, exposures=exposures)
+    assert promote_winner(settings, "treatment") is None
+    state = ExperimentStore(settings.output).read_state()
+    assert state is not None
+    assert state["promoted_variant"] == "treatment"
+    assert state["champion"] == "control"
+    assert state["challenger"] == "treatment"
+    assert clear_promotion(settings) is None
+    cleared = ExperimentStore(settings.output).read_state()
+    assert cleared is not None
+    assert cleared["promoted_variant"] is None
+    assert cleared["champion"] == "control"
+
+
+def test_thompson_ship_ignores_undecided(tmp_path):
+    from cicerone.config.constants import ALLOCATION_THOMPSON
+
+    settings = _settings(tmp_path, log_exposures=False)
+    settings = replace(settings, experiment=replace(settings.experiment, allocation=ALLOCATION_THOMPSON))
+    recs = [
+        {
+            "user_id": f"u{i}",
+            "item_id": f"i{i % 10}",
+            "rank": 1,
+            "score": 1.0,
+            "source": "personalized",
+            VARIANT_COLUMN: "control" if i < 6 else "treatment",
+        }
+        for i in range(12)
+    ]
+    events = [
+        {"user_id": f"u{i}", "item_id": f"i{i % 10}", "event_type": "view", "quantity": 1} for i in range(12)
+    ]
+    ExperimentStore(settings.output).write_state(
+        experiment_state("exp-1", promoted_variant=None, champion="control", challenger="treatment")
+    )
+    _write_frames(settings, events=events, recs=recs)
+    context = experiment_context(settings)
+    assert "undecided" in context["report"].promote_blocked_by
+    assert context["can_ship"] is True
+    assert context["ship_variant"] == "control"
+    assert promote_winner(settings, "control") is None
+    state = ExperimentStore(settings.output).read_state()
+    assert state is not None
+    assert state["promoted_variant"] == "control"
+
+
+def test_thompson_ship_ignores_parked_empty_lists(tmp_path):
+    from cicerone.config.constants import ALLOCATION_THOMPSON
+    from cicerone.dashboard_experiments import _eval_recipes
+    from cicerone.experiment.recipes import ResolvedRecipe
+    from cicerone.feature_config import BlendingConfig
+
+    settings = _settings(tmp_path, log_exposures=False)
+    settings = replace(
+        settings,
+        experiment=replace(
+            settings.experiment,
+            allocation=ALLOCATION_THOMPSON,
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+                VariantSettings(name="blend", traffic=0.0),
+            ),
+        ),
+    )
+    blending = BlendingConfig(enabled=False)
+    recipes = (
+        ResolvedRecipe("control", 0.5, ("popular",), None, None, "priority", blending, True, True),
+        ResolvedRecipe("treatment", 0.5, ("popular",), None, None, "priority", blending, True, True),
+        ResolvedRecipe("blend", 0.0, ("popular",), None, None, "priority", blending, True, True),
+    )
+    filtered = _eval_recipes(
+        recipes,
+        settings.experiment,
+        {"champion": "control", "challenger": "treatment"},
+    )
+    assert [item.name for item in filtered] == ["control", "treatment"]
+    recs = [
+        {
+            "user_id": f"u{i}",
+            "item_id": f"i{i % 10}",
+            "rank": 1,
+            "score": 1.0,
+            "source": "personalized",
+            VARIANT_COLUMN: "control" if i < 6 else "treatment",
+        }
+        for i in range(12)
+    ]
+    events = [
+        {"user_id": f"u{i}", "item_id": f"i{i % 10}", "event_type": "view", "quantity": 1} for i in range(12)
+    ]
+    ExperimentStore(settings.output).write_state(
+        experiment_state("exp-1", promoted_variant=None, champion="control", challenger="treatment")
+    )
+    _write_frames(settings, events=events, recs=recs)
+    context = experiment_context(settings)
+    assert "guardrails" not in context["ship_blocked"]
+    assert {item.variant for item in context["report"].guardrails} == {"control", "treatment"}
+    assert context["can_ship"] is True
+    assert context["ship_variant"] == "control"

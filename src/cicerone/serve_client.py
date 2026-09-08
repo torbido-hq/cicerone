@@ -8,7 +8,7 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-from cicerone.serve_schemas import HealthResponse, RecommendationsResponse
+from cicerone.serve_schemas import HealthResponse, RecommendationsResponse, TrackIngestResponse
 
 
 class ServeClientError(Exception):
@@ -22,7 +22,7 @@ class ServeClientError(Exception):
 
 
 class ServeClient:
-    """GET /health and GET /recommendations/{user_id}."""
+    """HTTP client for the Cicerone recommendation API (``cicerone serve``)."""
 
     def __init__(
         self,
@@ -59,12 +59,16 @@ class ServeClient:
         path = f"/recommendations/{urllib.parse.quote(str(user_id), safe='')}"
         return RecommendationsResponse.model_validate(self._request("GET", path, params=params))
 
+    def track(self, payload: dict[str, Any] | list[dict[str, Any]]) -> TrackIngestResponse:
+        return TrackIngestResponse.model_validate(self._request("POST", "/track", json_body=payload))
+
     def _request(
         self,
         method: str,
         path: str,
         *,
         params: dict[str, str] | None = None,
+        json_body: Any | None = None,
     ) -> dict[str, Any]:
         url = f"{self.base_url}{path}"
         if params:
@@ -72,7 +76,11 @@ class ServeClient:
         headers = {"Accept": "application/json"}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
-        request = urllib.request.Request(url, method=method, headers=headers)
+        data = None
+        if json_body is not None:
+            data = json.dumps(json_body).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+        request = urllib.request.Request(url, data=data, method=method, headers=headers)
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 raw = response.read().decode("utf-8")

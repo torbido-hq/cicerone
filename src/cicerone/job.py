@@ -15,9 +15,16 @@ import pandas as pd
 from cicerone.artifact import ARTIFACT_SCHEMA_VERSION, build_artifact, dumps_artifact
 from cicerone.automl import evaluate_candidates, select_best_candidate
 from cicerone.blending import COLD_START_USER_ID
-from cicerone.config import load_settings
-from cicerone.config.constants import DEFAULT_LOG_FORMAT
+from cicerone.config import Settings, load_settings
+from cicerone.config.constants import ALLOCATION_THOMPSON, DEFAULT_LOG_FORMAT
 from cicerone.dataset import build_dataset
+from cicerone.evaluation import (
+    conversion_event_types,
+    evaluate_served,
+    evaluate_tracking,
+    replay_ks,
+)
+from cicerone.events.store import load_items_catalog_size, load_recommendations_frame
 from cicerone.experiment import (
     ResolvedRecipe,
     apply_recipe,
@@ -25,10 +32,18 @@ from cicerone.experiment import (
     resolve_recipes,
     union_models,
 )
+from cicerone.experiment.guardrails import evaluate_guardrails
+from cicerone.experiment.store import ExperimentStore, merge_experiment_state
+from cicerone.experiment.thompson import (
+    allocate_thompson,
+    select_active_recipes,
+    track_rows_since,
+    window_trials_from_slices,
+)
 from cicerone.feature_config import load_feature_config
 from cicerone.io.base import InputSource
 from cicerone.io.factory import build_input_source, build_manifest_reader, build_output_sink
-from cicerone.io.recommendation_schema import USER_COLUMN, VARIANT_COLUMN
+from cicerone.io.recommendation_schema import USER_COLUMN, VARIANT_COLUMN, filter_variant_rows
 from cicerone.locks import LockLostError
 from cicerone.model import (
     DEFAULT_MODELS,
@@ -40,6 +55,8 @@ from cicerone.model import (
     train_and_recommend,
 )
 from cicerone.model.recommend import RecommendCache
+from cicerone.publish import build_publisher
+from cicerone.track.store import TrackStore
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +94,98 @@ _MANIFEST_DEFAULTS: dict[str, Any] = {
     "automl_metrics": "",
     "experiment_id": "",
     "experiment_variants": "",
+    "track_eval": "",
+    "served_eval": "",
 }
+
+
+def _score_previous_run(
+    settings: Settings,
+    events: pd.DataFrame,
+    last_manifest: dict[str, Any] | None,
+    items: pd.DataFrame | None = None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    if not settings.track.enabled and not settings.eval.enabled:
+        return None, None
+    previous_generated_at = None
+    if last_manifest:
+        previous_generated_at = last_manifest.get("generated_at")
+        previous_generated_at = str(previous_generated_at) if previous_generated_at else None
+    previous_recs = None
+    try:
+        previous_recs = load_recommendations_frame(settings.output)
+        if previous_recs is not None and previous_recs.empty:
+            previous_recs = None
+    except Exception:
+        logger.exception("Failed to load previous recommendations for eval")
+        previous_recs = None
+    store = TrackStore(settings.output)
+    track_rows: list[dict[str, Any]] = []
+    if settings.track.enabled:
+        try:
+            track_rows = store.read_rows()
+        except Exception:
+            logger.exception("Failed to read track rows")
+            track_rows = []
+    wanted = {str(row.get("generated_at") or "") for row in track_rows}
+    wanted.discard("")
+    if previous_generated_at:
+        wanted.add(previous_generated_at)
+    history = None
+    if wanted:
+        try:
+            history = store.read_history(generated_ats=wanted)
+            if history is not None and history.empty:
+                history = None
+        except Exception:
+            logger.exception("Failed to read recommendation history")
+            history = None
+    recs_for_track = previous_recs
+    if recs_for_track is not None and previous_generated_at:
+        recs_for_track = recs_for_track.copy()
+        recs_for_track["generated_at"] = previous_generated_at
+    if history is not None:
+        recs_for_track = (
+            pd.concat([history, recs_for_track], ignore_index=True) if recs_for_track is not None else history
+        )
+    track_payload = None
+    served_payload = None
+    if settings.track.enabled:
+        try:
+            types = conversion_event_types(
+                settings.track.conversion_event_types,
+                primary_metric=settings.experiment.primary_metric,
+            )
+            conversions = events
+            if not conversions.empty and "event_type" in conversions.columns:
+                conversions = conversions[conversions["event_type"].astype(str).isin(set(types))]
+            track_payload = evaluate_tracking(
+                track_rows=track_rows,
+                conversions=conversions,
+                recommendations=recs_for_track,
+                window_hours=settings.track.attribution_window_hours,
+            ).as_dict()
+        except Exception:
+            logger.exception("Failed to compute track eval")
+    if settings.eval.enabled and previous_recs is not None and previous_generated_at:
+        try:
+            types = settings.eval.event_types or conversion_event_types(
+                settings.track.conversion_event_types,
+                primary_metric=settings.experiment.primary_metric,
+            )
+            report = evaluate_served(
+                previous_recs,
+                events,
+                generated_at=previous_generated_at,
+                ks=replay_ks(settings.eval.ks, top_k=settings.top_k),
+                event_types=types,
+                history=history,
+                catalog=items,
+            )
+            served_payload = report.as_dict() if report is not None else None
+        except Exception:
+            logger.exception("Failed to compute served eval")
+    return track_payload, served_payload
 
 
 def _read_input(source: InputSource) -> tuple[pd.DataFrame, pd.DataFrame | None, pd.DataFrame | None]:
@@ -93,6 +201,115 @@ def _ensure_fence(fence_check: Callable[[], bool] | None) -> None:
         raise LockLostError("retrain lock lost before write")
 
 
+def _select_thompson_recipes(
+    settings: Settings,
+    recipes: tuple[ResolvedRecipe, ...],
+    events: pd.DataFrame,
+) -> tuple[ResolvedRecipe, ...]:
+    if len(recipes) < 2:
+        return recipes
+    experiment = settings.experiment
+    store = ExperimentStore(settings.output)
+    try:
+        previous = store.read_state()
+    except Exception:
+        logger.exception("Thompson allocation fail closed: could not read experiment state")
+        return recipes
+    if previous and str(previous.get("experiment_id") or "") != experiment.id:
+        previous = None
+    promoted = str(previous["promoted_variant"]) if previous and previous.get("promoted_variant") else None
+    try:
+        track_rows = TrackStore(settings.output).read_rows(experiment_id=experiment.id)
+    except Exception:
+        logger.exception("Thompson allocation fail closed: could not read track rows")
+        return recipes
+    has_pair = bool(previous and previous.get("champion") and previous.get("challenger"))
+    if not track_rows and not has_pair:
+        logger.warning("Thompson allocation fail closed: empty track")
+        return recipes
+    window_started = ""
+    if previous is not None and has_pair:
+        window_started = str(previous.get("window_started_at") or "")
+    window_rows = track_rows_since(track_rows, window_started or None)
+    names = [recipe.name for recipe in recipes]
+    try:
+        types = conversion_event_types(
+            settings.track.conversion_event_types,
+            primary_metric=experiment.primary_metric,
+        )
+        conversions = events
+        if not conversions.empty and "event_type" in conversions.columns:
+            conversions = conversions[conversions["event_type"].astype(str).isin(set(types))]
+        report = evaluate_tracking(
+            track_rows=window_rows,
+            conversions=conversions,
+            window_hours=settings.track.attribution_window_hours,
+        )
+        window_trials = window_trials_from_slices(
+            report.by_variant, attribution=experiment.attribution, names=names
+        )
+        recs = None
+        try:
+            recs = load_recommendations_frame(settings.output)
+        except Exception:
+            logger.exception("Failed to load recommendations for Thompson guardrails")
+        guardrails_ok = False
+        if recs is not None and not recs.empty and VARIANT_COLUMN in recs.columns:
+            catalog_size = None
+            try:
+                catalog_size = load_items_catalog_size(settings.output)
+            except Exception:
+                logger.exception("Failed to load catalog size for Thompson guardrails")
+            pair_names: tuple[str, ...] = tuple(names)
+            if previous is not None and has_pair:
+                pair_names = (str(previous.get("champion")), str(previous.get("challenger")))
+            guardrails_ok = all(
+                evaluate_guardrails(
+                    filter_variant_rows(recs, name),
+                    variant=name,
+                    catalog_size=catalog_size,
+                ).ok
+                for name in pair_names
+                if name
+            )
+        allocation = allocate_thompson(
+            names=names,
+            previous=previous,
+            window_trials=window_trials,
+            min_impressions=settings.track.min_impressions,
+            rotate_min_prob=experiment.rotate_min_prob,
+            promoted_variant=promoted,
+            guardrails_ok=guardrails_ok,
+        )
+        selected = select_active_recipes(
+            recipes,
+            champion=allocation.champion,
+            challenger=allocation.challenger,
+            explore_traffic=experiment.explore_traffic,
+        )
+        store.write_state(
+            merge_experiment_state(
+                previous,
+                experiment_id=experiment.id,
+                promoted_variant=promoted,
+                promoted_at=(
+                    str(previous["promoted_at"]) if previous and previous.get("promoted_at") else None
+                ),
+                **allocation.as_state(),
+            )
+        )
+        logger.info(
+            "Thompson allocation: champion=%s challenger=%s rotated=%s",
+            allocation.champion,
+            allocation.challenger,
+            allocation.rotated,
+        )
+        return selected
+    except Exception:
+        logger.exception("Thompson allocation fail closed")
+        return recipes
+
+
 def _recommendation_user_count(recommendations: pd.DataFrame) -> int:
     if recommendations.empty or USER_COLUMN not in recommendations.columns:
         return 0
@@ -104,14 +321,20 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
     settings = load_settings()
     feature_config = load_feature_config(settings.feature_config_path)
     sink = build_output_sink(settings.output)
+    publisher = None
 
     manifest = dict(_MANIFEST_DEFAULTS)
     manifest["triggered_by"] = triggered_by
     manifest["lock_backend"] = settings.trigger.lock_backend
     manifest["top_k"] = settings.top_k
     manifest["automl_enabled"] = settings.automl.enabled
+    track_eval_payload: dict[str, Any] | None = None
+    served_eval_payload: dict[str, Any] | None = None
+    recommendations: pd.DataFrame | None = None
+    eval_generated_at: str | None = None
 
     try:
+        publisher = build_publisher(settings)
         source = build_input_source(settings.input)
         events, users, items = _read_input(source)
 
@@ -121,6 +344,15 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
             len(users) if users is not None else "n/a",
             len(items) if items is not None else "n/a",
         )
+
+        last_manifest = None
+        try:
+            last_manifest = build_manifest_reader(settings.output).read_latest()
+        except Exception:
+            logger.exception("Failed to read last manifest")
+        if last_manifest and last_manifest.get("generated_at"):
+            eval_generated_at = str(last_manifest["generated_at"])
+        track_eval_payload, served_eval_payload = _score_previous_run(settings, events, last_manifest, items)
 
         built = build_dataset(events, users, items, feature_config, half_life_days=settings.half_life_days)
 
@@ -159,8 +391,7 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
             )
 
         fitted: dict[str, RecommenderModel] = {}
-        last_manifest = None
-        if settings.experiment.enabled:
+        if settings.experiment.enabled and last_manifest is None:
             try:
                 last_manifest = build_manifest_reader(settings.output).read_latest()
             except Exception:
@@ -184,6 +415,14 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
                 len(recipes),
                 ",".join(recipe.name for recipe in recipes),
             )
+            if settings.experiment.allocation == ALLOCATION_THOMPSON:
+                recipes = _select_thompson_recipes(settings, recipes, events)
+                logger.info(
+                    "Experiment %s after allocation: %d variant(s) %s",
+                    settings.experiment.id,
+                    len(recipes),
+                    ",".join(recipe.name for recipe in recipes),
+                )
 
         recommend_cache: RecommendCache = {}
         if recipes:
@@ -311,6 +550,8 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
             _ensure_fence(fence_check)
             sink.write_recommendations(recommendations)
             outputs_written = True
+            if publisher is not None:
+                publisher.publish(recommendations)
         except Exception:
             if outputs_written or manifest.get("artifact_written"):
                 manifest["partial_outputs"] = True
@@ -340,6 +581,8 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
                     if automl_result is not None
                     else ""
                 ),
+                "track_eval": json.dumps(track_eval_payload) if track_eval_payload else "",
+                "served_eval": json.dumps(served_eval_payload) if served_eval_payload else "",
             }
         )
     except Exception as exc:
@@ -349,6 +592,11 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
         manifest["error"] = error_message
         raise
     finally:
+        if publisher is not None:
+            try:
+                publisher.close()
+            except Exception:
+                logger.exception("Failed to close recommendation publisher")
         manifest["generated_at"] = datetime.now(UTC).isoformat()
         try:
             sink.write_manifest(manifest)
@@ -359,6 +607,23 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
             else:
                 raise
         logger.info("Job finished: %s", json.dumps(manifest))
+        if manifest.get("status") == "success" and (settings.track.enabled or settings.eval.enabled):
+            store = TrackStore(settings.output)
+            try:
+                store.write_eval(
+                    {
+                        "generated_at": eval_generated_at,
+                        "track_eval": track_eval_payload,
+                        "served_eval": served_eval_payload,
+                    }
+                )
+            except Exception:
+                logger.exception("Failed to write track eval")
+            if recommendations is not None:
+                try:
+                    store.append_history(recommendations, generated_at=str(manifest["generated_at"]))
+                except Exception:
+                    logger.exception("Failed to append recommendation history")
 
 
 if __name__ == "__main__":

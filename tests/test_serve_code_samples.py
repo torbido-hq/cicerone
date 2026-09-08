@@ -17,6 +17,8 @@ from cicerone.serve.code_samples import (
     RECOMMENDATIONS_CODE_SAMPLES,
     RECOMMENDATIONS_PATH,
     RECOMMENDATIONS_PATH_PREFIX,
+    TRACK_CODE_SAMPLES,
+    TRACK_PATH,
     attach_code_samples,
 )
 
@@ -38,6 +40,7 @@ def test_attach_code_samples_appends_to_existing():
             HEALTH_PATH: {"get": {"x-codeSamples": [{"lang": "Go", "label": "net/http", "source": "x"}]}},
             RECOMMENDATIONS_PATH: {"get": {}},
             EVENTS_PATH: {"post": {}},
+            TRACK_PATH: {"post": {}},
         }
     }
     attach_code_samples(schema)
@@ -48,6 +51,8 @@ def test_attach_code_samples_appends_to_existing():
     assert rec_langs == [s["lang"] for s in RECOMMENDATIONS_CODE_SAMPLES]
     events_langs = [s["lang"] for s in schema["paths"][EVENTS_PATH]["post"]["x-codeSamples"]]
     assert events_langs == [s["lang"] for s in EVENTS_CODE_SAMPLES]
+    track_langs = [s["lang"] for s in schema["paths"][TRACK_PATH]["post"]["x-codeSamples"]]
+    assert track_langs == [s["lang"] for s in TRACK_CODE_SAMPLES]
 
 
 def _events_schema() -> dict:
@@ -162,3 +167,35 @@ def test_health_shell_fails_on_http_errors():
     assert "|| exit 1" in shell
     assert ENV_SERVE_URL in shell
     assert DEFAULT_SERVE_URL in shell
+
+
+def test_track_javascript_invariants():
+    schema = {
+        "paths": {
+            HEALTH_PATH: {"get": {}},
+            RECOMMENDATIONS_PATH: {"get": {}},
+            TRACK_PATH: {"post": {}},
+        }
+    }
+    attach_code_samples(schema)
+    js = _sample_source(schema, TRACK_PATH, "JavaScript", method="post")
+    assert TRACK_PATH in js
+    assert "kind" in js
+    assert "impression" in js
+    assert EVENTS_PATH not in js
+    assert "event_type" not in js
+
+
+def test_track_python_invariants():
+    schema = {
+        "paths": {
+            HEALTH_PATH: {"get": {}},
+            RECOMMENDATIONS_PATH: {"get": {}},
+            TRACK_PATH: {"post": {}},
+        }
+    }
+    attach_code_samples(schema)
+    py = _sample_source(schema, TRACK_PATH, "Python", method="post")
+    assert TRACK_PATH in py
+    assert '"kind": "impression"' in py
+    assert "event_type" not in py

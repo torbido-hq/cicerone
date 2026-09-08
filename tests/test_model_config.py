@@ -8,9 +8,13 @@ import pandas as pd
 import pytest
 from rectools import Columns
 from rectools.models import (
+    EASEModel,
+    ImplicitALSWrapperModel,
     ImplicitItemKNNWrapperModel,
     LightFMWrapperModel,
+    PopularInCategoryModel,
     PopularModel,
+    RandomModel,
     model_from_config,
 )
 from support.toml_config import write_toml
@@ -73,6 +77,10 @@ def _tiny_dataset(feature_config):
         ("item_based", ImplicitItemKNNWrapperModel),
         ("popular", PopularModel),
         ("latest", PopularModel),
+        ("ease", EASEModel),
+        ("als", ImplicitALSWrapperModel),
+        ("popular_in_category", PopularInCategoryModel),
+        ("random", RandomModel),
     ],
 )
 def test_default_toml_config_builds_expected_rectools_class(strategy, expected_cls):
@@ -252,6 +260,46 @@ def test_legacy_and_native_k_same_value_ok(tmp_path):
     )
     settings = load_settings(config_path)
     assert settings.item_based_k_neighbors == 11
+
+
+def test_item_based_knn_backend_and_lightfm_loss_passthrough():
+    knn = resolve_model_configs({"item_based": {"model": {"cls": "BM25Recommender"}}})
+    assert knn["item_based"]["model"]["cls"] == "BM25Recommender"
+    knn_model = model_from_config(knn["item_based"])
+    assert knn_model.get_params(simple_types=True)["model.cls"] == "BM25Recommender"
+    cosine = resolve_model_configs({"item_based": {"model": {"cls": "CosineRecommender"}}})
+    assert cosine["item_based"]["model"]["cls"] == "CosineRecommender"
+    collab = resolve_model_configs({"collaborative": {"model": {"loss": "bpr"}}})
+    assert collab["collaborative"]["model"]["loss"] == "bpr"
+    lightfm = model_from_config(collab["collaborative"])
+    assert lightfm.get_params(simple_types=True)["model.loss"] == "bpr"
+
+
+def test_online_rejects_non_lightfm_collaborative_cls(tmp_path):
+    config_path = write_toml(
+        tmp_path,
+        f"""
+        [job]
+        mode = "serve"
+        [serve]
+        auth_token = "tok"
+        [events]
+        enabled = true
+        kind = "webhook"
+        [events.online]
+        enabled = true
+        [model.collaborative]
+        cls = "EASEModel"
+        {_minimal_io_toml()}
+        """,
+    )
+    with pytest.raises(ConfigError, match="events.online.enabled requires"):
+        load_settings(config_path)
+
+
+def test_popular_in_category_blank_feature_raises():
+    with pytest.raises(ConfigError, match="category_feature"):
+        resolve_model_configs({"popular_in_category": {"category_feature": "  "}})
 
 
 def test_unknown_model_table_raises(tmp_path):

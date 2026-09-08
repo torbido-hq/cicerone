@@ -11,11 +11,11 @@ from pathlib import Path
 from typing import Any, cast
 
 from cicerone.config.constants import (
+    ALLOCATION_THOMPSON,
     AUTOML_DEFAULT_N_SPLITS,
     AUTOML_DEFAULT_PRIMARY_METRIC,
     AUTOML_DEFAULT_TEST_DAYS,
     DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS,
-    DEFAULT_EXPERIMENT_ALPHA,
     DEFAULT_EXPLAIN_MAX_ATTRIBUTES,
     DEFAULT_EXPLAIN_MAX_SIMILAR_ITEMS,
     DEFAULT_ITEM_BASED_K_NEIGHBORS,
@@ -24,29 +24,31 @@ from cicerone.config.constants import (
     DEFAULT_MAX_WORKERS,
     DEFAULT_SEQUENTIAL_MIN_MEDIAN_INTERACTIONS,
     DEFAULT_SERVE_MAX_K,
-    EXPERIMENT_COMBINERS,
     LOCK_BACKENDS,
     MODES,
-    PRIMARY_METRIC_WEIGHTED,
+    PRIMARY_METRIC_CONVERSION,
+    PRIMARY_METRIC_CTR,
     STRATEGY_NAMES,
     ConfigError,
     Mode,
 )
 from cicerone.config.events import coerce_events_settings, load_events_settings
+from cicerone.config.experiment import _coerce_experiment, load_experiment_settings
+from cicerone.config.publish import coerce_publish_settings, load_publish_settings
 from cicerone.config.settings import (
     AutomlSettings,
     DashboardSettings,
-    ExperimentSettings,
+    EvalSettings,
     ExplainSettings,
     IOSettings,
     ServeSettings,
     Settings,
+    TrackSettings,
     TriggerSettings,
-    VariantSettings,
 )
+from cicerone.config.track import load_eval_settings, load_track_settings
 from cicerone.config.validation import (
     require_non_negative_int,
-    require_open_unit_interval,
     require_positive_float,
     require_positive_int,
     resolve_epoch_metrics,
@@ -68,6 +70,7 @@ _SERVE_FLAT_KEYS = (
     ("serve_category_column", "category_column"),
     ("serve_metrics_enabled", "metrics_enabled"),
     ("serve_metrics_token", "metrics_token"),
+    ("serve_log_impressions", "log_impressions"),
 )
 _TRIGGER_FLAT_KEYS = (
     ("trigger_enabled", "enabled"),
@@ -101,6 +104,17 @@ _AUTOML_FLAT_KEYS = (
     ("automl_primary_metric", "primary_metric"),
     ("automl_candidates", "candidates"),
     ("automl_debias", "debias"),
+)
+_TRACK_FLAT_KEYS = (
+    ("track_enabled", "enabled"),
+    ("track_attribution_window_hours", "attribution_window_hours"),
+    ("track_conversion_event_types", "conversion_event_types"),
+    ("track_min_impressions", "min_impressions"),
+)
+_EVAL_FLAT_KEYS = (
+    ("eval_enabled", "enabled"),
+    ("eval_event_types", "event_types"),
+    ("eval_ks", "ks"),
 )
 
 
@@ -168,7 +182,20 @@ def make_settings(**overrides: Any) -> Settings:
     )
     automl = _coerce_nested(AutomlSettings, overrides.pop("automl", None), _AUTOML_FLAT_KEYS, overrides)
     events = coerce_events_settings(overrides.pop("events", None))
+    publish = coerce_publish_settings(overrides.pop("publish", None))
     experiment = _coerce_experiment(overrides.pop("experiment", None))
+    track_raw = overrides.pop("track", None)
+    eval_raw = overrides.pop("eval", None)
+    track = (
+        load_track_settings(track_raw)
+        if isinstance(track_raw, dict)
+        else _coerce_nested(TrackSettings, track_raw, _TRACK_FLAT_KEYS, overrides)
+    )
+    job_eval = (
+        load_eval_settings(eval_raw)
+        if isinstance(eval_raw, dict)
+        else _coerce_nested(EvalSettings, eval_raw, _EVAL_FLAT_KEYS, overrides)
+    )
 
     base: dict[str, Any] = dict(
         input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": "/tmp/in"}),
@@ -194,8 +221,11 @@ def make_settings(**overrides: Any) -> Settings:
         trigger=trigger,
         dashboard=dashboard,
         events=events,
+        publish=publish,
         explain=ExplainSettings(),
         experiment=experiment,
+        track=track,
+        eval=job_eval,
     )
     base.update(overrides)
     if base.get("model_configs") is None:
@@ -214,6 +244,9 @@ def make_settings(**overrides: Any) -> Settings:
     settings = Settings(**base)
     _require_exposure_log_backend(settings)
     _require_online_output_backend(settings)
+    _require_online_collaborative_lightfm(settings)
+    _require_track_backend(settings)
+    _require_thompson_allocation(settings)
     _warn_online_skipped_for_experiment(settings)
     _warn_online_skipped_for_sequential(settings)
     return settings
@@ -253,6 +286,20 @@ ONLINE_OUTPUT_ERROR = (
 )
 
 
+def _require_online_collaborative_lightfm(settings: Settings) -> None:
+    if not settings.events.online.enabled:
+        return
+    from cicerone.model_config import LIGHTFM_WRAPPER_CLS, collaborative_cls
+
+    cls = collaborative_cls(settings.model_configs.get("collaborative"))
+    if cls != LIGHTFM_WRAPPER_CLS:
+        raise ConfigError(
+            "events.online.enabled requires [model.collaborative].cls = "
+            f"{LIGHTFM_WRAPPER_CLS!r}; got {cls!r}. Use ease or als as their own "
+            "job.models names instead of swapping the collaborative slot"
+        )
+
+
 def _require_online_output_backend(settings: Settings) -> None:
     if not settings.events.online.enabled:
         return
@@ -264,6 +311,31 @@ def _require_online_output_backend(settings: Settings) -> None:
     if output.kind == "dataset" and storage_backend(output.options) == "local":
         return
     raise ConfigError(ONLINE_OUTPUT_ERROR)
+
+
+def _require_track_backend(settings: Settings) -> None:
+    if settings.serve.log_impressions and not settings.track.enabled:
+        raise ConfigError("serve.log_impressions requires track.enabled = true")
+    rec_metric = settings.experiment.primary_metric in {PRIMARY_METRIC_CTR, PRIMARY_METRIC_CONVERSION}
+    if settings.experiment.enabled and rec_metric and not settings.track.enabled:
+        raise ConfigError("experiment.primary_metric 'ctr'/'conversion' requires track.enabled = true")
+    if not settings.track.enabled:
+        return
+    from cicerone.track.store import TRACK_LOG_HA_ERROR, require_appendable_track_log
+
+    require_appendable_track_log(settings.output)
+    if settings.events.ha and settings.output.kind != "db":
+        raise ConfigError(TRACK_LOG_HA_ERROR)
+
+
+def _require_thompson_allocation(settings: Settings) -> None:
+    if not settings.experiment.enabled or settings.experiment.allocation != ALLOCATION_THOMPSON:
+        return
+    from cicerone.experiment.thompson import require_bandits_extra
+
+    require_bandits_extra()
+    if not settings.track.enabled:
+        raise ConfigError("experiment.allocation 'thompson' requires track.enabled = true")
 
 
 def _warn_online_skipped_for_experiment(settings: Settings) -> None:
@@ -292,110 +364,6 @@ def _warn_online_skipped_for_sequential(settings: Settings) -> None:
         "[events.online] is enabled while job.models includes sequential "
         "and the torch extra is not installed; online recommend will be skipped"
     )
-
-
-def _coerce_experiment(value: Any) -> ExperimentSettings:
-    if value is None:
-        return ExperimentSettings()
-    if isinstance(value, ExperimentSettings):
-        return value
-    if isinstance(value, dict):
-        return load_experiment_settings(value)
-    raise TypeError(f"Expected ExperimentSettings, dict, or None; got {type(value).__name__}")
-
-
-def load_experiment_settings(raw: dict[str, Any] | None) -> ExperimentSettings:
-    data = raw or {}
-    enabled = bool(data.get("enabled", False))
-    variants_raw = data.get("variants") or []
-    variants = tuple(_load_variant(item, index) for index, item in enumerate(variants_raw))
-    experiment_id = str(data.get("id") or "").strip()
-    default_metric = PRIMARY_METRIC_WEIGHTED
-    primary_metric = str(data.get("primary_metric") or default_metric).strip() or default_metric
-    alpha = float(data.get("alpha", DEFAULT_EXPERIMENT_ALPHA))
-    automl_challenger = bool(data.get("automl_challenger", False))
-    if enabled:
-        if not experiment_id:
-            raise ConfigError("experiment.id is required when experiment.enabled = true")
-        if not automl_challenger and len(variants) < 2:
-            raise ConfigError("experiment requires at least two [[experiment.variants]] tables")
-        if automl_challenger and variants and len(variants) < 2:
-            raise ConfigError("experiment.automl_challenger with variants still needs at least two variants")
-        names = [variant.name for variant in variants]
-        if len(names) != len(set(names)):
-            raise ConfigError(f"experiment.variants names must be unique, got {names}")
-        variants = _normalize_traffic(variants)
-        require_open_unit_interval(alpha, name="experiment.alpha")
-        if not primary_metric:
-            raise ConfigError("experiment.primary_metric must be a non-empty string")
-    return ExperimentSettings(
-        enabled=enabled,
-        id=experiment_id,
-        primary_metric=primary_metric,
-        variants=variants,
-        log_exposures=bool(data.get("log_exposures", False)),
-        automl_challenger=automl_challenger,
-        alpha=alpha,
-    )
-
-
-def _load_variant(raw: Any, index: int) -> VariantSettings:
-    if not isinstance(raw, dict):
-        raise ConfigError(f"experiment.variants[{index}] must be a table")
-    name = str(raw.get("name") or "").strip()
-    if not name:
-        raise ConfigError(f"experiment.variants[{index}].name is required")
-    traffic = float(raw.get("traffic", 0.0))
-    if traffic < 0:
-        raise ConfigError(f"experiment.variants[{name}].traffic must be >= 0, got {traffic}")
-    models = list(raw["models"]) if "models" in raw else None
-    if models is not None:
-        from cicerone.experiment.recipes import validate_variant_models
-
-        validate_variant_models(models, variant_name=name)
-    weights = {str(key): float(value) for key, value in raw["weights"].items()} if "weights" in raw else None
-    if weights is None and "model_weights" in raw:
-        weights = {str(key): float(value) for key, value in raw["model_weights"].items()}
-    validate_model_weights(weights, context=f"experiment.variants[{name}].weights")
-    rrf_k = float(raw["rrf_k"]) if "rrf_k" in raw else None
-    validate_rrf_k(rrf_k, context=f"experiment.variants[{name}].rrf_k")
-    combiner = str(raw["combiner"]).lower() if "combiner" in raw else None
-    if combiner is not None and combiner not in EXPERIMENT_COMBINERS:
-        raise ConfigError(
-            f"experiment.variants[{name}].combiner must be one of {list(EXPERIMENT_COMBINERS)}, "
-            f"got {combiner!r}"
-        )
-    blending = dict(raw["blending"]) if isinstance(raw.get("blending"), dict) else None
-    return VariantSettings(
-        name=name,
-        traffic=traffic,
-        models=models,
-        model_weights=weights,
-        rrf_k=rrf_k,
-        combiner=combiner,
-        blending=blending,
-        boosts=bool(raw.get("boosts", True)),
-        eligibility=bool(raw.get("eligibility", True)),
-    )
-
-
-def _normalize_traffic(variants: tuple[VariantSettings, ...]) -> tuple[VariantSettings, ...]:
-    if not variants:
-        return variants
-    total = sum(variant.traffic for variant in variants)
-    if total > 1.0 + 1e-9:
-        raise ConfigError(f"experiment.variants traffic sums to {total}, which exceeds 1")
-    remainder = max(0.0, 1.0 - total)
-    last = variants[-1]
-    if remainder > 1e-9:
-        logger.warning(
-            "experiment.variants traffic sums to %s; assigning remainder %s to %r",
-            total,
-            remainder,
-            last.name,
-        )
-    adjusted = replace(last, traffic=last.traffic + remainder)
-    return (*variants[:-1], adjusted)
 
 
 def _load_explain_settings(raw: dict[str, Any]) -> ExplainSettings:
@@ -512,6 +480,10 @@ def load_settings(config_path: str | None = None) -> Settings:
         serve_auth_token=serve_auth_token,
         resolve_env=_resolve_env_placeholders,
     )
+    publish = load_publish_settings(
+        raw.get("publish", {}) or {},
+        resolve_env=_resolve_env_placeholders,
+    )
 
     log_epoch_metrics = bool(job.get("log_epoch_metrics", False))
 
@@ -624,6 +596,7 @@ def load_settings(config_path: str | None = None) -> Settings:
             category_column=str(serve_raw.get("category_column", "category")),
             metrics_enabled=serve_metrics_enabled,
             metrics_token=serve_metrics_token,
+            log_impressions=bool(serve_raw.get("log_impressions", False)),
         ),
         trigger=TriggerSettings(
             enabled=trigger_enabled,
@@ -664,10 +637,16 @@ def load_settings(config_path: str | None = None) -> Settings:
             lookup_user_attrs=_load_lookup_user_attrs(dashboard_raw.get("lookup_user_attrs")),
         ),
         events=events,
+        publish=publish,
         experiment=load_experiment_settings(raw.get("experiment") or {}),
+        track=load_track_settings(raw.get("track") or {}),
+        eval=load_eval_settings(job.get("eval") or {}),
     )
     _require_exposure_log_backend(settings)
     _require_online_output_backend(settings)
+    _require_online_collaborative_lightfm(settings)
+    _require_track_backend(settings)
+    _require_thompson_allocation(settings)
     _warn_online_skipped_for_experiment(settings)
     _warn_online_skipped_for_sequential(settings)
     return settings

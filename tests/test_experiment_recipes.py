@@ -16,6 +16,8 @@ from cicerone.experiment.recipes import (
     apply_recipe,
     inherit_combiner,
     recipes_manifest_json,
+    resolve_boost_policy,
+    resolve_eligibility_policy,
     resolve_recipes,
     union_models,
 )
@@ -75,7 +77,8 @@ def test_resolve_recipes_overrides_combiner_and_union() -> None:
     assert stripped.eligibility
     payload = json.loads(recipes_manifest_json(recipes))
     assert payload[1]["name"] == "treatment"
-    assert payload[1]["boosts"] is False
+    assert payload[1]["boosts"] == []
+    assert payload[0]["boosts"][0]["name"] == "featured"
 
 
 def test_automl_challenger_uses_last_manifest_as_control() -> None:
@@ -208,3 +211,129 @@ def test_automl_challenger_requires_automl_pick() -> None:
     )
     with pytest.raises(ConfigError, match="AutoML"):
         resolve_recipes(settings, _features())
+
+
+def test_resolve_recipes_named_and_replacement_policy() -> None:
+    settings = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="exp",
+            variants=(
+                VariantSettings(name="control", traffic=0.5, boosts=("featured",), eligibility=False),
+                VariantSettings(
+                    name="treatment",
+                    traffic=0.5,
+                    boosts=(
+                        BoostRule(
+                            name="new-arrivals",
+                            kind="boolean",
+                            item_column="is_new",
+                            factor=1.4,
+                        ),
+                    ),
+                    eligibility=(
+                        EligibilityRule(
+                            name="published",
+                            op="item_true",
+                            item_column="published",
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    )
+    recipes = resolve_recipes(settings, _features())
+    control = apply_recipe(_features(), recipes[0])
+    treatment = apply_recipe(_features(), recipes[1])
+    assert [rule.name for rule in control.boosts] == ["featured"]
+    assert control.eligibility == []
+    assert [rule.name for rule in treatment.boosts] == ["new-arrivals"]
+    assert treatment.boosts[0].factor == 1.4
+    assert [rule.name for rule in treatment.eligibility] == ["published"]
+    payload = json.loads(recipes_manifest_json(recipes))
+    assert payload[0]["boosts"][0]["name"] == "featured"
+    assert payload[1]["eligibility"][0]["item_column"] == "published"
+
+
+def test_resolve_recipes_unknown_policy_name() -> None:
+    settings = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="exp",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5, boosts=("missing",)),
+            ),
+        ),
+    )
+    with pytest.raises(ConfigError, match="unknown rule name"):
+        resolve_recipes(settings, _features())
+
+
+def test_resolve_boost_policy_from_manifest_dicts() -> None:
+    rules = resolve_boost_policy(
+        [{"name": "x", "kind": "boolean", "item_column": "featured", "factor": 1.1}],
+        _features().boosts,
+        label="boosts",
+    )
+    assert rules[0].name == "x"
+    assert rules[0].factor == 1.1
+
+
+def test_resolve_boost_policy_rejects_duplicate_names() -> None:
+    with pytest.raises(ConfigError, match="duplicate rule name"):
+        resolve_boost_policy(("featured", "featured"), _features().boosts, label="boosts")
+    inherited = [
+        BoostRule(name="featured", kind="boolean", item_column="featured", factor=1.2),
+        BoostRule(name="featured", kind="boolean", item_column="sale", factor=1.1),
+    ]
+    with pytest.raises(ConfigError, match="duplicate inherited rule name"):
+        resolve_boost_policy(("featured",), inherited, label="boosts")
+
+
+def test_resolve_boost_policy_edge_shapes() -> None:
+    inherited = _features().boosts
+    assert resolve_boost_policy([], inherited, label="boosts") == ()
+    with pytest.raises(ConfigError, match="must be true, false"):
+        resolve_boost_policy(1, inherited, label="boosts")
+    with pytest.raises(ConfigError, match="non-empty"):
+        resolve_boost_policy(("featured", "  "), inherited, label="boosts")
+    with pytest.raises(ConfigError, match="must be true, false"):
+        resolve_boost_policy(["featured", {"name": "x"}], inherited, label="boosts")
+    with pytest.raises(ConfigError, match="boolean"):
+        resolve_boost_policy(
+            [{"name": "x", "kind": "boolean", "item_column": "featured"}],
+            inherited,
+            label="boosts",
+        )
+    with pytest.raises(ConfigError, match="kind"):
+        resolve_boost_policy(
+            [{"name": "x", "item_column": "featured", "factor": 1.1}],
+            inherited,
+            label="boosts",
+        )
+    with pytest.raises(ConfigError, match="must be true, false"):
+        resolve_boost_policy([1], inherited, label="boosts")
+    with pytest.raises(ConfigError, match="must be true, false"):
+        resolve_boost_policy((1,), inherited, label="boosts")
+    with pytest.raises(ConfigError, match="must be true, false"):
+        resolve_eligibility_policy([1], _features().eligibility, label="eligibility")
+    with pytest.raises(ConfigError, match="must be true, false"):
+        resolve_boost_policy(tuple(_features().eligibility), inherited, label="boosts")
+    with pytest.raises(ConfigError, match="must be true, false"):
+        resolve_eligibility_policy(tuple(inherited), _features().eligibility, label="eligibility")
+    assert resolve_boost_policy(tuple(inherited), inherited, label="boosts") == tuple(inherited)
+    eligibility = tuple(_features().eligibility)
+    assert resolve_eligibility_policy(eligibility, eligibility, label="eligibility") == eligibility
+
+
+def test_resolve_boost_policy_rejects_duplicate_replacement_names() -> None:
+    with pytest.raises(ConfigError, match="duplicate rule name"):
+        resolve_boost_policy(
+            [
+                {"name": "featured", "kind": "boolean", "item_column": "featured", "factor": 1.2},
+                {"name": "featured", "kind": "boolean", "item_column": "sale", "factor": 1.1},
+            ],
+            _features().boosts,
+            label="boosts",
+        )

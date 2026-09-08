@@ -14,6 +14,9 @@ def test_events_body_uses_json_dumps_not_interpolation():
     assert "json.dumps" in text
     assert 'os.environ["USER_ID"]' in text
     assert '-d "$events_body"' in text
+    assert '-d "$track_body"' in text
+    assert "kind" in text
+    assert "/track" in text
     assert "python_detect.sh" in text
     assert '"$PYTHON"' in text
     assert '"user_id":"${USER_ID}"' not in text

@@ -2,185 +2,44 @@
 
 from __future__ import annotations
 
-import json
 import logging
-import os
 import threading
 import time
 from collections import OrderedDict, deque
 from collections.abc import Sequence
-from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote_plus
 
 import boto3
 from botocore.config import Config
 
-from cicerone.config import ConfigError
 from cicerone.events.base import EventSource, EventSourceHealth, NormalizedEvent
-from cicerone.events.normalize import EventNormalizeError, normalize_event
+from cicerone.events.s3_list import S3ListPoll
+from cicerone.events.s3_parse import (
+    _DEFAULT_LIST_PAGE_SIZE,
+    _DEFAULT_SQS_CLIENT_TIMEOUT_SECONDS,
+    _DEFAULT_SQS_LAG_CACHE_TTL_SECONDS,
+    _LOAD_FAILURE_SKIP_AFTER,  # noqa: F401
+    _SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS,
+    _SQS_NACK_VISIBILITY_TIMEOUT_SECONDS,
+    _as_int,
+    _Batch,
+    _events_from_body,
+    _normalize_prefix,
+    _optional_aws_region,
+    _positive_float,
+    _positive_int,
+    _s3_records_from_sqs_body,  # noqa: F401
+    validate_s3_event_options,
+)
+from cicerone.events.s3_sqs import S3SqsPoll
 from cicerone.io.options import build_s3_client, require_option
 
 logger = logging.getLogger(__name__)
 
-_MODES = frozenset({"sqs", "list"})
-_DEFAULT_LIST_PAGE_SIZE = 100
-_DEFAULT_SQS_LAG_CACHE_TTL_SECONDS = 5.0
-_DEFAULT_SQS_CLIENT_TIMEOUT_SECONDS = 2.0
-# Transient S3 read errors retry; after this many failures the object is skipped.
-_LOAD_FAILURE_SKIP_AFTER = 3
-# Cover lock-busy nack retries so the message is not stolen mid-lease wait.
-_SQS_NACK_VISIBILITY_TIMEOUT_SECONDS = 60
-# In-flight apply (online fit_partial) can outlast the receive visibility window.
-_SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS = 300
 
-
-def validate_s3_event_options(options: dict[str, Any]) -> str:
-    """Validate ``events.options`` for ``kind=s3``; return resolved mode."""
-    for key in ("access_key_id", "secret_access_key", "bucket"):
-        if not options.get(key):
-            raise ConfigError(f'events.options.{key} is required when events.kind = "s3"')
-    mode = options.get("mode")
-    if mode is None:
-        resolved = "sqs" if options.get("queue_url") else "list"
-    else:
-        resolved = str(mode).lower()
-        if resolved not in _MODES:
-            raise ConfigError(f"events.options.mode must be one of {sorted(_MODES)}, got {mode!r}")
-    if resolved == "sqs":
-        if options.get("endpoint_url"):
-            raise ConfigError(
-                'events.options.mode = "sqs" is AWS-only; '
-                'S3-compatible endpoints (R2/MinIO) must use mode = "list"'
-            )
-        if not options.get("queue_url"):
-            raise ConfigError('events.options.queue_url is required when events.options.mode = "sqs"')
-    return resolved
-
-
-def _as_int(options: dict[str, Any], key: str, default: int) -> int:
-    raw = options.get(key, default)
-    try:
-        return int(raw)
-    except (TypeError, ValueError) as exc:
-        raise ConfigError(f"events.options.{key} must be an integer, got {raw!r}") from exc
-
-
-def _positive_int(options: dict[str, Any], key: str, default: int) -> int:
-    value = _as_int(options, key, default)
-    if value < 1:
-        raise ConfigError(f"events.options.{key} must be an integer >= 1, got {value}")
-    return value
-
-
-def _positive_float(options: dict[str, Any], key: str, default: float) -> float:
-    raw = options.get(key, default)
-    try:
-        value = float(raw)
-    except (TypeError, ValueError) as exc:
-        raise ConfigError(f"events.options.{key} must be a float > 0, got {raw!r}") from exc
-    if value <= 0:
-        raise ConfigError(f"events.options.{key} must be > 0, got {value}")
-    return value
-
-
-# One SQS message / S3 object → _Batch. Events go pending → (on poll) in_flight;
-# ack clears remaining; marker/SQS delete only for leading fully-acked batches.
-@dataclass
-class _Batch:
-    remaining: set[str]
-    receipt_handle: str | None = None
-    object_key: str | None = None
-    object_etag: str | None = None
-    event_ids: set[str] = field(default_factory=set)
-
-
-def _optional_aws_region(options: dict[str, Any]) -> str | None:
-    if options.get("region_name"):
-        return str(options["region_name"])
-    return None
-
-
-def _normalize_prefix(raw: Any) -> str:
-    prefix = str(raw or "").strip("/")
-    return f"{prefix}/" if prefix else ""
-
-
-def _stable_event_id(payload: dict[str, Any], *, bucket: str, key: str, etag: str, index: int) -> str:
-    existing = payload.get("event_id") or payload.get("idempotency_key")
-    if existing not in (None, ""):
-        return str(existing)
-    return f"{bucket}/{key}|{etag}|{index}"
-
-
-def _events_from_body(body: bytes, *, bucket: str, key: str, etag: str) -> list[NormalizedEvent]:
-    text = body.decode("utf-8").strip()
-    if not text:
-        return []
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"invalid JSON in s3://{bucket}/{key}") from exc
-    if isinstance(data, dict):
-        payloads: list[Any] = [data]
-    elif isinstance(data, list):
-        payloads = data
-    else:
-        raise ValueError(f"s3://{bucket}/{key} must be a JSON object or array")
-    events: list[NormalizedEvent] = []
-    for index, payload in enumerate(payloads):
-        if not isinstance(payload, dict):
-            logger.warning(
-                "Skipping non-object event %d in s3://%s/%s",
-                index,
-                bucket,
-                key,
-            )
-            continue
-        try:
-            event_id = _stable_event_id(payload, bucket=bucket, key=key, etag=etag, index=index)
-            events.append(normalize_event({**payload, "event_id": event_id}))
-        except EventNormalizeError:
-            logger.warning(
-                "Skipping invalid event %d in s3://%s/%s",
-                index,
-                bucket,
-                key,
-                exc_info=True,
-            )
-    return events
-
-
-def _s3_records_from_sqs_body(body: str) -> list[tuple[str, str]]:
-    data = json.loads(body)
-    if isinstance(data, dict) and "Message" in data and ("TopicArn" in data or "Type" in data):
-        message = data["Message"]
-        data = json.loads(message) if isinstance(message, str) else message
-    if not isinstance(data, dict):
-        raise ValueError("SQS message body must be a JSON object")
-    records = data.get("Records")
-    if not isinstance(records, list):
-        raise ValueError("SQS message missing S3 Records")
-    out: list[tuple[str, str]] = []
-    for record in records:
-        if not isinstance(record, dict):
-            continue
-        event_name = str(record.get("eventName") or "")
-        if event_name and not event_name.startswith("ObjectCreated"):
-            continue
-        s3 = record.get("s3") or {}
-        if not isinstance(s3, dict):
-            continue
-        bucket = (s3.get("bucket") or {}).get("name")
-        key = (s3.get("object") or {}).get("key")
-        if bucket and key:
-            out.append((str(bucket), unquote_plus(str(key))))
-    return out
-
-
-class S3EventSource(EventSource):
+class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
     """R2/MinIO list+marker poll, or AWS SQS notifications (no endpoint_url)."""
 
     def __init__(self, options: dict[str, Any] | None = None):
@@ -378,159 +237,6 @@ class S3EventSource(EventSource):
                 out.append(event)
         return out
 
-    def _fetch_list(self, need: int) -> None:
-        if need < 1:
-            return
-        with self._lock:
-            s3 = self._s3
-            bucket = self._bucket
-            prefix = self._prefix
-            marker = self._marker_key
-            page_size = self._list_page_size
-            held_ids = set(self._in_flight) | {event.event_id for event in self._pending}
-            held_keys = {batch.object_key for batch in self._batches.values() if batch.object_key}
-            if s3 is None:
-                raise RuntimeError("S3EventSource.connect() required before poll")
-        kwargs: dict[str, Any] = {
-            "Bucket": bucket,
-            "MaxKeys": min(page_size, max(need, 1)),
-        }
-        if prefix:
-            kwargs["Prefix"] = prefix
-        if marker:
-            kwargs["StartAfter"] = marker
-        page = s3.list_objects_v2(**kwargs)
-        loaded = 0
-        for obj in page.get("Contents") or []:
-            if loaded >= need:
-                break
-            key = str(obj["Key"])
-            if key in held_keys:
-                continue
-            etag = str(obj.get("ETag") or "")
-            try:
-                events = self._load_object_events(s3, bucket, key, etag=etag)
-            except ValueError:
-                logger.exception("Skipping unreadable s3://%s/%s", bucket, key)
-                self._register_batch([], object_key=key, object_etag=etag)
-                self._load_failures.pop(key, None)
-                continue
-            except Exception:
-                failures = self._load_failures.get(key, 0) + 1
-                self._load_failures[key] = failures
-                logger.exception(
-                    "Failed to read s3://%s/%s (%d/%d)",
-                    bucket,
-                    key,
-                    failures,
-                    _LOAD_FAILURE_SKIP_AFTER,
-                )
-                if failures >= _LOAD_FAILURE_SKIP_AFTER:
-                    logger.error(
-                        "Skipping unreadable s3://%s/%s after %d load failures",
-                        bucket,
-                        key,
-                        failures,
-                    )
-                    self._register_batch([], object_key=key, object_etag=etag)
-                    self._load_failures.pop(key, None)
-                    continue
-                break
-            self._load_failures.pop(key, None)
-            novel = [event for event in events if event.event_id not in held_ids]
-            if not novel:
-                self._register_batch([], object_key=key, object_etag=etag)
-                continue
-            self._register_batch(novel, object_key=key, object_etag=etag)
-            held_ids.update(event.event_id for event in novel)
-            held_keys.add(key)
-            loaded += len(novel)
-
-    def _matching_sqs_records(self, pairs: Sequence[tuple[str, str]]) -> list[tuple[str, str]]:
-        matched: list[tuple[str, str]] = []
-        for bucket, key in pairs:
-            if bucket != self._bucket:
-                continue
-            if self._prefix and not key.startswith(self._prefix):
-                continue
-            matched.append((bucket, key))
-        return matched
-
-    def _fetch_sqs(self, need: int) -> None:
-        if need < 1:
-            return
-        with self._lock:
-            sqs = self._sqs
-            s3 = self._s3
-            queue_url = self._queue_url
-            held_ids = set(self._in_flight) | {event.event_id for event in self._pending}
-            if s3 is None or sqs is None or queue_url is None:
-                raise RuntimeError("S3EventSource.connect() required before poll")
-        loaded = 0
-        while loaded < need:
-            response = sqs.receive_message(
-                QueueUrl=queue_url,
-                MaxNumberOfMessages=min(self._max_messages, 10),
-                WaitTimeSeconds=self._wait_time_seconds if loaded == 0 else 0,
-                VisibilityTimeout=_SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS,
-            )
-            messages = response.get("Messages") or []
-            if not messages:
-                break
-            made_progress = False
-            for message in messages:
-                if loaded >= need:
-                    break
-                receipt = message["ReceiptHandle"]
-                try:
-                    pairs = _s3_records_from_sqs_body(message["Body"])
-                except Exception:
-                    logger.exception("Invalid S3 notification on SQS; deleting poison message")
-                    sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt)
-                    made_progress = True
-                    continue
-                if not pairs:
-                    sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt)
-                    made_progress = True
-                    continue
-                matched = self._matching_sqs_records(pairs)
-                if not matched:
-                    # Shared queue / miswired notification — leave message for others.
-                    logger.warning(
-                        "Ignoring SQS S3 notification with no keys under bucket=%s prefix=%r",
-                        self._bucket,
-                        self._prefix,
-                    )
-                    continue
-                batch_events: list[NormalizedEvent] = []
-                failed = False
-                for bucket, key in matched:
-                    try:
-                        batch_events.extend(self._load_object_events(s3, bucket, key))
-                    except Exception:
-                        logger.exception(
-                            "Failed to load s3://%s/%s from SQS notification; leaving message for retry",
-                            bucket,
-                            key,
-                        )
-                        failed = True
-                        break
-                if failed:
-                    continue
-                novel = [event for event in batch_events if event.event_id not in held_ids]
-                if not novel:
-                    # Already holding these events (local nack retry). Keep the
-                    # latest receipt so ack can still delete after visibility refresh.
-                    self._adopt_sqs_receipt(receipt, {event.event_id for event in batch_events})
-                    made_progress = True
-                    continue
-                self._register_batch(novel, receipt_handle=receipt)
-                held_ids.update(event.event_id for event in novel)
-                loaded += len(novel)
-                made_progress = True
-            if not made_progress:
-                break
-
     def _load_object_events(self, s3, bucket: str, key: str, etag: str = "") -> list[NormalizedEvent]:
         obj = s3.get_object(Bucket=bucket, Key=key)
         resolved_etag = etag or str(obj.get("ETag") or "")
@@ -602,68 +308,3 @@ class S3EventSource(EventSource):
                     sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=batch.receipt_handle)
                 except Exception:
                     logger.exception("Failed to delete SQS message after ack")
-
-    def _extend_sqs_visibility(
-        self,
-        receipts: Sequence[str],
-        *,
-        sqs: Any,
-        queue_url: str | None,
-        timeout_seconds: int = _SQS_NACK_VISIBILITY_TIMEOUT_SECONDS,
-    ) -> None:
-        if not receipts or sqs is None or queue_url is None:
-            return
-        for receipt in receipts:
-            try:
-                sqs.change_message_visibility(
-                    QueueUrl=queue_url,
-                    ReceiptHandle=receipt,
-                    VisibilityTimeout=timeout_seconds,
-                )
-            except Exception:
-                logger.exception("Failed to extend SQS visibility")
-
-    def _adopt_sqs_receipt(self, receipt: str, event_ids: set[str]) -> None:
-        with self._lock:
-            for eid in event_ids:
-                batch = self._event_batch.get(eid)
-                if batch is not None:
-                    batch.receipt_handle = receipt
-                    return
-
-    def _load_marker_unlocked(self) -> None:
-        if self._marker_path is None or not self._marker_path.is_file():
-            return
-        try:
-            raw = json.loads(self._marker_path.read_text())
-            if not isinstance(raw, dict):
-                raise ValueError("marker root must be an object")
-            key = raw.get("key")
-            if key:
-                self._marker_key = str(key)
-        except Exception:
-            logger.exception(
-                "Ignoring corrupt marker file %s; keeping marker %r",
-                self._marker_path,
-                self._marker_key,
-            )
-
-    def _persist_marker_unlocked(self) -> None:
-        if self._marker_path is None:
-            return
-        self._marker_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"key": self._marker_key}
-        tmp = self._marker_path.with_name(f".{self._marker_path.name}.tmp")
-        with tmp.open("w", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload, sort_keys=True) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        tmp.replace(self._marker_path)
-        try:
-            dir_fd = os.open(str(self._marker_path.parent), os.O_RDONLY)
-        except OSError:
-            return
-        try:
-            os.fsync(dir_fd)
-        finally:
-            os.close(dir_fd)

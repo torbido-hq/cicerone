@@ -3,30 +3,39 @@
 from __future__ import annotations
 
 import logging
+import os
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode, urlparse
 
 import uvicorn
 from croniter import CroniterError, croniter
 from fastapi import Depends, FastAPI, Form, Query, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+import cicerone.config as config_pkg
 from cicerone.config import Settings, load_settings
 from cicerone.config.constants import DEFAULT_LOG_FORMAT
+from cicerone.dashboard_config import config_display
 from cicerone.dashboard_experiments import clear_promotion, experiment_context, promote_winner
 from cicerone.dashboard_lookup import lookup_inspector
+from cicerone.dashboard_quality import quality_context
 from cicerone.dashboard_users import load_users
 from cicerone.http_auth import require_basic_auth
 from cicerone.http_security import (
     CSRF_FORM_FIELD,
+    FLASH_COOKIE,
+    FLASH_ERR,
     SecurityHeadersMiddleware,
+    clear_flash_cookie,
     csrf_token_for,
+    parse_flash_cookie,
     require_csrf,
     set_csrf_cookie,
+    set_flash_cookie,
 )
 from cicerone.io.base import ManifestReader, RecommendationReader, UserHistoryReader
 from cicerone.io.factory import build_manifest_reader, build_recommendation_reader, build_user_history_reader
@@ -34,20 +43,71 @@ from cicerone.io.factory import build_manifest_reader, build_recommendation_read
 logging.basicConfig(level=logging.INFO, format=DEFAULT_LOG_FORMAT)
 logger = logging.getLogger(__name__)
 
+ROBOTS_TAG = "noindex, nofollow, noarchive, nosnippet, noimageindex"
+ROBOTS_TXT = "User-agent: *\nDisallow: /\n"
+
 _PACKAGE_DIR = Path(__file__).resolve().parent
 _TEMPLATES = Jinja2Templates(directory=str(_PACKAGE_DIR / "templates"))
+_TEMPLATES.env.globals["robots_tag"] = ROBOTS_TAG
 _EXPERIMENTS_PATH = "/dashboard/experiments"
+_LOGOUT_HTML = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Signed out · Cicerone dashboard</title>
+</head>
+<body>
+  <p>Signed out. Close this tab, or clear the saved password for this site in your browser.</p>
+  <p><a href="/dashboard">Sign in again</a></p>
+</body>
+</html>
+"""
 
 
-def _experiments_redirect(**query: str) -> RedirectResponse:
-    target = _EXPERIMENTS_PATH
-    if query:
-        target = f"{target}?{urlencode(query)}"
-    target = target.replace("\\", "")
-    parsed = urlparse(target)
-    if parsed.scheme or parsed.netloc or parsed.path != _EXPERIMENTS_PATH:
-        return RedirectResponse(url=_EXPERIMENTS_PATH, status_code=303)
-    return RedirectResponse(url=target, status_code=303)
+def _as_percent(value: Any) -> str:
+    try:
+        return f"{float(value) * 100:.2f}%"
+    except (TypeError, ValueError):
+        return "—"
+
+
+_TEMPLATES.env.filters["as_percent"] = _as_percent
+
+
+def _is_static_path(path: str) -> bool:
+    return path == "/static" or path.startswith("/static/")
+
+
+def _chrome(settings: Settings) -> dict[str, Any]:
+    return {
+        "nav_quality_available": bool(settings.track.enabled or settings.eval.enabled),
+        "nav_experiments_available": bool(settings.experiment.enabled),
+    }
+
+
+def _flash_error(error: str) -> str:
+    if error in FLASH_ERR:
+        return error
+    if error.startswith("Unknown variant"):
+        return "Unknown variant"
+    if error.startswith("Experiment is not ready to promote"):
+        return "Experiment is not ready to promote"
+    if error.startswith("Winner is"):
+        return "That variant is not the winner"
+    return "Experiment report is not available"
+
+
+def _experiments_redirect(
+    request: Request | None = None,
+    *,
+    message: str = "",
+    promote_error: str = "",
+) -> RedirectResponse:
+    response = RedirectResponse(url=_EXPERIMENTS_PATH, status_code=303)
+    if request is not None and (message or promote_error):
+        set_flash_cookie(request, response, ok=message or None, error=promote_error or None)
+    return response
 
 
 def _compute_staleness(manifest: dict[str, Any] | None, cron_schedule: str, now: datetime) -> dict[str, Any]:
@@ -98,9 +158,10 @@ def page_title(
     return " · ".join(parts)
 
 
-def _html(request: Request, template: str, context: dict[str, Any]):
+def _html(request: Request, template: str, context: dict[str, Any], *, settings: Settings | None = None):
     token = csrf_token_for(request)
-    context = {**context, "csrf_token": token}
+    extra = _chrome(settings) if settings is not None else {}
+    context = {**extra, **context, "csrf_token": token}
     response = _TEMPLATES.TemplateResponse(request, template, context)
     set_csrf_cookie(request, response, token)
     return response
@@ -129,6 +190,7 @@ def create_app(
     users: dict[str, str],
     recommendation_reader: RecommendationReader | None = None,
     history_reader: UserHistoryReader | None = None,
+    config_path: str | None = None,
 ) -> FastAPI:
     app = FastAPI(
         title="cicerone-dashboard",
@@ -140,9 +202,23 @@ def create_app(
     app.mount("/static", StaticFiles(directory=str(_PACKAGE_DIR / "static")), name="static")
     auth = require_basic_auth(users)
 
+    @app.middleware("http")
+    async def anti_index_headers(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        response = await call_next(request)
+        response.headers["X-Robots-Tag"] = ROBOTS_TAG
+        if not _is_static_path(request.url.path):
+            response.headers.setdefault("Cache-Control", "private, no-store")
+        return response
+
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/robots.txt")
+    def robots() -> PlainTextResponse:
+        return PlainTextResponse(ROBOTS_TXT)
 
     def _status_context() -> dict[str, Any]:
         manifest = reader.read_latest()
@@ -179,16 +255,33 @@ def create_app(
             manifest=context["manifest"],
             staleness=context["staleness"],
         )
-        return _html(request, "dashboard.html", context)
+        return _html(request, "dashboard.html", context, settings=settings)
+
+    @app.get("/dashboard/logout")
+    def logout() -> HTMLResponse:
+        return HTMLResponse(
+            _LOGOUT_HTML,
+            status_code=401,
+            headers={"WWW-Authenticate": "Basic"},
+        )
 
     @app.get("/dashboard/experiments", dependencies=[Depends(auth)])
-    def experiments(
-        request: Request, message: str = Query(default=""), promote_error: str = Query(default="")
-    ):
+    def experiments(request: Request):
         context = experiment_context(settings)
-        context["message"] = message or None
-        context["promote_error"] = promote_error or None
-        return _html(request, "experiments.html", context)
+        message, promote_error = parse_flash_cookie(request.cookies.get(FLASH_COOKIE))
+        context["message"] = message
+        context["promote_error"] = promote_error
+        context["page_title"] = "Experiments · Cicerone dashboard"
+        response = _html(request, "experiments.html", context, settings=settings)
+        if request.cookies.get(FLASH_COOKIE) is not None:
+            clear_flash_cookie(response)
+        return response
+
+    @app.get("/dashboard/quality", dependencies=[Depends(auth)])
+    def quality(request: Request):
+        context = quality_context(settings)
+        context["page_title"] = "Quality · Cicerone dashboard"
+        return _html(request, "quality.html", context, settings=settings)
 
     @app.post("/dashboard/experiments/promote", dependencies=[Depends(auth)])
     def experiments_promote(
@@ -199,8 +292,8 @@ def create_app(
         require_csrf(request, csrf_token)
         error = promote_winner(settings, variant.strip())
         if error:
-            return _experiments_redirect(promote_error=error)
-        return _experiments_redirect(message=f"Promoted {variant.strip()}")
+            return _experiments_redirect(request, promote_error=_flash_error(error))
+        return _experiments_redirect(request, message="Promoted")
 
     @app.post("/dashboard/experiments/unpromote", dependencies=[Depends(auth)])
     def experiments_unpromote(
@@ -210,8 +303,18 @@ def create_app(
         require_csrf(request, csrf_token)
         error = clear_promotion(settings)
         if error:
-            return _experiments_redirect(promote_error=error)
-        return _experiments_redirect(message="Resumed split")
+            return _experiments_redirect(request, promote_error=_flash_error(error))
+        return _experiments_redirect(request, message="Resumed split")
+
+    @app.get("/dashboard/config", dependencies=[Depends(auth)])
+    def config_page(request: Request):
+        context = config_display(
+            settings,
+            config_path=config_path,
+            usernames=tuple(users),
+        )
+        context["page_title"] = "Configuration · Cicerone dashboard"
+        return _html(request, "config.html", context, settings=settings)
 
     return app
 
@@ -239,7 +342,15 @@ def main() -> None:
     except Exception:
         logger.exception("Event store is not available; dashboard history pane will be disabled")
         history_reader = None
-    app = create_app(settings, reader, users, rec_reader, history_reader)
+    loaded_config_path = os.environ.get("CICERONE_CONFIG_PATH") or config_pkg.DEFAULT_CONFIG_PATH
+    app = create_app(
+        settings,
+        reader,
+        users,
+        rec_reader,
+        history_reader,
+        config_path=loaded_config_path,
+    )
     uvicorn.run(app, host=settings.dashboard.host, port=settings.dashboard.port)
 
 

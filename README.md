@@ -40,21 +40,23 @@ up to your own data doesn't require touching any code.
 ## Features
 
 - **Batch recommender** — cron-scheduled train + top-K write (dataset or DB I/O)
-- **Hybrid strategies** — collaborative (LightFM), item-based KNN, optional SASRec/BERT4Rec/HSTU, optional content cold-item fallback, popular, latest
+- **Hybrid strategies** — collaborative (LightFM), item-based KNN, optional SASRec/BERT4Rec/HSTU, EASE, ALS, optional content cold-item fallback, popular, popular-in-category, latest, random
 - **Priority, RRF, or blending** — combine strategies by order, weighted ranks, or per-user mix
-- **A/B experiments** — sticky user assignment across whole ranking recipes; sequential CIs, catalog guardrails, optional AutoML challenger, dashboard promote
+- **A/B experiments** — sticky user assignment across whole ranking recipes; sequential CIs, catalog guardrails, optional AutoML challenger or job-time Thompson, dashboard promote
+- **Evaluation** — host-reported impressions and clicks (`POST /track`), CTR/CVR on the Quality page, optional production replay ([docs/evaluation.md](docs/evaluation.md))
 - **AutoML** — time-fold backtest to pick models/weights per run
 - **Business policies** — TOML eligibility filters and score boosts
 - **Serve mode** — read-only HTTP API over precomputed recommendations
   (`limit` / `category` / `exclude_unavailable`, cold-start fallback;
   OpenAPI at `/docs` + thin `ServeClient`)
-- **Incremental events** — write-through of popular/latest between retrains;
+- **Incremental events** — write-through of popular/latest between retrains
+  (webhook, DB, S3, Redis Streams, Kafka, or RabbitMQ);
   optional `[events.online]` continues LightFM for affected users
   ([docs/incremental-events.md](docs/incremental-events.md))
 - **CLI / PyPI** — `cicerone` console script; `pip install cicerone-recommender`
   (import name `cicerone`; the PyPI name `cicerone` is a different project)
 - **Retrain trigger** — webhook (+ optional input poll) alongside cron
-- **Dashboard** — Basic-Auth status page for run success/failure, history, user-id lookup, and experiment promote
+- **Dashboard** — Basic-Auth Status, Quality, Experiments, Config, and user-id lookup
 - **Model artifacts** — optional versioned fitted-model bundle for offline reload
 
 > **Why "Cicerone"?** In the world of beer, a [Cicerone](https://www.cicerone.org)
@@ -151,7 +153,9 @@ priority or RRF the reader substitutes one `popular_fallback` / `latest`
 user's top-K instead, and 404s when the table has neither. When
 `[experiment]` is enabled, the response also includes `experiment_id` and
 the sticky `variant`; both fields are `null` when experiments are off.
-See [docs/experiments.md](docs/experiments.md).
+See [docs/experiments.md](docs/experiments.md). Impression and click
+tracking (`POST /track`, CTR/CVR, Quality dashboard) is documented in
+[docs/evaluation.md](docs/evaluation.md).
 
 - For a `dataset` output, the whole recommendations file (+ optional
   `items_snapshot.parquet`) is cached in memory and refreshed on a
@@ -273,7 +277,13 @@ serve). It never loads lightfm/implicit/torch (it does import `rectools`).
   (default 20). When `[experiment]` is enabled, lookup shows the assigned
   variant (what serve would return). `GET /dashboard/experiments` compares
   recipes with always-valid CIs and catalog guardrails, and can **Promote**
-  a winner to 100% traffic. A missing event store does not hide recommendations. When `[events]` is
+  a winner to 100% traffic. `GET /dashboard/config` shows the Settings this
+  dashboard process loaded (and `features.toml` when present), with tokens,
+  URLs, and keys redacted. Section titles and known keys offer a one-line
+  hint (`?`), with a Docs link when cicerone.dev covers that setting.
+  Pages send `noindex` / `X-Robots-Tag` and
+  `GET /robots.txt` disallows `/` in case the process is reachable from
+  the public internet. A missing event store does not hide recommendations. When `[events]` is
   enabled, a panel shows the latest incremental flush from recent manifests
   (dataset outputs may clear it on the next full retrain). The status block
   auto-refreshes via
@@ -415,9 +425,11 @@ if omitted:
   features for cold-start. Personalized, warm users only. Hyperparameters
   via `[model.collaborative]` (RecTools `model_from_config` schema).
 - `item_based`: `ImplicitItemKNNWrapperModel` (rectools) — item-item
-  similarity (`TFIDFRecommender`). Personalized, warm users only. Neighbor
-  count is RecTools `model.item_based.model.K` (default `20`); the legacy
-  `[job.item_based].k_neighbors` key is still accepted and translated.
+  similarity (`TFIDFRecommender` by default; `CosineRecommender` or
+  `BM25Recommender` via `[model.item_based.model].cls`). Personalized, warm
+  users only. Neighbor count is RecTools `model.item_based.model.K` (default
+  `20`); the legacy `[job.item_based].k_neighbors` key is still accepted and
+  translated.
 - `sequential`: RecTools `SASRecModel` (default), `BERT4RecModel`, or
   `HSTUModel` — transformer next-item model. Personalized, interacting users
   only. Opt-in (`job.models`); not in the default chain. Requires
@@ -431,6 +443,12 @@ if omitted:
   `Dataset.construct`), so HSTU relative-time bias is weak. AutoML skips this
   strategy when the extra is missing or median distinct items/user is below
   `[job.sequential].min_median_interactions` (default `5`).
+- `ease`: RecTools `EASEModel` — dense item–item autoencoder. Personalized,
+  interacting users only. Opt-in. Hyperparameters via `[model.ease]`.
+- `als`: RecTools `ImplicitALSWrapperModel` (`pm-implicit` ALS) with
+  `fit_features_together` so side features on the dataset participate.
+  Personalized, interacting users only. Opt-in. `[events.online]` does not
+  refresh ALS; keep LightFM as `collaborative` if you need `fit_partial`.
 - `content_fallback`: feature-similarity recommendations for **zero-interaction
   items** (one-hot over `item_features`, cosine vs user history). Personalized,
   warm users only. Off by default — set `[job.content_fallback].enabled = true`
@@ -439,9 +457,14 @@ if omitted:
 - `popular`: `PopularModel` (rectools) — global popularity. Non-personalized,
   runs for every target user and backfills any warm user without enough
   personalized results. Optional `[model.popular]`.
+- `popular_in_category`: RecTools `PopularInCategoryModel` — mixes popularity
+  across an item category feature (`[model.popular_in_category].category_feature`,
+  default `category`). Non-personalized. Opt-in.
 - `latest`: `PopularModel` restricted to the last two weeks of interactions —
   trending/recently active items. Non-personalized, same backfill role as
   `popular`. Optional `[model.latest]` (`period = { days = 14 }`).
+- `random`: RecTools `RandomModel` — uniform catalog samples. Opt-in sanity
+  baseline.
 
 Strategy construction and hyperparameters live in `cicerone.model_config`
 + `cicerone.model` (`strategies` / `fit` / `recommend` / `combine`). What
@@ -526,12 +549,15 @@ recomputed. Scoring is unchanged.
 ## Experiments
 
 `[experiment]` runs a sticky A/B test of whole ranking recipes (models +
-combiner + blending knobs), not per-source CTR of a mixed cascade. The job
-fits the union of variant models once, writes extra `variant` rows, and
-serve hashes `user_id` onto one list. The dashboard Experiments page shows
-always-valid CIs and catalog guardrails, and can promote a winner to 100%
-traffic. Optional `automl_challenger` uses the last successful manifest as
-control and this run's AutoML pick as treatment.
+combiner + blending knobs + optional boost/eligibility policy), not per-source
+CTR of a mixed cascade. The job fits the union of variant models once. With
+`allocation = "fixed"` (default) it writes every named recipe; `allocation =
+"thompson"` normally writes only the live pair (empty track and no stored
+pair fall back to `fixed`). Serve hashes
+`user_id` onto one list. The dashboard Experiments page shows always-valid
+CIs and catalog guardrails, and can promote a winner to 100% traffic.
+Optional `automl_challenger` uses the last successful manifest as control
+and this run's AutoML pick as treatment.
 
 ```toml
 [experiment]
@@ -547,10 +573,12 @@ traffic = 0.5
 name = "treatment"
 traffic = 0.5
 combiner = "blend"
+# boosts = ["featured"]  # merchandising policy as the recipe under test
 ```
 
 Full assignment, schema, sequential stats, and promote rules:
-[docs/experiments.md](docs/experiments.md).
+[docs/experiments.md](docs/experiments.md). In-house CTR, conversion,
+and production replay: [docs/evaluation.md](docs/evaluation.md).
 
 ## Model artifacts
 
@@ -638,7 +666,10 @@ project; the import remains `cicerone`. LightFM may need a C compiler
 ```sh
 pip install cicerone-recommender
 pip install 'cicerone-recommender[redis]'        # lock backend / Redis Streams
+pip install 'cicerone-recommender[kafka]'        # events.kind / publish.kind = kafka
+pip install 'cicerone-recommender[rabbitmq]'     # events.kind / publish.kind = rabbitmq
 pip install 'cicerone-recommender[sequential]'   # SASRec / BERT4Rec / HSTU
+pip install 'cicerone-recommender[bandits]'      # experiment.allocation = thompson
 ```
 
 Then, with your own TOML. Example files default to image paths

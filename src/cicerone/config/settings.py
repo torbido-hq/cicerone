@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from cicerone.config.constants import (
+    ALLOCATION_FIXED,
     AUTOML_DEFAULT_N_SPLITS,
     AUTOML_DEFAULT_PRIMARY_METRIC,
     AUTOML_DEFAULT_TEST_DAYS,
@@ -24,9 +25,16 @@ from cicerone.config.constants import (
     DEFAULT_EXPLAIN_MAX_SIMILAR_ITEMS,
     DEFAULT_LOCK_KEY,
     DEFAULT_LOCK_TTL_SECONDS,
+    DEFAULT_THOMPSON_EXPLORE_TRAFFIC,
+    DEFAULT_THOMPSON_ROTATE_MIN_PROB,
+    DEFAULT_TRACK_ATTRIBUTION_WINDOW_HOURS,
+    DEFAULT_TRACK_MIN_IMPRESSIONS,
     PRIMARY_METRIC_WEIGHTED,
     Mode,
 )
+
+if TYPE_CHECKING:
+    from cicerone.feature_config import BoostRule, EligibilityRule
 
 
 @dataclass(frozen=True)
@@ -50,6 +58,7 @@ class ServeSettings:
     category_column: str = "category"
     metrics_enabled: bool = False
     metrics_token: str | None = None
+    log_impressions: bool = False
 
 
 @dataclass(frozen=True)
@@ -119,6 +128,13 @@ class EventsSettings:
 
 
 @dataclass(frozen=True)
+class PublishSettings:
+    enabled: bool = False
+    kind: str = "kafka"
+    options: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class VariantSettings:
     """One ranking recipe in an ``[experiment]`` block."""
 
@@ -129,8 +145,8 @@ class VariantSettings:
     rrf_k: float | None = None
     combiner: str | None = None
     blending: dict[str, Any] | None = None
-    boosts: bool = True
-    eligibility: bool = True
+    boosts: bool | tuple[str, ...] | tuple[BoostRule, ...] = True
+    eligibility: bool | tuple[str, ...] | tuple[EligibilityRule, ...] = True
 
 
 @dataclass(frozen=True)
@@ -142,6 +158,29 @@ class ExperimentSettings:
     log_exposures: bool = False
     automl_challenger: bool = False
     alpha: float = DEFAULT_EXPERIMENT_ALPHA
+    attribution: str = "user"
+    allocation: str = ALLOCATION_FIXED
+    explore_traffic: float = DEFAULT_THOMPSON_EXPLORE_TRAFFIC
+    rotate_min_prob: float = DEFAULT_THOMPSON_ROTATE_MIN_PROB
+
+
+@dataclass(frozen=True)
+class TrackSettings:
+    """Impression/click ingest; kept off the training event path."""
+
+    enabled: bool = False
+    attribution_window_hours: float = DEFAULT_TRACK_ATTRIBUTION_WINDOW_HOURS
+    conversion_event_types: tuple[str, ...] = ()
+    min_impressions: int = DEFAULT_TRACK_MIN_IMPRESSIONS
+
+
+@dataclass(frozen=True)
+class EvalSettings:
+    """Job-time production replay of previously written lists."""
+
+    enabled: bool = False
+    event_types: tuple[str, ...] = ()
+    ks: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -184,8 +223,11 @@ class Settings:
     trigger: TriggerSettings
     dashboard: DashboardSettings
     events: EventsSettings
+    publish: PublishSettings = field(default_factory=PublishSettings)
     explain: ExplainSettings = field(default_factory=ExplainSettings)
     experiment: ExperimentSettings = field(default_factory=ExperimentSettings)
+    track: TrackSettings = field(default_factory=TrackSettings)
+    eval: EvalSettings = field(default_factory=EvalSettings)
 
     @property
     def serve_host(self) -> str:

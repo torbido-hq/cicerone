@@ -28,6 +28,7 @@ from cicerone.io.base import OutputSink
 from cicerone.io.recommendation_reader import SOURCE_COLUMN, USER_COLUMN
 from cicerone.io.recommendation_schema import recommendation_output_columns
 from cicerone.locks import LockLostError
+from cicerone.publish.base import RecommendationPublisher
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         variant_names: Sequence[str] = (),
         assign_variant: Callable[[str], str | None] | None = None,
         explain_enabled: bool = True,
+        publisher: RecommendationPublisher | None = None,
     ):
         if user_cache_max_size < 1:
             raise ValueError("user_cache_max_size must be >= 1")
@@ -83,6 +85,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         self._variant_names = tuple(str(name) for name in variant_names)
         self._assign_variant = assign_variant
         self._explain_enabled = explain_enabled
+        self._publisher = publisher
 
     @property
     def last_success_at(self) -> datetime | None:
@@ -198,7 +201,6 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             return 0
         self._ensure_fence()
         n_users = self._sink.replace_recommendations_for_users(merged, user_ids=sorted(set(replace_ids)))
-
         now = datetime.now(UTC)
         manifest = {
             "triggered_by": "incremental",
@@ -218,6 +220,13 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             manifest["online_events_dropped_unknown"] = online_result.events_dropped_unknown
         self._ensure_fence()
         self._sink.write_manifest(manifest)
+        if self._publisher is not None:
+            try:
+                self._publisher.publish(merged)
+            except Exception:
+                logger.exception("Incremental publish failed after successful write")
+                self._abort_online()
+                raise
         self._store_users_in_cache(set(replace_ids), merged)
         if persist_online:
             self._commit_online()

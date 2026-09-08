@@ -4,6 +4,111 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.0] - 2026-09-08
+
+### Added
+
+- `[track]` ingest: `POST /track` records recommendation impressions and clicks
+  off the training event path (db table or local JSONL). Hosts report what was
+  actually rendered; `GET /recommendations` is not an impression unless
+  `[serve].log_impressions` is on.
+- CTR and attributed conversion (view-through and click-through) with an
+  attribution window, sliced by rank, source, and variant. The job writes
+  `track_eval`; the dashboard Quality page shows it.
+- `[experiment].primary_metric` `ctr` / `conversion` and
+  `attribution = click | impression | user | recommended`, with a volume floor
+  (`track.min_impressions`) before promote.
+- Optional `[job.eval]` production replay (HitRate / NDCG / Recall / MRR /
+  Precision / catalog coverage / novelty of the previous lists against later
+  events) and append-only recommendation history for windows that span jobs.
+- Dashboard Configuration page (`GET /dashboard/config`) shows the loaded
+  Settings and `features.toml` with tokens, URLs, and keys redacted.
+  Section chips, on/off badges, and nested panels.
+- Config keys and section titles can open a one-line hint; some include a
+  Docs link to cicerone.dev.
+- Optional Kafka and RabbitMQ extras: `[events].kind = "kafka"` /
+  `"rabbitmq"` ingest (consumer group / queue) and `[publish]` to emit
+  per-user recommendation JSON after the `[output]` store write. Serve
+  still looks up from dataset/db. `pip install 'cicerone-recommender[kafka]'`
+  or `[rabbitmq]`. Prefer Redis Streams when you already run Redis for the
+  lock.
+- Opt-in RecTools strategies `ease` (`EASEModel`), `als`
+  (`ImplicitALSWrapperModel` with item/user features), `popular_in_category`,
+  and `random`. `[model.collaborative]` stays LightFM; `[events.online]`
+  rejects a swapped collaborative `cls`.
+- Item-KNN can use RecTools `CosineRecommender` or `BM25Recommender` via
+  `[model.item_based.model].cls`. LightFM `loss` (`warp` / `bpr` / `logistic`
+  / `warp-kos`) is the same `[model.collaborative.model]` passthrough.
+- Serve Prometheus `cicerone_track_ingest_total` for `POST /track`.
+- Experiment variants can inherit, drop, subset, or replace `[[boost]]` /
+  `[[eligibility]]` rules (`boosts = ["featured"]` or
+  `[[experiment.variants.boost]]` tables). Duplicate subset names are rejected.
+- Job-time Thompson sampling (`allocation = "thompson"`) writes a sticky
+  champion/challenger pair from live CVR via Fidelity MABWiser. Requires
+  `cicerone-recommender[bandits]`. Read errors or empty track fail closed
+  to fixed (every named recipe). Serve still hashes; Ship is Promote.
+
+### Changed
+
+- Dashboard Config hints are in-flow disclosures; Explain keys reveals per-key
+  help. Quality shows CTR as percents with click and conversion counts and an
+  as-of time. Experiments promote confirms before sending 100% traffic and
+  uses a one-shot flash cookie.
+- Dashboard header wraps on narrow viewports, underlines the current page,
+  marks Quality and Experiments as off when unused, and offers Sign out.
+- Dashboard Configuration includes `[publish]`, `[track]`, and `[job.eval]`.
+  Experiments CI is labelled a mixture interval.
+- Dashboard Experiments loads events, recommendations, track, exposures, and
+  catalog size in parallel, and pushes event-type / experiment_id filters into
+  the store. Job eval and Quality live read only the history snapshots
+  referenced by track `generated_at`. Explain reasons scan interactions for
+  recommended users only.
+- Bump `boto3` 1.43.83 → 1.43.88, `psycopg` 3.3.4 → 3.3.5, and `ruff`
+  0.16.5 → 0.16.6.
+
+### Fixed
+
+- Quality as-of uses the scored previous run's timestamp, not the job that
+  just finished.
+- Quality labels live track metrics when a stored eval has no usable
+  track_eval.
+- Quality omits as-of when CTR/CVR is computed live from the track store.
+- Track ingest is idempotent without a host `event_id` (stable JSON hashes,
+  assigned ids, JSONL file lock, `accepted` from ids not already stored).
+  `since` compares instants. Slices join the matching recommendation snapshot
+  and count by impression `event_id`. Prometheus counts match accepted rows.
+- `POST /track` `event_ids` lists newly written rows only, matching
+  `accepted`.
+- Recommendation history writes one parquet file per job snapshot. Filtered
+  and `since` reads skip legacy unstamped files and parse slugged part names.
+- Incremental `[publish]` runs after the output write. Connect, config, or
+  publish failures fail the job or incremental tick so the batch is nacked.
+- Kafka and RabbitMQ ingest commit or ack after flush (contiguous watermark;
+  poison non-UTF-8 skipped; AMQP on one I/O thread). Publish uses the
+  configured routing key and reports setup failure.
+- Incremental popular/latest write-through is the assigned (or promoted)
+  variant only.
+- Experiment `ctr` / `conversion` use the track store only for `click` or
+  `impression` attribution, require `track.enabled`, and take the impression
+  `variant` when present. Empty track stays event ITT.
+- Served-eval `CatalogCoverage` uses the item catalog. Experiments surfaces
+  variant policy `ConfigError` instead of an empty-variant message. Job
+  `[eval]` still reads recommendation history when `[track]` is off.
+- In-flight event apply nacks the batch if a later heartbeat fails. Dashboard
+  `Cache-Control` skips only `/static` assets.
+
+### Security
+
+- Dashboard pages send `X-Robots-Tag` and HTML `noindex` so crawlers skip
+  them if the process is accidentally public; `GET /robots.txt` disallows
+  `/`, and OpenAPI `/docs` is off.
+- Config page redacts `*_url` option keys, `access_key_id` /
+  `aws_access_key_id`, and any value with embedded URL credentials.
+- `POST /track` rejects bodies larger than 1 MiB (or
+  `events.options.max_body_bytes`).
+- Dashboard flash cookies are an allowlist; form variant names never enter
+  `Set-Cookie`.
+
 ## [0.7.3] - 2026-09-03
 
 ### Changed

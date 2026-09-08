@@ -119,6 +119,7 @@ export default defineConfig({
 						{ label: 'Architecture', slug: 'architecture' },
 						{ label: 'Incremental events', slug: 'incremental-events' },
 						{ label: 'Experiments', slug: 'experiments' },
+						{ label: 'Evaluation', slug: 'evaluation' },
 					],
 				},
 				...(articlesNav ? [articlesNav] : []),

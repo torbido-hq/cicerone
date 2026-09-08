@@ -153,7 +153,7 @@
         <td class="py-2 px-3">
           {% if run.error %}
           <details class="max-w-md">
-            <summary class="cursor-pointer truncate text-red-800" title="{{ run.error }}">{{ run.error }}</summary>
+            <summary class="cursor-pointer truncate text-red-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2" title="{{ run.error }}">{{ run.error }}</summary>
             <pre class="mt-2 whitespace-pre-wrap text-xs text-red-900">{{ run.error }}</pre>
           </details>
           {% else %}

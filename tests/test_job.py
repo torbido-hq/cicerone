@@ -104,6 +104,197 @@ def test_target_user_ids_skip_missing_values():
     assert "nan" not in _target_user_ids(events, users)
 
 
+def test_job_publishes_recommendations_after_write(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.utcnow()
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+            {"user_id": "u2", "item_id": "i2", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+        ]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    config_path = _write_config(tmp_path, input_dir, output_dir, top_k=2)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
+    captured: list[pd.DataFrame] = []
+    closed = {"n": 0}
+
+    class _Pub:
+        def publish(self, df: pd.DataFrame) -> None:
+            captured.append(df.copy())
+
+        def close(self) -> None:
+            closed["n"] += 1
+
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
+    job.run()
+    assert len(captured) == 1
+    assert {"u1", "u2"}.issubset(set(captured[0]["user_id"].astype(str)))
+    assert closed["n"] == 1
+
+
+def test_job_run_writes_track_and_served_eval(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.utcnow()
+    events = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 2, "occurred_at": now},
+            {"user_id": "u1", "item_id": "i2", "event_type": "view", "quantity": 1, "occurred_at": now},
+            {
+                "user_id": "u2",
+                "item_id": "i1",
+                "event_type": "review_positive",
+                "quantity": 1,
+                "occurred_at": now,
+            },
+            {"user_id": "u2", "item_id": "i3", "event_type": "saved", "quantity": 1, "occurred_at": now},
+        ]
+    )
+    items = pd.DataFrame(
+        [
+            {"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True},
+            {"item_id": "i2", "category": "beer", "producer_id": "p2", "published": True, "in_stock": True},
+            {"item_id": "i3", "category": "wine", "producer_id": "p1", "published": True, "in_stock": True},
+        ]
+    )
+    events.to_parquet(input_dir / "events.parquet", index=False)
+    items.to_parquet(input_dir / "items.parquet", index=False)
+    extra = """
+        [track]
+        enabled = true
+        [job.eval]
+        enabled = true
+        """
+    config_path = _write_config(tmp_path, input_dir, output_dir, top_k=2, extra=extra)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
+    job.run()
+    previous_generated_at = json.loads((output_dir / "manifest.json").read_text())["generated_at"]
+    from cicerone.config import IOSettings
+    from cicerone.track.normalize import normalize_track
+    from cicerone.track.store import TrackStore
+
+    recs = pd.read_parquet(output_dir / "recommendations.parquet")
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(output_dir)})
+    store = TrackStore(output)
+    row = recs.iloc[0]
+    store.append_rows(
+        [
+            normalize_track(
+                {
+                    "kind": "impression",
+                    "user_id": str(row["user_id"]),
+                    "item_id": str(row["item_id"]),
+                    "rank": 1,
+                    "occurred_at": pd.Timestamp.now(tz="UTC").isoformat(),
+                    "event_id": "imp-job-1",
+                }
+            ).as_row()
+        ]
+    )
+    job.run()
+    report = json.loads((output_dir / "track_eval.json").read_text())
+    assert "track_eval" in report
+    assert report["generated_at"] == previous_generated_at
+    history_dir = output_dir / "recommendation_history"
+    assert history_dir.is_dir()
+    assert list(history_dir.glob("*.parquet"))
+    assert report["track_eval"]["overall"]["n_impressions"] >= 1
+
+
+def test_score_previous_run_reads_history_when_track_disabled(tmp_path, monkeypatch):
+    from cicerone.config import EvalSettings, IOSettings, TrackSettings, make_settings
+    from cicerone.job import _score_previous_run
+
+    out = tmp_path / "out"
+    out.mkdir()
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        track=TrackSettings(enabled=False),
+        eval=EvalSettings(enabled=True, event_types=("purchase",), ks=(1,)),
+    )
+    recs = pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"}]
+    )
+    history = recs.copy()
+    history["generated_at"] = "2026-08-28T03:00:00+00:00"
+    calls: list[set[str] | None] = []
+
+    monkeypatch.setattr("cicerone.job.load_recommendations_frame", lambda _output: recs)
+
+    def _read_history(self, *, generated_ats=None, since=None):
+        calls.append(generated_ats)
+        return history
+
+    monkeypatch.setattr("cicerone.job.TrackStore.read_history", _read_history)
+    monkeypatch.setattr("cicerone.job.TrackStore.read_rows", lambda self: [])
+    events = pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": pd.Timestamp("2026-08-28T04:00:00+00:00"),
+            }
+        ]
+    )
+    _track, served = _score_previous_run(settings, events, {"generated_at": "2026-08-28T03:00:00+00:00"})
+    assert calls == [{"2026-08-28T03:00:00+00:00"}]
+    assert served is not None
+
+
+def test_job_run_swallows_eval_persistence_errors(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.utcnow()
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 2, "occurred_at": now},
+            {"user_id": "u1", "item_id": "i2", "event_type": "view", "quantity": 1, "occurred_at": now},
+            {
+                "user_id": "u2",
+                "item_id": "i1",
+                "event_type": "review_positive",
+                "quantity": 1,
+                "occurred_at": now,
+            },
+            {"user_id": "u2", "item_id": "i3", "event_type": "saved", "quantity": 1, "occurred_at": now},
+        ]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    pd.DataFrame(
+        [
+            {"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True},
+            {"item_id": "i2", "category": "beer", "producer_id": "p2", "published": True, "in_stock": True},
+            {"item_id": "i3", "category": "wine", "producer_id": "p1", "published": True, "in_stock": True},
+        ]
+    ).to_parquet(input_dir / "items.parquet", index=False)
+    extra = """
+        [track]
+        enabled = true
+        [job.eval]
+        enabled = true
+        """
+    config_path = _write_config(tmp_path, input_dir, output_dir, top_k=2, extra=extra)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
+    monkeypatch.setattr(
+        "cicerone.track.store.TrackStore.write_eval",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("eval")),
+    )
+    monkeypatch.setattr(
+        "cicerone.track.store.TrackStore.append_history",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("history")),
+    )
+    job.run()
+    assert (output_dir / "recommendations.parquet").exists()
+
+
 def test_recommendation_user_count_excludes_cold_start():
     frame = pd.DataFrame(
         [
@@ -406,6 +597,24 @@ def test_job_run_raises_on_failure(tmp_path, monkeypatch):
     manifest = json.loads((tmp_path / "manifest.json").read_text())
     assert manifest["status"] == "failed"
     assert "events.parquet" in manifest["error"]
+
+
+def test_job_run_records_publisher_init_failure(tmp_path, monkeypatch):
+    from cicerone.config import ConfigError
+
+    config_path = _write_config(tmp_path, tmp_path, tmp_path)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
+    monkeypatch.setattr(
+        "cicerone.job.build_publisher",
+        lambda _settings: (_ for _ in ()).throw(
+            ConfigError("publish.options.bootstrap_servers is unreachable")
+        ),
+    )
+    with pytest.raises(ConfigError, match="bootstrap_servers"):
+        job.run()
+    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    assert manifest["status"] == "failed"
+    assert "bootstrap_servers" in manifest["error"]
 
 
 def test_job_run_truncates_an_overly_long_error_message(tmp_path, monkeypatch):
@@ -725,3 +934,304 @@ def test_job_run_writes_both_experiment_variants(tmp_path, monkeypatch):
     assert manifest["experiment_id"] == "rrf-vs-priority"
     variants = json.loads(manifest["experiment_variants"])
     assert [item["name"] for item in variants] == ["control", "treatment"]
+
+
+def _thompson_job_extra() -> str:
+    return """
+        [track]
+        enabled = true
+        [experiment]
+        enabled = true
+        id = "ranking-cvr"
+        primary_metric = "conversion"
+        attribution = "click"
+        allocation = "thompson"
+        [[experiment.variants]]
+        name = "control"
+        traffic = 0.34
+        [[experiment.variants]]
+        name = "treatment"
+        traffic = 0.33
+        [[experiment.variants]]
+        name = "blend"
+        traffic = 0.33
+        combiner = "rrf"
+        """
+
+
+def test_job_thompson_fail_closed_empty_track_writes_all_variants(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.now(tz="UTC")
+    events = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 2, "occurred_at": now},
+            {"user_id": "u2", "item_id": "i1", "event_type": "saved", "quantity": 1, "occurred_at": now},
+        ]
+    )
+    items = pd.DataFrame(
+        [
+            {"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True},
+            {"item_id": "i2", "category": "beer", "producer_id": "p2", "published": True, "in_stock": True},
+        ]
+    )
+    events.to_parquet(input_dir / "events.parquet", index=False)
+    items.to_parquet(input_dir / "items.parquet", index=False)
+    monkeypatch.setattr("cicerone.experiment.thompson.bandits_extra_available", lambda: True)
+    config_path = _write_config(tmp_path, input_dir, output_dir, extra=_thompson_job_extra())
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
+    job.run()
+    recommendations = pd.read_parquet(output_dir / "recommendations.parquet")
+    assert set(recommendations["variant"].astype(str)) == {"control", "treatment", "blend"}
+
+
+def test_job_thompson_writes_active_pair_and_keeps_it(tmp_path, monkeypatch):
+    from cicerone.config import IOSettings
+    from cicerone.experiment.store import ExperimentStore, experiment_state
+    from cicerone.experiment.thompson import ArmCounts, ThompsonAllocation
+
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.now(tz="UTC")
+    events = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 2, "occurred_at": now},
+            {"user_id": "u2", "item_id": "i1", "event_type": "saved", "quantity": 1, "occurred_at": now},
+        ]
+    )
+    items = pd.DataFrame(
+        [
+            {"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True},
+            {"item_id": "i2", "category": "beer", "producer_id": "p2", "published": True, "in_stock": True},
+        ]
+    )
+    events.to_parquet(input_dir / "events.parquet", index=False)
+    items.to_parquet(input_dir / "items.parquet", index=False)
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(output_dir)})
+    ExperimentStore(output).write_state(
+        experiment_state("ranking-cvr", promoted_variant=None, champion="control", challenger="blend")
+    )
+
+    def _allocate(**kwargs):
+        names = list(kwargs["names"])
+        return ThompsonAllocation(
+            champion="control",
+            challenger="blend",
+            arms={name: ArmCounts(0, 0) for name in names},
+            p_best={name: 0.5 for name in names},
+            pair_impressions=int((kwargs.get("previous") or {}).get("pair_impressions") or 0),
+            window_started_at="2026-09-04T00:00:00+00:00",
+            rotated=False,
+        )
+
+    monkeypatch.setattr("cicerone.experiment.thompson.bandits_extra_available", lambda: True)
+    monkeypatch.setattr("cicerone.job.allocate_thompson", _allocate)
+    config_path = _write_config(tmp_path, input_dir, output_dir, extra=_thompson_job_extra())
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
+    job.run()
+    recommendations = pd.read_parquet(output_dir / "recommendations.parquet")
+    assert set(recommendations["variant"].astype(str)) == {"control", "blend"}
+    state = ExperimentStore(output).read_state()
+    assert state is not None
+    assert state["champion"] == "control"
+    assert state["challenger"] == "blend"
+    job.run()
+    again = pd.read_parquet(output_dir / "recommendations.parquet")
+    assert set(again["variant"].astype(str)) == {"control", "blend"}
+
+
+def test_select_thompson_recipes_fail_closed_paths(tmp_path, monkeypatch):
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+    from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
+    from cicerone.experiment.recipes import ResolvedRecipe
+    from cicerone.feature_config import BlendingConfig
+    from cicerone.job import _select_thompson_recipes
+
+    blending = BlendingConfig(enabled=False)
+    recipes = (
+        ResolvedRecipe("control", 0.5, ("popular",), None, None, "priority", blending, True, True),
+        ResolvedRecipe("treatment", 0.5, ("popular",), None, None, "priority", blending, True, True),
+    )
+    settings = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="ranking-cvr",
+            allocation="thompson",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        track=TrackSettings(enabled=True),
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    assert _select_thompson_recipes(settings, recipes[:1], pd.DataFrame()) == recipes[:1]
+
+    monkeypatch.setattr(
+        "cicerone.job.ExperimentStore.read_state",
+        lambda self: (_ for _ in ()).throw(RuntimeError("state")),
+    )
+    assert _select_thompson_recipes(settings, recipes, pd.DataFrame()) == recipes
+
+    monkeypatch.setattr(
+        "cicerone.job.ExperimentStore.read_state",
+        lambda self: {"experiment_id": "other", "champion": "control", "challenger": "treatment"},
+    )
+    assert _select_thompson_recipes(settings, recipes, pd.DataFrame()) == recipes
+
+    monkeypatch.setattr(
+        "cicerone.job.ExperimentStore.read_state",
+        lambda self: {
+            "experiment_id": "ranking-cvr",
+            "champion": "control",
+            "challenger": "treatment",
+        },
+    )
+    monkeypatch.setattr(
+        "cicerone.job.TrackStore.read_rows",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("track")),
+    )
+    assert _select_thompson_recipes(settings, recipes, pd.DataFrame()) == recipes
+
+    monkeypatch.setattr("cicerone.job.TrackStore.read_rows", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        "cicerone.job.allocate_thompson",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("mab")),
+    )
+    assert _select_thompson_recipes(settings, recipes, pd.DataFrame()) == recipes
+
+
+def test_select_thompson_recipes_fail_closed_on_state_read_does_not_clear_promote(tmp_path, monkeypatch):
+    from unittest.mock import MagicMock
+
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+    from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
+    from cicerone.experiment.recipes import ResolvedRecipe
+    from cicerone.feature_config import BlendingConfig
+    from cicerone.job import _select_thompson_recipes
+
+    blending = BlendingConfig(enabled=False)
+    recipes = (
+        ResolvedRecipe("control", 0.5, ("popular",), None, None, "priority", blending, True, True),
+        ResolvedRecipe("treatment", 0.5, ("popular",), None, None, "priority", blending, True, True),
+    )
+    settings = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="ranking-cvr",
+            allocation="thompson",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        track=TrackSettings(enabled=True),
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    monkeypatch.setattr(
+        "cicerone.job.ExperimentStore.read_state",
+        lambda self: (_ for _ in ()).throw(RuntimeError("state")),
+    )
+    monkeypatch.setattr(
+        "cicerone.job.TrackStore.read_rows",
+        lambda *args, **kwargs: [
+            {
+                "user_id": "u-1",
+                "item_id": "i-1",
+                "kind": "impression",
+                "occurred_at": "2026-09-01T00:00:00Z",
+                "variant": "control",
+            }
+        ],
+    )
+    writer = MagicMock()
+    monkeypatch.setattr("cicerone.job.ExperimentStore.write_state", writer)
+    assert _select_thompson_recipes(settings, recipes, pd.DataFrame()) == recipes
+    writer.assert_not_called()
+
+
+def test_select_thompson_recipes_survives_recs_and_catalog_errors(tmp_path, monkeypatch):
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+    from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
+    from cicerone.experiment.recipes import ResolvedRecipe
+    from cicerone.experiment.store import ExperimentStore, experiment_state
+    from cicerone.experiment.thompson import ArmCounts, ThompsonAllocation
+    from cicerone.feature_config import BlendingConfig
+    from cicerone.io.recommendation_schema import VARIANT_COLUMN
+    from cicerone.job import _select_thompson_recipes
+
+    blending = BlendingConfig(enabled=False)
+    recipes = (
+        ResolvedRecipe("control", 0.5, ("popular",), None, None, "priority", blending, True, True),
+        ResolvedRecipe("treatment", 0.5, ("popular",), None, None, "priority", blending, True, True),
+    )
+    settings = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="ranking-cvr",
+            allocation="thompson",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        track=TrackSettings(enabled=True),
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    ExperimentStore(settings.output).write_state(
+        experiment_state(
+            "ranking-cvr",
+            promoted_variant=None,
+            champion="control",
+            challenger="treatment",
+            allocation="thompson",
+            pair_impressions=20,
+        )
+    )
+
+    def _allocate(**kwargs):
+        names = list(kwargs["names"])
+        return ThompsonAllocation(
+            champion="control",
+            challenger="treatment",
+            arms={name: ArmCounts(0, 0) for name in names},
+            p_best={name: 0.5 for name in names},
+            pair_impressions=20,
+            window_started_at="2026-09-04T00:00:00+00:00",
+            rotated=False,
+        )
+
+    monkeypatch.setattr("cicerone.job.TrackStore.read_rows", lambda *args, **kwargs: [])
+    monkeypatch.setattr("cicerone.job.allocate_thompson", _allocate)
+    monkeypatch.setattr(
+        "cicerone.job.load_recommendations_frame",
+        lambda output: (_ for _ in ()).throw(RuntimeError("recs gone")),
+    )
+    selected = _select_thompson_recipes(settings, recipes, pd.DataFrame())
+    assert [recipe.name for recipe in selected] == ["control", "treatment"]
+
+    recs = pd.DataFrame(
+        {
+            "user_id": ["u-1", "u-1"],
+            "item_id": ["i-1", "i-2"],
+            "score": [1.0, 0.9],
+            VARIANT_COLUMN: ["control", "treatment"],
+        }
+    )
+    monkeypatch.setattr("cicerone.job.load_recommendations_frame", lambda output: recs)
+    monkeypatch.setattr(
+        "cicerone.job.load_items_catalog_size",
+        lambda output: (_ for _ in ()).throw(RuntimeError("catalog gone")),
+    )
+    again = _select_thompson_recipes(settings, recipes, pd.DataFrame())
+    assert [recipe.name for recipe in again] == ["control", "treatment"]

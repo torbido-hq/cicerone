@@ -11,9 +11,13 @@ STRATEGY_NAMES: tuple[str, ...] = (
     "collaborative",
     "item_based",
     "sequential",
+    "ease",
+    "als",
     "content_fallback",
     "popular",
+    "popular_in_category",
     "latest",
+    "random",
 )
 DEFAULT_MODELS: list[str] = ["collaborative", "item_based", "popular"]
 # Reciprocal rank fusion constant (Cormack et al., 2009); default for rrf_k.
@@ -63,7 +67,31 @@ DEFAULT_EVENTS_ONLINE_MAX_EXTRA_INTERACTIONS = 50_000
 DEFAULT_EVENTS_HEARTBEAT_SECONDS = 15.0
 EXPERIMENT_COMBINERS: tuple[str, ...] = ("priority", "rrf", "blend")
 DEFAULT_EXPERIMENT_ALPHA = 0.05
+ALLOCATION_FIXED = "fixed"
+ALLOCATION_THOMPSON = "thompson"
+EXPERIMENT_ALLOCATIONS: tuple[str, ...] = (ALLOCATION_FIXED, ALLOCATION_THOMPSON)
+DEFAULT_THOMPSON_EXPLORE_TRAFFIC = 0.5
+DEFAULT_THOMPSON_ROTATE_MIN_PROB = 0.9
+THOMPSON_P_BEST_DRAWS = 1000
+BANDITS_EXTRA_HINT = "install with: pip install 'cicerone-recommender[bandits]'"
 PRIMARY_METRIC_WEIGHTED = "weighted"
+PRIMARY_METRIC_CTR = "ctr"
+PRIMARY_METRIC_CONVERSION = "conversion"
+ATTRIBUTION_USER = "user"
+ATTRIBUTION_CLICK = "click"
+ATTRIBUTION_IMPRESSION = "impression"
+ATTRIBUTION_RECOMMENDED = "recommended"
+EXPERIMENT_ATTRIBUTIONS: tuple[str, ...] = (
+    ATTRIBUTION_USER,
+    ATTRIBUTION_CLICK,
+    ATTRIBUTION_IMPRESSION,
+    ATTRIBUTION_RECOMMENDED,
+)
+TRACK_KIND_IMPRESSION = "impression"
+TRACK_KIND_CLICK = "click"
+TRACK_KINDS: tuple[str, ...] = (TRACK_KIND_IMPRESSION, TRACK_KIND_CLICK)
+DEFAULT_TRACK_ATTRIBUTION_WINDOW_HOURS = 24.0
+DEFAULT_TRACK_MIN_IMPRESSIONS = 100
 DEFAULT_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 
 

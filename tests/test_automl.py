@@ -12,6 +12,8 @@ from cicerone.automl import (
     _time_based_folds,
     evaluate_candidates,
     exclude_content_fallback_from_candidates,
+    exclude_popular_in_category_from_candidates,
+    popular_in_category_automl_skip_reason,
     select_best_candidate,
 )
 from cicerone.config import ConfigError
@@ -223,6 +225,34 @@ def test_exclude_content_fallback_from_candidates_drops_solo_and_strips_fusion()
     assert result[2].weights is None
 
 
+def test_evaluate_candidates_excludes_popular_in_category_without_items(feature_config):
+    events = _spread_events(n_days=21)
+    with pytest.raises(ValueError, match="popular_in_category"):
+        evaluate_candidates(
+            events,
+            None,
+            None,
+            feature_config,
+            top_k=2,
+            half_life_days=90,
+            candidates=[{"models": ["popular_in_category"]}],
+            n_splits=1,
+            test_days=7,
+        )
+
+
+def test_popular_in_category_skip_reason_and_exclude():
+    from cicerone.automl import Candidate
+
+    assert popular_in_category_automl_skip_reason(None, model_configs=None) is not None
+    items = pd.DataFrame([{"item_id": "i1"}])
+    assert "category" in popular_in_category_automl_skip_reason(items, model_configs=None)
+    kept = exclude_popular_in_category_from_candidates(
+        [Candidate(models=["popular_in_category"]), Candidate(models=["popular"])]
+    )
+    assert [c.models for c in kept] == [["popular"]]
+
+
 def test_evaluate_candidates_excludes_content_fallback_when_disabled(sample_items, feature_config):
     events = _spread_events(n_days=21)
     with pytest.raises(ValueError, match="content_fallback"):
@@ -290,6 +320,8 @@ def test_evaluate_candidates_scores_each_candidate(sample_items, feature_config)
         assert any(key.startswith("MAP") for key in result.metrics)
         assert any(key.startswith("NDCG") for key in result.metrics)
         assert any(key.startswith("Recall") for key in result.metrics)
+        assert any(key.startswith("HitRate") for key in result.metrics)
+        assert any(key.startswith("MRR") for key in result.metrics)
 
 
 def test_evaluate_candidates_passes_content_fallback_flag(sample_items, feature_config, monkeypatch):

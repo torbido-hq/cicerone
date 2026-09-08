@@ -244,7 +244,7 @@ def test_sqlite_db_reader_caches_missing_variant_after_query_error(tmp_path, mon
     reader._variant_supported = True
     variant_queries = {"n": 0}
     monkeypatch.setattr(
-        "cicerone.io.recommendation_reader.pd.read_sql",
+        "cicerone.io.db_recommendation_reader.pd.read_sql",
         _raise_on_variant_sql(pd.read_sql, variant_queries),
     )
     assert list(reader.get_recommendations("u1", k=10, variant="treatment")["item_id"]) == ["i1"]
@@ -271,7 +271,7 @@ def test_sqlite_db_reader_cold_start_caches_missing_variant_after_query_error(tm
     reader._variant_supported = True
     variant_queries = {"n": 0}
     monkeypatch.setattr(
-        "cicerone.io.recommendation_reader.pd.read_sql",
+        "cicerone.io.db_recommendation_reader.pd.read_sql",
         _raise_on_variant_sql(pd.read_sql, variant_queries),
     )
     cold = reader.get_cold_start_fallback(k=1, variant="treatment")
@@ -299,7 +299,7 @@ def test_sqlite_db_reader_does_not_cache_unrelated_missing_column(tmp_path, monk
             raise ProgrammingError("SELECT", {}, Exception('column "user_id" does not exist'))
         return original(sql, *args, **kwargs)
 
-    monkeypatch.setattr("cicerone.io.recommendation_reader.pd.read_sql", fake_read_sql)
+    monkeypatch.setattr("cicerone.io.db_recommendation_reader.pd.read_sql", fake_read_sql)
     with pytest.raises(ProgrammingError, match="user_id"):
         reader.get_recommendations("u1", k=10, variant="treatment")
     assert reader._variant_supported is True

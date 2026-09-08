@@ -170,6 +170,14 @@ def load_events_settings(
         from cicerone.events.redis_streams import validate_redis_stream_options
 
         validate_redis_stream_options(options)
+    if enabled and kind == "kafka":
+        from cicerone.events.kafka import validate_kafka_event_options
+
+        validate_kafka_event_options(options)
+    if enabled and kind == "rabbitmq":
+        from cicerone.events.rabbitmq import validate_rabbitmq_event_options
+
+        validate_rabbitmq_event_options(options)
 
     return EventsSettings(
         enabled=enabled,

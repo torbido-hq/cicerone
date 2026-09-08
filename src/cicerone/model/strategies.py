@@ -16,6 +16,7 @@ from cicerone.config import STRATEGY_NAMES, ConfigError
 from cicerone.content_fallback import CONTENT_FALLBACK_SOURCE, ContentFallbackModel
 from cicerone.model.constants import LIGHTFM_NUM_THREADS_SEQUENTIAL
 from cicerone.model_config import (
+    LIGHTFM_WRAPPER_CLS,
     RECTOOLS_STRATEGY_NAMES,
     SEQUENTIAL_EXTRA_HINT,
     SEQUENTIAL_STRATEGY,
@@ -86,7 +87,7 @@ def build_strategy_model(
     if name not in configs:
         raise ValueError(f"No model config for strategy {name!r}; have {sorted(configs)}")
     cfg = deepcopy(configs[name])
-    if name == "collaborative":
+    if name == "collaborative" and cfg.get("cls", LIGHTFM_WRAPPER_CLS) == LIGHTFM_WRAPPER_CLS:
         threads = lightfm_num_threads if lightfm_num_threads is not None else LIGHTFM_NUM_THREADS_SEQUENTIAL
         cfg["num_threads"] = threads
     if name == SEQUENTIAL_STRATEGY and not sequential_extra_available():
@@ -111,6 +112,16 @@ STRATEGIES: dict[str, Strategy] = {
         source_label="sequential",
         requires_interactions=True,
     ),
+    "ease": Strategy(
+        personalized=True,
+        source_label="ease",
+        requires_interactions=True,
+    ),
+    "als": Strategy(
+        personalized=True,
+        source_label="als",
+        requires_interactions=True,
+    ),
     "content_fallback": Strategy(
         factory=_build_content_fallback,
         personalized=True,
@@ -118,7 +129,9 @@ STRATEGIES: dict[str, Strategy] = {
         requires_interactions=True,
     ),
     "popular": Strategy(personalized=False, source_label="popular_fallback"),
+    "popular_in_category": Strategy(personalized=False, source_label="popular_in_category"),
     "latest": Strategy(personalized=False, source_label="latest"),
+    "random": Strategy(personalized=False, source_label="random"),
 }
 
 

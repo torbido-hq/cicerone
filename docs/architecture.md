@@ -7,7 +7,8 @@ For configuration and usage, see the main [README](../README.md). For the
 pipeline and how strategies differ, see [how-it-works.md](how-it-works.md).
 For `[events]` ingest (webhook, backends, HA), see
 [incremental-events.md](incremental-events.md). For sticky A/B tests of
-ranking recipes, see [experiments.md](experiments.md).
+ranking recipes, see [experiments.md](experiments.md). For impressions,
+clicks, CTR, and conversion, see [evaluation.md](evaluation.md).
 
 ## Module overview
 
@@ -43,6 +44,8 @@ ranking recipes, see [experiments.md](experiments.md).
 | `artifact.py` | Optional versioned fitted-model bundle (schema **v3**: RecTools `save`/`load_model` for library models + pickle envelope; `content_fallback` still pickle) |
 | `automl.py` | Optional: backtests candidate models/weights/`rrf_k` configs over time-based folds of event history and picks the best one |
 | `experiment/` | Sticky A/B assignment, per-variant recipes, sequential stats, guardrails, promote state / exposure log |
+| `track/` | Impression/click ingest (`POST /track`), JSONL/db store, rec history snapshots |
+| `evaluation/` | CTR/CVR attribution and production replay (`metrics.py`, `served.py`, `tracking.py`) |
 | `cli.py` | `cicerone` console script (`start` (alias `run`) / `job` / `serve` / `dashboard` / `scheduler` / `users` / `export-openapi`; `--config`, `--log-level`, `--log-format`) |
 | `packaging.py` | Wheel checks for the Docker `package` stage (`python -m cicerone.packaging`) |
 | `job.py` | Orchestrates one end-to-end run (source → dataset → model → sink) |
@@ -58,6 +61,9 @@ ranking recipes, see [experiments.md](experiments.md).
 | `serve_client.py` | Thin stdlib HTTP client for the serve read API |
 | `export_serve_openapi.py` | `cicerone export-openapi` — dump FastAPI OpenAPI JSON (`docs/openapi/…`) |
 | `events/` | EventSource registry, micro-batch write-through — [incremental-events.md](incremental-events.md) |
+| `events/kafka.py` | Optional Kafka consumer-group EventSource (`cicerone-recommender[kafka]`) |
+| `events/rabbitmq.py` | Optional RabbitMQ queue EventSource (`cicerone-recommender[rabbitmq]`) |
+| `publish/` | Optional per-user recs sidecar to Kafka or RabbitMQ after `[output]` writes |
 | `events/online.py` | Optional LightFM `fit_partial` + user-scoped recommend from the last artifact |
 | `events/ha.py` | Leader-only apply helpers for horizontally scaled incremental-events ingest |
 | `trigger.py` | Event-driven retrain trigger: webhook + optional input-bucket poll, debounce guard (`RunGuard`) shared with the cron loop; increments `cicerone_retrain_trigger_total` (per replica) |
@@ -68,6 +74,8 @@ ranking recipes, see [experiments.md](experiments.md).
 | `dashboard.py` | Standalone FastAPI dashboard: job status/history plus user-id lookup (`cicerone dashboard`) |
 | `dashboard_lookup.py` | Dashboard inspector: recs lookup, `[input]` event history, allowlisted user attrs, assigned experiment variant |
 | `dashboard_experiments.py` | Experiments page: always-valid CIs, guardrails, promote winner |
+| `dashboard_config.py` | Configuration page: redacted view of the loaded Settings and features.toml |
+| `dashboard_quality.py` | Quality page: CTR/CVR and optional production replay |
 | `dashboard_users.py` | Load/save the dashboard's Basic Auth users file (TOML, username → bcrypt hash) |
 | `manage_dashboard_users.py` | CLI to add/remove/list dashboard users |
 | `templates/`, `static/` | Jinja2 templates + vendored htmx/Stimulus/Tailwind assets for the dashboard |
@@ -105,10 +113,12 @@ Test modules mirror the packages (same pattern as `tests/test_io_*.py`):
 | `tests/support/model_events.py` | Shared synthetic events helper |
 | `tests/support/toml_config.py` | Shared `write_toml` helper |
 | `tests/support/events.py` | Shared event payload helper for `test_events_*` |
-| `tests/test_events_*.py` | EventSource registry / normalize / webhook / db / db_postgres / s3 / redis_streams / buffer / store / updater / worker / ha / online |
+| `tests/test_events_*.py` | EventSource registry / normalize / webhook / db / db_postgres / s3 / redis_streams / kafka / rabbitmq / buffer / store / updater / worker / ha / online |
+| `tests/test_publish.py` | Recommendation publish sidecar |
 | `tests/test_config_events.py` | `[events]` coerce + TOML load |
 | `tests/test_serve_events_routes.py` / `test_serve_bootstrap_events.py` | Serve webhook mount + worker bootstrap |
 | `tests/test_experiment_*.py` | Sticky assignment, per-variant recipes, sequential stats, store, serve lookup |
+| `tests/test_track_*.py` / `test_evaluation.py` / `test_dashboard_quality.py` | Track ingest, CTR/CVR, replay, Quality page |
 | `tests/test_explain.py` / `test_reasons.py` | Batch `reasons` JSON + serve-safe parse |
 
 ## Data flow
@@ -133,13 +143,13 @@ Test modules mirror the packages (same pattern as `tests/test_io_*.py`):
    produces top-K recommendations. When `[job.content_fallback].enabled` is true,
    `content_fallback` is inserted before the first non-personalized
    strategy if not already listed. Personalized strategies
-   (`collaborative`, `item_based`, `sequential`, `content_fallback`) only run for "warm"
+   (`collaborative`, `item_based`, `sequential`, `ease`, `als`, `content_fallback`) only run for "warm"
    users, but they do not agree on what warm means: `collaborative` scores any
    user present in the dataset, including feature-only users with no
-   interactions, while `item_based`, `sequential`, and `content_fallback` set
+   interactions, while `item_based`, `sequential`, `ease`, `als`, and `content_fallback` set
    `requires_interactions` and are filtered down to users who actually
    interacted (see the cold-start note below); non-personalized strategies (`popular`,
-   `latest`) run for every target user and backfill any warm user who didn't
+   `popular_in_category`, `latest`, `random`) run for every target user and backfill any warm user who didn't
    get enough personalized results after eligibility filtering. Before
    `recommend()`, `policy.resolve_eligibility()` merges
    `item_availability_filters` sugar with explicit `[[eligibility]]` rules.
@@ -363,14 +373,20 @@ never imports `cicerone.model`/`dataset`/`automl`.
   (`dashboard_users.py`: username -> bcrypt hash) managed via
   `cicerone users add <username>` (optional `--users-path`, or `--config`
   pointing at the dashboard TOML).
-- `dashboard.create_app()` exposes `GET /health` (no auth), `GET
+- `dashboard.create_app()` exposes `GET /health` (no auth), `GET /robots.txt`
+  (no auth, `Disallow: /`), `GET
   /partials/status` (Basic Auth, an htmx-polled fragment — see
   `templates/_status.html`), `GET /partials/recommendations` (Basic Auth,
   user-id lookup fragment — see `templates/_recommendations.html`),
   `GET /dashboard` (Basic Auth, the full page), `GET /dashboard/experiments`
-  (Basic Auth, always-valid CIs / catalog guardrails), and
+  (Basic Auth, always-valid CIs / catalog guardrails), `GET /dashboard/config`
+  (Basic Auth, read-only loaded Settings and features.toml with secrets
+  redacted; known keys open a one-line hint with an optional cicerone.dev
+  link), and
   `POST /dashboard/experiments/promote` (Basic Auth, 100% traffic to a
-  winner). The page polls
+  winner). OpenAPI `/docs` is disabled. HTML pages include a `noindex`
+  meta tag; every response sets `X-Robots-Tag` and HTML uses
+  `Cache-Control: private, no-store`. The page polls
   `/partials/status` (`Settings.dashboard_refresh_interval_seconds`)
   instead of a websocket or client-side JS framework. Initial markup is
   `hx-trigger="refresh"`; dashboard.js adds `every Ns` and the first request
@@ -425,7 +441,7 @@ Implementation details:
 
 Input and output are each just a `kind` (string) + a free-form `options`
 dict (`config.IOSettings`) — the config loader never needs to know what
-keys a given backend requires. To add a new backend (e.g. a message queue):
+keys a given backend requires. To add a new backend (e.g. another object store):
 
 1. Add a module under `src/cicerone/io/` implementing the `InputSource`
    and/or `OutputSink` protocol (`io/base.py`) — read `options` yourself,
@@ -447,6 +463,8 @@ Serve-process ingest lives in `events/` plus `serve/events_routes.py` and
 `serve/bootstrap_events.py`. Optional `[events.online]` loads the model
 artifact in the events worker (not on `GET`); skipped while `[experiment]`
 is on. Operator guide: [incremental-events.md](incremental-events.md).
+Optional `[publish]` emits per-user recommendation JSON to Kafka or RabbitMQ
+after the store write; serve still reads `[output]`.
 
 ## Cold-start behavior
 

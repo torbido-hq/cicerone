@@ -6,6 +6,7 @@ import pytest
 from support.toml_config import write_toml
 
 from cicerone.config import ConfigError, load_experiment_settings, load_settings
+from cicerone.feature_config import BoostRule, EligibilityRule
 
 
 def _minimal_io() -> str:
@@ -30,10 +31,11 @@ def test_load_experiment_defaults_disabled(tmp_path):
     assert settings.experiment.variants == ()
     assert settings.experiment.log_exposures is False
     assert settings.experiment.automl_challenger is False
+    assert settings.experiment.allocation == "fixed"
 
 
 def test_load_experiment_variants_and_remainder_traffic(tmp_path, caplog):
-    with caplog.at_level(logging.WARNING, logger="cicerone.config.load"):
+    with caplog.at_level(logging.WARNING, logger="cicerone.config.experiment"):
         settings = load_settings(
             write_toml(
                 tmp_path,
@@ -282,3 +284,344 @@ def test_load_settings_allows_log_exposures_with_ha_on_db(tmp_path):
     )
     assert settings.events.ha is True
     assert settings.experiment.log_exposures is True
+
+
+def test_load_experiment_policy_names_and_tables(tmp_path):
+    settings = load_settings(
+        write_toml(
+            tmp_path,
+            """
+            [job]
+            """
+            + _minimal_io()
+            + """
+            [experiment]
+            enabled = true
+            id = "policy"
+            [[experiment.variants]]
+            name = "control"
+            traffic = 0.5
+            boosts = ["featured"]
+            eligibility = false
+            [[experiment.variants]]
+            name = "treatment"
+            traffic = 0.5
+            [[experiment.variants.boost]]
+            name = "new-arrivals"
+            kind = "boolean"
+            item_column = "is_new"
+            factor = 1.3
+            [[experiment.variants.eligibility]]
+            name = "published"
+            op = "item_true"
+            item_column = "published"
+            """,
+        )
+    )
+    control, treatment = settings.experiment.variants
+    assert control.boosts == ("featured",)
+    assert control.eligibility is False
+    assert isinstance(treatment.boosts[0], BoostRule)
+    assert treatment.boosts[0].name == "new-arrivals"
+    assert isinstance(treatment.eligibility[0], EligibilityRule)
+    assert treatment.eligibility[0].op == "item_true"
+
+
+def test_load_experiment_rejects_boosts_bool_and_tables():
+    with pytest.raises(
+        ConfigError,
+        match=r"must not set both boosts and \[\[experiment.variants.boost\]\]",
+    ):
+        load_experiment_settings(
+            {
+                "enabled": True,
+                "id": "exp",
+                "variants": [
+                    {"name": "control", "traffic": 0.5},
+                    {
+                        "name": "treatment",
+                        "traffic": 0.5,
+                        "boosts": False,
+                        "boost": [{"name": "x", "kind": "boolean", "item_column": "featured", "factor": 1.1}],
+                    },
+                ],
+            }
+        )
+
+
+def test_load_experiment_rejects_invalid_boost_table():
+    with pytest.raises(ConfigError, match="boolean"):
+        load_experiment_settings(
+            {
+                "enabled": True,
+                "id": "exp",
+                "variants": [
+                    {"name": "control", "traffic": 0.5},
+                    {
+                        "name": "treatment",
+                        "traffic": 0.5,
+                        "boosts": [{"name": "x", "kind": "boolean", "item_column": "featured"}],
+                    },
+                ],
+            }
+        )
+
+
+def test_load_experiment_rejects_incomplete_or_typed_policy_tables():
+    with pytest.raises(ConfigError, match="kind"):
+        load_experiment_settings(
+            {
+                "enabled": True,
+                "id": "exp",
+                "variants": [
+                    {"name": "control", "traffic": 0.5},
+                    {
+                        "name": "treatment",
+                        "traffic": 0.5,
+                        "boosts": [{"name": "x", "item_column": "featured", "factor": 1.1}],
+                    },
+                ],
+            }
+        )
+    with pytest.raises(ConfigError, match="op"):
+        load_experiment_settings(
+            {
+                "enabled": True,
+                "id": "exp",
+                "variants": [
+                    {"name": "control", "traffic": 0.5},
+                    {
+                        "name": "treatment",
+                        "traffic": 0.5,
+                        "eligibility": [{"name": "x", "item_column": "published"}],
+                    },
+                ],
+            }
+        )
+    with pytest.raises(ConfigError):
+        load_experiment_settings(
+            {
+                "enabled": True,
+                "id": "exp",
+                "variants": [
+                    {"name": "control", "traffic": 0.5},
+                    {
+                        "name": "treatment",
+                        "traffic": 0.5,
+                        "boosts": [
+                            {
+                                "name": "x",
+                                "kind": "boolean",
+                                "item_column": "featured",
+                                "factor": {"bad": 1},
+                            }
+                        ],
+                    },
+                ],
+            }
+        )
+
+
+def test_load_experiment_rejects_invalid_policy_spec_shape():
+    with pytest.raises(ConfigError, match="must be true, false"):
+        load_experiment_settings(
+            {
+                "enabled": True,
+                "id": "exp",
+                "variants": [
+                    {"name": "control", "traffic": 0.5},
+                    {"name": "treatment", "traffic": 0.5, "boosts": 1},
+                ],
+            }
+        )
+    with pytest.raises(ConfigError, match="must be true, false"):
+        load_experiment_settings(
+            {
+                "enabled": True,
+                "id": "exp",
+                "variants": [
+                    {"name": "control", "traffic": 0.5},
+                    {"name": "treatment", "traffic": 0.5, "boosts": ["featured", {"name": "x"}]},
+                ],
+            }
+        )
+
+
+def test_load_experiment_rejects_duplicate_and_empty_policy_names():
+    with pytest.raises(ConfigError, match="duplicate rule name"):
+        load_experiment_settings(
+            {
+                "enabled": True,
+                "id": "exp",
+                "variants": [
+                    {"name": "control", "traffic": 0.5},
+                    {"name": "treatment", "traffic": 0.5, "boosts": ["featured", "featured"]},
+                ],
+            }
+        )
+    with pytest.raises(ConfigError, match="non-empty"):
+        load_experiment_settings(
+            {
+                "enabled": True,
+                "id": "exp",
+                "variants": [
+                    {"name": "control", "traffic": 0.5},
+                    {"name": "treatment", "traffic": 0.5, "boosts": ["featured", "  "]},
+                ],
+            }
+        )
+
+
+def test_load_experiment_empty_policy_list_drops():
+    settings = load_experiment_settings(
+        {
+            "enabled": True,
+            "id": "exp",
+            "variants": [
+                {"name": "control", "traffic": 0.5},
+                {"name": "treatment", "traffic": 0.5, "boosts": []},
+            ],
+        }
+    )
+    assert settings.variants[1].boosts == ()
+
+
+def test_load_experiment_rejects_duplicate_replacement_names():
+    with pytest.raises(ConfigError, match="duplicate rule name"):
+        load_experiment_settings(
+            {
+                "enabled": True,
+                "id": "exp",
+                "variants": [
+                    {"name": "control", "traffic": 0.5},
+                    {
+                        "name": "treatment",
+                        "traffic": 0.5,
+                        "boost": [
+                            {"name": "featured", "kind": "boolean", "item_column": "featured", "factor": 1.2},
+                            {"name": "featured", "kind": "boolean", "item_column": "sale", "factor": 1.1},
+                        ],
+                    },
+                ],
+            }
+        )
+
+
+def test_load_experiment_rejects_unknown_allocation():
+    with pytest.raises(ConfigError, match="allocation"):
+        load_experiment_settings(
+            {
+                "enabled": True,
+                "id": "exp",
+                "allocation": "epsilon-greedy",
+                "variants": [{"name": "a", "traffic": 0.5}, {"name": "b", "traffic": 0.5}],
+            }
+        )
+
+
+def test_load_experiment_thompson_requires_conversion_and_attribution():
+    with pytest.raises(ConfigError, match="primary_metric 'conversion'"):
+        load_experiment_settings(
+            {
+                "enabled": True,
+                "id": "exp",
+                "allocation": "thompson",
+                "primary_metric": "ctr",
+                "attribution": "click",
+                "variants": [{"name": "a", "traffic": 0.5}, {"name": "b", "traffic": 0.5}],
+            }
+        )
+    with pytest.raises(ConfigError, match="attribution 'click' or 'impression'"):
+        load_experiment_settings(
+            {
+                "enabled": True,
+                "id": "exp",
+                "allocation": "thompson",
+                "primary_metric": "conversion",
+                "attribution": "user",
+                "variants": [{"name": "a", "traffic": 0.5}, {"name": "b", "traffic": 0.5}],
+            }
+        )
+
+
+def test_load_settings_thompson_requires_extra_and_track(tmp_path, monkeypatch):
+    monkeypatch.setattr("cicerone.experiment.thompson.bandits_extra_available", lambda: False)
+    with pytest.raises(ConfigError, match="bandits"):
+        load_settings(
+            write_toml(
+                tmp_path,
+                """
+            [job]
+            """
+                + _minimal_io()
+                + """
+            [track]
+            enabled = true
+            [experiment]
+            enabled = true
+            id = "ranking-cvr"
+            primary_metric = "conversion"
+            attribution = "click"
+            allocation = "thompson"
+            [[experiment.variants]]
+            name = "control"
+            traffic = 0.5
+            [[experiment.variants]]
+            name = "treatment"
+            traffic = 0.5
+            """,
+            )
+        )
+    monkeypatch.setattr("cicerone.experiment.thompson.bandits_extra_available", lambda: True)
+    with pytest.raises(ConfigError, match="track.enabled"):
+        load_settings(
+            write_toml(
+                tmp_path,
+                """
+            [job]
+            """
+                + _minimal_io()
+                + """
+            [experiment]
+            enabled = true
+            id = "ranking-cvr"
+            primary_metric = "conversion"
+            attribution = "click"
+            allocation = "thompson"
+            [[experiment.variants]]
+            name = "control"
+            traffic = 0.5
+            [[experiment.variants]]
+            name = "treatment"
+            traffic = 0.5
+            """,
+            )
+        )
+    settings = load_settings(
+        write_toml(
+            tmp_path,
+            """
+        [job]
+        """
+            + _minimal_io()
+            + """
+        [track]
+        enabled = true
+        [experiment]
+        enabled = true
+        id = "ranking-cvr"
+        primary_metric = "conversion"
+        attribution = "click"
+        allocation = "thompson"
+        [[experiment.variants]]
+        name = "control"
+        traffic = 0.5
+        [[experiment.variants]]
+        name = "treatment"
+        traffic = 0.5
+        """,
+        )
+    )
+    assert settings.experiment.allocation == "thompson"
+    assert settings.experiment.explore_traffic == pytest.approx(0.5)
+    assert settings.experiment.rotate_min_prob == pytest.approx(0.9)

@@ -62,6 +62,9 @@ DEFAULT_MODEL_ARTIFACT_TABLE = "model_artifacts"
 DEFAULT_RECOMMENDATION_ITEMS_TABLE = "recommendation_items"
 DEFAULT_EXPOSURES_TABLE = "recommendation_exposures"
 DEFAULT_EXPERIMENT_STATE_TABLE = "experiment_state"
+DEFAULT_TRACK_TABLE = "recommendation_track"
+DEFAULT_EVAL_TABLE = "recommendation_eval"
+DEFAULT_HISTORY_TABLE = "recommendation_history"
 
 DEFAULT_DB_TABLES = frozenset(
     {
@@ -74,6 +77,9 @@ DEFAULT_DB_TABLES = frozenset(
         DEFAULT_RECOMMENDATION_ITEMS_TABLE,
         DEFAULT_EXPOSURES_TABLE,
         DEFAULT_EXPERIMENT_STATE_TABLE,
+        DEFAULT_TRACK_TABLE,
+        DEFAULT_EVAL_TABLE,
+        DEFAULT_HISTORY_TABLE,
     }
 )
 
