@@ -482,32 +482,35 @@ def _recipes(settings: Settings, feature_config: FeatureConfig | None) -> tuple[
                 return ()
             from cicerone.feature_config import BlendingConfig
 
-            return tuple(
-                ResolvedRecipe(
-                    name=str(item["name"]),
-                    traffic=float(item.get("traffic", 0.0)),
-                    models=tuple(item.get("models") or ()),
-                    weights=item.get("weights"),
-                    rrf_k=item.get("rrf_k"),
-                    combiner=str(item.get("combiner") or "priority"),
-                    blending=BlendingConfig(enabled=str(item.get("combiner")) == "blend"),
-                    boosts=resolve_boost_policy(
-                        item.get("boosts", True),
-                        feature_config.boosts,
-                        label=f"experiment_variants[{item['name']}].boosts",
-                    ),
-                    eligibility=resolve_eligibility_policy(
-                        item.get("eligibility", True),
-                        feature_config.eligibility,
-                        label=f"experiment_variants[{item['name']}].eligibility",
-                    ),
-                )
-                for item in parsed
-            )
+            parsed_recipes: list[ResolvedRecipe] = []
+            for item in parsed:
+                try:
+                    parsed_recipes.append(
+                        ResolvedRecipe(
+                            name=str(item["name"]),
+                            traffic=float(item.get("traffic", 0.0)),
+                            models=tuple(item.get("models") or ()),
+                            weights=item.get("weights"),
+                            rrf_k=item.get("rrf_k"),
+                            combiner=str(item.get("combiner") or "priority"),
+                            blending=BlendingConfig(enabled=str(item.get("combiner")) == "blend"),
+                            boosts=resolve_boost_policy(
+                                item.get("boosts", True),
+                                feature_config.boosts,
+                                label=f"experiment_variants[{item['name']}].boosts",
+                            ),
+                            eligibility=resolve_eligibility_policy(
+                                item.get("eligibility", True),
+                                feature_config.eligibility,
+                                label=f"experiment_variants[{item['name']}].eligibility",
+                            ),
+                        )
+                    )
+                except ConfigError:
+                    raise
+                except (TypeError, KeyError, ValueError):
+                    continue
+            return tuple(parsed_recipes)
         except json.JSONDecodeError:
-            return ()
-        except ConfigError:
-            raise
-        except (TypeError, KeyError, ValueError):
             return ()
     return ()
