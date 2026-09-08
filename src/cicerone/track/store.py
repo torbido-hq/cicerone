@@ -88,13 +88,15 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
                 event_id = str(row.get("event_id") or "")
                 if event_id and event_id in known:
                     continue
-                if event_id:
-                    known.add(event_id)
                 fresh.append(row)
             if not fresh:
                 return []
             encoded = "".join(json.dumps(row, separators=(",", ":")) + "\n" for row in fresh).encode("utf-8")
             self._append_bytes(TRACK_FILENAME, encoded)
+            for row in fresh:
+                event_id = str(row.get("event_id") or "")
+                if event_id:
+                    known.add(event_id)
             self._track_size = (self._track_size or 0) + len(encoded)
             return fresh
 
@@ -172,7 +174,7 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
                 return pd.DataFrame(columns=list(HISTORY_COLUMNS))
         since = _iso_utc(since)
         if self._kind == "db":
-            frame = self._read_history_db(generated_ats=wanted)
+            frame = self._read_history_db(generated_ats=None)
             return _filter_history(frame, generated_ats=wanted, since=since)
         frames = []
         if wanted is None and since is None:

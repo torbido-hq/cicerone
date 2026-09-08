@@ -130,6 +130,11 @@ class RabbitMQEventSource(EventSource):
             self._connection = connection
             self._channel = channel
             self._connected = True
+            self._pending.clear()
+            self._pending_ids.clear()
+            self._in_flight.clear()
+            self._delivery_tags.clear()
+            self._held_tags.clear()
         if previous_io is not None:
             try:
 

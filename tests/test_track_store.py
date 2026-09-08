@@ -670,3 +670,29 @@ def test_track_read_history_sqlite_generated_ats(tmp_path) -> None:
     history = store.read_history(generated_ats=["2026-08-29T03:00:00+00:00"])
     assert len(history) == 1
     assert len(store.read_history(since="2026-08-29T00:00:00+00:00")) == 1
+
+
+def test_jsonl_append_retries_after_write_failure(tmp_path, monkeypatch) -> None:
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    store = TrackStore(output)
+    original = store._append_bytes
+
+    def _boom(filename: str, payload: bytes) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(store, "_append_bytes", _boom)
+    with pytest.raises(OSError, match="disk full"):
+        store.append_accepted_rows([_row(event_id="retry-1")])
+    monkeypatch.setattr(store, "_append_bytes", original)
+    accepted = store.append_accepted_rows([_row(event_id="retry-1")])
+    assert [row["event_id"] for row in accepted] == ["retry-1"]
+    assert [row["event_id"] for row in store.read_rows()] == ["retry-1"]
+
+
+def test_track_read_history_generated_ats_matches_z_and_offset(tmp_path) -> None:
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
+    store = TrackStore(output)
+    store.append_history(recs, generated_at="2026-08-28T03:00:00+00:00")
+    history = store.read_history(generated_ats=["2026-08-28T03:00:00Z"])
+    assert len(history) == 1

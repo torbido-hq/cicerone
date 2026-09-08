@@ -1044,6 +1044,65 @@ def test_job_thompson_writes_active_pair_and_keeps_it(tmp_path, monkeypatch):
     assert set(again["variant"].astype(str)) == {"control", "blend"}
 
 
+def test_job_thompson_keeps_previous_pair_when_recs_write_fails(tmp_path, monkeypatch):
+    from cicerone.config import IOSettings
+    from cicerone.experiment.store import ExperimentStore, experiment_state
+    from cicerone.experiment.thompson import ArmCounts, ThompsonAllocation
+    from cicerone.io.dataset_store import DatasetOutputSink
+
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.now(tz="UTC")
+    events = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 2, "occurred_at": now},
+            {"user_id": "u2", "item_id": "i1", "event_type": "saved", "quantity": 1, "occurred_at": now},
+        ]
+    )
+    items = pd.DataFrame(
+        [
+            {"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True},
+            {"item_id": "i2", "category": "beer", "producer_id": "p2", "published": True, "in_stock": True},
+        ]
+    )
+    events.to_parquet(input_dir / "events.parquet", index=False)
+    items.to_parquet(input_dir / "items.parquet", index=False)
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(output_dir)})
+    ExperimentStore(output).write_state(
+        experiment_state("ranking-cvr", promoted_variant=None, champion="control", challenger="blend")
+    )
+
+    def _allocate(**kwargs):
+        names = list(kwargs["names"])
+        return ThompsonAllocation(
+            champion="control",
+            challenger="treatment",
+            arms={name: ArmCounts(0, 0) for name in names},
+            p_best={name: 0.5 for name in names},
+            pair_impressions=0,
+            window_started_at="2026-09-04T00:00:00+00:00",
+            rotated=True,
+        )
+
+    monkeypatch.setattr("cicerone.experiment.thompson.bandits_extra_available", lambda: True)
+    monkeypatch.setattr("cicerone.job.allocate_thompson", _allocate)
+    monkeypatch.setattr(
+        DatasetOutputSink,
+        "write_recommendations",
+        lambda self, df: (_ for _ in ()).throw(RuntimeError("disk full")),
+    )
+    config_path = _write_config(tmp_path, input_dir, output_dir, extra=_thompson_job_extra())
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
+    with pytest.raises(RuntimeError, match="disk full"):
+        job.run()
+    state = ExperimentStore(output).read_state()
+    assert state is not None
+    assert state["champion"] == "control"
+    assert state["challenger"] == "blend"
+
+
 def test_select_thompson_recipes_fail_closed_paths(tmp_path, monkeypatch):
     from conftest import make_settings
 
@@ -1071,19 +1130,19 @@ def test_select_thompson_recipes_fail_closed_paths(tmp_path, monkeypatch):
         track=TrackSettings(enabled=True),
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
     )
-    assert _select_thompson_recipes(settings, recipes[:1], pd.DataFrame()) == recipes[:1]
+    assert _select_thompson_recipes(settings, recipes[:1], pd.DataFrame()).recipes == recipes[:1]
 
     monkeypatch.setattr(
         "cicerone.job.ExperimentStore.read_state",
         lambda self: (_ for _ in ()).throw(RuntimeError("state")),
     )
-    assert _select_thompson_recipes(settings, recipes, pd.DataFrame()) == recipes
+    assert _select_thompson_recipes(settings, recipes, pd.DataFrame()).recipes == recipes
 
     monkeypatch.setattr(
         "cicerone.job.ExperimentStore.read_state",
         lambda self: {"experiment_id": "other", "champion": "control", "challenger": "treatment"},
     )
-    assert _select_thompson_recipes(settings, recipes, pd.DataFrame()) == recipes
+    assert _select_thompson_recipes(settings, recipes, pd.DataFrame()).recipes == recipes
 
     monkeypatch.setattr(
         "cicerone.job.ExperimentStore.read_state",
@@ -1097,14 +1156,14 @@ def test_select_thompson_recipes_fail_closed_paths(tmp_path, monkeypatch):
         "cicerone.job.TrackStore.read_rows",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("track")),
     )
-    assert _select_thompson_recipes(settings, recipes, pd.DataFrame()) == recipes
+    assert _select_thompson_recipes(settings, recipes, pd.DataFrame()).recipes == recipes
 
     monkeypatch.setattr("cicerone.job.TrackStore.read_rows", lambda *args, **kwargs: [])
     monkeypatch.setattr(
         "cicerone.job.allocate_thompson",
         lambda **kwargs: (_ for _ in ()).throw(RuntimeError("mab")),
     )
-    assert _select_thompson_recipes(settings, recipes, pd.DataFrame()) == recipes
+    assert _select_thompson_recipes(settings, recipes, pd.DataFrame()).recipes == recipes
 
 
 def test_select_thompson_recipes_fail_closed_on_state_read_does_not_clear_promote(tmp_path, monkeypatch):
@@ -1154,7 +1213,7 @@ def test_select_thompson_recipes_fail_closed_on_state_read_does_not_clear_promot
     )
     writer = MagicMock()
     monkeypatch.setattr("cicerone.job.ExperimentStore.write_state", writer)
-    assert _select_thompson_recipes(settings, recipes, pd.DataFrame()) == recipes
+    assert _select_thompson_recipes(settings, recipes, pd.DataFrame()).recipes == recipes
     writer.assert_not_called()
 
 
@@ -1218,7 +1277,8 @@ def test_select_thompson_recipes_survives_recs_and_catalog_errors(tmp_path, monk
         lambda output: (_ for _ in ()).throw(RuntimeError("recs gone")),
     )
     selected = _select_thompson_recipes(settings, recipes, pd.DataFrame())
-    assert [recipe.name for recipe in selected] == ["control", "treatment"]
+    assert [recipe.name for recipe in selected.recipes] == ["control", "treatment"]
+    assert selected.state is not None
 
     recs = pd.DataFrame(
         {
@@ -1234,4 +1294,110 @@ def test_select_thompson_recipes_survives_recs_and_catalog_errors(tmp_path, monk
         lambda output: (_ for _ in ()).throw(RuntimeError("catalog gone")),
     )
     again = _select_thompson_recipes(settings, recipes, pd.DataFrame())
-    assert [recipe.name for recipe in again] == ["control", "treatment"]
+    assert [recipe.name for recipe in again.recipes] == ["control", "treatment"]
+    assert again.state is not None
+
+
+def test_select_thompson_recipes_does_not_write_state(tmp_path, monkeypatch):
+    from unittest.mock import MagicMock
+
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+    from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
+    from cicerone.experiment.recipes import ResolvedRecipe
+    from cicerone.experiment.store import ExperimentStore, experiment_state
+    from cicerone.experiment.thompson import ArmCounts, ThompsonAllocation
+    from cicerone.feature_config import BlendingConfig
+    from cicerone.job import _select_thompson_recipes
+
+    blending = BlendingConfig(enabled=False)
+    recipes = (
+        ResolvedRecipe("control", 0.5, ("popular",), None, None, "priority", blending, True, True),
+        ResolvedRecipe("treatment", 0.5, ("popular",), None, None, "priority", blending, True, True),
+    )
+    settings = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="ranking-cvr",
+            allocation="thompson",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        track=TrackSettings(enabled=True),
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    ExperimentStore(settings.output).write_state(
+        experiment_state(
+            "ranking-cvr",
+            promoted_variant=None,
+            champion="control",
+            challenger="treatment",
+            allocation="thompson",
+        )
+    )
+
+    def _allocate(**kwargs):
+        names = list(kwargs["names"])
+        return ThompsonAllocation(
+            champion="control",
+            challenger="treatment",
+            arms={name: ArmCounts(0, 0) for name in names},
+            p_best={name: 0.5 for name in names},
+            pair_impressions=0,
+            window_started_at="2026-09-04T00:00:00+00:00",
+            rotated=False,
+        )
+
+    monkeypatch.setattr("cicerone.job.allocate_thompson", _allocate)
+    writer = MagicMock()
+    monkeypatch.setattr("cicerone.job.ExperimentStore.write_state", writer)
+    selected = _select_thompson_recipes(settings, recipes, pd.DataFrame())
+    writer.assert_not_called()
+    assert selected.state is not None
+    assert selected.state["champion"] == "control"
+
+
+def test_select_thompson_recipes_fail_closed_without_variant(tmp_path, monkeypatch):
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+    from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
+    from cicerone.experiment.recipes import ResolvedRecipe
+    from cicerone.feature_config import BlendingConfig
+    from cicerone.job import _select_thompson_recipes
+
+    blending = BlendingConfig(enabled=False)
+    recipes = (
+        ResolvedRecipe("control", 0.5, ("popular",), None, None, "priority", blending, True, True),
+        ResolvedRecipe("treatment", 0.5, ("popular",), None, None, "priority", blending, True, True),
+    )
+    settings = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="ranking-cvr",
+            allocation="thompson",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        track=TrackSettings(enabled=True),
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    monkeypatch.setattr(
+        "cicerone.job.TrackStore.read_rows",
+        lambda *args, **kwargs: [
+            {
+                "user_id": "u-1",
+                "item_id": "i-1",
+                "kind": "impression",
+                "occurred_at": "2026-09-01T00:00:00Z",
+            }
+        ],
+    )
+    selected = _select_thompson_recipes(settings, recipes, pd.DataFrame())
+    assert selected.recipes == recipes
+    assert selected.state is None

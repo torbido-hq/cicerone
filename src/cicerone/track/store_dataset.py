@@ -24,7 +24,13 @@ from cicerone.io.options import (
     require_option,
     validate_storage_options,
 )
-from cicerone.track.store_common import HISTORY_DIR, HISTORY_FILENAME, TRACK_FILENAME, _history_stem_before
+from cicerone.track.store_common import (
+    HISTORY_DIR,
+    HISTORY_FILENAME,
+    TRACK_FILENAME,
+    _history_part_matches,
+    _history_stem_before,
+)
 
 
 class TrackDatasetBackend:
@@ -59,8 +65,12 @@ class TrackDatasetBackend:
             if not root.is_dir():
                 return []
             if generated_ats is not None:
-                paths = sorted(root / _history_part_name(stamp) for stamp in generated_ats)
-                paths = [path for path in paths if path.is_file()]
+                exact = {_history_part_name(stamp) for stamp in generated_ats}
+                paths = [
+                    path
+                    for path in sorted(root.glob("*.parquet"))
+                    if path.name in exact or _history_part_matches(path.stem, generated_ats)
+                ]
             else:
                 paths = sorted(root.glob("*.parquet"))
                 if since:
@@ -81,7 +91,11 @@ class TrackDatasetBackend:
             raise
         if generated_ats is not None:
             wanted_names = {_history_part_name(stamp) for stamp in generated_ats}
-            keys = [key for key in keys if Path(key).name in wanted_names]
+            keys = [
+                key
+                for key in keys
+                if Path(key).name in wanted_names or _history_part_matches(Path(key).stem, generated_ats)
+            ]
         elif since:
             keys = [key for key in keys if not _history_stem_before(Path(key).stem, since)]
         keys = sorted(keys)

@@ -376,6 +376,36 @@ def test_quality_context_handles_read_errors(tmp_path, monkeypatch):
     assert context["empty_track"] is True
 
 
+def test_quality_context_clears_error_when_live_track_succeeds(tmp_path, monkeypatch):
+    from cicerone.dashboard_quality import quality_context
+    from cicerone.track.normalize import normalize_track
+
+    settings = _settings(tmp_path, track={"enabled": True})
+    TrackStore(settings.output).append_rows(
+        [
+            normalize_track(
+                {
+                    "kind": "impression",
+                    "user_id": "u1",
+                    "item_id": "i1",
+                    "rank": 1,
+                    "occurred_at": "2026-08-28T12:00:00Z",
+                    "event_id": "imp-live",
+                }
+            ).as_row()
+        ]
+    )
+
+    def _boom(self):
+        raise RuntimeError("nope")
+
+    monkeypatch.setattr("cicerone.track.store.TrackStore.read_eval", _boom)
+    context = quality_context(settings)
+    assert context["error"] is None
+    assert context["track_live"] is True
+    assert context["empty_track"] is False
+
+
 def test_quality_live_eval_with_conversions(tmp_path):
     import pandas as pd
 

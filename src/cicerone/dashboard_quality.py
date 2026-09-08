@@ -34,6 +34,8 @@ def quality_context(settings: Settings) -> dict[str, Any]:
     if track_eval is None and settings.track.enabled:
         track_eval = _live_track_eval(settings, store)
         used_live_track = track_eval is not None
+        if used_live_track:
+            error = None
     empty_track = (not settings.track.enabled) or _no_impressions(track_eval)
     track_as_of = None
     track_live = used_live_track
@@ -117,7 +119,7 @@ def _live_track_eval(settings: Settings, store: TrackStore) -> dict[str, Any] | 
         if wanted:
             history = store.read_history(generated_ats=wanted)
             if history is not None and not history.empty:
-                recs = pd.concat([history, recs], ignore_index=True) if recs is not None else history
+                recs = history
     except Exception:
         logger.exception("Failed to load conversions for live Quality metrics")
     try:

@@ -213,7 +213,12 @@ def test_pick_champion_and_helpers() -> None:
     assert [item.name for item in solo] == ["control"]
     assert solo[0].traffic == pytest.approx(1.0)
     kept = track_rows_since([{"occurred_at": "2026-09-01T00:00:00Z"}], "not-a-time")
-    assert len(kept) == 1
+    assert kept == []
+    undated = track_rows_since(
+        [{"occurred_at": None, "kind": "impression"}, {"occurred_at": "2026-09-03T00:00:00Z"}],
+        "2026-09-02T00:00:00Z",
+    )
+    assert [row["occurred_at"] for row in undated] == ["2026-09-03T00:00:00Z"]
     with pytest.raises(ValueError, match="at least two"):
         allocate_thompson(names=["only"])
 

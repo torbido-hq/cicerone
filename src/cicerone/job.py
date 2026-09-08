@@ -5,10 +5,10 @@ from __future__ import annotations
 import json
 import logging
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, NamedTuple
 
 import pandas as pd
 
@@ -16,7 +16,11 @@ from cicerone.artifact import ARTIFACT_SCHEMA_VERSION, build_artifact, dumps_art
 from cicerone.automl import evaluate_candidates, select_best_candidate
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import Settings, load_settings
-from cicerone.config.constants import ALLOCATION_THOMPSON, DEFAULT_LOG_FORMAT
+from cicerone.config.constants import (
+    ALLOCATION_THOMPSON,
+    DEFAULT_LOG_FORMAT,
+    TRACK_KIND_IMPRESSION,
+)
 from cicerone.dataset import build_dataset
 from cicerone.evaluation import (
     conversion_event_types,
@@ -32,6 +36,7 @@ from cicerone.experiment import (
     resolve_recipes,
     union_models,
 )
+from cicerone.experiment.assignment import resolve_assignment
 from cicerone.experiment.guardrails import evaluate_guardrails
 from cicerone.experiment.store import ExperimentStore, merge_experiment_state
 from cicerone.experiment.thompson import (
@@ -43,7 +48,12 @@ from cicerone.experiment.thompson import (
 from cicerone.feature_config import load_feature_config
 from cicerone.io.base import InputSource
 from cicerone.io.factory import build_input_source, build_manifest_reader, build_output_sink
-from cicerone.io.recommendation_schema import USER_COLUMN, VARIANT_COLUMN, filter_variant_rows
+from cicerone.io.recommendation_schema import (
+    USER_COLUMN,
+    VARIANT_COLUMN,
+    filter_variant_rows,
+    pick_fallback_variant,
+)
 from cicerone.locks import LockLostError
 from cicerone.model import (
     DEFAULT_MODELS,
@@ -61,6 +71,55 @@ from cicerone.track.store import TrackStore
 logger = logging.getLogger(__name__)
 
 _MAX_ERROR_LENGTH = 500
+
+
+class ThompsonSelection(NamedTuple):
+    recipes: tuple[ResolvedRecipe, ...]
+    state: dict[str, Any] | None = None
+
+
+def _replay_assignments(
+    settings: Settings,
+    recs: pd.DataFrame,
+    track_rows: Sequence[Mapping[str, Any]],
+) -> dict[str, str] | None:
+    if recs.empty or VARIANT_COLUMN not in recs.columns:
+        return None
+    names = {str(value) for value in recs[VARIANT_COLUMN].dropna().astype(str) if str(value)}
+    if len(names) <= 1:
+        return None
+    assigned: dict[str, str] = {}
+    timed: list[tuple[tuple[str, str], str, str]] = []
+    for row in track_rows:
+        if str(row.get("kind") or "") != TRACK_KIND_IMPRESSION:
+            continue
+        user_id = str(row.get("user_id") or "")
+        variant = str(row.get("variant") or "")
+        if not user_id or variant not in names:
+            continue
+        occurred = str(row.get("occurred_at") or "")
+        stamp = pd.to_datetime(occurred, utc=True, errors="coerce")
+        when = stamp.isoformat() if pd.notna(stamp) else occurred
+        timed.append(((when, str(row.get("event_id") or "")), user_id, variant))
+    for _key, user_id, variant in sorted(timed, key=lambda item: item[0]):
+        assigned.setdefault(user_id, variant)
+    if settings.experiment.enabled:
+        promoted, pair = ExperimentStore(settings.output).assignment_overlay(settings.experiment.id)
+        for raw_user in recs[USER_COLUMN].astype(str).unique():
+            user_id = str(raw_user)
+            if user_id in assigned or user_id == COLD_START_USER_ID:
+                continue
+            _experiment_id, assigned_variant = resolve_assignment(
+                settings, user_id, promoted_variant=promoted, active_pair=pair
+            )
+            if assigned_variant:
+                assigned[user_id] = assigned_variant
+    else:
+        pick = pick_fallback_variant(list(names))
+        if pick:
+            for user_id in recs[USER_COLUMN].astype(str).unique():
+                assigned.setdefault(str(user_id), pick)
+    return assigned or None
 
 
 def _target_user_ids(events: pd.DataFrame, users: pd.DataFrame | None) -> list[str]:
@@ -181,6 +240,7 @@ def _score_previous_run(
                 event_types=types,
                 history=history,
                 catalog=items,
+                assigned=_replay_assignments(settings, previous_recs, track_rows),
             )
             served_payload = report.as_dict() if report is not None else None
         except Exception:
@@ -205,16 +265,16 @@ def _select_thompson_recipes(
     settings: Settings,
     recipes: tuple[ResolvedRecipe, ...],
     events: pd.DataFrame,
-) -> tuple[ResolvedRecipe, ...]:
+) -> ThompsonSelection:
     if len(recipes) < 2:
-        return recipes
+        return ThompsonSelection(recipes)
     experiment = settings.experiment
     store = ExperimentStore(settings.output)
     try:
         previous = store.read_state()
     except Exception:
         logger.exception("Thompson allocation fail closed: could not read experiment state")
-        return recipes
+        return ThompsonSelection(recipes)
     if previous and str(previous.get("experiment_id") or "") != experiment.id:
         previous = None
     promoted = str(previous["promoted_variant"]) if previous and previous.get("promoted_variant") else None
@@ -222,11 +282,11 @@ def _select_thompson_recipes(
         track_rows = TrackStore(settings.output).read_rows(experiment_id=experiment.id)
     except Exception:
         logger.exception("Thompson allocation fail closed: could not read track rows")
-        return recipes
+        return ThompsonSelection(recipes)
     has_pair = bool(previous and previous.get("champion") and previous.get("challenger"))
     if not track_rows and not has_pair:
         logger.warning("Thompson allocation fail closed: empty track")
-        return recipes
+        return ThompsonSelection(recipes)
     window_started = ""
     if previous is not None and has_pair:
         window_started = str(previous.get("window_started_at") or "")
@@ -240,19 +300,23 @@ def _select_thompson_recipes(
         conversions = events
         if not conversions.empty and "event_type" in conversions.columns:
             conversions = conversions[conversions["event_type"].astype(str).isin(set(types))]
-        report = evaluate_tracking(
-            track_rows=window_rows,
-            conversions=conversions,
-            window_hours=settings.track.attribution_window_hours,
-        )
-        window_trials = window_trials_from_slices(
-            report.by_variant, attribution=experiment.attribution, names=names
-        )
         recs = None
         try:
             recs = load_recommendations_frame(settings.output)
         except Exception:
             logger.exception("Failed to load recommendations for Thompson guardrails")
+        report = evaluate_tracking(
+            track_rows=window_rows,
+            conversions=conversions,
+            recommendations=recs,
+            window_hours=settings.track.attribution_window_hours,
+        )
+        window_trials = window_trials_from_slices(
+            report.by_variant, attribution=experiment.attribution, names=names
+        )
+        if not has_pair and not any(item.impressions for item in window_trials.values()):
+            logger.warning("Thompson allocation fail closed: no variant signal")
+            return ThompsonSelection(recipes)
         guardrails_ok = False
         if recs is not None and not recs.empty and VARIANT_COLUMN in recs.columns:
             catalog_size = None
@@ -287,16 +351,12 @@ def _select_thompson_recipes(
             challenger=allocation.challenger,
             explore_traffic=experiment.explore_traffic,
         )
-        store.write_state(
-            merge_experiment_state(
-                previous,
-                experiment_id=experiment.id,
-                promoted_variant=promoted,
-                promoted_at=(
-                    str(previous["promoted_at"]) if previous and previous.get("promoted_at") else None
-                ),
-                **allocation.as_state(),
-            )
+        pending = merge_experiment_state(
+            previous,
+            experiment_id=experiment.id,
+            promoted_variant=promoted,
+            promoted_at=(str(previous["promoted_at"]) if previous and previous.get("promoted_at") else None),
+            **allocation.as_state(),
         )
         logger.info(
             "Thompson allocation: champion=%s challenger=%s rotated=%s",
@@ -304,10 +364,10 @@ def _select_thompson_recipes(
             allocation.challenger,
             allocation.rotated,
         )
-        return selected
+        return ThompsonSelection(selected, pending)
     except Exception:
         logger.exception("Thompson allocation fail closed")
-        return recipes
+        return ThompsonSelection(recipes)
 
 
 def _recommendation_user_count(recommendations: pd.DataFrame) -> int:
@@ -332,6 +392,7 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
     served_eval_payload: dict[str, Any] | None = None
     recommendations: pd.DataFrame | None = None
     eval_generated_at: str | None = None
+    pending_thompson: dict[str, Any] | None = None
 
     try:
         publisher = build_publisher(settings)
@@ -416,7 +477,9 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
                 ",".join(recipe.name for recipe in recipes),
             )
             if settings.experiment.allocation == ALLOCATION_THOMPSON:
-                recipes = _select_thompson_recipes(settings, recipes, events)
+                selected = _select_thompson_recipes(settings, recipes, events)
+                recipes = selected.recipes
+                pending_thompson = selected.state
                 logger.info(
                     "Experiment %s after allocation: %d variant(s) %s",
                     settings.experiment.id,
@@ -550,6 +613,8 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
             _ensure_fence(fence_check)
             sink.write_recommendations(recommendations)
             outputs_written = True
+            if pending_thompson is not None:
+                ExperimentStore(settings.output).write_state(pending_thompson)
             if publisher is not None:
                 publisher.publish(recommendations)
         except Exception:
@@ -602,9 +667,7 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
             sink.write_manifest(manifest)
         except Exception:
             logger.exception("Failed to write manifest; original job error (if any) is preserved")
-            if manifest.get("status") != "success":
-                pass  # keep original job failure
-            else:
+            if manifest.get("status") == "success":
                 raise
         logger.info("Job finished: %s", json.dumps(manifest))
         if manifest.get("status") == "success" and (settings.track.enabled or settings.eval.enabled):

@@ -189,6 +189,24 @@ def _history_sql_filter(
     return " WHERE " + " AND ".join(clauses), params
 
 
+def _utc_stamp(value: object) -> pd.Timestamp | None:
+    stamp = pd.to_datetime(value, utc=True, errors="coerce")
+    if pd.isna(stamp):
+        return None
+    return stamp
+
+
+def _stamps_equal(left: object, right: object) -> bool:
+    first = _utc_stamp(left)
+    second = _utc_stamp(right)
+    return first is not None and second is not None and first == second
+
+
+def _history_part_matches(stem: str, generated_ats: set[str]) -> bool:
+    restored = _unslug_history_stem(stem)
+    return any(_stamps_equal(restored, stamp) for stamp in generated_ats)
+
+
 def _filter_history(
     frame: pd.DataFrame,
     *,
@@ -203,7 +221,9 @@ def _filter_history(
         return frame
     keep = pd.Series(True, index=frame.index)
     if generated_ats is not None:
-        keep &= frame["generated_at"].astype(str).isin(generated_ats)
+        wanted = {stamp.value for stamp in (_utc_stamp(item) for item in generated_ats) if stamp is not None}
+        stamps = pd.to_datetime(frame["generated_at"], utc=True, errors="coerce")
+        keep &= stamps.map(lambda value: False if pd.isna(value) else value.value in wanted)
     if since:
         stamps = pd.to_datetime(frame["generated_at"], utc=True, errors="coerce")
         start = pd.to_datetime(since, utc=True, errors="coerce")

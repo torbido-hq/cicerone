@@ -43,7 +43,7 @@ def _secret_settings(**overrides):
                 "api_key": "options-api-key",
                 "bucket": "recs",
                 "endpoint_url": "https://minio.example:9000",
-                "webhook": "https://hook:leaked@example.com/hook",
+                "webhook": "https://hooks.slack.com/services/T/B/xxx",
             },
         ),
         output=IOSettings(

@@ -505,6 +505,19 @@ def test_experiment_context_manifest_policy_error_names_variant(tmp_path, monkey
     assert "experiment_variants[treatment].eligibility" in (context["error"] or "")
 
 
+def test_experiment_context_manifest_recipes_malformed_item(tmp_path, monkeypatch):
+    settings = _settings(tmp_path, log_exposures=False)
+    monkeypatch.setattr("cicerone.dashboard_experiments.resolve_recipes", lambda *args, **kwargs: ())
+
+    class _Reader:
+        def read_latest(self):
+            return {"experiment_variants": json.dumps([{"traffic": 0.5}])}
+
+    monkeypatch.setattr("cicerone.dashboard_experiments.build_manifest_reader", lambda _output: _Reader())
+    context = experiment_context(settings)
+    assert context["error"] == "No experiment variants to evaluate."
+
+
 def test_experiment_context_manifest_recipes_invalid_json(tmp_path, monkeypatch):
     settings = _settings(tmp_path, log_exposures=False)
     monkeypatch.setattr("cicerone.dashboard_experiments.resolve_recipes", lambda *args, **kwargs: ())

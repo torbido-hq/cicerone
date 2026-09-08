@@ -117,11 +117,13 @@ def track_rows_since(
         return [dict(row) for row in rows]
     stamp = pd.to_datetime(started_at, utc=True, errors="coerce")
     if pd.isna(stamp):
-        return [dict(row) for row in rows]
+        return []
     out: list[dict[str, Any]] = []
     for row in rows:
         when = pd.to_datetime(row.get("occurred_at"), utc=True, errors="coerce")
-        if pd.isna(when) or when >= stamp:
+        if pd.isna(when):
+            continue
+        if when >= stamp:
             out.append(dict(row))
     return out
 
