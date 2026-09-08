@@ -72,7 +72,7 @@ models = ["als", "collaborative", "popular"]
 combiner = "blend"
 ```
 
-Control inherits `[job]` if you omit `models` / `combiner`. Traffic must be ≥ 0 and sum to at most 1; if it is below 1, the remainder goes to the last variant (see Reference). `automl_challenger` is the other path: AutoML fills a control/treatment pair. Not this walkthrough.
+Control inherits `[job]` if you omit `models` / `combiner`. Traffic must be ≥ 0 and sum to at most 1; if it is below 1, the remainder goes to the last variant (see Reference). `automl_challenger` is the other path: AutoML fills a control/treatment pair after it has selected a treatment. Without that selection, recipe resolution fails. Not this walkthrough.
 
 `job.run()` unions models, fits once, then recommends once per recipe. It concatenates the frames and writes one table.
 
