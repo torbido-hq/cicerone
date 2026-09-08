@@ -1,8 +1,8 @@
 ---
 title: The same customer keeps the same list
-description: Cicerone materializes a per-user top-K for each ranking recipe. Serve assigns each user to one recipe. The assignment is sticky. The contents are not frozen.
+description: Cicerone materializes a per-user top-K for each ranking recipe. Serve assigns each user to one of those lists. The assignment is sticky. The contents are not frozen.
 date: 2026-09-08
-excerpt: The job writes every user's list under each recipe. Serve hashes the customer onto one recipe. Sticky assignment is not a frozen top-K.
+excerpt: The job writes every user's list under each recipe. Serve hashes the customer onto one list. Sticky assignment is not a frozen top-K.
 authors:
   - nicholas
 ---
@@ -11,7 +11,7 @@ You want half your signed-in traffic on one ranking recipe and half on a challen
 
 The [nightly table](/articles/a-nightly-table-next-to-your-orders/) walkthrough already ends with a homemade split: hash `user_id`, bestsellers to one half, the personalized `SELECT` to the other. The instinct is right. A cookie rematches when it is cleared. A per-request coin flip rematches every load. That split is not the `source` label on a rank. It is which recipe the customer is in.
 
-Cicerone runs that split **offline**. For every target user, the job writes **one top-K per recipe** into the same recommendations table, stamped `variant`. Serve hashes the customer onto **exactly one recipe** and reads that user's rows for it. The homepage `SELECT` does not pick an arm. Neither does a cookie.
+Cicerone runs that split **offline**. For every target user, the job writes **one top-K per recipe** into the same recommendations table, stamped `variant`. Serve hashes the customer onto **exactly one list** and reads that user's rows for it. The homepage `SELECT` does not pick an arm. Neither does a cookie.
 
 ```text
 [job] + [experiment.variants]
@@ -44,9 +44,9 @@ You get **one** `[experiment]` per config file. That is not a database lock. Old
 
 The [nightly table](/articles/a-nightly-table-next-to-your-orders/) post creates `unique (user_id, item_id)`. That is correct for **one** list. It is **wrong** for two.
 
-`variant` is optional in the schema. Cicerone does **not** create a uniqueness constraint. The same `(user_id, item_id)` **will** appear twice, once per recipe, when those lists overlap. A host unique `(user_id, item_id)` rejects the overlapping rows. Cicerone writes every variant in one replace; that write fails and the previous table stays. Use `unique (user_id, item_id, variant)`.
+`variant` is optional in the schema. Cicerone does **not** create a uniqueness constraint. The same `(user_id, item_id)` **will** appear twice, once per recipe, when those lists overlap. On the recommendations table from the nightly walkthrough, Cicerone writes every variant in one transactional replace. A host unique `(user_id, item_id)` fails that write; the previous table stays. Use `unique (user_id, item_id, variant)`.
 
-If the column is missing, the job raises `RecommendationSchemaError`. Serve still returns rows and nulls `experiment_id` / `variant`. You are not running this experiment.
+If the existing recommendations table has no `variant` column, the job raises `RecommendationSchemaError` and does not write. Serve still returns rows and nulls `experiment_id` / `variant`. You are not running this experiment.
 
 ## Two recipes
 
@@ -68,7 +68,7 @@ traffic = 0.5
 [[experiment.variants]]
 name = "blend"
 traffic = 0.5
-models = ["als", "bpr", "popular"]
+models = ["als", "collaborative", "popular"]
 combiner = "blend"
 ```
 
@@ -132,7 +132,7 @@ This walkthrough uses `primary_metric = "purchase"` and `attribution = "user"`: 
 
 `ctr` / `conversion` need `[track]` and `click` / `impression`. `min_impressions` is 100 **impression rows**, not GET hits.
 
-**Do this before you trust a week of `user` numbers:** set `log_exposures = true`. Without it, the dashboard hashes historical purchasers against **today’s** `id`, traffic, and order. Change any of those and Alice can move arms **in the report**. Serve did not rematch her live traffic. The evaluator rematched the CSV. With the flag on, the earliest `exposed_at` for this `experiment_id` pins her (a later-arriving row with an earlier stamp can replace the pin); events before that stamp are dropped. An empty exposure log assigns nobody.
+**Do this before you trust a week of `user` numbers:** set `log_exposures = true`. Without it, the dashboard hashes historical purchasers against **today’s** `id`, traffic, and order. Change any of those and Alice can move arms **in the report**. Serve did not rematch her live traffic. The evaluator rematched the event log. With the flag on, the earliest `exposed_at` for this `experiment_id` pins her (a later-arriving row with an earlier stamp can replace the pin); events before that stamp are dropped. An empty exposure log assigns nobody.
 
 The interval on the dashboard is a Robbins–Siegmund **mixture bound** on the mean difference, not a full anytime-valid confidence sequence and not a LIL CS. Alpha is split across non-control arms (`alpha / max(1, n−1)`). Peeking is the point. Do not quote a paper this binary does not implement.
 
@@ -167,6 +167,8 @@ Alice was `blend` on Monday and `blend` on Sunday. Tuesday’s job rewrote her t
 Change `id`, traffic, or order if you **mean** to rematch live assignment. Change names only if you mean to relabel a stable bucket. Change recipe knobs if you mean to rewrite that list and keep the people.
 
 If `log_exposures` was off, the dashboard can still walk Alice to the other arm in a CSV when you edit today’s TOML. That is the report. It is not serve.
+
+The customer keeps the same assignment. The assigned list does not keep last night’s SKUs.
 
 The customer keeps the same list. The list does not keep last night’s SKUs.
 
