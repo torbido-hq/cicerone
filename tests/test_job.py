@@ -248,6 +248,82 @@ def test_score_previous_run_reads_history_when_track_disabled(tmp_path, monkeypa
     assert served is not None
 
 
+def test_replay_assignments_prefers_first_impression_then_hash(tmp_path):
+    from cicerone.blending import COLD_START_USER_ID
+    from cicerone.config import IOSettings, make_settings
+    from cicerone.config.settings import ExperimentSettings, VariantSettings
+    from cicerone.job import _replay_assignments
+
+    recs = pd.DataFrame(
+        [
+            {"user_id": "alice", "item_id": "i1", "variant": "control"},
+            {"user_id": "alice", "item_id": "i2", "variant": "treatment"},
+            {"user_id": "bob", "item_id": "i1", "variant": "control"},
+            {"user_id": "bob", "item_id": "i2", "variant": "treatment"},
+            {"user_id": COLD_START_USER_ID, "item_id": "i1", "variant": "control"},
+        ]
+    )
+    assert _replay_assignments(make_settings(), pd.DataFrame(), []) is None
+    assert _replay_assignments(make_settings(), recs.drop(columns=["variant"]), []) is None
+    single = recs[recs["variant"] == "control"]
+    assert _replay_assignments(make_settings(), single, []) is None
+
+    settings = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="ranking-cvr",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    assigned = _replay_assignments(
+        settings,
+        recs,
+        [
+            {"kind": "click", "user_id": "alice", "variant": "treatment"},
+            {
+                "kind": "impression",
+                "user_id": "alice",
+                "variant": "treatment",
+                "occurred_at": "2026-08-28T13:00:00Z",
+                "event_id": "later",
+            },
+            {
+                "kind": "impression",
+                "user_id": "alice",
+                "variant": "control",
+                "occurred_at": "not-a-time",
+                "event_id": "bad",
+            },
+            {
+                "kind": "impression",
+                "user_id": "alice",
+                "variant": "control",
+                "occurred_at": "2026-08-28T12:00:00Z",
+                "event_id": "first",
+            },
+            {"kind": "impression", "user_id": "", "variant": "control"},
+            {"kind": "impression", "user_id": "alice", "variant": "unknown"},
+        ],
+    )
+    assert assigned is not None
+    assert assigned["alice"] == "control"
+    assert assigned["bob"] in {"control", "treatment"}
+    assert COLD_START_USER_ID not in assigned
+
+    fallback = _replay_assignments(
+        make_settings(),
+        recs[recs["user_id"] != COLD_START_USER_ID],
+        [],
+    )
+    assert fallback is not None
+    assert set(fallback.values()) <= {"control", "treatment"}
+    assert set(fallback) == {"alice", "bob"}
+
+
 def test_job_run_swallows_eval_persistence_errors(tmp_path, monkeypatch):
     input_dir = tmp_path / "in"
     output_dir = tmp_path / "out"
