@@ -590,7 +590,7 @@
             "type": "integer"
           },
           "event_ids": {
-            "description": "Assigned or provided event ids",
+            "description": "Event ids of newly written rows",
             "items": {
               "type": "string"
             },
@@ -798,6 +798,16 @@
             },
             "description": "Missing or invalid bearer token"
           },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Request body too large"
+          },
           "429": {
             "content": {
               "application/json": {
@@ -907,6 +917,7 @@
               "anyOf": [
                 {
                   "exclusiveMinimum": 0,
+                  "maximum": 100,
                   "type": "integer"
                 },
                 {
@@ -926,6 +937,7 @@
               "anyOf": [
                 {
                   "exclusiveMinimum": 0,
+                  "maximum": 100,
                   "type": "integer"
                 },
                 {
@@ -1122,6 +1134,16 @@
               }
             },
             "description": "Missing or invalid bearer token"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Request body too large"
           }
         },
         "security": [

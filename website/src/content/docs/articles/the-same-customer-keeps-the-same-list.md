@@ -1,23 +1,23 @@
 ---
 title: The same customer keeps the same list
-description: Cicerone materializes one top-K list per ranking recipe. Serve assigns each user to exactly one of those lists. The assignment is sticky. The contents of that list are not frozen.
+description: Cicerone materializes a per-user top-K for each ranking recipe. Serve assigns each user to one recipe. The assignment is sticky. The contents are not frozen.
 date: 2026-09-08
-excerpt: The job writes one list per recipe. Serve hashes the customer onto one of them. Sticky assignment is not a frozen top-K.
+excerpt: The job writes every user's list under each recipe. Serve hashes the customer onto one recipe. Sticky assignment is not a frozen top-K.
 authors:
   - nicholas
 ---
 
 You want half your signed-in traffic on one ranking recipe and half on a challenger. You write an `if` on the homepage. The same person comes back tomorrow and lands on the other side. You did not A/B test two ranking recipes. You randomized a page load.
 
-The [nightly table](/articles/a-nightly-table-next-to-your-orders/) walkthrough already ends with a homemade split: hash `user_id`, bestsellers to one half, the personalized `SELECT` to the other. The instinct is right. A cookie rematches when it is cleared. A per-request coin flip rematches every load. That split is not “which model won this rank.” It is which recipe the customer is in.
+The [nightly table](/articles/a-nightly-table-next-to-your-orders/) walkthrough already ends with a homemade split: hash `user_id`, bestsellers to one half, the personalized `SELECT` to the other. The instinct is right. A cookie rematches when it is cleared. A per-request coin flip rematches every load. That split is not the `source` label on a rank. It is which recipe the customer is in.
 
-Cicerone runs that split **offline**. The job writes **one top-K list per recipe** into the same recommendations table, stamped `variant`. Serve hashes the customer onto **exactly one** of those lists. The homepage `SELECT` does not pick an arm. Neither does a cookie.
+Cicerone runs that split **offline**. For every target user, the job writes **one top-K per recipe** into the same recommendations table, stamped `variant`. Serve hashes the customer onto **exactly one recipe** and reads that user's rows for it. The homepage `SELECT` does not pick an arm. Neither does a cookie.
 
 ```text
 [job] + [experiment.variants]
         │
         ▼
-   one top-K list per recipe
+   one per-user top-K per recipe
    (same table, column variant)
         │
         ▼
@@ -32,9 +32,9 @@ Four nouns, then stop mixing them.
 | Noun | What it is |
 | --- | --- |
 | **Recipe** | The ranking configuration. Models, combiner, optional boosts. |
-| **Variant list** | The materialized top-K rows that recipe wrote. |
+| **Variant list** | One user's materialized top-K rows for that recipe. |
 | **Assignment** | Which of those lists this user gets. |
-| **`source`** | Which model won **that rank** on **that** list. |
+| **`source`** | Where that row came from. RRF labels can combine sources; blending can label it `blended`. |
 
 A treatment user can still have `popular_fallback` at rank 8. That is a hole on their list, not a flip onto the control recipe.
 
@@ -91,8 +91,8 @@ Then it walks the variants in **TOML order** and takes the first whose cumulativ
 
 | You change | What happens |
 | --- | --- |
-| `experiment.id` | New digest. New assignment. |
-| Traffic or **order** | Same digest. Different slice. Different list. |
+| `experiment.id` | New digest. The user is rematched and may resolve to a different recipe. |
+| Traffic or **order** | Same digest, changed slices. Affected users resolve to a different recipe. |
 | **Names only** | Same digest. Same slice. **New label.** Serve filters the new name. Last night’s rows miss until the next job. |
 | Recipe knobs, same names | Same assignment. Next `job.run()` rewrites **that** list’s rows. |
 | Promote | Everyone gets the winner’s name. Hash unused until Resume. |
@@ -142,7 +142,7 @@ A week later `blend` wins. You click **Promote**. Tomorrow every `GET` reads the
 
 Resume puts the hash back. The job does **not** copy `blend` into `[job]`. After you disable the experiment you still have whatever `[job]` always was, plus leftover variant rows.
 
-Promote is refused when a CI is still undecided, two arms tie on the mean, a guardrail fails, the winner is already promoted, or `promoted_at` is set and unparsable. `ctr` / `conversion` also need enough impression rows (`min_impressions`). State lives in `experiment_state.json` or the `experiment_state` table (`experiment_id`, `promoted_variant`, `promoted_at`). Promote survives later jobs. If you rename the winner away, Promote’s name is gone and serve hashes again.
+For fixed allocation, Promote is refused when a CI is still undecided, two arms tie on the mean, a guardrail fails, the winner is already promoted, or `promoted_at` is set and unparsable. `ctr` / `conversion` also need enough impression rows (`min_impressions`). Thompson **Ship** ignores the undecided and tied-mean blockers and ships the current champion, but guardrail, volume, existing-promotion, and invalid-timestamp blockers still apply. State lives in `experiment_state.json` or the `experiment_state` table (`experiment_id`, `promoted_variant`, `promoted_at`). Promote survives later jobs. If you rename the winner away, Promote’s name is gone and serve hashes again.
 
 ## What happens if someone checks out this afternoon
 
@@ -167,8 +167,6 @@ Alice was `blend` on Monday and `blend` on Sunday. Tuesday’s job rewrote her t
 Change `id`, traffic, or order if you **mean** to rematch live assignment. Change names only if you mean to relabel a stable bucket. Change recipe knobs if you mean to rewrite that list and keep the people.
 
 If `log_exposures` was off, the dashboard can still walk Alice to the other arm in a CSV when you edit today’s TOML. That is the report. It is not serve.
-
-The customer keeps the same assignment. The assigned list does not keep last night’s SKUs.
 
 The customer keeps the same list. The list does not keep last night’s SKUs.
 
