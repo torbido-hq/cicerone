@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import pandas as pd
@@ -110,20 +111,35 @@ def _live_track_eval(settings: Settings, store: TrackStore) -> dict[str, Any] | 
     try:
         from cicerone.events.store import load_recommendations_frame
 
-        types = conversion_event_types(
-            settings.track.conversion_event_types,
-            primary_metric=settings.experiment.primary_metric,
-        )
-        events = load_metric_events(settings, event_types=types)
-        conversions = conversion_events_for_settings(events, settings)
-        recs = load_recommendations_frame(settings.output)
-        if recs is not None and recs.empty:
-            recs = None
         wanted = generated_ats_from_track(rows)
-        history = None
-        if wanted:
-            history = store.read_history(generated_ats=wanted)
-        recs = prefer_history(history, recs)
+
+        def _load_conversions() -> pd.DataFrame:
+            types = conversion_event_types(
+                settings.track.conversion_event_types,
+                primary_metric=settings.experiment.primary_metric,
+            )
+            return conversion_events_for_settings(
+                load_metric_events(settings, event_types=types),
+                settings,
+            )
+
+        def _load_recs() -> pd.DataFrame | None:
+            frame = load_recommendations_frame(settings.output)
+            if frame is not None and frame.empty:
+                return None
+            return frame
+
+        def _load_history() -> pd.DataFrame | None:
+            if not wanted:
+                return None
+            return store.read_history(generated_ats=wanted)
+
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            conv_f = pool.submit(_load_conversions)
+            recs_f = pool.submit(_load_recs)
+            hist_f = pool.submit(_load_history)
+            conversions = conv_f.result()
+            recs = prefer_history(hist_f.result(), recs_f.result())
     except Exception:
         logger.exception("Failed to load conversions for live Quality metrics")
     try:

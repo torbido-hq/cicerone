@@ -15,7 +15,7 @@ import pandas as pd
 from cicerone.artifact import ARTIFACT_SCHEMA_VERSION, build_artifact, dumps_artifact
 from cicerone.automl import evaluate_candidates, select_best_candidate
 from cicerone.blending import COLD_START_USER_ID
-from cicerone.config import Settings, load_settings
+from cicerone.config import IOSettings, Settings, load_settings
 from cicerone.config.constants import (
     ALLOCATION_THOMPSON,
     DEFAULT_LOG_FORMAT,
@@ -162,6 +162,14 @@ _MANIFEST_DEFAULTS: dict[str, Any] = {
 }
 
 
+def _try_load(label: str, fn: Callable[[], Any], default: Any) -> Any:
+    try:
+        return fn()
+    except Exception:
+        logger.exception("Failed to %s", label)
+        return default
+
+
 def _score_previous_run(
     settings: Settings,
     events: pd.DataFrame,
@@ -174,22 +182,24 @@ def _score_previous_run(
     if last_manifest:
         previous_generated_at = last_manifest.get("generated_at")
         previous_generated_at = str(previous_generated_at) if previous_generated_at else None
-    previous_recs = None
-    try:
-        previous_recs = load_recommendations_frame(settings.output)
-        if previous_recs is not None and previous_recs.empty:
-            previous_recs = None
-    except Exception:
-        logger.exception("Failed to load previous recommendations for eval")
-        previous_recs = None
     store = TrackStore(settings.output)
-    track_rows: list[dict[str, Any]] = []
-    if settings.track.enabled:
-        try:
-            track_rows = store.read_rows()
-        except Exception:
-            logger.exception("Failed to read track rows")
-            track_rows = []
+
+    def _load_recs() -> pd.DataFrame | None:
+        recs = load_recommendations_frame(settings.output)
+        if recs is not None and recs.empty:
+            return None
+        return recs
+
+    def _load_track() -> list[dict[str, Any]]:
+        if not settings.track.enabled:
+            return []
+        return store.read_rows()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        recs_f = pool.submit(_try_load, "load previous recommendations for eval", _load_recs, None)
+        track_f = pool.submit(_try_load, "read track rows", _load_track, [])
+        previous_recs = recs_f.result()
+        track_rows = track_f.result()
     wanted = generated_ats_from_track(track_rows, previous_generated_at)
     history = None
     if wanted:
@@ -236,12 +246,22 @@ def _score_previous_run(
     return track_payload, served_payload
 
 
-def _read_input(source: InputSource) -> tuple[pd.DataFrame, pd.DataFrame | None, pd.DataFrame | None]:
-    with ThreadPoolExecutor(max_workers=3) as executor:
+def _read_input(
+    source: InputSource, output: IOSettings
+) -> tuple[pd.DataFrame, pd.DataFrame | None, pd.DataFrame | None, dict[str, Any] | None]:
+    with ThreadPoolExecutor(max_workers=4) as executor:
         events_future = executor.submit(source.read_events)
         users_future = executor.submit(source.read_users)
         items_future = executor.submit(source.read_items)
-        return events_future.result(), users_future.result(), items_future.result()
+        manifest_future = executor.submit(
+            _try_load, "read last manifest", build_manifest_reader(output).read_latest, None
+        )
+        return (
+            events_future.result(),
+            users_future.result(),
+            items_future.result(),
+            manifest_future.result(),
+        )
 
 
 def _ensure_fence(fence_check: Callable[[], bool] | None) -> None:
@@ -282,11 +302,21 @@ def _select_thompson_recipes(
     names = [recipe.name for recipe in recipes]
     try:
         conversions = conversion_events_for_settings(events, settings)
-        recs = None
-        try:
-            recs = load_recommendations_frame(settings.output)
-        except Exception:
-            logger.exception("Failed to load recommendations for Thompson guardrails")
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            recs_f = pool.submit(
+                _try_load,
+                "load recommendations for Thompson guardrails",
+                lambda: load_recommendations_frame(settings.output),
+                None,
+            )
+            catalog_f = pool.submit(
+                _try_load,
+                "load catalog size for Thompson guardrails",
+                lambda: load_items_catalog_size(settings.output),
+                None,
+            )
+            recs = recs_f.result()
+            catalog_size = catalog_f.result()
         report = evaluate_tracking(
             track_rows=window_rows,
             conversions=conversions,
@@ -301,11 +331,6 @@ def _select_thompson_recipes(
             return ThompsonSelection(recipes)
         guardrails_ok = False
         if recs is not None and not recs.empty and VARIANT_COLUMN in recs.columns:
-            catalog_size = None
-            try:
-                catalog_size = load_items_catalog_size(settings.output)
-            except Exception:
-                logger.exception("Failed to load catalog size for Thompson guardrails")
             pair_names: tuple[str, ...] = tuple(names)
             if previous is not None and has_pair:
                 pair_names = (str(previous.get("champion")), str(previous.get("challenger")))
@@ -379,7 +404,7 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
     try:
         publisher = build_publisher(settings)
         source = build_input_source(settings.input)
-        events, users, items = _read_input(source)
+        events, users, items, last_manifest = _read_input(source, settings.output)
 
         logger.info(
             "Loaded %d events, %s users, %s items",
@@ -388,11 +413,6 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
             len(items) if items is not None else "n/a",
         )
 
-        last_manifest = None
-        try:
-            last_manifest = build_manifest_reader(settings.output).read_latest()
-        except Exception:
-            logger.exception("Failed to read last manifest")
         if last_manifest and last_manifest.get("generated_at"):
             eval_generated_at = str(last_manifest["generated_at"])
         track_eval_payload, served_eval_payload = _score_previous_run(settings, events, last_manifest, items)
@@ -654,21 +674,27 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
         logger.info("Job finished: %s", json.dumps(manifest))
         if manifest.get("status") == "success" and (settings.track.enabled or settings.eval.enabled):
             store = TrackStore(settings.output)
-            try:
-                store.write_eval(
-                    {
-                        "generated_at": eval_generated_at,
-                        "track_eval": track_eval_payload,
-                        "served_eval": served_eval_payload,
-                    }
+            generated_at = str(manifest["generated_at"])
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                pool.submit(
+                    _try_load,
+                    "write track eval",
+                    lambda: store.write_eval(
+                        {
+                            "generated_at": eval_generated_at,
+                            "track_eval": track_eval_payload,
+                            "served_eval": served_eval_payload,
+                        }
+                    ),
+                    None,
                 )
-            except Exception:
-                logger.exception("Failed to write track eval")
-            if recommendations is not None:
-                try:
-                    store.append_history(recommendations, generated_at=str(manifest["generated_at"]))
-                except Exception:
-                    logger.exception("Failed to append recommendation history")
+                if recommendations is not None:
+                    pool.submit(
+                        _try_load,
+                        "append recommendation history",
+                        lambda: store.append_history(recommendations, generated_at=generated_at),
+                        None,
+                    )
 
 
 if __name__ == "__main__":

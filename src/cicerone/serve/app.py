@@ -7,10 +7,11 @@ import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Query, Request, Response
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request, Response
 from fastapi.openapi.utils import get_openapi
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
@@ -52,6 +53,21 @@ from cicerone.track.store import TrackStore
 
 logging.basicConfig(level=logging.INFO, format=DEFAULT_LOG_FORMAT)
 logger = logging.getLogger(__name__)
+
+
+def _append_exposures_safe(store: ExperimentStore, rows: list[dict[str, Any]], user_id: str) -> None:
+    try:
+        store.append_exposures(rows)
+    except Exception:
+        logger.exception("Failed to append experiment exposure for user_id=%r", user_id)
+
+
+def _append_impressions_safe(store: TrackStore, rows: list[dict[str, Any]], user_id: str) -> None:
+    try:
+        store.append_rows(rows)
+    except Exception:
+        logger.exception("Failed to append serve impressions for user_id=%r", user_id)
+
 
 SERVE_API_TITLE = "Cicerone Serve API"
 SERVE_API_VERSION = __version__
@@ -233,6 +249,7 @@ def create_app(
     def get_recommendations(
         user_id: str,
         response: Response,
+        background_tasks: BackgroundTasks,
         limit: int | None = Query(
             default=None, gt=0, le=DEFAULT_SERVE_MAX_K, description="Top-K rows to return"
         ),
@@ -301,39 +318,36 @@ def create_app(
         if experiment_id and variant:
             record_experiment_served(experiment_id, variant)
             if settings.experiment.log_exposures and experiment_store is not None:
-                try:
-                    experiment_store.append_exposures(
-                        [
-                            exposure_row(
-                                user_id=user_id,
-                                experiment_id=experiment_id,
-                                variant=variant,
-                                generated_at=generated_at,
-                            )
-                        ]
-                    )
-                except Exception:
-                    logger.exception("Failed to append experiment exposure for user_id=%r", user_id)
+                background_tasks.add_task(
+                    _append_exposures_safe,
+                    experiment_store,
+                    [
+                        exposure_row(
+                            user_id=user_id,
+                            experiment_id=experiment_id,
+                            variant=variant,
+                            generated_at=generated_at,
+                        )
+                    ],
+                    user_id,
+                )
         if settings.serve.log_impressions and track_store is not None and not filtered.empty:
-            try:
-                occurred = datetime.now(UTC).isoformat()
-                rows = [
-                    {
-                        "kind": TRACK_KIND_IMPRESSION,
-                        "user_id": user_id,
-                        "item_id": str(row.item_id),
-                        "rank": int(row.rank),
-                        "occurred_at": occurred,
-                        "event_id": str(uuid4()),
-                        "variant": variant,
-                        "experiment_id": experiment_id,
-                        "generated_at": generated_at,
-                    }
-                    for row in filtered.itertuples(index=False)
-                ]
-                track_store.append_rows(rows)
-            except Exception:
-                logger.exception("Failed to append serve impressions for user_id=%r", user_id)
+            occurred = datetime.now(UTC).isoformat()
+            rows = [
+                {
+                    "kind": TRACK_KIND_IMPRESSION,
+                    "user_id": user_id,
+                    "item_id": str(row.item_id),
+                    "rank": int(row.rank),
+                    "occurred_at": occurred,
+                    "event_id": str(uuid4()),
+                    "variant": variant,
+                    "experiment_id": experiment_id,
+                    "generated_at": generated_at,
+                }
+                for row in filtered.itertuples(index=False)
+            ]
+            background_tasks.add_task(_append_impressions_safe, track_store, rows, user_id)
 
         body = RecommendationsResponse(
             generated_at=generated_at,
