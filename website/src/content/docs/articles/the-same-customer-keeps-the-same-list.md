@@ -9,7 +9,7 @@ authors:
 
 You want half your signed-in traffic on one ranking recipe and half on a challenger. You write an `if` on the homepage. The same person comes back tomorrow and lands on the other side. You did not A/B test two ranking recipes. You randomized a page load.
 
-The [nightly table](/articles/a-nightly-table-next-to-your-orders/) walkthrough already ends with a homemade split: hash `user_id`, bestsellers to one half, the personalized `SELECT` to the other. The instinct is right. A cookie rematches when it is cleared. A per-request coin flip rematches every load. That split is not the `source` label on a rank. It is which recipe the customer is in.
+The [nightly table](/articles/a-nightly-table-next-to-your-orders/) post writes a per-user top-K every night into one recommendations table. There is no experiment yet. That walkthrough already ends with a homemade split: hash `user_id`, bestsellers to one half, the personalized `SELECT` to the other. The instinct is right. A cookie rematches when it is cleared. A per-request coin flip rematches every load. That split is not the `source` label on a rank. It is which recipe the customer is in.
 
 Cicerone runs that split **offline**. For every target user, the job writes **one top-K per recipe** into the same recommendations table, stamped `variant`. Serve hashes the customer onto **exactly one list** and reads that user's rows for it. The homepage `SELECT` does not pick an arm. Neither does a cookie.
 
@@ -46,7 +46,7 @@ The [nightly table](/articles/a-nightly-table-next-to-your-orders/) post creates
 
 `variant` is optional in the schema. Cicerone does **not** create a uniqueness constraint. The same `(user_id, item_id)` **will** appear twice, once per recipe, when those lists overlap. On the recommendations table from the nightly walkthrough, Cicerone writes every variant in one transactional replace. A host unique `(user_id, item_id)` fails that write; the previous table stays. Use `unique (user_id, item_id, variant)`.
 
-If the existing recommendations table has no `variant` column, the job raises `RecommendationSchemaError` and does not write. Serve still returns rows and nulls `experiment_id` / `variant`. You are not running this experiment.
+If the existing recommendations table has no `variant` column, the job raises `RecommendationSchemaError` and does not write. Serve still returns the same rows. It just nulls `experiment_id` / `variant`. You are not running this experiment.
 
 ## Two recipes
 
@@ -72,7 +72,7 @@ models = ["als", "collaborative", "popular"]
 combiner = "blend"
 ```
 
-Control inherits `[job]` if you omit `models` / `combiner`. Traffic must be ≥ 0 and sum to at most 1; if it is below 1, the remainder goes to the last variant (see Reference).
+Control inherits `[job]` if you omit `models` / `combiner`. Traffic must be ≥ 0 and sum to at most 1; if it is below 1, the remainder goes to the last variant (see Reference). `automl_challenger` is the other path: AutoML fills a control/treatment pair. Not this walkthrough.
 
 `job.run()` unions models, fits once, then recommends once per recipe. It concatenates the frames and writes one table.
 
@@ -80,14 +80,14 @@ Control inherits `[job]` if you omit `models` / `combiner`. Traffic must be ≥ 
 
 Alice and Bob both `GET /recommendations/{user_id}`. Same experiment. Different users. Each gets a deterministic bucket. As long as the experiment ID, traffic, and variant order stay the same, that bucket keeps resolving to the same variant. Clearing a cookie does not rematch them.
 
-Serve does **not** take `?variant=`. It hashes:
+Serve hashes:
 
 ```text
 blake2s( f"{experiment.id}\0{user_id}".encode() , digest_size=8 )
 int.from_bytes(..., "big") / 2**64     →  u ∈ [0, 1)
 ```
 
-Then it walks the variants in **TOML order** and takes the first whose cumulative traffic is `> u`. The last name always gets leftover mass. Same inputs, same name, every request, every replica.
+Then it walks the variants in **TOML order** and takes the first whose cumulative traffic is `> u`. The last name always gets leftover mass. Append a name at the end and leave the earlier `traffic` numbers alone: earlier slices stay put. The new name only takes leftover that used to sit on the previous last variant. If those numbers already summed to 1, the new name gets nobody. Same inputs, same name, every request, every replica.
 
 | You change | What happens |
 | --- | --- |
@@ -127,7 +127,7 @@ This walkthrough uses `primary_metric = "purchase"` and `attribution = "user"`: 
 | --- | --- |
 | `user` | Purchases (or clicks) from that user. No `/track`. |
 | `recommended` | Same assignment. Event item must be on **that** list. Still no `/track`. |
-| `click` | Needs `[track]`. Click, then purchase in the window (default 24h). |
+| `click` | Needs `[track]` (impression/click ingest, not training events). Click, then purchase in the window (default 24h). |
 | `impression` | Needs `[track]`. Impression, then purchase. GET is not an impression unless `log_impressions = true`. |
 
 `ctr` / `conversion` need `[track]` and `click` / `impression`. `min_impressions` is 100 **impression rows**, not GET hits.
@@ -142,11 +142,11 @@ A week later `blend` wins. You click **Promote**. Tomorrow every `GET` reads the
 
 Resume puts the hash back. The job does **not** copy `blend` into `[job]`. After you disable the experiment you still have whatever `[job]` always was, plus leftover variant rows.
 
-For fixed allocation, Promote is refused when a CI is still undecided, two arms tie on the mean, a guardrail fails, the winner is already promoted, or `promoted_at` is set and unparsable. `ctr` / `conversion` also need enough impression rows (`min_impressions`). Thompson **Ship** ignores the undecided and tied-mean blockers and ships the current champion, but guardrail, volume, existing-promotion, and invalid-timestamp blockers still apply. State lives in `experiment_state.json` or the `experiment_state` table (`experiment_id`, `promoted_variant`, `promoted_at`). Promote survives later jobs. If you rename the winner away, Promote’s name is gone and serve hashes again.
+For fixed allocation, Promote is refused when a CI is still undecided, two arms tie on the mean, a guardrail fails, the winner is already promoted, or `promoted_at` is set and unparsable. `ctr` / `conversion` also need enough impression rows (`min_impressions`). Thompson sampling here is job-time: one champion/challenger pair, not a request-path bandit. **Ship** ignores the undecided and tied-mean blockers and ships the current champion, but guardrail, volume, existing-promotion, and invalid-timestamp blockers still apply. State lives in `experiment_state.json` or the `experiment_state` table (`experiment_id`, `promoted_variant`, `promoted_at`). Promote survives later jobs. If you rename the winner away, Promote’s name is gone and serve hashes again.
 
 ## What happens if someone checks out this afternoon
 
-The [checkout](/articles/this-afternoons-checkout-can-move-the-row/) post can still flush popular / latest. The webhook does **not** rank the catalog.
+The [checkout](/articles/this-afternoons-checkout-can-move-the-row/) post is write-through on popular/latest after a purchase, not a full retrain. It can still flush those sources here. The webhook does **not** rank the catalog.
 
 Only the assigned (or promoted) variant receives the popular/latest inject. The other list stays on last night’s job slice. Online LightFM is **not** started while the experiment is on (`Online collaborative refresh skipped while [experiment] is enabled`). Personalized ranks stay on the last `job.run()`.
 
@@ -181,7 +181,7 @@ The knobs and failure modes if you are wiring this up. The product page is [expe
 
 **Experiment off.** `resolve_assignment` is `(None, None)`. Promote is ignored. Leftover rows are **filtered** to `control` if that name exists, else `sorted(variant names)[0]`. Not a `DELETE`. Incremental follows the same rule when `variant_names == ()`.
 
-**Guardrails (defaults).** Fallback-rate cap `0.5` (`popular_fallback` / `latest` / `incremental` and `+` mixes). Top-item share cap `0.4`. Distinct-item floor: `5`, or `min(5, max(1, catalog_size // 20))` if the catalog is known. Empty list fails. Missing `variant` column blocks Promote.
+**Guardrails (defaults).** Fallback-rate cap `0.5` (`popular_fallback` / `latest` / `incremental` and `+` mixes). Top-item share cap `0.4`. Distinct-item floor: `5`, or `min(5, max(1, catalog_size // 20))` if the catalog is known — that formula can only lower the default 5 for a small catalog; it never raises the floor for a large one. Empty list fails. Missing `variant` column blocks Promote.
 
 **Promote / Resume.** Dashboard Promote and Resume split. Missing winner name → hash again. Experiment disabled → leftover rows collapse as above.
 
