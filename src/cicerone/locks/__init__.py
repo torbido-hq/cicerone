@@ -94,6 +94,8 @@ def held_writer_lock(lock: LockBackend | None) -> Iterator[None]:
     if not acquire_blocking(lock):
         raise RuntimeError("dataset writer lock busy")
     try:
+        if not lock.owned():
+            raise LockLostError("dataset writer lock lost before write")
         yield
     finally:
         lock.release()
