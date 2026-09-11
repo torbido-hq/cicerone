@@ -83,7 +83,7 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
         if self._kind == "db":
             return self._append_rows_db(payload)
         require_appendable_track_log(self._output)
-        with held_writer_lock(self._writer_lock), self._dataset_append_lock():
+        with held_writer_lock(self._writer_lock, fallback_on_error=True), self._dataset_append_lock():
             known = self._refresh_known_ids()
             fresh: list[dict[str, Any]] = []
             seen: set[str] = set()
