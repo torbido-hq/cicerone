@@ -14,6 +14,7 @@ from cicerone.item_scores import (
     POPULAR_SCORE_COLUMN,
     build_item_scores,
     empty_item_scores,
+    normalize_item_scores,
     page_item_scores,
 )
 from cicerone.model_config import LATEST_WINDOW_DAYS
@@ -97,6 +98,33 @@ def test_item_weight_helpers_missing_columns():
     assert float(_item_weight_sum(no_weight)["i1"]) == 0.0
     no_user = pd.DataFrame({Columns.Item: ["i1"], Columns.Weight: [1.0]})
     assert int(_item_n_users(no_user)["i1"]) == 0
+
+
+def test_normalize_item_scores_validates_and_sorts():
+    frame = pd.DataFrame(
+        [
+            {"item_id": "b", "popular_score": "2.0", "latest_score": 1.0, "n_users": 2},
+            {"item_id": "a", "popular_score": 1.0, "latest_score": 0.0, "n_users": 1},
+        ]
+    )
+    out = normalize_item_scores(frame)
+    assert list(out[ITEM_COLUMN]) == ["a", "b"]
+    assert float(out.iloc[0][POPULAR_SCORE_COLUMN]) == 1.0
+    assert normalize_item_scores(empty_item_scores()).empty
+    with pytest.raises(ValueError, match="missing columns"):
+        normalize_item_scores(pd.DataFrame([{"item_id": "a", "popular_score": 1.0}]))
+    with pytest.raises(ValueError, match="non-finite"):
+        normalize_item_scores(
+            pd.DataFrame([{"item_id": "a", "popular_score": "x", "latest_score": 0.0, "n_users": 1}])
+        )
+    with pytest.raises(ValueError, match="non-finite"):
+        normalize_item_scores(
+            pd.DataFrame([{"item_id": "a", "popular_score": float("nan"), "latest_score": 0.0, "n_users": 1}])
+        )
+    with pytest.raises(ValueError, match="negative"):
+        normalize_item_scores(
+            pd.DataFrame([{"item_id": "a", "popular_score": 1.0, "latest_score": 0.0, "n_users": -1}])
+        )
 
 
 def test_page_item_scores_cursor_and_single_id():
