@@ -304,6 +304,54 @@ def test_run_guard_passes_owned_as_fence_check():
     assert owned_calls == [True]
 
 
+def test_held_writer_lock_raises_when_lease_lost():
+    events: list[str] = []
+
+    class Lock:
+        def acquire(self) -> bool:
+            events.append("acquire")
+            return True
+
+        def release(self) -> None:
+            events.append("release")
+
+        def owned(self) -> bool:
+            events.append("owned")
+            return False
+
+        def is_locked(self) -> bool:
+            return True
+
+    from cicerone.locks import LockLostError, held_writer_lock
+
+    with (
+        pytest.raises(LockLostError, match="dataset writer lock lost before write"),
+        held_writer_lock(Lock()),
+    ):
+        pass
+    assert events == ["acquire", "owned", "release"]
+
+
+def test_held_writer_lock_falls_back_on_backend_error():
+    class Lock:
+        def acquire(self) -> bool:
+            raise RuntimeError("backend down")
+
+        def release(self) -> None:
+            raise AssertionError("release should not be called")
+
+        def owned(self) -> bool:
+            raise AssertionError("owned should not be called")
+
+        def is_locked(self) -> bool:
+            return False
+
+    from cicerone.locks import held_writer_lock
+
+    with held_writer_lock(Lock(), fallback_on_error=True):
+        pass
+
+
 def test_build_redis_lock_backend(monkeypatch):
     _mock_redis_module(monkeypatch)
     settings = make_settings(trigger_lock_backend="redis", trigger_redis_url="redis://localhost:6379/0")
