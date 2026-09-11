@@ -100,7 +100,11 @@ def build_user_history_reader(settings: IOSettings) -> UserHistoryReader:
     return build_input_source(settings)
 
 
-def build_output_sink(settings: IOSettings) -> OutputSink:
+def build_output_sink(settings: IOSettings, *, writer_lock: Any = None) -> OutputSink:
+    if settings.kind == "dataset":
+        from cicerone.io.dataset_store import DatasetOutputSink
+
+        return DatasetOutputSink(settings.options, writer_lock=writer_lock)
     return _build_from_registry(settings, _OUTPUT_SINKS, role="output")
 
 

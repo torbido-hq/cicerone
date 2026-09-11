@@ -333,8 +333,10 @@ serve-only image.
 
 Serve replicas scale on the read path. Incremental `[events]` apply is
 single-writer unless `lock_backend` is postgres/redis (leader-only lease,
-separate key from the retrain lock). `events.ha = true` still requires db
-output for track and exposures.
+separate key from the retrain lock). Dataset recommendation full writes and
+user-replace share the same host lock and, when a distributed lock is set,
+the dataset-append lease. `events.ha = true` still requires db output for
+track and exposures.
 
 ## Dashboard
 

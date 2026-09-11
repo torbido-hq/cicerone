@@ -102,9 +102,10 @@ class DatasetInputSource:
 
 
 class DatasetOutputSink:
-    def __init__(self, options: dict[str, Any]):
+    def __init__(self, options: dict[str, Any], *, writer_lock: Any = None):
         self._options = options
         self._backend = validate_storage_options(options)
+        self._writer_lock = writer_lock
 
     @contextmanager
     def _local_file_lock(self, filename: str) -> Iterator[None]:
@@ -113,6 +114,13 @@ class DatasetOutputSink:
             return
         path = Path(require_option(self._options, "path", "local")) / filename
         with exclusive_file_lock(path):
+            yield
+
+    @contextmanager
+    def _recommendations_lock(self) -> Iterator[None]:
+        from cicerone.locks import held_writer_lock
+
+        with held_writer_lock(self._writer_lock), self._local_file_lock(".recommendations.lock"):
             yield
 
     @contextmanager
@@ -136,17 +144,21 @@ class DatasetOutputSink:
         client = build_s3_client(self._options)
         client.put_object(Bucket=bucket, Key=key, Body=payload, ContentType=content_type)
 
-    def write_recommendations(self, df: pd.DataFrame) -> None:
+    def _write_recommendations_unlocked(self, df: pd.DataFrame) -> None:
         buffer = io.BytesIO()
         df.to_parquet(buffer, index=False)
         self._write_bytes("recommendations.parquet", buffer.getvalue(), "application/octet-stream")
+
+    def write_recommendations(self, df: pd.DataFrame) -> None:
+        with self._recommendations_lock():
+            self._write_recommendations_unlocked(df)
 
     def replace_recommendations_for_users(self, df: pd.DataFrame, *, user_ids: Sequence[str]) -> int:
         # Read-modify-write; concurrent replicas need a leader (DB sink is transactional).
         ids = normalize_replace_user_ids(df, user_ids)
         if not ids:
             return 0
-        with self._local_file_lock(".recommendations.lock"):
+        with self._recommendations_lock():
             try:
                 existing = read_parquet(self._options, "recommendations.parquet")
             except FileNotFoundError:
@@ -166,7 +178,7 @@ class DatasetOutputSink:
                 remaining = existing[~existing[USER_COLUMN].astype(str).isin(ids)]
             parts = [frame for frame in (remaining, df) if not frame.empty]
             merged = pd.concat(parts, ignore_index=True) if parts else df
-            self.write_recommendations(merged)
+            self._write_recommendations_unlocked(merged)
             if merged.empty or USER_COLUMN not in merged.columns:
                 return 0
             return int(merged[USER_COLUMN].astype(str).nunique())
