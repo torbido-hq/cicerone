@@ -76,6 +76,9 @@ def test_optional_float_validation():
 
     with pytest.raises(ConfigError, match="must be a number$"):
         optional_float({"n": _OverflowNoRepr()}, "n", 10.0, prefix="x")
+    with pytest.raises(ConfigError, match="<= 5"):
+        optional_float({"n": 5.1}, "n", 10.0, prefix="x", maximum=5.0)
+    assert optional_float({"n": 5.0}, "n", 10.0, prefix="x", maximum=5.0) == 5.0
 
 
 def test_kafka_client_timeouts_default_and_override(monkeypatch):
@@ -96,6 +99,23 @@ def test_kafka_client_timeouts_default_and_override(monkeypatch):
 def test_validate_rejects_bad_timeout():
     with pytest.raises(ConfigError, match="timeout_seconds"):
         validate_kafka_event_options(_options(timeout_seconds=0))
+    with pytest.raises(ConfigError, match="timeout_seconds"):
+        validate_kafka_event_options(_options(timeout_seconds=1e308))
+    from cicerone.kafka_options import MAX_TIMEOUT_MS, kafka_client_config, kafka_timeout_ms
+    from cicerone.option_parse import MAX_BROKER_TIMEOUT_SECONDS
+
+    at_max = _options(timeout_seconds=MAX_BROKER_TIMEOUT_SECONDS)
+    assert kafka_timeout_ms(at_max, prefix="x") == MAX_TIMEOUT_MS
+    with pytest.raises(ConfigError, match="timeout_seconds"):
+        kafka_client_config(_options(timeout_seconds=1e308), prefix="events.options")
+
+
+def test_kafka_timeout_ms_normalizes_conversion_overflow(monkeypatch):
+    from cicerone import kafka_options
+
+    monkeypatch.setattr(kafka_options, "kafka_timeout_seconds", lambda options, *, prefix: 1e308)
+    with pytest.raises(ConfigError, match="timeout_seconds"):
+        kafka_options.kafka_timeout_ms(_options(), prefix="events.options")
 
 
 def test_poll_ack_and_health(monkeypatch):

@@ -5,18 +5,43 @@ from __future__ import annotations
 from typing import Any
 
 from cicerone.config.constants import ConfigError
-from cicerone.option_parse import optional_float, optional_nonempty_str, require_nonempty_str
+from cicerone.option_parse import (
+    MAX_BROKER_TIMEOUT_SECONDS,
+    optional_float,
+    optional_nonempty_str,
+    require_nonempty_str,
+)
 
 SECURITY_PROTOCOLS = frozenset({"plaintext", "ssl", "sasl_plaintext", "sasl_ssl"})
 DEFAULT_TIMEOUT_SECONDS = 10.0
+MAX_TIMEOUT_MS = 2**31 - 1
 
 
 def kafka_timeout_seconds(options: dict[str, Any], *, prefix: str) -> float:
-    return optional_float(options, "timeout_seconds", DEFAULT_TIMEOUT_SECONDS, prefix=prefix)
+    return optional_float(
+        options,
+        "timeout_seconds",
+        DEFAULT_TIMEOUT_SECONDS,
+        prefix=prefix,
+        maximum=MAX_BROKER_TIMEOUT_SECONDS,
+    )
+
+
+def kafka_timeout_ms(options: dict[str, Any], *, prefix: str) -> int:
+    seconds = kafka_timeout_seconds(options, prefix=prefix)
+    try:
+        timeout_ms = int(round(seconds * 1000))
+    except (OverflowError, ValueError) as exc:
+        raise ConfigError(f"{prefix}.timeout_seconds must be a number, got {seconds!r}") from exc
+    if timeout_ms < 1 or timeout_ms > MAX_TIMEOUT_MS:
+        raise ConfigError(
+            f"{prefix}.timeout_seconds must be <= {MAX_BROKER_TIMEOUT_SECONDS}, got {seconds!r}"
+        )
+    return timeout_ms
 
 
 def kafka_client_config(options: dict[str, Any], *, prefix: str) -> dict[str, Any]:
-    timeout_ms = max(1, int(round(kafka_timeout_seconds(options, prefix=prefix) * 1000)))
+    timeout_ms = kafka_timeout_ms(options, prefix=prefix)
     conf: dict[str, Any] = {
         "bootstrap.servers": require_nonempty_str(options, "bootstrap_servers", prefix=prefix),
         "socket.timeout.ms": timeout_ms,
