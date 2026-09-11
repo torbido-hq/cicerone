@@ -4,6 +4,20 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.0] - 2026-09-11
+
+### Added
+
+- Job writes catalog `item_scores` (`popular_score`, `latest_score`, `n_users`) next to recommendations. Dataset: `item_scores.parquet`. DB: `item_scores` table (`item_scores_table` option). First 0.9.0 job creates the table.
+- Serve `GET /item-scores` (bearer, cursor pagination, optional `item_id`) for search-index pull. See [docs/search-weights.md](docs/search-weights.md).
+
+### Fixed
+
+- Serve keeps the last `item_scores` catalog when a refresh cannot read scores (I/O error, missing file or table after a load, or invalid values). Before the first successful load, missing data still serves empty.
+- Serve rejects `item_scores` catalogs with blank or duplicate `item_id`s or non-integral `n_users` and keeps the last valid cache.
+- `GET /item-scores` treats an empty-string `cursor` as a seek point instead of restarting the first page.
+- Job replaces a legacy `item_scores` table that is missing score columns instead of appending into the old schema.
+
 ## [0.8.1] - 2026-09-08
 
 ### Fixed

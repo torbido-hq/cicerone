@@ -94,6 +94,9 @@ def test_job_run_end_to_end_with_local_dataset_backend(tmp_path, monkeypatch):
     assert manifest["artifact_written"] is False
     assert manifest["artifact_schema_version"] is None
     assert not (output_dir / "model.artifact").exists()
+    scores = pd.read_parquet(output_dir / "item_scores.parquet")
+    assert set(scores["item_id"]) == {"i1", "i2", "i3"}
+    assert manifest["n_item_scores"] == 3
 
 
 def test_target_user_ids_skip_missing_values():

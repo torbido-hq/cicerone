@@ -16,7 +16,13 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from cicerone import __version__
 from cicerone.config import Settings, load_settings
-from cicerone.config.constants import DEFAULT_LOG_FORMAT, DEFAULT_SERVE_MAX_K, TRACK_KIND_IMPRESSION
+from cicerone.config.constants import (
+    DEFAULT_LOG_FORMAT,
+    DEFAULT_SERVE_ITEM_SCORES_LIMIT,
+    DEFAULT_SERVE_ITEM_SCORES_MAX,
+    DEFAULT_SERVE_MAX_K,
+    TRACK_KIND_IMPRESSION,
+)
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
 from cicerone.experiment.assignment import resolve_assignment
@@ -28,9 +34,15 @@ from cicerone.http_security import SecurityHeadersMiddleware, token_equals
 from cicerone.io.base import ManifestReader, RecommendationReader
 from cicerone.io.recommendation_reader import SOURCE_COLUMN
 from cicerone.io.recommendation_schema import has_variant_column
+from cicerone.item_scores import page_item_scores
 from cicerone.reasons import parse_reasons
 from cicerone.serve.bootstrap_events import start_events_runtime
-from cicerone.serve.code_samples import HEALTH_PATH, RECOMMENDATIONS_PATH, attach_code_samples
+from cicerone.serve.code_samples import (
+    HEALTH_PATH,
+    ITEM_SCORES_PATH,
+    RECOMMENDATIONS_PATH,
+    attach_code_samples,
+)
 from cicerone.serve.events_routes import attach_events_ingest_openapi, mount_events_routes
 from cicerone.serve.item_filters import (
     ItemsFilterCache,
@@ -46,7 +58,14 @@ from cicerone.serve.metrics import (
     update_cache_age_gauge,
     update_events_source_health,
 )
-from cicerone.serve_schemas import ErrorDetail, HealthResponse, RecommendationItem, RecommendationsResponse
+from cicerone.serve_schemas import (
+    ErrorDetail,
+    HealthResponse,
+    ItemScore,
+    ItemScoresResponse,
+    RecommendationItem,
+    RecommendationsResponse,
+)
 from cicerone.track.routes import attach_track_ingest_openapi, mount_track_routes
 from cicerone.track.store import TrackStore
 
@@ -67,6 +86,9 @@ same output store). See `docs/incremental-events.md`.
 
 When `[track]` is enabled, `POST /track` accepts recommendation impressions
 and clicks (not used for training). See `docs/evaluation.md`.
+
+`GET /item-scores` returns catalog-wide popular/latest weights for search
+indexers. See `docs/search-weights.md`.
 
 Interactive docs: `/docs` (Swagger UI) and `/redoc` (includes language
 code samples via ``x-codeSamples``). Machine-readable schema: `/openapi.json`.
@@ -355,6 +377,45 @@ def create_app(
         if generated_at is not None:
             response.headers["X-Generated-At"] = str(generated_at)
         return body
+
+    @app.get(
+        ITEM_SCORES_PATH,
+        response_model=ItemScoresResponse,
+        dependencies=dependencies,
+        tags=["item-scores"],
+        summary="Catalog popular and latest scores for search ranking",
+        responses={
+            401: {"model": ErrorDetail, "description": "Missing or invalid bearer token"},
+        },
+    )
+    def get_item_scores(
+        limit: int = Query(
+            default=DEFAULT_SERVE_ITEM_SCORES_LIMIT,
+            gt=0,
+            le=DEFAULT_SERVE_ITEM_SCORES_MAX,
+            description="Page size",
+        ),
+        cursor: str | None = Query(default=None, description="Seek after this item_id"),
+        item_id: str | None = Query(default=None, description="Single catalog id"),
+    ) -> ItemScoresResponse:
+        page, next_cursor = page_item_scores(
+            reader.get_item_scores(),
+            limit=min(limit, DEFAULT_SERVE_ITEM_SCORES_MAX),
+            cursor=cursor,
+            item_id=item_id,
+        )
+        return ItemScoresResponse(
+            items=[
+                ItemScore(
+                    item_id=str(row.item_id),
+                    popular_score=float(row.popular_score),
+                    latest_score=float(row.latest_score),
+                    n_users=int(row.n_users),
+                )
+                for row in page.itertuples(index=False)
+            ],
+            next_cursor=next_cursor,
+        )
 
     mount_events_routes(app, settings, event_source=event_source)
     mount_track_routes(app, settings, store=track_store)

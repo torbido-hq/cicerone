@@ -25,9 +25,15 @@ def _settings(**overrides) -> Settings:
 
 
 class _FakeReader:
-    def __init__(self, recs: pd.DataFrame, items: pd.DataFrame | None = None):
+    def __init__(
+        self,
+        recs: pd.DataFrame,
+        items: pd.DataFrame | None = None,
+        item_scores: pd.DataFrame | None = None,
+    ):
         self._recs = recs
         self._items = items
+        self._item_scores = item_scores if item_scores is not None else pd.DataFrame()
         self._items_version = 0
         self.refresh_calls = 0
         self.get_items_calls = 0
@@ -44,6 +50,9 @@ class _FakeReader:
     def get_items(self) -> pd.DataFrame | None:
         self.get_items_calls += 1
         return self._items
+
+    def get_item_scores(self) -> pd.DataFrame:
+        return self._item_scores
 
     def items_version(self) -> int:
         return self._items_version
@@ -187,6 +196,16 @@ def test_items_filter_cache_retries_when_version_moves_during_rebuild():
     assert items is not None
     assert available == frozenset({"i1", "i2"})
     assert by_cat["beer"] == frozenset({"i1", "i3"})
+
+
+def _item_scores_df() -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {"item_id": "a", "popular_score": 1.0, "latest_score": 0.0, "n_users": 1},
+            {"item_id": "b", "popular_score": 2.0, "latest_score": 1.5, "n_users": 2},
+            {"item_id": "c", "popular_score": 3.0, "latest_score": 0.0, "n_users": 1},
+        ]
+    )
 
 
 def test_health_requires_no_auth():
@@ -759,3 +778,39 @@ def test_main_allows_missing_feature_config(tmp_path, monkeypatch):
 
     main()
     assert uvicorn_calls == {"host": "0.0.0.0", "port": 8000}
+
+
+def test_item_scores_requires_auth():
+    app = create_app(_settings(), _FakeReader(_recs_df(), item_scores=_item_scores_df()))
+    assert TestClient(app).get("/item-scores").status_code == 401
+
+
+def test_item_scores_empty_store():
+    app = create_app(_settings(), _FakeReader(_recs_df()))
+    response = TestClient(app).get("/item-scores", headers={"Authorization": "Bearer secret"})
+    assert response.status_code == 200
+    assert response.json() == {"items": [], "next_cursor": None}
+
+
+def test_item_scores_paginates_and_filters():
+    app = create_app(_settings(), _FakeReader(_recs_df(), item_scores=_item_scores_df()))
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer secret"}
+
+    first = client.get("/item-scores", params={"limit": 2}, headers=headers)
+    assert first.status_code == 200
+    body = first.json()
+    assert [row["item_id"] for row in body["items"]] == ["a", "b"]
+    assert body["next_cursor"] == "b"
+
+    second = client.get("/item-scores", params={"limit": 2, "cursor": "b"}, headers=headers)
+    assert [row["item_id"] for row in second.json()["items"]] == ["c"]
+    assert second.json()["next_cursor"] is None
+
+    one = client.get("/item-scores", params={"item_id": "b"}, headers=headers)
+    assert one.json() == {
+        "items": [{"item_id": "b", "popular_score": 2.0, "latest_score": 1.5, "n_users": 2}],
+        "next_cursor": None,
+    }
+    missing = client.get("/item-scores", params={"item_id": "z"}, headers=headers)
+    assert missing.json() == {"items": [], "next_cursor": None}

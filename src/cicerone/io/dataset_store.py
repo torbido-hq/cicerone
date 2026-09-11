@@ -175,6 +175,13 @@ class DatasetOutputSink:
         df.to_parquet(buffer, index=False)
         self._write_bytes("items_snapshot.parquet", buffer.getvalue(), "application/octet-stream")
 
+    def write_item_scores(self, df: pd.DataFrame) -> None:
+        from cicerone.item_scores import ITEM_SCORES_FILENAME
+
+        buffer = io.BytesIO()
+        df.to_parquet(buffer, index=False)
+        self._write_bytes(ITEM_SCORES_FILENAME, buffer.getvalue(), "application/octet-stream")
+
     def write_manifest(self, manifest: dict) -> None:
         self._write_bytes("manifest.json", json.dumps(manifest, indent=2).encode("utf-8"), "application/json")
 

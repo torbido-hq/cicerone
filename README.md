@@ -48,7 +48,7 @@ up to your own data doesn't require touching any code.
 - **Business policies** — TOML eligibility filters and score boosts
 - **Serve mode** — read-only HTTP API over precomputed recommendations
   (`limit` / `category` / `exclude_unavailable`, cold-start fallback;
-  OpenAPI at `/docs` + thin `ServeClient`)
+  OpenAPI at `/docs` + thin `ServeClient`); catalog `GET /item-scores` for search ranking
 - **Incremental events** — write-through of popular/latest between retrains
   (webhook, DB, S3, Redis Streams, Kafka, or RabbitMQ);
   optional `[events.online]` continues LightFM for affected users
@@ -103,6 +103,7 @@ events worker loads the last artifact for write-through only:
 | --- | --- | --- |
 | `GET` | `/health` | Liveness probe (no auth) |
 | `GET` | `/recommendations/{user_id}` | Precomputed top-K for that user (optional `reasons`) |
+| `GET` | `/item-scores` | Catalog popular/latest scores for search ranking |
 | `GET` | `/metrics` | Prometheus text format (no bearer token; optional `X-Metrics-Token`) |
 | `POST` | `/events` | Incremental ingest when `[events]` `kind = "webhook"` |
 | `GET` | `/docs` / `/redoc` | Interactive OpenAPI docs (Swagger / ReDoc) |
@@ -632,6 +633,12 @@ manifest on every read.
 `items_snapshot` / `recommendation_items`: optional copy of the items frame
 written next to recommendations so serve mode can apply `?category=` and
 `exclude_unavailable` without reading the input store.
+
+`item_scores`: full-catalog `popular_score`, `latest_score`, `n_users` for
+search-index ranking (not per-user top-K). Dataset `item_scores.parquet` /
+DB table `item_scores`. Serve `GET /item-scores`. See
+[docs/search-weights.md](docs/search-weights.md). Incremental events do not
+refresh these rows.
 
 ## Interaction weights & cold-start
 

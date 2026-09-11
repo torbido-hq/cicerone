@@ -151,6 +151,7 @@ class _ItemFilterMixin:
 
     _items: pd.DataFrame | None
     _items_version: int
+    _item_scores: pd.DataFrame
     _category_column: str | None
     _availability_filters: list[str]
     _lock: threading.RLock
@@ -158,6 +159,7 @@ class _ItemFilterMixin:
     def _init_item_filter_state(self) -> None:
         self._items = None
         self._items_version = 0
+        self._item_scores = pd.DataFrame()
         self._category_column = None
         self._availability_filters = []
         self._lock = threading.RLock()
@@ -192,3 +194,8 @@ class _ItemFilterMixin:
         self._ensure_item_filter_state()
         with self._lock:
             return self._items
+
+    def get_item_scores(self) -> pd.DataFrame:
+        self._ensure_item_filter_state()
+        with self._lock:
+            return self._item_scores

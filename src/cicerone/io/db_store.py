@@ -42,6 +42,7 @@ from cicerone.io.recommendation_schema import (
 )
 from cicerone.io.replace_users import RecommendationSchemaError, normalize_replace_user_ids
 from cicerone.io.user_lookup import OCCURRED_AT_COLUMN, filter_rows_for_user, newest_events
+from cicerone.item_scores import ITEM_SCORES_COLUMNS, normalize_item_scores
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,7 @@ DEFAULT_EXPERIMENT_STATE_TABLE = "experiment_state"
 DEFAULT_TRACK_TABLE = "recommendation_track"
 DEFAULT_EVAL_TABLE = "recommendation_eval"
 DEFAULT_HISTORY_TABLE = "recommendation_history"
+DEFAULT_ITEM_SCORES_TABLE = "item_scores"
 
 DEFAULT_DB_TABLES = frozenset(
     {
@@ -80,6 +82,7 @@ DEFAULT_DB_TABLES = frozenset(
         DEFAULT_TRACK_TABLE,
         DEFAULT_EVAL_TABLE,
         DEFAULT_HISTORY_TABLE,
+        DEFAULT_ITEM_SCORES_TABLE,
     }
 )
 
@@ -126,6 +129,14 @@ def _require_optional_recommendation_columns(engine: Engine, table: str, frame: 
     raise RecommendationSchemaError(
         f"Recommendations table {table!r} is missing column(s) {missing}; {alters}"
     )
+
+
+def _missing_item_scores_columns(engine: Engine, table: str) -> list[str]:
+    inspector = inspect(engine)
+    if not inspector.has_table(table):
+        return []
+    existing = {column["name"] for column in inspector.get_columns(table)}
+    return [column for column in ITEM_SCORES_COLUMNS if column not in existing]
 
 
 def _sql_user_source(query: str | None, table: str) -> str:
@@ -390,4 +401,24 @@ class DatabaseOutputSink:
         logger.info("Writing %d item snapshot rows to database table %r", len(df), table)
         with self._engine.begin() as conn:
             _clear_table_for_replace(conn, table)
+            df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
+
+    def write_item_scores(self, df: pd.DataFrame) -> None:
+        table = sql_identifier(
+            self._options.get("item_scores_table", DEFAULT_ITEM_SCORES_TABLE),
+            option="item_scores_table",
+        )
+        df = normalize_item_scores(df)
+        logger.info("Writing %d item score rows to database table %r", len(df), table)
+        missing = _missing_item_scores_columns(self._engine, table)
+        with self._engine.begin() as conn:
+            if missing:
+                logger.warning(
+                    "Replacing legacy item_scores table %r missing column(s) %s",
+                    table,
+                    missing,
+                )
+                conn.execute(text(f'DROP TABLE "{table}"'))
+            else:
+                _clear_table_for_replace(conn, table)
             df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)

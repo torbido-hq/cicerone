@@ -84,6 +84,21 @@ class RecommendationsResponse(BaseModel):
     )
 
 
+class ItemScore(BaseModel):
+    item_id: str = Field(description="Catalog item identifier")
+    popular_score: float = Field(description="Sum of weighted interactions for this item")
+    latest_score: float = Field(description="Same sum restricted to the latest window (14 days)")
+    n_users: int = Field(description="Distinct users in the full (non-window) interactions", ge=0)
+
+
+class ItemScoresResponse(BaseModel):
+    items: list[ItemScore] = Field(description="Catalog scores, ordered by item_id")
+    next_cursor: str | None = Field(
+        default=None,
+        description="Pass as cursor to fetch the next page; null when this page is last",
+    )
+
+
 class ErrorDetail(BaseModel):
     detail: str
 

@@ -233,6 +233,69 @@ def test_dataset_reader_refresh_keeps_previous_cache_on_error(tmp_path):
     assert list(recs["item_id"]) == ["i1"]
 
 
+def test_dataset_reader_item_scores_missing_and_refresh(tmp_path):
+    _write_recommendations(tmp_path, [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9}])
+    reader = DatasetRecommendationReader({"storage_backend": "local", "path": str(tmp_path)})
+    assert reader.get_item_scores().empty
+
+    pd.DataFrame([{"item_id": "i1", "popular_score": 2.5, "latest_score": 1.0, "n_users": 4}]).to_parquet(
+        tmp_path / "item_scores.parquet", index=False
+    )
+    reader.refresh()
+    scores = reader.get_item_scores()
+    assert list(scores["item_id"]) == ["i1"]
+    assert float(scores.iloc[0]["popular_score"]) == 2.5
+
+    pd.DataFrame([{"item_id": "i1", "popular_score": 1.0}]).to_parquet(
+        tmp_path / "item_scores.parquet", index=False
+    )
+    reader.refresh()
+    kept = reader.get_item_scores()
+    assert list(kept["item_id"]) == ["i1"]
+    assert float(kept.iloc[0]["popular_score"]) == 2.5
+
+    (tmp_path / "item_scores.parquet").write_bytes(b"not-parquet")
+    reader.refresh()
+    still = reader.get_item_scores()
+    assert list(still["item_id"]) == ["i1"]
+    assert float(still.iloc[0]["popular_score"]) == 2.5
+
+    (tmp_path / "item_scores.parquet").unlink()
+    reader.refresh()
+    assert float(reader.get_item_scores().iloc[0]["popular_score"]) == 2.5
+
+    pd.DataFrame(columns=["item_id"]).to_parquet(tmp_path / "item_scores.parquet", index=False)
+    reader.refresh()
+    assert float(reader.get_item_scores().iloc[0]["popular_score"]) == 2.5
+
+    pd.DataFrame([{"item_id": "i1", "popular_score": "x", "latest_score": 0.0, "n_users": 1}]).to_parquet(
+        tmp_path / "item_scores.parquet", index=False
+    )
+    reader.refresh()
+    assert float(reader.get_item_scores().iloc[0]["popular_score"]) == 2.5
+
+    pd.DataFrame([{"item_id": "i1", "popular_score": 1.0, "latest_score": 0.0, "n_users": -1}]).to_parquet(
+        tmp_path / "item_scores.parquet", index=False
+    )
+    reader.refresh()
+    assert float(reader.get_item_scores().iloc[0]["popular_score"]) == 2.5
+
+    pd.DataFrame([{"item_id": "i1", "popular_score": 1.0, "latest_score": 0.0, "n_users": 1.5}]).to_parquet(
+        tmp_path / "item_scores.parquet", index=False
+    )
+    reader.refresh()
+    assert float(reader.get_item_scores().iloc[0]["popular_score"]) == 2.5
+
+    pd.DataFrame(
+        [
+            {"item_id": "i1", "popular_score": 1.0, "latest_score": 0.0, "n_users": 1},
+            {"item_id": "i1", "popular_score": 9.0, "latest_score": 0.0, "n_users": 2},
+        ]
+    ).to_parquet(tmp_path / "item_scores.parquet", index=False)
+    reader.refresh()
+    assert float(reader.get_item_scores().iloc[0]["popular_score"]) == 2.5
+
+
 def test_dataset_reader_cold_start_fallback_and_items(tmp_path):
     _write_recommendations(
         tmp_path,

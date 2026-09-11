@@ -5,8 +5,9 @@ serve process (`cicerone serve` or the serve container — see the README
 Serve section and [docs/tutorial.md](../../docs/tutorial.md) step 12).
 
 OpenAPI / ReDoc also embed language samples (`x-codeSamples`, including
-Ruby) on `/health`, `/recommendations/{user_id}`, `POST /events` (when
-webhook events are enabled), and `POST /track` (when `[track]` is enabled)
+Ruby) on `/health`, `/recommendations/{user_id}`, `GET /item-scores`,
+`POST /events` (when webhook events are enabled), and `POST /track` (when
+`[track]` is enabled)
 — open `http://localhost:8000/redoc` or the checked-in
 [`docs/openapi/serve.openapi.json`](../../docs/openapi/serve.openapi.json).
 
