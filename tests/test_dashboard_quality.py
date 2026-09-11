@@ -544,6 +544,40 @@ def test_quality_live_eval_concats_history_with_current_recs(tmp_path):
     assert context["track_eval"]["by_source"]["personalized"]["n_impressions"] == 1
 
 
+def test_quality_live_eval_history_error_keeps_current_recs(tmp_path, monkeypatch):
+    import pandas as pd
+
+    from cicerone.dashboard_quality import quality_context
+    from cicerone.track.normalize import normalize_track
+
+    settings = _settings(tmp_path, track={"enabled": True})
+    TrackStore(settings.output).append_rows(
+        [
+            normalize_track(
+                {
+                    "kind": "impression",
+                    "user_id": "u1",
+                    "item_id": "i1",
+                    "rank": 1,
+                    "occurred_at": "2026-08-28T12:00:00Z",
+                    "generated_at": "2026-08-28T03:00:00+00:00",
+                    "event_id": "imp-keep-recs",
+                }
+            ).as_row()
+        ]
+    )
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}]
+    ).to_parquet(tmp_path / "recommendations.parquet", index=False)
+    monkeypatch.setattr(
+        "cicerone.track.store.TrackStore.read_history",
+        lambda self, **_kwargs: (_ for _ in ()).throw(RuntimeError("history")),
+    )
+    context = quality_context(settings)
+    assert context["empty_track"] is False
+    assert context["track_eval"]["by_source"]["popular"]["n_impressions"] == 1
+
+
 def test_quality_context_no_impressions_malformed_overall(tmp_path):
     from cicerone.dashboard_quality import quality_context
 

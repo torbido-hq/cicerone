@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import logging
-from concurrent.futures import ThreadPoolExecutor
-from typing import Any
+from concurrent.futures import Future, ThreadPoolExecutor
+from typing import Any, TypeVar
 
 import pandas as pd
 
@@ -20,6 +20,7 @@ from cicerone.evaluation.context import prefer_history
 from cicerone.track.store import TrackStore
 
 logger = logging.getLogger(__name__)
+_T = TypeVar("_T")
 
 
 def quality_context(settings: Settings) -> dict[str, Any]:
@@ -89,6 +90,14 @@ def _replay_metric_names(served_eval: dict[str, Any] | None) -> list[str]:
     return names
 
 
+def _future_or(future: Future[_T], label: str, default: _T) -> _T:
+    try:
+        return future.result()
+    except Exception:
+        logger.exception("Failed to %s", label)
+        return default
+
+
 def _no_impressions(track_eval: dict[str, Any] | None) -> bool:
     if not track_eval:
         return True
@@ -138,8 +147,10 @@ def _live_track_eval(settings: Settings, store: TrackStore) -> dict[str, Any] | 
             conv_f = pool.submit(_load_conversions)
             recs_f = pool.submit(_load_recs)
             hist_f = pool.submit(_load_history)
-            conversions = conv_f.result()
-            recs = prefer_history(hist_f.result(), recs_f.result())
+            conversions = _future_or(conv_f, "load conversions for live Quality metrics", pd.DataFrame())
+            current = _future_or(recs_f, "load recommendations for live Quality metrics", None)
+            history = _future_or(hist_f, "read recommendation history for Quality", None)
+            recs = prefer_history(history, current)
     except Exception:
         logger.exception("Failed to load conversions for live Quality metrics")
     try:
