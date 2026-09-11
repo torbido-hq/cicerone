@@ -112,10 +112,16 @@ class _PikaIo:
                     self._cleanup_abandoned()
                     return
                 self._pump()
+                if self._failed:
+                    self._cleanup_abandoned()
+                    return
                 continue
             if job is _IO_STOP:
                 if self._failed:
                     self._cleanup_abandoned()
+                return
+            if self._failed:
+                self._cleanup_abandoned()
                 return
             fn, reply = job
             try:

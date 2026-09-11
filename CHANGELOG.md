@@ -23,6 +23,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Kafka and RabbitMQ ingest and publish time out broker calls after 10s (`timeout_seconds`).
 - Broker `timeout_seconds` values that overflow client millisecond limits raise `ConfigError`.
 - Kafka `timeout_seconds` below 10 ms raises `ConfigError` (librdkafka `socket.timeout.ms`).
+- A timed-out RabbitMQ I/O call queued during the idle pump is not executed.
 - Manual `popular_in_category` fails at job fit when items lack the category column.
 - Overall track CVR uses the same impression-slice attribution as rank, source, and variant.
 
