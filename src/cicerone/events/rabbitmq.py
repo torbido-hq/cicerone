@@ -88,10 +88,15 @@ class _PikaIo:
         self._thread.join(timeout=0.1 if self._failed else 5.0)
 
     def _cleanup_abandoned(self) -> None:
+        channel = self._abandon_channel
+        connection = self._connection if self._connection is not None else self._abandon_connection
+        extra = self._abandon_connection
         self._connection = None
-        _close_handles(self._abandon_channel, self._abandon_connection)
         self._abandon_channel = None
         self._abandon_connection = None
+        _close_handles(channel, connection)
+        if extra is not None and extra is not connection:
+            _close_quietly(extra, "connection")
 
     def _loop(self) -> None:
         while True:
@@ -159,7 +164,7 @@ class RabbitMQEventSource(EventSource):
         try:
             connection, channel = io.submit(partial(self._open, pika, io))
         except Exception as exc:
-            io.stop()
+            io.abandon(None, io._connection)
             raise ConfigError(f"events.options.amqp_url is unreachable: {exc}") from exc
 
         with self._lock:
