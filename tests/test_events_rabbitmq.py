@@ -308,6 +308,21 @@ def test_health_tolerates_queue_probe_failure(monkeypatch):
     assert health.connected is True
 
 
+def test_health_disconnected_when_probe_times_out(monkeypatch):
+    install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options(timeout_seconds=0.05))
+    source.connect()
+
+    def _hang() -> Any:
+        time.sleep(5)
+        raise RuntimeError("unreachable")
+
+    source._passive_declare = _hang  # type: ignore[method-assign]
+    health = source.health()
+    assert health.connected is False
+    source.close()
+
+
 def test_basic_get_failure_returns_partial(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     broker.enqueue("cicerone.events", event_payload(event_id="e1"))

@@ -260,6 +260,9 @@ def test_fit_strategies_rejects_popular_in_category_without_item_feature(sample_
     missing = replace(built, items=None)
     with pytest.raises(ConfigError, match="items frame is missing"):
         fit_strategies(missing, ["u1"], enabled_models=["popular_in_category"])
+    cache: dict = {"popular_in_category": object()}
+    with pytest.raises(ConfigError, match="category"):
+        fit_strategies(stripped, ["u1"], enabled_models=["popular_in_category"], strategy_cache=cache)
 
 
 def test_fit_strategy_on_worker_requires_initializer():

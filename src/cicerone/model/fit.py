@@ -274,6 +274,13 @@ def fit_strategies(
                 len(target_users),
             )
 
+    if "popular_in_category" in enabled_models:
+        from cicerone.automl import popular_in_category_automl_skip_reason
+
+        skip = popular_in_category_automl_skip_reason(built.items, model_configs=resolved_configs)
+        if skip is not None:
+            raise ConfigError(skip)
+
     models: dict[str, RecommenderModel] = {}
     if strategy_cache is not None:
         for name in enabled_models:
@@ -287,12 +294,6 @@ def fit_strategies(
             if name not in models and not (STRATEGIES[name].personalized and not warm_users)
         )
     )
-    if "popular_in_category" in to_fit:
-        from cicerone.automl import popular_in_category_automl_skip_reason
-
-        skip = popular_in_category_automl_skip_reason(built.items, model_configs=resolved_configs)
-        if skip is not None:
-            raise ConfigError(skip)
     # Pre-slice interactions in the parent to shrink ProcessPool pickles.
     epoch_interactions = (
         interactions_for_epoch_metrics(dataset, built.interactions, epoch_metrics.max_users)

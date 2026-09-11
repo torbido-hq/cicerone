@@ -293,6 +293,8 @@ class RabbitMQEventSource(EventSource):
             ready = int(declared.method.message_count)
         except Exception:
             logger.exception("RabbitMQ queue_declare (passive) failed")
+            if io.failed:
+                return EventSourceHealth(connected=False, lag=None, last_event_at=last_event_at)
             ready = 0
         lag = ready + local_held
         return EventSourceHealth(
