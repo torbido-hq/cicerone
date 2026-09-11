@@ -928,3 +928,64 @@ def test_incremental_updater_records_consumed(tmp_path, feature_config: FeatureC
     events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
     assert updater.apply(events) == 1
     assert overlay.item_ids("u1") == {"i9"}
+
+
+def test_incremental_updater_skips_consumed_when_write_blocked(tmp_path, feature_config: FeatureConfig):
+    from cicerone.events.consumed import ConsumedOverlay
+
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    overlay = ConsumedOverlay()
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        write_busy_check=lambda: True,
+        consumed=overlay,
+    )
+    events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
+    assert updater.apply(events) == 0
+    assert overlay.item_ids("u1") == set()
+
+
+def test_incremental_updater_skips_consumed_when_publish_fails(tmp_path, feature_config: FeatureConfig):
+    from cicerone.events.consumed import ConsumedOverlay
+
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+
+    class _Boom:
+        def publish(self, _df: pd.DataFrame) -> None:
+            raise RuntimeError("broker down")
+
+        def close(self) -> None:
+            return None
+
+    overlay = ConsumedOverlay()
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        publisher=_Boom(),
+        consumed=overlay,
+    )
+    events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
+    with pytest.raises(RuntimeError, match="broker down"):
+        updater.apply(events)
+    assert overlay.item_ids("u1") == set()

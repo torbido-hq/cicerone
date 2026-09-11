@@ -130,7 +130,6 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             logger.info("Skipping incremental update: full retrain in progress")
             return 0
 
-        self._note_consumed(events)
         batch = events_to_dataframe(events)
         weights = self._row_signal_weights(batch)
         affected_users = sorted(set(batch[USER_COLUMN].astype(str)))
@@ -196,6 +195,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
                 "Incremental update skipped write: %d event(s) had no ranking signal",
                 len(events),
             )
+            self._note_consumed(events)
             return len(events)
 
         merged = pd.concat(frames, ignore_index=True)
@@ -243,6 +243,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             len(replace_ids),
             len(events),
         )
+        self._note_consumed(events)
         return len(events)
 
     def _note_consumed(self, events: Sequence[NormalizedEvent]) -> None:
