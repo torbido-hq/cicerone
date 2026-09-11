@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.8.1] - 2026-09-08
+## [0.9.0] - 2026-09-11
 
 ### Added
 
@@ -17,6 +17,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Catalog CRUD on `[input]` (`PUT/GET/DELETE /users/{id}`, `/items/{id}`,
   `/catalog/events`) so a host can upsert users, items, and events without
   owning a separate ETL dump.
+
+## [0.8.1] - 2026-09-08
 
 ### Fixed
 
