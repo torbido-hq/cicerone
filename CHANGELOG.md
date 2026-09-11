@@ -12,6 +12,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   using `[input]` history plus incremental events. Short lists fill from
   popular/latest (`[serve].fallback_fill`) when hide or availability filters
   drop rows.
+- Catalog writes on `[input]` (`PUT/GET/DELETE /users/{id}`, `/items/{id}`,
+  `/catalog/events`) so a host can upsert users, items, and events without
+  a separate dump.
 
 ## [0.8.1] - 2026-09-08
 

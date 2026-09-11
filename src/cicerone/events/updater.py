@@ -26,6 +26,7 @@ from cicerone.events.updater_merge import (
 from cicerone.events.updater_ranking import UpdaterRanking
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.base import OutputSink
+from cicerone.io.catalog import CatalogStore
 from cicerone.io.recommendation_reader import SOURCE_COLUMN, USER_COLUMN
 from cicerone.io.recommendation_schema import recommendation_output_columns
 from cicerone.locks import LockLostError
@@ -68,6 +69,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         explain_enabled: bool = True,
         publisher: RecommendationPublisher | None = None,
         consumed: ConsumedOverlay | None = None,
+        catalog: CatalogStore | None = None,
     ):
         if user_cache_max_size < 1:
             raise ValueError("user_cache_max_size must be >= 1")
@@ -89,6 +91,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         self._explain_enabled = explain_enabled
         self._publisher = publisher
         self._consumed = consumed
+        self._catalog = catalog
 
     @property
     def last_success_at(self) -> datetime | None:
@@ -131,6 +134,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             return 0
 
         self._note_consumed(events)
+        self._persist_catalog(events)
         batch = events_to_dataframe(events)
         weights = self._row_signal_weights(batch)
         affected_users = sorted(set(batch[USER_COLUMN].astype(str)))
@@ -249,6 +253,25 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         if self._consumed is None:
             return
         self._consumed.add_many([(event.user_id, event.item_id) for event in events])
+
+    def _persist_catalog(self, events: Sequence[NormalizedEvent]) -> None:
+        if self._catalog is None:
+            return
+        rows = [
+            {
+                "user_id": event.user_id,
+                "item_id": event.item_id,
+                "event_type": event.event_type,
+                "quantity": event.quantity,
+                "occurred_at": event.occurred_at,
+                "event_id": event.event_id,
+            }
+            for event in events
+        ]
+        try:
+            self._catalog.upsert_events(rows)
+        except Exception:
+            logger.exception("Failed to persist incremental events to the catalog")
 
     def _commit_online(self) -> None:
         if self._online is None:

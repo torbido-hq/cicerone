@@ -74,10 +74,10 @@ metrics_enabled = false
 # [serve]
 # log_impressions = false         # GET lookup is not a view; host should POST /track
 
-# [input] is required by config.load_settings() even in serve mode. Serve
-# reads it for consumed-item hide (`[serve].exclude_consumed`). Point it at
-# the live events store when you want GET /recommendations to drop
-# just-purchased items.
+# [input] is required. Serve reads it for consumed-item hide and catalog
+# writes (`/users`, `/items`, `/catalog/events`). Point it at the live
+# events store when you want GET /recommendations to drop just-purchased
+# items.
 [input]
 kind = "dataset"
 

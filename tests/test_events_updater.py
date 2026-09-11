@@ -928,3 +928,65 @@ def test_incremental_updater_records_consumed(tmp_path, feature_config: FeatureC
     events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
     assert updater.apply(events) == 1
     assert overlay.item_ids("u1") == {"i9"}
+
+
+class _RecordingCatalog:
+    def __init__(self) -> None:
+        self.rows: list[dict] = []
+
+    def upsert_events(self, rows: list[dict]) -> int:
+        self.rows.extend(rows)
+        return len(rows)
+
+
+class _FailingCatalog:
+    def upsert_events(self, rows: list[dict]) -> int:
+        raise RuntimeError("catalog write failed")
+
+
+def test_incremental_updater_persists_catalog(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    catalog = _RecordingCatalog()
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        catalog=catalog,
+    )
+    events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
+    assert updater.apply(events) == 1
+    assert catalog.rows[0]["user_id"] == "u1"
+    assert catalog.rows[0]["item_id"] == "i9"
+    assert catalog.rows[0]["event_id"] == "n1"
+
+
+def test_incremental_updater_catalog_failure_does_not_block(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        catalog=_FailingCatalog(),
+    )
+    events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
+    assert updater.apply(events) == 1
+    frame = load_recommendations_frame(settings.output)
+    assert "i9" in set(frame[frame["user_id"] == "u1"]["item_id"].astype(str))
