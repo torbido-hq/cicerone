@@ -55,10 +55,17 @@ def test_openapi_json_lists_serve_paths_and_schemas():
     assert HEALTH_PATH in schema["paths"]
     assert RECOMMENDATIONS_PATH in schema["paths"]
     assert ITEM_SCORES_PATH in schema["paths"]
+    assert "/users/{user_id}" in schema["paths"]
+    assert "/items/{item_id}" in schema["paths"]
+    assert "/catalog/events" in schema["paths"]
+    assert "/catalog/events/{user_id}" in schema["paths"]
 
     components = schema["components"]["schemas"]
     assert "ItemScore" in components
     assert "ItemScoresResponse" in components
+    assert "CatalogWriteResponse" in components
+    assert "CatalogRowResponse" in components
+    assert "CatalogEventsResponse" in components
     assert "RecommendationsResponse" in components
     assert "experiment_id" in components["RecommendationsResponse"]["properties"]
     assert "variant" in components["RecommendationsResponse"]["properties"]
