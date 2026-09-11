@@ -40,6 +40,8 @@ def test_validate_requires_core_options():
         validate_rabbitmq_event_options(_options(prefetch=0))
     with pytest.raises(ConfigError, match="timeout_seconds"):
         validate_rabbitmq_event_options(_options(timeout_seconds=0))
+    with pytest.raises(ConfigError, match="timeout_seconds"):
+        validate_rabbitmq_event_options(_options(timeout_seconds=1e308))
 
 
 def test_amqp_timeouts_applied_on_connect(monkeypatch):

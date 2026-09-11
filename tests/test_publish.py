@@ -115,6 +115,10 @@ def test_validate_kafka_publish_options():
         validate_kafka_publish_options({"bootstrap_servers": "h:9092"})
     with pytest.raises(ConfigError, match="timeout_seconds"):
         validate_kafka_publish_options({"bootstrap_servers": "h:9092", "topic": "t", "timeout_seconds": 0})
+    with pytest.raises(ConfigError, match="timeout_seconds"):
+        validate_kafka_publish_options(
+            {"bootstrap_servers": "h:9092", "topic": "t", "timeout_seconds": 1e308}
+        )
 
 
 def test_validate_rabbitmq_publish_options():
@@ -125,6 +129,10 @@ def test_validate_rabbitmq_publish_options():
     with pytest.raises(ConfigError, match="timeout_seconds"):
         validate_rabbitmq_publish_options(
             {"amqp_url": "amqp://localhost/", "queue": "q", "timeout_seconds": 0}
+        )
+    with pytest.raises(ConfigError, match="timeout_seconds"):
+        validate_rabbitmq_publish_options(
+            {"amqp_url": "amqp://localhost/", "queue": "q", "timeout_seconds": 1e308}
         )
     validate_rabbitmq_publish_options({"amqp_url": "amqp://localhost/", "exchange": "recs"})
 
