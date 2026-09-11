@@ -9,6 +9,7 @@ import pandas as pd
 
 from cicerone.config import Settings
 from cicerone.evaluation import (
+    conversion_event_types,
     conversion_events_for_settings,
     evaluate_tracking,
     generated_ats_from_track,
@@ -109,7 +110,11 @@ def _live_track_eval(settings: Settings, store: TrackStore) -> dict[str, Any] | 
     try:
         from cicerone.events.store import load_recommendations_frame
 
-        events = load_metric_events(settings)
+        types = conversion_event_types(
+            settings.track.conversion_event_types,
+            primary_metric=settings.experiment.primary_metric,
+        )
+        events = load_metric_events(settings, event_types=types)
         conversions = conversion_events_for_settings(events, settings)
         recs = load_recommendations_frame(settings.output)
         if recs is not None and recs.empty:

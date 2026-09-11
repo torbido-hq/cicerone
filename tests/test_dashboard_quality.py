@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 
+import pandas as pd
 from conftest import make_settings
 from fastapi.testclient import TestClient
 
@@ -222,6 +223,37 @@ def test_quality_live_eval_read_rows_error(tmp_path, monkeypatch):
     context = quality_context(settings)
     assert context["empty_track"] is True
     assert context["track_eval"] is None
+
+
+def test_quality_live_eval_pushes_conversion_event_types(tmp_path, monkeypatch):
+    from cicerone.dashboard_quality import quality_context
+    from cicerone.evaluation import DEFAULT_CONVERSION_TYPE
+    from cicerone.track.normalize import normalize_track
+
+    settings = _settings(tmp_path, track={"enabled": True})
+    TrackStore(settings.output).append_rows(
+        [
+            normalize_track(
+                {
+                    "kind": "impression",
+                    "user_id": "u1",
+                    "item_id": "i1",
+                    "rank": 1,
+                    "occurred_at": "2026-08-28T12:00:00Z",
+                    "event_id": "imp-types",
+                }
+            ).as_row()
+        ]
+    )
+    seen: dict[str, object] = {}
+
+    def _load_events(_settings, *, event_types=None):
+        seen["event_types"] = event_types
+        return pd.DataFrame(columns=["user_id", "item_id", "event_type", "quantity", "occurred_at"])
+
+    monkeypatch.setattr("cicerone.dashboard_quality.load_metric_events", _load_events)
+    quality_context(settings)
+    assert seen["event_types"] == (DEFAULT_CONVERSION_TYPE,)
 
 
 def test_quality_live_eval_conversion_load_error_still_scores(tmp_path, monkeypatch):
