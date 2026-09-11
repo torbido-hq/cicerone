@@ -7,6 +7,8 @@ from typing import Any, TypeVar
 
 from cicerone.config.settings import IOSettings
 from cicerone.io.base import InputSource, ManifestReader, OutputSink, RecommendationReader, UserHistoryReader
+from cicerone.io.catalog import CatalogStore
+from cicerone.io.surfaces_reader import EmptySurfacesReader, SurfacesReader
 
 T = TypeVar("T")
 
@@ -110,3 +112,31 @@ def build_recommendation_reader(settings: IOSettings) -> RecommendationReader:
 
 def build_manifest_reader(settings: IOSettings) -> ManifestReader:
     return _build_from_registry(settings, _MANIFEST_READERS, role="manifest")
+
+
+def build_surfaces_reader(settings: IOSettings) -> SurfacesReader:
+    match settings.kind:
+        case "dataset":
+            from cicerone.io.surfaces_reader import DatasetSurfacesReader
+
+            return DatasetSurfacesReader(settings.options)
+        case "db":
+            from cicerone.io.surfaces_reader import DbSurfacesReader
+
+            return DbSurfacesReader(settings.options)
+        case _:
+            return EmptySurfacesReader()
+
+
+def build_catalog_store(settings: IOSettings) -> CatalogStore | None:
+    match settings.kind:
+        case "dataset":
+            from cicerone.io.dataset_catalog import DatasetCatalogStore
+
+            return DatasetCatalogStore(settings.options)
+        case "db":
+            from cicerone.io.db_catalog import DatabaseCatalogStore
+
+            return DatabaseCatalogStore(settings.options)
+        case _:
+            return None

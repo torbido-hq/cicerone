@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.8.1] - 2026-09-08
 
+### Added
+
+- Serve-time hide of consumed items (`[serve].exclude_consumed`, default on)
+  using `[input]` history plus incremental/catalog events. Short lists fill
+  from popular/latest (`[serve].fallback_fill`).
+- Named surfaces on the serve API: `GET /popular`, `GET /latest`,
+  `GET /similar/{item_id}`, and `POST /session/recommendations`. The job
+  writes popular / latest / item-neighbor snapshots next to recommendations.
+- Catalog CRUD on `[input]` (`PUT/GET/DELETE /users/{id}`, `/items/{id}`,
+  `/catalog/events`) so a host can upsert users, items, and events without
+  owning a separate ETL dump.
+
 ### Fixed
 
 - Production replay scores the served experiment variant, not the union of all lists.

@@ -103,6 +103,12 @@ events worker loads the last artifact for write-through only:
 | --- | --- | --- |
 | `GET` | `/health` | Liveness probe (no auth) |
 | `GET` | `/recommendations/{user_id}` | Precomputed top-K for that user (optional `reasons`) |
+| `GET` | `/popular` | Precomputed popular items |
+| `GET` | `/latest` | Precomputed latest items |
+| `GET` | `/similar/{item_id}` | Item-to-item neighbors from the last job |
+| `POST` | `/session/recommendations` | Anonymous session recommend via neighbors |
+| `PUT`/`GET`/`DELETE` | `/users/{user_id}`, `/items/{item_id}` | Catalog upsert when `[input]` is dataset or db |
+| `POST`/`GET`/`DELETE` | `/catalog/events` | Persist interaction events on `[input]` |
 | `GET` | `/metrics` | Prometheus text format (no bearer token; optional `X-Metrics-Token`) |
 | `POST` | `/events` | Incremental ingest when `[events]` `kind = "webhook"` |
 | `GET` | `/docs` / `/redoc` | Interactive OpenAPI docs (Swagger / ReDoc) |
@@ -115,6 +121,7 @@ Query parameters for `/recommendations/{user_id}`:
 | `limit` | `[serve].default_k` (10) | Top-K rows to return (`k` is accepted as an alias) |
 | `category` | _(none)_ | Keep only items whose `[serve].category_column` (default `category`) matches |
 | `exclude_unavailable` | `true` | Re-apply `item_availability_filters` against the items snapshot written with the last run |
+| `exclude_consumed` | `[serve].exclude_consumed` (`true`) | Drop items in the user's live `[input]` / incremental events |
 
 Response JSON:
 

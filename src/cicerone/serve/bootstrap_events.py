@@ -13,6 +13,7 @@ from cicerone.config.constants import (
     DEFAULT_EVENTS_RETRAIN_PROBE_TTL_SECONDS,
 )
 from cicerone.events.buffer import MicroBatchBuffer
+from cicerone.events.consumed import ConsumedOverlay
 from cicerone.events.ha import poll_without_apply_lock
 from cicerone.events.registry import build_event_source
 from cicerone.events.store import dispose_recommendation_engines
@@ -23,6 +24,7 @@ from cicerone.experiment.assignment import experiment_variant_names, resolve_ass
 from cicerone.experiment.store import ExperimentStore
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.base import RecommendationReader
+from cicerone.io.catalog import CatalogStore
 from cicerone.io.factory import build_output_sink
 from cicerone.locks import LockBackend, build_lock_backend, events_apply_lock_key
 from cicerone.publish import RecommendationPublisher, build_publisher
@@ -129,6 +131,8 @@ def start_events_runtime(
     feature_config: FeatureConfig | None,
     reader: RecommendationReader,
     busy_check: Callable[[], bool] | None = None,
+    consumed: ConsumedOverlay | None = None,
+    catalog: CatalogStore | None = None,
 ) -> EventsRuntime:
     if not settings.events.enabled:
         return EventsRuntime(webhook_source=None, worker=None)
@@ -207,6 +211,8 @@ def start_events_runtime(
             assign_variant=_assign_incremental_variant(settings),
             explain_enabled=settings.explain.enabled,
             publisher=publisher,
+            consumed=consumed,
+            catalog=catalog,
         )
         buffer = MicroBatchBuffer(
             batch_size=settings.events.incremental.batch_size,

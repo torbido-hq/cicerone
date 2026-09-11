@@ -903,3 +903,35 @@ def test_incremental_updater_publish_failure_raises(tmp_path, feature_config: Fe
     assert called["n"] == 0
     frame = load_recommendations_frame(settings.output)
     assert "i9" in set(frame[frame["user_id"] == "u1"]["item_id"].astype(str))
+
+
+def test_incremental_updater_records_consumed_and_catalog(tmp_path, feature_config: FeatureConfig):
+    from cicerone.events.consumed import ConsumedOverlay
+    from cicerone.io.dataset_catalog import DatasetCatalogStore
+
+    out = tmp_path / "out"
+    catalog_path = tmp_path / "in"
+    out.mkdir()
+    catalog_path.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    overlay = ConsumedOverlay()
+    catalog = DatasetCatalogStore({"storage_backend": "local", "path": str(catalog_path)})
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        consumed=overlay,
+        catalog=catalog,
+    )
+    events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
+    assert updater.apply(events) == 1
+    assert overlay.item_ids("u1") == {"i9"}
+    stored = catalog.get_events_for_user("u1", 10)
+    assert "i9" in set(stored["item_id"].astype(str))

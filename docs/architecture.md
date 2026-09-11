@@ -53,7 +53,12 @@ clicks, CTR, and conversion, see [evaluation.md](evaluation.md).
 | `serve/` | Serve mode package: FastAPI read API over precomputed recommendations |
 | `serve/app.py` | Routes, middleware, refresh loop (`cicerone serve`) |
 | `serve/item_filters.py` | Category / availability snapshot cache for serve requests |
+| `serve/consumed.py` | Serve-time hide of items in `[input]` / incremental events |
+| `serve/surfaces.py` | `GET /popular`, `/latest`, `/similar/{id}`, `POST /session/recommendations` |
+| `serve/catalog_routes.py` | User / item / event CRUD against `[input]` |
 | `serve/events_routes.py` | Optional `POST /events` webhook mount when `[events]` webhook is enabled |
+| `io/surfaces.py` | Job-time popular / latest / item-neighbor snapshots |
+| `io/catalog.py` | Catalog store protocol for live users / items / events |
 | `serve/bootstrap_events.py` | Start/stop the serve-process event worker (micro-batch → write-through) |
 | `serve/metrics.py` | Prometheus metric objects + helpers (default in-process registry) |
 | `serve/code_samples.py` | OpenAPI `x-codeSamples` snippets for serve mode (ReDoc / exported schema) |

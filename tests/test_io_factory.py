@@ -3,17 +3,22 @@ from __future__ import annotations
 import pytest
 
 from cicerone.config import IOSettings
+from cicerone.io.dataset_catalog import DatasetCatalogStore
 from cicerone.io.dataset_store import DatasetInputSource, DatasetOutputSink
+from cicerone.io.db_catalog import DatabaseCatalogStore
 from cicerone.io.db_store import DatabaseInputSource, DatabaseOutputSink
 from cicerone.io.factory import (
+    build_catalog_store,
     build_input_source,
     build_manifest_reader,
     build_output_sink,
     build_recommendation_reader,
+    build_surfaces_reader,
     build_user_history_reader,
 )
 from cicerone.io.manifest_reader import DatasetManifestReader, DbManifestReader
 from cicerone.io.recommendation_reader import DatasetRecommendationReader, DbRecommendationReader
+from cicerone.io.surfaces_reader import DatasetSurfacesReader, DbSurfacesReader, EmptySurfacesReader
 
 
 def test_build_input_source_dataset(tmp_path):
@@ -80,3 +85,15 @@ def test_build_manifest_reader_unknown_kind_raises():
     settings = IOSettings(kind="carrier-pigeon", options={})
     with pytest.raises(ValueError, match="Unknown manifest kind"):
         build_manifest_reader(settings)
+
+
+def test_build_surfaces_and_catalog(tmp_path):
+    settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    assert isinstance(build_surfaces_reader(settings), DatasetSurfacesReader)
+    assert isinstance(build_catalog_store(settings), DatasetCatalogStore)
+    db = IOSettings(kind="db", options={"database_url": "postgresql+psycopg://u:p@h/d"})
+    assert isinstance(build_surfaces_reader(db), DbSurfacesReader)
+    assert isinstance(build_catalog_store(db), DatabaseCatalogStore)
+    unknown = IOSettings(kind="carrier-pigeon", options={})
+    assert isinstance(build_surfaces_reader(unknown), EmptySurfacesReader)
+    assert build_catalog_store(IOSettings(kind="carrier-pigeon", options={})) is None
