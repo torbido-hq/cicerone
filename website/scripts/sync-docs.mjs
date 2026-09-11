@@ -15,7 +15,7 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import sharp from "sharp";
-import { parseLatestRelease } from "../src/lib/changelog.mjs";
+import { resolveLatestRelease } from "../src/lib/changelog.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const websiteRoot = resolve(__dirname, "..");
@@ -138,11 +138,31 @@ if (existsSync(imagesSrc)) {
 const changelogSrc = join(repoRoot, "CHANGELOG.md");
 const latestReleaseOut = join(websiteRoot, "src/generated/latest-release.json");
 mkdirSync(dirname(latestReleaseOut), { recursive: true });
-const latestRelease = existsSync(changelogSrc)
-  ? parseLatestRelease(readFileSync(changelogSrc, "utf8"))
-  : null;
-writeFileSync(latestReleaseOut, `${JSON.stringify(latestRelease)}\n`);
-console.log(`synced CHANGELOG.md → src/generated/latest-release.json`);
+const changelogText = existsSync(changelogSrc) ? readFileSync(changelogSrc, "utf8") : "";
+let previousRelease = null;
+if (existsSync(latestReleaseOut)) {
+  try {
+    previousRelease = JSON.parse(readFileSync(latestReleaseOut, "utf8"));
+  } catch {
+    previousRelease = null;
+  }
+}
+const { release, stale, source, reason } = await resolveLatestRelease({
+  changelogText,
+  previous: previousRelease,
+});
+writeFileSync(latestReleaseOut, `${JSON.stringify(release)}\n`);
+if (stale && source === "previous") {
+  console.warn(
+    `PyPI latest release unavailable (${reason}); using previously generated src/generated/latest-release.json (${release.version})`,
+  );
+} else if (stale && source === "changelog") {
+  console.warn(
+    `PyPI latest release unavailable (${reason}); using CHANGELOG.md heading ${release.version}`,
+  );
+} else {
+  console.log(`synced PyPI ${release.version} → src/generated/latest-release.json`);
+}
 
 const logoSvg = join(websiteRoot, "src/assets/cicerone-logo.svg");
 if (existsSync(logoSvg)) {
