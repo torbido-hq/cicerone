@@ -108,6 +108,33 @@ def test_pika_io_submit_times_out():
         io.stop()
 
 
+def test_close_abandons_hung_idle_pump(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    connection = broker.connection
+    channel = connection.channel_obj
+    entered = threading.Event()
+    released = threading.Event()
+
+    def _hang_pump(time_limit: float | int = 0) -> None:
+        del time_limit
+        entered.set()
+        released.wait(timeout=2)
+
+    connection.process_data_events = _hang_pump  # type: ignore[method-assign]
+    assert entered.wait(timeout=2)
+    began = time.monotonic()
+    source.close()
+    assert time.monotonic() - began < 1.0
+    released.set()
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline and not (channel.closed and connection.closed):
+        time.sleep(0.01)
+    assert channel.closed is True
+    assert connection.closed is True
+
+
 def test_close_abandons_in_flight_submit(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     source = RabbitMQEventSource(_options(timeout_seconds=2))

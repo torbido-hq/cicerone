@@ -147,24 +147,34 @@ class EventWorker:
                 logger.exception("Event source close() failed during worker stop")
         return joined
 
-    def refresh_source_health_metrics(self) -> None:
+    def refresh_source_health_metrics(self) -> bool:
         try:
             health = self._source.health()
         except Exception:
             logger.exception("Failed to read event source health for metrics")
             update_events_source_health(connected=False, lag=None)
-            return
+            return False
         update_events_source_health(connected=health.connected, lag=health.lag)
+        return bool(health.connected)
+
+    def _reconnect_source(self) -> None:
+        try:
+            self._source.connect()
+        except Exception:
+            logger.exception("Event source reconnect failed")
 
     def _loop(self) -> None:
+        disconnected = False
         while not self._stop.is_set():
+            if disconnected:
+                self._reconnect_source()
             try:
                 self.tick()
             except Exception:
                 record_events_tick_error()
                 logger.exception("Event worker tick failed")
             finally:
-                self.refresh_source_health_metrics()
+                disconnected = not self.refresh_source_health_metrics()
             self._stop.wait(self._poll_interval_seconds)
 
     def tick(self) -> int:

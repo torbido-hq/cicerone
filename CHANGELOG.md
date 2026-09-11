@@ -25,6 +25,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Kafka `timeout_seconds` below 10 ms raises `ConfigError` (librdkafka `socket.timeout.ms`).
 - A timed-out RabbitMQ I/O call queued during the idle pump is not executed.
 - Event worker stop closes the source even when the worker thread misses its join deadline.
+- The event worker reconnects when the source reports disconnected after a broker timeout.
 - Manual `popular_in_category` fails at job fit when items lack the category column.
 - Overall track CVR uses the same impression-slice attribution as rank, source, and variant.
 
