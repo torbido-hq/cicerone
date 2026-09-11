@@ -54,13 +54,28 @@ class _PikaIo:
         self._channel: Any | None = None
         self._timeout_seconds = timeout_seconds
         self._failed = False
-        self._in_flight = False
+        self._state_lock = threading.Lock()
+        self._busy = 0
         self._abandon_channel: Any | None = None
         self._abandon_connection: Any | None = None
 
     @property
     def failed(self) -> bool:
         return self._failed
+
+    @property
+    def busy(self) -> bool:
+        with self._state_lock:
+            return self._busy > 0
+
+    def _mark_busy(self) -> None:
+        with self._state_lock:
+            self._busy += 1
+
+    def _clear_busy(self) -> None:
+        with self._state_lock:
+            if self._busy > 0:
+                self._busy -= 1
 
     def start(self) -> None:
         self._thread.start()
@@ -69,7 +84,7 @@ class _PikaIo:
         if self._failed or not self._thread.is_alive():
             raise RuntimeError("RabbitMQ I/O thread is not running")
         reply: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
-        self._in_flight = True
+        self._mark_busy()
         self._jobs.put((fn, reply))
         try:
             status, payload = reply.get(timeout=self._timeout_seconds)
@@ -78,7 +93,7 @@ class _PikaIo:
             raise TimeoutError(f"RabbitMQ I/O call timed out after {self._timeout_seconds}s") from exc
         finally:
             if not self._failed:
-                self._in_flight = False
+                self._clear_busy()
         if status == "err":
             raise payload
         return payload
@@ -116,12 +131,12 @@ class _PikaIo:
                 if self._failed:
                     self._cleanup_abandoned()
                     return
-                self._in_flight = True
+                self._mark_busy()
                 try:
                     self._pump()
                 finally:
                     if not self._failed:
-                        self._in_flight = False
+                        self._clear_busy()
                 if self._failed:
                     self._cleanup_abandoned()
                     return
@@ -237,7 +252,7 @@ class RabbitMQEventSource(EventSource):
         remaining = max_events - len(out)
         while remaining > 0:
             try:
-                method, _properties, body = io.submit(self._basic_get)
+                method, _properties, body = io.submit(partial(self._basic_get, io))
             except Exception:
                 logger.exception("RabbitMQ basic_get failed")
                 break
@@ -269,7 +284,7 @@ class RabbitMQEventSource(EventSource):
         if not resolved:
             return
         for eid, tag in resolved:
-            io.submit(partial(self._basic_ack, tag))
+            io.submit(partial(self._basic_ack, io, tag))
             with self._lock:
                 self._delivery_tags.pop(eid, None)
                 self._held_tags.discard(tag)
@@ -295,7 +310,7 @@ class RabbitMQEventSource(EventSource):
         if io is None:
             return
         try:
-            io.submit(self._pump_connection)
+            io.submit(partial(self._pump_connection, io))
         except Exception:
             logger.exception("RabbitMQ heartbeat process_data_events failed")
 
@@ -310,7 +325,7 @@ class RabbitMQEventSource(EventSource):
             return EventSourceHealth(connected=False, lag=None, last_event_at=last_event_at)
         ready = 0
         try:
-            declared = io.submit(self._passive_declare)
+            declared = io.submit(partial(self._passive_declare, io))
             ready = int(declared.method.message_count)
         except Exception:
             logger.exception("RabbitMQ queue_declare (passive) failed")
@@ -325,20 +340,20 @@ class RabbitMQEventSource(EventSource):
             detail=f"queue={self._queue}",
         )
 
-    def _basic_get(self) -> Any:
-        channel = self._channel
+    def _basic_get(self, io: _PikaIo) -> Any:
+        channel = io._channel
         if channel is None:
             return None, None, None
         return channel.basic_get(self._queue, auto_ack=False)
 
-    def _basic_ack(self, tag: int) -> None:
-        channel = self._channel
+    def _basic_ack(self, io: _PikaIo, tag: int) -> None:
+        channel = io._channel
         if channel is None:
             return
         channel.basic_ack(delivery_tag=tag)
 
-    def _passive_declare(self) -> Any:
-        channel = self._channel
+    def _passive_declare(self, io: _PikaIo) -> Any:
+        channel = io._channel
         if channel is None:
             raise RuntimeError("RabbitMQEventSource is not connected")
         return channel.queue_declare(queue=self._queue, durable=True, passive=True)
@@ -361,8 +376,8 @@ class RabbitMQEventSource(EventSource):
             raise
         return connection, channel
 
-    def _pump_connection(self) -> None:
-        connection = self._connection
+    def _pump_connection(self, io: _PikaIo) -> None:
+        connection = io._connection
         if connection is None:
             return
         connection.process_data_events(time_limit=0)
@@ -412,13 +427,13 @@ class RabbitMQEventSource(EventSource):
 
     def _ack_discard(self, io: _PikaIo, tag: int) -> None:
         try:
-            io.submit(partial(self._basic_ack, tag))
+            io.submit(partial(self._basic_ack, io, tag))
         except Exception:
             logger.exception("Failed to ack discarded RabbitMQ message")
 
 
 def _release_io(io: _PikaIo, channel: Any, connection: Any) -> None:
-    if io.failed or io._in_flight:
+    if io.failed or io.busy:
         if io._thread.is_alive():
             io.abandon(channel, connection)
         else:

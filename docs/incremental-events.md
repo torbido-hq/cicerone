@@ -177,7 +177,7 @@ Consumer group, JSON objects matching the event contract. Required:
 (default hostname), `security_protocol`, `sasl_mechanism`,
 `sasl_username`, `sasl_password`, `timeout_seconds` (default 10, min 10 ms,
 max signed 32-bit milliseconds; sets librdkafka `socket.timeout.ms` /
-`request.timeout.ms` and `list_topics` / flush). Missing `event_id` uses
+`request.timeout.ms` and `list_topics`). Missing `event_id` uses
 `{partition}-{offset}`. Manual commits of the contiguous watermark per
 partition (an out-of-order ack cannot skip an earlier offset). `nack`
 returns the batch to a local deque without committing. Librdkafka session

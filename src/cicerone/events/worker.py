@@ -110,12 +110,14 @@ class EventWorker:
         self._poll_without_lock = poll_without_lock
         self._heartbeat_interval_seconds = heartbeat_interval_seconds
         self._stop = threading.Event()
+        self._source_guard = threading.Lock()
         self._thread: threading.Thread | None = None
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
             return
-        self._source.connect()
+        with self._source_guard:
+            self._source.connect()
         self.refresh_source_health_metrics()
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, name="cicerone-events", daemon=True)
@@ -139,12 +141,8 @@ class EventWorker:
                 self._drain_buffer_on_stop()
             except Exception:
                 logger.exception("Event worker drain on stop failed")
-        close = getattr(self._source, "close", None)
-        if callable(close):
-            try:
-                close()
-            except Exception:
-                logger.exception("Event source close() failed during worker stop")
+        with self._source_guard:
+            self._close_source()
         return joined
 
     def refresh_source_health_metrics(self) -> bool:
@@ -157,17 +155,34 @@ class EventWorker:
         update_events_source_health(connected=health.connected, lag=health.lag)
         return bool(health.connected)
 
-    def _reconnect_source(self) -> None:
+    def _close_source(self) -> None:
+        close = getattr(self._source, "close", None)
+        if not callable(close):
+            return
         try:
-            self._source.connect()
+            close()
         except Exception:
-            logger.exception("Event source reconnect failed")
+            logger.exception("Event source close() failed during worker stop")
+
+    def _reconnect_source(self) -> None:
+        with self._source_guard:
+            if self._stop.is_set():
+                return
+            try:
+                self._source.connect()
+            except Exception:
+                logger.exception("Event source reconnect failed")
+                return
+            if self._stop.is_set():
+                self._close_source()
 
     def _loop(self) -> None:
         disconnected = False
         while not self._stop.is_set():
             if disconnected:
                 self._reconnect_source()
+                if self._stop.is_set():
+                    break
             try:
                 self.tick()
             except Exception:

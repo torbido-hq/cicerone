@@ -248,6 +248,51 @@ def test_event_worker_reconnects_when_source_reports_disconnected(tmp_path, feat
     assert connects["n"] >= 2
 
 
+def test_event_worker_stop_closes_reconnect_in_progress(tmp_path, feature_config: FeatureConfig):
+    import threading
+    import time
+
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    reconnect_started = threading.Event()
+    connects = {"n": 0}
+    closes = {"n": 0}
+
+    class _SlowReconnect(WebhookEventSource):
+        def connect(self) -> None:
+            connects["n"] += 1
+            if connects["n"] >= 2:
+                reconnect_started.set()
+                time.sleep(0.25)
+            super().connect()
+
+        def close(self) -> None:
+            closes["n"] += 1
+            super().close()
+
+        def health(self) -> EventSourceHealth:
+            return EventSourceHealth(connected=False, lag=0)
+
+    worker = EventWorker(
+        _SlowReconnect({}),
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+        poll_interval_seconds=0.01,
+    )
+    worker.start()
+    assert reconnect_started.wait(timeout=2)
+    began = time.monotonic()
+    assert worker.stop(join_timeout_seconds=0.05) is False
+    assert closes["n"] >= 1
+    assert time.monotonic() - began < 2.0
+
+
 def test_event_worker_stop_returns_true_when_idle(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
