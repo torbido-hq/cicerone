@@ -347,7 +347,7 @@ def test_experiment_context_tolerates_load_failures(tmp_path, monkeypatch):
         raise RuntimeError("boom")
 
     monkeypatch.setattr("cicerone.experiment.store.ExperimentStore.read_state", _boom)
-    monkeypatch.setattr("cicerone.dashboard_experiments.load_metric_events", _boom)
+    monkeypatch.setattr("cicerone.dashboard_experiments._load_metric_events", _boom)
     monkeypatch.setattr("cicerone.dashboard_experiments.load_recommendation_guardrail_rows", _boom)
     monkeypatch.setattr("cicerone.experiment.store.ExperimentStore.read_exposures", _boom)
     monkeypatch.setattr("cicerone.dashboard_experiments.load_items_catalog_size", _boom)
