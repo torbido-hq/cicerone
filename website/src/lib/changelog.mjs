@@ -79,7 +79,59 @@ export async function fetchPypiProject(url = PYPI_JSON_URL, fetchImpl = fetch) {
 	if (!response.ok) {
 		throw new Error(`PyPI ${url} returned ${response.status}`);
 	}
-	return response.json();
+	try {
+		return await response.json();
+	} catch (error) {
+		const detail = error instanceof Error ? error.message : String(error);
+		throw new Error(`PyPI ${url} returned invalid JSON: ${detail}`);
+	}
+}
+
+export function isValidRelease(value) {
+	return (
+		value != null &&
+		typeof value === 'object' &&
+		typeof value.version === 'string' &&
+		/^\d+\.\d+\.\d+$/.test(value.version) &&
+		typeof value.date === 'string' &&
+		/^\d{4}-\d{2}-\d{2}$/.test(value.date) &&
+		typeof value.url === 'string' &&
+		value.url.length > 0
+	);
+}
+
+function errorMessage(error) {
+	return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Latest homepage release: PyPI first, then a previously generated file, then CHANGELOG.
+ * @returns {{ release: {version: string, date: string, url: string}, stale: boolean, source: 'pypi' | 'previous' | 'changelog', reason: string | null }}
+ */
+export async function resolveLatestRelease({
+	changelogText = '',
+	previous = null,
+	fetchProject = fetchPypiProject,
+} = {}) {
+	try {
+		const project = await fetchProject();
+		return {
+			release: latestReleaseFromPypi(project, changelogText),
+			stale: false,
+			source: 'pypi',
+			reason: null,
+		};
+	} catch (error) {
+		const reason = errorMessage(error);
+		if (isValidRelease(previous)) {
+			return { release: previous, stale: true, source: 'previous', reason };
+		}
+		const fromChangelog = parseLatestRelease(changelogText);
+		if (fromChangelog) {
+			return { release: fromChangelog, stale: true, source: 'changelog', reason };
+		}
+		throw new Error(`Could not resolve latest release: ${reason}`);
+	}
 }
 
 export function changelogPath(fromUrl = import.meta.url) {

@@ -37,7 +37,9 @@ and `public/images/docs/` are gitignored; they are created at build/dev time. CI
 sync from `docs/`. The homepage release line is the latest
 [`cicerone-recommender`](https://pypi.org/project/cicerone-recommender/)
 version on PyPI (date and “what changed” come from that version’s
-`CHANGELOG.md` heading when present). Articles are **not** synced from `docs/` — add Markdown
+`CHANGELOG.md` heading when present). If PyPI is down, `sync-docs` keeps the
+last generated `latest-release.json` when valid, otherwise the newest dated
+CHANGELOG heading. Articles are **not** synced from `docs/` — add Markdown
 under `src/content/docs/articles/` (see below).
 
 ## Articles
