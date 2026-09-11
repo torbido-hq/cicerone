@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from typing import Any
 
@@ -84,9 +85,34 @@ def test_close_after_io_timeout_does_not_block(monkeypatch):
 
     source._basic_get = _hang  # type: ignore[method-assign]
     assert list(source.poll(1)) == []
+    assert source.health().connected is False
     started = time.monotonic()
     source.close()
     assert time.monotonic() - started < 1.0
+
+
+def test_close_after_io_timeout_closes_handles_when_call_unwinds(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options(timeout_seconds=0.05))
+    source.connect()
+    connection = broker.connection
+    channel = connection.channel_obj
+    done = threading.Event()
+
+    def _hang() -> tuple[Any, None, Any]:
+        time.sleep(0.2)
+        done.set()
+        return None, None, None
+
+    source._basic_get = _hang  # type: ignore[method-assign]
+    assert list(source.poll(1)) == []
+    source.close()
+    assert done.wait(timeout=2)
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline and not (channel.closed and connection.closed):
+        time.sleep(0.01)
+    assert channel.closed is True
+    assert connection.closed is True
 
 
 def test_poll_ack_and_health(monkeypatch):

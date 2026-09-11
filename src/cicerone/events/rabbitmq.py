@@ -53,6 +53,8 @@ class _PikaIo:
         self._connection: Any | None = None
         self._timeout_seconds = timeout_seconds
         self._failed = False
+        self._abandon_channel: Any | None = None
+        self._abandon_connection: Any | None = None
 
     @property
     def failed(self) -> bool:
@@ -75,24 +77,44 @@ class _PikaIo:
             raise payload
         return payload
 
+    def abandon(self, channel: Any, connection: Any) -> None:
+        self._failed = True
+        self._abandon_channel = channel
+        self._abandon_connection = connection
+        self.stop()
+
     def stop(self) -> None:
         self._jobs.put(_IO_STOP)
         self._thread.join(timeout=0.1 if self._failed else 5.0)
+
+    def _cleanup_abandoned(self) -> None:
+        self._connection = None
+        _close_handles(self._abandon_channel, self._abandon_connection)
+        self._abandon_channel = None
+        self._abandon_connection = None
 
     def _loop(self) -> None:
         while True:
             try:
                 job = self._jobs.get(timeout=_IO_IDLE_SECONDS)
             except queue.Empty:
+                if self._failed:
+                    self._cleanup_abandoned()
+                    return
                 self._pump()
                 continue
             if job is _IO_STOP:
+                if self._failed:
+                    self._cleanup_abandoned()
                 return
             fn, reply = job
             try:
                 reply.put(("ok", fn()))
             except Exception as exc:
                 reply.put(("err", exc))
+            if self._failed:
+                self._cleanup_abandoned()
+                return
 
     def _pump(self) -> None:
         connection = self._connection
@@ -258,7 +280,7 @@ class RabbitMQEventSource(EventSource):
             channel = self._channel
             local_held = len(self._pending_ids) + len(self._in_flight)
             last_event_at = self._last_event_at
-        if not connected or io is None or channel is None:
+        if not connected or io is None or channel is None or io.failed:
             return EventSourceHealth(connected=False, lag=None, last_event_at=last_event_at)
         ready = 0
         try:
@@ -365,16 +387,20 @@ class RabbitMQEventSource(EventSource):
 
 
 def _release_io(io: _PikaIo, channel: Any, connection: Any) -> None:
-    if not io.failed:
-        try:
+    if io.failed:
+        io.abandon(channel, connection)
+        return
+    try:
 
-            def _shutdown() -> None:
-                io._connection = None
-                _close_handles(channel, connection)
+        def _shutdown() -> None:
+            io._connection = None
+            _close_handles(channel, connection)
 
-            io.submit(_shutdown)
-        except Exception:
-            logger.exception("Failed to close RabbitMQ connection on I/O thread")
+        io.submit(_shutdown)
+    except Exception:
+        logger.exception("Failed to close RabbitMQ connection on I/O thread")
+        io.abandon(channel, connection)
+        return
     io.stop()
 
 
