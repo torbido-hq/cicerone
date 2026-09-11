@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from cicerone.config.settings import IOSettings
 from cicerone.io.base import InputSource, ManifestReader, OutputSink, RecommendationReader, UserHistoryReader
+
+if TYPE_CHECKING:
+    from cicerone.io.surfaces_reader import SurfacesReader
 
 T = TypeVar("T")
 
@@ -110,3 +113,19 @@ def build_recommendation_reader(settings: IOSettings) -> RecommendationReader:
 
 def build_manifest_reader(settings: IOSettings) -> ManifestReader:
     return _build_from_registry(settings, _MANIFEST_READERS, role="manifest")
+
+
+def build_surfaces_reader(settings: IOSettings) -> SurfacesReader:
+    match settings.kind:
+        case "dataset":
+            from cicerone.io.surfaces_reader import DatasetSurfacesReader
+
+            return DatasetSurfacesReader(settings.options)
+        case "db":
+            from cicerone.io.surfaces_reader import DbSurfacesReader
+
+            return DbSurfacesReader(settings.options)
+        case _:
+            from cicerone.io.surfaces_reader import EmptySurfacesReader
+
+            return EmptySurfacesReader()

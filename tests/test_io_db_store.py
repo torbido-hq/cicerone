@@ -34,6 +34,9 @@ def _clean_tables():
             "recommendation_items",
             "recommendation_runs",
             "model_artifacts",
+            "recommendation_popular",
+            "recommendation_latest",
+            "item_neighbors",
             "custom_events",
             "custom_users",
             "custom_recommendations",
@@ -205,6 +208,35 @@ def test_database_output_writes_and_replaces_items_snapshot():
     engine = create_engine(TEST_DATABASE_URL)
     stored = pd.read_sql('SELECT * FROM "recommendation_items"', engine)
     assert list(stored["item_id"]) == ["i2"]
+
+
+def test_database_output_writes_and_replaces_surfaces():
+    sink = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})
+    sink.write_surfaces(
+        popular=pd.DataFrame([{"item_id": "i1", "rank": 1, "score": 3.0, "source": "popular_fallback"}]),
+        latest=pd.DataFrame([{"item_id": "i2", "rank": 1, "score": 2.0, "source": "latest"}]),
+        neighbors=pd.DataFrame([{"item_id": "i1", "neighbor_id": "i2", "rank": 1, "score": 0.5}]),
+    )
+    sink.write_surfaces(
+        popular=pd.DataFrame([{"item_id": "i9", "rank": 1, "score": 9.0, "source": "popular_fallback"}]),
+        latest=pd.DataFrame([{"item_id": "i8", "rank": 1, "score": 1.0, "source": "latest"}]),
+        neighbors=pd.DataFrame([{"item_id": "i9", "neighbor_id": "i8", "rank": 1, "score": 0.2}]),
+    )
+    engine = create_engine(TEST_DATABASE_URL)
+    popular = pd.read_sql('SELECT item_id FROM "recommendation_popular"', engine)
+    latest = pd.read_sql('SELECT item_id FROM "recommendation_latest"', engine)
+    neighbors = pd.read_sql('SELECT neighbor_id FROM "item_neighbors"', engine)
+    assert list(popular["item_id"]) == ["i9"]
+    assert list(latest["item_id"]) == ["i8"]
+    assert list(neighbors["neighbor_id"]) == ["i8"]
+
+    from cicerone.io.surfaces_reader import DbSurfacesReader
+
+    reader = DbSurfacesReader({"database_url": TEST_DATABASE_URL})
+    assert list(reader.get_popular(5)["item_id"]) == ["i9"]
+    assert list(reader.get_latest(5)["item_id"]) == ["i8"]
+    assert list(reader.get_similar("i9", 5)["neighbor_id"]) == ["i8"]
+    assert reader.get_similar("missing", 5).empty
 
 
 def test_database_output_writes_manifest_appends():

@@ -37,6 +37,13 @@ def test_local_backend_round_trip(tmp_path):
     assert (tmp_path / "model.artifact").read_bytes() == b"fake-artifact-bytes"
     items_snap = pd.read_parquet(tmp_path / "items_snapshot.parquet")
     assert list(items_snap["item_id"]) == ["i1"]
+    sink.write_surfaces(
+        popular=pd.DataFrame([{"item_id": "i1", "rank": 1, "score": 3.0, "source": "popular_fallback"}]),
+        latest=pd.DataFrame([{"item_id": "i1", "rank": 1, "score": 2.0, "source": "latest"}]),
+        neighbors=pd.DataFrame([{"item_id": "i1", "neighbor_id": "i2", "rank": 1, "score": 0.5}]),
+    )
+    assert list(pd.read_parquet(tmp_path / "popular.parquet")["item_id"]) == ["i1"]
+    assert list(pd.read_parquet(tmp_path / "item_neighbors.parquet")["neighbor_id"]) == ["i2"]
 
 
 def test_local_read_model_artifact_missing_returns_none(tmp_path):

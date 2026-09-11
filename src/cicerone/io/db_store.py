@@ -65,6 +65,9 @@ DEFAULT_EXPERIMENT_STATE_TABLE = "experiment_state"
 DEFAULT_TRACK_TABLE = "recommendation_track"
 DEFAULT_EVAL_TABLE = "recommendation_eval"
 DEFAULT_HISTORY_TABLE = "recommendation_history"
+DEFAULT_POPULAR_TABLE = "recommendation_popular"
+DEFAULT_LATEST_TABLE = "recommendation_latest"
+DEFAULT_NEIGHBORS_TABLE = "item_neighbors"
 
 DEFAULT_DB_TABLES = frozenset(
     {
@@ -80,6 +83,9 @@ DEFAULT_DB_TABLES = frozenset(
         DEFAULT_TRACK_TABLE,
         DEFAULT_EVAL_TABLE,
         DEFAULT_HISTORY_TABLE,
+        DEFAULT_POPULAR_TABLE,
+        DEFAULT_LATEST_TABLE,
+        DEFAULT_NEIGHBORS_TABLE,
     }
 )
 
@@ -391,3 +397,37 @@ class DatabaseOutputSink:
         with self._engine.begin() as conn:
             _clear_table_for_replace(conn, table)
             df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
+
+    def write_surfaces(
+        self,
+        *,
+        popular: pd.DataFrame,
+        latest: pd.DataFrame,
+        neighbors: pd.DataFrame,
+    ) -> None:
+        tables = (
+            (
+                sql_identifier(
+                    self._options.get("popular_table", DEFAULT_POPULAR_TABLE), option="popular_table"
+                ),
+                popular,
+            ),
+            (
+                sql_identifier(
+                    self._options.get("latest_table", DEFAULT_LATEST_TABLE), option="latest_table"
+                ),
+                latest,
+            ),
+            (
+                sql_identifier(
+                    self._options.get("neighbors_table", DEFAULT_NEIGHBORS_TABLE), option="neighbors_table"
+                ),
+                neighbors,
+            ),
+        )
+        with self._engine.begin() as conn:
+            for table, frame in tables:
+                logger.info("Writing %d surface rows to database table %r", len(frame), table)
+                _clear_table_for_replace(conn, table)
+                if not frame.empty:
+                    frame.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)

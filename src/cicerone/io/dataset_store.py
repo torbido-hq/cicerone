@@ -175,6 +175,24 @@ class DatasetOutputSink:
         df.to_parquet(buffer, index=False)
         self._write_bytes("items_snapshot.parquet", buffer.getvalue(), "application/octet-stream")
 
+    def write_surfaces(
+        self,
+        *,
+        popular: pd.DataFrame,
+        latest: pd.DataFrame,
+        neighbors: pd.DataFrame,
+    ) -> None:
+        from cicerone.io.surfaces import LATEST_FILENAME, NEIGHBORS_FILENAME, POPULAR_FILENAME
+
+        for filename, frame in (
+            (POPULAR_FILENAME, popular),
+            (LATEST_FILENAME, latest),
+            (NEIGHBORS_FILENAME, neighbors),
+        ):
+            buffer = io.BytesIO()
+            frame.to_parquet(buffer, index=False)
+            self._write_bytes(filename, buffer.getvalue(), "application/octet-stream")
+
     def write_manifest(self, manifest: dict) -> None:
         self._write_bytes("manifest.json", json.dumps(manifest, indent=2).encode("utf-8"), "application/json")
 

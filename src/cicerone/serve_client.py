@@ -8,7 +8,14 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-from cicerone.serve_schemas import HealthResponse, RecommendationsResponse, TrackIngestResponse
+from cicerone.serve_schemas import (
+    HealthResponse,
+    RecommendationsResponse,
+    SessionRecommendResponse,
+    SimilarResponse,
+    SurfaceResponse,
+    TrackIngestResponse,
+)
 
 
 class ServeClientError(Exception):
@@ -61,6 +68,34 @@ class ServeClient:
             params["exclude_consumed"] = "true" if exclude_consumed else "false"
         path = f"/recommendations/{urllib.parse.quote(str(user_id), safe='')}"
         return RecommendationsResponse.model_validate(self._request("GET", path, params=params))
+
+    def popular(self, *, limit: int | None = None, category: str | None = None) -> SurfaceResponse:
+        params: dict[str, str] = {}
+        if limit is not None:
+            params["limit"] = str(limit)
+        if category is not None:
+            params["category"] = category
+        return SurfaceResponse.model_validate(self._request("GET", "/popular", params=params))
+
+    def latest(self, *, limit: int | None = None, category: str | None = None) -> SurfaceResponse:
+        params: dict[str, str] = {}
+        if limit is not None:
+            params["limit"] = str(limit)
+        if category is not None:
+            params["category"] = category
+        return SurfaceResponse.model_validate(self._request("GET", "/latest", params=params))
+
+    def similar(self, item_id: str, *, limit: int | None = None) -> SimilarResponse:
+        params: dict[str, str] = {}
+        if limit is not None:
+            params["limit"] = str(limit)
+        path = f"/similar/{urllib.parse.quote(str(item_id), safe='')}"
+        return SimilarResponse.model_validate(self._request("GET", path, params=params))
+
+    def session(self, items: list[str]) -> SessionRecommendResponse:
+        return SessionRecommendResponse.model_validate(
+            self._request("POST", "/session/recommendations", json_body={"items": items})
+        )
 
     def track(self, payload: dict[str, Any] | list[dict[str, Any]]) -> TrackIngestResponse:
         return TrackIngestResponse.model_validate(self._request("POST", "/track", json_body=payload))
