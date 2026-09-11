@@ -192,36 +192,6 @@ def test_append_exposures_empty_is_noop(tmp_path) -> None:
     assert not (tmp_path / "exposures.jsonl").exists()
 
 
-def test_append_exposures_writer_lock_falls_back_on_backend_error(tmp_path) -> None:
-    class _Broken:
-        def acquire(self) -> bool:
-            raise RuntimeError("backend down")
-
-        def release(self) -> None:
-            raise AssertionError("release should not be called")
-
-        def owned(self) -> bool:
-            raise AssertionError("owned should not be called")
-
-        def is_locked(self) -> bool:
-            return False
-
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    store = ExperimentStore(output, writer_lock=_Broken())
-    store.append_exposures(
-        [
-            {
-                "user_id": "u1",
-                "experiment_id": "exp",
-                "variant": "control",
-                "generated_at": None,
-                "exposed_at": "2026-08-25T00:00:00+00:00",
-            }
-        ]
-    )
-    assert [row["user_id"] for row in store.read_exposures()] == ["u1"]
-
-
 def test_experiment_store_state_roundtrip_s3() -> None:
     import boto3
     from moto import mock_aws

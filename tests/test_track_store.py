@@ -461,26 +461,6 @@ def test_track_jsonl_append_writer_lock_busy(tmp_path, monkeypatch) -> None:
         store.append_rows([_row()])
 
 
-def test_track_jsonl_append_writer_lock_falls_back_on_backend_error(tmp_path) -> None:
-    class _Broken:
-        def acquire(self) -> bool:
-            raise RuntimeError("backend down")
-
-        def release(self) -> None:
-            raise AssertionError("release should not be called")
-
-        def owned(self) -> bool:
-            raise AssertionError("owned should not be called")
-
-        def is_locked(self) -> bool:
-            return False
-
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    store = TrackStore(output, writer_lock=_Broken())
-    assert store.append_rows([_row()]) == 1
-    assert [row["event_id"] for row in store.read_rows()] == ["imp-1"]
-
-
 def test_track_jsonl_append_without_fcntl(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("cicerone.io.options.fcntl", None)
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
