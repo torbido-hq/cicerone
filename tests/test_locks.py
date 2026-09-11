@@ -17,6 +17,7 @@ from cicerone.config import (
 from cicerone.config.constants import DEFAULT_EVENTS_APPLY_LOCK_TTL_SECONDS
 from cicerone.locks import (
     REDIS_LOCK_TTL_MS,
+    LockLostError,
     PostgresAdvisoryLock,
     RedisLock,
     acquire_blocking,
@@ -26,6 +27,7 @@ from cicerone.locks import (
     dataset_append_lock_key,
     events_apply_lock_key,
     has_distributed_lock,
+    held_writer_lock,
 )
 from cicerone.trigger import RunGuard
 
@@ -626,6 +628,32 @@ def test_dataset_append_lock_key_and_optional_builder(monkeypatch):
         output=IOSettings(kind="db", options={"database_url": "sqlite://"}),
     )
     assert build_dataset_writer_lock(db_settings) is None
+
+
+def test_held_writer_lock_raises_when_lease_lost():
+    events: list[str] = []
+
+    class Lock:
+        def acquire(self) -> bool:
+            events.append("acquire")
+            return True
+
+        def release(self) -> None:
+            events.append("release")
+
+        def owned(self) -> bool:
+            events.append("owned")
+            return False
+
+        def is_locked(self) -> bool:
+            return True
+
+    with (
+        pytest.raises(LockLostError, match="dataset writer lock lost before write"),
+        held_writer_lock(Lock()),
+    ):
+        events.append("write")
+    assert events == ["acquire", "owned", "release"]
 
 
 def test_acquire_blocking_times_out():
