@@ -67,6 +67,16 @@ def test_optional_float_validation():
     with pytest.raises(ConfigError, match="number"):
         optional_float({"n": 10**400}, "n", 10.0, prefix="x")
 
+    class _OverflowNoRepr:
+        def __float__(self) -> float:
+            raise OverflowError("too big")
+
+        def __repr__(self) -> str:
+            raise RuntimeError("repr failed")
+
+    with pytest.raises(ConfigError, match="must be a number$"):
+        optional_float({"n": _OverflowNoRepr()}, "n", 10.0, prefix="x")
+
 
 def test_kafka_client_timeouts_default_and_override(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
