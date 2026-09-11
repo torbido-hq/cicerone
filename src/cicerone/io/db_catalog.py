@@ -51,9 +51,12 @@ class DatabaseCatalogStore:
             return pd.DataFrame()
 
     def _delete_id(self, conn, table: str, key: str, value: str) -> int:
+        savepoint = conn.begin_nested()
         try:
             result = conn.execute(text(f'DELETE FROM "{table}" WHERE "{key}" = :value'), {"value": value})
+            savepoint.commit()
         except MISSING_TABLE_ERRORS:
+            savepoint.rollback()
             return 0
         return int(result.rowcount or 0)
 
@@ -72,15 +75,7 @@ class DatabaseCatalogStore:
     def delete_user(self, user_id: str) -> int:
         with self._engine.begin() as conn:
             users = self._delete_id(conn, self._users, USER_COLUMN, user_id)
-            events = 0
-            try:
-                result = conn.execute(
-                    text(f'DELETE FROM "{self._events}" WHERE "{USER_COLUMN}" = :user_id'),
-                    {"user_id": user_id},
-                )
-                events = int(result.rowcount or 0)
-            except MISSING_TABLE_ERRORS:
-                events = 0
+            events = self._delete_id(conn, self._events, USER_COLUMN, user_id)
         return users + events
 
     def upsert_item(self, row: dict[str, Any]) -> None:
@@ -105,15 +100,20 @@ class DatabaseCatalogStore:
         incoming = [normalize_event_row(row) for row in rows]
         frame = pd.DataFrame(incoming)
         with self._engine.begin() as conn:
-            if EVENT_ID_COLUMN in frame.columns and inspect(self._engine).has_table(self._events):
+            if EVENT_ID_COLUMN in frame.columns:
                 ids = [str(value) for value in frame[EVENT_ID_COLUMN].tolist() if value not in (None, "")]
                 if ids:
-                    conn.execute(
-                        text(f'DELETE FROM "{self._events}" WHERE "{EVENT_ID_COLUMN}" IN :ids').bindparams(
-                            bindparam("ids", expanding=True)
-                        ),
-                        {"ids": ids},
-                    )
+                    savepoint = conn.begin_nested()
+                    try:
+                        conn.execute(
+                            text(
+                                f'DELETE FROM "{self._events}" WHERE "{EVENT_ID_COLUMN}" IN :ids'
+                            ).bindparams(bindparam("ids", expanding=True)),
+                            {"ids": ids},
+                        )
+                        savepoint.commit()
+                    except MISSING_TABLE_ERRORS:
+                        savepoint.rollback()
             frame.to_sql(self._events, conn, if_exists="append", index=False)
         return int(len(frame))
 
@@ -132,19 +132,23 @@ class DatabaseCatalogStore:
 
     def delete_events_for_user(self, user_id: str, *, item_id: str | None = None) -> int:
         with self._engine.begin() as conn:
-            if not inspect(conn).has_table(self._events):
+            savepoint = conn.begin_nested()
+            try:
+                if item_id is None:
+                    result = conn.execute(
+                        text(f'DELETE FROM "{self._events}" WHERE "{USER_COLUMN}" = :user_id'),
+                        {"user_id": user_id},
+                    )
+                else:
+                    result = conn.execute(
+                        text(
+                            f'DELETE FROM "{self._events}" WHERE "{USER_COLUMN}" = :user_id '
+                            f'AND "{ITEM_COLUMN}" = :item_id'
+                        ),
+                        {"user_id": user_id, "item_id": item_id},
+                    )
+                savepoint.commit()
+            except MISSING_TABLE_ERRORS:
+                savepoint.rollback()
                 return 0
-            if item_id is None:
-                result = conn.execute(
-                    text(f'DELETE FROM "{self._events}" WHERE "{USER_COLUMN}" = :user_id'),
-                    {"user_id": user_id},
-                )
-            else:
-                result = conn.execute(
-                    text(
-                        f'DELETE FROM "{self._events}" WHERE "{USER_COLUMN}" = :user_id '
-                        f'AND "{ITEM_COLUMN}" = :item_id'
-                    ),
-                    {"user_id": user_id, "item_id": item_id},
-                )
             return int(result.rowcount or 0)

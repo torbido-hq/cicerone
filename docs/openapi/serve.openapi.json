@@ -30,6 +30,166 @@
         "title": "BoostHit",
         "type": "object"
       },
+      "CatalogEventsBody": {
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/InteractionEvent"
+            },
+            "minItems": 1,
+            "title": "Events",
+            "type": "array"
+          }
+        },
+        "required": [
+          "events"
+        ],
+        "title": "CatalogEventsBody",
+        "type": "object"
+      },
+      "CatalogEventsResponse": {
+        "properties": {
+          "events": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "events"
+        ],
+        "title": "CatalogEventsResponse",
+        "type": "object"
+      },
+      "CatalogItemBody": {
+        "additionalProperties": true,
+        "properties": {
+          "categories": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Categories"
+          },
+          "comment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comment"
+          },
+          "is_hidden": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Hidden"
+          },
+          "labels": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Labels"
+          }
+        },
+        "title": "CatalogItemBody",
+        "type": "object"
+      },
+      "CatalogRowResponse": {
+        "properties": {
+          "row": {
+            "additionalProperties": true,
+            "title": "Row",
+            "type": "object"
+          }
+        },
+        "required": [
+          "row"
+        ],
+        "title": "CatalogRowResponse",
+        "type": "object"
+      },
+      "CatalogUserBody": {
+        "additionalProperties": true,
+        "properties": {
+          "comment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comment"
+          },
+          "labels": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Labels"
+          }
+        },
+        "title": "CatalogUserBody",
+        "type": "object"
+      },
+      "CatalogWriteResponse": {
+        "properties": {
+          "accepted": {
+            "minimum": 0.0,
+            "title": "Accepted",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "accepted"
+        ],
+        "title": "CatalogWriteResponse",
+        "type": "object"
+      },
       "ErrorDetail": {
         "properties": {
           "detail": {
@@ -366,6 +526,61 @@
         "title": "RecommendationsResponse",
         "type": "object"
       },
+      "SessionRecommendRequest": {
+        "properties": {
+          "events": {
+            "description": "Optional session events; item_id values are used",
+            "items": {
+              "$ref": "#/components/schemas/InteractionEvent"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "items": {
+            "description": "Item ids in this anonymous session",
+            "items": {
+              "type": "string"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "title": "SessionRecommendRequest",
+        "type": "object"
+      },
+      "SessionRecommendResponse": {
+        "properties": {
+          "fallback": {
+            "description": "True when neighbors were empty and popular/latest was used",
+            "title": "Fallback",
+            "type": "boolean"
+          },
+          "generated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generated At"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SurfaceItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items",
+          "fallback"
+        ],
+        "title": "SessionRecommendResponse",
+        "type": "object"
+      },
       "SimilarItem": {
         "properties": {
           "item_id": {
@@ -384,6 +599,38 @@
           "score"
         ],
         "title": "SimilarItem",
+        "type": "object"
+      },
+      "SimilarResponse": {
+        "properties": {
+          "generated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generated At"
+          },
+          "item_id": {
+            "title": "Item Id",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SurfaceItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items",
+          "item_id"
+        ],
+        "title": "SimilarResponse",
         "type": "object"
       },
       "SourceContribution": {
@@ -438,6 +685,62 @@
           "label"
         ],
         "title": "SourceContribution",
+        "type": "object"
+      },
+      "SurfaceItem": {
+        "properties": {
+          "item_id": {
+            "title": "Item Id",
+            "type": "string"
+          },
+          "rank": {
+            "minimum": 1.0,
+            "title": "Rank",
+            "type": "integer"
+          },
+          "score": {
+            "title": "Score",
+            "type": "number"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "item_id",
+          "rank",
+          "score",
+          "source"
+        ],
+        "title": "SurfaceItem",
+        "type": "object"
+      },
+      "SurfaceResponse": {
+        "properties": {
+          "generated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generated At"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SurfaceItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "SurfaceResponse",
         "type": "object"
       },
       "TrackEvent": {
@@ -726,12 +1029,208 @@
     }
   },
   "info": {
-    "description": "Read-only HTTP API over **precomputed** recommendations written by the batch job.\n\nThere is no live inference in the request path: `GET /recommendations/{user_id}`\nlooks up rows already stored in the configured output (dataset parquet or DB).\n\nWhen `[events]` is enabled with `kind = \"webhook\"`, `POST /events` accepts\ninteraction events for micro-batch incremental updates (write-through to the\nsame output store). See `docs/incremental-events.md`.\n\nWhen `[track]` is enabled, `POST /track` accepts recommendation impressions\nand clicks (not used for training). See `docs/evaluation.md`.\n\nInteractive docs: `/docs` (Swagger UI) and `/redoc` (includes language\ncode samples via ``x-codeSamples``). Machine-readable schema: `/openapi.json`.\nA checked-in copy lives at `docs/openapi/serve.openapi.json` (regenerate with\n`cicerone export-openapi`).",
+    "description": "Read-only HTTP API over **precomputed** recommendations written by the batch job.\n\nThere is no live inference in the request path: `GET /recommendations/{user_id}`\nlooks up rows already stored in the configured output (dataset parquet or DB).\n\nWhen `[events]` is enabled with `kind = \"webhook\"`, `POST /events` accepts\ninteraction events for micro-batch incremental updates (write-through to the\nsame output store). See `docs/incremental-events.md`.\n\nWhen `[track]` is enabled, `POST /track` accepts recommendation impressions\nand clicks (not used for training). See `docs/evaluation.md`.\n\n`GET /recommendations` can hide items from the user's live `[input]` events\n(`[serve].exclude_consumed`) and fill short lists from popular/latest\n(`[serve].fallback_fill`). Named surfaces: `GET /popular`, `GET /latest`,\n`GET /similar/{item_id}`, `POST /session/recommendations`. Catalog CRUD\nlives under `/users`, `/items`, and `/catalog/events`.\n\nInteractive docs: `/docs` (Swagger UI) and `/redoc` (includes language\ncode samples via ``x-codeSamples``). Machine-readable schema: `/openapi.json`.\nA checked-in copy lives at `docs/openapi/serve.openapi.json` (regenerate with\n`cicerone export-openapi`).",
     "title": "Cicerone Serve API",
     "version": "0.8.1"
   },
   "openapi": "3.1.0",
   "paths": {
+    "/catalog/events": {
+      "post": {
+        "operationId": "post_catalog_events_catalog_events_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogEventsBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogWriteResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "501": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Implemented"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Upsert interaction events into the input catalog",
+        "tags": [
+          "catalog"
+        ]
+      }
+    },
+    "/catalog/events/{user_id}": {
+      "delete": {
+        "operationId": "delete_catalog_events_catalog_events__user_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "title": "User Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "item_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Item Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogWriteResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "501": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Implemented"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete a user's events (optionally one item)",
+        "tags": [
+          "catalog"
+        ]
+      },
+      "get": {
+        "operationId": "get_catalog_events_catalog_events__user_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "title": "User Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "exclusiveMinimum": 0,
+              "maximum": 1000,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogEventsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "501": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Implemented"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List a user's recent catalog events",
+        "tags": [
+          "catalog"
+        ]
+      }
+    },
     "/events": {
       "post": {
         "operationId": "post_events_events_post",
@@ -895,6 +1394,409 @@
         ]
       }
     },
+    "/items/{item_id}": {
+      "delete": {
+        "operationId": "delete_item_items__item_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogWriteResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "501": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Implemented"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete an item",
+        "tags": [
+          "catalog"
+        ]
+      },
+      "get": {
+        "operationId": "get_item_items__item_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogRowResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "501": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Implemented"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get an item",
+        "tags": [
+          "catalog"
+        ]
+      },
+      "put": {
+        "operationId": "put_item_items__item_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogItemBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogWriteResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "501": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Implemented"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Upsert an item",
+        "tags": [
+          "catalog"
+        ]
+      }
+    },
+    "/latest": {
+      "get": {
+        "operationId": "get_latest_latest_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "maximum": 100,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          },
+          {
+            "in": "query",
+            "name": "category",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Category"
+            }
+          },
+          {
+            "in": "query",
+            "name": "exclude_unavailable",
+            "required": false,
+            "schema": {
+              "default": true,
+              "title": "Exclude Unavailable",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "user_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SurfaceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "No latest snapshot"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Precomputed latest items",
+        "tags": [
+          "recommendations"
+        ]
+      }
+    },
+    "/popular": {
+      "get": {
+        "operationId": "get_popular_popular_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "maximum": 100,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          },
+          {
+            "in": "query",
+            "name": "category",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Category"
+            }
+          },
+          {
+            "in": "query",
+            "name": "exclude_unavailable",
+            "required": false,
+            "schema": {
+              "default": true,
+              "title": "Exclude Unavailable",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "user_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SurfaceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "No popular snapshot"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Precomputed popular items",
+        "tags": [
+          "recommendations"
+        ]
+      }
+    },
     "/recommendations/{user_id}": {
       "get": {
         "operationId": "get_recommendations_recommendations__user_id__get",
@@ -976,6 +1878,24 @@
               "description": "Re-apply item_availability_filters against the items snapshot",
               "title": "Exclude Unavailable",
               "type": "boolean"
+            }
+          },
+          {
+            "description": "Drop items in the user's live input/incremental events",
+            "in": "query",
+            "name": "exclude_consumed",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Drop items in the user's live input/incremental events",
+              "title": "Exclude Consumed"
             }
           }
         ],
@@ -1066,6 +1986,179 @@
             "lang": "Shell",
             "source": "BASE_URL=\"${CICERONE_SERVE_URL:-http://localhost:8000}\"\nBASE_URL=\"${BASE_URL%/}\"\nTOKEN=\"${CICERONE_SERVE_TOKEN:?set CICERONE_SERVE_TOKEN}\"\nUSER_ID=\"${CICERONE_USER_ID:-alice}\"\nif command -v python3 >/dev/null 2>&1; then PYTHON=python3\nelif command -v python >/dev/null 2>&1; then PYTHON=python\nelse PYTHON=\nfi\nif [ -z \"$PYTHON\" ]; then\n  echo \"python3 or python required to URL-encode USER_ID\" >&2\n  exit 1\nfi\nUSER_ID_ENC=\"$(\n  USER_ID=\"$USER_ID\" \"$PYTHON\" -c \\\n    'import os, urllib.parse; print(urllib.parse.quote(os.environ[\"USER_ID\"], safe=\"\"))'\n)\"\ncurl -fsS \\\n  -H \"Authorization: Bearer $TOKEN\" \\\n  \"$BASE_URL/recommendations/${USER_ID_ENC}?limit=5\" || exit 1\n"
           }
+        ]
+      }
+    },
+    "/session/recommendations": {
+      "post": {
+        "operationId": "post_session_session_recommendations_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionRecommendRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionRecommendResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "No session neighbors or popular fallback"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Recommend from an anonymous session via item neighbors",
+        "tags": [
+          "recommendations"
+        ]
+      }
+    },
+    "/similar/{item_id}": {
+      "get": {
+        "operationId": "get_similar_similar__item_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "maximum": 100,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          },
+          {
+            "in": "query",
+            "name": "category",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Category"
+            }
+          },
+          {
+            "in": "query",
+            "name": "exclude_unavailable",
+            "required": false,
+            "schema": {
+              "default": true,
+              "title": "Exclude Unavailable",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "user_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SimilarResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "No neighbors for this item"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Items similar to a catalog item",
+        "tags": [
+          "recommendations"
         ]
       }
     },
@@ -1176,6 +2269,193 @@
             "lang": "Shell",
             "source": "BASE_URL=\"${CICERONE_SERVE_URL:-http://localhost:8000}\"\nBASE_URL=\"${BASE_URL%/}\"\nTOKEN=\"${CICERONE_SERVE_TOKEN:?set CICERONE_SERVE_TOKEN}\"\nUSER_ID=\"${CICERONE_USER_ID:-alice}\"\nif command -v python3 >/dev/null 2>&1; then PYTHON=python3\nelif command -v python >/dev/null 2>&1; then PYTHON=python\nelse PYTHON=\nfi\nif [ -n \"$PYTHON\" ]; then\n  BODY=\"$(\n    USER_ID=\"$USER_ID\" \"$PYTHON\" -c \\\n      'import json, os\nprint(json.dumps({\n    \"user_id\": os.environ[\"USER_ID\"],\n    \"item_id\": \"ipa-001\",\n    \"kind\": \"impression\", \"rank\": 1,\n    \"occurred_at\": \"2026-08-19T12:00:00Z\",\n}))'\n  )\"\nelif command -v jq >/dev/null 2>&1; then\n  BODY=\"$(\n    jq -n --arg user_id \"$USER_ID\" \\\n      '{user_id:$user_id,item_id:\"ipa-001\",kind:\"impression\",rank:1,occurred_at:\"2026-08-19T12:00:00Z\"}'\n  )\"\nelse\n  echo \"python3, python, or jq required to JSON-encode USER_ID\" >&2\n  exit 1\nfi\ncurl -fsS -X POST \\\n  -H \"Authorization: Bearer $TOKEN\" \\\n  -H \"Content-Type: application/json\" \\\n  -d \"$BODY\" \\\n  \"$BASE_URL/track\" || exit 1\n"
           }
+        ]
+      }
+    },
+    "/users/{user_id}": {
+      "delete": {
+        "operationId": "delete_user_users__user_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "title": "User Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogWriteResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "501": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Implemented"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete a user and their events",
+        "tags": [
+          "catalog"
+        ]
+      },
+      "get": {
+        "operationId": "get_user_users__user_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "title": "User Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogRowResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "501": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Implemented"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get a user",
+        "tags": [
+          "catalog"
+        ]
+      },
+      "put": {
+        "operationId": "put_user_users__user_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "title": "User Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogUserBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogWriteResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "501": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Implemented"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Upsert a user",
+        "tags": [
+          "catalog"
         ]
       }
     }

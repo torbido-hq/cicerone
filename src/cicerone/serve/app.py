@@ -299,7 +299,6 @@ def create_app(
                 and (category is not None or (exclude_unavailable and availability_filters))
             )
             or consumed_ids
-            or settings.serve.fallback_fill
         )
         fetch_k = max(top_k * 5, top_k) if can_filter else top_k
         promoted, active_pair = _assignment_overlay(settings, experiment_store)
@@ -327,7 +326,8 @@ def create_app(
             on_missing_category_column=_warn_missing_category_column,
         )
         filtered = drop_consumed(filtered, consumed_ids)
-        if settings.serve.fallback_fill and len(filtered) < top_k:
+        dropped_rows = len(filtered) < len(recs)
+        if settings.serve.fallback_fill and len(filtered) < top_k and dropped_rows:
             filler = reader.get_cold_start_fallback(fetch_k, variant=variant)
             filler = filter_recommendations(
                 filler,

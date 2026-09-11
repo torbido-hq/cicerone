@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from cicerone.config.settings import IOSettings
 from cicerone.io.base import InputSource, ManifestReader, OutputSink, RecommendationReader, UserHistoryReader
-from cicerone.io.catalog import CatalogStore
-from cicerone.io.surfaces_reader import EmptySurfacesReader, SurfacesReader
+
+if TYPE_CHECKING:
+    from cicerone.io.catalog import CatalogStore
+    from cicerone.io.surfaces_reader import SurfacesReader
 
 T = TypeVar("T")
 
@@ -125,6 +127,8 @@ def build_surfaces_reader(settings: IOSettings) -> SurfacesReader:
 
             return DbSurfacesReader(settings.options)
         case _:
+            from cicerone.io.surfaces_reader import EmptySurfacesReader
+
             return EmptySurfacesReader()
 
 
