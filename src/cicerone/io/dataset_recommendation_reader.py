@@ -30,6 +30,7 @@ from cicerone.io.recommendation_reader_common import (
     normalize_items_snapshot,
     select_cold_start_fallback,
 )
+from cicerone.item_scores import ITEM_SCORES_COLUMNS, ITEM_SCORES_FILENAME, empty_item_scores
 from cicerone.serve.metrics import observe_cache_refresh, record_cache_hit, record_cache_miss
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,32 @@ class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             "recommendations.parquet",
             s3_client=self._get_s3_client() if self._backend == "s3" else None,
         )
+
+    def _read_item_scores(self) -> pd.DataFrame:
+        try:
+            if self._backend == "local":
+                path = Path(require_option(self._options, "path", "local")) / ITEM_SCORES_FILENAME
+                if not path.exists():
+                    return empty_item_scores()
+            frame = read_parquet(
+                self._options,
+                ITEM_SCORES_FILENAME,
+                s3_client=self._get_s3_client() if self._backend == "s3" else None,
+            )
+        except FileNotFoundError:
+            return empty_item_scores()
+        except Exception as exc:
+            if is_s3_not_found(exc):
+                return empty_item_scores()
+            logger.exception("Failed to load item scores; serving an empty catalog")
+            return empty_item_scores()
+        if frame.empty:
+            return empty_item_scores()
+        missing = [column for column in ITEM_SCORES_COLUMNS if column not in frame.columns]
+        if missing:
+            logger.warning("item_scores missing columns %s; serving an empty catalog", missing)
+            return empty_item_scores()
+        return frame.loc[:, list(ITEM_SCORES_COLUMNS)]
 
     def _read_items_snapshot(self) -> pd.DataFrame | None:
         try:
@@ -104,6 +131,12 @@ class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
                 self._items_version += 1
         except Exception:
             logger.exception("Failed to refresh items snapshot; keeping previous data")
+        try:
+            scores = self._read_item_scores()
+            with self._lock:
+                self._item_scores = scores
+        except Exception:
+            logger.exception("Failed to refresh item scores; keeping previous data")
         observe_cache_refresh(duration_seconds=time.perf_counter() - started, success=recommendations_ok)
 
     def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame:

@@ -53,6 +53,9 @@ class _FakeReader:
     def get_cold_start_fallback(self, k: int, *, variant: str | None = None) -> pd.DataFrame:
         return self._recs.iloc[0:0]
 
+    def get_item_scores(self):
+        return pd.DataFrame()
+
     def configure_item_filters(self, *, category_column=None, availability_filters=()) -> None:
         del category_column, availability_filters
 

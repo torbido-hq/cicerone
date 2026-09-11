@@ -8,7 +8,8 @@ pipeline and how strategies differ, see [how-it-works.md](how-it-works.md).
 For `[events]` ingest (webhook, backends, HA), see
 [incremental-events.md](incremental-events.md). For sticky A/B tests of
 ranking recipes, see [experiments.md](experiments.md). For impressions,
-clicks, CTR, and conversion, see [evaluation.md](evaluation.md).
+clicks, CTR, and conversion, see [evaluation.md](evaluation.md). For catalog
+search weights, see [search-weights.md](search-weights.md).
 
 ## Module overview
 
@@ -18,7 +19,7 @@ clicks, CTR, and conversion, see [evaluation.md](evaluation.md).
 | `feature_config.py` | Load `config/features.toml` (event weights, feature columns, eligibility/boost policy rules; `[[boost]]` / `[[boosts]]`) |
 | `policy/` | Declarative eligibility masks (fail-open/fail-closed matrix), cohort grouping (`eligibility.py`), score boosts (`boosts.py`) |
 | `blending.py` | Per-user weighted mix of personalized/popular/latest (optional) |
-| `io/base.py` | `InputSource` / `OutputSink` / `RecommendationReader` protocols (including `configure_item_filters` and `replace_recommendations_for_users`); `BaseRecommendationReader` with empty defaults for custom readers |
+| `io/base.py` | `InputSource` / `OutputSink` / `RecommendationReader` protocols (including `configure_item_filters`, `replace_recommendations_for_users`, `write_item_scores`); `BaseRecommendationReader` with empty defaults for custom readers |
 | `io/recommendation_schema.py` | Shared recommendation column constants + SQL identifier helper for read/write paths |
 | `io/db_errors.py` | Shared SQLAlchemy missing-table/column classifiers for recommendation I/O |
 | `io/factory.py` | kind→backend registry (`"dataset"` or `"db"`) |
@@ -30,6 +31,7 @@ clicks, CTR, and conversion, see [evaluation.md](evaluation.md).
 | `io/replace_users.py` | Shared helpers for user-scoped recommendation replaces |
 | `ids.py` | External user/item id column resolution shared by dataset frames, policy, and recommend paths |
 | `values.py` | Shared missing-value / list-coercion helpers for policy and content features |
+| `item_scores.py` | Catalog popular/latest scores from `build_interactions` (search-index weights; not top-K recs) |
 | `dataset.py` | Raw events/users/items → weighted rectools Dataset (`BuiltDataset`; keeps users+items frames for policy evaluation; caps keep most recent N) |
 | `model/` | `BuiltDataset` → `STRATEGIES` registry → fit / recommend / combine |
 | `model/strategies.py` | `RecommenderModel` protocol, `Strategy`, `STRATEGIES`, `build_strategy_model` |

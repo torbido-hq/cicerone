@@ -14,6 +14,7 @@ from cicerone.io import recommendation_schema as _rec
 from cicerone.io.base import BaseRecommendationReader
 from cicerone.io.db_errors import db_error_message, is_missing_column_error
 from cicerone.io.db_store import (
+    DEFAULT_ITEM_SCORES_TABLE,
     DEFAULT_RECOMMENDATION_ITEMS_TABLE,
     DEFAULT_RECOMMENDATIONS_TABLE,
     MISSING_TABLE_ERRORS,
@@ -27,6 +28,7 @@ from cicerone.io.recommendation_reader_common import (
     _ItemFilterMixin,
     normalize_items_snapshot,
 )
+from cicerone.item_scores import ITEM_SCORES_COLUMNS, empty_item_scores
 from cicerone.serve.metrics import observe_cache_refresh, record_cache_hit, record_cache_miss
 
 logger = logging.getLogger(__name__)
@@ -42,6 +44,10 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
         self._items_table = sql_identifier(
             options.get("recommendation_items_table", DEFAULT_RECOMMENDATION_ITEMS_TABLE),
             option="recommendation_items_table",
+        )
+        self._item_scores_table = sql_identifier(
+            options.get("item_scores_table", DEFAULT_ITEM_SCORES_TABLE),
+            option="item_scores_table",
         )
         self._engine = create_engine(require_option(options, "database_url", "db"), pool_pre_ping=True)
         self._variant_supported: bool | None = None
@@ -74,6 +80,26 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             items_ok = True
         except Exception:
             logger.exception("Failed to refresh recommendation items snapshot; keeping previous data")
+        try:
+            frame = pd.read_sql(text(f'SELECT * FROM "{self._item_scores_table}"'), self._engine)
+            scores = empty_item_scores() if frame.empty else frame
+            missing = [column for column in ITEM_SCORES_COLUMNS if column not in scores.columns]
+            if missing:
+                logger.warning("item_scores table %r missing columns %s", self._item_scores_table, missing)
+                scores = empty_item_scores()
+            else:
+                scores = scores.loc[:, list(ITEM_SCORES_COLUMNS)]
+            with self._lock:
+                self._item_scores = scores
+        except MISSING_TABLE_ERRORS:
+            logger.debug(
+                "item_scores table %r not present; serving an empty catalog",
+                self._item_scores_table,
+            )
+            with self._lock:
+                self._item_scores = empty_item_scores()
+        except Exception:
+            logger.exception("Failed to refresh item scores; keeping previous data")
         observe_cache_refresh(duration_seconds=time.perf_counter() - started, success=items_ok)
 
     def _supports_variant_column(self) -> bool:

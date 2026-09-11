@@ -65,6 +65,7 @@ DEFAULT_EXPERIMENT_STATE_TABLE = "experiment_state"
 DEFAULT_TRACK_TABLE = "recommendation_track"
 DEFAULT_EVAL_TABLE = "recommendation_eval"
 DEFAULT_HISTORY_TABLE = "recommendation_history"
+DEFAULT_ITEM_SCORES_TABLE = "item_scores"
 
 DEFAULT_DB_TABLES = frozenset(
     {
@@ -80,6 +81,7 @@ DEFAULT_DB_TABLES = frozenset(
         DEFAULT_TRACK_TABLE,
         DEFAULT_EVAL_TABLE,
         DEFAULT_HISTORY_TABLE,
+        DEFAULT_ITEM_SCORES_TABLE,
     }
 )
 
@@ -388,6 +390,16 @@ class DatabaseOutputSink:
             option="recommendation_items_table",
         )
         logger.info("Writing %d item snapshot rows to database table %r", len(df), table)
+        with self._engine.begin() as conn:
+            _clear_table_for_replace(conn, table)
+            df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
+
+    def write_item_scores(self, df: pd.DataFrame) -> None:
+        table = sql_identifier(
+            self._options.get("item_scores_table", DEFAULT_ITEM_SCORES_TABLE),
+            option="item_scores_table",
+        )
+        logger.info("Writing %d item score rows to database table %r", len(df), table)
         with self._engine.begin() as conn:
             _clear_table_for_replace(conn, table)
             df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)

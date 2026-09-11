@@ -24,6 +24,14 @@ def main() -> int:
     print(f"user={body.user_id} fallback={body.fallback} generated_at={body.generated_at} experiment={body.experiment_id} variant={body.variant}")
     for row in body.items:
         print(f"  #{row.rank} {row.item_id} score={row.score:.4f} source={row.source}")
+    try:
+        scores = client.item_scores(limit=5)
+    except ServeClientError as exc:
+        print(f"item_scores failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"item_scores n={len(scores.items)} next_cursor={scores.next_cursor}")
+    for row in scores.items:
+        print(f"  {row.item_id} popular={row.popular_score:.4f} latest={row.latest_score:.4f} n_users={row.n_users}")
     if os.environ.get("CICERONE_POST_TRACK") == "1" and body.items:
         from datetime import UTC, datetime
 

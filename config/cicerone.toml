@@ -459,4 +459,5 @@ prefix = "recommendations/latest"
 # recommendations_table = "recommendations"
 # manifest_table = "recommendation_runs"
 # model_artifact_table = "model_artifacts"  # used when [job].save_model_artifact = true
+# item_scores_table = "item_scores"  # catalog popular/latest for search indexers
 

@@ -22,6 +22,9 @@ def test_local_backend_round_trip(tmp_path):
     df = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"}])
     sink.write_recommendations(df)
     sink.write_items_snapshot(pd.DataFrame([{"item_id": "i1", "category": "beer"}]))
+    sink.write_item_scores(
+        pd.DataFrame([{"item_id": "i1", "popular_score": 1.5, "latest_score": 0.5, "n_users": 2}])
+    )
     sink.write_manifest({"n_events": 3})
     sink.write_model_artifact(b"fake-artifact-bytes")
 
@@ -37,6 +40,9 @@ def test_local_backend_round_trip(tmp_path):
     assert (tmp_path / "model.artifact").read_bytes() == b"fake-artifact-bytes"
     items_snap = pd.read_parquet(tmp_path / "items_snapshot.parquet")
     assert list(items_snap["item_id"]) == ["i1"]
+    scores = pd.read_parquet(tmp_path / "item_scores.parquet")
+    assert list(scores["item_id"]) == ["i1"]
+    assert float(scores.iloc[0]["popular_score"]) == 1.5
 
 
 def test_local_read_model_artifact_missing_returns_none(tmp_path):

@@ -67,6 +67,13 @@ const PAGES = [
     description:
       "Impression and click tracking, CTR/CVR attribution, Quality dashboard, and production replay.",
   },
+  {
+    source: "search-weights.md",
+    out: "search-weights.md",
+    title: "Search weights",
+    description:
+      "Catalog item_scores for Meilisearch and OpenSearch ranking. No search-engine client.",
+  },
 ];
 
 function rewrite(source) {
