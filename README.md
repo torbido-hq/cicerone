@@ -756,8 +756,10 @@ code is structured. See [CHANGELOG.md](CHANGELOG.md) for release notes.
   Multi-replica deployments must opt into `[job.trigger].lock_backend`
   (`postgres` or `redis`); see Event-driven retrain trigger above. Serve
   remains independently scalable on the read path; incremental apply takes
-  the same lock whenever it is `postgres` or `redis`. `events.ha = true`
-  still requires db output for track and exposures.
+  the same lock whenever it is `postgres` or `redis`. Dataset
+  recommendation writes and user-replace share that host/distributed
+  writer lock. `events.ha = true` still requires db output for track and
+  exposures.
 - Credentials only ever live in environment variables (`.env`, not
   committed), referenced from `config/cicerone.toml` via `${...}`
   placeholders — never written into the config file itself.

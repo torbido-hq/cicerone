@@ -234,7 +234,10 @@ lease expires mid-apply; Postgres `owned()` checks `pg_locks` for this
 session. A dead Postgres lock probe **fails closed** (logged and
 re-raised), not “lock free”. The same `owned()` callback is passed into
 full `job.run()` (cron and `RunGuard` trigger) so a lost retrain lock skips
-artifact and recommendation writes.
+artifact and recommendation writes. Dataset `write_recommendations` and
+`replace_recommendations_for_users` share `.recommendations.lock` on one
+host and the `{lock_key}:dataset:append` lease when a distributed lock is
+set.
 
 Fan-out sources **heartbeat** in-flight messages for the duration of apply
 (at the start of the flush, then every 15s).

@@ -24,7 +24,13 @@ from cicerone.experiment.store import ExperimentStore
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.base import RecommendationReader
 from cicerone.io.factory import build_output_sink
-from cicerone.locks import LockBackend, build_lock_backend, events_apply_lock_key, has_distributed_lock
+from cicerone.locks import (
+    LockBackend,
+    build_dataset_writer_lock,
+    build_lock_backend,
+    events_apply_lock_key,
+    has_distributed_lock,
+)
 from cicerone.publish import RecommendationPublisher, build_publisher
 
 logger = logging.getLogger(__name__)
@@ -164,7 +170,7 @@ def start_events_runtime(
         (retrain_probe.is_locked if retrain_probe is not None else None),
     )
 
-    sink = build_output_sink(settings.output)
+    sink = build_output_sink(settings.output, writer_lock=build_dataset_writer_lock(settings))
     publisher = build_publisher(settings)
     worker: EventWorker | None = None
     try:

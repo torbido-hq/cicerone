@@ -14,9 +14,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- Dataset user-replace and local JSONL track/exposure append serialize
-  writers on one host; a distributed lock serializes those appends when
-  `lock_backend` is postgres or redis.
+- Dataset recommendation writes and user-replace share one host lock;
+  JSONL track/exposure appends do the same. A distributed lock serializes
+  those writers when `lock_backend` is postgres or redis.
 
 ## [0.8.1] - 2026-09-11
 

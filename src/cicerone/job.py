@@ -57,7 +57,7 @@ from cicerone.io.recommendation_schema import (
     filter_variant_rows,
     pick_fallback_variant,
 )
-from cicerone.locks import LockLostError
+from cicerone.locks import LockLostError, build_dataset_writer_lock
 from cicerone.model import (
     DEFAULT_MODELS,
     RRF_K,
@@ -442,7 +442,7 @@ def _recommendation_user_count(recommendations: pd.DataFrame) -> int:
 def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None = None) -> None:
     settings = load_settings()
     feature_config = load_feature_config(settings.feature_config_path)
-    sink = build_output_sink(settings.output)
+    sink = build_output_sink(settings.output, writer_lock=build_dataset_writer_lock(settings))
     publisher = None
 
     manifest = dict(_MANIFEST_DEFAULTS)

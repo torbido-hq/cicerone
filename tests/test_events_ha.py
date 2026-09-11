@@ -388,7 +388,12 @@ def test_start_events_runtime_wires_apply_lock(tmp_path, feature_config: Feature
         seen_ttl["retrain"] = ttl_seconds
         return retrain_fake
 
+    writer_fake = SharedLock()
     monkeypatch.setattr("cicerone.serve.bootstrap_events.build_lock_backend", _build)
+    monkeypatch.setattr(
+        "cicerone.serve.bootstrap_events.build_dataset_writer_lock",
+        lambda _settings: writer_fake,
+    )
 
     class _Reader:
         def refresh(self) -> None:
@@ -407,6 +412,7 @@ def test_start_events_runtime_wires_apply_lock(tmp_path, feature_config: Feature
     assert runtime.apply_lock is apply_fake
     assert runtime.worker is not None
     assert runtime.worker._apply_lock is apply_fake
+    assert runtime.worker._updater._sink._writer_lock is writer_fake
     assert seen_ttl["apply"] == 60.0
     assert seen_ttl["retrain"] is None
     runtime.stop()
@@ -431,7 +437,12 @@ def test_start_events_runtime_wires_apply_lock_without_ha(
             return apply_fake
         return retrain_fake
 
+    writer_fake = SharedLock()
     monkeypatch.setattr("cicerone.serve.bootstrap_events.build_lock_backend", _build)
+    monkeypatch.setattr(
+        "cicerone.serve.bootstrap_events.build_dataset_writer_lock",
+        lambda _settings: writer_fake,
+    )
 
     class _Reader:
         def refresh(self) -> None:
@@ -450,6 +461,7 @@ def test_start_events_runtime_wires_apply_lock_without_ha(
     assert runtime.apply_lock is apply_fake
     assert runtime.worker is not None
     assert runtime.worker._apply_lock is apply_fake
+    assert runtime.worker._updater._sink._writer_lock is writer_fake
     runtime.stop()
 
 
