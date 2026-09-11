@@ -4,6 +4,20 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.2] - 2026-09-11
+
+### Changed
+
+- Incremental apply takes the postgres/redis lease whenever
+  `lock_backend` is distributed, even if `events.ha` is false. Retrain
+  probe follows the same rule.
+
+### Fixed
+
+- Dataset user-replace and local JSONL track/exposure append serialize
+  writers on one host; a distributed lock serializes those appends when
+  `lock_backend` is postgres or redis.
+
 ## [0.8.1] - 2026-09-11
 
 ### Fixed

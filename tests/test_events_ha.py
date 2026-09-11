@@ -412,15 +412,26 @@ def test_start_events_runtime_wires_apply_lock(tmp_path, feature_config: Feature
     runtime.stop()
 
 
-def test_start_events_runtime_skips_apply_lock_without_ha(
+def test_start_events_runtime_wires_apply_lock_without_ha(
     tmp_path, feature_config: FeatureConfig, monkeypatch
 ):
     out, _settings = _seed_out(tmp_path)
+    apply_fake = SharedLock()
+    retrain_fake = HeldLock()
+    retrain_fake.is_locked = lambda: False  # type: ignore[method-assign]
 
-    def _boom(*_args: Any, **_kwargs: Any) -> None:
-        raise AssertionError("build_lock_backend must not run when events.ha is false")
+    def _build(
+        _settings: Any,
+        *,
+        lock_key: str | None = None,
+        ttl_seconds: float | None = None,
+    ) -> SharedLock | HeldLock:
+        del ttl_seconds
+        if lock_key is not None and lock_key.endswith(":events:apply"):
+            return apply_fake
+        return retrain_fake
 
-    monkeypatch.setattr("cicerone.serve.bootstrap_events.build_lock_backend", _boom)
+    monkeypatch.setattr("cicerone.serve.bootstrap_events.build_lock_backend", _build)
 
     class _Reader:
         def refresh(self) -> None:
@@ -431,6 +442,34 @@ def test_start_events_runtime_skips_apply_lock_without_ha(
             output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
             trigger_lock_backend="redis",
             trigger_redis_url="redis://localhost:6379/0",
+            events=EventsSettings(enabled=True, kind="webhook", ha=False),
+        ),
+        feature_config=feature_config,
+        reader=_Reader(),  # type: ignore[arg-type]
+    )
+    assert runtime.apply_lock is apply_fake
+    assert runtime.worker is not None
+    assert runtime.worker._apply_lock is apply_fake
+    runtime.stop()
+
+
+def test_start_events_runtime_skips_apply_lock_in_process(
+    tmp_path, feature_config: FeatureConfig, monkeypatch
+):
+    out, _settings = _seed_out(tmp_path)
+
+    def _boom(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("build_lock_backend must not run when lock_backend is in_process")
+
+    monkeypatch.setattr("cicerone.serve.bootstrap_events.build_lock_backend", _boom)
+
+    class _Reader:
+        def refresh(self) -> None:
+            return None
+
+    runtime = start_events_runtime(
+        make_settings(
+            output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
             events=EventsSettings(enabled=True, kind="webhook", ha=False),
         ),
         feature_config=feature_config,

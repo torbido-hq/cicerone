@@ -6,8 +6,15 @@ Default single-instance exclusion is RunGuard's threading.Lock (no backend).
 
 from __future__ import annotations
 
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Protocol
 
+from cicerone.config.constants import (
+    DEFAULT_DATASET_APPEND_LOCK_TTL_SECONDS,
+    DEFAULT_LOCK_ACQUIRE_TIMEOUT_SECONDS,
+)
 from cicerone.config.lock_url import resolve_postgres_lock_url
 from cicerone.config.settings import Settings
 from cicerone.locks.keys import (
@@ -16,6 +23,7 @@ from cicerone.locks.keys import (
     REDIS_LOCK_KEY,
     REDIS_LOCK_TTL_MS,
     advisory_keys_from_lock_key,
+    dataset_append_lock_key,
     events_apply_lock_key,
 )
 from cicerone.locks.postgres import PostgresAdvisoryLock
@@ -30,9 +38,14 @@ __all__ = [
     "REDIS_LOCK_KEY",
     "REDIS_LOCK_TTL_MS",
     "RedisLock",
+    "acquire_blocking",
     "advisory_keys_from_lock_key",
+    "build_dataset_writer_lock",
     "build_lock_backend",
+    "dataset_append_lock_key",
     "events_apply_lock_key",
+    "has_distributed_lock",
+    "held_writer_lock",
 ]
 
 
@@ -52,6 +65,51 @@ class LockBackend(Protocol):
     def is_locked(self) -> bool:
         """True when any process holds this key (probe; does not acquire)."""
         ...
+
+
+def has_distributed_lock(settings: Settings) -> bool:
+    return settings.trigger.lock_backend != "in_process"
+
+
+def acquire_blocking(
+    lock: LockBackend,
+    *,
+    timeout_seconds: float = DEFAULT_LOCK_ACQUIRE_TIMEOUT_SECONDS,
+    interval_seconds: float = 0.05,
+) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        if lock.acquire():
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(interval_seconds)
+
+
+@contextmanager
+def held_writer_lock(lock: LockBackend | None) -> Iterator[None]:
+    if lock is None:
+        yield
+        return
+    if not acquire_blocking(lock):
+        raise RuntimeError("dataset writer lock busy")
+    try:
+        yield
+    finally:
+        lock.release()
+
+
+def build_dataset_writer_lock(settings: Settings) -> LockBackend | None:
+    if not has_distributed_lock(settings) or settings.output.kind != "dataset":
+        return None
+    return build_lock_backend(
+        settings,
+        lock_key=dataset_append_lock_key(settings.trigger.lock_key),
+        ttl_seconds=min(
+            settings.trigger.lock_ttl_seconds,
+            DEFAULT_DATASET_APPEND_LOCK_TTL_SECONDS,
+        ),
+    )
 
 
 def build_lock_backend(

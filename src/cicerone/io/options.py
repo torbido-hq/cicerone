@@ -5,9 +5,15 @@ from __future__ import annotations
 import io
 import logging
 import re
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None  # type: ignore[assignment]
 
 import pandas as pd
 
@@ -31,6 +37,19 @@ def require_option(options: dict[str, Any], key: str, backend: str) -> Any:
     if value is None:
         raise ConfigError(f"Missing required option '{key}' for backend {backend!r}")
     return value
+
+
+@contextmanager
+def exclusive_file_lock(path: Path) -> Iterator[None]:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as handle:
+        if fcntl is not None:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def object_key(options: dict[str, Any], filename: str) -> str:

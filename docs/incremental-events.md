@@ -222,15 +222,16 @@ nacked. Requires the matching extra.
 Default is **one writer process**. Dataset output is whole-object
 read-modify-write — multi-replica serve is only safe with a leader.
 
-Set `events.ha = true` **and** `job.trigger.lock_backend` to `postgres` or
-`redis`. Config fails fast otherwise. Serve takes a **separate** apply
-lease (`{lock_key}:events:apply`) around write-through (not the 24h
-retrain TTL; Redis apply lease is 60s, refreshed while held). Fan-out
-sources poll without the lease and acquire it when a micro-batch is ready
-to flush; db / s3-list still take the lease to poll (single consumer). On
-lock busy the flush nacks so lag stays honest. Redis `owned()` fences
-writes if the lease expires mid-apply; Postgres `owned()` checks `pg_locks`
-for this session. A dead Postgres lock probe **fails closed** (logged and
+A postgres or redis `job.trigger.lock_backend` is enough for serve to take
+the apply lease (`{lock_key}:events:apply`) around write-through (not the
+24h retrain TTL; Redis apply lease is 60s, refreshed while held). Set
+`events.ha = true` as well when you claim multi-replica ingest — config
+then requires db output for track and exposures. Fan-out sources poll
+without the lease and acquire it when a micro-batch is ready to flush;
+db / s3-list still take the lease to poll (single consumer). On lock busy
+the flush nacks so lag stays honest. Redis `owned()` fences writes if the
+lease expires mid-apply; Postgres `owned()` checks `pg_locks` for this
+session. A dead Postgres lock probe **fails closed** (logged and
 re-raised), not “lock free”. The same `owned()` callback is passed into
 full `job.run()` (cron and `RunGuard` trigger) so a lost retrain lock skips
 artifact and recommendation writes.
@@ -257,12 +258,12 @@ artifact are capped (`events.online.max_extra_interactions`).
 | kafka | Consumer groups + unique `consumer_name`; apply is leader-only |
 | rabbitmq | Competing consumers on one queue; apply is leader-only |
 
-The retrain interlock only engages when something supplies a busy check.
-`start_events_runtime` builds the retrain probe solely when
-`[events].ha = true`, and its optional `busy_check` argument is left unset by
-the only caller in shipped code (`serve.app`) — no batch path starts the
-events runtime at all. So with `ha = false` a flush is never deferred while a
-full retrain writes, and `cicerone_events_apply_busy_total{reason="retrain"}`
+The retrain interlock engages when `lock_backend` is postgres or redis
+(`start_events_runtime` builds the probe itself). Its optional
+`busy_check` argument is left unset by the only caller in shipped code
+(`serve.app`) — no batch path starts the events runtime at all. With
+`lock_backend = "in_process"` a flush is never deferred while a full
+retrain writes, and `cicerone_events_apply_busy_total{reason="retrain"}`
 stays at zero unless you embed the worker yourself and pass a check.
 
 ## Ops

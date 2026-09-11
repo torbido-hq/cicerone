@@ -238,12 +238,13 @@ def _score_previous_run(
             logger.exception("Failed to read recommendation history")
             history = None
     recs_for_track = concat_history(history, stamp_recommendations(previous_recs, previous_generated_at))
-    track_payload = None
-    served_payload = None
-    if settings.track.enabled:
+
+    def _compute_track() -> dict[str, Any] | None:
+        if not settings.track.enabled:
+            return None
         try:
             conversions = conversion_events_for_settings(events, settings)
-            track_payload = evaluate_tracking(
+            return evaluate_tracking(
                 track_rows=track_rows,
                 conversions=conversions,
                 recommendations=recs_for_track,
@@ -251,7 +252,11 @@ def _score_previous_run(
             ).as_dict()
         except Exception:
             logger.exception("Failed to compute track eval")
-    if settings.eval.enabled and previous_recs is not None and previous_generated_at:
+            return None
+
+    def _compute_served() -> dict[str, Any] | None:
+        if not settings.eval.enabled or previous_recs is None or not previous_generated_at:
+            return None
         try:
             types = settings.eval.event_types or conversion_event_types(
                 settings.track.conversion_event_types,
@@ -267,10 +272,23 @@ def _score_previous_run(
                 catalog=items,
                 assigned=_replay_assignments(settings, previous_recs, track_rows),
             )
-            served_payload = report.as_dict() if report is not None else None
+            return report.as_dict() if report is not None else None
         except Exception:
             logger.exception("Failed to compute served eval")
-    return track_payload, served_payload
+            return None
+
+    run_both = bool(
+        settings.track.enabled
+        and settings.eval.enabled
+        and previous_recs is not None
+        and previous_generated_at
+    )
+    if run_both:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            track_f = pool.submit(_compute_track)
+            served_f = pool.submit(_compute_served)
+            return track_f.result(), served_f.result()
+    return _compute_track(), _compute_served()
 
 
 def _read_input(
@@ -308,19 +326,26 @@ def _select_thompson_recipes(
         return ThompsonSelection(recipes)
     experiment = settings.experiment
     store = ExperimentStore(settings.output)
-    try:
-        previous = store.read_state()
-    except Exception:
-        logger.exception("Thompson allocation fail closed: could not read experiment state")
+    failed = object()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        state_f = pool.submit(_try_load, "read experiment state", store.read_state, failed)
+        track_f = pool.submit(
+            _try_load,
+            "read track rows",
+            lambda: TrackStore(settings.output).read_rows(experiment_id=experiment.id),
+            failed,
+        )
+        raw_state = state_f.result()
+        raw_track = track_f.result()
+    if raw_state is failed or not (raw_state is None or isinstance(raw_state, dict)):
         return ThompsonSelection(recipes)
+    previous: dict[str, Any] | None = raw_state
+    if raw_track is failed or not isinstance(raw_track, list):
+        return ThompsonSelection(recipes)
+    track_rows: list[dict[str, Any]] = raw_track
     if previous and str(previous.get("experiment_id") or "") != experiment.id:
         previous = None
     promoted = str(previous["promoted_variant"]) if previous and previous.get("promoted_variant") else None
-    try:
-        track_rows = TrackStore(settings.output).read_rows(experiment_id=experiment.id)
-    except Exception:
-        logger.exception("Thompson allocation fail closed: could not read track rows")
-        return ThompsonSelection(recipes)
     has_pair = bool(previous and previous.get("champion") and previous.get("challenger"))
     if not track_rows and not has_pair:
         logger.warning("Thompson allocation fail closed: empty track")
