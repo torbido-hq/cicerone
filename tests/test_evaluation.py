@@ -8,12 +8,16 @@ from cicerone.evaluation import (
     DEFAULT_CONVERSION_TYPE,
     OCCURRED_AT,
     conversion_event_types,
+    conversion_events,
     evaluate_served,
     evaluate_tracking,
+    filter_events_by_types,
     filter_events_to_recommended,
+    generated_ats_from_track,
     replay_ks,
     user_track_outcomes,
 )
+from cicerone.evaluation.context import concat_history, prefer_history, stamp_recommendations
 
 
 def test_evaluation_package_reexports_prior_constants() -> None:
@@ -167,6 +171,30 @@ def test_evaluate_tracking_empty_and_helpers() -> None:
     assert conversion_event_types((), primary_metric="ctr") == ("purchase",)
     assert conversion_event_types((), primary_metric="view") == ("view",)
     assert conversion_event_types(("purchase", "save"), primary_metric="ctr") == ("purchase", "save")
+    events = pd.DataFrame(
+        [
+            {"user_id": "a", "item_id": "i1", "event_type": "purchase"},
+            {"user_id": "b", "item_id": "i2", "event_type": "view"},
+        ]
+    )
+    purchases = conversion_events(events, (), primary_metric="ctr")
+    assert list(purchases["event_type"]) == ["purchase"]
+    assert filter_events_by_types(events, None).equals(events)
+    assert generated_ats_from_track(
+        [{"generated_at": "2026-09-01T00:00:00Z"}, {"generated_at": ""}],
+        "2026-09-02T00:00:00Z",
+        None,
+    ) == {"2026-09-01T00:00:00Z", "2026-09-02T00:00:00Z"}
+    current = pd.DataFrame([{"user_id": "a", "item_id": "i1"}])
+    stamped = stamp_recommendations(current, "2026-09-01T00:00:00Z")
+    assert stamped is not None
+    assert list(stamped["generated_at"]) == ["2026-09-01T00:00:00Z"]
+    history = pd.DataFrame([{"user_id": "b", "item_id": "i2"}])
+    combined = concat_history(history, stamped)
+    assert combined is not None
+    assert len(combined) == 2
+    assert prefer_history(history, current).equals(history)
+    assert prefer_history(pd.DataFrame(), current).equals(current)
     assert replay_ks((), top_k=10) == (5, 10)
     assert replay_ks((3, 3, 20), top_k=10) == (3,)
     assert replay_ks((0, 99), top_k=10) == (10,)

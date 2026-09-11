@@ -8,7 +8,14 @@ from typing import Any
 import pandas as pd
 
 from cicerone.config import Settings
-from cicerone.evaluation import conversion_event_types, evaluate_tracking
+from cicerone.evaluation import (
+    conversion_event_types,
+    conversion_events_for_settings,
+    evaluate_tracking,
+    generated_ats_from_track,
+    load_metric_events,
+)
+from cicerone.evaluation.context import prefer_history
 from cicerone.track.store import TrackStore
 
 logger = logging.getLogger(__name__)
@@ -101,23 +108,22 @@ def _live_track_eval(settings: Settings, store: TrackStore) -> dict[str, Any] | 
     conversions = pd.DataFrame()
     recs = None
     try:
-        from cicerone.dashboard_experiments import load_metric_events
         from cicerone.events.store import load_recommendations_frame
 
         types = conversion_event_types(
             settings.track.conversion_event_types,
             primary_metric=settings.experiment.primary_metric,
         )
-        conversions = load_metric_events(settings, event_types=types)
+        events = load_metric_events(settings, event_types=types)
+        conversions = conversion_events_for_settings(events, settings)
         recs = load_recommendations_frame(settings.output)
         if recs is not None and recs.empty:
             recs = None
-        wanted = {str(row.get("generated_at") or "") for row in rows}
-        wanted.discard("")
+        wanted = generated_ats_from_track(rows)
+        history = None
         if wanted:
             history = store.read_history(generated_ats=wanted)
-            if history is not None and not history.empty:
-                recs = history
+        recs = prefer_history(history, recs)
     except Exception:
         logger.exception("Failed to load conversions for live Quality metrics")
     try:
