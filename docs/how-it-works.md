@@ -15,7 +15,7 @@ read next.
 
 ## Pipeline
 
-![Pipeline from events through weighting, fitting, combining, and boosts to a recommendations table, with optional incremental events writing through](/images/pipeline.svg)
+![Pipeline from events through weighting, fitting, combining, and boosts to a recommendations table, with optional incremental events writing through](images/pipeline.svg)
 
 1. Load `events` (required) plus optional `users` / `items`.
 2. Turn raw events into weighted `(user, item)` pairs (`features.toml` +
