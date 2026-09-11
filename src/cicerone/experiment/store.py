@@ -229,7 +229,7 @@ class ExperimentStore:
         require_appendable_exposure_log(self._output)
         payload = "".join(json.dumps(dict(row), separators=(",", ":")) + "\n" for row in rows).encode("utf-8")
         path = Path(require_option(self._options, "path", "local")) / ".exposures.jsonl.lock"
-        with held_writer_lock(self._writer_lock, fallback_on_error=True), exclusive_file_lock(path):
+        with held_writer_lock(self._writer_lock), exclusive_file_lock(path):
             self._append_bytes(EXPOSURES_FILENAME, payload)
 
     def read_exposures(self, *, experiment_id: str | None = None) -> list[dict[str, Any]]:

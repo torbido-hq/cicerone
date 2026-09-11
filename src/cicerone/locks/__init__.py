@@ -6,7 +6,6 @@ Default single-instance exclusion is RunGuard's threading.Lock (no backend).
 
 from __future__ import annotations
 
-import logging
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -29,8 +28,6 @@ from cicerone.locks.keys import (
 )
 from cicerone.locks.postgres import PostgresAdvisoryLock
 from cicerone.locks.redis import RedisLock
-
-logger = logging.getLogger(__name__)
 
 __all__ = [
     "LockBackend",
@@ -90,45 +87,16 @@ def acquire_blocking(
 
 
 @contextmanager
-def held_writer_lock(lock: LockBackend | None, *, fallback_on_error: bool = False) -> Iterator[None]:
+def held_writer_lock(lock: LockBackend | None) -> Iterator[None]:
     if lock is None:
         yield
         return
-    release_needed = False
-    try:
-        acquired = acquire_blocking(lock)
-    except Exception:
-        if not fallback_on_error:
-            raise
-        logger.warning(
-            "Dataset writer distributed lock unavailable; continuing with local lock only",
-            exc_info=True,
-        )
-        yield
-        return
-    if not acquired:
+    if not acquire_blocking(lock):
         raise RuntimeError("dataset writer lock busy")
-    release_needed = True
     try:
-        try:
-            owned = lock.owned()
-        except Exception:
-            if not fallback_on_error:
-                raise
-            logger.warning(
-                "Dataset writer distributed lock probe failed; continuing with local lock only",
-                exc_info=True,
-            )
-            lock.release()
-            release_needed = False
-            yield
-            return
-        if not owned:
-            raise LockLostError("dataset writer lock lost before write")
         yield
     finally:
-        if release_needed:
-            lock.release()
+        lock.release()
 
 
 def build_dataset_writer_lock(settings: Settings) -> LockBackend | None:
