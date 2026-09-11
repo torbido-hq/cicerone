@@ -58,6 +58,38 @@ def test_amqp_timeouts_applied_on_connect(monkeypatch):
     source.close()
 
 
+def test_pika_io_skips_job_queued_during_timed_out_pump():
+    from cicerone.events.rabbitmq import _PikaIo
+
+    entered = threading.Event()
+    released = threading.Event()
+    executed = threading.Event()
+
+    class _Conn:
+        def process_data_events(self, time_limit: float | int = 0) -> None:
+            del time_limit
+            entered.set()
+            released.wait(timeout=2)
+
+    io = _PikaIo(timeout_seconds=0.05)
+    io._connection = _Conn()
+    io.start()
+    try:
+        assert entered.wait(timeout=2)
+        with pytest.raises(TimeoutError, match="timed out"):
+            io.submit(executed.set)
+        released.set()
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and io._thread.is_alive():
+            time.sleep(0.01)
+        assert io.failed is True
+        assert io._thread.is_alive() is False
+        assert executed.is_set() is False
+    finally:
+        released.set()
+        io.stop()
+
+
 def test_pika_io_submit_times_out():
     from cicerone.events.rabbitmq import _PikaIo
 
