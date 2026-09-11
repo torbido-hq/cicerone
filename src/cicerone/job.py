@@ -170,6 +170,33 @@ def _try_load(label: str, fn: Callable[[], Any], default: Any) -> Any:
         return default
 
 
+def _persist_track_outputs(
+    store: TrackStore,
+    *,
+    kind: str,
+    eval_report: Mapping[str, Any],
+    recommendations: pd.DataFrame | None,
+    generated_at: str,
+) -> None:
+    tasks: list[tuple[str, Callable[[], Any]]] = [
+        ("write track eval", lambda: store.write_eval(eval_report)),
+    ]
+    if recommendations is not None:
+        tasks.append(
+            (
+                "append recommendation history",
+                lambda: store.append_history(recommendations, generated_at=generated_at),
+            )
+        )
+    if kind == "db":
+        for label, fn in tasks:
+            _try_load(label, fn, None)
+        return
+    with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
+        for label, fn in tasks:
+            pool.submit(_try_load, label, fn, None)
+
+
 def _score_previous_run(
     settings: Settings,
     events: pd.DataFrame,
@@ -254,7 +281,10 @@ def _read_input(
         users_future = executor.submit(source.read_users)
         items_future = executor.submit(source.read_items)
         manifest_future = executor.submit(
-            _try_load, "read last manifest", build_manifest_reader(output).read_latest, None
+            _try_load,
+            "read last manifest",
+            lambda: build_manifest_reader(output).read_latest(),
+            None,
         )
         return (
             events_future.result(),
@@ -673,28 +703,17 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
                 raise
         logger.info("Job finished: %s", json.dumps(manifest))
         if manifest.get("status") == "success" and (settings.track.enabled or settings.eval.enabled):
-            store = TrackStore(settings.output)
-            generated_at = str(manifest["generated_at"])
-            with ThreadPoolExecutor(max_workers=2) as pool:
-                pool.submit(
-                    _try_load,
-                    "write track eval",
-                    lambda: store.write_eval(
-                        {
-                            "generated_at": eval_generated_at,
-                            "track_eval": track_eval_payload,
-                            "served_eval": served_eval_payload,
-                        }
-                    ),
-                    None,
-                )
-                if recommendations is not None:
-                    pool.submit(
-                        _try_load,
-                        "append recommendation history",
-                        lambda: store.append_history(recommendations, generated_at=generated_at),
-                        None,
-                    )
+            _persist_track_outputs(
+                TrackStore(settings.output),
+                kind=settings.output.kind,
+                eval_report={
+                    "generated_at": eval_generated_at,
+                    "track_eval": track_eval_payload,
+                    "served_eval": served_eval_payload,
+                },
+                recommendations=recommendations,
+                generated_at=str(manifest["generated_at"]),
+            )
 
 
 if __name__ == "__main__":

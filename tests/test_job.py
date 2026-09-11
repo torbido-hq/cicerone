@@ -9,8 +9,10 @@ import pytest
 
 from cicerone import job
 from cicerone.blending import COLD_START_USER_ID
+from cicerone.config import IOSettings
 from cicerone.job import _recommendation_user_count, _target_user_ids
 from cicerone.model import RRF_K
+from cicerone.track.store import TrackStore
 
 REPO_FEATURES_CONFIG = Path(__file__).resolve().parents[1] / "config" / "features.toml"
 
@@ -369,6 +371,69 @@ def test_job_run_swallows_eval_persistence_errors(tmp_path, monkeypatch):
     )
     job.run()
     assert (output_dir / "recommendations.parquet").exists()
+
+
+def test_read_input_swallows_manifest_reader_construction(monkeypatch):
+    class _Source:
+        def read_events(self) -> pd.DataFrame:
+            return pd.DataFrame({"user_id": ["u1"]})
+
+        def read_users(self) -> pd.DataFrame | None:
+            return None
+
+        def read_items(self) -> pd.DataFrame | None:
+            return None
+
+        def get_events_for_user(self, user_id: str, limit: int) -> pd.DataFrame:
+            return pd.DataFrame()
+
+        def get_user(self, user_id: str) -> dict | None:
+            return None
+
+    monkeypatch.setattr(
+        "cicerone.job.build_manifest_reader",
+        lambda _output: (_ for _ in ()).throw(RuntimeError("bad url")),
+    )
+    events, users, items, manifest = job._read_input(
+        _Source(),
+        IOSettings(kind="db", options={"database_url": "postgresql+psycopg://bad"}),
+    )
+    assert list(events["user_id"]) == ["u1"]
+    assert users is None
+    assert items is None
+    assert manifest is None
+
+
+def test_persist_track_outputs_serializes_db_writes(monkeypatch):
+    active = 0
+    max_active = 0
+    order: list[str] = []
+
+    def _write_eval(self, report):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        order.append("eval")
+        active -= 1
+
+    def _append_history(self, recommendations, *, generated_at):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        order.append("hist")
+        active -= 1
+
+    monkeypatch.setattr(TrackStore, "write_eval", _write_eval)
+    monkeypatch.setattr(TrackStore, "append_history", _append_history)
+    job._persist_track_outputs(
+        TrackStore(IOSettings(kind="db", options={"database_url": "sqlite://"})),
+        kind="db",
+        eval_report={"generated_at": "t"},
+        recommendations=pd.DataFrame([{"user_id": "u1"}]),
+        generated_at="t",
+    )
+    assert order == ["eval", "hist"]
+    assert max_active == 1
 
 
 def test_recommendation_user_count_excludes_cold_start():
