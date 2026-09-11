@@ -68,8 +68,9 @@ Do not mix lists.
 conversion instrument, not a request-path bandit. Each `job.run()` keeps one
 **champion** and one **challenger**, updates Bernoulli posteriors from tracked
 CVR (`primary_metric = "conversion"` with `attribution = "click"` or
-`"impression"`), and writes **only those two** recipe lists. Serve still hashes
-the user onto the active pair (or 100% to a **Ship** / Promote winner).
+`"impression"`), and writes per-user top-Ks for **only those two** recipes.
+Serve still hashes the user onto the active pair (or 100% to a **Ship** /
+Promote winner).
 
 Requires `[track]` and `pip install 'cicerone-recommender[bandits]'` (Fidelity
 [MABWiser](https://github.com/fidelity/mabwiser) `LearningPolicy.ThompsonSampling()`).
@@ -91,6 +92,24 @@ attribution = "click"
 allocation = "thompson"   # needs pip install 'cicerone-recommender[bandits]'
 # explore_traffic = 0.5
 # rotate_min_prob = 0.9
+
+[[experiment.variants]]
+name = "control"
+traffic = 0.34
+
+[[experiment.variants]]
+name = "blend"
+traffic = 0.33
+models = ["collaborative", "popular"]
+combiner = "blend"
+
+[[experiment.variants]]
+name = "popular"
+traffic = 0.33
+models = ["popular"]
+
+[track]
+enabled = true
 ```
 
 The Experiments page shows CVR %, P(best), “now testing A vs B”, and a volume
@@ -102,8 +121,8 @@ meter. **Ship** remains the explicit 100% action; Thompson does not auto-promote
 The job fits the **union** of variant models once. What it writes depends on
 `[experiment].allocation`:
 
-- `fixed` (default) — combine/blend **each** named recipe into top-K and tag
-  `variant`.
+- `fixed` (default) — combine/blend a per-user top-K for **each** named recipe
+  and tag it with `variant`.
 - `thompson` — normally writes only the live pair; with empty tracking and no
   stored pair, it falls back to `fixed` and writes every named recipe (see
   [Thompson at retrain](#thompson-at-retrain)).

@@ -33,12 +33,19 @@ enabled = true
 
 `kind` is `impression` or `click`. Send one row per shown item (or a list /
 `{"events":[...]}`). Optional `variant`, `experiment_id`, `generated_at`,
-`event_id` (idempotency). Bodies larger than 1 MiB (or
-`events.options.max_body_bytes`) return 413.
+`event_id` (idempotency). Bodies larger than the configured limit return 413;
+the default is 1 MiB. The endpoint shares the events request-body limit;
+override it, even in a track-only deployment, with:
+
+```toml
+[events.options]
+max_body_bytes = 2097152 # 2 MiB
+```
 
 Storage is next to `[output]`: local `track.jsonl`, or a
-`recommendation_track` db table. Object-store JSONL append is refused.
-`events.ha = true` requires db output.
+`recommendation_track` db table. Enabling `[track]` with object-store output
+is rejected at config load because JSONL append is not atomic. `events.ha =
+true` requires db output.
 
 SQL-join shops that never call GET still POST `/track` when the widget
 renders.

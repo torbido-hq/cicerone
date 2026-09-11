@@ -162,7 +162,8 @@ them contribute once you turn on weighted fusion in the next step.
 Available strategies:
 
 - `collaborative`: `LightFMWrapperModel` — hybrid CF using user/item
-  features for cold-start. Personalized, warm users only.
+  features for cold-start. Personalized; scores users with interactions or
+  profile features.
 - `item_based`: `ImplicitItemKNNWrapperModel` — item-item similarity.
   Neighbor count is RecTools `model.item_based.model.K` (default 20);
   legacy `[job.item_based].k_neighbors` still works. Personalized; users
@@ -496,6 +497,9 @@ path = "/data/output"
 [serve]
 auth_token = "tutorial-token"
 category_column = "category"
+
+[track]
+enabled = true
 ```
 
 Start it in the background and query a user's recommendations. Keep the
@@ -540,6 +544,16 @@ The response is an object (not a bare list):
 }
 ```
 
+Report what the host actually rendered. This writes an impression row to
+`data/output/track.jsonl`; it does not enter the training event path:
+
+```sh
+curl -sS -X POST -H "Authorization: Bearer $SERVE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"kind":"impression","user_id":"alice","item_id":"lager-003","rank":1,"occurred_at":"2026-08-28T12:00:00Z"}' \
+  http://localhost:8000/track | python -m json.tool
+```
+
 Try a few filters (same auth header):
 
 ```sh
@@ -551,9 +565,6 @@ curl -s -H "Authorization: Bearer $SERVE_TOKEN" \
 # 404 only when the table has no sentinel and no popular/latest rows
 curl -s -H "Authorization: Bearer $SERVE_TOKEN" \
   "http://localhost:8000/recommendations/nobody?limit=5"
-
-# Prometheus metrics (X-Metrics-Token required when metrics_enabled = true)
-curl -s -H "X-Metrics-Token: $METRICS_TOKEN" "http://localhost:8000/metrics" | head
 ```
 
 `GET /metrics` is off unless `[serve].metrics_enabled = true` with a
@@ -619,6 +630,7 @@ docker run --rm -d --name cicerone-tutorial-serve -p 8000:8000 \
   -v "$PWD/data":/data \
   cicerone-test cicerone --config /app/config/cicerone.toml serve
 
+read -s -p "Serve auth token: " SERVE_TOKEN && echo
 curl -sS -X POST -H "Authorization: Bearer $SERVE_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"user_id":"alice","item_id":"ipa-001","event_type":"purchase","quantity":1,"occurred_at":"2026-08-19T12:00:00Z"}' \
@@ -699,6 +711,9 @@ path = "/data/output"
 
 [job]
 cron_schedule = "0 3 * * *"
+
+[track]
+enabled = true
 ```
 
 Add a login user (prompts for a password interactively, note `-it`):
@@ -713,8 +728,9 @@ docker run --rm -it \
 Then start the dashboard and open `http://localhost:8090/dashboard` in a
 browser (log in with the user just created), or
 `http://localhost:8090/dashboard?user_id=alice` to fill the inspector on
-load. The header also links to **Config**, a read-only view of the TOML this
-dashboard process loaded (secrets redacted). HTTP Basic credentials stay in the browser until it forgets them
+load. The header also links to **Quality**, where the impression from step 12
+appears, and **Config**, a read-only view of the TOML this dashboard process
+loaded (secrets redacted). HTTP Basic credentials stay in the browser until it forgets them
 for this origin — closing the tab is not a sign-out; use a private window
 or clear saved passwords. The **Inspect user** form shows that `user_id`'s
 recent `[input]` events beside current top-K (including cold-start
