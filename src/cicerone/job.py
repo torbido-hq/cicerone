@@ -54,6 +54,7 @@ from cicerone.io.recommendation_schema import (
     filter_variant_rows,
     pick_fallback_variant,
 )
+from cicerone.io.surfaces import latest_from_items, neighbors_from_events, popular_from_events
 from cicerone.locks import LockLostError
 from cicerone.model import (
     DEFAULT_MODELS,
@@ -610,6 +611,17 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
             if items is not None and not items.empty:
                 _ensure_fence(fence_check)
                 sink.write_items_snapshot(items)
+
+            _ensure_fence(fence_check)
+            sink.write_surfaces(
+                popular=popular_from_events(events, settings.top_k),
+                latest=latest_from_items(
+                    items,
+                    settings.top_k,
+                    feature_config.blending.latest_date_columns,
+                ),
+                neighbors=neighbors_from_events(events, settings.item_based_k_neighbors),
+            )
 
             _ensure_fence(fence_check)
             sink.write_recommendations(recommendations)

@@ -157,3 +157,30 @@ class TrackIngestRequest(BaseModel):
 class TrackIngestResponse(BaseModel):
     accepted: int = Field(description="Number of new rows written (duplicates skipped)")
     event_ids: list[str] = Field(description="Event ids of newly written rows")
+
+
+class SurfaceItem(BaseModel):
+    item_id: str
+    rank: int = Field(ge=1)
+    score: float
+    source: str
+
+
+class SurfaceResponse(BaseModel):
+    generated_at: str | None = None
+    items: list[SurfaceItem]
+
+
+class SimilarResponse(SurfaceResponse):
+    item_id: str
+
+
+class SessionRecommendRequest(BaseModel):
+    items: list[str] = Field(default_factory=list, description="Item ids in this anonymous session")
+    events: list[InteractionEvent] = Field(
+        default_factory=list, description="Optional session events; item_id values are used"
+    )
+
+
+class SessionRecommendResponse(SurfaceResponse):
+    fallback: bool = Field(description="True when neighbors were empty and popular/latest was used")
