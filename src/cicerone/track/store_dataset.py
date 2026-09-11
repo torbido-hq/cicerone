@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 try:
     import fcntl
 except ImportError:
     fcntl = None  # type: ignore[assignment]
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from io import BytesIO
 from pathlib import Path
@@ -31,6 +32,20 @@ from cicerone.track.store_common import (
     _history_part_matches,
     _history_stem_before,
 )
+
+_HISTORY_READ_WORKERS = 8
+
+
+def _collect_frames(loaders: list[Callable[[], pd.DataFrame | None]]) -> list[pd.DataFrame]:
+    if not loaders:
+        return []
+    if len(loaders) == 1:
+        frame = loaders[0]()
+        return [] if frame is None or frame.empty else [frame]
+    workers = min(_HISTORY_READ_WORKERS, len(loaders))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        loaded = list(pool.map(lambda load: load(), loaders))
+    return [frame for frame in loaded if frame is not None and not frame.empty]
 
 
 class TrackDatasetBackend:
@@ -58,7 +73,6 @@ class TrackDatasetBackend:
         generated_ats: set[str] | None,
         since: str | None,
     ) -> list[pd.DataFrame]:
-        frames: list[pd.DataFrame] = []
         backend = validate_storage_options(self._options)
         if backend == "local":
             root = Path(require_option(self._options, "path", "local")) / HISTORY_DIR
@@ -70,11 +84,7 @@ class TrackDatasetBackend:
                 paths = sorted(root.glob("*.parquet"))
                 if since:
                     paths = [path for path in paths if not _history_stem_before(path.stem, since)]
-            for path in paths:
-                frame = pd.read_parquet(path)
-                if not frame.empty:
-                    frames.append(frame)
-            return frames
+            return _collect_frames([_bind_local_frame(path) for path in paths])
         bucket = require_option(self._options, "bucket", "s3")
         prefix = object_key(self._options, f"{HISTORY_DIR}/")
         client = build_s3_client(self._options)
@@ -88,11 +98,7 @@ class TrackDatasetBackend:
             raise
         if since:
             keys = [key for key in keys if not _history_stem_before(Path(key).stem, since)]
-        for key in sorted(keys):
-            frame = _s3_parquet_frame(client, bucket, key)
-            if frame is not None:
-                frames.append(frame)
-        return frames
+        return _collect_frames([_bind_s3_frame(client, bucket, key) for key in sorted(keys)])
 
     def _read_rows_dataset(self) -> list[dict[str, Any]]:
         raw = self._read_bytes(TRACK_FILENAME)
@@ -202,6 +208,25 @@ def _local_history_paths(root: Path, generated_ats: set[str]) -> list[Path]:
     ]
 
 
+def _bind_local_frame(path: Path) -> Callable[[], pd.DataFrame | None]:
+    def _load() -> pd.DataFrame | None:
+        return _local_parquet_frame(path)
+
+    return _load
+
+
+def _bind_s3_frame(client: Any, bucket: str, key: str) -> Callable[[], pd.DataFrame | None]:
+    def _load() -> pd.DataFrame | None:
+        return _s3_parquet_frame(client, bucket, key)
+
+    return _load
+
+
+def _local_parquet_frame(path: Path) -> pd.DataFrame | None:
+    frame = pd.read_parquet(path)
+    return None if frame.empty else frame
+
+
 def _s3_parquet_frame(client: Any, bucket: str, key: str) -> pd.DataFrame | None:
     try:
         obj = client.get_object(Bucket=bucket, Key=key)
@@ -209,8 +234,7 @@ def _s3_parquet_frame(client: Any, bucket: str, key: str) -> pd.DataFrame | None
         if is_s3_not_found(exc):
             return None
         raise
-    frame = pd.read_parquet(BytesIO(obj["Body"].read()))
-    return None if frame.empty else frame
+    return pd.read_parquet(BytesIO(obj["Body"].read()))
 
 
 def _s3_history_frames(
@@ -223,14 +247,25 @@ def _s3_history_frames(
     frames: list[pd.DataFrame] = []
     loaded: set[str] = set()
     missing: set[str] = set()
-    for stamp in generated_ats:
-        key = object_key(options, f"{HISTORY_DIR}/{_history_part_name(stamp)}")
-        frame = _s3_parquet_frame(client, bucket, key)
-        if frame is None:
-            missing.add(stamp)
-            continue
-        loaded.add(key)
-        frames.append(frame)
+    exact = [
+        (stamp, object_key(options, f"{HISTORY_DIR}/{_history_part_name(stamp)}")) for stamp in generated_ats
+    ]
+
+    def _one(item: tuple[str, str]) -> tuple[str, str, pd.DataFrame | None]:
+        stamp, key = item
+        return stamp, key, _s3_parquet_frame(client, bucket, key)
+
+    if exact:
+        workers = min(_HISTORY_READ_WORKERS, len(exact))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            results = list(pool.map(_one, exact))
+        for stamp, key, frame in results:
+            if frame is None:
+                missing.add(stamp)
+                continue
+            loaded.add(key)
+            if not frame.empty:
+                frames.append(frame)
     if not missing:
         return frames
     try:
@@ -246,10 +281,7 @@ def _s3_history_frames(
         if key not in loaded
         and (Path(key).name in missing_names or _history_part_matches(Path(key).stem, missing))
     ]
-    for key in sorted(extra):
-        frame = _s3_parquet_frame(client, bucket, key)
-        if frame is not None:
-            frames.append(frame)
+    frames.extend(_collect_frames([_bind_s3_frame(client, bucket, key) for key in extra]))
     return frames
 
 

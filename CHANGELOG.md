@@ -19,6 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Experiments manifest recipe parse treats malformed items as missing recipes.
 - Inheriting all experiment boost/eligibility rules rejects duplicate names, same as a named subset.
 - The recommendation publish sidecar rejects NaN scores instead of emitting non-JSON.
+- Job eval and history writes on `kind = "db"` run one at a time so SQLite does not drop either.
 
 ## [0.8.0] - 2026-09-08
 

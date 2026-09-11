@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from concurrent.futures import Future, ThreadPoolExecutor
+from typing import Any, TypeVar
 
 import pandas as pd
 
@@ -19,6 +20,7 @@ from cicerone.evaluation.context import prefer_history
 from cicerone.track.store import TrackStore
 
 logger = logging.getLogger(__name__)
+_T = TypeVar("_T")
 
 
 def quality_context(settings: Settings) -> dict[str, Any]:
@@ -88,6 +90,14 @@ def _replay_metric_names(served_eval: dict[str, Any] | None) -> list[str]:
     return names
 
 
+def _future_or(future: Future[_T], label: str, default: _T) -> _T:
+    try:
+        return future.result()
+    except Exception:
+        logger.exception("Failed to %s", label)
+        return default
+
+
 def _no_impressions(track_eval: dict[str, Any] | None) -> bool:
     if not track_eval:
         return True
@@ -110,20 +120,37 @@ def _live_track_eval(settings: Settings, store: TrackStore) -> dict[str, Any] | 
     try:
         from cicerone.events.store import load_recommendations_frame
 
-        types = conversion_event_types(
-            settings.track.conversion_event_types,
-            primary_metric=settings.experiment.primary_metric,
-        )
-        events = load_metric_events(settings, event_types=types)
-        conversions = conversion_events_for_settings(events, settings)
-        recs = load_recommendations_frame(settings.output)
-        if recs is not None and recs.empty:
-            recs = None
         wanted = generated_ats_from_track(rows)
-        history = None
-        if wanted:
-            history = store.read_history(generated_ats=wanted)
-        recs = prefer_history(history, recs)
+
+        def _load_conversions() -> pd.DataFrame:
+            types = conversion_event_types(
+                settings.track.conversion_event_types,
+                primary_metric=settings.experiment.primary_metric,
+            )
+            return conversion_events_for_settings(
+                load_metric_events(settings, event_types=types),
+                settings,
+            )
+
+        def _load_recs() -> pd.DataFrame | None:
+            frame = load_recommendations_frame(settings.output)
+            if frame is not None and frame.empty:
+                return None
+            return frame
+
+        def _load_history() -> pd.DataFrame | None:
+            if not wanted:
+                return None
+            return store.read_history(generated_ats=wanted)
+
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            conv_f = pool.submit(_load_conversions)
+            recs_f = pool.submit(_load_recs)
+            hist_f = pool.submit(_load_history)
+            conversions = _future_or(conv_f, "load conversions for live Quality metrics", pd.DataFrame())
+            current = _future_or(recs_f, "load recommendations for live Quality metrics", None)
+            history = _future_or(hist_f, "read recommendation history for Quality", None)
+            recs = prefer_history(history, current)
     except Exception:
         logger.exception("Failed to load conversions for live Quality metrics")
     try:
