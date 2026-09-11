@@ -12,6 +12,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   using `[input]` history plus incremental events. Short lists fill from
   popular/latest (`[serve].fallback_fill`) when hide or availability filters
   drop rows.
+- Named surfaces on the serve API: `GET /popular`, `GET /latest`,
+  `GET /similar/{item_id}`, and `POST /session/recommendations`. The job
+  writes popular / latest / item-neighbor snapshots next to recommendations.
 
 ## [0.8.1] - 2026-09-08
 
