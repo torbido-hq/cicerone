@@ -31,11 +31,11 @@ def empty_item_scores() -> pd.DataFrame:
 
 def normalize_item_scores(frame: pd.DataFrame) -> pd.DataFrame:
     """Validate, stringify ids, and sort. Raises ``ValueError`` on bad rows."""
-    if frame.empty:
-        return empty_item_scores()
     missing = [column for column in ITEM_SCORES_COLUMNS if column not in frame.columns]
     if missing:
         raise ValueError(f"item_scores missing columns {missing}")
+    if frame.empty:
+        return empty_item_scores()
     out = frame.loc[:, list(ITEM_SCORES_COLUMNS)].copy()
     out[ITEM_COLUMN] = out[ITEM_COLUMN].astype(str)
     popular = pd.to_numeric(out[POPULAR_SCORE_COLUMN], errors="coerce")

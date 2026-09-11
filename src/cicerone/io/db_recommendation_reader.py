@@ -28,7 +28,7 @@ from cicerone.io.recommendation_reader_common import (
     _ItemFilterMixin,
     normalize_items_snapshot,
 )
-from cicerone.item_scores import empty_item_scores, normalize_item_scores
+from cicerone.item_scores import normalize_item_scores
 from cicerone.serve.metrics import observe_cache_refresh, record_cache_hit, record_cache_miss
 
 logger = logging.getLogger(__name__)
@@ -87,11 +87,9 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
                 self._item_scores = scores
         except MISSING_TABLE_ERRORS:
             logger.debug(
-                "item_scores table %r not present; serving an empty catalog",
+                "item_scores table %r not present; keeping previous data",
                 self._item_scores_table,
             )
-            with self._lock:
-                self._item_scores = empty_item_scores()
         except Exception:
             logger.exception("Failed to refresh item scores; keeping previous data")
         observe_cache_refresh(duration_seconds=time.perf_counter() - started, success=items_ok)
