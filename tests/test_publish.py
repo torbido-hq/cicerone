@@ -325,10 +325,10 @@ def test_rabbitmq_publisher_exchange_empty_routing_key(monkeypatch):
 def test_kafka_publisher_connect_failure(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
     broker.list_topics_error = RuntimeError("down")
-    publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "t"})
+    publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "t", "timeout_seconds": 2})
     with pytest.raises(ConfigError, match="unreachable"):
         publisher.connect()
-    assert broker.flush_calls == [1]
+    assert broker.flush_calls == [2.0]
 
 
 def test_rabbitmq_publisher_connect_failure(monkeypatch):
