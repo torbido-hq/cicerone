@@ -60,11 +60,11 @@ class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
         )
 
     def _read_item_scores(self) -> pd.DataFrame:
+        if self._backend == "local":
+            path = Path(require_option(self._options, "path", "local")) / ITEM_SCORES_FILENAME
+            if not path.exists():
+                return empty_item_scores()
         try:
-            if self._backend == "local":
-                path = Path(require_option(self._options, "path", "local")) / ITEM_SCORES_FILENAME
-                if not path.exists():
-                    return empty_item_scores()
             frame = read_parquet(
                 self._options,
                 ITEM_SCORES_FILENAME,
@@ -75,14 +75,12 @@ class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
         except Exception as exc:
             if is_s3_not_found(exc):
                 return empty_item_scores()
-            logger.exception("Failed to load item scores; serving an empty catalog")
-            return empty_item_scores()
+            raise
         if frame.empty:
             return empty_item_scores()
         missing = [column for column in ITEM_SCORES_COLUMNS if column not in frame.columns]
         if missing:
-            logger.warning("item_scores missing columns %s; serving an empty catalog", missing)
-            return empty_item_scores()
+            raise ValueError(f"item_scores missing columns {missing}")
         return frame.loc[:, list(ITEM_SCORES_COLUMNS)]
 
     def _read_items_snapshot(self) -> pd.DataFrame | None:

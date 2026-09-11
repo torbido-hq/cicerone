@@ -85,10 +85,8 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             scores = empty_item_scores() if frame.empty else frame
             missing = [column for column in ITEM_SCORES_COLUMNS if column not in scores.columns]
             if missing:
-                logger.warning("item_scores table %r missing columns %s", self._item_scores_table, missing)
-                scores = empty_item_scores()
-            else:
-                scores = scores.loc[:, list(ITEM_SCORES_COLUMNS)]
+                raise ValueError(f"item_scores table {self._item_scores_table!r} missing columns {missing}")
+            scores = scores.loc[:, list(ITEM_SCORES_COLUMNS)]
             with self._lock:
                 self._item_scores = scores
         except MISSING_TABLE_ERRORS:

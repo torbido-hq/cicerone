@@ -250,7 +250,15 @@ def test_dataset_reader_item_scores_missing_and_refresh(tmp_path):
         tmp_path / "item_scores.parquet", index=False
     )
     reader.refresh()
-    assert reader.get_item_scores().empty
+    kept = reader.get_item_scores()
+    assert list(kept["item_id"]) == ["i1"]
+    assert float(kept.iloc[0]["popular_score"]) == 2.5
+
+    (tmp_path / "item_scores.parquet").write_bytes(b"not-parquet")
+    reader.refresh()
+    still = reader.get_item_scores()
+    assert list(still["item_id"]) == ["i1"]
+    assert float(still.iloc[0]["popular_score"]) == 2.5
 
 
 def test_dataset_reader_cold_start_fallback_and_items(tmp_path):
