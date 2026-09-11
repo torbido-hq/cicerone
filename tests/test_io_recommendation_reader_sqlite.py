@@ -118,6 +118,28 @@ def test_sqlite_db_reader_item_scores_missing_columns(tmp_path):
     assert reader.get_item_scores().empty
 
 
+def test_sqlite_db_reader_item_scores_keeps_cache_on_bad_schema(tmp_path):
+    url = _sqlite_url(tmp_path)
+    sink = DatabaseOutputSink({"database_url": url})
+    sink.write_recommendations(
+        pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"}])
+    )
+    sink.write_item_scores(
+        pd.DataFrame([{"item_id": "i1", "popular_score": 2.5, "latest_score": 1.0, "n_users": 4}])
+    )
+    reader = DbRecommendationReader({"database_url": url})
+    assert list(reader.get_item_scores()["item_id"]) == ["i1"]
+
+    engine = create_engine(url)
+    pd.DataFrame([{"item_id": "i1", "popular_score": 1.0}]).to_sql(
+        "item_scores", engine, index=False, if_exists="replace"
+    )
+    reader.refresh()
+    kept = reader.get_item_scores()
+    assert list(kept["item_id"]) == ["i1"]
+    assert float(kept.iloc[0]["popular_score"]) == 2.5
+
+
 def test_sqlite_clear_table_for_replace_falls_back_to_delete(tmp_path):
     url = _sqlite_url(tmp_path)
     sink = DatabaseOutputSink({"database_url": url})
