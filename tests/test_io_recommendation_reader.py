@@ -260,6 +260,14 @@ def test_dataset_reader_item_scores_missing_and_refresh(tmp_path):
     assert list(still["item_id"]) == ["i1"]
     assert float(still.iloc[0]["popular_score"]) == 2.5
 
+    (tmp_path / "item_scores.parquet").unlink()
+    reader.refresh()
+    assert float(reader.get_item_scores().iloc[0]["popular_score"]) == 2.5
+
+    pd.DataFrame(columns=["item_id"]).to_parquet(tmp_path / "item_scores.parquet", index=False)
+    reader.refresh()
+    assert float(reader.get_item_scores().iloc[0]["popular_score"]) == 2.5
+
     pd.DataFrame([{"item_id": "i1", "popular_score": "x", "latest_score": 0.0, "n_users": 1}]).to_parquet(
         tmp_path / "item_scores.parquet", index=False
     )

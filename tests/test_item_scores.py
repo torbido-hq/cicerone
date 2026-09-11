@@ -112,6 +112,8 @@ def test_normalize_item_scores_validates_and_sorts():
     assert float(out.iloc[0][POPULAR_SCORE_COLUMN]) == 1.0
     assert normalize_item_scores(empty_item_scores()).empty
     with pytest.raises(ValueError, match="missing columns"):
+        normalize_item_scores(pd.DataFrame())
+    with pytest.raises(ValueError, match="missing columns"):
         normalize_item_scores(pd.DataFrame([{"item_id": "a", "popular_score": 1.0}]))
     with pytest.raises(ValueError, match="non-finite"):
         normalize_item_scores(

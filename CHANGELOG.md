@@ -13,7 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- Serve keeps the last `item_scores` catalog when a refresh cannot read the parquet or table, or when scores are non-numeric, non-finite, or have negative `n_users`. A missing file still serves empty.
+- Serve keeps the last `item_scores` catalog when a refresh cannot read scores (I/O error, missing file or table after a load, or invalid values). Before the first successful load, missing data still serves empty.
 
 ## [0.8.1] - 2026-09-08
 

@@ -30,7 +30,7 @@ from cicerone.io.recommendation_reader_common import (
     normalize_items_snapshot,
     select_cold_start_fallback,
 )
-from cicerone.item_scores import ITEM_SCORES_FILENAME, empty_item_scores, normalize_item_scores
+from cicerone.item_scores import ITEM_SCORES_FILENAME, normalize_item_scores
 from cicerone.serve.metrics import observe_cache_refresh, record_cache_hit, record_cache_miss
 
 logger = logging.getLogger(__name__)
@@ -63,19 +63,12 @@ class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
         if self._backend == "local":
             path = Path(require_option(self._options, "path", "local")) / ITEM_SCORES_FILENAME
             if not path.exists():
-                return empty_item_scores()
-        try:
-            frame = read_parquet(
-                self._options,
-                ITEM_SCORES_FILENAME,
-                s3_client=self._get_s3_client() if self._backend == "s3" else None,
-            )
-        except FileNotFoundError:
-            return empty_item_scores()
-        except Exception as exc:
-            if is_s3_not_found(exc):
-                return empty_item_scores()
-            raise
+                raise FileNotFoundError(path)
+        frame = read_parquet(
+            self._options,
+            ITEM_SCORES_FILENAME,
+            s3_client=self._get_s3_client() if self._backend == "s3" else None,
+        )
         return normalize_item_scores(frame)
 
     def _read_items_snapshot(self) -> pd.DataFrame | None:

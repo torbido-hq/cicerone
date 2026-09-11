@@ -152,6 +152,11 @@ def test_sqlite_db_reader_item_scores_keeps_cache_on_bad_schema(tmp_path):
     reader.refresh()
     assert float(reader.get_item_scores().iloc[0]["popular_score"]) == 2.5
 
+    with engine.begin() as conn:
+        conn.execute(text('DROP TABLE IF EXISTS "item_scores"'))
+    reader.refresh()
+    assert float(reader.get_item_scores().iloc[0]["popular_score"]) == 2.5
+
 
 def test_sqlite_clear_table_for_replace_falls_back_to_delete(tmp_path):
     url = _sqlite_url(tmp_path)
