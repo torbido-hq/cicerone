@@ -231,7 +231,7 @@ def test_close_abandons_when_submit_overlaps_pump(monkeypatch):
 def test_amqp_callbacks_use_io_handles(monkeypatch):
     from types import SimpleNamespace
 
-    broker = install_fake_rabbitmq(monkeypatch)
+    install_fake_rabbitmq(monkeypatch)
     source = RabbitMQEventSource(_options())
     source.connect()
     io = source._io
