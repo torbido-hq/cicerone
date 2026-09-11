@@ -3,10 +3,10 @@ from __future__ import annotations
 import pytest
 
 from cicerone.config import IOSettings
-from cicerone.io.dataset_store import DatasetInputSource, DatasetOutputSink
-from cicerone.io.db_store import DatabaseInputSource, DatabaseOutputSink
 from cicerone.io.dataset_catalog import DatasetCatalogStore
+from cicerone.io.dataset_store import DatasetInputSource, DatasetOutputSink
 from cicerone.io.db_catalog import DatabaseCatalogStore
+from cicerone.io.db_store import DatabaseInputSource, DatabaseOutputSink
 from cicerone.io.factory import (
     build_catalog_store,
     build_input_source,
