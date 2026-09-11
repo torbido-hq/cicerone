@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 280" role="img" aria-labelledby="pipeTitle pipeDesc">
+  <title id="pipeTitle">Cicerone recommendation pipeline</title>
+  <desc id="pipeDesc">Events, users, and items are weighted, fitted, combined, and boosted into a recommendations table. Optional incremental events write through to that table.</desc>
+  <defs>
+    <linearGradient id="pipeFill" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f7fcff"/>
+      <stop offset="100%" stop-color="#e6f4fa"/>
+    </linearGradient>
+    <linearGradient id="pipeArrow" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#00B4DB"/>
+      <stop offset="100%" stop-color="#004B75"/>
+    </linearGradient>
+    <marker id="pipeHead" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M0,0 L10,4 L0,8 Z" fill="#004B75"/>
+    </marker>
+  </defs>
+  <rect x="16" y="70" width="170" height="100" rx="8" fill="url(#pipeFill)" stroke="#004B75" stroke-opacity="0.25"/>
+  <text x="101" y="112" text-anchor="middle" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#0a2438">Input</text>
+  <text x="101" y="136" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="#4a6a82">events · users · items</text>
+  <line x1="186" y1="120" x2="230" y2="120" stroke="url(#pipeArrow)" stroke-width="2.5" marker-end="url(#pipeHead)"/>
+  <rect x="236" y="70" width="200" height="100" rx="8" fill="url(#pipeFill)" stroke="#00B4DB" stroke-width="1.5"/>
+  <text x="336" y="108" text-anchor="middle" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#0a2438">Fit</text>
+  <text x="336" y="130" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="#4a6a82">weigh · strategies</text>
+  <text x="336" y="148" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="#4a6a82">eligibility allowlist</text>
+  <line x1="436" y1="120" x2="480" y2="120" stroke="url(#pipeArrow)" stroke-width="2.5" marker-end="url(#pipeHead)"/>
+  <rect x="486" y="70" width="200" height="100" rx="8" fill="url(#pipeFill)" stroke="#00B4DB" stroke-width="1.5"/>
+  <text x="586" y="108" text-anchor="middle" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#0a2438">Combine</text>
+  <text x="586" y="130" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="#4a6a82">priority · RRF · blend</text>
+  <text x="586" y="148" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="#4a6a82">boosts re-rank</text>
+  <line x1="686" y1="120" x2="730" y2="120" stroke="url(#pipeArrow)" stroke-width="2.5" marker-end="url(#pipeHead)"/>
+  <rect x="736" y="70" width="208" height="100" rx="8" fill="url(#pipeFill)" stroke="#004B75" stroke-opacity="0.25"/>
+  <text x="840" y="112" text-anchor="middle" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#0a2438">Output</text>
+  <text x="840" y="136" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="#4a6a82">recommendations + manifest</text>
+  <text x="480" y="230" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="#4a6a82">Optional events ingest writes through popular / latest / online LightFM to the same table.</text>
+</svg>
