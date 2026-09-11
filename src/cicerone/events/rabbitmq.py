@@ -116,7 +116,12 @@ class _PikaIo:
                 if self._failed:
                     self._cleanup_abandoned()
                     return
-                self._pump()
+                self._in_flight = True
+                try:
+                    self._pump()
+                finally:
+                    if not self._failed:
+                        self._in_flight = False
                 if self._failed:
                     self._cleanup_abandoned()
                     return
