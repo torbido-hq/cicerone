@@ -44,6 +44,7 @@ def optional_float(
     *,
     prefix: str,
     minimum_exclusive: float = 0.0,
+    minimum: float | None = None,
     maximum: float | None = None,
 ) -> float:
     raw = options.get(key, default)
@@ -53,6 +54,8 @@ def optional_float(
         raise ConfigError(f"{prefix}.{key} must be a number{_option_detail(raw)}") from exc
     if not math.isfinite(value) or value <= minimum_exclusive:
         raise ConfigError(f"{prefix}.{key} must be > {minimum_exclusive}{_option_detail(raw)}")
+    if minimum is not None and value < minimum:
+        raise ConfigError(f"{prefix}.{key} must be >= {minimum}{_option_detail(raw)}")
     if maximum is not None and value > maximum:
         raise ConfigError(f"{prefix}.{key} must be <= {maximum}{_option_detail(raw)}")
     return value

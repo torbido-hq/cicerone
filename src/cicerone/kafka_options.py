@@ -14,6 +14,8 @@ from cicerone.option_parse import (
 
 SECURITY_PROTOCOLS = frozenset({"plaintext", "ssl", "sasl_plaintext", "sasl_ssl"})
 DEFAULT_TIMEOUT_SECONDS = 10.0
+MIN_TIMEOUT_MS = 10  # librdkafka socket.timeout.ms
+MIN_TIMEOUT_SECONDS = MIN_TIMEOUT_MS / 1000.0
 MAX_TIMEOUT_MS = 2**31 - 1
 
 
@@ -23,6 +25,7 @@ def kafka_timeout_seconds(options: dict[str, Any], *, prefix: str) -> float:
         "timeout_seconds",
         DEFAULT_TIMEOUT_SECONDS,
         prefix=prefix,
+        minimum=MIN_TIMEOUT_SECONDS,
         maximum=MAX_BROKER_TIMEOUT_SECONDS,
     )
 
@@ -33,9 +36,10 @@ def kafka_timeout_ms(options: dict[str, Any], *, prefix: str) -> int:
         timeout_ms = int(round(seconds * 1000))
     except (OverflowError, ValueError) as exc:
         raise ConfigError(f"{prefix}.timeout_seconds must be a number, got {seconds!r}") from exc
-    if timeout_ms < 1 or timeout_ms > MAX_TIMEOUT_MS:
+    if timeout_ms < MIN_TIMEOUT_MS or timeout_ms > MAX_TIMEOUT_MS:
         raise ConfigError(
-            f"{prefix}.timeout_seconds must be <= {MAX_BROKER_TIMEOUT_SECONDS}, got {seconds!r}"
+            f"{prefix}.timeout_seconds must be >= {MIN_TIMEOUT_SECONDS} "
+            f"and <= {MAX_BROKER_TIMEOUT_SECONDS}, got {seconds!r}"
         )
     return timeout_ms
 

@@ -79,6 +79,8 @@ def test_optional_float_validation():
     with pytest.raises(ConfigError, match="<= 5"):
         optional_float({"n": 5.1}, "n", 10.0, prefix="x", maximum=5.0)
     assert optional_float({"n": 5.0}, "n", 10.0, prefix="x", maximum=5.0) == 5.0
+    with pytest.raises(ConfigError, match=">= 0.01"):
+        optional_float({"n": 0.005}, "n", 10.0, prefix="x", minimum=0.01)
 
 
 def test_kafka_client_timeouts_default_and_override(monkeypatch):
@@ -101,9 +103,17 @@ def test_validate_rejects_bad_timeout():
         validate_kafka_event_options(_options(timeout_seconds=0))
     with pytest.raises(ConfigError, match="timeout_seconds"):
         validate_kafka_event_options(_options(timeout_seconds=1e308))
-    from cicerone.kafka_options import MAX_TIMEOUT_MS, kafka_client_config, kafka_timeout_ms
+    with pytest.raises(ConfigError, match="timeout_seconds"):
+        validate_kafka_event_options(_options(timeout_seconds=0.005))
+    from cicerone.kafka_options import (
+        MAX_TIMEOUT_MS,
+        MIN_TIMEOUT_MS,
+        kafka_client_config,
+        kafka_timeout_ms,
+    )
     from cicerone.option_parse import MAX_BROKER_TIMEOUT_SECONDS
 
+    assert kafka_timeout_ms(_options(timeout_seconds=0.01), prefix="x") == MIN_TIMEOUT_MS
     at_max = _options(timeout_seconds=MAX_BROKER_TIMEOUT_SECONDS)
     assert kafka_timeout_ms(at_max, prefix="x") == MAX_TIMEOUT_MS
     with pytest.raises(ConfigError, match="timeout_seconds"):
@@ -114,6 +124,9 @@ def test_kafka_timeout_ms_normalizes_conversion_overflow(monkeypatch):
     from cicerone import kafka_options
 
     monkeypatch.setattr(kafka_options, "kafka_timeout_seconds", lambda options, *, prefix: 1e308)
+    with pytest.raises(ConfigError, match="timeout_seconds"):
+        kafka_options.kafka_timeout_ms(_options(), prefix="events.options")
+    monkeypatch.setattr(kafka_options, "kafka_timeout_seconds", lambda options, *, prefix: 0.005)
     with pytest.raises(ConfigError, match="timeout_seconds"):
         kafka_options.kafka_timeout_ms(_options(), prefix="events.options")
 

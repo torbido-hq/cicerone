@@ -175,8 +175,8 @@ RabbitMQ are extras for shops that already have those brokers.
 Consumer group, JSON objects matching the event contract. Required:
 `bootstrap_servers`, `topic`, `group_id`. Optional `consumer_name`
 (default hostname), `security_protocol`, `sasl_mechanism`,
-`sasl_username`, `sasl_password`, `timeout_seconds` (default 10, max
-signed 32-bit milliseconds; sets librdkafka `socket.timeout.ms` /
+`sasl_username`, `sasl_password`, `timeout_seconds` (default 10, min 10 ms,
+max signed 32-bit milliseconds; sets librdkafka `socket.timeout.ms` /
 `request.timeout.ms` and `list_topics` / flush). Missing `event_id` uses
 `{partition}-{offset}`. Manual commits of the contiguous watermark per
 partition (an out-of-order ack cannot skip an earlier offset). `nack`
@@ -215,8 +215,8 @@ bootstrap_servers = "${KAFKA_BOOTSTRAP_SERVERS}"
 topic = "cicerone.recommendations"
 ```
 
-Optional `timeout_seconds` (default 10, max signed 32-bit milliseconds)
-applies to Kafka connect/flush and RabbitMQ socket timeouts. RabbitMQ: `amqp_url` + `queue`, or `exchange` +
+Optional `timeout_seconds` (default 10; Kafka min 10 ms, max signed 32-bit
+milliseconds) applies to Kafka connect/flush and RabbitMQ socket timeouts. RabbitMQ: `amqp_url` + `queue`, or `exchange` +
 optional `routing_key` (empty is valid, e.g. fanout; omitted queue-mode
 key is the queue name).
 Payload: `{user_id, recommendations: [{user_id, item_id, rank, score, source, …}]}`.
