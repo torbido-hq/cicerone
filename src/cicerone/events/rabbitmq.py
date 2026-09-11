@@ -54,6 +54,7 @@ class _PikaIo:
         self._channel: Any | None = None
         self._timeout_seconds = timeout_seconds
         self._failed = False
+        self._in_flight = False
         self._abandon_channel: Any | None = None
         self._abandon_connection: Any | None = None
 
@@ -68,12 +69,16 @@ class _PikaIo:
         if self._failed or not self._thread.is_alive():
             raise RuntimeError("RabbitMQ I/O thread is not running")
         reply: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
+        self._in_flight = True
         self._jobs.put((fn, reply))
         try:
             status, payload = reply.get(timeout=self._timeout_seconds)
         except queue.Empty as exc:
             self._failed = True
             raise TimeoutError(f"RabbitMQ I/O call timed out after {self._timeout_seconds}s") from exc
+        finally:
+            if not self._failed:
+                self._in_flight = False
         if status == "err":
             raise payload
         return payload
@@ -408,7 +413,7 @@ class RabbitMQEventSource(EventSource):
 
 
 def _release_io(io: _PikaIo, channel: Any, connection: Any) -> None:
-    if io.failed:
+    if io.failed or io._in_flight:
         if io._thread.is_alive():
             io.abandon(channel, connection)
         else:
