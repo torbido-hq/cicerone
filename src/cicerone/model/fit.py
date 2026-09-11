@@ -10,7 +10,7 @@ from typing import Any
 
 from rectools.dataset import Dataset
 
-from cicerone.config import ConfigError, DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS, EpochMetricsSettings
+from cicerone.config import DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS, ConfigError, EpochMetricsSettings
 from cicerone.content_fallback import build_content_fallback_model
 from cicerone.dataset import BuiltDataset
 from cicerone.feature_config import FeatureColumn

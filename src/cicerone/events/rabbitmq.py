@@ -64,9 +64,7 @@ class _PikaIo:
         try:
             status, payload = reply.get(timeout=self._timeout_seconds)
         except queue.Empty as exc:
-            raise TimeoutError(
-                f"RabbitMQ I/O call timed out after {self._timeout_seconds}s"
-            ) from exc
+            raise TimeoutError(f"RabbitMQ I/O call timed out after {self._timeout_seconds}s") from exc
         if status == "err":
             raise payload
         return payload

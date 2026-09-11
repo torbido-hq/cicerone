@@ -157,9 +157,7 @@ def test_kafka_publisher_uses_timeout_seconds(monkeypatch):
 
 def test_rabbitmq_publisher_applies_timeouts(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
-    publisher = RabbitMQPublisher(
-        {"amqp_url": "amqp://localhost/", "queue": "q", "timeout_seconds": 2.5}
-    )
+    publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "q", "timeout_seconds": 2.5})
     publisher.connect()
     params = broker.last_url_params
     assert params is not None

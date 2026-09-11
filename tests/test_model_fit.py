@@ -250,9 +250,7 @@ def test_item_based_k_neighbors_reaches_tfidf_recommender(sample_items, feature_
     assert params["model.K"] == 7
 
 
-def test_fit_strategies_rejects_popular_in_category_without_item_feature(
-    sample_items, feature_config
-):
+def test_fit_strategies_rejects_popular_in_category_without_item_feature(sample_items, feature_config):
     events = synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
     items = None if built.items is None else built.items.drop(columns=["category"])
