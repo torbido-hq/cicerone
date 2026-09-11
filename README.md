@@ -105,6 +105,7 @@ events worker loads the last artifact for write-through only:
 | `GET` | `/recommendations/{user_id}` | Precomputed top-K for that user (optional `reasons`) |
 | `GET` | `/metrics` | Prometheus text format (no bearer token; optional `X-Metrics-Token`) |
 | `POST` | `/events` | Incremental ingest when `[events]` `kind = "webhook"` |
+| `POST` | `/track` | Impression/click ingest when `[track]` is enabled |
 | `GET` | `/docs` / `/redoc` | Interactive OpenAPI docs (Swagger / ReDoc) |
 | `GET` | `/openapi.json` | Machine-readable OpenAPI schema |
 
@@ -193,7 +194,8 @@ docker run --rm -v "$PWD":/app -w /app -e PYTHONPATH=/app/src cicerone-test \
 Thin clients (no generated SDK package — copy or import as needed). ReDoc
 (`http://localhost:8000/redoc`) and the checked-in OpenAPI schema also include
 `x-codeSamples` (Ruby, Python, JavaScript, Shell) on `/health`,
-`/recommendations/{user_id}`, and `POST /events` (when webhook events are enabled):
+`/recommendations/{user_id}`, `POST /events` (when webhook events are enabled),
+and `POST /track` (when tracking is enabled):
 
 | Path | Notes |
 | --- | --- |
@@ -422,7 +424,8 @@ user/item pair). Defaults to `["collaborative", "item_based", "popular"]`
 if omitted:
 
 - `collaborative`: `LightFMWrapperModel` (rectools) — hybrid CF, uses user/item
-  features for cold-start. Personalized, warm users only. Hyperparameters
+  features for cold-start. Personalized; scores users with interactions or
+  profile features. Hyperparameters
   via `[model.collaborative]` (RecTools `model_from_config` schema).
 - `item_based`: `ImplicitItemKNNWrapperModel` (rectools) — item-item
   similarity (`TFIDFRecommender` by default; `CosineRecommender` or
@@ -451,7 +454,7 @@ if omitted:
   refresh ALS; keep LightFM as `collaborative` if you need `fit_partial`.
 - `content_fallback`: feature-similarity recommendations for **zero-interaction
   items** (one-hot over `item_features`, cosine vs user history). Personalized,
-  warm users only. Off by default — set `[job.content_fallback].enabled = true`
+  interacting users only. Off by default — set `[job.content_fallback].enabled = true`
   (auto-inserted before the first non-personalized strategy if not listed in
   `models`). Independent of `item_based`.
 - `popular`: `PopularModel` (rectools) — global popularity. Non-personalized,
