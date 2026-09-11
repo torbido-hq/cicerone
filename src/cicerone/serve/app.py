@@ -175,7 +175,13 @@ def create_app(
     app.state.events_worker = events_worker
     experiment_store = ExperimentStore(settings.output) if settings.experiment.enabled else None
     track_store = TrackStore(settings.output) if settings.track.enabled else None
-    overlay = consumed if consumed is not None else ConsumedOverlay()
+    overlay = (
+        consumed
+        if consumed is not None
+        else ConsumedOverlay(
+            max_items_per_user=settings.serve.consumed_lookback,
+        )
+    )
     missing_category_warned = False
 
     @app.middleware("http")
@@ -330,8 +336,6 @@ def create_app(
                 ids_by_category=ids_by_category,
                 on_missing_category_column=_warn_missing_category_column,
             )
-            if filtered.empty and not filler.empty:
-                used_fallback = True
             filtered = merge_fill(filtered, filler, k=top_k, exclude=consumed_ids)
         filtered = filtered.head(top_k).reset_index(drop=True)
         if not filtered.empty:
@@ -463,7 +467,7 @@ def main() -> None:
         availability_filters=availability_filters,
     )
 
-    overlay = ConsumedOverlay()
+    overlay = ConsumedOverlay(max_items_per_user=settings.serve.consumed_lookback)
     try:
         history_reader = build_user_history_reader(settings.input)
     except Exception:

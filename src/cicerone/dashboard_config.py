@@ -144,6 +144,10 @@ HINTS: dict[str, dict[str, str]] = {
         "text": "When hide/filters shorten a list, fill from popular/latest.",
         "docs": f"{_DOCS}/openapi/",
     },
+    "serve.consumed_lookback": {
+        "text": "Max [input] events per user for hide, and the overlay cap per user.",
+        "docs": f"{_DOCS}/openapi/",
+    },
     "serve.metrics_enabled": {"text": "Expose Prometheus metrics on the serve process."},
     "dashboard": {
         "text": "This status UI: Basic Auth, lookup, experiments, and this page.",

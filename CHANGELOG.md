@@ -9,9 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - Serve-time hide of consumed items (`[serve].exclude_consumed`, default on)
-  using `[input]` history plus incremental events. Short lists fill from
-  popular/latest (`[serve].fallback_fill`) when hide or availability filters
-  drop rows.
+  using `[input]` history plus a process-local incremental overlay capped at
+  `consumed_lookback` items per user. Short lists fill from popular/latest
+  (`[serve].fallback_fill`) when hide or availability filters drop rows.
 
 ## [0.8.1] - 2026-09-08
 
