@@ -632,7 +632,8 @@ manifest on every read.
 
 `items_snapshot` / `recommendation_items`: optional copy of the items frame
 written next to recommendations so serve mode can apply `?category=` and
-`exclude_unavailable` without reading the input store.
+`exclude_unavailable` without reading the input store. Consumed-item hide
+(`[serve].exclude_consumed`, default on) does read `[input]` history.
 
 ## Interaction weights & cold-start
 

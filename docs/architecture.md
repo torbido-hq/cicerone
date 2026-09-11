@@ -236,7 +236,8 @@ Test modules mirror the packages (same pattern as `tests/test_io_*.py`):
    `OutputSink`. When items were loaded, it also writes an items snapshot
    (`items_snapshot.parquet` / `recommendation_items`) so serve mode can
    apply `?category=` and `exclude_unavailable` without reading the input
-   store. When `Settings.save_model_artifact` is true, it also writes
+   store. Consumed-item hide (`[serve].exclude_consumed`) still reads
+   `[input]` history. When `Settings.save_model_artifact` is true, it also writes
    a versioned fitted-model artifact (`model.artifact` for the dataset
    backend, `model_artifacts` table for db) via
    `OutputSink.write_model_artifact`. The request path never loads this

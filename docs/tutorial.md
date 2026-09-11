@@ -480,18 +480,23 @@ local `data/output/` from
 cp config/cicerone.serve.toml config/cicerone.serve.local.toml
 ```
 
-In `config/cicerone.serve.local.toml`, **replace** the `[output.options]` and
-`[serve]` tables the copy already ships with — do not append these, because a
-second `[output.options]` or `[serve]` header is a duplicate table and TOML
-parsing fails. Replacing `[output.options]` also drops the `${OUTPUT_S3_*}`
-placeholders, which would otherwise resolve against environment variables you
-have not set. Everything omitted from `[serve]` keeps its default (`host`
-`0.0.0.0`, `port` 8000, `default_k` 10, `refresh_interval_seconds` 60):
+In `config/cicerone.serve.local.toml`, **replace** the `[output.options]`,
+`[input.options]`, and `[serve]` tables the copy already ships with — do not
+append these, because a second header for the same table is a duplicate and
+TOML parsing fails. Replacing `[output.options]` also drops the
+`${OUTPUT_S3_*}` placeholders, which would otherwise resolve against
+environment variables you have not set. Everything omitted from `[serve]`
+keeps its default (`host` `0.0.0.0`, `port` 8000, `default_k` 10,
+`refresh_interval_seconds` 60, `exclude_consumed` true):
 
 ```toml
 [output.options]
 storage_backend = "local"
 path = "/data/output"
+
+[input.options]
+storage_backend = "local"
+path = "/data/input"
 
 [serve]
 auth_token = "tutorial-token"
