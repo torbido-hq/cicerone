@@ -108,6 +108,34 @@ def test_pika_io_submit_times_out():
         io.stop()
 
 
+def test_close_abandons_in_flight_submit(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options(timeout_seconds=2))
+    source.connect()
+    connection = broker.connection
+    channel = connection.channel_obj
+    started = threading.Event()
+
+    def _hang() -> tuple[Any, None, Any]:
+        started.set()
+        time.sleep(0.4)
+        return None, None, None
+
+    source._basic_get = _hang  # type: ignore[method-assign]
+    poller = threading.Thread(target=lambda: list(source.poll(1)))
+    poller.start()
+    assert started.wait(timeout=2)
+    began = time.monotonic()
+    source.close()
+    assert time.monotonic() - began < 1.0
+    poller.join(timeout=2)
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline and not (channel.closed and connection.closed):
+        time.sleep(0.01)
+    assert channel.closed is True
+    assert connection.closed is True
+
+
 def test_close_after_io_timeout_does_not_block(monkeypatch):
     install_fake_rabbitmq(monkeypatch)
     source = RabbitMQEventSource(_options(timeout_seconds=0.05))

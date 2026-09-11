@@ -183,8 +183,15 @@ def test_event_worker_stop_returns_false_when_join_times_out(tmp_path, feature_c
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
     )
+    closed = {"n": 0}
+
+    class _CloseCount(WebhookEventSource):
+        def close(self) -> None:
+            closed["n"] += 1
+            super().close()
+
     worker = EventWorker(
-        WebhookEventSource({}),
+        _CloseCount({}),
         MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
         IncrementalUpdater(
             sink=build_output_sink(settings.output),
@@ -201,6 +208,7 @@ def test_event_worker_stop_returns_false_when_join_times_out(tmp_path, feature_c
     with caplog.at_level(logging.WARNING):
         assert worker.stop(join_timeout_seconds=0.01) is False
     assert any("still alive" in record.getMessage() for record in caplog.records)
+    assert closed["n"] == 1
     worker._stop.set()
 
 
