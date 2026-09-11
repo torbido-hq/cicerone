@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 
 import boto3
 import pandas as pd
@@ -110,6 +111,45 @@ def test_local_replace_recommendations_for_users_preserves_others(tmp_path):
     assert len(after) == len(before)
     with pytest.raises(ValueError, match="requires user_ids"):
         sink.replace_recommendations_for_users(before, user_ids=[])
+
+
+def test_local_replace_recommendations_serializes_writers(tmp_path):
+    options = {"storage_backend": "local", "path": str(tmp_path)}
+    sink = DatasetOutputSink(options)
+    sink.write_recommendations(
+        pd.DataFrame(
+            [
+                {"user_id": "u1", "item_id": "old1", "rank": 1, "score": 1.0, "source": "personalized"},
+                {"user_id": "u2", "item_id": "old2", "rank": 1, "score": 1.0, "source": "personalized"},
+            ]
+        )
+    )
+    started = threading.Barrier(2)
+
+    def _replace(user_id: str, item_id: str) -> None:
+        started.wait()
+        sink.replace_recommendations_for_users(
+            pd.DataFrame(
+                [{"user_id": user_id, "item_id": item_id, "rank": 1, "score": 2.0, "source": "incremental"}]
+            ),
+            user_ids=[user_id],
+        )
+
+    threads = [
+        threading.Thread(target=_replace, args=("u1", "new1")),
+        threading.Thread(target=_replace, args=("u2", "new2")),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    stored = pd.read_parquet(tmp_path / "recommendations.parquet")
+    by_user = {
+        str(user_id): list(group["item_id"])
+        for user_id, group in stored.groupby(stored["user_id"].astype(str), sort=False)
+    }
+    assert by_user["u1"] == ["new1"]
+    assert by_user["u2"] == ["new2"]
 
 
 def test_local_replace_recommendations_when_file_missing(tmp_path):

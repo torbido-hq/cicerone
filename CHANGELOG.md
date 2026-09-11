@@ -4,7 +4,14 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.8.2] - 2026-09-14
+## [0.8.2] - 2026-09-15
+
+### Changed
+
+- Incremental apply takes the postgres/redis lease whenever
+  `lock_backend` is distributed, even if `events.ha` is false. Retrain
+  probe follows the same rule.
+
 
 ### Fixed
 
@@ -105,6 +112,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A RabbitMQ I/O timeout cannot start a dispatched job.
 - RabbitMQ get, ack, declare, and heartbeat raise after the I/O channel is detached instead of succeeding.
 - RabbitMQ abandoned cleanup closes the timed-out connection and any leftover live handle.
+- Dataset user-replace and local JSONL track/exposure append serialize
+  writers on one host; a distributed lock serializes those appends when
+  `lock_backend` is postgres or redis.
+
 
 ## [0.8.1] - 2026-09-11
 

@@ -13,6 +13,7 @@ import pandas as pd
 from sqlalchemy import Engine
 
 from cicerone.config.settings import IOSettings
+from cicerone.locks import LockBackend, held_writer_lock
 from cicerone.track.store_common import (
     DEFAULT_EVAL_TABLE,  # noqa: F401
     DEFAULT_HISTORY_TABLE,  # noqa: F401
@@ -65,7 +66,7 @@ __all__ = [
 class TrackStore(TrackDbBackend, TrackDatasetBackend):
     """Output-store side channel for track rows, eval JSON, and rec snapshots."""
 
-    def __init__(self, output: IOSettings):
+    def __init__(self, output: IOSettings, *, writer_lock: LockBackend | None = None):
         self._output = output
         self._kind = output.kind
         self._options = output.options
@@ -73,6 +74,7 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
         self._known_ids: set[str] | None = None
         self._track_size: int | None = None
         self._append_lock = threading.Lock()
+        self._writer_lock = writer_lock
 
     def append_accepted_rows(self, rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
         if not rows:
@@ -81,7 +83,7 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
         if self._kind == "db":
             return self._append_rows_db(payload)
         require_appendable_track_log(self._output)
-        with self._dataset_append_lock():
+        with held_writer_lock(self._writer_lock), self._dataset_append_lock():
             known = self._refresh_known_ids()
             fresh: list[dict[str, Any]] = []
             seen: set[str] = set()

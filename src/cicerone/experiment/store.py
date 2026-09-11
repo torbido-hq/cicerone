@@ -19,6 +19,7 @@ from cicerone.io.db_errors import is_missing_column_error, is_missing_table_erro
 from cicerone.io.db_store import MISSING_TABLE_ERRORS
 from cicerone.io.options import (
     build_s3_client,
+    exclusive_file_lock,
     is_s3_not_found,
     object_key,
     require_option,
@@ -26,6 +27,7 @@ from cicerone.io.options import (
     storage_backend,
     validate_storage_options,
 )
+from cicerone.locks import LockBackend, held_writer_lock
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +139,7 @@ def _hydrate_state_row(row: dict[str, Any]) -> dict[str, Any]:
 class ExperimentStore:
     """Output-store side channel for promote state and exposure logs."""
 
-    def __init__(self, output: IOSettings):
+    def __init__(self, output: IOSettings, *, writer_lock: LockBackend | None = None):
         self._output = output
         self._kind = output.kind
         self._options = output.options
@@ -147,6 +149,7 @@ class ExperimentStore:
         self._promote_experiment_id: str | None = None
         self._promote_value: str | None = None
         self._promote_state: dict[str, Any] | None = None
+        self._writer_lock = writer_lock
 
     def _db_engine(self) -> Engine:
         if self._engine is None:
@@ -225,7 +228,9 @@ class ExperimentStore:
             return
         require_appendable_exposure_log(self._output)
         payload = "".join(json.dumps(dict(row), separators=(",", ":")) + "\n" for row in rows).encode("utf-8")
-        self._append_bytes(EXPOSURES_FILENAME, payload)
+        path = Path(require_option(self._options, "path", "local")) / ".exposures.jsonl.lock"
+        with held_writer_lock(self._writer_lock), exclusive_file_lock(path):
+            self._append_bytes(EXPOSURES_FILENAME, payload)
 
     def read_exposures(self, *, experiment_id: str | None = None) -> list[dict[str, Any]]:
         if self._kind == "db":

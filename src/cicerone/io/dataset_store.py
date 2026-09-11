@@ -9,7 +9,6 @@ Options (from [input.options] / [output.options]):
 
 from __future__ import annotations
 
-import fcntl
 import io
 import json
 import logging
@@ -22,6 +21,7 @@ import pandas as pd
 
 from cicerone.io.options import (
     build_s3_client,
+    exclusive_file_lock,
     is_s3_not_found,
     object_key,
     read_parquet,
@@ -107,18 +107,18 @@ class DatasetOutputSink:
         self._backend = validate_storage_options(options)
 
     @contextmanager
-    def _artifact_lock(self) -> Iterator[None]:
+    def _local_file_lock(self, filename: str) -> Iterator[None]:
         if self._backend != "local":
             yield
             return
-        path = Path(require_option(self._options, "path", "local")) / ".model-artifact.lock"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a") as handle:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        path = Path(require_option(self._options, "path", "local")) / filename
+        with exclusive_file_lock(path):
+            yield
+
+    @contextmanager
+    def _artifact_lock(self) -> Iterator[None]:
+        with self._local_file_lock(".model-artifact.lock"):
+            yield
 
     def _write_bytes(self, filename: str, payload: bytes, content_type: str) -> None:
         if self._backend == "local":
@@ -142,33 +142,34 @@ class DatasetOutputSink:
         self._write_bytes("recommendations.parquet", buffer.getvalue(), "application/octet-stream")
 
     def replace_recommendations_for_users(self, df: pd.DataFrame, *, user_ids: Sequence[str]) -> int:
-        # Read-modify-write; concurrent replicas need events.ha (DB sink is transactional).
+        # Read-modify-write; concurrent replicas need a leader (DB sink is transactional).
         ids = normalize_replace_user_ids(df, user_ids)
         if not ids:
             return 0
-        try:
-            existing = read_parquet(self._options, "recommendations.parquet")
-        except FileNotFoundError:
-            existing = pd.DataFrame()
-        except Exception as exc:
-            if is_s3_not_found(exc):
+        with self._local_file_lock(".recommendations.lock"):
+            try:
+                existing = read_parquet(self._options, "recommendations.parquet")
+            except FileNotFoundError:
                 existing = pd.DataFrame()
+            except Exception as exc:
+                if is_s3_not_found(exc):
+                    existing = pd.DataFrame()
+                else:
+                    raise
+            if existing.empty:
+                remaining = existing
+            elif USER_COLUMN not in existing.columns:
+                raise RecommendationSchemaError(
+                    f"Recommendations schema mismatch (missing {USER_COLUMN}); refusing replace"
+                )
             else:
-                raise
-        if existing.empty:
-            remaining = existing
-        elif USER_COLUMN not in existing.columns:
-            raise RecommendationSchemaError(
-                f"Recommendations schema mismatch (missing {USER_COLUMN}); refusing replace"
-            )
-        else:
-            remaining = existing[~existing[USER_COLUMN].astype(str).isin(ids)]
-        parts = [frame for frame in (remaining, df) if not frame.empty]
-        merged = pd.concat(parts, ignore_index=True) if parts else df
-        self.write_recommendations(merged)
-        if merged.empty or USER_COLUMN not in merged.columns:
-            return 0
-        return int(merged[USER_COLUMN].astype(str).nunique())
+                remaining = existing[~existing[USER_COLUMN].astype(str).isin(ids)]
+            parts = [frame for frame in (remaining, df) if not frame.empty]
+            merged = pd.concat(parts, ignore_index=True) if parts else df
+            self.write_recommendations(merged)
+            if merged.empty or USER_COLUMN not in merged.columns:
+                return 0
+            return int(merged[USER_COLUMN].astype(str).nunique())
 
     def write_items_snapshot(self, df: pd.DataFrame) -> None:
         buffer = io.BytesIO()
