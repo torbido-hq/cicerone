@@ -173,6 +173,24 @@ def test_serve_client_health_and_recommendations(live_serve_url):
     assert len(body.items) == 1
     assert body.items[0].item_id == "i1"
 
+    opt_out = client.recommendations("u1", exclude_consumed=False)
+    assert [row.item_id for row in opt_out.items] == ["i1", "i2"]
+
+
+def test_serve_client_sends_exclude_consumed(monkeypatch):
+    seen: dict[str, object] = {}
+
+    def fake_request(self, method, path, params=None, json_body=None):
+        del self, method, path, json_body
+        seen["params"] = params
+        return {"user_id": "u1", "fallback": False, "items": []}
+
+    monkeypatch.setattr(ServeClient, "_request", fake_request)
+    ServeClient("http://example.test").recommendations("u1", exclude_consumed=False)
+    assert seen["params"] == {"exclude_consumed": "false"}
+    ServeClient("http://example.test").recommendations("u1", exclude_consumed=True)
+    assert seen["params"] == {"exclude_consumed": "true"}
+
 
 def test_serve_client_category_and_auth_errors(live_serve_url):
     client = ServeClient(live_serve_url, token="secret")

@@ -31,8 +31,13 @@ default_k = 10
 refresh_interval_seconds = 60
 category_column = "category"
 metrics_enabled = false
+# Placeholder [input] below is not a live events store. Hide stays off here;
+# set exclude_consumed = true and point [input] at the job's events store.
+exclude_consumed = false
 # metrics_token is required when metrics_enabled = true
 # metrics_token = "${METRICS_TOKEN}"
+# fallback_fill = true      # fill short lists from popular/latest
+# consumed_lookback = 1000
 
 # Optional incremental event ingest. See docs/incremental-events.md.
 # Webhook: POST /events. DB: watermark poll. S3/R2: list/marker (or AWS SQS).
@@ -71,12 +76,19 @@ metrics_enabled = false
 # [serve]
 # log_impressions = false         # GET lookup is not a view; host should POST /track
 
-# [input] is required by config.load_settings() even in serve mode (kept
-# generic/simple rather than special-casing it away) but is never read from
-# in this mode -- any valid, already-configured backend works as a placeholder.
+# [input] is required by config.load_settings() even in serve mode.
+# For consumed-item hide, use the same events store as the batch job
+# (see config/cicerone.toml [input]). The incremental overlay is
+# process-local until events land in [input].
 [input]
 kind = "dataset"
 
 [input.options]
 storage_backend = "local"
 path = "/tmp/unused-in-serve-mode"
+# storage_backend = "s3"
+# endpoint_url = "${INPUT_S3_ENDPOINT_URL}"
+# access_key_id = "${INPUT_S3_ACCESS_KEY_ID}"
+# secret_access_key = "${INPUT_S3_SECRET_ACCESS_KEY}"
+# bucket = "${INPUT_S3_BUCKET}"
+# prefix = "datasets/latest"

@@ -115,6 +115,7 @@ Query parameters for `/recommendations/{user_id}`:
 | `limit` | `[serve].default_k` (10) | Top-K rows to return (`k` is accepted as an alias) |
 | `category` | _(none)_ | Keep only items whose `[serve].category_column` (default `category`) matches |
 | `exclude_unavailable` | `true` | Re-apply `item_availability_filters` against the items snapshot written with the last run |
+| `exclude_consumed` | `[serve].exclude_consumed` (`true`) | Drop items in the user's live `[input]` / incremental events |
 
 Response JSON:
 
@@ -631,7 +632,8 @@ manifest on every read.
 
 `items_snapshot` / `recommendation_items`: optional copy of the items frame
 written next to recommendations so serve mode can apply `?category=` and
-`exclude_unavailable` without reading the input store.
+`exclude_unavailable` without reading the input store. Consumed-item hide
+(`[serve].exclude_consumed`, default on) does read `[input]` history.
 
 ## Interaction weights & cold-start
 
