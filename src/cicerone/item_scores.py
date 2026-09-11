@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import numpy as np
 import pandas as pd
 from rectools import Columns
 
@@ -26,6 +27,31 @@ ITEM_SCORES_FILENAME = "item_scores.parquet"
 
 def empty_item_scores() -> pd.DataFrame:
     return pd.DataFrame(columns=list(ITEM_SCORES_COLUMNS))
+
+
+def normalize_item_scores(frame: pd.DataFrame) -> pd.DataFrame:
+    """Validate, stringify ids, and sort. Raises ``ValueError`` on bad rows."""
+    if frame.empty:
+        return empty_item_scores()
+    missing = [column for column in ITEM_SCORES_COLUMNS if column not in frame.columns]
+    if missing:
+        raise ValueError(f"item_scores missing columns {missing}")
+    out = frame.loc[:, list(ITEM_SCORES_COLUMNS)].copy()
+    out[ITEM_COLUMN] = out[ITEM_COLUMN].astype(str)
+    popular = pd.to_numeric(out[POPULAR_SCORE_COLUMN], errors="coerce")
+    latest = pd.to_numeric(out[LATEST_SCORE_COLUMN], errors="coerce")
+    n_users = pd.to_numeric(out[N_USERS_COLUMN], errors="coerce")
+    if (
+        not np.isfinite(popular.to_numpy(dtype="float64")).all()
+        or not np.isfinite(latest.to_numpy(dtype="float64")).all()
+        or not np.isfinite(n_users.to_numpy(dtype="float64")).all()
+        or bool((n_users < 0).any())
+    ):
+        raise ValueError("item_scores has non-finite scores or negative n_users")
+    out[POPULAR_SCORE_COLUMN] = popular.astype(float)
+    out[LATEST_SCORE_COLUMN] = latest.astype(float)
+    out[N_USERS_COLUMN] = n_users.round().astype(int)
+    return out.sort_values(ITEM_COLUMN, kind="mergesort").reset_index(drop=True)
 
 
 def _item_weight_sum(interactions: pd.DataFrame) -> pd.Series:
@@ -100,17 +126,15 @@ def page_item_scores(
     cursor: str | None = None,
     item_id: str | None = None,
 ) -> tuple[pd.DataFrame, str | None]:
-    """Seek pagination on ``item_id``. ``cursor`` is the last returned id."""
+    """Seek pagination on ``item_id``. ``frame`` must already be id-sorted."""
     if frame.empty:
         return empty_item_scores(), None
-    rows = frame.copy()
-    rows[ITEM_COLUMN] = rows[ITEM_COLUMN].astype(str)
     if item_id is not None:
-        matched = rows.loc[rows[ITEM_COLUMN] == str(item_id), list(ITEM_SCORES_COLUMNS)]
+        matched = frame.loc[frame[ITEM_COLUMN].astype(str) == str(item_id), list(ITEM_SCORES_COLUMNS)]
         return matched.reset_index(drop=True), None
-    rows = rows.sort_values(ITEM_COLUMN, kind="mergesort")
+    rows = frame
     if cursor:
-        rows = rows.loc[rows[ITEM_COLUMN] > str(cursor)]
+        rows = rows.loc[rows[ITEM_COLUMN].astype(str) > str(cursor)]
     window = rows.head(limit + 1)
     page = window.head(limit)
     next_cursor = None

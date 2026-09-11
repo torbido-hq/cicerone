@@ -28,7 +28,7 @@ from cicerone.io.recommendation_reader_common import (
     _ItemFilterMixin,
     normalize_items_snapshot,
 )
-from cicerone.item_scores import ITEM_SCORES_COLUMNS, empty_item_scores
+from cicerone.item_scores import empty_item_scores, normalize_item_scores
 from cicerone.serve.metrics import observe_cache_refresh, record_cache_hit, record_cache_miss
 
 logger = logging.getLogger(__name__)
@@ -82,11 +82,7 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             logger.exception("Failed to refresh recommendation items snapshot; keeping previous data")
         try:
             frame = pd.read_sql(text(f'SELECT * FROM "{self._item_scores_table}"'), self._engine)
-            scores = empty_item_scores() if frame.empty else frame
-            missing = [column for column in ITEM_SCORES_COLUMNS if column not in scores.columns]
-            if missing:
-                raise ValueError(f"item_scores table {self._item_scores_table!r} missing columns {missing}")
-            scores = scores.loc[:, list(ITEM_SCORES_COLUMNS)]
+            scores = normalize_item_scores(frame)
             with self._lock:
                 self._item_scores = scores
         except MISSING_TABLE_ERRORS:

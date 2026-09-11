@@ -139,6 +139,19 @@ def test_sqlite_db_reader_item_scores_keeps_cache_on_bad_schema(tmp_path):
     assert list(kept["item_id"]) == ["i1"]
     assert float(kept.iloc[0]["popular_score"]) == 2.5
 
+    engine = create_engine(url)
+    pd.DataFrame([{"item_id": "i1", "popular_score": "x", "latest_score": 0.0, "n_users": 1}]).to_sql(
+        "item_scores", engine, index=False, if_exists="replace"
+    )
+    reader.refresh()
+    assert float(reader.get_item_scores().iloc[0]["popular_score"]) == 2.5
+
+    pd.DataFrame([{"item_id": "i1", "popular_score": 1.0, "latest_score": 0.0, "n_users": -1}]).to_sql(
+        "item_scores", engine, index=False, if_exists="replace"
+    )
+    reader.refresh()
+    assert float(reader.get_item_scores().iloc[0]["popular_score"]) == 2.5
+
 
 def test_sqlite_clear_table_for_replace_falls_back_to_delete(tmp_path):
     url = _sqlite_url(tmp_path)
