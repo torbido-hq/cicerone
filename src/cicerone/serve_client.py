@@ -46,6 +46,7 @@ class ServeClient:
         k: int | None = None,
         category: str | None = None,
         exclude_unavailable: bool | None = None,
+        exclude_consumed: bool | None = None,
     ) -> RecommendationsResponse:
         params: dict[str, str] = {}
         if limit is not None:
@@ -56,6 +57,8 @@ class ServeClient:
             params["category"] = category
         if exclude_unavailable is not None:
             params["exclude_unavailable"] = "true" if exclude_unavailable else "false"
+        if exclude_consumed is not None:
+            params["exclude_consumed"] = "true" if exclude_consumed else "false"
         path = f"/recommendations/{urllib.parse.quote(str(user_id), safe='')}"
         return RecommendationsResponse.model_validate(self._request("GET", path, params=params))
 

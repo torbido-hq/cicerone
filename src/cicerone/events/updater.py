@@ -13,6 +13,7 @@ import pandas as pd
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import IOSettings
 from cicerone.events.base import NormalizedEvent
+from cicerone.events.consumed import ConsumedOverlay
 from cicerone.events.normalize import events_to_dataframe
 from cicerone.events.online_result import OnlineRefreshResult, empty_online_rows
 from cicerone.events.store import empty_recommendations_frame
@@ -66,6 +67,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         assign_variant: Callable[[str], str | None] | None = None,
         explain_enabled: bool = True,
         publisher: RecommendationPublisher | None = None,
+        consumed: ConsumedOverlay | None = None,
     ):
         if user_cache_max_size < 1:
             raise ValueError("user_cache_max_size must be >= 1")
@@ -86,6 +88,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         self._assign_variant = assign_variant
         self._explain_enabled = explain_enabled
         self._publisher = publisher
+        self._consumed = consumed
 
     @property
     def last_success_at(self) -> datetime | None:
@@ -127,6 +130,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             logger.info("Skipping incremental update: full retrain in progress")
             return 0
 
+        self._note_consumed(events)
         batch = events_to_dataframe(events)
         weights = self._row_signal_weights(batch)
         affected_users = sorted(set(batch[USER_COLUMN].astype(str)))
@@ -240,6 +244,11 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             len(events),
         )
         return len(events)
+
+    def _note_consumed(self, events: Sequence[NormalizedEvent]) -> None:
+        if self._consumed is None:
+            return
+        self._consumed.add_many([(event.user_id, event.item_id) for event in events])
 
     def _commit_online(self) -> None:
         if self._online is None:

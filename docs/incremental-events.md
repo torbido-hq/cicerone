@@ -8,13 +8,14 @@ full batch retrains. Enable `[events]` on the **serve** process
 event contract, micro-batch, then write-through to the same `[output]`
 store serve already reads.
 
-This is not live ranking on `GET /recommendations`. LightFM / item-KNN /
+This is not live ranking on `GET /recommendations`. Applied events are
+recorded for serve-time hide (`[serve].exclude_consumed`). LightFM / item-KNN /
 content-fallback rows wait for the next `job.run()` **unless**
 `[events.online]` is enabled: the serve events worker then continues LightFM
 (`fit_partial`) on IDs already in the last model artifact and rewrites
 personalized / item-KNN / content-fallback rows for affected users.
 Sequential never runs `fit_partial`. The default runtime image is
-torch-free. New catalog IDs still wait for a full retrain.
+torch-free. New user/item IDs still wait for a full retrain.
 
 The incremental path always refreshes **popular / latest slices** (and recency
 boosts) for affected users plus `__cold_start__`. When `[experiment]` is

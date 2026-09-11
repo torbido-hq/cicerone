@@ -33,6 +33,9 @@ category_column = "category"
 metrics_enabled = false
 # metrics_token is required when metrics_enabled = true
 # metrics_token = "${METRICS_TOKEN}"
+# exclude_consumed = true   # hide items in [input] / incremental events
+# fallback_fill = true      # fill short lists from popular/latest
+# consumed_lookback = 1000
 
 # Optional incremental event ingest. See docs/incremental-events.md.
 # Webhook: POST /events. DB: watermark poll. S3/R2: list/marker (or AWS SQS).
@@ -71,9 +74,10 @@ metrics_enabled = false
 # [serve]
 # log_impressions = false         # GET lookup is not a view; host should POST /track
 
-# [input] is required by config.load_settings() even in serve mode (kept
-# generic/simple rather than special-casing it away) but is never read from
-# in this mode -- any valid, already-configured backend works as a placeholder.
+# [input] is required by config.load_settings() even in serve mode. Serve
+# reads it for consumed-item hide (`[serve].exclude_consumed`). Point it at
+# the live events store when you want GET /recommendations to drop
+# just-purchased items.
 [input]
 kind = "dataset"
 
