@@ -16,7 +16,6 @@ from cicerone.evaluation.metrics import (
     _frame,
     _merge_asof_events,
     _metrics_for_impression_slice,
-    _slice_metrics,
     _with_join_keys,
 )
 from cicerone.io.recommendation_schema import (
@@ -189,7 +188,7 @@ def evaluate_tracking(
         click_conv = _merge_asof_events(conv, matched_clicks, window=window)
     else:
         click_conv = conv.iloc[0:0]
-    overall = _slice_metrics(impressions, matched_clicks, view_conv, click_conv)
+    overall = _metrics_for_impression_slice(impressions, matched_clicks, view_conv, click_conv)
     by_rank: dict[str, SliceMetrics] = {}
     if RANK_COLUMN in impressions.columns:
         for rank, group in impressions.groupby(RANK_COLUMN, dropna=True):

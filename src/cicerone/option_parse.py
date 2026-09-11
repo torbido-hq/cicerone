@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from cicerone.config.constants import ConfigError
@@ -31,4 +32,22 @@ def optional_int(options: dict[str, Any], key: str, default: int, *, prefix: str
         raise ConfigError(f"{prefix}.{key} must be an integer, got {raw!r}") from exc
     if value < minimum:
         raise ConfigError(f"{prefix}.{key} must be >= {minimum}, got {value}")
+    return value
+
+
+def optional_float(
+    options: dict[str, Any],
+    key: str,
+    default: float,
+    *,
+    prefix: str,
+    minimum_exclusive: float = 0.0,
+) -> float:
+    raw = options.get(key, default)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"{prefix}.{key} must be a number, got {raw!r}") from exc
+    if not math.isfinite(value) or value <= minimum_exclusive:
+        raise ConfigError(f"{prefix}.{key} must be > {minimum_exclusive}, got {raw!r}")
     return value

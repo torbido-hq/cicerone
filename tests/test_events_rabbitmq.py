@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 
 import pytest
@@ -36,6 +37,34 @@ def test_validate_requires_core_options():
         validate_rabbitmq_event_options({"amqp_url": "amqp://localhost/"})
     with pytest.raises(ConfigError, match="prefetch"):
         validate_rabbitmq_event_options(_options(prefetch=0))
+    with pytest.raises(ConfigError, match="timeout_seconds"):
+        validate_rabbitmq_event_options(_options(timeout_seconds=0))
+
+
+def test_amqp_timeouts_applied_on_connect(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options(timeout_seconds=2.5))
+    source.connect()
+    params = broker.last_url_params
+    assert params is not None
+    assert params.socket_timeout == 2.5
+    assert params.blocked_connection_timeout == 2.5
+    assert params.stack_timeout == 2.5
+    assert source._io is not None
+    assert source._io._timeout_seconds == 2.5
+    source.close()
+
+
+def test_pika_io_submit_times_out():
+    from cicerone.events.rabbitmq import _PikaIo
+
+    io = _PikaIo(timeout_seconds=0.05)
+    io.start()
+    try:
+        with pytest.raises(TimeoutError, match="timed out"):
+            io.submit(lambda: time.sleep(2))
+    finally:
+        io.stop()
 
 
 def test_poll_ack_and_health(monkeypatch):

@@ -53,6 +53,39 @@ def test_optional_int_validation():
         optional_int({"n": 0}, "n", 3, prefix="x", minimum=1)
 
 
+def test_optional_float_validation():
+    from cicerone.option_parse import optional_float
+
+    assert optional_float({}, "n", 10.0, prefix="x") == 10.0
+    assert optional_float({"n": "2.5"}, "n", 10.0, prefix="x") == 2.5
+    with pytest.raises(ConfigError, match="number"):
+        optional_float({"n": "nope"}, "n", 10.0, prefix="x")
+    with pytest.raises(ConfigError, match="> 0"):
+        optional_float({"n": 0}, "n", 10.0, prefix="x")
+    with pytest.raises(ConfigError, match="> 0"):
+        optional_float({"n": float("nan")}, "n", 10.0, prefix="x")
+
+
+def test_kafka_client_timeouts_default_and_override(monkeypatch):
+    broker = install_fake_kafka(monkeypatch)
+    source = KafkaEventSource(_options())
+    source.connect()
+    assert source._consumer.config["socket.timeout.ms"] == 10000
+    assert source._consumer.config["request.timeout.ms"] == 10000
+    assert broker.list_topics_timeouts[-1] == 10.0
+
+    other = KafkaEventSource(_options(timeout_seconds=3))
+    other.connect()
+    assert other._consumer.config["socket.timeout.ms"] == 3000
+    assert other._consumer.config["request.timeout.ms"] == 3000
+    assert broker.list_topics_timeouts[-1] == 3.0
+
+
+def test_validate_rejects_bad_timeout():
+    with pytest.raises(ConfigError, match="timeout_seconds"):
+        validate_kafka_event_options(_options(timeout_seconds=0))
+
+
 def test_poll_ack_and_health(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
     broker.add("cicerone.events", event_payload(event_id="e1", item_id="i1"))

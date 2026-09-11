@@ -354,6 +354,7 @@ prefix = "recommendations/latest"
 # # sasl_mechanism = "PLAIN"
 # # sasl_username = "${KAFKA_USERNAME}"
 # # sasl_password = "${KAFKA_PASSWORD}"
+# # timeout_seconds = 10
 
 # RabbitMQ queue. Requires: pip install 'cicerone-recommender[rabbitmq]'
 # [events]
@@ -363,6 +364,7 @@ prefix = "recommendations/latest"
 # amqp_url = "${RABBITMQ_URL}"
 # queue = "cicerone.events"
 # # prefetch = 100
+# # timeout_seconds = 10
 
 # Optional: after [output] writes, also emit per-user recommendation JSON
 # to Kafka or RabbitMQ. Serve still reads [output]. Independent of [events].
@@ -372,6 +374,7 @@ prefix = "recommendations/latest"
 # [publish.options]
 # bootstrap_servers = "${KAFKA_BOOTSTRAP_SERVERS}"
 # topic = "cicerone.recommendations"
+# # timeout_seconds = 10
 # # RabbitMQ instead:
 # # amqp_url = "${RABBITMQ_URL}"
 # # queue = "cicerone.recommendations"

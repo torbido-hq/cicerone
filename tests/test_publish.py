@@ -113,6 +113,8 @@ def test_validate_kafka_publish_options():
         validate_kafka_publish_options({"topic": "t"})
     with pytest.raises(ConfigError, match="topic"):
         validate_kafka_publish_options({"bootstrap_servers": "h:9092"})
+    with pytest.raises(ConfigError, match="timeout_seconds"):
+        validate_kafka_publish_options({"bootstrap_servers": "h:9092", "topic": "t", "timeout_seconds": 0})
 
 
 def test_validate_rabbitmq_publish_options():
@@ -120,6 +122,10 @@ def test_validate_rabbitmq_publish_options():
         validate_rabbitmq_publish_options({"queue": "q"})
     with pytest.raises(ConfigError, match="queue"):
         validate_rabbitmq_publish_options({"amqp_url": "amqp://localhost/"})
+    with pytest.raises(ConfigError, match="timeout_seconds"):
+        validate_rabbitmq_publish_options(
+            {"amqp_url": "amqp://localhost/", "queue": "q", "timeout_seconds": 0}
+        )
     validate_rabbitmq_publish_options({"amqp_url": "amqp://localhost/", "exchange": "recs"})
 
 
@@ -132,6 +138,34 @@ def test_kafka_publisher_emits_per_user(monkeypatch):
     assert keys == ["u1", "u2"]
     body = json.loads(broker.produced[0][2])
     assert body["user_id"] == "u1"
+    publisher.close()
+
+
+def test_kafka_publisher_uses_timeout_seconds(monkeypatch):
+    broker = install_fake_kafka(monkeypatch)
+    publisher = KafkaPublisher(
+        {"bootstrap_servers": "localhost:9092", "topic": "cicerone.recs", "timeout_seconds": 4}
+    )
+    publisher.connect()
+    assert publisher._producer.config["socket.timeout.ms"] == 4000
+    assert publisher._producer.config["request.timeout.ms"] == 4000
+    assert broker.list_topics_timeouts[-1] == 4.0
+    publisher.publish(pd.DataFrame())
+    assert broker.flush_calls[-1] == 4.0
+    publisher.close()
+
+
+def test_rabbitmq_publisher_applies_timeouts(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    publisher = RabbitMQPublisher(
+        {"amqp_url": "amqp://localhost/", "queue": "q", "timeout_seconds": 2.5}
+    )
+    publisher.connect()
+    params = broker.last_url_params
+    assert params is not None
+    assert params.socket_timeout == 2.5
+    assert params.blocked_connection_timeout == 2.5
+    assert params.stack_timeout == 2.5
     publisher.close()
 
 

@@ -5,14 +5,22 @@ from __future__ import annotations
 from typing import Any
 
 from cicerone.config.constants import ConfigError
-from cicerone.option_parse import optional_nonempty_str, require_nonempty_str
+from cicerone.option_parse import optional_float, optional_nonempty_str, require_nonempty_str
 
 SECURITY_PROTOCOLS = frozenset({"plaintext", "ssl", "sasl_plaintext", "sasl_ssl"})
+DEFAULT_TIMEOUT_SECONDS = 10.0
+
+
+def kafka_timeout_seconds(options: dict[str, Any], *, prefix: str) -> float:
+    return optional_float(options, "timeout_seconds", DEFAULT_TIMEOUT_SECONDS, prefix=prefix)
 
 
 def kafka_client_config(options: dict[str, Any], *, prefix: str) -> dict[str, Any]:
+    timeout_ms = max(1, int(round(kafka_timeout_seconds(options, prefix=prefix) * 1000)))
     conf: dict[str, Any] = {
         "bootstrap.servers": require_nonempty_str(options, "bootstrap_servers", prefix=prefix),
+        "socket.timeout.ms": timeout_ms,
+        "request.timeout.ms": timeout_ms,
     }
     protocol = optional_nonempty_str(options, "security_protocol", prefix=prefix)
     if protocol is not None:
