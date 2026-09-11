@@ -52,18 +52,24 @@ class _PikaIo:
         self._thread = threading.Thread(target=self._loop, name="cicerone-amqp-io", daemon=True)
         self._connection: Any | None = None
         self._timeout_seconds = timeout_seconds
+        self._failed = False
+
+    @property
+    def failed(self) -> bool:
+        return self._failed
 
     def start(self) -> None:
         self._thread.start()
 
     def submit(self, fn: Callable[[], Any]) -> Any:
-        if not self._thread.is_alive():
+        if self._failed or not self._thread.is_alive():
             raise RuntimeError("RabbitMQ I/O thread is not running")
         reply: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
         self._jobs.put((fn, reply))
         try:
             status, payload = reply.get(timeout=self._timeout_seconds)
         except queue.Empty as exc:
+            self._failed = True
             raise TimeoutError(f"RabbitMQ I/O call timed out after {self._timeout_seconds}s") from exc
         if status == "err":
             raise payload
@@ -71,7 +77,7 @@ class _PikaIo:
 
     def stop(self) -> None:
         self._jobs.put(_IO_STOP)
-        self._thread.join(timeout=5.0)
+        self._thread.join(timeout=0.1 if self._failed else 5.0)
 
     def _loop(self) -> None:
         while True:
@@ -148,16 +154,7 @@ class RabbitMQEventSource(EventSource):
             self._delivery_tags.clear()
             self._held_tags.clear()
         if previous_io is not None:
-            try:
-
-                def _close_previous() -> None:
-                    previous_io._connection = None
-                    _close_handles(previous_channel, previous_connection)
-
-                previous_io.submit(_close_previous)
-            except Exception:
-                logger.exception("Failed to close previous RabbitMQ connection")
-            previous_io.stop()
+            _release_io(previous_io, previous_channel, previous_connection)
 
     def close(self) -> None:
         with self._lock:
@@ -175,16 +172,7 @@ class RabbitMQEventSource(EventSource):
             self._held_tags.clear()
         if io is None:
             return
-        try:
-
-            def _shutdown() -> None:
-                io._connection = None
-                _close_handles(channel, connection)
-
-            io.submit(_shutdown)
-        except Exception:
-            logger.exception("RabbitMQ close on I/O thread failed")
-        io.stop()
+        _release_io(io, channel, connection)
 
     def poll(self, max_events: int = 100) -> Sequence[NormalizedEvent]:
         if max_events < 1:
@@ -374,6 +362,20 @@ class RabbitMQEventSource(EventSource):
             io.submit(partial(self._basic_ack, tag))
         except Exception:
             logger.exception("Failed to ack discarded RabbitMQ message")
+
+
+def _release_io(io: _PikaIo, channel: Any, connection: Any) -> None:
+    if not io.failed:
+        try:
+
+            def _shutdown() -> None:
+                io._connection = None
+                _close_handles(channel, connection)
+
+            io.submit(_shutdown)
+        except Exception:
+            logger.exception("Failed to close RabbitMQ connection on I/O thread")
+    io.stop()
 
 
 def _close_handles(channel: Any, connection: Any) -> None:

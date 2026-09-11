@@ -62,9 +62,31 @@ def test_pika_io_submit_times_out():
     io.start()
     try:
         with pytest.raises(TimeoutError, match="timed out"):
-            io.submit(lambda: time.sleep(2))
+            io.submit(lambda: time.sleep(5))
+        assert io.failed is True
+        started = time.monotonic()
+        io.stop()
+        assert time.monotonic() - started < 1.0
+        with pytest.raises(RuntimeError, match="not running"):
+            io.submit(lambda: None)
     finally:
         io.stop()
+
+
+def test_close_after_io_timeout_does_not_block(monkeypatch):
+    install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options(timeout_seconds=0.05))
+    source.connect()
+
+    def _hang() -> tuple[Any, None, Any]:
+        time.sleep(5)
+        return None, None, None
+
+    source._basic_get = _hang  # type: ignore[method-assign]
+    assert list(source.poll(1)) == []
+    started = time.monotonic()
+    source.close()
+    assert time.monotonic() - started < 1.0
 
 
 def test_poll_ack_and_health(monkeypatch):
