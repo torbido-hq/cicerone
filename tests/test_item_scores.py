@@ -127,6 +127,23 @@ def test_normalize_item_scores_validates_and_sorts():
         normalize_item_scores(
             pd.DataFrame([{"item_id": "a", "popular_score": 1.0, "latest_score": 0.0, "n_users": -1}])
         )
+    with pytest.raises(ValueError, match="blank item_id"):
+        normalize_item_scores(
+            pd.DataFrame([{"item_id": "  ", "popular_score": 1.0, "latest_score": 0.0, "n_users": 1}])
+        )
+    with pytest.raises(ValueError, match="blank item_id"):
+        normalize_item_scores(
+            pd.DataFrame([{"item_id": None, "popular_score": 1.0, "latest_score": 0.0, "n_users": 1}])
+        )
+    with pytest.raises(ValueError, match="duplicate item_id"):
+        normalize_item_scores(
+            pd.DataFrame(
+                [
+                    {"item_id": "a", "popular_score": 1.0, "latest_score": 0.0, "n_users": 1},
+                    {"item_id": " a ", "popular_score": 2.0, "latest_score": 1.0, "n_users": 2},
+                ]
+            )
+        )
 
 
 def test_page_item_scores_cursor_and_single_id():

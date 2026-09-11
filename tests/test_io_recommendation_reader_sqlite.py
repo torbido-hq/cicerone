@@ -158,6 +158,23 @@ def test_sqlite_db_reader_item_scores_keeps_cache_on_bad_schema(tmp_path):
     assert float(reader.get_item_scores().iloc[0]["popular_score"]) == 2.5
 
 
+def test_sqlite_write_item_scores_replaces_legacy_table(tmp_path):
+    url = _sqlite_url(tmp_path)
+    engine = create_engine(url)
+    pd.DataFrame([{"item_id": "i0", "popular_score": 0.5}]).to_sql("item_scores", engine, index=False)
+
+    sink = DatabaseOutputSink({"database_url": url})
+    sink.write_item_scores(
+        pd.DataFrame([{"item_id": "i1", "popular_score": 2.0, "latest_score": 1.0, "n_users": 3}])
+    )
+
+    stored = pd.read_sql('SELECT * FROM "item_scores"', engine)
+    assert list(stored.columns) == ["item_id", "popular_score", "latest_score", "n_users"]
+    assert stored.to_dict(orient="records") == [
+        {"item_id": "i1", "popular_score": 2.0, "latest_score": 1.0, "n_users": 3}
+    ]
+
+
 def test_sqlite_clear_table_for_replace_falls_back_to_delete(tmp_path):
     url = _sqlite_url(tmp_path)
     sink = DatabaseOutputSink({"database_url": url})

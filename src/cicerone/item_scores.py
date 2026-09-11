@@ -12,6 +12,7 @@ from cicerone.dataset import build_interactions
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.recommendation_schema import ITEM_COLUMN
 from cicerone.model_config import LATEST_WINDOW_DAYS
+from cicerone.values import is_missing
 
 POPULAR_SCORE_COLUMN = "popular_score"
 LATEST_SCORE_COLUMN = "latest_score"
@@ -37,7 +38,12 @@ def normalize_item_scores(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty:
         return empty_item_scores()
     out = frame.loc[:, list(ITEM_SCORES_COLUMNS)].copy()
-    out[ITEM_COLUMN] = out[ITEM_COLUMN].astype(str)
+    item_ids = out[ITEM_COLUMN].map(lambda value: "" if is_missing(value) else str(value).strip())
+    if bool(item_ids.eq("").any()):
+        raise ValueError("item_scores has missing or blank item_id")
+    if bool(item_ids.duplicated().any()):
+        raise ValueError("item_scores has duplicate item_id")
+    out[ITEM_COLUMN] = item_ids
     popular = pd.to_numeric(out[POPULAR_SCORE_COLUMN], errors="coerce")
     latest = pd.to_numeric(out[LATEST_SCORE_COLUMN], errors="coerce")
     n_users = pd.to_numeric(out[N_USERS_COLUMN], errors="coerce")
