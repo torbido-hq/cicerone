@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from types import ModuleType, SimpleNamespace
 from typing import Any
 
@@ -82,6 +83,9 @@ class FakeConnection:
         self.process_error: Exception | None = None
 
     def channel(self) -> FakeChannel:
+        hang = self.broker.channel_hang_seconds
+        if hang:
+            time.sleep(hang)
         return self.channel_obj
 
     def process_data_events(self, time_limit: float | int = 0) -> None:
@@ -108,6 +112,7 @@ class FakeRabbitBroker:
         self.published: list[tuple[str, str, bytes]] = []
         self.connect_error: Exception | None = None
         self.queue_declare_error: Exception | None = None
+        self.channel_hang_seconds: float = 0.0
         self.last_url_params: FakeURLParameters | None = None
         self._tag = 0
 

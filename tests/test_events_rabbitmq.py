@@ -332,6 +332,22 @@ def test_connect_failure(monkeypatch):
         source.connect()
 
 
+def test_connect_timeout_during_open_closes_connection(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.channel_hang_seconds = 0.3
+    source = RabbitMQEventSource(_options(timeout_seconds=0.05))
+    with pytest.raises(ConfigError, match="unreachable"):
+        source.connect()
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline and not getattr(broker, "connection", None):
+        time.sleep(0.01)
+    connection = getattr(broker, "connection", None)
+    assert connection is not None
+    while time.monotonic() < deadline and not connection.closed:
+        time.sleep(0.01)
+    assert connection.closed is True
+
+
 def test_connect_closes_connection_when_declare_fails(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     broker.queue_declare_error = RuntimeError("no queue")
