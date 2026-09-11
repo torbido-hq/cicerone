@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from types import ModuleType, SimpleNamespace
 from typing import Any
 
@@ -82,6 +83,9 @@ class FakeConnection:
         self.process_error: Exception | None = None
 
     def channel(self) -> FakeChannel:
+        hang = self.broker.channel_hang_seconds
+        if hang:
+            time.sleep(hang)
         return self.channel_obj
 
     def process_data_events(self, time_limit: float | int = 0) -> None:
@@ -94,12 +98,22 @@ class FakeConnection:
         self.closed = True
 
 
+class FakeURLParameters:
+    def __init__(self, url: str) -> None:
+        self.url = url
+        self.socket_timeout: float | None = None
+        self.blocked_connection_timeout: float | None = None
+        self.stack_timeout: float | None = None
+
+
 class FakeRabbitBroker:
     def __init__(self) -> None:
         self.queues: dict[str, list[FakeRabbitMessage]] = {}
         self.published: list[tuple[str, str, bytes]] = []
         self.connect_error: Exception | None = None
         self.queue_declare_error: Exception | None = None
+        self.channel_hang_seconds: float = 0.0
+        self.last_url_params: FakeURLParameters | None = None
         self._tag = 0
 
     def enqueue(self, queue: str, body: bytes | str | dict[str, Any]) -> FakeRabbitMessage:
@@ -115,10 +129,12 @@ def install_fake_rabbitmq(
     broker = broker or FakeRabbitBroker()
     module = ModuleType("pika")
 
-    def _params(url: str) -> str:
-        return url
+    def _params(url: str) -> FakeURLParameters:
+        params = FakeURLParameters(url)
+        broker.last_url_params = params
+        return params
 
-    def _connection(_params: str) -> FakeConnection:
+    def _connection(_params: FakeURLParameters) -> FakeConnection:
         if broker.connect_error is not None:
             raise broker.connect_error
         connection = FakeConnection(broker)

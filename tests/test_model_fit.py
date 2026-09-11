@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pandas as pd
 import pytest
 from rectools import Columns
 from support.model_events import synthetic_events
 
+from cicerone.config import ConfigError
 from cicerone.dataset import build_dataset
 from cicerone.model import (
     STRATEGIES,
     RecommenderModel,
     Strategy,
+    fit_strategies,
     train_and_recommend,
 )
 
@@ -244,6 +248,21 @@ def test_item_based_k_neighbors_reaches_tfidf_recommender(sample_items, feature_
     )
     params = fitted["item_based"].get_params(simple_types=True)
     assert params["model.K"] == 7
+
+
+def test_fit_strategies_rejects_popular_in_category_without_item_feature(sample_items, feature_config):
+    events = synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+    items = None if built.items is None else built.items.drop(columns=["category"])
+    stripped = replace(built, items=items)
+    with pytest.raises(ConfigError, match="category"):
+        fit_strategies(stripped, ["u1"], enabled_models=["popular_in_category"])
+    missing = replace(built, items=None)
+    with pytest.raises(ConfigError, match="items frame is missing"):
+        fit_strategies(missing, ["u1"], enabled_models=["popular_in_category"])
+    cache: dict = {"popular_in_category": object()}
+    with pytest.raises(ConfigError, match="category"):
+        fit_strategies(stripped, ["u1"], enabled_models=["popular_in_category"], strategy_cache=cache)
 
 
 def test_fit_strategy_on_worker_requires_initializer():

@@ -110,12 +110,14 @@ class EventWorker:
         self._poll_without_lock = poll_without_lock
         self._heartbeat_interval_seconds = heartbeat_interval_seconds
         self._stop = threading.Event()
+        self._source_guard = threading.Lock()
         self._thread: threading.Thread | None = None
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
             return
-        self._source.connect()
+        with self._source_guard:
+            self._source.connect()
         self.refresh_source_health_metrics()
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, name="cicerone-events", daemon=True)
@@ -124,6 +126,7 @@ class EventWorker:
     def stop(self, *, join_timeout_seconds: float = 5.0) -> bool:
         self._stop.set()
         thread = self._thread
+        joined = True
         if thread is not None and thread.is_alive():
             thread.join(timeout=join_timeout_seconds)
             if thread.is_alive():
@@ -132,37 +135,61 @@ class EventWorker:
                     thread.name,
                     join_timeout_seconds,
                 )
-                return False
-        try:
-            self._drain_buffer_on_stop()
-        except Exception:
-            logger.exception("Event worker drain on stop failed")
-        close = getattr(self._source, "close", None)
-        if callable(close):
+                joined = False
+        if joined:
             try:
-                close()
+                self._drain_buffer_on_stop()
             except Exception:
-                logger.exception("Event source close() failed during worker stop")
-        return True
+                logger.exception("Event worker drain on stop failed")
+        with self._source_guard:
+            self._close_source()
+        return joined
 
-    def refresh_source_health_metrics(self) -> None:
+    def refresh_source_health_metrics(self) -> bool:
         try:
             health = self._source.health()
         except Exception:
             logger.exception("Failed to read event source health for metrics")
             update_events_source_health(connected=False, lag=None)
-            return
+            return False
         update_events_source_health(connected=health.connected, lag=health.lag)
+        return bool(health.connected)
+
+    def _close_source(self) -> None:
+        close = getattr(self._source, "close", None)
+        if not callable(close):
+            return
+        try:
+            close()
+        except Exception:
+            logger.exception("Event source close() failed during worker stop")
+
+    def _reconnect_source(self) -> None:
+        with self._source_guard:
+            if self._stop.is_set():
+                return
+            try:
+                self._source.connect()
+            except Exception:
+                logger.exception("Event source reconnect failed")
+                return
+            if self._stop.is_set():
+                self._close_source()
 
     def _loop(self) -> None:
+        disconnected = False
         while not self._stop.is_set():
+            if disconnected:
+                self._reconnect_source()
+                if self._stop.is_set():
+                    break
             try:
                 self.tick()
             except Exception:
                 record_events_tick_error()
                 logger.exception("Event worker tick failed")
             finally:
-                self.refresh_source_health_metrics()
+                disconnected = not self.refresh_source_health_metrics()
             self._stop.wait(self._poll_interval_seconds)
 
     def tick(self) -> int:

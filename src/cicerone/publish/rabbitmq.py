@@ -7,7 +7,14 @@ from typing import Any
 
 import pandas as pd
 
-from cicerone.amqp_options import optional_exchange, optional_routing_key, require_amqp_url, require_queue
+from cicerone.amqp_options import (
+    amqp_timeout_seconds,
+    apply_amqp_timeouts,
+    optional_exchange,
+    optional_routing_key,
+    require_amqp_url,
+    require_queue,
+)
 from cicerone.config.constants import ConfigError
 from cicerone.publish.payload import user_recommendation_messages
 
@@ -18,6 +25,7 @@ _PREFIX = "publish.options"
 
 def validate_rabbitmq_publish_options(options: dict[str, Any]) -> None:
     require_amqp_url(options, prefix=_PREFIX)
+    amqp_timeout_seconds(options, prefix=_PREFIX)
     exchange = optional_exchange(options, prefix=_PREFIX)
     if exchange is None:
         require_queue(options, prefix=_PREFIX)
@@ -36,6 +44,7 @@ class RabbitMQPublisher:
     def __init__(self, options: dict[str, Any]):
         validate_rabbitmq_publish_options(options)
         self._amqp_url = require_amqp_url(options, prefix=_PREFIX)
+        self._timeout_seconds = amqp_timeout_seconds(options, prefix=_PREFIX)
         self._exchange = optional_exchange(options, prefix=_PREFIX) or ""
         self._queue = require_queue(options, prefix=_PREFIX) if not self._exchange else ""
         routing = optional_routing_key(options, prefix=_PREFIX)
@@ -50,7 +59,9 @@ class RabbitMQPublisher:
             raise _missing_extra() from exc
         connection = None
         try:
-            connection = pika.BlockingConnection(pika.URLParameters(self._amqp_url))
+            connection = pika.BlockingConnection(
+                apply_amqp_timeouts(pika.URLParameters(self._amqp_url), self._timeout_seconds)
+            )
             channel = connection.channel()
             if self._exchange == "":
                 channel.queue_declare(queue=self._queue, durable=True)

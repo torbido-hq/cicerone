@@ -20,6 +20,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Inheriting all experiment boost/eligibility rules rejects duplicate names, same as a named subset.
 - The recommendation publish sidecar rejects NaN scores instead of emitting non-JSON.
 - Job eval and history writes on `kind = "db"` run one at a time so SQLite does not drop either.
+- Kafka and RabbitMQ ingest and publish time out broker calls after 10s (`timeout_seconds`).
+- Broker `timeout_seconds` values that overflow client millisecond limits raise `ConfigError`.
+- Kafka `timeout_seconds` below 10 ms raises `ConfigError` (librdkafka `socket.timeout.ms`).
+- A timed-out RabbitMQ I/O call queued during the idle pump is not executed.
+- Event worker stop closes the source even when the worker thread misses its join deadline.
+- The event worker reconnects when the source reports disconnected after a broker timeout.
+- Event worker stop closes a reconnect that finishes after shutdown.
+- RabbitMQ reconnect keeps the previous I/O thread on its own connection.
+- Manual `popular_in_category` fails at job fit when items lack the category column.
+- Overall track CVR uses the same impression-slice attribution as rank, source, and variant.
 
 ## [0.8.0] - 2026-09-08
 

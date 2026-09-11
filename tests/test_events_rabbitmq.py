@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from typing import Any
 
 import pytest
@@ -36,6 +38,380 @@ def test_validate_requires_core_options():
         validate_rabbitmq_event_options({"amqp_url": "amqp://localhost/"})
     with pytest.raises(ConfigError, match="prefetch"):
         validate_rabbitmq_event_options(_options(prefetch=0))
+    with pytest.raises(ConfigError, match="timeout_seconds"):
+        validate_rabbitmq_event_options(_options(timeout_seconds=0))
+    with pytest.raises(ConfigError, match="timeout_seconds"):
+        validate_rabbitmq_event_options(_options(timeout_seconds=1e308))
+
+
+def test_amqp_timeouts_applied_on_connect(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options(timeout_seconds=2.5))
+    source.connect()
+    params = broker.last_url_params
+    assert params is not None
+    assert params.socket_timeout == 2.5
+    assert params.blocked_connection_timeout == 2.5
+    assert params.stack_timeout == 2.5
+    assert source._io is not None
+    assert source._io._timeout_seconds == 2.5
+    source.close()
+
+
+def test_pika_io_skips_job_queued_during_timed_out_pump():
+    from cicerone.events.rabbitmq import _PikaIo
+
+    entered = threading.Event()
+    released = threading.Event()
+    executed = threading.Event()
+
+    class _Conn:
+        def process_data_events(self, time_limit: float | int = 0) -> None:
+            del time_limit
+            entered.set()
+            released.wait(timeout=2)
+
+    io = _PikaIo(timeout_seconds=0.05)
+    io._connection = _Conn()
+    io.start()
+    try:
+        assert entered.wait(timeout=2)
+        with pytest.raises(TimeoutError, match="timed out"):
+            io.submit(executed.set)
+        released.set()
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and io._thread.is_alive():
+            time.sleep(0.01)
+        assert io.failed is True
+        assert io._thread.is_alive() is False
+        assert executed.is_set() is False
+    finally:
+        released.set()
+        io.stop()
+
+
+def test_pika_io_submit_times_out():
+    from cicerone.events.rabbitmq import _PikaIo
+
+    io = _PikaIo(timeout_seconds=0.05)
+    io.start()
+    try:
+        with pytest.raises(TimeoutError, match="timed out"):
+            io.submit(lambda: time.sleep(5))
+        assert io.failed is True
+        started = time.monotonic()
+        io.stop()
+        assert time.monotonic() - started < 1.0
+        with pytest.raises(RuntimeError, match="not running"):
+            io.submit(lambda: None)
+    finally:
+        io.stop()
+
+
+def test_close_abandons_hung_idle_pump(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    connection = broker.connection
+    channel = connection.channel_obj
+    entered = threading.Event()
+    released = threading.Event()
+
+    def _hang_pump(time_limit: float | int = 0) -> None:
+        del time_limit
+        entered.set()
+        released.wait(timeout=2)
+
+    connection.process_data_events = _hang_pump  # type: ignore[method-assign]
+    assert entered.wait(timeout=2)
+    began = time.monotonic()
+    source.close()
+    assert time.monotonic() - began < 1.0
+    released.set()
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline and not (channel.closed and connection.closed):
+        time.sleep(0.01)
+    assert channel.closed is True
+    assert connection.closed is True
+
+
+def test_pika_io_busy_survives_overlapping_pump():
+    from cicerone.events.rabbitmq import _PikaIo
+
+    entered = threading.Event()
+    released = threading.Event()
+    job_started = threading.Event()
+    hold_job = threading.Event()
+
+    class _Conn:
+        def process_data_events(self, time_limit: float | int = 0) -> None:
+            del time_limit
+            entered.set()
+            released.wait(timeout=2)
+
+    io = _PikaIo(timeout_seconds=2)
+    io._connection = _Conn()
+    io.start()
+    try:
+        assert entered.wait(timeout=2)
+        assert io.busy is True
+
+        def _job() -> None:
+            job_started.set()
+            hold_job.wait(timeout=2)
+
+        waiter = threading.Thread(target=lambda: io.submit(_job))
+        waiter.start()
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and io._busy < 2:
+            time.sleep(0.01)
+        assert io._busy >= 2
+        released.set()
+        assert job_started.wait(timeout=2)
+        assert io.busy is True
+        hold_job.set()
+        waiter.join(timeout=2)
+        io._connection = None
+        idle_deadline = time.monotonic() + 2.0
+        while time.monotonic() < idle_deadline and io.busy:
+            time.sleep(0.01)
+        assert io.busy is False
+    finally:
+        released.set()
+        hold_job.set()
+        io.stop()
+
+
+def test_close_abandons_when_submit_overlaps_pump(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options(timeout_seconds=2))
+    source.connect()
+    connection = broker.connection
+    channel = connection.channel_obj
+    pump_entered = threading.Event()
+    pump_released = threading.Event()
+    get_entered = threading.Event()
+
+    def _hang_pump(time_limit: float | int = 0) -> None:
+        del time_limit
+        pump_entered.set()
+        pump_released.wait(timeout=2)
+
+    def _hang_get(*_args: Any, **_kwargs: Any) -> tuple[Any, None, Any]:
+        get_entered.set()
+        time.sleep(2)
+        return None, None, None
+
+    connection.process_data_events = _hang_pump  # type: ignore[method-assign]
+    assert pump_entered.wait(timeout=2)
+    source._basic_get = _hang_get  # type: ignore[method-assign]
+    poller = threading.Thread(target=lambda: list(source.poll(1)))
+    poller.start()
+    queued = time.monotonic() + 2.0
+    io = source._io
+    while time.monotonic() < queued:
+        io = source._io
+        if io is not None and io._busy >= 2:
+            break
+        time.sleep(0.01)
+    assert io is not None and io._busy >= 2
+    pump_released.set()
+    assert get_entered.wait(timeout=2)
+    began = time.monotonic()
+    source.close()
+    assert time.monotonic() - began < 1.0
+    poller.join(timeout=2)
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline and not (channel.closed and connection.closed):
+        time.sleep(0.01)
+    assert channel.closed is True
+    assert connection.closed is True
+
+
+def test_amqp_callbacks_use_io_handles(monkeypatch):
+    from types import SimpleNamespace
+
+    install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    io = source._io
+    assert io is not None
+    used: list[str] = []
+    io_channel = io._channel
+    io_connection = io._connection
+    assert io_channel is not None
+    assert io_connection is not None
+
+    def _get(queue: str, auto_ack: bool = False) -> tuple[Any, None, Any]:
+        del auto_ack
+        used.append(f"get:{queue}")
+        return None, None, None
+
+    def _ack(delivery_tag: int) -> None:
+        used.append(f"ack:{delivery_tag}")
+
+    def _declare(*, queue: str, durable: bool = True, passive: bool = False) -> Any:
+        del durable
+        used.append(f"declare:{queue}:{passive}")
+        return SimpleNamespace(method=SimpleNamespace(message_count=0))
+
+    def _pump(time_limit: float | int = 0) -> None:
+        used.append(f"pump:{time_limit}")
+
+    def _fail(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("callback used source handles")
+
+    io_channel.basic_get = _get  # type: ignore[method-assign]
+    io_channel.basic_ack = _ack  # type: ignore[method-assign]
+    io_channel.queue_declare = _declare  # type: ignore[method-assign]
+    io_connection.process_data_events = _pump  # type: ignore[method-assign]
+    source._channel = SimpleNamespace(basic_get=_fail, basic_ack=_fail, queue_declare=_fail)
+    source._connection = SimpleNamespace(process_data_events=_fail)
+
+    assert source._basic_get(io) == (None, None, None)
+    source._basic_ack(io, 9)
+    declared = source._passive_declare(io)
+    assert declared.method.message_count == 0
+    source._pump_connection(io)
+    assert used == [f"get:{source._queue}", "ack:9", f"declare:{source._queue}:True", "pump:0"]
+    source.close()
+
+
+def test_reconnect_does_not_run_old_callback_on_new_channel(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options(timeout_seconds=0.4))
+    source.connect()
+    old_connection = broker.connection
+    old_channel = old_connection.channel_obj
+    pump_entered = threading.Event()
+    pump_released = threading.Event()
+    new_gets: list[int] = []
+
+    def _hang_pump(time_limit: float | int = 0) -> None:
+        del time_limit
+        pump_entered.set()
+        pump_released.wait(timeout=2)
+
+    old_connection.process_data_events = _hang_pump  # type: ignore[method-assign]
+    assert pump_entered.wait(timeout=2)
+    poller = threading.Thread(target=lambda: list(source.poll(1)))
+    poller.start()
+    queued = time.monotonic() + 2.0
+    old_io = source._io
+    while time.monotonic() < queued:
+        old_io = source._io
+        if old_io is not None and old_io._busy >= 2:
+            break
+        time.sleep(0.01)
+    assert old_io is not None and old_io._busy >= 2
+    source.connect()
+    new_channel = broker.connection.channel_obj
+    assert new_channel is not old_channel
+    original_get = new_channel.basic_get
+
+    def _spy_get(queue: str, auto_ack: bool = False) -> tuple[Any, None, Any]:
+        new_gets.append(1)
+        return original_get(queue, auto_ack=auto_ack)
+
+    new_channel.basic_get = _spy_get  # type: ignore[method-assign]
+    pump_released.set()
+    poller.join(timeout=2)
+    assert new_gets == []
+    assert old_channel.closed is True
+    source.close()
+
+
+def test_close_abandons_in_flight_submit(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options(timeout_seconds=2))
+    source.connect()
+    connection = broker.connection
+    channel = connection.channel_obj
+    started = threading.Event()
+
+    def _hang(*_args: Any, **_kwargs: Any) -> tuple[Any, None, Any]:
+        started.set()
+        time.sleep(0.4)
+        return None, None, None
+
+    source._basic_get = _hang  # type: ignore[method-assign]
+    poller = threading.Thread(target=lambda: list(source.poll(1)))
+    poller.start()
+    assert started.wait(timeout=2)
+    began = time.monotonic()
+    source.close()
+    assert time.monotonic() - began < 1.0
+    poller.join(timeout=2)
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline and not (channel.closed and connection.closed):
+        time.sleep(0.01)
+    assert channel.closed is True
+    assert connection.closed is True
+
+
+def test_close_after_io_timeout_does_not_block(monkeypatch):
+    install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options(timeout_seconds=0.05))
+    source.connect()
+
+    def _hang(*_args: Any, **_kwargs: Any) -> tuple[Any, None, Any]:
+        time.sleep(5)
+        return None, None, None
+
+    source._basic_get = _hang  # type: ignore[method-assign]
+    assert list(source.poll(1)) == []
+    assert source.health().connected is False
+    started = time.monotonic()
+    source.close()
+    assert time.monotonic() - started < 1.0
+
+
+def test_close_after_io_timeout_closes_handles_when_call_unwinds(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options(timeout_seconds=0.05))
+    source.connect()
+    connection = broker.connection
+    channel = connection.channel_obj
+    done = threading.Event()
+
+    def _hang(*_args: Any, **_kwargs: Any) -> tuple[Any, None, Any]:
+        time.sleep(0.2)
+        done.set()
+        return None, None, None
+
+    source._basic_get = _hang  # type: ignore[method-assign]
+    assert list(source.poll(1)) == []
+    source.close()
+    assert done.wait(timeout=2)
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline and not (channel.closed and connection.closed):
+        time.sleep(0.01)
+    assert channel.closed is True
+    assert connection.closed is True
+
+
+def test_close_after_timed_out_worker_exits_closes_channel(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options(timeout_seconds=0.05))
+    source.connect()
+    connection = broker.connection
+    channel = connection.channel_obj
+    io = source._io
+    assert io is not None
+
+    def _hang(*_args: Any, **_kwargs: Any) -> tuple[Any, None, Any]:
+        time.sleep(0.15)
+        return None, None, None
+
+    source._basic_get = _hang  # type: ignore[method-assign]
+    assert list(source.poll(1)) == []
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and io._thread.is_alive():
+        time.sleep(0.01)
+    assert io._thread.is_alive() is False
+    source.close()
+    assert channel.closed is True
+    assert connection.closed is True
 
 
 def test_poll_ack_and_health(monkeypatch):
@@ -231,6 +607,21 @@ def test_health_tolerates_queue_probe_failure(monkeypatch):
     assert health.connected is True
 
 
+def test_health_disconnected_when_probe_times_out(monkeypatch):
+    install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options(timeout_seconds=0.05))
+    source.connect()
+
+    def _hang(*_args: Any, **_kwargs: Any) -> Any:
+        time.sleep(5)
+        raise RuntimeError("unreachable")
+
+    source._passive_declare = _hang  # type: ignore[method-assign]
+    health = source.health()
+    assert health.connected is False
+    source.close()
+
+
 def test_basic_get_failure_returns_partial(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     broker.enqueue("cicerone.events", event_payload(event_id="e1"))
@@ -253,6 +644,23 @@ def test_connect_failure(monkeypatch):
     source = RabbitMQEventSource(_options())
     with pytest.raises(ConfigError, match="unreachable"):
         source.connect()
+
+
+def test_connect_timeout_during_open_closes_connection(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.channel_hang_seconds = 0.3
+    source = RabbitMQEventSource(_options(timeout_seconds=0.05))
+    with pytest.raises(ConfigError, match="unreachable"):
+        source.connect()
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline and not getattr(broker, "connection", None):
+        time.sleep(0.01)
+    connection = getattr(broker, "connection", None)
+    assert connection is not None
+    while time.monotonic() < deadline and not connection.closed:
+        time.sleep(0.01)
+    assert connection.closed is True
+    assert connection.channel_obj.closed is True
 
 
 def test_connect_closes_connection_when_declare_fails(monkeypatch):

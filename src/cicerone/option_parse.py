@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from cicerone.config.constants import ConfigError
+
+MAX_BROKER_TIMEOUT_SECONDS = (2**31 - 1) / 1000.0  # signed 32-bit milliseconds
 
 
 def require_nonempty_str(options: dict[str, Any], key: str, *, prefix: str) -> str:
@@ -32,3 +35,34 @@ def optional_int(options: dict[str, Any], key: str, default: int, *, prefix: str
     if value < minimum:
         raise ConfigError(f"{prefix}.{key} must be >= {minimum}, got {value}")
     return value
+
+
+def optional_float(
+    options: dict[str, Any],
+    key: str,
+    default: float,
+    *,
+    prefix: str,
+    minimum_exclusive: float = 0.0,
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> float:
+    raw = options.get(key, default)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ConfigError(f"{prefix}.{key} must be a number{_option_detail(raw)}") from exc
+    if not math.isfinite(value) or value <= minimum_exclusive:
+        raise ConfigError(f"{prefix}.{key} must be > {minimum_exclusive}{_option_detail(raw)}")
+    if minimum is not None and value < minimum:
+        raise ConfigError(f"{prefix}.{key} must be >= {minimum}{_option_detail(raw)}")
+    if maximum is not None and value > maximum:
+        raise ConfigError(f"{prefix}.{key} must be <= {maximum}{_option_detail(raw)}")
+    return value
+
+
+def _option_detail(raw: Any) -> str:
+    try:
+        return f", got {raw!r}"
+    except Exception:
+        return ""

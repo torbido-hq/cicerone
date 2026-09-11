@@ -61,6 +61,7 @@ class FakeKafkaBroker:
         self.list_topics_error: Exception | None = None
         self.commit_error: Exception | None = None
         self.flush_calls: list[float | None] = []
+        self.list_topics_timeouts: list[float | None] = []
         self._seq = 0
 
     def add(
@@ -119,7 +120,8 @@ class FakeConsumer:
             self.broker.committed.append((message.partition(), message.offset()))
 
     def list_topics(self, topic: str | None = None, timeout: float | None = None) -> None:
-        del topic, timeout
+        del topic
+        self.broker.list_topics_timeouts.append(timeout)
         if self.broker.list_topics_error is not None:
             raise self.broker.list_topics_error
 
@@ -147,7 +149,7 @@ class FakeProducer:
         return self.flush_remaining
 
     def list_topics(self, timeout: float | None = None) -> None:
-        del timeout
+        self.broker.list_topics_timeouts.append(timeout)
         if self.broker.list_topics_error is not None:
             raise self.broker.list_topics_error
 
