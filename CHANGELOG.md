@@ -11,6 +11,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Job writes catalog `item_scores` (`popular_score`, `latest_score`, `n_users`) next to recommendations. Dataset: `item_scores.parquet`. DB: `item_scores` table (`item_scores_table` option). First 0.9.0 job creates the table.
 - Serve `GET /item-scores` (bearer, cursor pagination, optional `item_id`) for search-index pull. See [docs/search-weights.md](docs/search-weights.md).
 
+### Fixed
+
+- Serve keeps the last `item_scores` catalog when a refresh cannot read the parquet or table. A missing file still serves empty.
+
 ## [0.8.1] - 2026-09-08
 
 ### Fixed
