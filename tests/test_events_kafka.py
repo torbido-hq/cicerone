@@ -64,6 +64,8 @@ def test_optional_float_validation():
         optional_float({"n": 0}, "n", 10.0, prefix="x")
     with pytest.raises(ConfigError, match="> 0"):
         optional_float({"n": float("nan")}, "n", 10.0, prefix="x")
+    with pytest.raises(ConfigError, match="number"):
+        optional_float({"n": 10**400}, "n", 10.0, prefix="x")
 
 
 def test_kafka_client_timeouts_default_and_override(monkeypatch):

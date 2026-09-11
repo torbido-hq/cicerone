@@ -46,8 +46,12 @@ def optional_float(
     raw = options.get(key, default)
     try:
         value = float(raw)
-    except (TypeError, ValueError) as exc:
-        raise ConfigError(f"{prefix}.{key} must be a number, got {raw!r}") from exc
+    except (TypeError, ValueError, OverflowError) as exc:
+        try:
+            detail = f", got {raw!r}"
+        except Exception:
+            detail = ""
+        raise ConfigError(f"{prefix}.{key} must be a number{detail}") from exc
     if not math.isfinite(value) or value <= minimum_exclusive:
         raise ConfigError(f"{prefix}.{key} must be > {minimum_exclusive}, got {raw!r}")
     return value
