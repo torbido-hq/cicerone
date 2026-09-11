@@ -277,6 +277,26 @@ class DatasetOutputSink:
             self._ensure_writer_still_held()
             self._write_bytes(ITEM_SCORES_FILENAME, buffer.getvalue(), "application/octet-stream")
 
+    def write_surfaces(
+        self,
+        *,
+        popular: pd.DataFrame,
+        latest: pd.DataFrame,
+        neighbors: pd.DataFrame,
+    ) -> None:
+        from cicerone.io.surfaces import LATEST_FILENAME, NEIGHBORS_FILENAME, POPULAR_FILENAME
+
+        for filename, frame in (
+            (POPULAR_FILENAME, popular),
+            (LATEST_FILENAME, latest),
+            (NEIGHBORS_FILENAME, neighbors),
+        ):
+            buffer = io.BytesIO()
+            frame.to_parquet(buffer, index=False)
+            with self._maybe_recommendations_lock():
+                self._ensure_writer_still_held()
+                self._write_bytes(filename, buffer.getvalue(), "application/octet-stream")
+
     def write_manifest(self, manifest: dict, *, skip_if_newer_than: str | None = None) -> bool:
         payload = json.dumps(manifest, indent=2).encode("utf-8")
         with self._maybe_recommendations_lock():

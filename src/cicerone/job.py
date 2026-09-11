@@ -59,6 +59,7 @@ from cicerone.io.recommendation_schema import (
     filter_variant_rows,
     pick_fallback_variant,
 )
+from cicerone.io.surfaces import latest_from_items, neighbors_from_events, popular_from_events
 from cicerone.item_scores import build_item_scores, empty_item_scores
 from cicerone.locks import (
     LockBackend,
@@ -837,6 +838,19 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                     if callable(write_item_scores):
                         _ensure_publication_fence(sink, fence_check)
                         write_item_scores(item_scores)
+                        outputs_written = True
+                    write_surfaces = getattr(sink, "write_surfaces", None)
+                    if callable(write_surfaces):
+                        _ensure_publication_fence(sink, fence_check)
+                        write_surfaces(
+                            popular=popular_from_events(events, settings.top_k),
+                            latest=latest_from_items(
+                                items,
+                                settings.top_k,
+                                feature_config.blending.latest_date_columns,
+                            ),
+                            neighbors=neighbors_from_events(events, settings.item_based_k_neighbors),
+                        )
                         outputs_written = True
                     _ensure_publication_fence(sink, fence_check)
                     sink.write_recommendations(recommendations)

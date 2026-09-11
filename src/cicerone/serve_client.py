@@ -12,6 +12,9 @@ from cicerone.serve_schemas import (
     HealthResponse,
     ItemScoresResponse,
     RecommendationsResponse,
+    SessionRecommendResponse,
+    SimilarResponse,
+    SurfaceResponse,
     TrackIngestResponse,
 )
 
@@ -82,6 +85,34 @@ class ServeClient:
         if item_id is not None:
             params["item_id"] = item_id
         return ItemScoresResponse.model_validate(self._request("GET", "/item-scores", params=params))
+
+    def popular(self, *, limit: int | None = None, category: str | None = None) -> SurfaceResponse:
+        params: dict[str, str] = {}
+        if limit is not None:
+            params["limit"] = str(limit)
+        if category is not None:
+            params["category"] = category
+        return SurfaceResponse.model_validate(self._request("GET", "/popular", params=params))
+
+    def latest(self, *, limit: int | None = None, category: str | None = None) -> SurfaceResponse:
+        params: dict[str, str] = {}
+        if limit is not None:
+            params["limit"] = str(limit)
+        if category is not None:
+            params["category"] = category
+        return SurfaceResponse.model_validate(self._request("GET", "/latest", params=params))
+
+    def similar(self, item_id: str, *, limit: int | None = None) -> SimilarResponse:
+        params: dict[str, str] = {}
+        if limit is not None:
+            params["limit"] = str(limit)
+        path = f"/similar/{urllib.parse.quote(str(item_id), safe='')}"
+        return SimilarResponse.model_validate(self._request("GET", path, params=params))
+
+    def session(self, items: list[str]) -> SessionRecommendResponse:
+        return SessionRecommendResponse.model_validate(
+            self._request("POST", "/session/recommendations", json_body={"items": items})
+        )
 
     def track(self, payload: dict[str, Any] | list[dict[str, Any]]) -> TrackIngestResponse:
         return TrackIngestResponse.model_validate(self._request("POST", "/track", json_body=payload))

@@ -56,6 +56,16 @@ class OutputSink(Protocol):
         """Persist items for serve-time category/availability filters."""
         ...
 
+    def write_surfaces(
+        self,
+        *,
+        popular: pd.DataFrame,
+        latest: pd.DataFrame,
+        neighbors: pd.DataFrame,
+    ) -> None:
+        """Persist popular / latest / item-neighbor tables for serve surfaces."""
+        ...
+
 
 class ItemScoresWriter(Protocol):
     def write_item_scores(self, df: pd.DataFrame) -> None:

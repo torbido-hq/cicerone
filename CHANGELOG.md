@@ -17,6 +17,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Catalog writes on `[input]` (`PUT/GET/DELETE /users/{id}`, `/items/{id}`,
   `/catalog/events`) so a host can upsert users, items, and events without
   a separate dump.
+- Named surfaces on the serve API: `GET /popular`, `GET /latest`,
+  `GET /similar/{item_id}`, and `POST /session/recommendations`. The job
+  writes popular / latest / item-neighbor snapshots next to recommendations.
 
 ### Fixed
 
