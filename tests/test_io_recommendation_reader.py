@@ -280,6 +280,21 @@ def test_dataset_reader_item_scores_missing_and_refresh(tmp_path):
     reader.refresh()
     assert float(reader.get_item_scores().iloc[0]["popular_score"]) == 2.5
 
+    pd.DataFrame([{"item_id": "i1", "popular_score": 1.0, "latest_score": 0.0, "n_users": 1.5}]).to_parquet(
+        tmp_path / "item_scores.parquet", index=False
+    )
+    reader.refresh()
+    assert float(reader.get_item_scores().iloc[0]["popular_score"]) == 2.5
+
+    pd.DataFrame(
+        [
+            {"item_id": "i1", "popular_score": 1.0, "latest_score": 0.0, "n_users": 1},
+            {"item_id": "i1", "popular_score": 9.0, "latest_score": 0.0, "n_users": 2},
+        ]
+    ).to_parquet(tmp_path / "item_scores.parquet", index=False)
+    reader.refresh()
+    assert float(reader.get_item_scores().iloc[0]["popular_score"]) == 2.5
+
 
 def test_dataset_reader_cold_start_fallback_and_items(tmp_path):
     _write_recommendations(

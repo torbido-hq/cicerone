@@ -121,8 +121,13 @@ class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             scores = self._read_item_scores()
             with self._lock:
                 self._item_scores = scores
-        except Exception:
-            logger.exception("Failed to refresh item scores; keeping previous data")
+        except FileNotFoundError:
+            logger.debug("item_scores file not found; keeping previous data")
+        except Exception as exc:
+            if is_s3_not_found(exc):
+                logger.debug("item_scores object not found; keeping previous data")
+            else:
+                logger.exception("Failed to refresh item scores; keeping previous data")
         observe_cache_refresh(duration_seconds=time.perf_counter() - started, success=recommendations_ok)
 
     def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame:

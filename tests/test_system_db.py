@@ -113,6 +113,10 @@ def test_system_job_db_round_trip_with_artifact_and_readers(
     expected_users = set(sample_events["user_id"]) | set(sample_users["user_id"])
 
     rec_reader = DbRecommendationReader({"database_url": TEST_DATABASE_URL})
+    scores = rec_reader.get_item_scores()
+    assert not scores.empty
+    assert set(scores.columns) >= {"item_id", "popular_score", "latest_score", "n_users"}
+    assert set(sample_items["item_id"]) <= set(scores["item_id"])
     for user_id in sorted(expected_users):
         served_all = rec_reader.get_recommendations(user_id, k=10)
         assert not served_all.empty, f"expected recommendations for {user_id}"
@@ -131,6 +135,7 @@ def test_system_job_db_round_trip_with_artifact_and_readers(
     assert latest["status"] == "success"
     assert latest["triggered_by"] == "system-spec"
     assert int(latest["n_events"]) == len(sample_events)
+    assert int(latest["n_item_scores"]) == len(scores)
     assert bool(latest["artifact_written"]) is True
     assert int(latest["artifact_schema_version"]) == ARTIFACT_SCHEMA_VERSION
     recent = manifest_reader.read_recent(limit=5)
