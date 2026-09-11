@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from io import BytesIO
 
 import pandas as pd
 import pytest
@@ -717,6 +718,43 @@ def test_track_read_history_generated_ats_skips_glob_when_exact_name_exists(tmp_
     monkeypatch.setattr(Path, "glob", _glob)
     history = store.read_history(generated_ats=["2026-08-29T03:00:00+00:00"])
     assert len(history) == 1
+
+
+def test_track_read_history_s3_empty_exact_key_skips_list(monkeypatch) -> None:
+    import boto3
+    from moto import mock_aws
+
+    from cicerone.track import store_dataset
+    from cicerone.track.store_common import HISTORY_COLUMNS, HISTORY_DIR
+    from cicerone.track.store_dataset import _history_part_name
+
+    stamp = "2026-08-29T03:00:00+00:00"
+    with mock_aws():
+        client = boto3.client("s3", region_name="us-east-1")
+        client.create_bucket(Bucket="recs")
+        buf = BytesIO()
+        pd.DataFrame(columns=list(HISTORY_COLUMNS)).to_parquet(buf, index=False)
+        client.put_object(
+            Bucket="recs",
+            Key=f"{HISTORY_DIR}/{_history_part_name(stamp)}",
+            Body=buf.getvalue(),
+        )
+        output = IOSettings(
+            kind="dataset",
+            options={
+                "storage_backend": "s3",
+                "bucket": "recs",
+                "access_key_id": "test",
+                "secret_access_key": "test",
+            },
+        )
+
+        def _no_list(*_args, **_kwargs):
+            raise AssertionError("list should not run when the exact history key exists")
+
+        monkeypatch.setattr(store_dataset, "_list_s3_parquet_keys", _no_list)
+        history = TrackStore(output).read_history(generated_ats=[stamp])
+        assert history.empty
 
 
 def test_track_read_history_s3_generated_ats_skips_list_when_exact_key_exists(monkeypatch) -> None:

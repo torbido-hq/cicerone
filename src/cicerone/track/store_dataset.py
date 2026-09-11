@@ -234,8 +234,7 @@ def _s3_parquet_frame(client: Any, bucket: str, key: str) -> pd.DataFrame | None
         if is_s3_not_found(exc):
             return None
         raise
-    frame = pd.read_parquet(BytesIO(obj["Body"].read()))
-    return None if frame.empty else frame
+    return pd.read_parquet(BytesIO(obj["Body"].read()))
 
 
 def _s3_history_frames(
@@ -265,7 +264,8 @@ def _s3_history_frames(
                 missing.add(stamp)
                 continue
             loaded.add(key)
-            frames.append(frame)
+            if not frame.empty:
+                frames.append(frame)
     if not missing:
         return frames
     try:
