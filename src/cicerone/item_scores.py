@@ -52,11 +52,12 @@ def normalize_item_scores(frame: pd.DataFrame) -> pd.DataFrame:
         or not np.isfinite(latest.to_numpy(dtype="float64")).all()
         or not np.isfinite(n_users.to_numpy(dtype="float64")).all()
         or bool((n_users < 0).any())
+        or bool((n_users % 1 != 0).any())
     ):
-        raise ValueError("item_scores has non-finite scores or negative n_users")
+        raise ValueError("item_scores has non-finite scores, negative n_users, or non-integral n_users")
     out[POPULAR_SCORE_COLUMN] = popular.astype(float)
     out[LATEST_SCORE_COLUMN] = latest.astype(float)
-    out[N_USERS_COLUMN] = n_users.round().astype(int)
+    out[N_USERS_COLUMN] = n_users.astype(int)
     return out.sort_values(ITEM_COLUMN, kind="mergesort").reset_index(drop=True)
 
 
@@ -135,15 +136,17 @@ def page_item_scores(
     """Seek pagination on ``item_id``. ``frame`` must already be id-sorted."""
     if frame.empty:
         return empty_item_scores(), None
+    ids = frame[ITEM_COLUMN].astype(str)
     if item_id is not None:
-        matched = frame.loc[frame[ITEM_COLUMN].astype(str) == str(item_id), list(ITEM_SCORES_COLUMNS)]
-        return matched.reset_index(drop=True), None
-    rows = frame
-    if cursor:
-        rows = rows.loc[rows[ITEM_COLUMN].astype(str) > str(cursor)]
-    window = rows.head(limit + 1)
-    page = window.head(limit)
+        key = str(item_id)
+        start = int(ids.searchsorted(key, side="left"))
+        if start < len(ids) and ids.iloc[start] == key:
+            return frame.iloc[start : start + 1].reset_index(drop=True), None
+        return empty_item_scores(), None
+    start = 0 if cursor is None else int(ids.searchsorted(str(cursor), side="right"))
+    end = start + limit
+    page = frame.iloc[start:end]
     next_cursor = None
-    if len(window) > limit and not page.empty:
+    if end < len(frame) and not page.empty:
         next_cursor = str(page.iloc[-1][ITEM_COLUMN])
     return page.reset_index(drop=True), next_cursor

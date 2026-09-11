@@ -127,6 +127,10 @@ def test_normalize_item_scores_validates_and_sorts():
         normalize_item_scores(
             pd.DataFrame([{"item_id": "a", "popular_score": 1.0, "latest_score": 0.0, "n_users": -1}])
         )
+    with pytest.raises(ValueError, match="non-integral"):
+        normalize_item_scores(
+            pd.DataFrame([{"item_id": "a", "popular_score": 1.0, "latest_score": 0.0, "n_users": 1.5}])
+        )
     with pytest.raises(ValueError, match="blank item_id"):
         normalize_item_scores(
             pd.DataFrame([{"item_id": "  ", "popular_score": 1.0, "latest_score": 0.0, "n_users": 1}])
@@ -168,3 +172,15 @@ def test_page_item_scores_cursor_and_single_id():
     empty, empty_cursor = page_item_scores(empty_item_scores(), limit=10)
     assert empty.empty
     assert empty_cursor is None
+    with_empty_id = pd.DataFrame(
+        [
+            {"item_id": "", "popular_score": 1.0, "latest_score": 0.0, "n_users": 1},
+            {"item_id": "a", "popular_score": 2.0, "latest_score": 0.0, "n_users": 1},
+        ]
+    )
+    first_empty, empty_id_cursor = page_item_scores(with_empty_id, limit=1)
+    assert list(first_empty[ITEM_COLUMN]) == [""]
+    assert empty_id_cursor == ""
+    after_empty, done_empty = page_item_scores(with_empty_id, limit=1, cursor=empty_id_cursor)
+    assert list(after_empty[ITEM_COLUMN]) == ["a"]
+    assert done_empty is None

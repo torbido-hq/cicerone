@@ -46,17 +46,18 @@ Universe: `items.item_id` (when present) union items that appear in interactions
 
 Copy scores onto every document. Missing attributes make custom ranking undefined — write `0`.
 
-Numeric fields `cicerone_popular`, `cicerone_latest`. Custom rule **after** text:
+Numeric fields `cicerone_popular`, `cicerone_latest`. Keep default `rankingRules` for text. Put popularity in `customRanking`:
 
 ```text
-["words", "typo", "proximity", "attribute", "sort", "exactness", "cicerone_popular:desc"]
+rankingRules: ["words", "typo", "proximity", "attribute", "sort", "exactness"]
+customRanking: ["desc(cicerone_popular)"]
 ```
 
 Logged-in: RRF the Meili hit list with Cicerone ranks (`weight / (rrf_k + rank)`), or a second `filter` search merged. No per-user fields in the index.
 
 ## OpenSearch (host indexer)
 
-Map `cicerone_popular` / `cicerone_latest` as `float`. Query with `function_score` + `field_value_factor` `log1p` on `cicerone_popular`, `missing: 0`, `boost_mode: multiply`.
+Map `cicerone_popular` / `cicerone_latest` as `float`. Query with `function_score` + `field_value_factor` `log1p` on `cicerone_popular`, `missing: 0`, `boost_mode: sum` so a zero or missing weight does not wipe BM25.
 
 Logged-in: extra `filter` function on recommended ids, or `should` `term` boosts from serve `score`.
 
