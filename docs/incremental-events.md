@@ -9,7 +9,10 @@ event contract, micro-batch, then write-through to the same `[output]`
 store serve already reads.
 
 This is not live ranking on `GET /recommendations`. Applied events are
-recorded for serve-time hide (`[serve].exclude_consumed`). LightFM / item-KNN /
+recorded for serve-time hide (`[serve].exclude_consumed`) in a process-local
+overlay (capped at `[serve].consumed_lookback` items per user). Hide across
+replicas or after restart uses `[input]` history — point that store at the
+live events. LightFM / item-KNN /
 content-fallback rows wait for the next `job.run()` **unless**
 `[events.online]` is enabled: the serve events worker then continues LightFM
 (`fit_partial`) on IDs already in the last model artifact and rewrites

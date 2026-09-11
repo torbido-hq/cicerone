@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 from fastapi.testclient import TestClient
 from test_serve import _FakeReader, _feature_config, _items_df, _recs_df, _settings
 
@@ -141,5 +142,40 @@ def test_recommendations_fill_after_hide():
         history_reader=history,
     )
     body = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
-    assert body["fallback"] is True
+    assert body["fallback"] is False
     assert [row["item_id"] for row in body["items"]] == ["i2"]
+
+
+def test_consumed_overlay_rejects_non_positive_bounds():
+    with pytest.raises(ValueError, match="max_items_per_user"):
+        ConsumedOverlay(max_items_per_user=0)
+    with pytest.raises(ValueError, match="max_users"):
+        ConsumedOverlay(max_users=0)
+
+
+def test_consumed_overlay_evicts_old_items_and_users():
+    overlay = ConsumedOverlay(max_items_per_user=2, max_users=2)
+    overlay.add("u1", "i1")
+    overlay.add("u1", "i2")
+    overlay.add("u1", "i3")
+    assert overlay.item_ids("u1") == {"i2", "i3"}
+    overlay.add("u2", "a")
+    overlay.add("u3", "b")
+    assert overlay.item_ids("u1") == set()
+    assert overlay.item_ids("u2") == {"a"}
+    assert overlay.item_ids("u3") == {"b"}
+
+
+def test_consumed_item_ids_missing_history_is_quiet():
+    class _Missing:
+        def get_events_for_user(self, user_id: str, limit: int) -> pd.DataFrame:
+            del user_id, limit
+            raise FileNotFoundError("events.parquet")
+
+        def get_user(self, user_id: str):
+            del user_id
+            return None
+
+    overlay = ConsumedOverlay()
+    overlay.add("u1", "i2")
+    assert consumed_item_ids("u1", history=_Missing(), overlay=overlay, lookback=10) == {"i2"}

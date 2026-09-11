@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 
 import pandas as pd
 
@@ -20,6 +21,37 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
+_HISTORY_FAIL_LOCK = threading.Lock()
+_history_fail_logged = False
+_MISSING_S3_CODES = frozenset({"NoSuchKey", "404", "NotFound"})
+
+
+def _missing_history(exc: BaseException) -> bool:
+    if isinstance(exc, FileNotFoundError):
+        return True
+    response = getattr(exc, "response", None)
+    if isinstance(response, dict):
+        return response.get("Error", {}).get("Code") in _MISSING_S3_CODES
+    return False
+
+
+def _log_history_failure(user_id: str) -> None:
+    global _history_fail_logged
+    with _HISTORY_FAIL_LOCK:
+        first = not _history_fail_logged
+        _history_fail_logged = True
+    if first:
+        logger.exception(
+            "Failed to read [input] history for user_id=%r; hide uses overlay only",
+            user_id,
+        )
+        return
+    logger.debug(
+        "Failed to read [input] history for user_id=%r; hide uses overlay only",
+        user_id,
+        exc_info=True,
+    )
+
 
 def consumed_item_ids(
     user_id: str,
@@ -35,8 +67,9 @@ def consumed_item_ids(
         return ids
     try:
         events = history.get_events_for_user(user_id, lookback)
-    except Exception:
-        logger.exception("Failed to read consumed items for user_id=%r; serving without hide", user_id)
+    except Exception as exc:
+        if not _missing_history(exc):
+            _log_history_failure(user_id)
         return ids
     if events.empty or ITEM_COLUMN not in events.columns:
         return ids
