@@ -10,7 +10,7 @@ from typing import Any
 
 from rectools.dataset import Dataset
 
-from cicerone.config import DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS, EpochMetricsSettings
+from cicerone.config import ConfigError, DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS, EpochMetricsSettings
 from cicerone.content_fallback import build_content_fallback_model
 from cicerone.dataset import BuiltDataset
 from cicerone.feature_config import FeatureColumn
@@ -287,6 +287,12 @@ def fit_strategies(
             if name not in models and not (STRATEGIES[name].personalized and not warm_users)
         )
     )
+    if "popular_in_category" in to_fit:
+        from cicerone.automl import popular_in_category_automl_skip_reason
+
+        skip = popular_in_category_automl_skip_reason(built.items, model_configs=resolved_configs)
+        if skip is not None:
+            raise ConfigError(skip)
     # Pre-slice interactions in the parent to shrink ProcessPool pickles.
     epoch_interactions = (
         interactions_for_epoch_metrics(dataset, built.interactions, epoch_metrics.max_users)

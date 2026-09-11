@@ -175,7 +175,9 @@ RabbitMQ are extras for shops that already have those brokers.
 Consumer group, JSON objects matching the event contract. Required:
 `bootstrap_servers`, `topic`, `group_id`. Optional `consumer_name`
 (default hostname), `security_protocol`, `sasl_mechanism`,
-`sasl_username`, `sasl_password`. Missing `event_id` uses
+`sasl_username`, `sasl_password`, `timeout_seconds` (default 10; sets
+librdkafka `socket.timeout.ms` / `request.timeout.ms` and `list_topics`
+/ flush). Missing `event_id` uses
 `{partition}-{offset}`. Manual commits of the contiguous watermark per
 partition (an out-of-order ack cannot skip an earlier offset). `nack`
 returns the batch to a local deque without committing. Librdkafka session
@@ -186,8 +188,9 @@ or `pip install -r requirements-kafka.txt`.
 ### `rabbitmq`
 
 JSON objects from one durable queue (`basic_get` / `basic_ack`). Required:
-`amqp_url`, `queue`. Optional `prefetch` (default 100). Missing `event_id`
-uses the delivery tag. `nack` returns events to a local deque (broker
+`amqp_url`, `queue`. Optional `prefetch` (default 100), `timeout_seconds`
+(default 10; socket / blocked / stack timeouts and I/O-thread `reply.get`).
+Missing `event_id` uses the delivery tag. `nack` returns events to a local deque (broker
 delivery stays unacked). AMQP calls run on one I/O thread; `heartbeat`
 pumps `process_data_events` there so apply does not share the connection
 with the worker thread. Poison messages are acked and dropped. Requires
@@ -211,8 +214,10 @@ bootstrap_servers = "${KAFKA_BOOTSTRAP_SERVERS}"
 topic = "cicerone.recommendations"
 ```
 
-RabbitMQ: `amqp_url` + `queue`, or `exchange` + optional `routing_key`
-(empty is valid, e.g. fanout; omitted queue-mode key is the queue name).
+Optional `timeout_seconds` (default 10) applies to Kafka connect/flush and
+RabbitMQ socket timeouts. RabbitMQ: `amqp_url` + `queue`, or `exchange` +
+optional `routing_key` (empty is valid, e.g. fanout; omitted queue-mode
+key is the queue name).
 Payload: `{user_id, recommendations: [{user_id, item_id, rank, score, source, …}]}`.
 Kafka key is `user_id`. Publish failures fail the job/flush so events are
 nacked. Requires the matching extra.

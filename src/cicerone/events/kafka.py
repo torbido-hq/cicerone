@@ -14,7 +14,12 @@ from cicerone.config.constants import ConfigError
 from cicerone.events.base import EventSource, EventSourceHealth, NormalizedEvent
 from cicerone.events.json_payload import decode_json_object
 from cicerone.events.normalize import EventNormalizeError, normalize_event
-from cicerone.kafka_options import kafka_client_config, optional_nonempty_str, require_nonempty_str
+from cicerone.kafka_options import (
+    kafka_client_config,
+    kafka_timeout_seconds,
+    optional_nonempty_str,
+    require_nonempty_str,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +46,7 @@ class KafkaEventSource(EventSource):
     def __init__(self, options: dict[str, Any]):
         validate_kafka_event_options(options)
         self._conf = kafka_client_config(options, prefix=_EVENTS_PREFIX)
+        self._timeout_seconds = kafka_timeout_seconds(options, prefix=_EVENTS_PREFIX)
         self._topic = require_nonempty_str(options, "topic", prefix=_EVENTS_PREFIX)
         self._group_id = require_nonempty_str(options, "group_id", prefix=_EVENTS_PREFIX)
         raw_name = optional_nonempty_str(options, "consumer_name", prefix=_EVENTS_PREFIX)
@@ -73,7 +79,7 @@ class KafkaEventSource(EventSource):
         }
         consumer = Consumer(conf)
         try:
-            consumer.list_topics(topic=self._topic, timeout=10)
+            consumer.list_topics(topic=self._topic, timeout=self._timeout_seconds)
         except Exception as exc:
             try:
                 consumer.close()

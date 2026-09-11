@@ -94,12 +94,21 @@ class FakeConnection:
         self.closed = True
 
 
+class FakeURLParameters:
+    def __init__(self, url: str) -> None:
+        self.url = url
+        self.socket_timeout: float | None = None
+        self.blocked_connection_timeout: float | None = None
+        self.stack_timeout: float | None = None
+
+
 class FakeRabbitBroker:
     def __init__(self) -> None:
         self.queues: dict[str, list[FakeRabbitMessage]] = {}
         self.published: list[tuple[str, str, bytes]] = []
         self.connect_error: Exception | None = None
         self.queue_declare_error: Exception | None = None
+        self.last_url_params: FakeURLParameters | None = None
         self._tag = 0
 
     def enqueue(self, queue: str, body: bytes | str | dict[str, Any]) -> FakeRabbitMessage:
@@ -115,10 +124,12 @@ def install_fake_rabbitmq(
     broker = broker or FakeRabbitBroker()
     module = ModuleType("pika")
 
-    def _params(url: str) -> str:
-        return url
+    def _params(url: str) -> FakeURLParameters:
+        params = FakeURLParameters(url)
+        broker.last_url_params = params
+        return params
 
-    def _connection(_params: str) -> FakeConnection:
+    def _connection(_params: FakeURLParameters) -> FakeConnection:
         if broker.connect_error is not None:
             raise broker.connect_error
         connection = FakeConnection(broker)

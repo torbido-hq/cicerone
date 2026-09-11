@@ -11,7 +11,13 @@ from datetime import datetime
 from functools import partial
 from typing import Any
 
-from cicerone.amqp_options import prefetch_count, require_amqp_url, require_queue
+from cicerone.amqp_options import (
+    amqp_timeout_seconds,
+    apply_amqp_timeouts,
+    prefetch_count,
+    require_amqp_url,
+    require_queue,
+)
 from cicerone.config.constants import ConfigError
 from cicerone.events.base import EventSource, EventSourceHealth, NormalizedEvent
 from cicerone.events.json_payload import decode_json_object
@@ -28,6 +34,7 @@ def validate_rabbitmq_event_options(options: dict[str, Any]) -> None:
     require_amqp_url(options, prefix=_EVENTS_PREFIX)
     require_queue(options, prefix=_EVENTS_PREFIX)
     prefetch_count(options, prefix=_EVENTS_PREFIX)
+    amqp_timeout_seconds(options, prefix=_EVENTS_PREFIX)
 
 
 def _missing_extra() -> ConfigError:
@@ -40,10 +47,11 @@ def _missing_extra() -> ConfigError:
 class _PikaIo:
     """Run BlockingConnection calls on one thread (pika is not thread-safe)."""
 
-    def __init__(self) -> None:
+    def __init__(self, timeout_seconds: float) -> None:
         self._jobs: queue.Queue[Any] = queue.Queue()
         self._thread = threading.Thread(target=self._loop, name="cicerone-amqp-io", daemon=True)
         self._connection: Any | None = None
+        self._timeout_seconds = timeout_seconds
 
     def start(self) -> None:
         self._thread.start()
@@ -53,7 +61,12 @@ class _PikaIo:
             raise RuntimeError("RabbitMQ I/O thread is not running")
         reply: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
         self._jobs.put((fn, reply))
-        status, payload = reply.get()
+        try:
+            status, payload = reply.get(timeout=self._timeout_seconds)
+        except queue.Empty as exc:
+            raise TimeoutError(
+                f"RabbitMQ I/O call timed out after {self._timeout_seconds}s"
+            ) from exc
         if status == "err":
             raise payload
         return payload
@@ -95,6 +108,7 @@ class RabbitMQEventSource(EventSource):
         self._amqp_url = require_amqp_url(options, prefix=_EVENTS_PREFIX)
         self._queue = require_queue(options, prefix=_EVENTS_PREFIX)
         self._prefetch = prefetch_count(options, prefix=_EVENTS_PREFIX)
+        self._timeout_seconds = amqp_timeout_seconds(options, prefix=_EVENTS_PREFIX)
 
         self._io: _PikaIo | None = None
         self._connection: Any | None = None
@@ -114,7 +128,7 @@ class RabbitMQEventSource(EventSource):
         except ImportError as exc:
             raise _missing_extra() from exc
 
-        io = _PikaIo()
+        io = _PikaIo(self._timeout_seconds)
         io.start()
         try:
             connection, channel = io.submit(partial(self._open, pika, io))
@@ -294,7 +308,9 @@ class RabbitMQEventSource(EventSource):
         return channel.queue_declare(queue=self._queue, durable=True, passive=True)
 
     def _open(self, pika: Any, io: _PikaIo) -> tuple[Any, Any]:
-        connection = pika.BlockingConnection(pika.URLParameters(self._amqp_url))
+        connection = pika.BlockingConnection(
+            apply_amqp_timeouts(pika.URLParameters(self._amqp_url), self._timeout_seconds)
+        )
         io._connection = connection
         try:
             channel = connection.channel()

@@ -4,9 +4,21 @@ from __future__ import annotations
 
 from typing import Any
 
-from cicerone.option_parse import optional_int, optional_nonempty_str, require_nonempty_str
+from cicerone.option_parse import optional_float, optional_int, optional_nonempty_str, require_nonempty_str
 
 DEFAULT_PREFETCH = 100
+DEFAULT_TIMEOUT_SECONDS = 10.0
+
+
+def amqp_timeout_seconds(options: dict[str, Any], *, prefix: str) -> float:
+    return optional_float(options, "timeout_seconds", DEFAULT_TIMEOUT_SECONDS, prefix=prefix)
+
+
+def apply_amqp_timeouts(params: Any, timeout_seconds: float) -> Any:
+    params.socket_timeout = timeout_seconds
+    params.blocked_connection_timeout = timeout_seconds
+    params.stack_timeout = timeout_seconds
+    return params
 
 
 def require_amqp_url(options: dict[str, Any], *, prefix: str) -> str:
