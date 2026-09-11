@@ -115,6 +115,30 @@ def test_close_after_io_timeout_closes_handles_when_call_unwinds(monkeypatch):
     assert connection.closed is True
 
 
+def test_close_after_timed_out_worker_exits_closes_channel(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options(timeout_seconds=0.05))
+    source.connect()
+    connection = broker.connection
+    channel = connection.channel_obj
+    io = source._io
+    assert io is not None
+
+    def _hang() -> tuple[Any, None, Any]:
+        time.sleep(0.15)
+        return None, None, None
+
+    source._basic_get = _hang  # type: ignore[method-assign]
+    assert list(source.poll(1)) == []
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and io._thread.is_alive():
+        time.sleep(0.01)
+    assert io._thread.is_alive() is False
+    source.close()
+    assert channel.closed is True
+    assert connection.closed is True
+
+
 def test_poll_ack_and_health(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     broker.enqueue("cicerone.events", event_payload(event_id="e1", item_id="i1"))
@@ -361,6 +385,7 @@ def test_connect_timeout_during_open_closes_connection(monkeypatch):
     while time.monotonic() < deadline and not connection.closed:
         time.sleep(0.01)
     assert connection.closed is True
+    assert connection.channel_obj.closed is True
 
 
 def test_connect_closes_connection_when_declare_fails(monkeypatch):

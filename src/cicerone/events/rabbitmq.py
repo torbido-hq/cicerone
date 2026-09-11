@@ -51,6 +51,7 @@ class _PikaIo:
         self._jobs: queue.Queue[Any] = queue.Queue()
         self._thread = threading.Thread(target=self._loop, name="cicerone-amqp-io", daemon=True)
         self._connection: Any | None = None
+        self._channel: Any | None = None
         self._timeout_seconds = timeout_seconds
         self._failed = False
         self._abandon_channel: Any | None = None
@@ -88,15 +89,19 @@ class _PikaIo:
         self._thread.join(timeout=0.1 if self._failed else 5.0)
 
     def _cleanup_abandoned(self) -> None:
-        channel = self._abandon_channel
+        channel = self._abandon_channel if self._abandon_channel is not None else self._channel
         connection = self._connection if self._connection is not None else self._abandon_connection
-        extra = self._abandon_connection
+        extra_channel = self._channel
+        extra_connection = self._abandon_connection
         self._connection = None
+        self._channel = None
         self._abandon_channel = None
         self._abandon_connection = None
         _close_handles(channel, connection)
-        if extra is not None and extra is not connection:
-            _close_quietly(extra, "connection")
+        if extra_channel is not None and extra_channel is not channel:
+            _close_quietly(extra_channel, "channel")
+        if extra_connection is not None and extra_connection is not connection:
+            _close_quietly(extra_connection, "connection")
 
     def _loop(self) -> None:
         while True:
@@ -327,13 +332,16 @@ class RabbitMQEventSource(EventSource):
             apply_amqp_timeouts(pika.URLParameters(self._amqp_url), self._timeout_seconds)
         )
         io._connection = connection
+        channel = None
         try:
             channel = connection.channel()
+            io._channel = channel
             channel.basic_qos(prefetch_count=self._prefetch)
             channel.queue_declare(queue=self._queue, durable=True)
         except Exception:
+            io._channel = None
             io._connection = None
-            _close_quietly(connection, "connection")
+            _close_handles(channel, connection)
             raise
         return connection, channel
 
@@ -395,7 +403,10 @@ class RabbitMQEventSource(EventSource):
 
 def _release_io(io: _PikaIo, channel: Any, connection: Any) -> None:
     if io.failed:
-        io.abandon(channel, connection)
+        if io._thread.is_alive():
+            io.abandon(channel, connection)
+        else:
+            _close_handles(channel, connection)
         return
     try:
 
