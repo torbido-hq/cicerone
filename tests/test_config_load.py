@@ -1223,6 +1223,9 @@ def test_load_settings_serve_mode_with_auth_token(tmp_path, monkeypatch):
     assert settings.serve_category_column == "category"
     assert settings.serve_metrics_enabled is False
     assert settings.serve_metrics_token is None
+    assert settings.serve.exclude_consumed is True
+    assert settings.serve.fallback_fill is True
+    assert settings.serve.consumed_lookback == 1000
 
 
 def test_load_settings_serve_metrics_token(tmp_path, monkeypatch):
@@ -1297,6 +1300,23 @@ def test_load_settings_serve_default_k_rejects_over_cap(tmp_path):
         """,
     )
     with pytest.raises(ConfigError, match="serve.default_k"):
+        load_settings(config_path)
+
+
+def test_load_settings_serve_consumed_lookback_rejects_zero(tmp_path):
+    config_path = write_toml(
+        tmp_path,
+        f"""
+        [job]
+        mode = "serve"
+
+        [serve]
+        auth_token = "secret"
+        consumed_lookback = 0
+        {_base_io_toml()}
+        """,
+    )
+    with pytest.raises(ConfigError, match="serve.consumed_lookback"):
         load_settings(config_path)
 
 
