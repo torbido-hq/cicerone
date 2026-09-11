@@ -3,9 +3,12 @@ from __future__ import annotations
 import pytest
 
 from cicerone.config import IOSettings
+from cicerone.io.dataset_catalog import DatasetCatalogStore
 from cicerone.io.dataset_store import DatasetInputSource, DatasetOutputSink
+from cicerone.io.db_catalog import DatabaseCatalogStore
 from cicerone.io.db_store import DatabaseInputSource, DatabaseOutputSink
 from cicerone.io.factory import (
+    build_catalog_store,
     build_input_source,
     build_manifest_reader,
     build_output_sink,
@@ -80,3 +83,18 @@ def test_build_manifest_reader_unknown_kind_raises():
     settings = IOSettings(kind="carrier-pigeon", options={})
     with pytest.raises(ValueError, match="Unknown manifest kind"):
         build_manifest_reader(settings)
+
+
+def test_build_catalog_store_dataset(tmp_path):
+    settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    assert isinstance(build_catalog_store(settings), DatasetCatalogStore)
+
+
+def test_build_catalog_store_db():
+    settings = IOSettings(kind="db", options={"database_url": "postgresql+psycopg://u:p@h/d"})
+    assert isinstance(build_catalog_store(settings), DatabaseCatalogStore)
+
+
+def test_build_catalog_store_unknown_kind_returns_none():
+    settings = IOSettings(kind="carrier-pigeon", options={})
+    assert build_catalog_store(settings) is None

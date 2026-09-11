@@ -34,14 +34,21 @@ def test_dataset_factory_does_not_load_sqlalchemy_or_boto3(tmp_path):
         f"""
 import sys
 from cicerone.config.settings import IOSettings
-from cicerone.io.factory import build_input_source, build_manifest_reader, build_output_sink
+from cicerone.io.factory import (
+    build_catalog_store,
+    build_input_source,
+    build_manifest_reader,
+    build_output_sink,
+)
 
 settings = IOSettings(kind="dataset", options={{"storage_backend": "local", "path": {path!r}}})
 build_input_source(settings)
 build_output_sink(settings)
 build_manifest_reader(settings)
+build_catalog_store(settings)
 assert "sqlalchemy" not in sys.modules
 assert "cicerone.io.db_store" not in sys.modules
+assert "cicerone.io.db_catalog" not in sys.modules
 assert "boto3" not in sys.modules
 assert "cicerone.io.recommendation_reader" not in sys.modules
 """

@@ -157,3 +157,16 @@ class TrackIngestRequest(BaseModel):
 class TrackIngestResponse(BaseModel):
     accepted: int = Field(description="Number of new rows written (duplicates skipped)")
     event_ids: list[str] = Field(description="Event ids of newly written rows")
+
+
+class CatalogRowResponse(BaseModel):
+    row: dict[str, object]
+
+
+class CatalogWriteResponse(BaseModel):
+    accepted: int = Field(ge=0)
+
+
+class CatalogEventsResponse(BaseModel):
+    user_id: str
+    events: list[dict[str, object]]

@@ -27,10 +27,12 @@ from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.http_security import SecurityHeadersMiddleware, token_equals
 from cicerone.io.base import ManifestReader, RecommendationReader, UserHistoryReader
+from cicerone.io.catalog import CatalogStore
 from cicerone.io.recommendation_reader import SOURCE_COLUMN
 from cicerone.io.recommendation_schema import has_variant_column
 from cicerone.reasons import parse_reasons
 from cicerone.serve.bootstrap_events import start_events_runtime
+from cicerone.serve.catalog_routes import mount_catalog_routes
 from cicerone.serve.code_samples import HEALTH_PATH, RECOMMENDATIONS_PATH, attach_code_samples
 from cicerone.serve.consumed import consumed_item_ids, drop_consumed, merge_fill
 from cicerone.serve.events_routes import attach_events_ingest_openapi, mount_events_routes
@@ -73,6 +75,7 @@ and clicks (not used for training). See `docs/evaluation.md`.
 `GET /recommendations` can hide items from the user's live `[input]` events
 (`[serve].exclude_consumed`) and fill short lists from popular/latest
 (`[serve].fallback_fill`) when hide or availability filters drop rows.
+Catalog writes live under `/users`, `/items`, and `/catalog/events`.
 
 Interactive docs: `/docs` (Swagger UI) and `/redoc` (includes language
 code samples via ``x-codeSamples``). Machine-readable schema: `/openapi.json`.
@@ -154,6 +157,7 @@ def create_app(
     event_source: WebhookEventSource | None = None,
     events_worker: EventWorker | None = None,
     history_reader: UserHistoryReader | None = None,
+    catalog: CatalogStore | None = None,
     consumed: ConsumedOverlay | None = None,
 ) -> FastAPI:
     app = FastAPI(
@@ -400,6 +404,7 @@ def create_app(
 
     mount_events_routes(app, settings, event_source=event_source)
     mount_track_routes(app, settings, store=track_store)
+    mount_catalog_routes(app, settings, catalog=catalog, overlay=overlay)
 
     def custom_openapi() -> dict:
         if app.openapi_schema is not None:
@@ -435,6 +440,7 @@ def create_app(
 def main() -> None:
     from cicerone.events.consumed import ConsumedOverlay
     from cicerone.io.factory import (
+        build_catalog_store,
         build_manifest_reader,
         build_recommendation_reader,
         build_user_history_reader,
@@ -469,11 +475,17 @@ def main() -> None:
     except Exception:
         logger.exception("Failed to open [input] for consumed-item hide")
         history_reader = None
+    try:
+        catalog = build_catalog_store(settings.input)
+    except Exception:
+        logger.exception("Failed to open [input] catalog store")
+        catalog = None
     events_runtime = start_events_runtime(
         settings,
         feature_config=feature_config,
         reader=reader,
         consumed=overlay,
+        catalog=catalog,
     )
     app = create_app(
         settings,
@@ -483,6 +495,7 @@ def main() -> None:
         event_source=events_runtime.webhook_source,
         events_worker=events_runtime.worker,
         history_reader=history_reader,
+        catalog=catalog,
         consumed=overlay,
     )
     _start_refresh_loop(
