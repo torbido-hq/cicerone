@@ -354,7 +354,7 @@ prefix = "recommendations/latest"
 # # sasl_mechanism = "PLAIN"
 # # sasl_username = "${KAFKA_USERNAME}"
 # # sasl_password = "${KAFKA_PASSWORD}"
-# # timeout_seconds = 10
+# # timeout_seconds = 10          # min 0.01 (librdkafka socket.timeout.ms)
 
 # RabbitMQ queue. Requires: pip install 'cicerone-recommender[rabbitmq]'
 # [events]

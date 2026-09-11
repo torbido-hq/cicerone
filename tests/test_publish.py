@@ -119,6 +119,10 @@ def test_validate_kafka_publish_options():
         validate_kafka_publish_options(
             {"bootstrap_servers": "h:9092", "topic": "t", "timeout_seconds": 1e308}
         )
+    with pytest.raises(ConfigError, match="timeout_seconds"):
+        validate_kafka_publish_options(
+            {"bootstrap_servers": "h:9092", "topic": "t", "timeout_seconds": 0.005}
+        )
 
 
 def test_validate_rabbitmq_publish_options():
