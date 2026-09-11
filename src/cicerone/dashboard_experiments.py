@@ -226,7 +226,7 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
         events_f = pool.submit(
             _try_load,
             "read events for experiment metrics",
-            lambda: _load_metric_events(settings, event_types=event_types),
+            lambda: load_metric_events(settings, event_types=event_types),
             pd.DataFrame(),
         )
         recs_f = pool.submit(
@@ -400,7 +400,7 @@ def _filter_event_types(frame: pd.DataFrame, event_types: Sequence[str] | None) 
     return frame[frame["event_type"].astype(str).isin(set(event_types))]
 
 
-def _load_metric_events(settings: Settings, *, event_types: Sequence[str] | None = None) -> pd.DataFrame:
+def load_metric_events(settings: Settings, *, event_types: Sequence[str] | None = None) -> pd.DataFrame:
     inp = settings.input
     types = tuple(event_types) if event_types else None
     if inp.kind == "dataset":

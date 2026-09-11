@@ -44,6 +44,46 @@ def test_user_recommendation_messages_empty():
     assert user_recommendation_messages(pd.DataFrame({"item_id": ["i1"]})) == []
 
 
+def test_user_recommendation_messages_rejects_nan():
+    frame = pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": float("nan"), "source": "popular"}]
+    )
+    with pytest.raises(ValueError, match="not JSON compliant"):
+        user_recommendation_messages(frame)
+
+
+def test_user_recommendation_messages_rejects_numpy_nan():
+    import numpy as np
+
+    frame = pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": np.float64("nan"), "source": "popular"}]
+    )
+    frame["score"] = frame["score"].astype(object)
+    frame.at[0, "score"] = np.float64("nan")
+    with pytest.raises(ValueError, match="not JSON compliant"):
+        user_recommendation_messages(frame)
+
+
+def test_user_recommendation_messages_encodes_optional_missing_as_null():
+    frame = pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "rank": 1,
+                "score": 0.9,
+                "source": "popular",
+                "reasons": pd.NA,
+                "variant": pd.NaT,
+            }
+        ]
+    )
+    _user_id, body = user_recommendation_messages(frame)[0]
+    rec = json.loads(body)["recommendations"][0]
+    assert rec["reasons"] is None
+    assert rec["variant"] is None
+
+
 def test_user_recommendation_messages_keeps_reasons_and_variant():
     frame = pd.DataFrame(
         [

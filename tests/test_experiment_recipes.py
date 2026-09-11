@@ -289,6 +289,8 @@ def test_resolve_boost_policy_rejects_duplicate_names() -> None:
     ]
     with pytest.raises(ConfigError, match="duplicate inherited rule name"):
         resolve_boost_policy(("featured",), inherited, label="boosts")
+    with pytest.raises(ConfigError, match="duplicate inherited rule name"):
+        resolve_boost_policy(True, inherited, label="boosts")
 
 
 def test_resolve_boost_policy_edge_shapes() -> None:

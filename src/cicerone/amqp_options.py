@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from cicerone.kafka_options import optional_int, optional_nonempty_str, require_nonempty_str
+from cicerone.option_parse import optional_int, optional_nonempty_str, require_nonempty_str
 
 DEFAULT_PREFETCH = 100
 

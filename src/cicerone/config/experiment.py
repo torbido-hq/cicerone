@@ -27,6 +27,7 @@ from cicerone.config.settings import ExperimentSettings, VariantSettings
 from cicerone.config.validation import (
     require_open_unit_interval,
     require_unit_interval,
+    unique_policy_names,
     validate_model_weights,
     validate_rrf_k,
 )
@@ -167,20 +168,6 @@ def _load_variant(raw: Any, index: int) -> VariantSettings:
     )
 
 
-def _unique_policy_names(names: Sequence[object], *, label: str) -> tuple[str, ...]:
-    seen: set[str] = set()
-    out: list[str] = []
-    for raw in names:
-        name = str(raw).strip()
-        if not name:
-            raise ConfigError(f"{label} rule name must be non-empty")
-        if name in seen:
-            raise ConfigError(f"{label} duplicate rule name {name!r}")
-        seen.add(name)
-        out.append(name)
-    return tuple(out)
-
-
 def _load_policy_spec(
     raw: dict[str, Any],
     name: str,
@@ -209,14 +196,14 @@ def _load_policy_spec(
         return ()
     label = f"experiment.variants[{name}].{field}"
     if all(isinstance(item, str) for item in value):
-        return _unique_policy_names(value, label=label)
+        return unique_policy_names(value, label=label)
     if not all(isinstance(item, dict) for item in value):
         raise ConfigError(f"{label} must be true, false, a list of rule names, or an array of rule tables")
     try:
         rules = tuple(parse_table([dict(item) for item in value]))
     except (KeyError, TypeError, ValueError) as exc:
         raise ConfigError(f"{label}: {exc}") from exc
-    _unique_policy_names([rule.name for rule in rules], label=label)  # type: ignore[attr-defined]
+    unique_policy_names([rule.name for rule in rules], label=label)  # type: ignore[attr-defined]
     return rules
 
 

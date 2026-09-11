@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from cicerone.config.constants import (
@@ -105,3 +106,17 @@ def require_unit_interval(value: float, *, name: str) -> float:
     if value <= 0 or value > 1:
         raise ConfigError(f"{name} must be in (0, 1], got {value}")
     return value
+
+
+def unique_policy_names(names: Sequence[object], *, label: str) -> tuple[str, ...]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in names:
+        name = str(raw).strip()
+        if not name:
+            raise ConfigError(f"{label} rule name must be non-empty")
+        if name in seen:
+            raise ConfigError(f"{label} duplicate rule name {name!r}")
+        seen.add(name)
+        out.append(name)
+    return tuple(out)

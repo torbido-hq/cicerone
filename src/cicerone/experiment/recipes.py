@@ -9,7 +9,7 @@ from typing import Any, TypeVar, cast
 
 from cicerone.config.constants import DEFAULT_MODELS, RRF_K, STRATEGY_NAMES, ConfigError
 from cicerone.config.settings import Settings, VariantSettings
-from cicerone.config.validation import validate_model_weights, validate_rrf_k
+from cicerone.config.validation import unique_policy_names, validate_model_weights, validate_rrf_k
 from cicerone.feature_config import (
     BLENDING_CURVES,
     BlendingConfig,
@@ -98,20 +98,6 @@ def resolve_eligibility_policy(
     )
 
 
-def _unique_policy_names(names: Sequence[object], *, label: str) -> tuple[str, ...]:
-    seen: set[str] = set()
-    out: list[str] = []
-    for raw in names:
-        name = str(raw).strip()
-        if not name:
-            raise ConfigError(f"{label} rule name must be non-empty")
-        if name in seen:
-            raise ConfigError(f"{label} duplicate rule name {name!r}")
-        seen.add(name)
-        out.append(name)
-    return tuple(out)
-
-
 def _pick_named(inherited: Sequence[_T], names: Sequence[str], *, label: str) -> tuple[_T, ...]:
     by_name: dict[str, _T] = {}
     for rule in inherited:
@@ -134,7 +120,11 @@ def _resolve_policy_spec(
     rule_type: type[_T],
 ) -> tuple[_T, ...]:
     if spec is True:
-        return tuple(inherited)
+        return _pick_named(
+            inherited,
+            [rule.name for rule in inherited],  # type: ignore[attr-defined]
+            label=label,
+        )
     if spec is False:
         return ()
     if not isinstance(spec, (list, tuple)):
@@ -143,14 +133,14 @@ def _resolve_policy_spec(
     if not items:
         return ()
     if all(isinstance(item, str) for item in items):
-        names = _unique_policy_names(items, label=label)
+        names = unique_policy_names(items, label=label)
         return _pick_named(inherited, names, label=label)
     if all(isinstance(item, Mapping) for item in items):
         try:
             rules = tuple(parse([dict(item) for item in items]))
         except (KeyError, TypeError, ValueError) as exc:
             raise ConfigError(f"{label}: {exc}") from exc
-        _unique_policy_names([rule.name for rule in rules], label=label)  # type: ignore[attr-defined]
+        unique_policy_names([rule.name for rule in rules], label=label)  # type: ignore[attr-defined]
         return rules
     if all(isinstance(item, rule_type) for item in items):
         return cast(tuple[_T, ...], items)
