@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import threading
+
 import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
 
 from cicerone.config import ConfigError, IOSettings
 from cicerone.experiment.store import ExperimentStore, experiment_state
+from cicerone.locks import LockLostError
 
 
 def test_experiment_store_roundtrip_dataset(tmp_path) -> None:
@@ -184,6 +187,79 @@ def test_require_appendable_exposure_log_allows_db_and_local(tmp_path) -> None:
     require_appendable_exposure_log(
         IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     )
+
+
+def _exposure(user_id: str, suffix: str = "00") -> dict[str, str | None]:
+    return {
+        "user_id": user_id,
+        "experiment_id": "exp",
+        "variant": "control",
+        "generated_at": None,
+        "exposed_at": f"2026-08-25T00:{suffix}:00+00:00",
+    }
+
+
+def test_append_exposures_serializes_concurrent_local_writers(tmp_path) -> None:
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    store = ExperimentStore(output)
+    started = threading.Barrier(2)
+
+    def _append(user_id: str, suffix: str) -> None:
+        started.wait()
+        store.append_exposures([_exposure(user_id, suffix)])
+
+    threads = [
+        threading.Thread(target=_append, args=("u1", "00")),
+        threading.Thread(target=_append, args=("u2", "01")),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert sorted(row["user_id"] for row in store.read_exposures()) == ["u1", "u2"]
+
+
+def test_append_exposures_writer_lock_busy(tmp_path, monkeypatch) -> None:
+    class _Busy:
+        def acquire(self) -> bool:
+            return False
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            return False
+
+        def is_locked(self) -> bool:
+            return True
+
+    monkeypatch.setattr("cicerone.locks.acquire_blocking", lambda _lock, **_kwargs: False)
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    store = ExperimentStore(output, writer_lock=_Busy())
+    with pytest.raises(RuntimeError, match="dataset writer lock busy"):
+        store.append_exposures([_exposure("u1")])
+    assert store.read_exposures() == []
+
+
+def test_append_exposures_writer_lock_lost(tmp_path) -> None:
+    class _Lost:
+        def acquire(self) -> bool:
+            return True
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            return False
+
+        def is_locked(self) -> bool:
+            return True
+
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    store = ExperimentStore(output, writer_lock=_Lost())
+    with pytest.raises(LockLostError, match="dataset writer lock lost before write"):
+        store.append_exposures([_exposure("u1")])
+    assert store.read_exposures() == []
 
 
 def test_append_exposures_empty_is_noop(tmp_path) -> None:

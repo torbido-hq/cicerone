@@ -630,6 +630,36 @@ def test_dataset_append_lock_key_and_optional_builder(monkeypatch):
     assert build_dataset_writer_lock(db_settings) is None
 
 
+def test_held_writer_lock_owned_after_nested_wait():
+    from contextlib import contextmanager
+
+    events: list[str] = []
+
+    class Lock:
+        def acquire(self) -> bool:
+            events.append("acquire")
+            return True
+
+        def release(self) -> None:
+            events.append("release")
+
+        def owned(self) -> bool:
+            events.append("owned")
+            return True
+
+        def is_locked(self) -> bool:
+            return True
+
+    @contextmanager
+    def nested():
+        events.append("nested")
+        yield
+
+    with nested(), held_writer_lock(Lock()):
+        events.append("write")
+    assert events == ["nested", "acquire", "owned", "write", "release"]
+
+
 def test_held_writer_lock_raises_when_lease_lost():
     events: list[str] = []
 

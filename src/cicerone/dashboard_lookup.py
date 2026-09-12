@@ -86,11 +86,12 @@ def lookup_inspector(
     user_id = user_id.strip()
     if not user_id:
         return empty_recommendations_context()
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    if recommendation_reader is None:
+        return lookup_recommendations(settings, None, user_id)
+    with ThreadPoolExecutor(max_workers=1) as pool:
         recs_f = pool.submit(lookup_recommendations, settings, recommendation_reader, user_id)
-        hist_f = pool.submit(lookup_history, settings, history_reader, user_id)
+        history = lookup_history(settings, history_reader, user_id)
         recs = recs_f.result()
-        history = hist_f.result()
     if not recs["queried"]:
         return recs
     recs.update(history)
