@@ -301,9 +301,7 @@ def test_lookup_inspector_memory_sqlite_history_stays_on_caller_thread():
                 "user_id TEXT, item_id TEXT, event_type TEXT, quantity INTEGER, occurred_at TEXT)"
             )
         )
-        conn.execute(
-            text("INSERT INTO events VALUES ('u1', 'i1', 'view', 1, '2026-08-21')")
-        )
+        conn.execute(text("INSERT INTO events VALUES ('u1', 'i1', 'view', 1, '2026-08-21')"))
     result = lookup_inspector(make_settings(dashboard_enabled=True), _KReader(), source, "u1")
     assert result["queried"] is True
     assert [row["item_id"] for row in result["events"]] == ["i1"]
