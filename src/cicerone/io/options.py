@@ -55,15 +55,14 @@ def require_option(options: dict[str, Any], key: str, backend: str) -> Any:
 @contextmanager
 def exclusive_file_lock(path: Path) -> Iterator[None]:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with _process_path_lock(path):
-        with path.open("a") as handle:
+    with _process_path_lock(path), path.open("a") as handle:
+        if fcntl is not None:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
             if fcntl is not None:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                if fcntl is not None:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def object_key(options: dict[str, Any], filename: str) -> str:
