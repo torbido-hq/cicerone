@@ -24,7 +24,13 @@ from cicerone.experiment.store import ExperimentStore
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.base import RecommendationReader
 from cicerone.io.factory import build_output_sink
-from cicerone.locks import LockBackend, build_lock_backend, events_apply_lock_key
+from cicerone.locks import (
+    LockBackend,
+    build_dataset_writer_lock,
+    build_lock_backend,
+    events_apply_lock_key,
+    has_distributed_lock,
+)
 from cicerone.publish import RecommendationPublisher, build_publisher
 
 logger = logging.getLogger(__name__)
@@ -142,7 +148,7 @@ def start_events_runtime(
 
     apply_lock: LockBackend | None = None
     retrain_probe: LockBackend | None = None
-    if settings.events.ha:
+    if has_distributed_lock(settings):
         apply_lock = build_lock_backend(
             settings,
             lock_key=events_apply_lock_key(settings.trigger.lock_key),
@@ -153,9 +159,10 @@ def start_events_runtime(
         )
         retrain_probe = build_lock_backend(settings)
         logger.info(
-            "Events apply lease enabled (backend=%s, key=%s)",
+            "Events apply lease enabled (backend=%s, key=%s, ha=%s)",
             settings.trigger.lock_backend,
             events_apply_lock_key(settings.trigger.lock_key),
+            settings.events.ha,
         )
 
     combined_busy = _combine_busy_checks(
@@ -163,7 +170,7 @@ def start_events_runtime(
         (retrain_probe.is_locked if retrain_probe is not None else None),
     )
 
-    sink = build_output_sink(settings.output)
+    sink = build_output_sink(settings.output, writer_lock=build_dataset_writer_lock(settings))
     publisher = build_publisher(settings)
     worker: EventWorker | None = None
     try:
@@ -232,8 +239,8 @@ def start_events_runtime(
         if apply_lock is None:
             logger.warning(
                 "Incremental events assume a single writer process "
-                "(kind=%s, output=%s); set events.ha = true and "
-                "job.trigger.lock_backend = postgres|redis for multi-replica apply",
+                "(kind=%s, output=%s); set job.trigger.lock_backend = postgres|redis "
+                "to serialize apply (events.ha = true still requires db for track)",
                 settings.events.kind,
                 settings.output.kind,
             )

@@ -440,8 +440,29 @@ def test_track_jsonl_append_skips_reread_when_warm(tmp_path, monkeypatch) -> Non
     assert {row["event_id"] for row in store.read_rows()} == {"imp-1", "imp-2"}
 
 
+def test_track_jsonl_append_writer_lock_busy(tmp_path, monkeypatch) -> None:
+    class _Busy:
+        def acquire(self) -> bool:
+            return False
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            return False
+
+        def is_locked(self) -> bool:
+            return True
+
+    monkeypatch.setattr("cicerone.locks.acquire_blocking", lambda _lock, **_kwargs: False)
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    store = TrackStore(output, writer_lock=_Busy())
+    with pytest.raises(RuntimeError, match="dataset writer lock busy"):
+        store.append_rows([_row()])
+
+
 def test_track_jsonl_append_without_fcntl(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr("cicerone.track.store_dataset.fcntl", None)
+    monkeypatch.setattr("cicerone.io.options.fcntl", None)
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     store = TrackStore(output)
     assert store.append_rows([_row()]) == 1

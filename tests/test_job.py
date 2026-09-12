@@ -827,6 +827,7 @@ def test_job_run_records_configured_lock_backend(tmp_path, monkeypatch):
         extra_job='[job.trigger]\nlock_backend = "redis"\nredis_url = "redis://localhost:6379/0"\n',
     )
     monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
+    monkeypatch.setattr("cicerone.job.build_dataset_writer_lock", lambda _settings: None)
 
     job.run(triggered_by="cron")
 

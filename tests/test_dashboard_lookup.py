@@ -71,8 +71,10 @@ class _History:
         self._events_error = events_error
         self._user_error = user_error
         self.get_user_calls = 0
+        self.get_events_calls = 0
 
     def get_events_for_user(self, user_id: str, limit: int) -> pd.DataFrame:
+        self.get_events_calls += 1
         if self._events_error is not None:
             raise self._events_error
         rows = self._events[self._events["user_id"].astype(str) == user_id]
@@ -263,6 +265,47 @@ def test_lookup_inspector_keeps_recommendations_when_user_attrs_are_sequences():
         {"name": "tags", "value": "session"},
         {"name": "tag_ids", "value": "1, 2"},
     ]
+
+
+def test_lookup_inspector_skips_history_when_recommendations_unavailable():
+    history = _History(
+        pd.DataFrame(
+            [
+                {
+                    "user_id": "u1",
+                    "item_id": "i1",
+                    "event_type": "view",
+                    "quantity": 1,
+                    "occurred_at": "2026-08-21",
+                }
+            ]
+        )
+    )
+    result = lookup_inspector(make_settings(dashboard_enabled=True), None, history, "u1")
+    assert result["queried"] is True
+    assert result["error"] == "Recommendation store is not available."
+    assert history.get_events_calls == 0
+    assert result["events"] == []
+
+
+def test_lookup_inspector_memory_sqlite_history_stays_on_caller_thread():
+    from sqlalchemy import text
+
+    from cicerone.io.db_store import DatabaseInputSource
+
+    source = DatabaseInputSource({"database_url": "sqlite+pysqlite://"})
+    with source._engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE events ("
+                "user_id TEXT, item_id TEXT, event_type TEXT, quantity INTEGER, occurred_at TEXT)"
+            )
+        )
+        conn.execute(text("INSERT INTO events VALUES ('u1', 'i1', 'view', 1, '2026-08-21')"))
+    result = lookup_inspector(make_settings(dashboard_enabled=True), _KReader(), source, "u1")
+    assert result["queried"] is True
+    assert [row["item_id"] for row in result["events"]] == ["i1"]
+    assert result["events_error"] is None
 
 
 def test_lookup_inspector_empty_user_id_skips_history():

@@ -4,6 +4,23 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.2] - 2026-09-11
+
+### Changed
+
+- Incremental apply takes the postgres/redis lease whenever
+  `lock_backend` is distributed, even if `events.ha` is false. Retrain
+  probe follows the same rule.
+
+### Fixed
+
+- Dataset recommendation writes and user-replace share one host lock;
+  JSONL track/exposure appends do the same. A distributed lock serializes
+  those writers when `lock_backend` is postgres or redis.
+- Dashboard lookup keeps in-memory SQLite history on the request thread.
+- `cicerone_events_leader` reports apply-lease ownership, not HA-only.
+- Local dataset file locks serialize in-process writers when `fcntl` is missing.
+
 ## [0.8.1] - 2026-09-11
 
 ### Fixed

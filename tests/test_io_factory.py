@@ -24,7 +24,27 @@ def test_build_input_source_dataset(tmp_path):
 
 def test_build_output_sink_dataset(tmp_path):
     settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    assert isinstance(build_output_sink(settings), DatasetOutputSink)
+    sink = build_output_sink(settings)
+    assert isinstance(sink, DatasetOutputSink)
+    assert sink._writer_lock is None
+
+    class _Lock:
+        def acquire(self) -> bool:
+            return True
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            return True
+
+        def is_locked(self) -> bool:
+            return False
+
+    lock = _Lock()
+    locked = build_output_sink(settings, writer_lock=lock)
+    assert isinstance(locked, DatasetOutputSink)
+    assert locked._writer_lock is lock
 
 
 def test_build_input_source_db():

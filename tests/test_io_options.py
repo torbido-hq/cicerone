@@ -8,6 +8,7 @@ from botocore.exceptions import ClientError
 from cicerone.config import ConfigError
 from cicerone.io.options import (
     S3_NOT_FOUND_CODES,
+    exclusive_file_lock,
     is_s3_not_found,
     object_key,
     readonly_select,
@@ -89,3 +90,38 @@ def test_readonly_select_accepts_simple_select():
 def test_readonly_select_rejects_writes(query):
     with pytest.raises(ValueError, match="q"):
         readonly_select(query, option="q")
+
+
+def test_exclusive_file_lock_serializes_without_fcntl(tmp_path, monkeypatch):
+    import threading
+
+    monkeypatch.setattr("cicerone.io.options.fcntl", None)
+    path = tmp_path / "writers.lock"
+    seen: list[int] = []
+    hold = threading.Event()
+    entered = threading.Event()
+
+    def _hold() -> None:
+        with exclusive_file_lock(path):
+            entered.set()
+            hold.wait(timeout=2)
+            seen.append(1)
+
+    first = threading.Thread(target=_hold)
+    first.start()
+    assert entered.wait(timeout=2)
+    second_started = threading.Event()
+
+    def _second() -> None:
+        second_started.set()
+        with exclusive_file_lock(path):
+            seen.append(2)
+
+    second = threading.Thread(target=_second)
+    second.start()
+    assert second_started.wait(timeout=2)
+    assert seen == []
+    hold.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+    assert seen == [1, 2]

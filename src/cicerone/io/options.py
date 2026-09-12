@@ -5,9 +5,16 @@ from __future__ import annotations
 import io
 import logging
 import re
-from collections.abc import Sequence
+import threading
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None  # type: ignore[assignment]
 
 import pandas as pd
 
@@ -24,6 +31,18 @@ _READONLY_SELECT_FORBIDDEN = re.compile(
 )
 S3_NOT_FOUND_CODES = frozenset({"NoSuchKey", "404", "NotFound"})
 STORAGE_BACKENDS = frozenset({"s3", "local"})
+_PATH_LOCKS_GUARD = threading.Lock()
+_PATH_LOCKS: dict[str, threading.Lock] = {}
+
+
+def _process_path_lock(path: Path) -> threading.Lock:
+    key = str(path.resolve())
+    with _PATH_LOCKS_GUARD:
+        lock = _PATH_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _PATH_LOCKS[key] = lock
+        return lock
 
 
 def require_option(options: dict[str, Any], key: str, backend: str) -> Any:
@@ -31,6 +50,19 @@ def require_option(options: dict[str, Any], key: str, backend: str) -> Any:
     if value is None:
         raise ConfigError(f"Missing required option '{key}' for backend {backend!r}")
     return value
+
+
+@contextmanager
+def exclusive_file_lock(path: Path) -> Iterator[None]:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with _process_path_lock(path), path.open("a") as handle:
+        if fcntl is not None:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def object_key(options: dict[str, Any], filename: str) -> str:

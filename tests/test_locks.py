@@ -17,11 +17,17 @@ from cicerone.config import (
 from cicerone.config.constants import DEFAULT_EVENTS_APPLY_LOCK_TTL_SECONDS
 from cicerone.locks import (
     REDIS_LOCK_TTL_MS,
+    LockLostError,
     PostgresAdvisoryLock,
     RedisLock,
+    acquire_blocking,
     advisory_keys_from_lock_key,
+    build_dataset_writer_lock,
     build_lock_backend,
+    dataset_append_lock_key,
     events_apply_lock_key,
+    has_distributed_lock,
+    held_writer_lock,
 )
 from cicerone.trigger import RunGuard
 
@@ -597,6 +603,104 @@ def test_redis_owned_and_is_locked(monkeypatch):
     client.get.side_effect = RuntimeError("redis down")
     assert lock.owned() is False
     lock.release()
+
+
+def test_dataset_append_lock_key_and_optional_builder(monkeypatch):
+    assert dataset_append_lock_key("job-a") == "job-a:dataset:append"
+    assert has_distributed_lock(make_settings()) is False
+    settings = make_settings(
+        trigger_lock_backend="redis",
+        trigger_redis_url="redis://localhost:6379/0",
+        trigger_lock_key="job-a",
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": "/tmp/out"}),
+    )
+    assert has_distributed_lock(settings) is True
+    client = _mock_redis_module(monkeypatch)
+    client.set.return_value = True
+    lock = build_dataset_writer_lock(settings)
+    assert lock is not None
+    assert lock.acquire() is True
+    client.set.assert_called_with("job-a:dataset:append", lock._token, nx=True, px=10_000)
+    lock.release()
+    db_settings = make_settings(
+        trigger_lock_backend="redis",
+        trigger_redis_url="redis://localhost:6379/0",
+        output=IOSettings(kind="db", options={"database_url": "sqlite://"}),
+    )
+    assert build_dataset_writer_lock(db_settings) is None
+
+
+def test_held_writer_lock_owned_after_nested_wait():
+    from contextlib import contextmanager
+
+    events: list[str] = []
+
+    class Lock:
+        def acquire(self) -> bool:
+            events.append("acquire")
+            return True
+
+        def release(self) -> None:
+            events.append("release")
+
+        def owned(self) -> bool:
+            events.append("owned")
+            return True
+
+        def is_locked(self) -> bool:
+            return True
+
+    @contextmanager
+    def nested():
+        events.append("nested")
+        yield
+
+    with nested(), held_writer_lock(Lock()):
+        events.append("write")
+    assert events == ["nested", "acquire", "owned", "write", "release"]
+
+
+def test_held_writer_lock_raises_when_lease_lost():
+    events: list[str] = []
+
+    class Lock:
+        def acquire(self) -> bool:
+            events.append("acquire")
+            return True
+
+        def release(self) -> None:
+            events.append("release")
+
+        def owned(self) -> bool:
+            events.append("owned")
+            return False
+
+        def is_locked(self) -> bool:
+            return True
+
+    with (
+        pytest.raises(LockLostError, match="dataset writer lock lost before write"),
+        held_writer_lock(Lock()),
+    ):
+        events.append("write")
+    assert events == ["acquire", "owned", "release"]
+
+
+def test_acquire_blocking_times_out():
+    class _Busy:
+        def acquire(self) -> bool:
+            return False
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            return False
+
+        def is_locked(self) -> bool:
+            return True
+
+    assert acquire_blocking(_Busy(), timeout_seconds=0.0) is False
 
 
 def test_events_apply_lock_key_and_build_override(monkeypatch):

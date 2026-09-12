@@ -15,6 +15,11 @@ def events_apply_lock_key(run_guard_key: str) -> str:
     return f"{run_guard_key}:events:apply"
 
 
+def dataset_append_lock_key(run_guard_key: str) -> str:
+    """Lease key for local dataset JSONL / parquet writers."""
+    return f"{run_guard_key}:dataset:append"
+
+
 def advisory_keys_from_lock_key(lock_key: str) -> tuple[int, int]:
     digest = hashlib.sha256(lock_key.encode()).digest()
     return (

@@ -6,6 +6,7 @@ import logging
 import time
 from collections import Counter
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from typing import Any
 
@@ -82,10 +83,18 @@ def lookup_inspector(
     history_reader: UserHistoryReader | None,
     user_id: str,
 ) -> dict[str, Any]:
-    recs = lookup_recommendations(settings, recommendation_reader, user_id)
+    user_id = user_id.strip()
+    if not user_id:
+        return empty_recommendations_context()
+    if recommendation_reader is None:
+        return lookup_recommendations(settings, None, user_id)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        recs_f = pool.submit(lookup_recommendations, settings, recommendation_reader, user_id)
+        history = lookup_history(settings, history_reader, user_id)
+        recs = recs_f.result()
     if not recs["queried"]:
         return recs
-    recs.update(lookup_history(settings, history_reader, recs["user_id"]))
+    recs.update(history)
     rec_ids = {row["item_id"] for row in recs["items"] if row["item_id"] and row["item_id"] != MISSING}
     event_ids = {row["item_id"] for row in recs["events"] if row["item_id"] and row["item_id"] != MISSING}
     recs["overlap_item_ids"] = sorted(rec_ids & event_ids)
