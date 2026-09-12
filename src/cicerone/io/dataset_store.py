@@ -120,7 +120,7 @@ class DatasetOutputSink:
     def _recommendations_lock(self) -> Iterator[None]:
         from cicerone.locks import held_writer_lock
 
-        with held_writer_lock(self._writer_lock), self._local_file_lock(".recommendations.lock"):
+        with self._local_file_lock(".recommendations.lock"), held_writer_lock(self._writer_lock):
             yield
 
     @contextmanager
