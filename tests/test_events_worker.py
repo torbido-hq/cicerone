@@ -217,6 +217,102 @@ def test_event_worker_stop_returns_false_when_join_times_out(tmp_path, feature_c
     worker._stop.set()
 
 
+def test_event_worker_stop_skips_close_during_apply_ack(tmp_path, feature_config, caplog):
+    import logging
+
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    closed = {"n": 0}
+
+    class _CloseCount(WebhookEventSource):
+        def close(self) -> None:
+            closed["n"] += 1
+            super().close()
+
+    worker = EventWorker(
+        _CloseCount({}),
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+        poll_interval_seconds=0.01,
+    )
+    worker.start()
+    assert worker._thread is not None
+    worker._thread.join = lambda timeout=None: None  # type: ignore[method-assign]
+    worker._thread.is_alive = lambda: True  # type: ignore[method-assign]
+    assert worker._apply_ack_guard.acquire(blocking=False)
+    assert worker._source_guard.acquire(blocking=False)
+    try:
+        with caplog.at_level(logging.WARNING):
+            assert worker.stop(join_timeout_seconds=0.01) is False
+        assert any("still alive" in record.getMessage() for record in caplog.records)
+        assert closed["n"] == 0
+    finally:
+        worker._apply_ack_guard.release()
+        worker._source_guard.release()
+    worker._stop.set()
+
+
+def test_event_worker_stop_does_not_close_before_in_flight_ack(tmp_path, feature_config: FeatureConfig):
+    import threading
+    import time
+
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    ack_started = threading.Event()
+    ack_release = threading.Event()
+    order: list[str] = []
+
+    class _GateAck(WebhookEventSource):
+        def ack(self, event_ids):  # type: ignore[no-untyped-def,override]
+            order.append("ack-start")
+            ack_started.set()
+            ack_release.wait(timeout=2)
+            super().ack(event_ids)
+            order.append("ack-done")
+
+        def close(self) -> None:
+            order.append("close")
+            super().close()
+
+    source = _GateAck({})
+    source.ingest(event_payload(event_id="ack-race", item_id="i7"))
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+        poll_interval_seconds=0.01,
+    )
+    worker.start()
+    assert ack_started.wait(timeout=2)
+    assert worker.stop(join_timeout_seconds=0.05) is False
+    assert "close" not in order
+    ack_release.set()
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and "close" not in order:
+        time.sleep(0.01)
+    assert "ack-done" in order
+    assert "close" in order
+    assert order.index("ack-done") < order.index("close")
+
+
 def test_event_worker_reconnects_when_source_reports_disconnected(tmp_path, feature_config: FeatureConfig):
     import time
 

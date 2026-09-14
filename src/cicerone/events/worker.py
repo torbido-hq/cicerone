@@ -111,6 +111,7 @@ class EventWorker:
         self._heartbeat_interval_seconds = heartbeat_interval_seconds
         self._stop = threading.Event()
         self._source_guard = threading.Lock()
+        self._apply_ack_guard = threading.Lock()
         self._thread: threading.Thread | None = None
 
     def start(self) -> None:
@@ -153,7 +154,12 @@ class EventWorker:
             with self._source_guard:
                 self._close_source()
         elif not joined:
-            self._close_source()
+            acquired = self._apply_ack_guard.acquire(blocking=True, timeout=join_timeout_seconds)
+            if acquired:
+                try:
+                    self._close_source()
+                finally:
+                    self._apply_ack_guard.release()
         elif self._source_guard.acquire(blocking=False):
             try:
                 self._close_source()
@@ -198,19 +204,24 @@ class EventWorker:
 
     def _loop(self) -> None:
         disconnected = False
-        while not self._stop.is_set():
-            if disconnected:
-                self._reconnect_source()
-                if self._stop.is_set():
-                    break
-            try:
-                self.tick()
-            except Exception:
-                record_events_tick_error()
-                logger.exception("Event worker tick failed")
-            finally:
-                disconnected = not self.refresh_source_health_metrics()
-            self._stop.wait(self._poll_interval_seconds)
+        try:
+            while not self._stop.is_set():
+                if disconnected:
+                    self._reconnect_source()
+                    if self._stop.is_set():
+                        break
+                try:
+                    self.tick()
+                except Exception:
+                    record_events_tick_error()
+                    logger.exception("Event worker tick failed")
+                finally:
+                    disconnected = not self.refresh_source_health_metrics()
+                self._stop.wait(self._poll_interval_seconds)
+        finally:
+            if self._stop.is_set():
+                with self._source_guard:
+                    self._close_source()
 
     def tick(self) -> int:
         """One poll/flush cycle; returns events successfully applied."""
@@ -297,6 +308,10 @@ class EventWorker:
             self._release_apply_lock()
 
     def _flush_ready(self, ready: list[NormalizedEvent]) -> int:
+        with self._apply_ack_guard:
+            return self._flush_ready_locked(ready)
+
+    def _flush_ready_locked(self, ready: list[NormalizedEvent]) -> int:
         try:
             with inflight_heartbeat(self._source, ready, self._heartbeat_interval_seconds):
                 applied = self._updater.apply(ready, persist_online=False)

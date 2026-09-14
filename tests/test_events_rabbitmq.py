@@ -149,6 +149,29 @@ def test_abandoned_io_does_not_return_late_ok():
         io.stop()
 
 
+def test_pika_io_replies_abandoned_for_job_dequeued_after_fail():
+    from cicerone.events.rabbitmq import _IO_STOP, _PikaIo
+
+    io = _PikaIo(timeout_seconds=5)
+    original_get = io._jobs.get
+
+    def _fail_after_dequeue(*args: Any, **kwargs: Any) -> object:
+        job = original_get(*args, **kwargs)
+        if job is not _IO_STOP:
+            io._failed = True
+        return job
+
+    io._jobs.get = _fail_after_dequeue  # type: ignore[method-assign]
+    io.start()
+    try:
+        began = time.monotonic()
+        with pytest.raises(RuntimeError, match="abandoned"):
+            io.submit(lambda: "should-not-run")
+        assert time.monotonic() - began < 1.0
+    finally:
+        io.stop()
+
+
 def test_pika_io_wakes_queued_submit_when_pump_fails():
     from cicerone.events.rabbitmq import _PikaIo
 
@@ -918,6 +941,52 @@ def test_reconnect_does_not_ack_late_delivery_on_new_channel(monkeypatch):
         source.ack(got)
     assert got == []
     assert new_acks == []
+    source.close()
+
+
+def test_ack_does_not_clear_reborn_delivery_tag(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.enqueue("cicerone.events", event_payload(event_id="e1"))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    first = list(source.poll(1))
+    assert [event.event_id for event in first] == ["e1"]
+    old_io = source._io
+    assert old_io is not None
+    submitted = threading.Event()
+    proceed = threading.Event()
+    original_submit = old_io.submit
+
+    def _gate(fn: Any, *, allow_closing: bool = False) -> Any:
+        result = original_submit(fn, allow_closing=allow_closing)
+        submitted.set()
+        proceed.wait(timeout=2)
+        return result
+
+    old_io.submit = _gate  # type: ignore[method-assign]
+    errors: list[BaseException] = []
+
+    def _ack() -> None:
+        try:
+            source.ack(["e1"])
+        except Exception as exc:
+            errors.append(exc)
+
+    waiter = threading.Thread(target=_ack)
+    waiter.start()
+    assert submitted.wait(timeout=2)
+    source.connect()
+    broker.enqueue("cicerone.events", event_payload(event_id="e1"))
+    second = list(source.poll(1))
+    assert [event.event_id for event in second] == ["e1"]
+    new_tag = source._delivery_tags["e1"]
+    proceed.set()
+    waiter.join(timeout=2)
+    assert errors == []
+    assert source._delivery_tags.get("e1") == new_tag
+    source.ack(["e1"])
+    assert source._delivery_tags == {}
+    assert new_tag in broker.connection.channel_obj.acked
     source.close()
 
 

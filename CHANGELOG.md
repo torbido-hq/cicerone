@@ -26,6 +26,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A timed-out RabbitMQ I/O call queued during the idle pump is not executed.
 - Event worker stop closes the source even when the worker thread misses its join deadline.
 - Event worker stop interrupts a hung source without taking the reconnect lock.
+- Event worker stop does not close the source during an in-flight apply/ack.
+- A failed RabbitMQ I/O worker replies abandoned to a job already dequeued.
+- RabbitMQ ack does not drop a new connection's delivery tag after reconnect.
 - The event worker reconnects when the source reports disconnected after a broker timeout.
 - Event worker stop closes a reconnect that finishes after shutdown.
 - Event worker stop does not wait on a reconnect that is still opening a broker connection.

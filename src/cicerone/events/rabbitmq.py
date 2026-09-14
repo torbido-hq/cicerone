@@ -159,10 +159,12 @@ class _PikaIo:
                 if self._failed:
                     self._exit_failed()
                 return
+            fn, reply = job
             if self._failed:
+                with suppress(queue.Full):
+                    reply.put_nowait(("err", RuntimeError("RabbitMQ I/O worker abandoned")))
                 self._exit_failed()
                 return
-            fn, reply = job
             try:
                 result = fn()
             except Exception as exc:
@@ -326,6 +328,8 @@ class RabbitMQEventSource(EventSource):
         for eid, tag in resolved:
             io.submit(partial(self._basic_ack, io, tag))
             with self._lock:
+                if self._io is not io or self._delivery_tags.get(eid) != tag:
+                    continue
                 self._delivery_tags.pop(eid, None)
                 self._held_tags.discard(tag)
                 self._in_flight.discard(eid)
