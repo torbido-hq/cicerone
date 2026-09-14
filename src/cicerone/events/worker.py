@@ -112,6 +112,7 @@ class EventWorker:
         self._stop = threading.Event()
         self._source_guard = threading.Lock()
         self._tick_guard = threading.Lock()
+        self._finalized = False
         self._thread: threading.Thread | None = None
 
     def start(self) -> None:
@@ -119,6 +120,7 @@ class EventWorker:
             return
         self._stop.clear()
         with self._source_guard:
+            self._finalized = False
             self._source.connect()
             if self._stop.is_set():
                 self._close_source()
@@ -186,6 +188,9 @@ class EventWorker:
             logger.exception("Event source close() failed during worker stop")
 
     def _drain_and_close(self) -> None:
+        if self._finalized:
+            return
+        self._finalized = True
         try:
             self._drain_buffer_on_stop()
         except Exception:
@@ -232,6 +237,8 @@ class EventWorker:
     def tick(self) -> int:
         """One poll/flush cycle; returns events successfully applied."""
         with self._tick_guard:
+            if self._stop.is_set():
+                return 0
             return self._tick_locked()
 
     def _tick_locked(self) -> int:

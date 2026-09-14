@@ -38,6 +38,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Event worker drain runs before the source close on shutdown.
 - Event worker stop does not close during an in-flight reconnect.
 - RabbitMQ health reports disconnected when the I/O worker is closing or replaced.
+- Event worker stop closes the source once.
+- RabbitMQ heartbeat fails closed when the I/O worker is already failed or closing.
+- Event worker tick does not poll after stop has closed the source.
 
 ## [0.8.1] - 2026-09-11
 

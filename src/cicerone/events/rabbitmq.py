@@ -364,6 +364,8 @@ class RabbitMQEventSource(EventSource):
             raise
         except Exception:
             logger.exception("RabbitMQ heartbeat process_data_events failed")
+            if io.failed or io.closing:
+                raise
 
     def health(self) -> EventSourceHealth:
         with self._lock:

@@ -571,6 +571,59 @@ def test_event_worker_reconnect_closes_after_failed_connect(tmp_path, feature_co
     assert closes["n"] >= 1
 
 
+def test_event_worker_stop_closes_source_once(tmp_path, feature_config: FeatureConfig):
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    closed = {"n": 0}
+
+    class _CloseCount(WebhookEventSource):
+        def close(self) -> None:
+            closed["n"] += 1
+            super().close()
+
+    worker = EventWorker(
+        _CloseCount({}),
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+        poll_interval_seconds=0.01,
+    )
+    worker.start()
+    assert worker.stop(join_timeout_seconds=2.0) is True
+    assert closed["n"] == 1
+
+
+def test_event_worker_tick_skips_when_stopped(tmp_path, feature_config: FeatureConfig):
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    polled = {"n": 0}
+
+    class _CountPoll(WebhookEventSource):
+        def poll(self, max_events: int = 100):  # type: ignore[override]
+            polled["n"] += 1
+            return super().poll(max_events)
+
+    worker = EventWorker(
+        _CountPoll({}),
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    worker._stop.set()
+    assert worker.tick() == 0
+    assert polled["n"] == 0
+
+
 def test_event_worker_stop_returns_true_when_idle(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),

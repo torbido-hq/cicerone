@@ -673,6 +673,28 @@ def test_heartbeat_reraises_timeout(monkeypatch):
     source.close()
 
 
+def test_heartbeat_reraises_when_io_failed(monkeypatch):
+    install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    io = source._io
+    assert io is not None
+    io._failed = True
+    with pytest.raises(RuntimeError, match="not running"):
+        source.heartbeat([])
+
+
+def test_heartbeat_reraises_when_io_closing(monkeypatch):
+    install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    io = source._io
+    assert io is not None
+    io._closing = True
+    with pytest.raises(RuntimeError, match="not running"):
+        source.heartbeat([])
+
+
 def test_heartbeat_when_disconnected(monkeypatch):
     install_fake_rabbitmq(monkeypatch)
     source = RabbitMQEventSource(_options())
