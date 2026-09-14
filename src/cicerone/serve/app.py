@@ -387,19 +387,29 @@ def create_app(
         if not has_variant_column(recs):
             experiment_id, variant = None, None
 
-        filtered = filter_recommendations(
+        after_availability = filter_recommendations(
             recs,
             items=items,
             available_ids=available_ids,
-            category=category,
+            category=None,
             category_column=category_column,
             exclude_unavailable=exclude_unavailable,
             ids_by_category=ids_by_category,
             on_missing_category_column=_warn_missing_category_column,
         )
-        filtered = drop_consumed(filtered, consumed_ids)
-        dropped_rows = len(filtered) < len(recs)
-        if settings.serve.fallback_fill and len(filtered) < top_k and dropped_rows:
+        after_hide = drop_consumed(after_availability, consumed_ids)
+        dropped_by_hide_or_availability = len(after_hide) < len(recs)
+        filtered = filter_recommendations(
+            after_hide,
+            items=items,
+            available_ids=available_ids,
+            category=category,
+            category_column=category_column,
+            exclude_unavailable=False,
+            ids_by_category=ids_by_category,
+            on_missing_category_column=_warn_missing_category_column,
+        )
+        if settings.serve.fallback_fill and len(filtered) < top_k and dropped_by_hide_or_availability:
             filler = reader.get_cold_start_fallback(fetch_k, variant=variant)
             filler = filter_recommendations(
                 filler,

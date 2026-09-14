@@ -121,6 +121,35 @@ def test_consumed_item_ids_history_error_keeps_overlay():
     assert consumed_item_ids("u1", history=_Boom(), overlay=overlay, lookback=10) == {"i2"}
 
 
+def test_recommendations_category_only_does_not_fill():
+    recs = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"},
+            {
+                "user_id": "__cold_start__",
+                "item_id": "i2",
+                "rank": 1,
+                "score": 0.4,
+                "source": "popular_fallback",
+            },
+        ]
+    )
+    app = create_app(
+        _settings(),
+        _FakeReader(recs, _items_df()),
+        feature_config=_feature_config(),
+    )
+    body = (
+        TestClient(app)
+        .get(
+            "/recommendations/u1?category=wine",
+            headers={"Authorization": "Bearer secret"},
+        )
+        .json()
+    )
+    assert body["items"] == []
+
+
 def test_recommendations_fill_after_hide():
     recs = pd.DataFrame(
         [

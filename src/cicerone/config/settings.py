@@ -266,6 +266,18 @@ class Settings:
         return self.serve.metrics_token
 
     @property
+    def serve_exclude_consumed(self) -> bool:
+        return self.serve.exclude_consumed
+
+    @property
+    def serve_fallback_fill(self) -> bool:
+        return self.serve.fallback_fill
+
+    @property
+    def serve_consumed_lookback(self) -> int:
+        return self.serve.consumed_lookback
+
+    @property
     def trigger_enabled(self) -> bool:
         return self.trigger.enabled
 
