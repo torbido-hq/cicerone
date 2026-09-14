@@ -12,7 +12,7 @@ from __future__ import annotations
 import io
 import json
 import logging
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -102,10 +102,21 @@ class DatasetInputSource:
 
 
 class DatasetOutputSink:
-    def __init__(self, options: dict[str, Any], *, writer_lock: Any = None):
+    def __init__(
+        self,
+        options: dict[str, Any],
+        *,
+        writer_lock: Any = None,
+        fence_check: Callable[[], bool] | None = None,
+        fence_lost: str = "lock lost before write",
+        fence_kind: str = "lock",
+    ):
         self._options = options
         self._backend = validate_storage_options(options)
         self._writer_lock = writer_lock
+        self._fence_check = fence_check
+        self._fence_lost = fence_lost
+        self._fence_kind = fence_kind
 
     @contextmanager
     def _local_file_lock(self, filename: str) -> Iterator[None]:
@@ -120,7 +131,15 @@ class DatasetOutputSink:
     def _recommendations_lock(self) -> Iterator[None]:
         from cicerone.locks import held_writer_lock
 
-        with self._local_file_lock(".recommendations.lock"), held_writer_lock(self._writer_lock):
+        with (
+            self._local_file_lock(".recommendations.lock"),
+            held_writer_lock(
+                self._writer_lock,
+                fence_check=self._fence_check,
+                fence_lost=self._fence_lost,
+                fence_kind=self._fence_kind,
+            ),
+        ):
             yield
 
     @contextmanager

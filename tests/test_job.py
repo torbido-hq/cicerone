@@ -1470,6 +1470,67 @@ def test_select_thompson_recipes_survives_recs_and_catalog_errors(tmp_path, monk
     assert again.state is not None
 
 
+def test_select_thompson_recipes_reads_in_memory_sqlite_on_caller_thread(monkeypatch):
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+    from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
+    from cicerone.experiment.recipes import ResolvedRecipe
+    from cicerone.experiment.store import ExperimentStore, experiment_state
+    from cicerone.experiment.thompson import ArmCounts, ThompsonAllocation
+    from cicerone.feature_config import BlendingConfig
+    from cicerone.job import _select_thompson_recipes
+
+    blending = BlendingConfig(enabled=False)
+    recipes = (
+        ResolvedRecipe("control", 0.5, ("popular",), None, None, "priority", blending, True, True),
+        ResolvedRecipe("treatment", 0.5, ("popular",), None, None, "priority", blending, True, True),
+    )
+    output = IOSettings(kind="db", options={"database_url": "sqlite+pysqlite://"})
+    settings = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="ranking-cvr",
+            allocation="thompson",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        track=TrackSettings(enabled=True),
+        output=output,
+    )
+    seeded = ExperimentStore(output)
+    seeded.write_state(
+        experiment_state(
+            "ranking-cvr",
+            promoted_variant=None,
+            champion="control",
+            challenger="treatment",
+            allocation="thompson",
+        )
+    )
+    monkeypatch.setattr("cicerone.job.ExperimentStore", lambda _output: seeded)
+    monkeypatch.setattr("cicerone.job.TrackStore.read_rows", lambda *args, **kwargs: [])
+
+    def _allocate(**kwargs):
+        names = list(kwargs["names"])
+        return ThompsonAllocation(
+            champion="control",
+            challenger="treatment",
+            arms={name: ArmCounts(0, 0) for name in names},
+            p_best={name: 0.5 for name in names},
+            pair_impressions=0,
+            window_started_at="2026-09-04T00:00:00+00:00",
+            rotated=False,
+        )
+
+    monkeypatch.setattr("cicerone.job.allocate_thompson", _allocate)
+    selected = _select_thompson_recipes(settings, recipes, pd.DataFrame())
+    assert selected.state is not None
+    assert selected.state["champion"] == "control"
+
+
 def test_select_thompson_recipes_does_not_write_state(tmp_path, monkeypatch):
     from unittest.mock import MagicMock
 

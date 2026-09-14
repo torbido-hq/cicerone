@@ -170,7 +170,13 @@ def start_events_runtime(
         (retrain_probe.is_locked if retrain_probe is not None else None),
     )
 
-    sink = build_output_sink(settings.output, writer_lock=build_dataset_writer_lock(settings))
+    sink = build_output_sink(
+        settings.output,
+        writer_lock=build_dataset_writer_lock(settings),
+        fence_check=(apply_lock.owned if apply_lock is not None else None),
+        fence_lost="events apply lock lost before write",
+        fence_kind="apply",
+    )
     publisher = build_publisher(settings)
     worker: EventWorker | None = None
     try:

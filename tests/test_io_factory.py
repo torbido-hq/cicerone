@@ -42,9 +42,18 @@ def test_build_output_sink_dataset(tmp_path):
             return False
 
     lock = _Lock()
-    locked = build_output_sink(settings, writer_lock=lock)
+    locked = build_output_sink(
+        settings,
+        writer_lock=lock,
+        fence_check=lock.owned,
+        fence_lost="retrain lock lost before write",
+        fence_kind="retrain",
+    )
     assert isinstance(locked, DatasetOutputSink)
     assert locked._writer_lock is lock
+    assert locked._fence_check is not None
+    assert locked._fence_check() is True
+    assert locked._fence_kind == "retrain"
 
 
 def test_build_input_source_db():

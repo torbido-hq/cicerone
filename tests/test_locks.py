@@ -660,6 +660,54 @@ def test_held_writer_lock_owned_after_nested_wait():
     assert events == ["nested", "acquire", "owned", "write", "release"]
 
 
+def test_held_writer_lock_rechecks_caller_fence_after_acquire():
+    events: list[str] = []
+    held = {"v": True}
+
+    class Lock:
+        def acquire(self) -> bool:
+            events.append("acquire")
+            held["v"] = False
+            return True
+
+        def release(self) -> None:
+            events.append("release")
+
+        def owned(self) -> bool:
+            events.append("owned")
+            return True
+
+        def is_locked(self) -> bool:
+            return True
+
+    with (
+        pytest.raises(LockLostError, match="retrain lock lost before write") as captured,
+        held_writer_lock(
+            Lock(),
+            fence_check=lambda: held["v"],
+            fence_lost="retrain lock lost before write",
+            fence_kind="retrain",
+        ),
+    ):
+        events.append("write")
+    assert captured.value.kind == "retrain"
+    assert events == ["acquire", "owned", "release"]
+
+
+def test_held_writer_lock_fence_without_writer_lock():
+    with (
+        pytest.raises(LockLostError, match="events apply lock lost before write") as captured,
+        held_writer_lock(
+            None,
+            fence_check=lambda: False,
+            fence_lost="events apply lock lost before write",
+            fence_kind="apply",
+        ),
+    ):
+        pass
+    assert captured.value.kind == "apply"
+
+
 def test_held_writer_lock_raises_when_lease_lost():
     events: list[str] = []
 
@@ -679,11 +727,12 @@ def test_held_writer_lock_raises_when_lease_lost():
             return True
 
     with (
-        pytest.raises(LockLostError, match="dataset writer lock lost before write"),
+        pytest.raises(LockLostError, match="dataset writer lock lost before write") as captured,
         held_writer_lock(Lock()),
     ):
         events.append("write")
     assert events == ["acquire", "owned", "release"]
+    assert captured.value.kind == "writer"
 
 
 def test_acquire_blocking_times_out():

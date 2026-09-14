@@ -7,7 +7,7 @@ Default single-instance exclusion is RunGuard's threading.Lock (no backend).
 from __future__ import annotations
 
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import Protocol
 
@@ -52,6 +52,10 @@ __all__ = [
 class LockLostError(RuntimeError):
     """Lease expired or was stolen before a fenced write."""
 
+    def __init__(self, message: str, *, kind: str = "lock") -> None:
+        super().__init__(message)
+        self.kind = kind
+
 
 class LockBackend(Protocol):
     def acquire(self) -> bool: ...
@@ -87,15 +91,25 @@ def acquire_blocking(
 
 
 @contextmanager
-def held_writer_lock(lock: LockBackend | None) -> Iterator[None]:
+def held_writer_lock(
+    lock: LockBackend | None,
+    *,
+    fence_check: Callable[[], bool] | None = None,
+    fence_lost: str = "lock lost before write",
+    fence_kind: str = "lock",
+) -> Iterator[None]:
     if lock is None:
+        if fence_check is not None and not fence_check():
+            raise LockLostError(fence_lost, kind=fence_kind)
         yield
         return
     if not acquire_blocking(lock):
         raise RuntimeError("dataset writer lock busy")
     try:
         if not lock.owned():
-            raise LockLostError("dataset writer lock lost before write")
+            raise LockLostError("dataset writer lock lost before write", kind="writer")
+        if fence_check is not None and not fence_check():
+            raise LockLostError(fence_lost, kind=fence_kind)
         yield
     finally:
         lock.release()

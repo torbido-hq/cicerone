@@ -125,6 +125,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Local dataset file locks serialize in-process writers when `fcntl` is missing.
 - Incremental apply reloads cached users under the lease so another
   replica's write is not overwritten.
+- Thompson and served-eval store reads stay on the job thread so
+  in-memory SQLite is not empty.
+- Dataset writes re-check the caller fence after waiting for the writer
+  lock. Writer-lease loss is logged as itself, not as apply-lease loss.
 
 
 ## [0.8.1] - 2026-09-11

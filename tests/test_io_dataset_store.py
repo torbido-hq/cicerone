@@ -230,6 +230,42 @@ def test_write_recommendations_writer_lock_busy(tmp_path, monkeypatch) -> None:
     assert not (tmp_path / "recommendations.parquet").exists()
 
 
+def test_write_recommendations_rechecks_fence_after_writer_lock(tmp_path) -> None:
+    from cicerone.locks import LockLostError
+
+    held = {"v": True}
+
+    class _Lock:
+        def acquire(self) -> bool:
+            held["v"] = False
+            return True
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            return True
+
+        def is_locked(self) -> bool:
+            return True
+
+    sink = DatasetOutputSink(
+        {"storage_backend": "local", "path": str(tmp_path)},
+        writer_lock=_Lock(),
+        fence_check=lambda: held["v"],
+        fence_lost="retrain lock lost before write",
+        fence_kind="retrain",
+    )
+    with pytest.raises(LockLostError, match="retrain lock lost before write") as captured:
+        sink.write_recommendations(
+            pd.DataFrame(
+                [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"}]
+            )
+        )
+    assert captured.value.kind == "retrain"
+    assert not (tmp_path / "recommendations.parquet").exists()
+
+
 def test_local_replace_recommendations_when_file_missing(tmp_path):
     options = {"storage_backend": "local", "path": str(tmp_path)}
     sink = DatasetOutputSink(options)

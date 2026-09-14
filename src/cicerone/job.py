@@ -222,11 +222,8 @@ def _score_previous_run(
             return []
         return store.read_rows()
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        recs_f = pool.submit(_try_load, "load previous recommendations for eval", _load_recs, None)
-        track_f = pool.submit(_try_load, "read track rows", _load_track, [])
-        previous_recs = recs_f.result()
-        track_rows = track_f.result()
+    previous_recs = _try_load("load previous recommendations for eval", _load_recs, None)
+    track_rows = _try_load("read track rows", _load_track, [])
     wanted = generated_ats_from_track(track_rows, previous_generated_at)
     history = None
     if wanted:
@@ -238,6 +235,14 @@ def _score_previous_run(
             logger.exception("Failed to read recommendation history")
             history = None
     recs_for_track = concat_history(history, stamp_recommendations(previous_recs, previous_generated_at))
+    assigned: dict[str, str] | None = None
+    replay_failed = False
+    if settings.eval.enabled and previous_recs is not None and previous_generated_at:
+        try:
+            assigned = _replay_assignments(settings, previous_recs, track_rows)
+        except Exception:
+            logger.exception("Failed to compute served eval")
+            replay_failed = True
 
     def _compute_track() -> dict[str, Any] | None:
         if not settings.track.enabled:
@@ -255,7 +260,7 @@ def _score_previous_run(
             return None
 
     def _compute_served() -> dict[str, Any] | None:
-        if not settings.eval.enabled or previous_recs is None or not previous_generated_at:
+        if replay_failed or not settings.eval.enabled or previous_recs is None or not previous_generated_at:
             return None
         try:
             types = settings.eval.event_types or conversion_event_types(
@@ -270,7 +275,7 @@ def _score_previous_run(
                 event_types=types,
                 history=history,
                 catalog=items,
-                assigned=_replay_assignments(settings, previous_recs, track_rows),
+                assigned=assigned,
             )
             return report.as_dict() if report is not None else None
         except Exception:
@@ -314,7 +319,7 @@ def _read_input(
 
 def _ensure_fence(fence_check: Callable[[], bool] | None) -> None:
     if fence_check is not None and not fence_check():
-        raise LockLostError("retrain lock lost before write")
+        raise LockLostError("retrain lock lost before write", kind="retrain")
 
 
 def _select_thompson_recipes(
@@ -327,16 +332,12 @@ def _select_thompson_recipes(
     experiment = settings.experiment
     store = ExperimentStore(settings.output)
     failed = object()
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        state_f = pool.submit(_try_load, "read experiment state", store.read_state, failed)
-        track_f = pool.submit(
-            _try_load,
-            "read track rows",
-            lambda: TrackStore(settings.output).read_rows(experiment_id=experiment.id),
-            failed,
-        )
-        raw_state = state_f.result()
-        raw_track = track_f.result()
+    raw_state = _try_load("read experiment state", store.read_state, failed)
+    raw_track = _try_load(
+        "read track rows",
+        lambda: TrackStore(settings.output).read_rows(experiment_id=experiment.id),
+        failed,
+    )
     if raw_state is failed or not (raw_state is None or isinstance(raw_state, dict)):
         return ThompsonSelection(recipes)
     previous: dict[str, Any] | None = raw_state
@@ -357,21 +358,16 @@ def _select_thompson_recipes(
     names = [recipe.name for recipe in recipes]
     try:
         conversions = conversion_events_for_settings(events, settings)
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            recs_f = pool.submit(
-                _try_load,
-                "load recommendations for Thompson guardrails",
-                lambda: load_recommendations_frame(settings.output),
-                None,
-            )
-            catalog_f = pool.submit(
-                _try_load,
-                "load catalog size for Thompson guardrails",
-                lambda: load_items_catalog_size(settings.output),
-                None,
-            )
-            recs = recs_f.result()
-            catalog_size = catalog_f.result()
+        recs = _try_load(
+            "load recommendations for Thompson guardrails",
+            lambda: load_recommendations_frame(settings.output),
+            None,
+        )
+        catalog_size = _try_load(
+            "load catalog size for Thompson guardrails",
+            lambda: load_items_catalog_size(settings.output),
+            None,
+        )
         report = evaluate_tracking(
             track_rows=window_rows,
             conversions=conversions,
@@ -442,7 +438,13 @@ def _recommendation_user_count(recommendations: pd.DataFrame) -> int:
 def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None = None) -> None:
     settings = load_settings()
     feature_config = load_feature_config(settings.feature_config_path)
-    sink = build_output_sink(settings.output, writer_lock=build_dataset_writer_lock(settings))
+    sink = build_output_sink(
+        settings.output,
+        writer_lock=build_dataset_writer_lock(settings),
+        fence_check=fence_check,
+        fence_lost="retrain lock lost before write",
+        fence_kind="retrain",
+    )
     publisher = None
 
     manifest = dict(_MANIFEST_DEFAULTS)

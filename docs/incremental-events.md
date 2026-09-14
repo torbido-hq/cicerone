@@ -228,7 +228,9 @@ nacked. Requires the matching extra.
 ## High availability
 
 Default is **one writer process**. Dataset output is whole-object
-read-modify-write — multi-replica serve is only safe with a leader.
+read-modify-write. Multi-replica serve is safe with a postgres or redis
+`lock_backend` (apply / dataset-append lease). `in_process` remains
+single-writer.
 
 A postgres or redis `job.trigger.lock_backend` is enough for serve to take
 the apply lease (`{lock_key}:events:apply`) around write-through (not the

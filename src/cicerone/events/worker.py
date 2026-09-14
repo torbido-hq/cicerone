@@ -592,13 +592,11 @@ class EventWorker:
             self._updater.abort_online()
             self._return_events(ready)
             return 0
-        except LockLostError:
+        except LockLostError as exc:
             record_events_flush(status="error")
-            update_events_leader(False)
-            logger.error(
-                "Apply lease lost before write; nacking %d event(s)",
-                len(ready),
-            )
+            if exc.kind == "apply":
+                update_events_leader(False)
+            logger.error("%s; nacking %d event(s)", exc, len(ready))
             self._updater.abort_online()
             self._return_events(ready)
             return 0
@@ -664,8 +662,8 @@ class EventWorker:
             try:
                 self._updater.persist_online()
                 return
-            except LockLostError:
-                logger.error("Apply lease lost before online persist; dropping pending artifact")
+            except LockLostError as exc:
+                logger.error("%s; dropping pending artifact", exc)
                 self._updater.abort_online()
                 return
             except Exception as exc:
