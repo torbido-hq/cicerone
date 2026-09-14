@@ -625,10 +625,10 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
                 latest=latest,
                 neighbors=neighbors,
             )
+            outputs_written = True
 
             _ensure_fence(fence_check)
             sink.write_recommendations(recommendations)
-            outputs_written = True
             if pending_thompson is not None:
                 ExperimentStore(settings.output).write_state(pending_thompson)
             if publisher is not None:

@@ -15,6 +15,7 @@ NEIGHBOR_ITEM_COLUMN = "neighbor_id"
 POPULAR_FILENAME = "popular.parquet"
 LATEST_FILENAME = "latest.parquet"
 NEIGHBORS_FILENAME = "item_neighbors.parquet"
+DEFAULT_NEIGHBOR_HISTORY_CAP = 200
 SURFACE_COLUMNS: tuple[str, ...] = (ITEM_COLUMN, RANK_COLUMN, SCORE_COLUMN, SOURCE_COLUMN)
 NEIGHBOR_COLUMNS: tuple[str, ...] = (ITEM_COLUMN, NEIGHBOR_ITEM_COLUMN, RANK_COLUMN, SCORE_COLUMN)
 
@@ -75,11 +76,27 @@ def latest_from_items(
     return frame[list(SURFACE_COLUMNS)]
 
 
-def neighbors_from_events(events: pd.DataFrame, k: int) -> pd.DataFrame:
+def neighbors_from_events(
+    events: pd.DataFrame,
+    k: int,
+    *,
+    history_cap: int = DEFAULT_NEIGHBOR_HISTORY_CAP,
+) -> pd.DataFrame:
     """Item-item cosine on binary user overlap (users who interacted with both)."""
     if k < 1 or events.empty or ITEM_COLUMN not in events.columns or "user_id" not in events.columns:
         return empty_neighbors_frame()
-    pairs = events[["user_id", ITEM_COLUMN]].dropna().astype(str).drop_duplicates()
+    columns = ["user_id", ITEM_COLUMN]
+    if "occurred_at" in events.columns:
+        columns.append("occurred_at")
+    pairs = events[columns].dropna(subset=["user_id", ITEM_COLUMN]).copy()
+    pairs["user_id"] = pairs["user_id"].astype(str)
+    pairs[ITEM_COLUMN] = pairs[ITEM_COLUMN].astype(str)
+    if "occurred_at" in pairs.columns:
+        pairs["_at"] = pd.to_datetime(pairs["occurred_at"], errors="coerce", utc=True)
+        pairs = pairs.sort_values("_at", ascending=False, kind="mergesort")
+    pairs = pairs.drop_duplicates(subset=["user_id", ITEM_COLUMN], keep="first")
+    if history_cap >= 1:
+        pairs = pairs.groupby("user_id", sort=False).head(history_cap)
     if pairs.empty:
         return empty_neighbors_frame()
     item_users: dict[str, set[str]] = defaultdict(set)

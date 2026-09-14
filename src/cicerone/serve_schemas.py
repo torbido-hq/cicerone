@@ -177,18 +177,22 @@ class SimilarResponse(SurfaceResponse):
     item_id: str
 
 
+class SessionItem(BaseModel):
+    item_id: str = Field(description="Catalog item id observed in this session")
+
+
 class SessionRecommendRequest(BaseModel):
     items: list[str] = Field(
         default_factory=list,
         max_length=DEFAULT_SERVE_MAX_K,
         description="Item ids in this anonymous session",
     )
-    events: list[InteractionEvent] = Field(
+    events: list[SessionItem] = Field(
         default_factory=list,
         max_length=DEFAULT_SERVE_MAX_K,
-        description="Optional session events; item_id values are used",
+        description="Optional session events; only item_id is used",
     )
 
 
 class SessionRecommendResponse(SurfaceResponse):
-    fallback: bool = Field(description="True when neighbors were empty and popular/latest was used")
+    fallback: bool = Field(description="True when neighbors were empty and popular was used")

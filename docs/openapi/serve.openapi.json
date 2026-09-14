@@ -366,12 +366,26 @@
         "title": "RecommendationsResponse",
         "type": "object"
       },
+      "SessionItem": {
+        "properties": {
+          "item_id": {
+            "description": "Catalog item id observed in this session",
+            "title": "Item Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "item_id"
+        ],
+        "title": "SessionItem",
+        "type": "object"
+      },
       "SessionRecommendRequest": {
         "properties": {
           "events": {
-            "description": "Optional session events; item_id values are used",
+            "description": "Optional session events; only item_id is used",
             "items": {
-              "$ref": "#/components/schemas/InteractionEvent"
+              "$ref": "#/components/schemas/SessionItem"
             },
             "maxItems": 100,
             "title": "Events",
@@ -393,7 +407,7 @@
       "SessionRecommendResponse": {
         "properties": {
           "fallback": {
-            "description": "True when neighbors were empty and popular/latest was used",
+            "description": "True when neighbors were empty and popular was used",
             "title": "Fallback",
             "type": "boolean"
           },
@@ -1471,6 +1485,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Session has no item ids"
           },
           "404": {
             "content": {

@@ -425,9 +425,17 @@ class DatabaseOutputSink:
                 neighbors,
             ),
         )
+        neighbors_table = tables[2][0]
         with self._engine.begin() as conn:
             for table, frame in tables:
                 logger.info("Writing %d surface rows to database table %r", len(frame), table)
                 _clear_table_for_replace(conn, table)
                 if not frame.empty:
                     frame.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
+                    if table == neighbors_table:
+                        conn.execute(
+                            text(
+                                f'CREATE INDEX IF NOT EXISTS "{table}_item_rank_idx" '
+                                f'ON "{table}" ("item_id", "rank")'
+                            )
+                        )

@@ -35,6 +35,19 @@ def test_latest_from_items_uses_published_at():
     assert frame.iloc[0]["source"] == LATEST_SOURCE
 
 
+def test_neighbors_from_events_caps_per_user_history():
+    events = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": f"i{n}", "occurred_at": f"2026-09-01T00:{n:02d}:00Z"}
+            for n in range(30)
+        ]
+        + [{"user_id": "u2", "item_id": "i0"}, {"user_id": "u2", "item_id": "i1"}]
+    )
+    frame = neighbors_from_events(events, 3, history_cap=4)
+    assert set(frame["item_id"]) <= {"i0", "i1", "i26", "i27", "i28", "i29"}
+    assert frame.groupby("item_id").size().max() <= 3
+
+
 def test_neighbors_from_events_scores_shared_users():
     events = pd.DataFrame(
         [

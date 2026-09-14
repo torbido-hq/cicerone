@@ -179,7 +179,10 @@ def mount_surface_routes(
         dependencies=dependencies,
         tags=["recommendations"],
         summary="Recommend from an anonymous session via item neighbors",
-        responses={404: {"model": ErrorDetail, "description": "No session neighbors or popular fallback"}},
+        responses={
+            400: {"model": ErrorDetail, "description": "Session has no item ids"},
+            404: {"model": ErrorDetail, "description": "No session neighbors or popular fallback"},
+        },
     )
     def post_session(body: SessionRecommendRequest) -> SessionRecommendResponse:
         session_ids = [str(item_id) for item_id in body.items if str(item_id).strip()]
@@ -200,16 +203,19 @@ def mount_surface_routes(
             if not neighbors.empty:
                 parts.append(neighbors)
         used_fallback = False
+        merged = pd.DataFrame()
         if parts:
             merged = pd.concat(parts, ignore_index=True)
             if SCORE_COLUMN in merged.columns:
                 merged = merged.sort_values(SCORE_COLUMN, ascending=False, kind="mergesort")
             merged = merged.drop_duplicates(subset=[ITEM_COLUMN], keep="first")
-        else:
+            merged = _filter_surface(merged, category=None, exclude_unavailable=True)
+            merged = drop_consumed(merged, set(session_ids)).head(top_k)
+        if merged.empty:
             used_fallback = True
             merged = surfaces.get_popular(fetch_k)
-        merged = _filter_surface(merged, category=None, exclude_unavailable=True)
-        merged = drop_consumed(merged, set(session_ids)).head(top_k)
+            merged = _filter_surface(merged, category=None, exclude_unavailable=True)
+            merged = drop_consumed(merged, set(session_ids)).head(top_k)
         if merged.empty:
             raise HTTPException(status_code=404, detail="No session recommendations")
         return SessionRecommendResponse(
