@@ -152,6 +152,8 @@ class EventWorker:
         if joined and started:
             with self._source_guard:
                 self._close_source()
+        elif not joined:
+            self._close_source()
         elif self._source_guard.acquire(blocking=False):
             try:
                 self._close_source()

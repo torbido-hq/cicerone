@@ -25,6 +25,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Kafka `timeout_seconds` below 10 ms raises `ConfigError` (librdkafka `socket.timeout.ms`).
 - A timed-out RabbitMQ I/O call queued during the idle pump is not executed.
 - Event worker stop closes the source even when the worker thread misses its join deadline.
+- Event worker stop interrupts a hung source without taking the reconnect lock.
 - The event worker reconnects when the source reports disconnected after a broker timeout.
 - Event worker stop closes a reconnect that finishes after shutdown.
 - Event worker stop does not wait on a reconnect that is still opening a broker connection.

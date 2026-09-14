@@ -206,10 +206,14 @@ def test_event_worker_stop_returns_false_when_join_times_out(tmp_path, feature_c
     assert worker._thread is not None
     worker._thread.join = lambda timeout=None: None  # type: ignore[method-assign]
     worker._thread.is_alive = lambda: True  # type: ignore[method-assign]
-    with caplog.at_level(logging.WARNING):
-        assert worker.stop(join_timeout_seconds=0.01) is False
-    assert any("still alive" in record.getMessage() for record in caplog.records)
-    assert closed["n"] == 1
+    assert worker._source_guard.acquire(blocking=False)
+    try:
+        with caplog.at_level(logging.WARNING):
+            assert worker.stop(join_timeout_seconds=0.01) is False
+        assert any("still alive" in record.getMessage() for record in caplog.records)
+        assert closed["n"] == 1
+    finally:
+        worker._source_guard.release()
     worker._stop.set()
 
 
