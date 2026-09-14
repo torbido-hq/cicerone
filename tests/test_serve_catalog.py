@@ -98,3 +98,36 @@ def test_catalog_events_update_consumed_overlay(tmp_path):
     )
     assert response.json()["accepted"] == 1
     assert overlay.item_ids("u1") == {"i9"}
+
+
+def test_catalog_events_reject_blank_event_type(tmp_path):
+    store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
+    response = TestClient(create_app(_settings(), _FakeReader(_recs_df()), catalog=store)).post(
+        "/catalog/events",
+        json={
+            "events": [
+                {
+                    "user_id": "u1",
+                    "item_id": "i1",
+                    "event_type": "   ",
+                    "occurred_at": "2026-09-11T12:00:00Z",
+                }
+            ]
+        },
+        headers={"Authorization": "Bearer secret"},
+    )
+    assert response.status_code == 400
+
+
+def test_catalog_delete_clears_consumed_overlay(tmp_path):
+    store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
+    overlay = ConsumedOverlay()
+    overlay.add("u1", "i9")
+    overlay.add("u1", "i2")
+    app = create_app(_settings(), _FakeReader(_recs_df()), catalog=store, consumed=overlay)
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer secret"}
+    client.delete("/catalog/events/u1?item_id=i9", headers=headers)
+    assert overlay.item_ids("u1") == {"i2"}
+    client.delete("/users/u1", headers=headers)
+    assert overlay.item_ids("u1") == set()

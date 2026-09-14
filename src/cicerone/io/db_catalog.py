@@ -6,7 +6,7 @@ import logging
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import bindparam, create_engine, inspect, text
+from sqlalchemy import create_engine, inspect, text
 
 from cicerone.io.catalog import (
     EVENT_ID_COLUMN,
@@ -60,14 +60,61 @@ class DatabaseCatalogStore:
             return 0
         return int(result.rowcount or 0)
 
+    def _table_columns(self, table: str) -> list[str] | None:
+        if not self._table_exists(table):
+            return None
+        return [column["name"] for column in inspect(self._engine).get_columns(table)]
+
+    def _align_frame(self, table: str, frame: pd.DataFrame) -> pd.DataFrame:
+        columns = self._table_columns(table)
+        if columns is None:
+            return frame
+        keep = [name for name in frame.columns if name in columns]
+        return frame.loc[:, keep]
+
+    def _ensure_unique(self, conn, table: str, key: str) -> bool:
+        index = f"catalog_{table}_{key}_uidx"
+        try:
+            conn.execute(text(f'CREATE UNIQUE INDEX IF NOT EXISTS "{index}" ON "{table}" ("{key}")'))
+        except Exception:
+            logger.exception("Failed to ensure unique index on %s.%s", table, key)
+            return False
+        return True
+
+    def _upsert_frame(self, conn, table: str, key: str, frame: pd.DataFrame) -> None:
+        aligned = self._align_frame(table, frame)
+        if aligned.empty:
+            return
+        if self._table_columns(table) is None:
+            aligned.to_sql(table, conn, if_exists="append", index=False)
+            if key in aligned.columns:
+                self._ensure_unique(conn, table, key)
+            return
+        if key not in aligned.columns or not self._ensure_unique(conn, table, key):
+            if key in aligned.columns:
+                for value in aligned[key].astype(str).tolist():
+                    self._delete_id(conn, table, key, value)
+            aligned.to_sql(table, conn, if_exists="append", index=False)
+            return
+        columns = list(aligned.columns)
+        cols = ", ".join(f'"{name}"' for name in columns)
+        placeholders = ", ".join(f":{name}" for name in columns)
+        updates = ", ".join(f'"{name}" = EXCLUDED."{name}"' for name in columns if name != key)
+        sql = f'INSERT INTO "{table}" ({cols}) VALUES ({placeholders})'
+        sql += (
+            f' ON CONFLICT ("{key}") DO UPDATE SET {updates}'
+            if updates
+            else f' ON CONFLICT ("{key}") DO NOTHING'
+        )
+        conn.execute(text(sql), aligned.to_dict(orient="records"))
+
     def upsert_user(self, row: dict[str, Any]) -> None:
         user_id = require_id(row, USER_COLUMN)
         payload = dict(row)
         payload[USER_COLUMN] = user_id
         frame = pd.DataFrame([payload])
         with self._engine.begin() as conn:
-            self._delete_id(conn, self._users, USER_COLUMN, user_id)
-            frame.to_sql(self._users, conn, if_exists="append", index=False)
+            self._upsert_frame(conn, self._users, USER_COLUMN, frame)
 
     def get_user(self, user_id: str) -> dict[str, Any] | None:
         return user_row_or_none(self._read_id(self._users, USER_COLUMN, user_id), user_id)
@@ -84,8 +131,7 @@ class DatabaseCatalogStore:
         payload[ITEM_COLUMN] = item_id
         frame = pd.DataFrame([payload])
         with self._engine.begin() as conn:
-            self._delete_id(conn, self._items, ITEM_COLUMN, item_id)
-            frame.to_sql(self._items, conn, if_exists="append", index=False)
+            self._upsert_frame(conn, self._items, ITEM_COLUMN, frame)
 
     def get_item(self, item_id: str) -> dict[str, Any] | None:
         return item_row_or_none(self._read_id(self._items, ITEM_COLUMN, item_id), item_id)
@@ -100,21 +146,7 @@ class DatabaseCatalogStore:
         incoming = [normalize_event_row(row) for row in rows]
         frame = pd.DataFrame(incoming)
         with self._engine.begin() as conn:
-            if EVENT_ID_COLUMN in frame.columns:
-                ids = [str(value) for value in frame[EVENT_ID_COLUMN].tolist() if value not in (None, "")]
-                if ids:
-                    savepoint = conn.begin_nested()
-                    try:
-                        conn.execute(
-                            text(
-                                f'DELETE FROM "{self._events}" WHERE "{EVENT_ID_COLUMN}" IN :ids'
-                            ).bindparams(bindparam("ids", expanding=True)),
-                            {"ids": ids},
-                        )
-                        savepoint.commit()
-                    except MISSING_TABLE_ERRORS:
-                        savepoint.rollback()
-            frame.to_sql(self._events, conn, if_exists="append", index=False)
+            self._upsert_frame(conn, self._events, EVENT_ID_COLUMN, frame)
         return int(len(frame))
 
     def get_events_for_user(self, user_id: str, limit: int) -> pd.DataFrame:

@@ -61,6 +61,50 @@ def test_database_catalog_crud_round_trip():
     assert store.get_user("u1") is None
 
 
+def test_database_catalog_projects_to_existing_event_columns():
+    engine = create_engine(TEST_DATABASE_URL)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                'CREATE TABLE "events" ('
+                '"user_id" TEXT, "item_id" TEXT, "event_type" TEXT, '
+                '"occurred_at" TIMESTAMPTZ, "quantity" INTEGER)'
+            )
+        )
+    engine.dispose()
+    store = DatabaseCatalogStore({"database_url": TEST_DATABASE_URL})
+    assert (
+        store.upsert_events(
+            [
+                {
+                    "user_id": "u1",
+                    "item_id": "i1",
+                    "event_type": "purchase",
+                    "occurred_at": "2026-09-11T12:00:00Z",
+                    "event_id": "e1",
+                    "idempotency_key": "e1",
+                }
+            ]
+        )
+        == 1
+    )
+    events = store.get_events_for_user("u1", 10)
+    assert list(events["item_id"]) == ["i1"]
+    assert "event_id" not in events.columns
+
+
+def test_database_catalog_user_upsert_replaces_one_row():
+    store = DatabaseCatalogStore({"database_url": TEST_DATABASE_URL})
+    store.upsert_user({"user_id": "u1", "comment": "alice"})
+    store.upsert_user({"user_id": "u1", "comment": "updated"})
+    engine = create_engine(TEST_DATABASE_URL)
+    with engine.begin() as conn:
+        count = conn.execute(text('SELECT COUNT(*) FROM "users"')).scalar_one()
+    engine.dispose()
+    assert count == 1
+    assert store.get_user("u1")["comment"] == "updated"
+
+
 def test_database_catalog_missing_tables_are_empty():
     store = DatabaseCatalogStore({"database_url": TEST_DATABASE_URL})
     assert store.get_user("u1") is None

@@ -98,3 +98,14 @@ def test_build_catalog_store_db():
 def test_build_catalog_store_unknown_kind_returns_none():
     settings = IOSettings(kind="carrier-pigeon", options={})
     assert build_catalog_store(settings) is None
+
+
+def test_build_catalog_store_query_backed_db_returns_none():
+    settings = IOSettings(
+        kind="db",
+        options={
+            "database_url": "postgresql+psycopg://u:p@h/d",
+            "events_query": "SELECT * FROM analytics_events",
+        },
+    )
+    assert build_catalog_store(settings) is None

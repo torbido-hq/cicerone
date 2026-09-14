@@ -10,8 +10,9 @@ from pydantic import BaseModel, Field
 
 from cicerone.config import Settings
 from cicerone.events.consumed import ConsumedOverlay
+from cicerone.events.normalize import EventNormalizeError
 from cicerone.http_auth import optional_bearer_deps
-from cicerone.io.catalog import CatalogStore, jsonable_row, require_id
+from cicerone.io.catalog import CatalogStore, jsonable_row, normalize_event_row
 from cicerone.io.recommendation_schema import ITEM_COLUMN, USER_COLUMN
 from cicerone.serve_schemas import (
     CatalogEventsResponse,
@@ -72,6 +73,11 @@ def mount_catalog_routes(
             )
         return catalog
 
+    def _forget_consumed(user_id: str, item_id: str | None = None) -> None:
+        if overlay is None:
+            return
+        overlay.discard(user_id, item_id)
+
     @app.put(
         USERS_PATH,
         response_model=CatalogWriteResponse,
@@ -108,7 +114,9 @@ def mount_catalog_routes(
         responses={501: {"model": ErrorDetail}},
     )
     def delete_user(user_id: str) -> CatalogWriteResponse:
-        return CatalogWriteResponse(accepted=_require().delete_user(user_id))
+        accepted = _require().delete_user(user_id)
+        _forget_consumed(user_id)
+        return CatalogWriteResponse(accepted=accepted)
 
     @app.put(
         ITEMS_PATH,
@@ -158,12 +166,9 @@ def mount_catalog_routes(
     )
     def post_catalog_events(body: CatalogEventsBody) -> CatalogWriteResponse:
         store = _require()
-        rows = [event.model_dump() for event in body.events]
         try:
-            for row in rows:
-                require_id(row, USER_COLUMN)
-                require_id(row, ITEM_COLUMN)
-        except ValueError as exc:
+            rows = [normalize_event_row(event.model_dump()) for event in body.events]
+        except (ValueError, EventNormalizeError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         accepted = store.upsert_events(rows)
         if overlay is not None:
@@ -198,4 +203,6 @@ def mount_catalog_routes(
         user_id: str,
         item_id: str | None = Query(default=None),
     ) -> CatalogWriteResponse:
-        return CatalogWriteResponse(accepted=_require().delete_events_for_user(user_id, item_id=item_id))
+        accepted = _require().delete_events_for_user(user_id, item_id=item_id)
+        _forget_consumed(user_id, item_id)
+        return CatalogWriteResponse(accepted=accepted)
