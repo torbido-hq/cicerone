@@ -51,6 +51,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - RabbitMQ ack does not resolve tags from a connection that was replaced.
 - Event worker stop returns false when the initial connect still holds the source lock.
 - Event worker health probes run under the tick lock so stop cannot close during health.
+- RabbitMQ nack ignores an event whose I/O handle was replaced after poll.
+- Event worker start does not clear a stop that already finished before connect.
 
 ## [0.8.1] - 2026-09-11
 

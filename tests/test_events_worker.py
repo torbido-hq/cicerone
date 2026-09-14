@@ -478,6 +478,63 @@ def test_event_worker_stop_closes_reconnect_in_progress(tmp_path, feature_config
     assert closes["n"] >= 1
 
 
+def test_event_worker_start_does_not_revive_after_completed_stop(tmp_path, feature_config: FeatureConfig):
+    import threading
+
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    inner = threading.Lock()
+    started = threading.Event()
+    release = threading.Event()
+    starter_thread: list[threading.Thread] = []
+
+    class _GateLock:
+        def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+            if starter_thread and threading.current_thread() is starter_thread[0]:
+                started.set()
+                release.wait(timeout=2)
+            return inner.acquire(blocking, timeout)
+
+        def release(self) -> None:
+            inner.release()
+
+        def __enter__(self) -> _GateLock:
+            self.acquire()
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            self.release()
+
+    worker = EventWorker(
+        WebhookEventSource({}),
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+        poll_interval_seconds=0.01,
+    )
+    worker._source_guard = _GateLock()  # type: ignore[assignment]
+
+    def _start() -> None:
+        starter_thread.append(threading.current_thread())
+        worker.start()
+
+    starter = threading.Thread(target=_start)
+    starter.start()
+    assert started.wait(timeout=2)
+    assert worker.stop(join_timeout_seconds=0.05) is True
+    release.set()
+    starter.join(timeout=2)
+    assert worker._thread is None or worker._thread.is_alive() is False
+    worker.start()
+    assert worker._thread is not None and worker._thread.is_alive()
+    assert worker.stop(join_timeout_seconds=2.0) is True
+
+
 def test_event_worker_start_aborts_if_stopped_during_connect(tmp_path, feature_config: FeatureConfig):
     import threading
     import time

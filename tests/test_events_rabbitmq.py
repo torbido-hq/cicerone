@@ -1069,6 +1069,24 @@ def test_poll_stops_getting_after_io_replaced(monkeypatch):
     source.close()
 
 
+def test_nack_ignores_event_after_io_replaced(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.enqueue("cicerone.events", event_payload(event_id="e1"))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    first = list(source.poll(1))
+    assert [event.event_id for event in first] == ["e1"]
+    source.connect()
+    broker.enqueue("cicerone.events", event_payload(event_id="e1"))
+    second = list(source.poll(1))
+    assert [event.event_id for event in second] == ["e1"]
+    new_tag = source._delivery_tags["e1"]
+    source.nack(first)
+    assert first[0].event_id not in source._pending_ids
+    assert source._delivery_tags.get("e1") == new_tag
+    source.close()
+
+
 def test_ack_skips_when_io_replaced_before_resolve(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     broker.enqueue("cicerone.events", event_payload(event_id="e1"))

@@ -231,6 +231,7 @@ class RabbitMQEventSource(EventSource):
         self._in_flight: set[str] = set()
         self._delivery_tags: dict[str, int] = {}
         self._held_tags: set[int] = set()
+        self._event_io: dict[int, _PikaIo] = {}
         self._last_event_at: datetime | None = None
 
     def connect(self) -> None:
@@ -260,6 +261,7 @@ class RabbitMQEventSource(EventSource):
             self._in_flight.clear()
             self._delivery_tags.clear()
             self._held_tags.clear()
+            self._event_io.clear()
         if previous_io is not None:
             _release_io(previous_io, previous_channel, previous_connection)
 
@@ -277,6 +279,7 @@ class RabbitMQEventSource(EventSource):
             self._in_flight.clear()
             self._delivery_tags.clear()
             self._held_tags.clear()
+            self._event_io.clear()
         if io is None:
             return
         _release_io(io, channel, connection)
@@ -327,6 +330,8 @@ class RabbitMQEventSource(EventSource):
             ]
             if out:
                 self._last_event_at = max(event.occurred_at for event in out)
+            for event in out:
+                self._event_io[id(event)] = io
         return out
 
     def ack(self, event_ids: Sequence[str]) -> None:
@@ -361,6 +366,8 @@ class RabbitMQEventSource(EventSource):
             return
         with self._lock:
             for event in reversed(list(events)):
+                if self._event_io.get(id(event)) is not self._io:
+                    continue
                 if event.event_id not in self._delivery_tags:
                     continue
                 self._in_flight.discard(event.event_id)

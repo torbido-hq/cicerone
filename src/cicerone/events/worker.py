@@ -114,34 +114,39 @@ class EventWorker:
         self._tick_guard = threading.Lock()
         self._finalized = False
         self._source_unhealthy = False
+        self._stop_epoch = 0
         self._thread: threading.Thread | None = None
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
             return
+        epoch = self._stop_epoch
         with self._source_guard:
             if self._thread is not None and self._thread.is_alive():
+                return
+            if self._stop_epoch != epoch:
                 return
             self._stop.clear()
             self._finalized = False
             try:
                 self._source.connect()
             except Exception:
-                if self._stop.is_set():
+                if self._stop.is_set() or self._stop_epoch != epoch:
                     self._drain_and_close()
                 raise
-            if self._stop.is_set():
+            if self._stop.is_set() or self._stop_epoch != epoch:
                 self._drain_and_close()
                 return
             self._thread = threading.Thread(target=self._loop, name="cicerone-events", daemon=True)
             self._thread.start()
-        if self._stop.is_set():
+        if self._stop.is_set() or self._stop_epoch != epoch:
             with self._source_guard:
                 self._drain_and_close()
             return
 
     def stop(self, *, join_timeout_seconds: float = 5.0) -> bool:
         self._stop.set()
+        self._stop_epoch += 1
         thread = self._thread
         started = thread is not None
         joined = True
