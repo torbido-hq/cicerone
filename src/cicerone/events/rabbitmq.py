@@ -318,9 +318,7 @@ class RabbitMQEventSource(EventSource):
             remaining -= 1
 
         with self._lock:
-            out = [
-                event for event, tag in claimed if self._delivery_tags.get(event.event_id) == tag
-            ]
+            out = [event for event, tag in claimed if self._delivery_tags.get(event.event_id) == tag]
             if out:
                 self._last_event_at = max(event.occurred_at for event in out)
         return out
