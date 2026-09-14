@@ -47,7 +47,7 @@ class CatalogItemBody(BaseModel):
 
 
 class CatalogEventsBody(BaseModel):
-    events: list[InteractionEvent] = Field(min_length=1)
+    events: list[InteractionEvent] = Field(min_length=1, max_length=1000)
 
 
 def _row_payload(path_id: str, key: str, body: BaseModel) -> dict[str, Any]:

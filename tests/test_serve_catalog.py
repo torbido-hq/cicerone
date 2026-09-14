@@ -100,6 +100,26 @@ def test_catalog_events_update_consumed_overlay(tmp_path):
     assert overlay.item_ids("u1") == {"i9"}
 
 
+def test_catalog_events_reject_oversized_batch(tmp_path):
+    store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
+    response = TestClient(create_app(_settings(), _FakeReader(_recs_df()), catalog=store)).post(
+        "/catalog/events",
+        json={
+            "events": [
+                {
+                    "user_id": "u1",
+                    "item_id": f"i{n}",
+                    "event_type": "view",
+                    "occurred_at": "2026-09-11T12:00:00Z",
+                }
+                for n in range(1001)
+            ]
+        },
+        headers={"Authorization": "Bearer secret"},
+    )
+    assert response.status_code == 422
+
+
 def test_catalog_events_reject_blank_event_type(tmp_path):
     store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
     response = TestClient(create_app(_settings(), _FakeReader(_recs_df()), catalog=store)).post(

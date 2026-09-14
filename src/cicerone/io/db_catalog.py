@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -65,6 +66,16 @@ class DatabaseCatalogStore:
             return None
         return [column["name"] for column in inspect(self._engine).get_columns(table)]
 
+    @staticmethod
+    def _sql_ready(row: dict[str, Any]) -> dict[str, Any]:
+        ready: dict[str, Any] = {}
+        for key, value in row.items():
+            if isinstance(value, (dict, list)):
+                ready[key] = json.dumps(value)
+            else:
+                ready[key] = value
+        return ready
+
     def _align_frame(self, table: str, frame: pd.DataFrame) -> pd.DataFrame:
         columns = self._table_columns(table)
         if columns is None:
@@ -110,7 +121,7 @@ class DatabaseCatalogStore:
 
     def upsert_user(self, row: dict[str, Any]) -> None:
         user_id = require_id(row, USER_COLUMN)
-        payload = dict(row)
+        payload = self._sql_ready(row)
         payload[USER_COLUMN] = user_id
         frame = pd.DataFrame([payload])
         with self._engine.begin() as conn:
@@ -127,7 +138,7 @@ class DatabaseCatalogStore:
 
     def upsert_item(self, row: dict[str, Any]) -> None:
         item_id = require_id(row, ITEM_COLUMN)
-        payload = dict(row)
+        payload = self._sql_ready(row)
         payload[ITEM_COLUMN] = item_id
         frame = pd.DataFrame([payload])
         with self._engine.begin() as conn:
