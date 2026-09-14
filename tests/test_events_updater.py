@@ -649,6 +649,34 @@ def test_incremental_updater_preserves_untouched_via_scoped_write(tmp_path, feat
     assert "i9" in set(frame[frame["user_id"] == "u1"]["item_id"].astype(str))
 
 
+def test_incremental_updater_reloads_users_under_fence(tmp_path, feature_config):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        fence_check=lambda: True,
+    )
+    assert updater.apply([normalize_event(event_payload(user_id="u1", item_id="i9", event_id="e1"))]) == 1
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "job", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    assert updater.apply([normalize_event(event_payload(user_id="u1", item_id="i8", event_id="e2"))]) == 1
+    frame = load_recommendations_frame(settings.output)
+    items = set(frame[frame["user_id"] == "u1"]["item_id"].astype(str))
+    assert "job" in items
+    assert "old" not in items
+
+
 def test_incremental_updater_user_cache_lru_evicts(tmp_path, feature_config):
     out = tmp_path / "out"
     out.mkdir()

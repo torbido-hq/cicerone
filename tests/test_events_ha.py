@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from typing import Any
@@ -419,7 +420,7 @@ def test_start_events_runtime_wires_apply_lock(tmp_path, feature_config: Feature
 
 
 def test_start_events_runtime_wires_apply_lock_without_ha(
-    tmp_path, feature_config: FeatureConfig, monkeypatch
+    tmp_path, feature_config: FeatureConfig, monkeypatch, caplog
 ):
     out, _settings = _seed_out(tmp_path)
     apply_fake = SharedLock()
@@ -448,20 +449,25 @@ def test_start_events_runtime_wires_apply_lock_without_ha(
         def refresh(self) -> None:
             return None
 
-    runtime = start_events_runtime(
-        make_settings(
-            output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
-            trigger_lock_backend="redis",
-            trigger_redis_url="redis://localhost:6379/0",
-            events=EventsSettings(enabled=True, kind="webhook", ha=False),
-        ),
-        feature_config=feature_config,
-        reader=_Reader(),  # type: ignore[arg-type]
-    )
+    with caplog.at_level(logging.INFO, logger="cicerone.serve.bootstrap_events"):
+        runtime = start_events_runtime(
+            make_settings(
+                output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+                trigger_lock_backend="redis",
+                trigger_redis_url="redis://localhost:6379/0",
+                events=EventsSettings(enabled=True, kind="webhook", ha=False),
+            ),
+            feature_config=feature_config,
+            reader=_Reader(),  # type: ignore[arg-type]
+        )
     assert runtime.apply_lock is apply_fake
     assert runtime.worker is not None
     assert runtime.worker._apply_lock is apply_fake
     assert runtime.worker._updater._sink._writer_lock is writer_fake
+    messages = [record.getMessage() for record in caplog.records]
+    started = [message for message in messages if "Event worker started" in message]
+    assert started
+    assert ", ha=False)" in started[0]
     runtime.stop()
 
 

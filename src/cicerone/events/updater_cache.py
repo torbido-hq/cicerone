@@ -43,6 +43,10 @@ class UpdaterUserCache:
             user_id: group.reset_index(drop=True) for user_id, group in keyed.groupby(USER_COLUMN, sort=False)
         }
 
+    def _evict_users(self, user_ids: Collection[str]) -> None:
+        for user_id in user_ids:
+            self._cached_by_user.pop(user_id, None)
+
     def _load_users(self, user_ids: set[str]) -> pd.DataFrame:
         missing = sorted(user_id for user_id in user_ids if user_id not in self._cached_by_user)
         if missing:

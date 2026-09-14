@@ -131,6 +131,8 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         weights = self._row_signal_weights(batch)
         affected_users = sorted(set(batch[USER_COLUMN].astype(str)))
         affected_set = set(affected_users) | {COLD_START_USER_ID}
+        if self._fence_check is not None:
+            self._evict_users(affected_set)
         existing = self._load_users(affected_set)
 
         if USER_COLUMN in existing.columns and not existing.empty:

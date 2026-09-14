@@ -119,9 +119,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Dataset recommendation writes and user-replace share one host lock;
   JSONL track/exposure appends do the same. A distributed lock serializes
   those writers when `lock_backend` is postgres or redis.
-- Dashboard lookup keeps in-memory SQLite history on the request thread.
+- Dashboard lookup keeps recommendation and history reads on the request
+  thread so in-memory SQLite does not miss rows.
 - `cicerone_events_leader` reports apply-lease ownership, not HA-only.
 - Local dataset file locks serialize in-process writers when `fcntl` is missing.
+- Incremental apply reloads cached users under the lease so another
+  replica's write is not overwritten.
 
 
 ## [0.8.1] - 2026-09-11

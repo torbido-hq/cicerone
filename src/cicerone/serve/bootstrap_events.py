@@ -234,7 +234,7 @@ def start_events_runtime(
             settings.events.incremental.batch_size,
             settings.events.incremental.batch_window_seconds,
             settings.events.incremental.poll_interval_seconds,
-            apply_lock is not None,
+            settings.events.ha,
         )
         if apply_lock is None:
             logger.warning(

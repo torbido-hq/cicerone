@@ -288,6 +288,20 @@ def test_lookup_inspector_skips_history_when_recommendations_unavailable():
     assert result["events"] == []
 
 
+def test_lookup_inspector_keeps_recommendation_lookup_on_caller_thread():
+    import threading
+
+    seen: dict[str, threading.Thread] = {}
+
+    class _ThreadReader(_KReader):
+        def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame:
+            seen["thread"] = threading.current_thread()
+            return super().get_recommendations(user_id, k, variant=variant)
+
+    lookup_inspector(make_settings(dashboard_enabled=True), _ThreadReader(), None, "u1")
+    assert seen["thread"] is threading.current_thread()
+
+
 def test_lookup_inspector_memory_sqlite_history_stays_on_caller_thread():
     from sqlalchemy import text
 
