@@ -105,6 +105,27 @@ def test_database_catalog_user_upsert_replaces_one_row():
     assert store.get_user("u1")["comment"] == "updated"
 
 
+def test_database_catalog_user_projects_and_serializes_labels():
+    engine = create_engine(TEST_DATABASE_URL)
+    with engine.begin() as conn:
+        conn.execute(text('CREATE TABLE "users" ("user_id" TEXT, "comment" TEXT)'))
+    engine.dispose()
+    store = DatabaseCatalogStore({"database_url": TEST_DATABASE_URL})
+    store.upsert_user({"user_id": "u1", "comment": "alice", "labels": {"vip": True}})
+    user = store.get_user("u1")
+    assert user is not None
+    assert user["comment"] == "alice"
+    assert "labels" not in user
+
+
+def test_database_catalog_item_serializes_categories():
+    store = DatabaseCatalogStore({"database_url": TEST_DATABASE_URL})
+    store.upsert_item({"item_id": "i1", "categories": ["beer", "ipa"]})
+    item = store.get_item("i1")
+    assert item is not None
+    assert item["categories"] == '["beer", "ipa"]'
+
+
 def test_database_catalog_missing_tables_are_empty():
     store = DatabaseCatalogStore({"database_url": TEST_DATABASE_URL})
     assert store.get_user("u1") is None
