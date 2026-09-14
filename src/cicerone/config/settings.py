@@ -25,6 +25,7 @@ from cicerone.config.constants import (
     DEFAULT_EXPLAIN_MAX_SIMILAR_ITEMS,
     DEFAULT_LOCK_KEY,
     DEFAULT_LOCK_TTL_SECONDS,
+    DEFAULT_SERVE_CONSUMED_LOOKBACK,
     DEFAULT_THOMPSON_EXPLORE_TRAFFIC,
     DEFAULT_THOMPSON_ROTATE_MIN_PROB,
     DEFAULT_TRACK_ATTRIBUTION_WINDOW_HOURS,
@@ -59,6 +60,9 @@ class ServeSettings:
     metrics_enabled: bool = False
     metrics_token: str | None = None
     log_impressions: bool = False
+    exclude_consumed: bool = True
+    fallback_fill: bool = True
+    consumed_lookback: int = DEFAULT_SERVE_CONSUMED_LOOKBACK
 
 
 @dataclass(frozen=True)
@@ -260,6 +264,18 @@ class Settings:
     @property
     def serve_metrics_token(self) -> str | None:
         return self.serve.metrics_token
+
+    @property
+    def serve_exclude_consumed(self) -> bool:
+        return self.serve.exclude_consumed
+
+    @property
+    def serve_fallback_fill(self) -> bool:
+        return self.serve.fallback_fill
+
+    @property
+    def serve_consumed_lookback(self) -> int:
+        return self.serve.consumed_lookback
 
     @property
     def trigger_enabled(self) -> bool:

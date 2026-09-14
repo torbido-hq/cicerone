@@ -23,6 +23,7 @@ from cicerone.config.constants import (
     DEFAULT_LOCK_TTL_SECONDS,
     DEFAULT_MAX_WORKERS,
     DEFAULT_SEQUENTIAL_MIN_MEDIAN_INTERACTIONS,
+    DEFAULT_SERVE_CONSUMED_LOOKBACK,
     DEFAULT_SERVE_MAX_K,
     LOCK_BACKENDS,
     MODES,
@@ -71,6 +72,9 @@ _SERVE_FLAT_KEYS = (
     ("serve_metrics_enabled", "metrics_enabled"),
     ("serve_metrics_token", "metrics_token"),
     ("serve_log_impressions", "log_impressions"),
+    ("serve_exclude_consumed", "exclude_consumed"),
+    ("serve_fallback_fill", "fallback_fill"),
+    ("serve_consumed_lookback", "consumed_lookback"),
 )
 _TRIGGER_FLAT_KEYS = (
     ("trigger_enabled", "enabled"),
@@ -597,6 +601,12 @@ def load_settings(config_path: str | None = None) -> Settings:
             metrics_enabled=serve_metrics_enabled,
             metrics_token=serve_metrics_token,
             log_impressions=bool(serve_raw.get("log_impressions", False)),
+            exclude_consumed=bool(serve_raw.get("exclude_consumed", True)),
+            fallback_fill=bool(serve_raw.get("fallback_fill", True)),
+            consumed_lookback=require_positive_int(
+                int(serve_raw.get("consumed_lookback", DEFAULT_SERVE_CONSUMED_LOOKBACK)),
+                name="serve.consumed_lookback",
+            ),
         ),
         trigger=TriggerSettings(
             enabled=trigger_enabled,

@@ -53,6 +53,7 @@ clicks, CTR, and conversion, see [evaluation.md](evaluation.md).
 | `serve/` | Serve mode package: FastAPI read API over precomputed recommendations |
 | `serve/app.py` | Routes, middleware, refresh loop (`cicerone serve`) |
 | `serve/item_filters.py` | Category / availability snapshot cache for serve requests |
+| `serve/consumed.py` | Serve-time hide of items in `[input]` / process-local incremental overlay |
 | `serve/events_routes.py` | Optional `POST /events` webhook mount when `[events]` webhook is enabled |
 | `serve/bootstrap_events.py` | Start/stop the serve-process event worker (micro-batch → write-through) |
 | `serve/metrics.py` | Prometheus metric objects + helpers (default in-process registry) |
@@ -235,7 +236,8 @@ Test modules mirror the packages (same pattern as `tests/test_io_*.py`):
    `OutputSink`. When items were loaded, it also writes an items snapshot
    (`items_snapshot.parquet` / `recommendation_items`) so serve mode can
    apply `?category=` and `exclude_unavailable` without reading the input
-   store. When `Settings.save_model_artifact` is true, it also writes
+   store. Consumed-item hide (`[serve].exclude_consumed`) still reads
+   `[input]` history. When `Settings.save_model_artifact` is true, it also writes
    a versioned fitted-model artifact (`model.artifact` for the dataset
    backend, `model_artifacts` table for db) via
    `OutputSink.write_model_artifact`. The request path never loads this

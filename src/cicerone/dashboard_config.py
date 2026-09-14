@@ -136,6 +136,18 @@ HINTS: dict[str, dict[str, str]] = {
     "serve.enabled": {"text": "Whether this config starts the serve API."},
     "serve.auth_token": {"text": "Bearer token for GET /recommendations. Shown redacted."},
     "serve.default_k": {"text": "Default number of rows when the client omits limit."},
+    "serve.exclude_consumed": {
+        "text": "Drop items the user already has in live [input] or incremental events.",
+        "docs": f"{_DOCS}/openapi/",
+    },
+    "serve.fallback_fill": {
+        "text": "When hide/filters shorten a list, fill from popular/latest.",
+        "docs": f"{_DOCS}/openapi/",
+    },
+    "serve.consumed_lookback": {
+        "text": "Max [input] events per user for hide, and the overlay cap per user.",
+        "docs": f"{_DOCS}/openapi/",
+    },
     "serve.metrics_enabled": {"text": "Expose Prometheus metrics on the serve process."},
     "dashboard": {
         "text": "This status UI: Basic Auth, lookup, experiments, and this page.",
