@@ -27,6 +27,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Event worker stop closes the source even when the worker thread misses its join deadline.
 - Event worker stop interrupts a hung source without taking the reconnect lock.
 - Event worker stop does not close the source during an in-flight apply/ack.
+- Event worker stop does not close the source during an in-flight tick.
 - A failed RabbitMQ I/O worker replies abandoned to a job already dequeued.
 - RabbitMQ ack does not drop a new connection's delivery tag after reconnect.
 - The event worker reconnects when the source reports disconnected after a broker timeout.

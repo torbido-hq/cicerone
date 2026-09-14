@@ -245,7 +245,7 @@ def test_event_worker_stop_skips_close_during_apply_ack(tmp_path, feature_config
     assert worker._thread is not None
     worker._thread.join = lambda timeout=None: None  # type: ignore[method-assign]
     worker._thread.is_alive = lambda: True  # type: ignore[method-assign]
-    assert worker._apply_ack_guard.acquire(blocking=False)
+    assert worker._tick_guard.acquire(blocking=False)
     assert worker._source_guard.acquire(blocking=False)
     try:
         with caplog.at_level(logging.WARNING):
@@ -253,9 +253,55 @@ def test_event_worker_stop_skips_close_during_apply_ack(tmp_path, feature_config
         assert any("still alive" in record.getMessage() for record in caplog.records)
         assert closed["n"] == 0
     finally:
-        worker._apply_ack_guard.release()
+        worker._tick_guard.release()
         worker._source_guard.release()
     worker._stop.set()
+
+
+def test_event_worker_stop_skips_close_during_poll(tmp_path, feature_config: FeatureConfig):
+    import threading
+    import time
+
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    poll_started = threading.Event()
+    poll_release = threading.Event()
+    order: list[str] = []
+
+    class _GatePoll(WebhookEventSource):
+        def poll(self, max_events: int = 100):  # type: ignore[override]
+            order.append("poll-start")
+            poll_started.set()
+            poll_release.wait(timeout=2)
+            return super().poll(max_events)
+
+        def close(self) -> None:
+            order.append("close")
+            super().close()
+
+    worker = EventWorker(
+        _GatePoll({}),
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+        poll_interval_seconds=0.01,
+    )
+    worker.start()
+    assert poll_started.wait(timeout=2)
+    assert worker.stop(join_timeout_seconds=0.05) is False
+    assert "close" not in order
+    poll_release.set()
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and "close" not in order:
+        time.sleep(0.01)
+    assert "poll-start" in order
+    assert "close" in order
+    assert order.index("poll-start") < order.index("close")
 
 
 def test_event_worker_stop_does_not_close_before_in_flight_ack(tmp_path, feature_config: FeatureConfig):
