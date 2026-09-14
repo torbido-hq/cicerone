@@ -141,8 +141,14 @@ class EventWorker:
                 self._drain_buffer_on_stop()
             except Exception:
                 logger.exception("Event worker drain on stop failed")
-        with self._source_guard:
-            self._close_source()
+        if joined:
+            with self._source_guard:
+                self._close_source()
+        elif self._source_guard.acquire(blocking=False):
+            try:
+                self._close_source()
+            finally:
+                self._source_guard.release()
         return joined
 
     def refresh_source_health_metrics(self) -> bool:

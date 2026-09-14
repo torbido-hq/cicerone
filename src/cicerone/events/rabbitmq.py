@@ -7,6 +7,7 @@ import queue
 import threading
 from collections import deque
 from collections.abc import Callable, Sequence
+from contextlib import suppress
 from datetime import datetime
 from functools import partial
 from typing import Any
@@ -96,6 +97,8 @@ class _PikaIo:
                 self._clear_busy()
         if status == "err":
             raise payload
+        if self._failed:
+            raise RuntimeError("RabbitMQ I/O worker abandoned")
         return payload
 
     def abandon(self, channel: Any, connection: Any) -> None:
@@ -150,9 +153,15 @@ class _PikaIo:
                 return
             fn, reply = job
             try:
-                reply.put(("ok", fn()))
+                result = fn()
             except Exception as exc:
-                reply.put(("err", exc))
+                payload: tuple[str, Any] = ("err", exc)
+            else:
+                payload = ("ok", result)
+            if self._failed:
+                payload = ("err", RuntimeError("RabbitMQ I/O worker abandoned"))
+            with suppress(queue.Full):
+                reply.put_nowait(payload)
             if self._failed:
                 self._cleanup_abandoned()
                 return
@@ -164,6 +173,7 @@ class _PikaIo:
         try:
             connection.process_data_events(time_limit=0)
         except Exception:
+            self._failed = True
             logger.exception("RabbitMQ I/O thread process_data_events failed")
 
 

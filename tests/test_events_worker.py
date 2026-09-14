@@ -264,7 +264,7 @@ def test_event_worker_stop_closes_reconnect_in_progress(tmp_path, feature_config
             connects["n"] += 1
             if connects["n"] >= 2:
                 reconnect_started.set()
-                time.sleep(0.25)
+                time.sleep(1.0)
             super().connect()
 
         def close(self) -> None:
@@ -289,8 +289,11 @@ def test_event_worker_stop_closes_reconnect_in_progress(tmp_path, feature_config
     assert reconnect_started.wait(timeout=2)
     began = time.monotonic()
     assert worker.stop(join_timeout_seconds=0.05) is False
+    assert time.monotonic() - began < 0.4
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and closes["n"] < 1:
+        time.sleep(0.01)
     assert closes["n"] >= 1
-    assert time.monotonic() - began < 2.0
 
 
 def test_event_worker_stop_returns_true_when_idle(tmp_path, feature_config: FeatureConfig):

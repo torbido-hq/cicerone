@@ -90,6 +90,65 @@ def test_pika_io_skips_job_queued_during_timed_out_pump():
         io.stop()
 
 
+def test_pika_io_marks_failed_when_pump_raises():
+    from cicerone.events.rabbitmq import _PikaIo
+
+    class _Conn:
+        def process_data_events(self, time_limit: float | int = 0) -> None:
+            del time_limit
+            raise ConnectionError("socket closed")
+
+    io = _PikaIo(timeout_seconds=1)
+    io._connection = _Conn()
+    io.start()
+    try:
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and not io.failed:
+            time.sleep(0.01)
+        assert io.failed is True
+        while time.monotonic() < deadline and io._thread.is_alive():
+            time.sleep(0.01)
+        assert io._thread.is_alive() is False
+    finally:
+        io.stop()
+
+
+def test_abandoned_io_does_not_return_late_ok():
+    from cicerone.events.rabbitmq import _PikaIo
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def _job() -> str:
+        started.set()
+        release.wait(timeout=2)
+        return "late-delivery"
+
+    io = _PikaIo(timeout_seconds=2)
+    io.start()
+    result: dict[str, Any] = {"value": None, "err": None}
+
+    def _caller() -> None:
+        try:
+            result["value"] = io.submit(_job)
+        except Exception as exc:
+            result["err"] = exc
+
+    waiter = threading.Thread(target=_caller)
+    waiter.start()
+    try:
+        assert started.wait(timeout=2)
+        io.abandon(None, None)
+        release.set()
+        waiter.join(timeout=2)
+        assert result["value"] is None
+        assert result["err"] is not None
+        assert "abandoned" in str(result["err"])
+    finally:
+        release.set()
+        io.stop()
+
+
 def test_pika_io_submit_times_out():
     from cicerone.events.rabbitmq import _PikaIo
 
@@ -715,6 +774,48 @@ def test_reconnect_closes_previous(monkeypatch):
     first = broker.connection
     source.connect()
     assert first.closed is True
+    source.close()
+
+
+def test_reconnect_does_not_ack_late_delivery_on_new_channel(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options(timeout_seconds=2))
+    source.connect()
+    old_channel = broker.connection.channel_obj
+    started = threading.Event()
+    release = threading.Event()
+    new_acks: list[int] = []
+
+    def _late_get(*_args: Any, **_kwargs: Any) -> tuple[Any, None, Any]:
+        started.set()
+        release.wait(timeout=2)
+        return old_channel.basic_get(source._queue, auto_ack=False)
+
+    broker.enqueue("cicerone.events", event_payload(event_id="stale", item_id="i1"))
+    source._basic_get = _late_get  # type: ignore[method-assign]
+    got: list[str] = []
+
+    def _poll() -> None:
+        got.extend(event.event_id for event in source.poll(1))
+
+    poller = threading.Thread(target=_poll)
+    poller.start()
+    assert started.wait(timeout=2)
+    source.connect()
+    new_channel = broker.connection.channel_obj
+    original_ack = new_channel.basic_ack
+
+    def _spy_ack(delivery_tag: int) -> None:
+        new_acks.append(delivery_tag)
+        original_ack(delivery_tag)
+
+    new_channel.basic_ack = _spy_ack  # type: ignore[method-assign]
+    release.set()
+    poller.join(timeout=2)
+    if got:
+        source.ack(got)
+    assert got == []
+    assert new_acks == []
     source.close()
 
 
