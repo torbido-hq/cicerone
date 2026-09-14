@@ -1046,6 +1046,53 @@ def test_poll_drops_stale_pending_when_io_replaced_with_same_tag(monkeypatch):
     source.close()
 
 
+def test_poll_stops_getting_after_io_replaced(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.enqueue("cicerone.events", event_payload(event_id="e1"))
+    broker.enqueue("cicerone.events", event_payload(event_id="e2"))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    gets = {"n": 0}
+    original_get = source._basic_get
+
+    def _get(io: object) -> Any:
+        gets["n"] += 1
+        if gets["n"] == 1:
+            source._io = object()  # type: ignore[assignment]
+        return original_get(io)
+
+    old_io = source._io
+    source._basic_get = _get  # type: ignore[method-assign]
+    list(source.poll(2))
+    assert gets["n"] == 1
+    source._io = old_io
+    source.close()
+
+
+def test_ack_skips_when_io_replaced_before_resolve(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.enqueue("cicerone.events", event_payload(event_id="e1"))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    first = list(source.poll(1))
+    assert [event.event_id for event in first] == ["e1"]
+    old_io = source._io
+    assert old_io is not None
+    source.connect()
+    broker.enqueue("cicerone.events", event_payload(event_id="e1"))
+    second = list(source.poll(1))
+    assert [event.event_id for event in second] == ["e1"]
+    new_tag = source._delivery_tags["e1"]
+
+    def _require() -> object:
+        return old_io
+
+    source._require_io = _require  # type: ignore[method-assign]
+    source.ack(["e1"])
+    assert source._delivery_tags.get("e1") == new_tag
+    source.close()
+
+
 def test_ack_does_not_clear_reborn_delivery_tag(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     broker.enqueue("cicerone.events", event_payload(event_id="e1"))

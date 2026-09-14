@@ -113,13 +113,16 @@ class EventWorker:
         self._source_guard = threading.Lock()
         self._tick_guard = threading.Lock()
         self._finalized = False
+        self._source_unhealthy = False
         self._thread: threading.Thread | None = None
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
             return
-        self._stop.clear()
         with self._source_guard:
+            if self._thread is not None and self._thread.is_alive():
+                return
+            self._stop.clear()
             self._finalized = False
             try:
                 self._source.connect()
@@ -136,7 +139,6 @@ class EventWorker:
             with self._source_guard:
                 self._drain_and_close()
             return
-        self.refresh_source_health_metrics()
 
     def stop(self, *, join_timeout_seconds: float = 5.0) -> bool:
         self._stop.set()
@@ -171,6 +173,8 @@ class EventWorker:
                 self._drain_and_close()
             finally:
                 self._source_guard.release()
+        else:
+            return False
         return joined
 
     def refresh_source_health_metrics(self) -> bool:
@@ -237,8 +241,7 @@ class EventWorker:
                 except Exception:
                     record_events_tick_error()
                     logger.exception("Event worker tick failed")
-                finally:
-                    disconnected = not self.refresh_source_health_metrics()
+                disconnected = self._source_unhealthy
                 self._stop.wait(self._poll_interval_seconds)
         finally:
             if self._stop.is_set():
@@ -250,7 +253,10 @@ class EventWorker:
         with self._tick_guard:
             if self._stop.is_set():
                 return 0
-            return self._tick_locked()
+            try:
+                return self._tick_locked()
+            finally:
+                self._source_unhealthy = not self.refresh_source_health_metrics()
 
     def _tick_locked(self) -> int:
         if self._apply_lock is None:

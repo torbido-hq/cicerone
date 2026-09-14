@@ -47,6 +47,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - RabbitMQ poll drops a claimed event after reconnect even if the new channel reuses the same tag.
 - Event worker skips poll after a failed reconnect until connect succeeds.
 - Event worker start abort drains when the initial connect raises.
+- RabbitMQ poll stops getting once reconnect replaces the I/O handle.
+- RabbitMQ ack does not resolve tags from a connection that was replaced.
+- Event worker stop returns false when the initial connect still holds the source lock.
+- Event worker health probes run under the tick lock so stop cannot close during health.
 
 ## [0.8.1] - 2026-09-11
 

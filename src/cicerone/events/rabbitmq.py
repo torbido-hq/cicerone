@@ -298,6 +298,8 @@ class RabbitMQEventSource(EventSource):
 
         remaining = max_events - len(claimed)
         while remaining > 0:
+            if not self._owns_io(io):
+                break
             try:
                 method, _properties, body = io.submit(partial(self._basic_get, io))
             except Exception:
@@ -332,6 +334,8 @@ class RabbitMQEventSource(EventSource):
             return
         io = self._require_io()
         with self._lock:
+            if self._io is not io:
+                return
             resolved: list[tuple[str, int]] = []
             for event_id in event_ids:
                 eid = str(event_id)
@@ -341,6 +345,8 @@ class RabbitMQEventSource(EventSource):
         if not resolved:
             return
         for eid, tag in resolved:
+            if not self._owns_io(io):
+                return
             io.submit(partial(self._basic_ack, io, tag))
             with self._lock:
                 if self._io is not io or self._delivery_tags.get(eid) != tag:
