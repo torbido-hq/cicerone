@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import logging
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +39,11 @@ class DatasetCatalogStore:
     def __init__(self, options: dict[str, Any]):
         self._options = options
         self._backend = validate_storage_options(options)
+        self._locks = {
+            _USERS: threading.Lock(),
+            _ITEMS: threading.Lock(),
+            _EVENTS: threading.Lock(),
+        }
 
     def _read(self, filename: str) -> pd.DataFrame:
         try:
@@ -66,12 +72,13 @@ class DatasetCatalogStore:
         client.put_object(Bucket=bucket, Key=key, Body=payload, ContentType="application/octet-stream")
 
     def _replace_row(self, filename: str, key: str, value: str, row: dict[str, Any]) -> None:
-        frame = self._read(filename)
-        if not frame.empty and key in frame.columns:
-            frame = frame.loc[frame[key].astype(str) != str(value)]
-        incoming = pd.DataFrame([row])
-        merged = pd.concat([frame, incoming], ignore_index=True) if not frame.empty else incoming
-        self._write(filename, merged)
+        with self._locks[filename]:
+            frame = self._read(filename)
+            if not frame.empty and key in frame.columns:
+                frame = frame.loc[frame[key].astype(str) != str(value)]
+            incoming = pd.DataFrame([row])
+            merged = pd.concat([frame, incoming], ignore_index=True) if not frame.empty else incoming
+            self._write(filename, merged)
 
     def upsert_user(self, row: dict[str, Any]) -> None:
         user_id = require_id(row, USER_COLUMN)
@@ -83,11 +90,12 @@ class DatasetCatalogStore:
         return user_row_or_none(self._read(_USERS), user_id)
 
     def delete_user(self, user_id: str) -> int:
-        users = self._read(_USERS)
-        before = 0 if users.empty else int((users[USER_COLUMN].astype(str) == str(user_id)).sum())
-        if not users.empty and USER_COLUMN in users.columns:
-            remaining = users.loc[users[USER_COLUMN].astype(str) != str(user_id)]
-            self._write(_USERS, remaining.reset_index(drop=True))
+        with self._locks[_USERS]:
+            users = self._read(_USERS)
+            before = 0 if users.empty else int((users[USER_COLUMN].astype(str) == str(user_id)).sum())
+            if not users.empty and USER_COLUMN in users.columns:
+                remaining = users.loc[users[USER_COLUMN].astype(str) != str(user_id)]
+                self._write(_USERS, remaining.reset_index(drop=True))
         events_deleted = self.delete_events_for_user(user_id)
         return before + events_deleted
 
@@ -101,39 +109,42 @@ class DatasetCatalogStore:
         return item_row_or_none(self._read(_ITEMS), item_id)
 
     def delete_item(self, item_id: str) -> int:
-        items = self._read(_ITEMS)
-        if items.empty or ITEM_COLUMN not in items.columns:
-            return 0
-        before = int((items[ITEM_COLUMN].astype(str) == str(item_id)).sum())
-        remaining = items.loc[items[ITEM_COLUMN].astype(str) != str(item_id)]
-        self._write(_ITEMS, remaining.reset_index(drop=True))
-        return before
+        with self._locks[_ITEMS]:
+            items = self._read(_ITEMS)
+            if items.empty or ITEM_COLUMN not in items.columns:
+                return 0
+            before = int((items[ITEM_COLUMN].astype(str) == str(item_id)).sum())
+            remaining = items.loc[items[ITEM_COLUMN].astype(str) != str(item_id)]
+            self._write(_ITEMS, remaining.reset_index(drop=True))
+            return before
 
     def upsert_events(self, rows: list[dict[str, Any]]) -> int:
         if not rows:
             return 0
         incoming = pd.DataFrame([normalize_event_row(row) for row in rows])
-        existing = self._read(_EVENTS)
-        if existing.empty:
-            self._write(_EVENTS, incoming)
+        with self._locks[_EVENTS]:
+            existing = self._read(_EVENTS)
+            if existing.empty:
+                self._write(_EVENTS, incoming)
+                return int(len(incoming))
+            if EVENT_ID_COLUMN in incoming.columns and EVENT_ID_COLUMN in existing.columns:
+                ids = set(incoming[EVENT_ID_COLUMN].astype(str))
+                existing = existing.loc[~existing[EVENT_ID_COLUMN].astype(str).isin(ids)]
+            merged = pd.concat([existing, incoming], ignore_index=True)
+            self._write(_EVENTS, merged)
             return int(len(incoming))
-        if EVENT_ID_COLUMN in incoming.columns and EVENT_ID_COLUMN in existing.columns:
-            ids = set(incoming[EVENT_ID_COLUMN].astype(str))
-            existing = existing.loc[~existing[EVENT_ID_COLUMN].astype(str).isin(ids)]
-        merged = pd.concat([existing, incoming], ignore_index=True)
-        self._write(_EVENTS, merged)
-        return int(len(incoming))
 
     def get_events_for_user(self, user_id: str, limit: int) -> pd.DataFrame:
         return newest_events(filter_rows_for_user(self._read(_EVENTS), user_id), limit)
 
     def delete_events_for_user(self, user_id: str, *, item_id: str | None = None) -> int:
-        events = self._read(_EVENTS)
-        if events.empty or USER_COLUMN not in events.columns:
-            return 0
-        mask = events[USER_COLUMN].astype(str) == str(user_id)
-        if item_id is not None and ITEM_COLUMN in events.columns:
-            mask = mask & (events[ITEM_COLUMN].astype(str) == str(item_id))
-        deleted = int(mask.sum())
-        self._write(_EVENTS, events.loc[~mask].reset_index(drop=True))
-        return deleted
+        with self._locks[_EVENTS]:
+            events = self._read(_EVENTS)
+            if events.empty or USER_COLUMN not in events.columns:
+                return 0
+            mask = events[USER_COLUMN].astype(str) == str(user_id)
+            if item_id is not None and ITEM_COLUMN in events.columns:
+                mask = mask & (events[ITEM_COLUMN].astype(str) == str(item_id))
+            deleted = int(mask.sum())
+            self._write(_EVENTS, events.loc[~mask].reset_index(drop=True))
+            return deleted

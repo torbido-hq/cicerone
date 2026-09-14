@@ -7,6 +7,7 @@ from typing import Any, Protocol
 
 import pandas as pd
 
+from cicerone.events.normalize import normalize_event
 from cicerone.io.recommendation_schema import ITEM_COLUMN, USER_COLUMN
 from cicerone.io.user_lookup import OCCURRED_AT_COLUMN, filter_rows_for_user
 
@@ -51,13 +52,15 @@ def require_id(row: dict[str, Any], key: str) -> str:
 
 
 def normalize_event_row(row: dict[str, Any]) -> dict[str, Any]:
-    payload = dict(row)
-    payload[USER_COLUMN] = require_id(payload, USER_COLUMN)
-    payload[ITEM_COLUMN] = require_id(payload, ITEM_COLUMN)
-    payload[EVENT_TYPE_COLUMN] = require_id(payload, EVENT_TYPE_COLUMN)
-    if QUANTITY_COLUMN not in payload or payload[QUANTITY_COLUMN] in (None, ""):
-        payload[QUANTITY_COLUMN] = 1
-    return payload
+    event = normalize_event(row)
+    return {
+        USER_COLUMN: event.user_id,
+        ITEM_COLUMN: event.item_id,
+        EVENT_TYPE_COLUMN: event.event_type,
+        QUANTITY_COLUMN: event.quantity,
+        OCCURRED_AT_COLUMN: event.occurred_at,
+        EVENT_ID_COLUMN: event.event_id,
+    }
 
 
 def filter_item_row(frame: pd.DataFrame, item_id: str) -> pd.DataFrame:

@@ -142,6 +142,9 @@ def build_manifest_reader(settings: IOSettings) -> ManifestReader:
     return _build_from_registry(settings, _MANIFEST_READERS, role="manifest")
 
 
+_CATALOG_QUERY_OPTIONS = ("events_query", "users_query", "items_query")
+
+
 def build_catalog_store(settings: IOSettings) -> CatalogStore | None:
     match settings.kind:
         case "dataset":
@@ -149,6 +152,8 @@ def build_catalog_store(settings: IOSettings) -> CatalogStore | None:
 
             return DatasetCatalogStore(settings.options)
         case "db":
+            if any(str(settings.options.get(name) or "").strip() for name in _CATALOG_QUERY_OPTIONS):
+                return None
             from cicerone.io.db_catalog import DatabaseCatalogStore
 
             return DatabaseCatalogStore(settings.options)

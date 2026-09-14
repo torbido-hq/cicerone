@@ -32,6 +32,21 @@ def test_normalize_event_row_defaults_quantity():
         }
     )
     assert row["quantity"] == 1
+    assert row["event_id"]
+
+
+def test_normalize_event_row_uses_idempotency_key():
+    row = normalize_event_row(
+        {
+            "user_id": "u1",
+            "item_id": "i1",
+            "event_type": "purchase",
+            "occurred_at": "2026-09-11T12:00:00Z",
+            "idempotency_key": "k1",
+        }
+    )
+    assert row["event_id"] == "k1"
+    assert "idempotency_key" not in row
 
 
 def test_jsonable_row_coerces_numpy_and_nan():
