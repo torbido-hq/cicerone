@@ -4,22 +4,10 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.8.1] - 2026-09-11
+## [0.8.2] - 2026-09-14
 
 ### Fixed
 
-- Production replay scores the served experiment variant, not the union of all lists.
-- Click-through CVR ignores unmatched clicks.
-- JSONL track idempotency records ids only after a successful append.
-- Thompson writes the champion/challenger pair after the recommendation write.
-- Kafka and RabbitMQ reconnect clear in-flight ack maps.
-- History snapshot lookup compares instants; unmatched `generated_at` does not take a later job.
-- Quality live CTR prefers history snapshots and clears the load-error banner when live metrics succeed.
-- Dashboard config redacts webhook URLs that have no userinfo.
-- Experiments manifest recipe parse treats malformed items as missing recipes.
-- Inheriting all experiment boost/eligibility rules rejects duplicate names, same as a named subset.
-- The recommendation publish sidecar rejects NaN scores instead of emitting non-JSON.
-- Job eval and history writes on `kind = "db"` run one at a time so SQLite does not drop either.
 - Kafka and RabbitMQ ingest and publish time out broker calls after 10s (`timeout_seconds`).
 - Broker `timeout_seconds` values that overflow client millisecond limits raise `ConfigError`.
 - Kafka `timeout_seconds` below 10 ms raises `ConfigError` (librdkafka `socket.timeout.ms`).
@@ -47,6 +35,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - RabbitMQ reconnect keeps the previous I/O thread on its own connection.
 - Manual `popular_in_category` fails at job fit when items lack the category column.
 - Overall track CVR uses the same impression-slice attribution as rank, source, and variant.
+
+## [0.8.1] - 2026-09-11
+
+### Fixed
+
+- Production replay scores the served experiment variant, not the union of all lists.
+- Click-through CVR ignores unmatched clicks.
+- JSONL track idempotency records ids only after a successful append.
+- Thompson writes the champion/challenger pair after the recommendation write.
+- Kafka and RabbitMQ reconnect clear in-flight ack maps.
+- History snapshot lookup compares instants; unmatched `generated_at` does not take a later job.
+- Quality live CTR prefers history snapshots and clears the load-error banner when live metrics succeed.
+- Dashboard config redacts webhook URLs that have no userinfo.
+- Experiments manifest recipe parse treats malformed items as missing recipes.
+- Inheriting all experiment boost/eligibility rules rejects duplicate names, same as a named subset.
+- The recommendation publish sidecar rejects NaN scores instead of emitting non-JSON.
+- Job eval and history writes on `kind = "db"` run one at a time so SQLite does not drop either.
 
 ## [0.8.0] - 2026-09-08
 
