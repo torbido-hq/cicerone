@@ -159,6 +159,19 @@ def test_sqlite_db_reader_item_scores_keeps_cache_on_bad_schema(tmp_path):
     assert float(reader.get_item_scores().iloc[0]["popular_score"]) == 2.5
 
 
+def test_sqlite_write_manifest_adds_missing_columns(tmp_path):
+    url = _sqlite_url(tmp_path)
+    engine = create_engine(url)
+    pd.DataFrame([{"n_events": 1, "status": "success"}]).to_sql(
+        "recommendation_runs", engine, index=False, if_exists="replace"
+    )
+    sink = DatabaseOutputSink({"database_url": url})
+    sink.write_manifest({"n_events": 2, "status": "success", "n_item_scores": 4})
+    stored = pd.read_sql('SELECT * FROM "recommendation_runs"', engine)
+    assert list(stored["n_events"]) == [1, 2]
+    assert int(stored.iloc[1]["n_item_scores"]) == 4
+
+
 def test_sqlite_write_item_scores_replaces_legacy_table(tmp_path):
     url = _sqlite_url(tmp_path)
     engine = create_engine(url)

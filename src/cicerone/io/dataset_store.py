@@ -268,8 +268,9 @@ class DatasetOutputSink:
             self._write_bytes("items_snapshot.parquet", buffer.getvalue(), "application/octet-stream")
 
     def write_item_scores(self, df: pd.DataFrame) -> None:
-        from cicerone.item_scores import ITEM_SCORES_FILENAME
+        from cicerone.item_scores import ITEM_SCORES_FILENAME, normalize_item_scores
 
+        df = normalize_item_scores(df)
         buffer = io.BytesIO()
         df.to_parquet(buffer, index=False)
         with self._maybe_recommendations_lock():

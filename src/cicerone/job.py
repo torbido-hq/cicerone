@@ -813,9 +813,6 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                         _ensure_publication_fence(sink, fence_check)
                         sink.write_items_snapshot(items)
 
-                    _ensure_publication_fence(sink, fence_check)
-                    sink.write_recommendations(recommendations)
-                    outputs_written = True
                     item_scores = build_item_scores(
                         events,
                         items,
@@ -825,6 +822,9 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                     )
                     _ensure_publication_fence(sink, fence_check)
                     sink.write_item_scores(item_scores)
+                    outputs_written = True
+                    _ensure_publication_fence(sink, fence_check)
+                    sink.write_recommendations(recommendations)
                     if pending_thompson is not None:
                         _ensure_publication_fence(sink, fence_check)
                         store = ExperimentStore(

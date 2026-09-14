@@ -1151,6 +1151,42 @@ def test_job_skips_failure_manifest_when_incremental_is_newer(tmp_path, monkeypa
     assert json.loads((output_dir / "manifest.json").read_text()) == incremental
 
 
+def test_job_keeps_prior_recommendations_when_item_scores_write_fails(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+
+    now = pd.Timestamp.now(tz="UTC")
+    events = pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    )
+    items = pd.DataFrame(
+        [{"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True}]
+    )
+    events.to_parquet(input_dir / "events.parquet", index=False)
+    items.to_parquet(input_dir / "items.parquet", index=False)
+
+    config_path = _write_config(tmp_path, input_dir, output_dir)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
+    job.run()
+    first = pd.read_parquet(output_dir / "recommendations.parquet")
+
+    from cicerone.io.dataset_store import DatasetOutputSink
+
+    def boom(self, df):
+        raise RuntimeError("scores unavailable")
+
+    monkeypatch.setattr(DatasetOutputSink, "write_item_scores", boom)
+    with pytest.raises(RuntimeError, match="scores unavailable"):
+        job.run()
+
+    kept = pd.read_parquet(output_dir / "recommendations.parquet")
+    pd.testing.assert_frame_equal(first, kept)
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    assert manifest["status"] == "failed"
+
+
 def test_job_preserves_success_when_manifest_write_fails(tmp_path, monkeypatch):
     input_dir = tmp_path / "in"
     output_dir = tmp_path / "out"

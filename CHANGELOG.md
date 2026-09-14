@@ -17,6 +17,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Serve rejects `item_scores` catalogs with blank or duplicate `item_id`s or non-integral `n_users` and keeps the last valid cache.
 - `GET /item-scores` treats an empty-string `cursor` as a seek point instead of restarting the first page.
 - Job replaces a legacy `item_scores` table that is missing score columns instead of appending into the old schema.
+- Job writes `item_scores` before recommendations so a score-write failure does not leave a new recs file without scores.
+- DB manifest append adds missing columns (including `n_item_scores`) on pre-0.9.0 `recommendation_runs`.
+- Dataset `item_scores` writes use the same validation as the DB sink.
 
 ## [0.8.2] - 2026-09-15
 

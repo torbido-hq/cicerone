@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 
 import pandas as pd
 from rectools import Columns
@@ -65,14 +66,28 @@ def _normalize_feature_df(df: pd.DataFrame | None) -> _NormalizedFeatures:
     return _NormalizedFeatures(frame=df, categorical=list(df["feature"].unique()))
 
 
-def _time_decay_multiplier(occurred_at: pd.Series, half_life_days: float) -> pd.Series:
-    now = pd.Timestamp.now(tz="UTC")
-    age_days = (now - occurred_at).dt.total_seconds() / 86_400
+def _utc_timestamp(now: datetime | pd.Timestamp | None = None) -> pd.Timestamp:
+    stamp = pd.Timestamp.now(tz="UTC") if now is None else pd.Timestamp(now)
+    if stamp.tzinfo is None:
+        return stamp.tz_localize("UTC")
+    return stamp.tz_convert("UTC")
+
+
+def _time_decay_multiplier(
+    occurred_at: pd.Series, half_life_days: float, *, now: datetime | pd.Timestamp | None = None
+) -> pd.Series:
+    age_days = (_utc_timestamp(now) - occurred_at).dt.total_seconds() / 86_400
     age_days = age_days.clip(lower=0)
     return 0.5 ** (age_days / half_life_days)
 
 
-def build_interactions(events: pd.DataFrame, config: FeatureConfig, half_life_days: float) -> pd.DataFrame:
+def build_interactions(
+    events: pd.DataFrame,
+    config: FeatureConfig,
+    half_life_days: float,
+    *,
+    now: datetime | pd.Timestamp | None = None,
+) -> pd.DataFrame:
     """Weighted/aggregated interactions without building a rectools Dataset."""
     df = events.copy()
     df["occurred_at"] = pd.to_datetime(df["occurred_at"], utc=True)
@@ -113,7 +128,7 @@ def build_interactions(events: pd.DataFrame, config: FeatureConfig, half_life_da
             limits = capped["event_type"].map(config.event_caps)
             df = df.drop(index=capped.index[rank >= limits])
 
-    decay = _time_decay_multiplier(df["occurred_at"], half_life_days)
+    decay = _time_decay_multiplier(df["occurred_at"], half_life_days, now=now)
     df["weight"] = df["row_weight"] * decay
 
     aggregated = df.groupby(["user_id", "item_id"], as_index=False).agg(

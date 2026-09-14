@@ -154,6 +154,31 @@ def _require_optional_recommendation_columns(engine: Engine, table: str, frame: 
     )
 
 
+def _manifest_sql_type(value: object) -> str:
+    if isinstance(value, bool):
+        return "BOOLEAN"
+    if isinstance(value, int):
+        return "BIGINT"
+    if isinstance(value, float):
+        return "FLOAT"
+    return "TEXT"
+
+
+def _add_missing_manifest_columns(engine: Engine, table: str, frame: pd.DataFrame) -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table(table):
+        return
+    existing = {column["name"] for column in inspector.get_columns(table)}
+    missing = [column for column in frame.columns if column not in existing]
+    if not missing:
+        return
+    with engine.begin() as conn:
+        for column in missing:
+            ident = sql_identifier(str(column), option="manifest_table column")
+            sample = frame[column].iloc[0] if len(frame) else None
+            conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN "{ident}" {_manifest_sql_type(sample)}'))
+
+
 def _missing_item_scores_columns(engine: Engine, table: str) -> list[str]:
     inspector = inspect(engine)
     if not inspector.has_table(table):
@@ -391,12 +416,14 @@ class DatabaseOutputSink:
             self._options.get("manifest_table", DEFAULT_MANIFEST_TABLE),
             option="manifest_table",
         )
+        frame = pd.DataFrame([manifest])
+        _add_missing_manifest_columns(self._engine, table, frame)
         logger.info("Appending run manifest to database table %r", table)
         with self.recommendations_write(), self._engine.begin() as conn:
             if skip_if_newer_than is not None and _db_manifest_newer(conn, table, skip_if_newer_than):
                 return False
             self._ensure_fence()
-            pd.DataFrame([manifest]).to_sql(table, conn, if_exists="append", index=False)
+            frame.to_sql(table, conn, if_exists="append", index=False)
             self._ensure_fence()
         return True
 

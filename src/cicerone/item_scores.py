@@ -27,7 +27,14 @@ ITEM_SCORES_FILENAME = "item_scores.parquet"
 
 
 def empty_item_scores() -> pd.DataFrame:
-    return pd.DataFrame(columns=list(ITEM_SCORES_COLUMNS))
+    return pd.DataFrame(
+        {
+            ITEM_COLUMN: pd.Series(dtype="string"),
+            POPULAR_SCORE_COLUMN: pd.Series(dtype="float64"),
+            LATEST_SCORE_COLUMN: pd.Series(dtype="float64"),
+            N_USERS_COLUMN: pd.Series(dtype="int64"),
+        }
+    )
 
 
 def normalize_item_scores(frame: pd.DataFrame) -> pd.DataFrame:
@@ -87,10 +94,14 @@ def build_item_scores(
     now: datetime | None = None,
 ) -> pd.DataFrame:
     """Full-catalog scores from the same weighted interactions as training."""
-    popular = interactions if interactions is not None else build_interactions(events, config, half_life_days)
     stamp = now if now is not None else datetime.now(UTC)
     if stamp.tzinfo is None:
         stamp = stamp.replace(tzinfo=UTC)
+    popular = (
+        interactions
+        if interactions is not None
+        else build_interactions(events, config, half_life_days, now=stamp)
+    )
     window_start = pd.Timestamp(stamp) - pd.Timedelta(days=latest_window_days)
     if events.empty or "occurred_at" not in events.columns:
         latest = popular.iloc[0:0]
@@ -98,7 +109,7 @@ def build_item_scores(
         occurred = pd.to_datetime(events["occurred_at"], utc=True)
         latest_events = events.loc[occurred >= window_start]
         latest = (
-            build_interactions(latest_events, config, half_life_days)
+            build_interactions(latest_events, config, half_life_days, now=stamp)
             if not latest_events.empty
             else popular.iloc[0:0]
         )
@@ -106,15 +117,17 @@ def build_item_scores(
     popular_sum = _item_weight_sum(popular)
     latest_sum = _item_weight_sum(latest)
     n_users = _item_n_users(popular)
-    popular_sum.index = popular_sum.index.astype(str)
-    latest_sum.index = latest_sum.index.astype(str)
-    n_users.index = n_users.index.astype(str)
+    popular_sum.index = popular_sum.index.astype(str).str.strip()
+    latest_sum.index = latest_sum.index.astype(str).str.strip()
+    n_users.index = n_users.index.astype(str).str.strip()
 
     catalog: set[str] = set()
     if items is not None and not items.empty and ITEM_COLUMN in items.columns:
-        catalog.update(items[ITEM_COLUMN].dropna().astype(str))
-    catalog.update(popular_sum.index.astype(str))
-    catalog.update(latest_sum.index.astype(str))
+        cleaned = items[ITEM_COLUMN].dropna().map(lambda value: str(value).strip())
+        catalog.update(cleaned[cleaned != ""])
+    catalog.update(popular_sum.index.astype(str).map(str.strip))
+    catalog.update(latest_sum.index.astype(str).map(str.strip))
+    catalog.discard("")
     if not catalog:
         return empty_item_scores()
 
@@ -123,7 +136,7 @@ def build_item_scores(
     frame[POPULAR_SCORE_COLUMN] = frame[ITEM_COLUMN].map(popular_sum.astype(float)).fillna(0.0)
     frame[LATEST_SCORE_COLUMN] = frame[ITEM_COLUMN].map(latest_sum.astype(float)).fillna(0.0)
     frame[N_USERS_COLUMN] = frame[ITEM_COLUMN].map(n_users).fillna(0).astype(int)
-    return frame.loc[:, list(ITEM_SCORES_COLUMNS)].reset_index(drop=True)
+    return normalize_item_scores(frame)
 
 
 def page_item_scores(

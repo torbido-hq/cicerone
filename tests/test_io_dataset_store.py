@@ -46,6 +46,15 @@ def test_local_backend_round_trip(tmp_path):
     assert float(scores.iloc[0]["popular_score"]) == 1.5
 
 
+def test_local_write_item_scores_rejects_blank_ids(tmp_path):
+    sink = DatasetOutputSink({"storage_backend": "local", "path": str(tmp_path)})
+    with pytest.raises(ValueError, match="blank item_id"):
+        sink.write_item_scores(
+            pd.DataFrame([{"item_id": "  ", "popular_score": 1.0, "latest_score": 0.0, "n_users": 1}])
+        )
+    assert not (tmp_path / "item_scores.parquet").exists()
+
+
 def test_local_read_model_artifact_missing_returns_none(tmp_path):
     sink = DatasetOutputSink({"storage_backend": "local", "path": str(tmp_path)})
     assert sink.read_model_artifact() is None

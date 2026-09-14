@@ -89,6 +89,40 @@ def test_build_item_scores_empty_catalog_and_naive_now(feature_config):
     assert int(scores.iloc[0][N_USERS_COLUMN]) == 0
 
 
+def test_empty_item_scores_uses_numeric_dtypes():
+    empty = empty_item_scores()
+    assert pd.api.types.is_string_dtype(empty[ITEM_COLUMN]) or empty[ITEM_COLUMN].dtype == object
+    assert pd.api.types.is_float_dtype(empty[POPULAR_SCORE_COLUMN])
+    assert pd.api.types.is_float_dtype(empty[LATEST_SCORE_COLUMN])
+    assert pd.api.types.is_integer_dtype(empty[N_USERS_COLUMN])
+
+
+def test_build_item_scores_latest_reuses_weighting_timestamp(feature_config, monkeypatch):
+    now = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+    events = pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": now - timedelta(days=1),
+            }
+        ]
+    )
+    interactions = build_interactions(events, feature_config, 90.0, now=now)
+    seen: list[datetime | pd.Timestamp | None] = []
+    real = build_interactions
+
+    def _capture(frame, config, half_life_days, *, now=None):
+        seen.append(now)
+        return real(frame, config, half_life_days, now=now)
+
+    monkeypatch.setattr("cicerone.item_scores.build_interactions", _capture)
+    build_item_scores(events, None, feature_config, 90.0, interactions=interactions, now=now)
+    assert seen == [now]
+
+
 def test_item_weight_helpers_missing_columns():
     from cicerone.item_scores import _item_n_users, _item_weight_sum
 
