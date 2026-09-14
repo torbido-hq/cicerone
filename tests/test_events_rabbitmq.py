@@ -149,6 +149,31 @@ def test_abandoned_io_does_not_return_late_ok():
         io.stop()
 
 
+def test_pika_io_wakes_queued_submit_when_pump_fails():
+    from cicerone.events.rabbitmq import _PikaIo
+
+    entered = threading.Event()
+
+    class _Conn:
+        def process_data_events(self, time_limit: float | int = 0) -> None:
+            del time_limit
+            entered.set()
+            time.sleep(0.05)
+            raise ConnectionError("socket closed")
+
+    io = _PikaIo(timeout_seconds=5)
+    io._connection = _Conn()
+    io.start()
+    try:
+        assert entered.wait(timeout=2)
+        began = time.monotonic()
+        with pytest.raises(RuntimeError, match="abandoned|not running"):
+            io.submit(lambda: "late")
+        assert time.monotonic() - began < 1.0
+    finally:
+        io.stop()
+
+
 def test_pika_io_submit_rejected_after_shutdown_reserved():
     from cicerone.events.rabbitmq import _PikaIo
 
@@ -802,6 +827,24 @@ def test_reconnect_closes_previous(monkeypatch):
     first = broker.connection
     source.connect()
     assert first.closed is True
+    source.close()
+
+
+def test_poll_drops_delivery_if_reconnect_clears_tags(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.enqueue("cicerone.events", event_payload(event_id="stale", item_id="i1"))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    original = source._delivery_to_event
+
+    def _reconnect_after(io: object, method: object, body: object) -> object:
+        event = original(io, method, body)
+        source.connect()
+        return event
+
+    source._delivery_to_event = _reconnect_after  # type: ignore[method-assign]
+    assert list(source.poll(1)) == []
+    assert source._delivery_tags == {}
     source.close()
 
 

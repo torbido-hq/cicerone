@@ -137,11 +137,11 @@ class _PikaIo:
                 job = self._jobs.get(timeout=_IO_IDLE_SECONDS)
             except queue.Empty:
                 if self._failed:
-                    self._cleanup_abandoned()
+                    self._exit_failed()
                     return
                 with self._state_lock:
                     if self._failed:
-                        self._cleanup_abandoned()
+                        self._exit_failed()
                         return
                     if self._closing:
                         continue
@@ -152,15 +152,15 @@ class _PikaIo:
                     if not self._failed:
                         self._clear_busy()
                 if self._failed:
-                    self._cleanup_abandoned()
+                    self._exit_failed()
                     return
                 continue
             if job is _IO_STOP:
                 if self._failed:
-                    self._cleanup_abandoned()
+                    self._exit_failed()
                 return
             if self._failed:
-                self._cleanup_abandoned()
+                self._exit_failed()
                 return
             fn, reply = job
             try:
@@ -174,7 +174,7 @@ class _PikaIo:
             with suppress(queue.Full):
                 reply.put_nowait(payload)
             if self._failed:
-                self._cleanup_abandoned()
+                self._exit_failed()
                 return
 
     def _pump(self) -> None:
@@ -184,8 +184,25 @@ class _PikaIo:
         try:
             connection.process_data_events(time_limit=0)
         except Exception:
-            self._failed = True
+            with self._state_lock:
+                self._failed = True
             logger.exception("RabbitMQ I/O thread process_data_events failed")
+
+    def _fail_pending(self, exc: BaseException) -> None:
+        while True:
+            try:
+                job = self._jobs.get_nowait()
+            except queue.Empty:
+                return
+            if job is _IO_STOP:
+                continue
+            _fn, reply = job
+            with suppress(queue.Full):
+                reply.put_nowait(("err", exc))
+
+    def _exit_failed(self) -> None:
+        self._fail_pending(RuntimeError("RabbitMQ I/O worker abandoned"))
+        self._cleanup_abandoned()
 
 
 class RabbitMQEventSource(EventSource):
@@ -287,10 +304,10 @@ class RabbitMQEventSource(EventSource):
             out.append(incoming)
             remaining -= 1
 
-        if out:
-            newest = max(event.occurred_at for event in out)
-            with self._lock:
-                self._last_event_at = newest
+        with self._lock:
+            out = [event for event in out if event.event_id in self._delivery_tags]
+            if out:
+                self._last_event_at = max(event.occurred_at for event in out)
         return out
 
     def ack(self, event_ids: Sequence[str]) -> None:
