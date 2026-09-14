@@ -742,6 +742,16 @@ def test_health_tolerates_queue_probe_failure(monkeypatch):
     assert health.connected is True
 
 
+def test_health_disconnected_when_io_closing(monkeypatch):
+    install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    assert source._io is not None
+    assert source._io._try_begin_shutdown() is True
+    assert source.health().connected is False
+    source.close()
+
+
 def test_health_disconnected_when_probe_times_out(monkeypatch):
     install_fake_rabbitmq(monkeypatch)
     source = RabbitMQEventSource(_options(timeout_seconds=0.05))

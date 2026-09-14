@@ -211,9 +211,44 @@ def test_event_worker_stop_returns_false_when_join_times_out(tmp_path, feature_c
         with caplog.at_level(logging.WARNING):
             assert worker.stop(join_timeout_seconds=0.01) is False
         assert any("still alive" in record.getMessage() for record in caplog.records)
-        assert closed["n"] == 1
+        assert closed["n"] == 0
     finally:
         worker._source_guard.release()
+    worker._stop.set()
+
+
+def test_event_worker_stop_closes_on_join_timeout_when_idle(tmp_path, feature_config, caplog):
+    import logging
+
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    closed = {"n": 0}
+
+    class _CloseCount(WebhookEventSource):
+        def close(self) -> None:
+            closed["n"] += 1
+            super().close()
+
+    worker = EventWorker(
+        _CloseCount({}),
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+        poll_interval_seconds=0.01,
+    )
+    worker.start()
+    assert worker._thread is not None
+    worker._thread.join = lambda timeout=None: None  # type: ignore[method-assign]
+    worker._thread.is_alive = lambda: True  # type: ignore[method-assign]
+    with caplog.at_level(logging.WARNING):
+        assert worker.stop(join_timeout_seconds=0.01) is False
+    assert any("still alive" in record.getMessage() for record in caplog.records)
+    assert closed["n"] == 1
     worker._stop.set()
 
 

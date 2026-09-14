@@ -35,6 +35,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - RabbitMQ reconnect keeps the previous I/O thread on its own connection.
 - Manual `popular_in_category` fails at job fit when items lack the category column.
 - Overall track CVR uses the same impression-slice attribution as rank, source, and variant.
+- Event worker drain runs before the source close on shutdown.
+- Event worker stop does not close during an in-flight reconnect.
+- RabbitMQ health reports disconnected when the I/O worker is closing or replaced.
 
 ## [0.8.1] - 2026-09-11
 

@@ -146,23 +146,22 @@ class EventWorker:
                 )
                 joined = False
         if joined and started:
-            try:
-                self._drain_buffer_on_stop()
-            except Exception:
-                logger.exception("Event worker drain on stop failed")
-        if joined and started:
             with self._source_guard:
-                self._close_source()
+                self._drain_and_close()
         elif not joined:
             acquired = self._tick_guard.acquire(blocking=True, timeout=join_timeout_seconds)
             if acquired:
                 try:
-                    self._close_source()
+                    if self._source_guard.acquire(blocking=False):
+                        try:
+                            self._drain_and_close()
+                        finally:
+                            self._source_guard.release()
                 finally:
                     self._tick_guard.release()
         elif self._source_guard.acquire(blocking=False):
             try:
-                self._close_source()
+                self._drain_and_close()
             finally:
                 self._source_guard.release()
         return joined
@@ -186,21 +185,28 @@ class EventWorker:
         except Exception:
             logger.exception("Event source close() failed during worker stop")
 
+    def _drain_and_close(self) -> None:
+        try:
+            self._drain_buffer_on_stop()
+        except Exception:
+            logger.exception("Event worker drain on stop failed")
+        self._close_source()
+
     def _reconnect_source(self) -> None:
         with self._source_guard:
             if self._stop.is_set():
-                self._close_source()
+                self._drain_and_close()
                 return
             try:
                 self._source.connect()
             except Exception:
                 logger.exception("Event source reconnect failed")
             if self._stop.is_set():
-                self._close_source()
+                self._drain_and_close()
                 return
         if self._stop.is_set():
             with self._source_guard:
-                self._close_source()
+                self._drain_and_close()
 
     def _loop(self) -> None:
         disconnected = False
@@ -221,7 +227,7 @@ class EventWorker:
         finally:
             if self._stop.is_set():
                 with self._source_guard:
-                    self._close_source()
+                    self._drain_and_close()
 
     def tick(self) -> int:
         """One poll/flush cycle; returns events successfully applied."""

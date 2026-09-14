@@ -66,6 +66,10 @@ class _PikaIo:
         return self._failed
 
     @property
+    def closing(self) -> bool:
+        return self._closing
+
+    @property
     def busy(self) -> bool:
         with self._state_lock:
             return self._busy > 0
@@ -368,7 +372,7 @@ class RabbitMQEventSource(EventSource):
             channel = self._channel
             local_held = len(self._pending_ids) + len(self._in_flight)
             last_event_at = self._last_event_at
-        if not connected or io is None or channel is None or io.failed:
+        if not connected or io is None or channel is None or io.failed or io.closing:
             return EventSourceHealth(connected=False, lag=None, last_event_at=last_event_at)
         ready = 0
         try:
@@ -376,9 +380,11 @@ class RabbitMQEventSource(EventSource):
             ready = int(declared.method.message_count)
         except Exception:
             logger.exception("RabbitMQ queue_declare (passive) failed")
-            if io.failed:
+            if io.failed or io.closing or not self._owns_io(io):
                 return EventSourceHealth(connected=False, lag=None, last_event_at=last_event_at)
             ready = 0
+        if io.failed or io.closing or not self._owns_io(io):
+            return EventSourceHealth(connected=False, lag=None, last_event_at=last_event_at)
         lag = ready + local_held
         return EventSourceHealth(
             connected=True,
