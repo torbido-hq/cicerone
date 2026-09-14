@@ -1226,6 +1226,9 @@ def test_load_settings_serve_mode_with_auth_token(tmp_path, monkeypatch):
     assert settings.serve.exclude_consumed is True
     assert settings.serve.fallback_fill is True
     assert settings.serve.consumed_lookback == 1000
+    assert settings.serve_exclude_consumed is True
+    assert settings.serve_fallback_fill is True
+    assert settings.serve_consumed_lookback == 1000
 
 
 def test_load_settings_serve_metrics_token(tmp_path, monkeypatch):
