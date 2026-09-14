@@ -154,7 +154,7 @@ class DatasetOutputSink:
             self._write_recommendations_unlocked(df)
 
     def replace_recommendations_for_users(self, df: pd.DataFrame, *, user_ids: Sequence[str]) -> int:
-        # Read-modify-write; concurrent replicas need a leader (DB sink is transactional).
+        # Read-modify-write under host fcntl plus the optional dataset-append lease.
         ids = normalize_replace_user_ids(df, user_ids)
         if not ids:
             return 0
