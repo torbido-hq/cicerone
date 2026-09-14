@@ -231,7 +231,7 @@ class RabbitMQEventSource(EventSource):
         self._in_flight: set[str] = set()
         self._delivery_tags: dict[str, int] = {}
         self._held_tags: set[int] = set()
-        self._event_io: dict[int, _PikaIo] = {}
+        self._event_io: dict[int, tuple[_PikaIo, str]] = {}
         self._last_event_at: datetime | None = None
 
     def connect(self) -> None:
@@ -331,7 +331,7 @@ class RabbitMQEventSource(EventSource):
             if out:
                 self._last_event_at = max(event.occurred_at for event in out)
             for event in out:
-                self._event_io[id(event)] = io
+                self._event_io[id(event)] = (io, event.event_id)
         return out
 
     def ack(self, event_ids: Sequence[str]) -> None:
@@ -360,13 +360,17 @@ class RabbitMQEventSource(EventSource):
                 self._held_tags.discard(tag)
                 self._in_flight.discard(eid)
                 self._pending_ids.discard(eid)
+                stale = [key for key, (_owner, event_id) in self._event_io.items() if event_id == eid]
+                for key in stale:
+                    self._event_io.pop(key, None)
 
     def nack(self, events: Sequence[NormalizedEvent]) -> None:
         if not events:
             return
         with self._lock:
             for event in reversed(list(events)):
-                if self._event_io.get(id(event)) is not self._io:
+                owner = self._event_io.get(id(event))
+                if owner is None or owner[0] is not self._io:
                     continue
                 if event.event_id not in self._delivery_tags:
                     continue

@@ -143,14 +143,19 @@ class EventWorker:
             with self._source_guard:
                 self._drain_and_close()
             return
+        with self._tick_guard:
+            self.refresh_source_health_metrics()
+        if self._stop.is_set() or self._stop_epoch != epoch:
+            with self._source_guard:
+                self._drain_and_close()
 
     def stop(self, *, join_timeout_seconds: float = 5.0) -> bool:
         self._stop.set()
         self._stop_epoch += 1
         thread = self._thread
-        started = thread is not None
+        was_alive = thread is not None and thread.is_alive()
         joined = True
-        if thread is not None and thread.is_alive():
+        if thread is not None and was_alive:
             thread.join(timeout=join_timeout_seconds)
             if thread.is_alive():
                 logger.warning(
@@ -159,9 +164,15 @@ class EventWorker:
                     join_timeout_seconds,
                 )
                 joined = False
-        if joined and started:
-            with self._source_guard:
-                self._drain_and_close()
+        if joined and was_alive:
+            acquired = self._source_guard.acquire(blocking=True, timeout=join_timeout_seconds)
+            if acquired:
+                try:
+                    self._drain_and_close()
+                finally:
+                    self._source_guard.release()
+            else:
+                return False
         elif not joined:
             acquired = self._tick_guard.acquire(blocking=True, timeout=join_timeout_seconds)
             if acquired:

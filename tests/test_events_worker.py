@@ -478,6 +478,53 @@ def test_event_worker_stop_closes_reconnect_in_progress(tmp_path, feature_config
     assert closes["n"] >= 1
 
 
+def test_event_worker_stop_does_not_block_on_dead_thread_during_restart(
+    tmp_path, feature_config: FeatureConfig
+):
+    import threading
+    import time
+
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    started = threading.Event()
+    release = threading.Event()
+
+    class _SlowSecondConnect(WebhookEventSource):
+        def connect(self) -> None:
+            if started.is_set():
+                release.wait(timeout=2)
+                return
+            started.set()
+            super().connect()
+
+    worker = EventWorker(
+        _SlowSecondConnect({}),
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+        poll_interval_seconds=0.01,
+    )
+    worker.start()
+    assert worker.stop(join_timeout_seconds=2.0) is True
+    assert worker._thread is not None and worker._thread.is_alive() is False
+    starter = threading.Thread(target=worker.start)
+    starter.start()
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and worker._source_guard.acquire(blocking=False):
+        worker._source_guard.release()
+        time.sleep(0.01)
+    began = time.monotonic()
+    assert worker.stop(join_timeout_seconds=0.05) is False
+    assert time.monotonic() - began < 0.4
+    release.set()
+    starter.join(timeout=2)
+
+
 def test_event_worker_start_does_not_revive_after_completed_stop(tmp_path, feature_config: FeatureConfig):
     import threading
 
@@ -841,7 +888,6 @@ def test_event_worker_stop_waits_for_health_before_close(tmp_path, feature_confi
 
         def close(self) -> None:
             order.append("close")
-            super().close()
 
     worker = EventWorker(
         _SlowHealth({}),
@@ -854,7 +900,8 @@ def test_event_worker_stop_waits_for_health_before_close(tmp_path, feature_confi
         ),
         poll_interval_seconds=0.01,
     )
-    worker.start()
+    starter = threading.Thread(target=worker.start)
+    starter.start()
     assert health_started.wait(timeout=2)
     assert worker.stop(join_timeout_seconds=0.05) is False
     assert "close" not in order
@@ -865,6 +912,7 @@ def test_event_worker_stop_waits_for_health_before_close(tmp_path, feature_confi
     assert "health-start" in order
     assert "close" in order
     assert order.index("health-start") < order.index("close")
+    starter.join(timeout=2)
 
 
 def test_event_worker_tick_skips_when_stopped(tmp_path, feature_config: FeatureConfig):

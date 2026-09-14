@@ -1069,6 +1069,18 @@ def test_poll_stops_getting_after_io_replaced(monkeypatch):
     source.close()
 
 
+def test_ack_clears_event_io_ownership(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.enqueue("cicerone.events", event_payload(event_id="e1"))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    events = list(source.poll(1))
+    assert source._event_io
+    source.ack([events[0].event_id])
+    assert source._event_io == {}
+    source.close()
+
+
 def test_nack_ignores_event_after_io_replaced(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     broker.enqueue("cicerone.events", event_payload(event_id="e1"))

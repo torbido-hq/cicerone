@@ -53,6 +53,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Event worker health probes run under the tick lock so stop cannot close during health.
 - RabbitMQ nack ignores an event whose I/O handle was replaced after poll.
 - Event worker start does not clear a stop that already finished before connect.
+- RabbitMQ ack drops ownership stamps so the poll map does not grow without bound.
+- Event worker stop does not block on the source lock for a leftover dead thread.
+- Event worker start refreshes source health before the first tick.
 
 ## [0.8.1] - 2026-09-11
 
