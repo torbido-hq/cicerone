@@ -331,7 +331,9 @@ def test_event_worker_start_aborts_if_stopped_during_connect(tmp_path, feature_c
     starter = threading.Thread(target=worker.start)
     starter.start()
     assert started.wait(timeout=2)
+    began = time.monotonic()
     assert worker.stop(join_timeout_seconds=0.05) is True
+    assert time.monotonic() - began < 0.4
     release.set()
     starter.join(timeout=2)
     assert worker._thread is None or worker._thread.is_alive() is False

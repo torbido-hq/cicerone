@@ -32,6 +32,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - RabbitMQ poll drops a delivery whose I/O handle was replaced before the tag is recorded.
 - A RabbitMQ heartbeat timeout fails closed so apply nacks before writing.
 - Event worker start aborts if stop wins during the initial connect.
+- Event worker stop does not wait on the initial connect lock.
+- RabbitMQ I/O rejects new broker calls after close reserves the thread.
 - Event worker reconnect closes the source after a failed in-flight connect when stop is set.
 - RabbitMQ close reserves the I/O thread for shutdown so a new idle pump cannot queue ahead of it.
 - A RabbitMQ idle-pump socket failure marks the source disconnected so the worker reconnects.

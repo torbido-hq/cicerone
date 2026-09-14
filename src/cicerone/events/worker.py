@@ -129,6 +129,7 @@ class EventWorker:
     def stop(self, *, join_timeout_seconds: float = 5.0) -> bool:
         self._stop.set()
         thread = self._thread
+        started = thread is not None
         joined = True
         if thread is not None and thread.is_alive():
             thread.join(timeout=join_timeout_seconds)
@@ -139,12 +140,12 @@ class EventWorker:
                     join_timeout_seconds,
                 )
                 joined = False
-        if joined:
+        if joined and started:
             try:
                 self._drain_buffer_on_stop()
             except Exception:
                 logger.exception("Event worker drain on stop failed")
-        if joined:
+        if joined and started:
             with self._source_guard:
                 self._close_source()
         elif self._source_guard.acquire(blocking=False):
@@ -185,6 +186,9 @@ class EventWorker:
             finally:
                 if self._stop.is_set():
                     self._close_source()
+        if self._stop.is_set():
+            with self._source_guard:
+                self._close_source()
 
     def _loop(self) -> None:
         disconnected = False

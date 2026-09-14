@@ -149,6 +149,20 @@ def test_abandoned_io_does_not_return_late_ok():
         io.stop()
 
 
+def test_pika_io_submit_rejected_after_shutdown_reserved():
+    from cicerone.events.rabbitmq import _PikaIo
+
+    io = _PikaIo(timeout_seconds=1)
+    io.start()
+    try:
+        assert io._try_begin_shutdown() is True
+        with pytest.raises(RuntimeError, match="not running"):
+            io.submit(lambda: None)
+        io.submit(lambda: None, allow_closing=True)
+    finally:
+        io.stop()
+
+
 def test_pika_io_submit_times_out():
     from cicerone.events.rabbitmq import _PikaIo
 

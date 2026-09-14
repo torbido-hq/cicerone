@@ -70,10 +70,6 @@ class _PikaIo:
         with self._state_lock:
             return self._busy > 0
 
-    def _mark_busy(self) -> None:
-        with self._state_lock:
-            self._busy += 1
-
     def _clear_busy(self) -> None:
         with self._state_lock:
             if self._busy > 0:
@@ -89,12 +85,13 @@ class _PikaIo:
     def start(self) -> None:
         self._thread.start()
 
-    def submit(self, fn: Callable[[], Any]) -> Any:
-        if self._failed or not self._thread.is_alive():
-            raise RuntimeError("RabbitMQ I/O thread is not running")
+    def submit(self, fn: Callable[[], Any], *, allow_closing: bool = False) -> Any:
         reply: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
-        self._mark_busy()
-        self._jobs.put((fn, reply))
+        with self._state_lock:
+            if self._failed or not self._thread.is_alive() or (self._closing and not allow_closing):
+                raise RuntimeError("RabbitMQ I/O thread is not running")
+            self._busy += 1
+            self._jobs.put((fn, reply))
         try:
             status, payload = reply.get(timeout=self._timeout_seconds)
         except queue.Empty as exc:
@@ -480,7 +477,7 @@ def _release_io(io: _PikaIo, channel: Any, connection: Any) -> None:
             io._connection = None
             _close_handles(channel, connection)
 
-        io.submit(_shutdown)
+        io.submit(_shutdown, allow_closing=True)
     except Exception:
         logger.exception("Failed to close RabbitMQ connection on I/O thread")
         io.abandon(channel, connection)
