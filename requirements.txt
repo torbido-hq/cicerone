@@ -6,7 +6,7 @@ pandas==2.3.3
 numpy==1.26.4
 # scipy>=1.18 needs Python>=3.12 and numpy>=2; 1.17.1 is the last 3.11 + numpy 1.26 pin.
 scipy==1.17.1
-scikit-learn==1.9.0
+scikit-learn==1.9.1
 
 # Configurable I/O: static datasets (S3/R2-compatible or local files) or a
 # database (input can be read straight from a Postgres source; output can
