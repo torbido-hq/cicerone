@@ -45,6 +45,19 @@ class ConsumedOverlay:
             items = self._by_user.get(str(user_id))
             return set(items) if items is not None else set()
 
+    def discard(self, user_id: str, item_id: str | None = None) -> None:
+        with self._lock:
+            key = str(user_id)
+            if item_id is None:
+                self._by_user.pop(key, None)
+                return
+            items = self._by_user.get(key)
+            if items is None:
+                return
+            items.pop(str(item_id), None)
+            if not items:
+                self._by_user.pop(key, None)
+
     def _remember(self, user_id: str, item_id: str) -> None:
         items = self._by_user.get(user_id)
         if items is None:

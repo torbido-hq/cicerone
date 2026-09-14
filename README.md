@@ -103,6 +103,9 @@ events worker loads the last artifact for write-through only:
 | --- | --- | --- |
 | `GET` | `/health` | Liveness probe (no auth) |
 | `GET` | `/recommendations/{user_id}` | Precomputed top-K for that user (optional `reasons`) |
+| `PUT`/`GET`/`DELETE` | `/users/{user_id}`, `/items/{item_id}` | Catalog upsert when `[input]` is dataset or db |
+| `POST` | `/catalog/events` | Persist interaction events on `[input]` |
+| `GET`/`DELETE` | `/catalog/events/{user_id}` | List or delete a user's catalog events |
 | `GET` | `/metrics` | Prometheus text format (no bearer token; optional `X-Metrics-Token`) |
 | `POST` | `/events` | Incremental ingest when `[events]` `kind = "webhook"` |
 | `GET` | `/docs` / `/redoc` | Interactive OpenAPI docs (Swagger / ReDoc) |

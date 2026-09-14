@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from cicerone.config.settings import IOSettings
 from cicerone.io.base import InputSource, ManifestReader, OutputSink, RecommendationReader, UserHistoryReader
+
+if TYPE_CHECKING:
+    from cicerone.io.catalog import CatalogStore
 
 T = TypeVar("T")
 
@@ -110,3 +113,22 @@ def build_recommendation_reader(settings: IOSettings) -> RecommendationReader:
 
 def build_manifest_reader(settings: IOSettings) -> ManifestReader:
     return _build_from_registry(settings, _MANIFEST_READERS, role="manifest")
+
+
+_CATALOG_QUERY_OPTIONS = ("events_query", "users_query", "items_query")
+
+
+def build_catalog_store(settings: IOSettings) -> CatalogStore | None:
+    match settings.kind:
+        case "dataset":
+            from cicerone.io.dataset_catalog import DatasetCatalogStore
+
+            return DatasetCatalogStore(settings.options)
+        case "db":
+            if any(str(settings.options.get(name) or "").strip() for name in _CATALOG_QUERY_OPTIONS):
+                return None
+            from cicerone.io.db_catalog import DatabaseCatalogStore
+
+            return DatabaseCatalogStore(settings.options)
+        case _:
+            return None
