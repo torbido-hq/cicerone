@@ -582,6 +582,70 @@ def test_event_worker_start_abort_drains_and_closes_once(tmp_path, feature_confi
     assert closes["n"] == 1
 
 
+def test_event_worker_start_abort_drains_when_connect_raises(tmp_path, feature_config: FeatureConfig):
+    import threading
+    import time
+
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    started = threading.Event()
+    release = threading.Event()
+    closes = {"n": 0}
+    errors: list[BaseException] = []
+
+    class _BoomStart(WebhookEventSource):
+        def connect(self) -> None:
+            started.set()
+            release.wait(timeout=2)
+            raise RuntimeError("connect failed")
+
+        def close(self) -> None:
+            closes["n"] += 1
+            super().close()
+
+    source = _BoomStart({})
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+        poll_interval_seconds=0.01,
+    )
+    worker._buffer.extend([normalize_event(event_payload(event_id="drain-boom", item_id="idrain"))])
+
+    def _start() -> None:
+        try:
+            worker.start()
+        except Exception as exc:
+            errors.append(exc)
+
+    starter = threading.Thread(target=_start)
+    starter.start()
+    assert started.wait(timeout=2)
+    assert worker.stop(join_timeout_seconds=0.05) is True
+    release.set()
+    starter.join(timeout=2)
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and closes["n"] < 1:
+        time.sleep(0.01)
+    assert errors
+    assert closes["n"] == 1
+    assert worker._finalized is True
+    frame = pd.read_parquet(out / "recommendations.parquet")
+    assert "idrain" in set(frame["item_id"].astype(str))
+
+
 def test_event_worker_reconnect_closes_after_failed_connect(tmp_path, feature_config: FeatureConfig):
     import threading
     import time
@@ -627,6 +691,49 @@ def test_event_worker_reconnect_closes_after_failed_connect(tmp_path, feature_co
     while time.monotonic() < deadline and closes["n"] < 1:
         time.sleep(0.01)
     assert closes["n"] >= 1
+
+
+def test_event_worker_skips_tick_after_failed_reconnect(tmp_path, feature_config: FeatureConfig):
+    import threading
+    import time
+
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    reconnect_started = threading.Event()
+    polls = {"n": 0}
+
+    class _FailReconnect(WebhookEventSource):
+        def connect(self) -> None:
+            if polls["n"] > 0:
+                reconnect_started.set()
+                raise RuntimeError("broker down")
+            super().connect()
+
+        def poll(self, max_events: int = 100):  # type: ignore[override]
+            polls["n"] += 1
+            return super().poll(max_events)
+
+        def health(self) -> EventSourceHealth:
+            return EventSourceHealth(connected=False, lag=0)
+
+    worker = EventWorker(
+        _FailReconnect({}),
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+        poll_interval_seconds=0.02,
+    )
+    worker.start()
+    assert reconnect_started.wait(timeout=2)
+    after = polls["n"]
+    time.sleep(0.08)
+    assert polls["n"] == after
+    worker.stop(join_timeout_seconds=1.0)
 
 
 def test_event_worker_stop_closes_source_once(tmp_path, feature_config: FeatureConfig):

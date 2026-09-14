@@ -43,6 +43,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Event worker tick does not poll after stop has closed the source.
 - Event worker start abort drains before close.
 - RabbitMQ poll drops a stale delivery when the same event id is reborn after reconnect.
+- RabbitMQ close still closes channel handles when the failed I/O thread has already exited.
+- RabbitMQ poll drops a claimed event after reconnect even if the new channel reuses the same tag.
+- Event worker skips poll after a failed reconnect until connect succeeds.
+- Event worker start abort drains when the initial connect raises.
 
 ## [0.8.1] - 2026-09-11
 

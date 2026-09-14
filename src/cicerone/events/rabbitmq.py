@@ -318,7 +318,11 @@ class RabbitMQEventSource(EventSource):
             remaining -= 1
 
         with self._lock:
-            out = [event for event, tag in claimed if self._delivery_tags.get(event.event_id) == tag]
+            out = [
+                event
+                for event, tag in claimed
+                if self._io is io and self._delivery_tags.get(event.event_id) == tag
+            ]
             if out:
                 self._last_event_at = max(event.occurred_at for event in out)
         return out
@@ -502,9 +506,8 @@ class RabbitMQEventSource(EventSource):
 
 def _release_io(io: _PikaIo, channel: Any, connection: Any) -> None:
     if io.failed or not io._try_begin_shutdown():
-        if io._thread.is_alive():
-            io.abandon(channel, connection)
-        else:
+        io.abandon(channel, connection)
+        if not io._thread.is_alive():
             _close_handles(channel, connection)
         return
     try:

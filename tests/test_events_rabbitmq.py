@@ -976,6 +976,28 @@ def test_reconnect_does_not_ack_late_delivery_on_new_channel(monkeypatch):
     source.close()
 
 
+def test_release_io_closes_handles_if_thread_already_exited(monkeypatch):
+    from cicerone.events.rabbitmq import _PikaIo, _release_io
+
+    class _Handle:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    io = _PikaIo(timeout_seconds=0.05)
+    io.start()
+    io._failed = True
+    io.stop()
+    assert io._thread.is_alive() is False
+    channel = _Handle()
+    connection = _Handle()
+    _release_io(io, channel, connection)
+    assert channel.closed is True
+    assert connection.closed is True
+
+
 def test_poll_drops_stale_pending_when_tag_reborn(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     broker.enqueue("cicerone.events", event_payload(event_id="e1"))
@@ -995,6 +1017,32 @@ def test_poll_drops_stale_pending_when_tag_reborn(monkeypatch):
     got = list(source.poll(2))
     assert got == []
     assert source._delivery_tags.get("e1") == old_tag + 99
+    source.close()
+
+
+def test_poll_drops_stale_pending_when_io_replaced_with_same_tag(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.enqueue("cicerone.events", event_payload(event_id="e1"))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    first = list(source.poll(1))
+    assert [event.event_id for event in first] == ["e1"]
+    source.nack(first)
+    old_tag = source._delivery_tags["e1"]
+    old_io = source._io
+
+    def _reborn(_io: object) -> tuple[None, None, None]:
+        source._io = object()  # type: ignore[assignment]
+        source._delivery_tags["e1"] = old_tag
+        source._held_tags.add(old_tag)
+        return None, None, None
+
+    source._basic_get = _reborn  # type: ignore[method-assign]
+    got = list(source.poll(2))
+    assert got == []
+    assert source._io is not old_io
+    assert source._delivery_tags.get("e1") == old_tag
+    source._io = old_io
     source.close()
 
 

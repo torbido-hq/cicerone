@@ -121,7 +121,12 @@ class EventWorker:
         self._stop.clear()
         with self._source_guard:
             self._finalized = False
-            self._source.connect()
+            try:
+                self._source.connect()
+            except Exception:
+                if self._stop.is_set():
+                    self._drain_and_close()
+                raise
             if self._stop.is_set():
                 self._drain_and_close()
                 return
@@ -197,30 +202,36 @@ class EventWorker:
             logger.exception("Event worker drain on stop failed")
         self._close_source()
 
-    def _reconnect_source(self) -> None:
+    def _reconnect_source(self) -> bool:
         with self._source_guard:
             if self._stop.is_set():
                 self._drain_and_close()
-                return
+                return False
             try:
                 self._source.connect()
             except Exception:
                 logger.exception("Event source reconnect failed")
+                if self._stop.is_set():
+                    self._drain_and_close()
+                return False
             if self._stop.is_set():
                 self._drain_and_close()
-                return
+                return False
         if self._stop.is_set():
             with self._source_guard:
                 self._drain_and_close()
+            return False
+        return True
 
     def _loop(self) -> None:
         disconnected = False
         try:
             while not self._stop.is_set():
-                if disconnected:
-                    self._reconnect_source()
+                if disconnected and not self._reconnect_source():
                     if self._stop.is_set():
                         break
+                    self._stop.wait(self._poll_interval_seconds)
+                    continue
                 try:
                     self.tick()
                 except Exception:
