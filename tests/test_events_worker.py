@@ -395,6 +395,85 @@ def test_event_worker_stop_does_not_close_before_in_flight_ack(tmp_path, feature
     assert order.index("ack-done") < order.index("close")
 
 
+def test_event_worker_reconnect_nacks_buffer_before_connect(tmp_path, feature_config: FeatureConfig):
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    order: list[str] = []
+    nacked: list[str] = []
+
+    class _TrackNack(WebhookEventSource):
+        def connect(self) -> None:
+            order.append("connect")
+            super().connect()
+
+        def nack(self, events):  # type: ignore[no-untyped-def,override]
+            order.append("nack")
+            nacked.extend(event.event_id for event in events)
+            super().nack(events)
+
+    source = _TrackNack({})
+    source.connect()
+    source.ingest(event_payload(event_id="buf-1", item_id="i7"))
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    kept = worker._buffer.extend(source.poll(1))
+    assert kept.kept_count == 1
+    assert worker._reconnect_source() is True
+    assert nacked == ["buf-1"]
+    assert len(worker._buffer) == 0
+    assert order == ["connect", "nack", "connect"]
+
+
+def test_event_worker_skips_poll_when_startup_health_disconnected(tmp_path, feature_config: FeatureConfig):
+    import time
+
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    connects = {"n": 0}
+    polls_at_connect: list[int] = []
+
+    class _UnhealthyUntilReconnect(WebhookEventSource):
+        def connect(self) -> None:
+            connects["n"] += 1
+            super().connect()
+
+        def poll(self, max_events: int = 100):  # type: ignore[override]
+            polls_at_connect.append(connects["n"])
+            return super().poll(max_events)
+
+        def health(self) -> EventSourceHealth:
+            return EventSourceHealth(connected=connects["n"] >= 2, lag=0)
+
+    worker = EventWorker(
+        _UnhealthyUntilReconnect({}),
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+        poll_interval_seconds=0.01,
+    )
+    worker.start()
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and not polls_at_connect:
+        time.sleep(0.01)
+    worker.stop(join_timeout_seconds=2.0)
+    assert polls_at_connect
+    assert polls_at_connect[0] >= 2
+
+
 def test_event_worker_reconnects_when_source_reports_disconnected(tmp_path, feature_config: FeatureConfig):
     import time
 

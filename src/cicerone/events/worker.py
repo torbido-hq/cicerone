@@ -137,7 +137,7 @@ class EventWorker:
             if self._stop.is_set() or self._stop_epoch != epoch:
                 self._drain_and_close()
                 return
-            self.refresh_source_health_metrics()
+            self._source_unhealthy = not self.refresh_source_health_metrics()
             if self._stop.is_set() or self._stop_epoch != epoch:
                 self._drain_and_close()
                 return
@@ -220,11 +220,24 @@ class EventWorker:
             logger.exception("Event worker drain on stop failed")
         self._close_source()
 
+    def _return_buffer_before_reconnect(self) -> None:
+        leftover = self._buffer.flush()
+        if not leftover:
+            return
+        try:
+            self._source.nack(leftover)
+        except Exception:
+            logger.exception(
+                "Event worker failed to return %d buffered event(s) before reconnect",
+                len(leftover),
+            )
+
     def _reconnect_source(self) -> bool:
         with self._source_guard:
             if self._stop.is_set():
                 self._drain_and_close()
                 return False
+            self._return_buffer_before_reconnect()
             try:
                 self._source.connect()
             except Exception:
@@ -242,7 +255,7 @@ class EventWorker:
         return True
 
     def _loop(self) -> None:
-        disconnected = False
+        disconnected = self._source_unhealthy
         try:
             while not self._stop.is_set():
                 if disconnected and not self._reconnect_source():
