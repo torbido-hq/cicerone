@@ -32,6 +32,7 @@ from cicerone.locks.redis import RedisLock
 __all__ = [
     "LockBackend",
     "LockLostError",
+    "WriterLockBusyError",
     "PG_ADVISORY_KEY1",
     "PG_ADVISORY_KEY2",
     "PostgresAdvisoryLock",
@@ -55,6 +56,10 @@ class LockLostError(RuntimeError):
     def __init__(self, message: str, *, kind: str = "lock") -> None:
         super().__init__(message)
         self.kind = kind
+
+
+class WriterLockBusyError(RuntimeError):
+    """Another writer held the dataset-append lease until acquire timed out."""
 
 
 class LockBackend(Protocol):
@@ -104,7 +109,7 @@ def held_writer_lock(
         yield
         return
     if not acquire_blocking(lock):
-        raise RuntimeError("dataset writer lock busy")
+        raise WriterLockBusyError("dataset writer lock busy")
     try:
         if not lock.owned():
             raise LockLostError("dataset writer lock lost before write", kind="writer")

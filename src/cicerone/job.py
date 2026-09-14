@@ -747,13 +747,16 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
             except Exception:
                 logger.exception("Failed to close recommendation publisher")
         if not manifest_written:
-            manifest["generated_at"] = datetime.now(UTC).isoformat()
-            try:
-                sink.write_manifest(manifest)
-            except Exception:
-                logger.exception("Failed to write manifest; original job error (if any) is preserved")
-                if manifest.get("status") == "success":
-                    raise
+            if fence_check is not None and not fence_check():
+                logger.error("Skipping job manifest: retrain lock lost before write")
+            else:
+                manifest["generated_at"] = datetime.now(UTC).isoformat()
+                try:
+                    sink.write_manifest(manifest)
+                except Exception:
+                    logger.exception("Failed to write manifest; original job error (if any) is preserved")
+                    if manifest.get("status") == "success":
+                        raise
         logger.info("Job finished: %s", json.dumps(manifest))
         if manifest.get("status") == "success" and (settings.track.enabled or settings.eval.enabled):
             _persist_track_outputs(

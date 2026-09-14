@@ -185,7 +185,16 @@ class DatasetOutputSink:
         client = build_s3_client(self._options)
         client.put_object(Bucket=bucket, Key=key, Body=payload, ContentType=content_type)
 
+    def _ensure_writer_still_held(self) -> None:
+        from cicerone.locks import LockLostError
+
+        if self._writer_lock is not None and not self._writer_lock.owned():
+            raise LockLostError("dataset writer lock lost before write", kind="writer")
+        if self._fence_check is not None and not self._fence_check():
+            raise LockLostError(self._fence_lost, kind=self._fence_kind)
+
     def _write_recommendations_unlocked(self, df: pd.DataFrame) -> None:
+        self._ensure_writer_still_held()
         buffer = io.BytesIO()
         df.to_parquet(buffer, index=False)
         self._write_bytes("recommendations.parquet", buffer.getvalue(), "application/octet-stream")

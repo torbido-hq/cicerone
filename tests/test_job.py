@@ -960,10 +960,7 @@ def test_job_skips_writes_when_fence_lost_before_output(tmp_path, monkeypatch):
         job.run(fence_check=lambda: False)
 
     assert not (output_dir / "recommendations.parquet").exists()
-    manifest = json.loads((output_dir / "manifest.json").read_text())
-    assert manifest["status"] == "failed"
-    assert manifest["partial_outputs"] is False
-    assert "retrain lock lost" in manifest["error"]
+    assert not (output_dir / "manifest.json").exists()
 
 
 def test_job_marks_partial_outputs_when_fence_lost_after_write(tmp_path, monkeypatch):
@@ -997,9 +994,7 @@ def test_job_marks_partial_outputs_when_fence_lost_after_write(tmp_path, monkeyp
         job.run(fence_check=fence)
 
     assert (output_dir / "recommendations.parquet").exists()
-    manifest = json.loads((output_dir / "manifest.json").read_text())
-    assert manifest["status"] == "failed"
-    assert manifest["partial_outputs"] is True
+    assert not (output_dir / "manifest.json").exists()
     assert calls["n"] >= 2
 
 
@@ -1040,9 +1035,7 @@ def test_run_guard_skips_job_writes_when_owned_is_false(tmp_path, monkeypatch):
     assert guard.trigger("webhook") is True
     assert released.wait(timeout=30)
     assert not (output_dir / "recommendations.parquet").exists()
-    manifest = json.loads((output_dir / "manifest.json").read_text())
-    assert manifest["status"] == "failed"
-    assert "retrain lock lost" in manifest["error"]
+    assert not (output_dir / "manifest.json").exists()
 
 
 def test_job_run_writes_both_experiment_variants(tmp_path, monkeypatch):

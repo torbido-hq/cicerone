@@ -650,6 +650,25 @@ def test_flush_logs_writer_lock_loss_not_apply(tmp_path, feature_config: Feature
     assert source.health().lag >= 1
 
 
+def test_flush_records_writer_lock_busy(tmp_path, feature_config: FeatureConfig):
+    from cicerone.locks import WriterLockBusyError
+
+    _out, settings = _seed_out(tmp_path)
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="wb1", user_id="u1", item_id="iwb"))
+    worker = _worker(settings, source, feature_config, apply_lock=SharedLock())
+
+    def _boom(_events, persist_online=False):
+        del _events, persist_online
+        raise WriterLockBusyError("dataset writer lock busy")
+
+    worker._updater.apply = _boom  # type: ignore[method-assign]
+    before = registry_metric_value("cicerone_events_apply_busy_total", {"reason": "lock"})
+    assert worker.tick() == 0
+    assert registry_metric_value("cicerone_events_apply_busy_total", {"reason": "lock"}) == before + 1
+    assert source.health().lag >= 1
+
+
 def test_flush_logs_apply_lock_loss(tmp_path, feature_config: FeatureConfig, caplog):
     _out, settings = _seed_out(tmp_path)
     source = WebhookEventSource({})

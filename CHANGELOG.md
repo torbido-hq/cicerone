@@ -135,6 +135,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   skip the host/distributed lease.
 - The job writes a successful manifest under the same dataset write lock
   as recommendations.
+- Nested dataset writes re-check writer ownership before replacing
+  parquet. A failed job does not write a manifest after fence loss.
+- Writer-lock contention is a busy nack, not an apply error. Serve
+  impression/exposure appends retry that busy path.
 
 
 ## [0.8.1] - 2026-09-11

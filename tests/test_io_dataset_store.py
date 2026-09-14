@@ -272,6 +272,40 @@ def test_recommendations_write_reentry_is_per_thread(tmp_path, monkeypatch) -> N
     assert acquires[0] != acquires[1]
 
 
+def test_nested_replace_rechecks_owned_before_unlocked_write(tmp_path) -> None:
+    from cicerone.locks import LockLostError
+
+    held = {"v": True}
+
+    class _Lock:
+        def acquire(self) -> bool:
+            return True
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            return held["v"]
+
+        def is_locked(self) -> bool:
+            return True
+
+    sink = DatasetOutputSink(
+        {"storage_backend": "local", "path": str(tmp_path)},
+        writer_lock=_Lock(),
+    )
+    with sink.recommendations_write():
+        held["v"] = False
+        with pytest.raises(LockLostError, match="dataset writer lock lost before write"):
+            sink.replace_recommendations_for_users(
+                pd.DataFrame(
+                    [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"}]
+                ),
+                user_ids=["u1"],
+            )
+    assert not (tmp_path / "recommendations.parquet").exists()
+
+
 def test_write_recommendations_rechecks_fence_after_writer_lock(tmp_path) -> None:
     from cicerone.locks import LockLostError
 

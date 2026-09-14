@@ -348,6 +348,27 @@ def test_get_log_impressions_when_enabled(tmp_path):
     assert [row["rank"] for row in rows] == [item["rank"] for item in body["items"]]
 
 
+def test_get_log_impressions_retries_writer_lock_busy(tmp_path, monkeypatch):
+    from cicerone.locks import WriterLockBusyError
+    from cicerone.serve import app as serve_app
+
+    calls = {"n": 0}
+
+    def flaky(*args, **kwargs):
+        del args, kwargs
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise WriterLockBusyError("dataset writer lock busy")
+        return 1
+
+    monkeypatch.setattr("cicerone.track.store.TrackStore.append_rows", flaky)
+    monkeypatch.setattr(serve_app.time, "sleep", lambda _seconds: None)
+    app = create_app(_settings(tmp_path, serve_log_impressions=True), _FakeReader(_recs_df()))
+    response = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"})
+    assert response.status_code == 200
+    assert calls["n"] == 3
+
+
 def test_get_log_impressions_swallows_store_errors(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "cicerone.track.store.TrackStore.append_rows",

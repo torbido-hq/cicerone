@@ -17,7 +17,7 @@ from cicerone.events.base import EventSource, NormalizedEvent
 from cicerone.events.buffer import MicroBatchBuffer
 from cicerone.events.normalize import event_fingerprint
 from cicerone.events.updater import IncrementalUpdater
-from cicerone.locks import LockBackend, LockLostError
+from cicerone.locks import LockBackend, LockLostError, WriterLockBusyError
 from cicerone.serve.metrics import (
     record_events_apply_busy,
     record_events_flush,
@@ -599,6 +599,13 @@ class EventWorker:
             logger.error("%s; nacking %d event(s)", exc, len(ready))
             self._updater.abort_online()
             self._return_events(ready)
+            return 0
+        except WriterLockBusyError as exc:
+            record_events_flush(status="busy")
+            record_events_apply_busy(reason="lock")
+            logger.info("%s; nacking %d event(s)", exc, len(ready))
+            self._updater.abort_online()
+            self._source.nack(ready)
             return 0
         except Exception:
             record_events_flush(status="error")
