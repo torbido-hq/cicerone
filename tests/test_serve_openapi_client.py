@@ -206,6 +206,32 @@ def test_serve_client_health_and_recommendations(live_serve_url):
     assert [row.item_id for row in opt_out.items] == ["i1", "i2"]
 
 
+def test_serve_client_surface_methods_serialize(monkeypatch):
+    seen: list[tuple[str, str, dict[str, str] | None, object]] = []
+
+    def fake_request(self, method, path, params=None, json_body=None):
+        del self
+        seen.append((method, path, params, json_body))
+        if path.startswith("/similar/"):
+            return {"item_id": "i1", "items": []}
+        if method == "POST":
+            return {"fallback": False, "items": []}
+        return {"items": []}
+
+    monkeypatch.setattr(ServeClient, "_request", fake_request)
+    client = ServeClient("http://example.test")
+    client.popular(limit=5, category="beer")
+    client.latest(limit=3, category="wine")
+    client.similar("i 1", limit=2)
+    client.session(["i1", "i2"])
+    assert seen[0] == ("GET", "/popular", {"limit": "5", "category": "beer"}, None)
+    assert seen[1] == ("GET", "/latest", {"limit": "3", "category": "wine"}, None)
+    assert seen[2][0] == "GET"
+    assert seen[2][1] == "/similar/i%201"
+    assert seen[2][2] == {"limit": "2"}
+    assert seen[3] == ("POST", "/session/recommendations", None, {"items": ["i1", "i2"]})
+
+
 def test_serve_client_sends_exclude_consumed(monkeypatch):
     seen: dict[str, object] = {}
 

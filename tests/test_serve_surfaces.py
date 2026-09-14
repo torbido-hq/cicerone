@@ -64,6 +64,31 @@ def test_popular_latest_similar_and_session():
     assert [row["item_id"] for row in session["items"]] == ["i2"]
 
 
+def test_session_falls_back_when_neighbors_are_filtered_out():
+    class _OnlyUnavailable(_Surfaces):
+        def get_similar(self, item_id: str, k: int) -> pd.DataFrame:
+            del item_id, k
+            return pd.DataFrame([{"item_id": "i1", "neighbor_id": "i3", "rank": 1, "score": 0.9}])
+
+    app = create_app(
+        _settings(),
+        _FakeReader(_recs_df(), _items_df()),
+        feature_config=_feature_config(),
+        surfaces=_OnlyUnavailable(),
+    )
+    body = (
+        TestClient(app)
+        .post(
+            "/session/recommendations",
+            json={"items": ["i1"]},
+            headers={"Authorization": "Bearer secret"},
+        )
+        .json()
+    )
+    assert body["fallback"] is True
+    assert [row["item_id"] for row in body["items"]] == ["i2"]
+
+
 def test_session_falls_back_to_popular():
     client = TestClient(_app())
     body = client.post(
