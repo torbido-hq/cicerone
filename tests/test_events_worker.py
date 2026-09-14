@@ -915,6 +915,47 @@ def test_event_worker_stop_waits_for_health_before_close(tmp_path, feature_confi
     starter.join(timeout=2)
 
 
+def test_event_worker_start_returns_before_first_poll(tmp_path, feature_config: FeatureConfig):
+    import threading
+
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    healths = {"n": 0}
+    poll_started = threading.Event()
+    poll_release = threading.Event()
+
+    class _GatePoll(WebhookEventSource):
+        def health(self) -> EventSourceHealth:
+            healths["n"] += 1
+            return super().health()
+
+        def poll(self, max_events: int = 100):  # type: ignore[override]
+            poll_started.set()
+            poll_release.wait(timeout=5)
+            return super().poll(max_events)
+
+    worker = EventWorker(
+        _GatePoll({}),
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+        poll_interval_seconds=0.01,
+    )
+    starter = threading.Thread(target=worker.start)
+    starter.start()
+    starter.join(timeout=1)
+    assert not starter.is_alive()
+    assert healths["n"] >= 1
+    assert poll_started.wait(timeout=2)
+    poll_release.set()
+    assert worker.stop(join_timeout_seconds=2.0) is True
+
+
 def test_event_worker_tick_skips_when_stopped(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),

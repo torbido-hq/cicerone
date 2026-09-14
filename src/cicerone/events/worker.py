@@ -137,14 +137,12 @@ class EventWorker:
             if self._stop.is_set() or self._stop_epoch != epoch:
                 self._drain_and_close()
                 return
+            self.refresh_source_health_metrics()
+            if self._stop.is_set() or self._stop_epoch != epoch:
+                self._drain_and_close()
+                return
             self._thread = threading.Thread(target=self._loop, name="cicerone-events", daemon=True)
             self._thread.start()
-        if self._stop.is_set() or self._stop_epoch != epoch:
-            with self._source_guard:
-                self._drain_and_close()
-            return
-        with self._tick_guard:
-            self.refresh_source_health_metrics()
         if self._stop.is_set() or self._stop_epoch != epoch:
             with self._source_guard:
                 self._drain_and_close()
