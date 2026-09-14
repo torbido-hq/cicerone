@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from cicerone.config.constants import DEFAULT_SERVE_MAX_K
+
 
 class HealthResponse(BaseModel):
     status: str = Field(examples=["ok"])
@@ -204,9 +206,15 @@ class SimilarResponse(SurfaceResponse):
 
 
 class SessionRecommendRequest(BaseModel):
-    items: list[str] = Field(default_factory=list, description="Item ids in this anonymous session")
+    items: list[str] = Field(
+        default_factory=list,
+        max_length=DEFAULT_SERVE_MAX_K,
+        description="Item ids in this anonymous session",
+    )
     events: list[InteractionEvent] = Field(
-        default_factory=list, description="Optional session events; item_id values are used"
+        default_factory=list,
+        max_length=DEFAULT_SERVE_MAX_K,
+        description="Optional session events; item_id values are used",
     )
 
 

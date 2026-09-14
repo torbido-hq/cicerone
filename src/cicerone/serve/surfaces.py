@@ -187,10 +187,16 @@ def mount_surface_routes(
         session_ids = list(dict.fromkeys(session_ids))
         if not session_ids:
             raise HTTPException(status_code=400, detail="Session must include at least one item_id")
+        if len(session_ids) > DEFAULT_SERVE_MAX_K:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Session may include at most {DEFAULT_SERVE_MAX_K} item ids",
+            )
         top_k = settings.serve.default_k
+        fetch_k = max(top_k * 5, top_k)
         parts: list[pd.DataFrame] = []
         for item_id in session_ids:
-            neighbors = similar_as_surface(surfaces.get_similar(item_id, top_k))
+            neighbors = similar_as_surface(surfaces.get_similar(item_id, fetch_k))
             if not neighbors.empty:
                 parts.append(neighbors)
         used_fallback = False
@@ -201,7 +207,7 @@ def mount_surface_routes(
             merged = merged.drop_duplicates(subset=[ITEM_COLUMN], keep="first")
         else:
             used_fallback = True
-            merged = surfaces.get_popular(top_k * 5)
+            merged = surfaces.get_popular(fetch_k)
         merged = _filter_surface(merged, category=None, exclude_unavailable=True)
         merged = drop_consumed(merged, set(session_ids)).head(top_k)
         if merged.empty:

@@ -808,6 +808,7 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
         outputs_written = False
         recs_write = getattr(sink, "recommendations_write", None)
         write_item_scores = getattr(sink, "write_item_scores", None)
+        write_surfaces = getattr(sink, "write_surfaces", None)
         _ensure_fence(fence_check)
         item_scores = (
             build_item_scores(
@@ -821,6 +822,13 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
             if callable(write_item_scores)
             else empty_item_scores()
         )
+        popular = popular_from_events(events, settings.top_k)
+        latest = latest_from_items(
+            items,
+            settings.top_k,
+            feature_config.blending.latest_date_columns,
+        )
+        neighbors = neighbors_from_events(events, settings.item_based_k_neighbors)
         try:
             with recs_write() if callable(recs_write) else nullcontext():
                 try:
@@ -839,17 +847,12 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                         _ensure_publication_fence(sink, fence_check)
                         write_item_scores(item_scores)
                         outputs_written = True
-                    write_surfaces = getattr(sink, "write_surfaces", None)
                     if callable(write_surfaces):
                         _ensure_publication_fence(sink, fence_check)
                         write_surfaces(
-                            popular=popular_from_events(events, settings.top_k),
-                            latest=latest_from_items(
-                                items,
-                                settings.top_k,
-                                feature_config.blending.latest_date_columns,
-                            ),
-                            neighbors=neighbors_from_events(events, settings.item_based_k_neighbors),
+                            popular=popular,
+                            latest=latest,
+                            neighbors=neighbors,
                         )
                         outputs_written = True
                     _ensure_publication_fence(sink, fence_check)

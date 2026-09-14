@@ -4,6 +4,7 @@ import pandas as pd
 from fastapi.testclient import TestClient
 from test_serve import _FakeReader, _feature_config, _items_df, _recs_df, _settings
 
+from cicerone.config.constants import DEFAULT_SERVE_MAX_K
 from cicerone.io.surfaces_reader import EmptySurfacesReader
 from cicerone.serve import create_app
 
@@ -90,3 +91,50 @@ def test_session_requires_an_item():
         headers={"Authorization": "Bearer secret"},
     )
     assert response.status_code == 400
+
+
+def test_session_overfetches_neighbors_before_filters():
+    class _UnavailableFirst(_Surfaces):
+        def __init__(self) -> None:
+            super().__init__()
+            self.neighbors = pd.DataFrame(
+                [
+                    {"item_id": "i1", "neighbor_id": "i3", "rank": 1, "score": 0.9},
+                    {"item_id": "i1", "neighbor_id": "i2", "rank": 2, "score": 0.8},
+                ]
+            )
+            self.requested: list[int] = []
+
+        def get_similar(self, item_id: str, k: int) -> pd.DataFrame:
+            self.requested.append(k)
+            return super().get_similar(item_id, k)
+
+    surfaces = _UnavailableFirst()
+    app = create_app(
+        _settings(),
+        _FakeReader(_recs_df(), _items_df()),
+        feature_config=_feature_config(),
+        surfaces=surfaces,
+    )
+    body = (
+        TestClient(app)
+        .post(
+            "/session/recommendations",
+            json={"items": ["i1"]},
+            headers={"Authorization": "Bearer secret"},
+        )
+        .json()
+    )
+    assert [row["item_id"] for row in body["items"]] == ["i2"]
+    assert surfaces.requested
+    assert surfaces.requested[0] >= 5
+
+
+def test_session_rejects_too_many_items():
+    client = TestClient(_app())
+    response = client.post(
+        "/session/recommendations",
+        json={"items": [f"i{n}" for n in range(DEFAULT_SERVE_MAX_K + 1)]},
+        headers={"Authorization": "Bearer secret"},
+    )
+    assert response.status_code == 422
