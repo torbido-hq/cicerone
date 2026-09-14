@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
 
-from cicerone.io.db_store import DatabaseOutputSink
+from cicerone.io.db_store import DatabaseOutputSink, _manifest_column_sql_type
 from cicerone.io.recommendation_reader import DbRecommendationReader
 from cicerone.io.replace_users import RecommendationSchemaError
 from cicerone.locks import LockLostError
@@ -159,6 +159,13 @@ def test_sqlite_db_reader_item_scores_keeps_cache_on_bad_schema(tmp_path):
     assert float(reader.get_item_scores().iloc[0]["popular_score"]) == 2.5
 
 
+def test_manifest_column_sql_type_uses_series_dtype():
+    assert _manifest_column_sql_type(pd.Series([True, False])) == "BOOLEAN"
+    assert _manifest_column_sql_type(pd.Series([1, 4])) == "BIGINT"
+    assert _manifest_column_sql_type(pd.Series([1.5, 60.0])) == "FLOAT"
+    assert _manifest_column_sql_type(pd.Series(["success", "failed"])) == "TEXT"
+
+
 def test_sqlite_write_manifest_adds_missing_columns(tmp_path):
     url = _sqlite_url(tmp_path)
     engine = create_engine(url)
@@ -166,10 +173,29 @@ def test_sqlite_write_manifest_adds_missing_columns(tmp_path):
         "recommendation_runs", engine, index=False, if_exists="replace"
     )
     sink = DatabaseOutputSink({"database_url": url})
-    sink.write_manifest({"n_events": 2, "status": "success", "n_item_scores": 4})
+    sink.write_manifest(
+        {
+            "n_events": 2,
+            "status": "success",
+            "n_item_scores": 4,
+            "partial_outputs": False,
+            "rrf_k": 60.0,
+        }
+    )
     stored = pd.read_sql('SELECT * FROM "recommendation_runs"', engine)
     assert list(stored["n_events"]) == [1, 2]
     assert int(stored.iloc[1]["n_item_scores"]) == 4
+    with engine.connect() as conn:
+        types = {
+            str(row[1]): str(row[2]).upper()
+            for row in conn.execute(text("PRAGMA table_info(recommendation_runs)"))
+        }
+    assert "INT" in types["n_item_scores"]
+    assert types["partial_outputs"] in {"BOOLEAN", "BOOL"}
+    assert types["rrf_k"] in {"FLOAT", "REAL"}
+    sink.write_manifest({"n_events": 3, "status": "success", "n_item_scores": 5})
+    stored = pd.read_sql('SELECT * FROM "recommendation_runs"', engine)
+    assert list(stored["n_events"]) == [1, 2, 3]
 
 
 def test_sqlite_write_item_scores_replaces_legacy_table(tmp_path):

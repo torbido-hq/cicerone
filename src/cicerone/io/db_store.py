@@ -154,12 +154,12 @@ def _require_optional_recommendation_columns(engine: Engine, table: str, frame: 
     )
 
 
-def _manifest_sql_type(value: object) -> str:
-    if isinstance(value, bool):
+def _manifest_column_sql_type(series: pd.Series) -> str:
+    if pd.api.types.is_bool_dtype(series.dtype):
         return "BOOLEAN"
-    if isinstance(value, int):
+    if pd.api.types.is_integer_dtype(series.dtype):
         return "BIGINT"
-    if isinstance(value, float):
+    if pd.api.types.is_float_dtype(series.dtype):
         return "FLOAT"
     return "TEXT"
 
@@ -175,8 +175,9 @@ def _add_missing_manifest_columns(engine: Engine, table: str, frame: pd.DataFram
     with engine.begin() as conn:
         for column in missing:
             ident = sql_identifier(str(column), option="manifest_table column")
-            sample = frame[column].iloc[0] if len(frame) else None
-            conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN "{ident}" {_manifest_sql_type(sample)}'))
+            conn.execute(
+                text(f'ALTER TABLE "{table}" ADD COLUMN "{ident}" {_manifest_column_sql_type(frame[column])}')
+            )
 
 
 def _missing_item_scores_columns(engine: Engine, table: str) -> list[str]:
