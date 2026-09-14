@@ -131,6 +131,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   lock. Writer-lease loss is logged as itself, not as apply-lease loss.
 - Incremental apply reloads and remakes affected users under the dataset
   writer lock so a finished retrain is not overwritten.
+- Dataset writer-lock re-entry is per-thread, so a second writer cannot
+  skip the host/distributed lease.
+- The job writes a successful manifest under the same dataset write lock
+  as recommendations.
 
 
 ## [0.8.1] - 2026-09-11

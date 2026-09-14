@@ -230,6 +230,48 @@ def test_write_recommendations_writer_lock_busy(tmp_path, monkeypatch) -> None:
     assert not (tmp_path / "recommendations.parquet").exists()
 
 
+def test_recommendations_write_reentry_is_per_thread(tmp_path, monkeypatch) -> None:
+    acquires: list[int] = []
+
+    class _Lock:
+        def acquire(self) -> bool:
+            acquires.append(threading.get_ident())
+            return True
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            return True
+
+        def is_locked(self) -> bool:
+            return True
+
+    monkeypatch.setattr("cicerone.locks.acquire_blocking", lambda lock, **_kwargs: lock.acquire())
+    sink = DatasetOutputSink(
+        {"storage_backend": "local", "path": str(tmp_path)},
+        writer_lock=_Lock(),
+    )
+    started = threading.Event()
+    release = threading.Event()
+
+    def holder() -> None:
+        with sink.recommendations_write():
+            started.set()
+            release.wait(timeout=2)
+
+    thread = threading.Thread(target=holder)
+    thread.start()
+    assert started.wait(timeout=2)
+    sink.write_recommendations(
+        pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"}])
+    )
+    release.set()
+    thread.join(timeout=2)
+    assert len(acquires) == 2
+    assert acquires[0] != acquires[1]
+
+
 def test_write_recommendations_rechecks_fence_after_writer_lock(tmp_path) -> None:
     from cicerone.locks import LockLostError
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import threading
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
@@ -117,7 +118,7 @@ class DatasetOutputSink:
         self._fence_check = fence_check
         self._fence_lost = fence_lost
         self._fence_kind = fence_kind
-        self._recs_write_depth = 0
+        self._recs_write_held = threading.local()
 
     @contextmanager
     def _local_file_lock(self, filename: str) -> Iterator[None]:
@@ -143,18 +144,21 @@ class DatasetOutputSink:
         ):
             yield
 
+    def _recs_write_depth(self) -> int:
+        return int(getattr(self._recs_write_held, "depth", 0))
+
     @contextmanager
     def recommendations_write(self) -> Iterator[None]:
         with self._recommendations_lock():
-            self._recs_write_depth += 1
+            self._recs_write_held.depth = self._recs_write_depth() + 1
             try:
                 yield
             finally:
-                self._recs_write_depth -= 1
+                self._recs_write_held.depth = self._recs_write_depth() - 1
 
     @contextmanager
     def _maybe_recommendations_lock(self) -> Iterator[None]:
-        if self._recs_write_depth:
+        if self._recs_write_depth():
             yield
             return
         with self._recommendations_lock():

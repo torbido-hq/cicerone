@@ -7,6 +7,7 @@ import logging
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from datetime import UTC, datetime
 from typing import Any, NamedTuple
 
@@ -170,6 +171,24 @@ def _try_load(label: str, fn: Callable[[], Any], default: Any) -> Any:
         return default
 
 
+def _try_load_pair(
+    left_label: str,
+    left: Callable[[], Any],
+    left_default: Any,
+    right_label: str,
+    right: Callable[[], Any],
+    right_default: Any,
+    *,
+    parallel: bool,
+) -> tuple[Any, Any]:
+    if not parallel:
+        return _try_load(left_label, left, left_default), _try_load(right_label, right, right_default)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        left_f = pool.submit(_try_load, left_label, left, left_default)
+        right_f = pool.submit(_try_load, right_label, right, right_default)
+        return left_f.result(), right_f.result()
+
+
 def _persist_track_outputs(
     store: TrackStore,
     *,
@@ -222,8 +241,15 @@ def _score_previous_run(
             return []
         return store.read_rows()
 
-    previous_recs = _try_load("load previous recommendations for eval", _load_recs, None)
-    track_rows = _try_load("read track rows", _load_track, [])
+    previous_recs, track_rows = _try_load_pair(
+        "load previous recommendations for eval",
+        _load_recs,
+        None,
+        "read track rows",
+        _load_track,
+        [],
+        parallel=settings.output.kind != "db",
+    )
     wanted = generated_ats_from_track(track_rows, previous_generated_at)
     history = None
     if wanted:
@@ -358,15 +384,14 @@ def _select_thompson_recipes(
     names = [recipe.name for recipe in recipes]
     try:
         conversions = conversion_events_for_settings(events, settings)
-        recs = _try_load(
+        recs, catalog_size = _try_load_pair(
             "load recommendations for Thompson guardrails",
             lambda: load_recommendations_frame(settings.output),
             None,
-        )
-        catalog_size = _try_load(
             "load catalog size for Thompson guardrails",
             lambda: load_items_catalog_size(settings.output),
             None,
+            parallel=settings.output.kind != "db",
         )
         report = evaluate_tracking(
             track_rows=window_rows,
@@ -457,6 +482,7 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
     recommendations: pd.DataFrame | None = None
     eval_generated_at: str | None = None
     pending_thompson: dict[str, Any] | None = None
+    manifest_written = False
 
     try:
         publisher = build_publisher(settings)
@@ -657,6 +683,7 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
 
         # Artifact → snapshot → recommendations; success only after all writes.
         outputs_written = False
+        recs_write = getattr(sink, "recommendations_write", None)
         _ensure_fence(fence_check)
         try:
             if artifact_bytes is not None:
@@ -670,45 +697,43 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
                 sink.write_items_snapshot(items)
 
             _ensure_fence(fence_check)
-            sink.write_recommendations(recommendations)
-            outputs_written = True
-            if pending_thompson is not None:
-                ExperimentStore(settings.output).write_state(pending_thompson)
-            if publisher is not None:
-                publisher.publish(recommendations)
+            with recs_write() if callable(recs_write) else nullcontext():
+                sink.write_recommendations(recommendations)
+                outputs_written = True
+                if pending_thompson is not None:
+                    ExperimentStore(settings.output).write_state(pending_thompson)
+                if publisher is not None:
+                    publisher.publish(recommendations)
+                _ensure_fence(fence_check)
+                manifest.update(
+                    {
+                        "status": "success",
+                        "n_events": int(len(events)),
+                        "n_target_users": len(target_users),
+                        "n_users_with_recommendations": _recommendation_user_count(recommendations),
+                        "n_items": int(built.dataset.item_id_map.external_ids.shape[0]),
+                        "models": ",".join(run_models),
+                        "model_weights": model_weights_str,
+                        "rrf_k": rrf_k if rrf_k is not None else RRF_K,
+                        "automl_metrics": (
+                            ",".join(
+                                f"{name}={automl_result.metrics[name]:.4f}"
+                                for name in sorted(automl_result.metrics)
+                            )
+                            if automl_result is not None
+                            else ""
+                        ),
+                        "track_eval": json.dumps(track_eval_payload) if track_eval_payload else "",
+                        "served_eval": json.dumps(served_eval_payload) if served_eval_payload else "",
+                    }
+                )
+                manifest["generated_at"] = datetime.now(UTC).isoformat()
+                sink.write_manifest(manifest)
+                manifest_written = True
         except Exception:
             if outputs_written or manifest.get("artifact_written"):
                 manifest["partial_outputs"] = True
             raise
-
-        try:
-            _ensure_fence(fence_check)
-        except LockLostError:
-            if outputs_written or manifest.get("artifact_written"):
-                manifest["partial_outputs"] = True
-            raise
-
-        manifest.update(
-            {
-                "status": "success",
-                "n_events": int(len(events)),
-                "n_target_users": len(target_users),
-                "n_users_with_recommendations": _recommendation_user_count(recommendations),
-                "n_items": int(built.dataset.item_id_map.external_ids.shape[0]),
-                "models": ",".join(run_models),
-                "model_weights": model_weights_str,
-                "rrf_k": rrf_k if rrf_k is not None else RRF_K,
-                "automl_metrics": (
-                    ",".join(
-                        f"{name}={automl_result.metrics[name]:.4f}" for name in sorted(automl_result.metrics)
-                    )
-                    if automl_result is not None
-                    else ""
-                ),
-                "track_eval": json.dumps(track_eval_payload) if track_eval_payload else "",
-                "served_eval": json.dumps(served_eval_payload) if served_eval_payload else "",
-            }
-        )
     except Exception as exc:
         error_message = str(exc)
         if len(error_message) > _MAX_ERROR_LENGTH:
@@ -721,13 +746,14 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
                 publisher.close()
             except Exception:
                 logger.exception("Failed to close recommendation publisher")
-        manifest["generated_at"] = datetime.now(UTC).isoformat()
-        try:
-            sink.write_manifest(manifest)
-        except Exception:
-            logger.exception("Failed to write manifest; original job error (if any) is preserved")
-            if manifest.get("status") == "success":
-                raise
+        if not manifest_written:
+            manifest["generated_at"] = datetime.now(UTC).isoformat()
+            try:
+                sink.write_manifest(manifest)
+            except Exception:
+                logger.exception("Failed to write manifest; original job error (if any) is preserved")
+                if manifest.get("status") == "success":
+                    raise
         logger.info("Job finished: %s", json.dumps(manifest))
         if manifest.get("status") == "success" and (settings.track.enabled or settings.eval.enabled):
             _persist_track_outputs(

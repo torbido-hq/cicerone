@@ -288,6 +288,42 @@ def test_incremental_updater_remakes_under_writer_lock_after_retrain(tmp_path, f
     assert list(frame.loc[frame["user_id"] == "u2", "item_id"]) == ["x"]
 
 
+def test_incremental_updater_rechecks_busy_after_merge(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+    )
+    checks = {"n": 0}
+    writes = {"n": 0}
+
+    def busy() -> bool:
+        checks["n"] += 1
+        return checks["n"] >= 3
+
+    sink = build_output_sink(settings.output)
+    real_replace = sink.replace_recommendations_for_users
+
+    def counting_replace(df, *, user_ids):  # type: ignore[no-untyped-def]
+        writes["n"] += 1
+        return real_replace(df, user_ids=user_ids)
+
+    sink.replace_recommendations_for_users = counting_replace  # type: ignore[method-assign]
+    updater = IncrementalUpdater(
+        sink=sink,
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=3,
+        busy_check=busy,
+    )
+    assert updater.apply([normalize_event(event_payload())]) == 0
+    assert writes["n"] == 0
+    assert checks["n"] >= 3
+
+
 def test_incremental_updater_rechecks_busy_before_write(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()
