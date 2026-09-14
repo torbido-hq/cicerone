@@ -55,6 +55,7 @@ class _PikaIo:
         self._channel: Any | None = None
         self._timeout_seconds = timeout_seconds
         self._failed = False
+        self._closing = False
         self._state_lock = threading.Lock()
         self._busy = 0
         self._abandon_channel: Any | None = None
@@ -77,6 +78,13 @@ class _PikaIo:
         with self._state_lock:
             if self._busy > 0:
                 self._busy -= 1
+
+    def _try_begin_shutdown(self) -> bool:
+        with self._state_lock:
+            if self._failed or self._closing or self._busy > 0:
+                return False
+            self._closing = True
+            return True
 
     def start(self) -> None:
         self._thread.start()
@@ -134,7 +142,13 @@ class _PikaIo:
                 if self._failed:
                     self._cleanup_abandoned()
                     return
-                self._mark_busy()
+                with self._state_lock:
+                    if self._failed:
+                        self._cleanup_abandoned()
+                        return
+                    if self._closing:
+                        continue
+                    self._busy += 1
                 try:
                     self._pump()
                 finally:
@@ -270,6 +284,8 @@ class RabbitMQEventSource(EventSource):
                 break
             incoming = self._delivery_to_event(io, method, body)
             if incoming is None:
+                if not self._owns_io(io):
+                    break
                 continue
             out.append(incoming)
             remaining -= 1
@@ -321,6 +337,9 @@ class RabbitMQEventSource(EventSource):
             return
         try:
             io.submit(partial(self._pump_connection, io))
+        except TimeoutError:
+            logger.exception("RabbitMQ heartbeat process_data_events failed")
+            raise
         except Exception:
             logger.exception("RabbitMQ heartbeat process_data_events failed")
 
@@ -398,10 +417,14 @@ class RabbitMQEventSource(EventSource):
                 raise RuntimeError("RabbitMQEventSource is not connected")
             return self._io
 
+    def _owns_io(self, io: _PikaIo) -> bool:
+        with self._lock:
+            return self._io is io
+
     def _delivery_to_event(self, io: _PikaIo, method: Any, body: Any) -> NormalizedEvent | None:
         tag = int(method.delivery_tag)
         with self._lock:
-            if tag in self._held_tags:
+            if self._io is not io or tag in self._held_tags:
                 return None
         try:
             payload = decode_json_object(body)
@@ -418,6 +441,8 @@ class RabbitMQEventSource(EventSource):
             self._ack_discard(io, tag)
             return None
         with self._lock:
+            if self._io is not io:
+                return None
             if event.event_id in self._delivery_tags:
                 logger.warning(
                     "Duplicate event_id %r on RabbitMQ delivery %s; acking duplicate",
@@ -443,7 +468,7 @@ class RabbitMQEventSource(EventSource):
 
 
 def _release_io(io: _PikaIo, channel: Any, connection: Any) -> None:
-    if io.failed or io.busy:
+    if io.failed or not io._try_begin_shutdown():
         if io._thread.is_alive():
             io.abandon(channel, connection)
         else:

@@ -296,6 +296,98 @@ def test_event_worker_stop_closes_reconnect_in_progress(tmp_path, feature_config
     assert closes["n"] >= 1
 
 
+def test_event_worker_start_aborts_if_stopped_during_connect(tmp_path, feature_config: FeatureConfig):
+    import threading
+    import time
+
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    started = threading.Event()
+    release = threading.Event()
+    closes = {"n": 0}
+
+    class _SlowStart(WebhookEventSource):
+        def connect(self) -> None:
+            started.set()
+            release.wait(timeout=2)
+            super().connect()
+
+        def close(self) -> None:
+            closes["n"] += 1
+            super().close()
+
+    worker = EventWorker(
+        _SlowStart({}),
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+        poll_interval_seconds=0.01,
+    )
+    starter = threading.Thread(target=worker.start)
+    starter.start()
+    assert started.wait(timeout=2)
+    assert worker.stop(join_timeout_seconds=0.05) is True
+    release.set()
+    starter.join(timeout=2)
+    assert worker._thread is None or worker._thread.is_alive() is False
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and closes["n"] < 1:
+        time.sleep(0.01)
+    assert closes["n"] >= 1
+
+
+def test_event_worker_reconnect_closes_after_failed_connect(tmp_path, feature_config: FeatureConfig):
+    import threading
+    import time
+
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    reconnect_started = threading.Event()
+    closes = {"n": 0}
+    connects = {"n": 0}
+
+    class _FailReconnect(WebhookEventSource):
+        def connect(self) -> None:
+            connects["n"] += 1
+            if connects["n"] >= 2:
+                reconnect_started.set()
+                time.sleep(0.2)
+                raise RuntimeError("broker down")
+            super().connect()
+
+        def close(self) -> None:
+            closes["n"] += 1
+            super().close()
+
+        def health(self) -> EventSourceHealth:
+            return EventSourceHealth(connected=False, lag=0)
+
+    worker = EventWorker(
+        _FailReconnect({}),
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+        poll_interval_seconds=0.01,
+    )
+    worker.start()
+    assert reconnect_started.wait(timeout=2)
+    worker.stop(join_timeout_seconds=0.05)
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and closes["n"] < 1:
+        time.sleep(0.01)
+    assert closes["n"] >= 1
+
+
 def test_event_worker_stop_returns_true_when_idle(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),

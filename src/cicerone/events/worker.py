@@ -116,12 +116,15 @@ class EventWorker:
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
             return
+        self._stop.clear()
         with self._source_guard:
             self._source.connect()
+            if self._stop.is_set():
+                self._close_source()
+                return
+            self._thread = threading.Thread(target=self._loop, name="cicerone-events", daemon=True)
+            self._thread.start()
         self.refresh_source_health_metrics()
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._loop, name="cicerone-events", daemon=True)
-        self._thread.start()
 
     def stop(self, *, join_timeout_seconds: float = 5.0) -> bool:
         self._stop.set()
@@ -173,14 +176,15 @@ class EventWorker:
     def _reconnect_source(self) -> None:
         with self._source_guard:
             if self._stop.is_set():
+                self._close_source()
                 return
             try:
                 self._source.connect()
             except Exception:
                 logger.exception("Event source reconnect failed")
-                return
-            if self._stop.is_set():
-                self._close_source()
+            finally:
+                if self._stop.is_set():
+                    self._close_source()
 
     def _loop(self) -> None:
         disconnected = False

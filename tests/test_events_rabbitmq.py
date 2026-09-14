@@ -597,6 +597,20 @@ def test_heartbeat_logs_process_failure(monkeypatch):
     source.heartbeat([])
 
 
+def test_heartbeat_reraises_timeout(monkeypatch):
+    install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options(timeout_seconds=0.05))
+    source.connect()
+
+    def _hang(_io: object) -> None:
+        time.sleep(5)
+
+    source._pump_connection = _hang  # type: ignore[method-assign]
+    with pytest.raises(TimeoutError, match="timed out"):
+        source.heartbeat([])
+    source.close()
+
+
 def test_heartbeat_when_disconnected(monkeypatch):
     install_fake_rabbitmq(monkeypatch)
     source = RabbitMQEventSource(_options())
@@ -774,6 +788,37 @@ def test_reconnect_closes_previous(monkeypatch):
     first = broker.connection
     source.connect()
     assert first.closed is True
+    source.close()
+
+
+def test_poll_drops_delivery_after_reconnect_replaces_io(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.enqueue("cicerone.events", event_payload(event_id="stale", item_id="i1"))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    entered = threading.Event()
+    release = threading.Event()
+    original = source._delivery_to_event
+
+    def _gated(io: object, method: object, body: object) -> object:
+        entered.set()
+        release.wait(timeout=2)
+        return original(io, method, body)
+
+    source._delivery_to_event = _gated  # type: ignore[method-assign]
+    got: list[str] = []
+
+    def _poll() -> None:
+        got.extend(event.event_id for event in source.poll(1))
+
+    poller = threading.Thread(target=_poll)
+    poller.start()
+    assert entered.wait(timeout=2)
+    source.connect()
+    release.set()
+    poller.join(timeout=2)
+    assert got == []
+    assert source._delivery_tags == {}
     source.close()
 
 
