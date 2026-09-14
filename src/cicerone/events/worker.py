@@ -123,13 +123,13 @@ class EventWorker:
             self._finalized = False
             self._source.connect()
             if self._stop.is_set():
-                self._close_source()
+                self._drain_and_close()
                 return
             self._thread = threading.Thread(target=self._loop, name="cicerone-events", daemon=True)
             self._thread.start()
         if self._stop.is_set():
             with self._source_guard:
-                self._close_source()
+                self._drain_and_close()
             return
         self.refresh_source_health_metrics()
 

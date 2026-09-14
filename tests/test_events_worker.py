@@ -7,6 +7,7 @@ from support.prometheus_metrics import registry_metric_value
 from cicerone.config import EventsSettings, IOSettings, make_settings
 from cicerone.events.base import EventSourceHealth
 from cicerone.events.buffer import MicroBatchBuffer
+from cicerone.events.normalize import normalize_event
 from cicerone.events.updater import IncrementalUpdater
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
@@ -522,6 +523,63 @@ def test_event_worker_start_aborts_if_stopped_during_connect(tmp_path, feature_c
     while time.monotonic() < deadline and closes["n"] < 1:
         time.sleep(0.01)
     assert closes["n"] >= 1
+
+
+def test_event_worker_start_abort_drains_and_closes_once(tmp_path, feature_config: FeatureConfig):
+    import threading
+    import time
+
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    started = threading.Event()
+    release = threading.Event()
+    closes = {"n": 0}
+
+    class _SlowStart(WebhookEventSource):
+        def connect(self) -> None:
+            started.set()
+            release.wait(timeout=2)
+            super().connect()
+
+        def close(self) -> None:
+            closes["n"] += 1
+            super().close()
+
+    source = _SlowStart({})
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+        poll_interval_seconds=0.01,
+    )
+    worker._buffer.extend([normalize_event(event_payload(event_id="drain-start", item_id="idrain"))])
+    starter = threading.Thread(target=worker.start)
+    starter.start()
+    assert started.wait(timeout=2)
+    assert worker.stop(join_timeout_seconds=0.05) is True
+    release.set()
+    starter.join(timeout=2)
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and closes["n"] < 1:
+        time.sleep(0.01)
+    assert closes["n"] == 1
+    assert worker._finalized is True
+    frame = pd.read_parquet(out / "recommendations.parquet")
+    assert "idrain" in set(frame["item_id"].astype(str))
+    assert worker.stop(join_timeout_seconds=0.05) is True
+    assert closes["n"] == 1
 
 
 def test_event_worker_reconnect_closes_after_failed_connect(tmp_path, feature_config: FeatureConfig):

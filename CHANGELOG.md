@@ -41,6 +41,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Event worker stop closes the source once.
 - RabbitMQ heartbeat fails closed when the I/O worker is already failed or closing.
 - Event worker tick does not poll after stop has closed the source.
+- Event worker start abort drains before close.
+- RabbitMQ poll drops a stale delivery when the same event id is reborn after reconnect.
 
 ## [0.8.1] - 2026-09-11
 

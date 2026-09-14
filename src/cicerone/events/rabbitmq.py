@@ -285,15 +285,18 @@ class RabbitMQEventSource(EventSource):
         if max_events < 1:
             return []
         io = self._require_io()
-        out: list[NormalizedEvent] = []
+        claimed: list[tuple[NormalizedEvent, int]] = []
         with self._lock:
-            while self._pending and len(out) < max_events:
+            while self._pending and len(claimed) < max_events:
                 event = self._pending.popleft()
                 self._pending_ids.discard(event.event_id)
+                tag = self._delivery_tags.get(event.event_id)
+                if tag is None:
+                    continue
                 self._in_flight.add(event.event_id)
-                out.append(event)
+                claimed.append((event, tag))
 
-        remaining = max_events - len(out)
+        remaining = max_events - len(claimed)
         while remaining > 0:
             try:
                 method, _properties, body = io.submit(partial(self._basic_get, io))
@@ -307,11 +310,17 @@ class RabbitMQEventSource(EventSource):
                 if not self._owns_io(io):
                     break
                 continue
-            out.append(incoming)
+            with self._lock:
+                tag = self._delivery_tags.get(incoming.event_id)
+            if tag is None:
+                continue
+            claimed.append((incoming, tag))
             remaining -= 1
 
         with self._lock:
-            out = [event for event in out if event.event_id in self._delivery_tags]
+            out = [
+                event for event, tag in claimed if self._delivery_tags.get(event.event_id) == tag
+            ]
             if out:
                 self._last_event_at = max(event.occurred_at for event in out)
         return out
