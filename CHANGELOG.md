@@ -129,6 +129,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   in-memory SQLite is not empty.
 - Dataset writes re-check the caller fence after waiting for the writer
   lock. Writer-lease loss is logged as itself, not as apply-lease loss.
+- Incremental apply reloads and remakes affected users under the dataset
+  writer lock so a finished retrain is not overwritten.
 
 
 ## [0.8.1] - 2026-09-11

@@ -246,6 +246,48 @@ def test_incremental_updater_skips_when_busy(tmp_path, feature_config: FeatureCo
     assert updater.apply([normalize_event(event_payload())]) == 0
 
 
+def test_incremental_updater_remakes_under_writer_lock_after_retrain(tmp_path, feature_config: FeatureConfig):
+    from contextlib import contextmanager
+
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    sink = build_output_sink(settings.output)
+    retrain = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "job", "rank": 1, "score": 1.0, "source": "personalized"},
+            {"user_id": "u2", "item_id": "x", "rank": 1, "score": 0.5, "source": "personalized"},
+        ]
+    )
+    inner = sink.recommendations_write
+
+    @contextmanager
+    def after_retrain():
+        sink.write_recommendations(retrain)
+        with inner():
+            yield
+
+    sink.recommendations_write = after_retrain  # type: ignore[method-assign]
+    updater = IncrementalUpdater(
+        sink=sink,
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+    )
+    assert updater.apply([normalize_event(event_payload(user_id="u1", item_id="i9"))]) == 1
+    frame = load_recommendations_frame(settings.output)
+    u1 = set(frame.loc[frame["user_id"] == "u1", "item_id"].astype(str))
+    assert "job" in u1
+    assert "i9" in u1
+    assert list(frame.loc[frame["user_id"] == "u2", "item_id"]) == ["x"]
+
+
 def test_incremental_updater_rechecks_busy_before_write(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()
@@ -542,7 +584,7 @@ def test_incremental_updater_no_feature_config(tmp_path):
     assert "i1" in set(frame["item_id"].astype(str))
 
 
-def test_incremental_updater_caches_frame_across_applies(tmp_path, feature_config, monkeypatch):
+def test_incremental_updater_reloads_affected_users_each_apply(tmp_path, feature_config, monkeypatch):
     out = tmp_path / "out"
     out.mkdir()
     pd.DataFrame(
@@ -569,7 +611,7 @@ def test_incremental_updater_caches_frame_across_applies(tmp_path, feature_confi
     assert updater.apply([normalize_event(event_payload(event_id="c1", item_id="a"))]) == 1
     assert loads["n"] == 1
     assert updater.apply([normalize_event(event_payload(event_id="c2", item_id="b"))]) == 1
-    assert loads["n"] == 1
+    assert loads["n"] == 2
 
 
 def test_incremental_updater_busy_invalidates_cache(tmp_path, feature_config, monkeypatch):

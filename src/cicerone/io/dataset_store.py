@@ -117,6 +117,7 @@ class DatasetOutputSink:
         self._fence_check = fence_check
         self._fence_lost = fence_lost
         self._fence_kind = fence_kind
+        self._recs_write_depth = 0
 
     @contextmanager
     def _local_file_lock(self, filename: str) -> Iterator[None]:
@@ -140,6 +141,23 @@ class DatasetOutputSink:
                 fence_kind=self._fence_kind,
             ),
         ):
+            yield
+
+    @contextmanager
+    def recommendations_write(self) -> Iterator[None]:
+        with self._recommendations_lock():
+            self._recs_write_depth += 1
+            try:
+                yield
+            finally:
+                self._recs_write_depth -= 1
+
+    @contextmanager
+    def _maybe_recommendations_lock(self) -> Iterator[None]:
+        if self._recs_write_depth:
+            yield
+            return
+        with self._recommendations_lock():
             yield
 
     @contextmanager
@@ -169,7 +187,7 @@ class DatasetOutputSink:
         self._write_bytes("recommendations.parquet", buffer.getvalue(), "application/octet-stream")
 
     def write_recommendations(self, df: pd.DataFrame) -> None:
-        with self._recommendations_lock():
+        with self._maybe_recommendations_lock():
             self._write_recommendations_unlocked(df)
 
     def replace_recommendations_for_users(self, df: pd.DataFrame, *, user_ids: Sequence[str]) -> int:
@@ -177,7 +195,7 @@ class DatasetOutputSink:
         ids = normalize_replace_user_ids(df, user_ids)
         if not ids:
             return 0
-        with self._recommendations_lock():
+        with self._maybe_recommendations_lock():
             try:
                 existing = read_parquet(self._options, "recommendations.parquet")
             except FileNotFoundError:
