@@ -373,6 +373,7 @@
             "items": {
               "$ref": "#/components/schemas/InteractionEvent"
             },
+            "maxItems": 100,
             "title": "Events",
             "type": "array"
           },
@@ -381,6 +382,7 @@
             "items": {
               "type": "string"
             },
+            "maxItems": 100,
             "title": "Items",
             "type": "array"
           }

@@ -612,15 +612,18 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
                 _ensure_fence(fence_check)
                 sink.write_items_snapshot(items)
 
+            popular = popular_from_events(events, settings.top_k)
+            latest = latest_from_items(
+                items,
+                settings.top_k,
+                feature_config.blending.latest_date_columns,
+            )
+            neighbors = neighbors_from_events(events, settings.item_based_k_neighbors)
             _ensure_fence(fence_check)
             sink.write_surfaces(
-                popular=popular_from_events(events, settings.top_k),
-                latest=latest_from_items(
-                    items,
-                    settings.top_k,
-                    feature_config.blending.latest_date_columns,
-                ),
-                neighbors=neighbors_from_events(events, settings.item_based_k_neighbors),
+                popular=popular,
+                latest=latest,
+                neighbors=neighbors,
             )
 
             _ensure_fence(fence_check)
