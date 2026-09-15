@@ -41,6 +41,11 @@ curl -sS "${auth_header[@]}" \
   "${BASE_URL}/recommendations/${USER_ID}?limit=5" | "$PYTHON" -m json.tool
 
 echo
+echo "## GET /item-scores?limit=5"
+curl -sS "${auth_header[@]}" \
+  "${BASE_URL}/item-scores?limit=5" | "$PYTHON" -m json.tool
+
+echo
 echo "## GET /openapi.json (first paths only)"
 curl -sS "${BASE_URL}/openapi.json" | "$PYTHON" -c '
 import json, sys

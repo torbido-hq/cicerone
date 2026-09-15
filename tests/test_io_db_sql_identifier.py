@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from cicerone.io.db_store import (
+    DEFAULT_ITEM_SCORES_TABLE,
     DEFAULT_MANIFEST_TABLE,
     DEFAULT_RECOMMENDATIONS_TABLE,
     DatabaseInputSource,
@@ -107,6 +108,24 @@ def test_write_recommendations_rejects_unsafe_table_name_before_db(bad_name):
 @pytest.mark.parametrize(
     "bad_name",
     [
+        'evil"; DROP TABLE item_scores; --',
+        "has-dash",
+        "has space",
+    ],
+)
+def test_write_item_scores_rejects_unsafe_table_name_before_db(bad_name):
+    sink = DatabaseOutputSink(
+        {"database_url": "postgresql+psycopg://u:p@localhost/db", "item_scores_table": bad_name}
+    )
+    with pytest.raises(ValueError, match="SQL identifier"):
+        sink.write_item_scores(
+            pd.DataFrame([{"item_id": "i1", "popular_score": 1.0, "latest_score": 0.0, "n_users": 1}])
+        )
+
+
+@pytest.mark.parametrize(
+    "bad_name",
+    [
         'evil"; DROP TABLE recommendation_runs; --',
         "has-dash",
         "has space",
@@ -170,6 +189,36 @@ def test_db_recommendation_reader_accepts_safe_table_names(table_name):
         options["recommendations_table"] = table_name
     reader = DbRecommendationReader(options)
     assert reader._table == (table_name or DEFAULT_RECOMMENDATIONS_TABLE)
+
+
+@pytest.mark.parametrize(
+    "bad_name",
+    [
+        'evil"; DROP TABLE item_scores; --',
+        "has-dash",
+        "has space",
+    ],
+)
+def test_db_recommendation_reader_rejects_unsafe_item_scores_table_name(bad_name):
+    with pytest.raises(ValueError, match="SQL identifier"):
+        DbRecommendationReader(
+            {
+                "database_url": "postgresql+psycopg://u:p@localhost/db_test",
+                "item_scores_table": bad_name,
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "table_name",
+    [None, DEFAULT_ITEM_SCORES_TABLE, "item_scores_2024", "custom_item_scores"],
+)
+def test_db_recommendation_reader_accepts_safe_item_scores_table_names(table_name):
+    options: dict = {"database_url": "postgresql+psycopg://u:p@localhost/db_test"}
+    if table_name is not None:
+        options["item_scores_table"] = table_name
+    reader = DbRecommendationReader(options)
+    assert reader._item_scores_table == (table_name or DEFAULT_ITEM_SCORES_TABLE)
 
 
 @pytest.mark.parametrize(

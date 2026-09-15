@@ -129,6 +129,10 @@ HINTS: dict[str, dict[str, str]] = {
         "docs": f"{_DOCS}/architecture/",
     },
     "output.kind": {"text": "dataset files or a database."},
+    "output.options.item_scores_table": {
+        "text": "DB table for catalog popular/latest scores (search indexers).",
+        "docs": f"{_DOCS}/search-weights/",
+    },
     "serve": {
         "text": "Read-only HTTP API over the precomputed top-K table.",
         "docs": f"{_DOCS}/openapi/",

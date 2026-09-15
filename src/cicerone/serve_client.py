@@ -8,7 +8,12 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-from cicerone.serve_schemas import HealthResponse, RecommendationsResponse, TrackIngestResponse
+from cicerone.serve_schemas import (
+    HealthResponse,
+    ItemScoresResponse,
+    RecommendationsResponse,
+    TrackIngestResponse,
+)
 
 
 class ServeClientError(Exception):
@@ -58,6 +63,22 @@ class ServeClient:
             params["exclude_unavailable"] = "true" if exclude_unavailable else "false"
         path = f"/recommendations/{urllib.parse.quote(str(user_id), safe='')}"
         return RecommendationsResponse.model_validate(self._request("GET", path, params=params))
+
+    def item_scores(
+        self,
+        *,
+        limit: int | None = None,
+        cursor: str | None = None,
+        item_id: str | None = None,
+    ) -> ItemScoresResponse:
+        params: dict[str, str] = {}
+        if limit is not None:
+            params["limit"] = str(limit)
+        if cursor is not None:
+            params["cursor"] = cursor
+        if item_id is not None:
+            params["item_id"] = item_id
+        return ItemScoresResponse.model_validate(self._request("GET", "/item-scores", params=params))
 
     def track(self, payload: dict[str, Any] | list[dict[str, Any]]) -> TrackIngestResponse:
         return TrackIngestResponse.model_validate(self._request("POST", "/track", json_body=payload))

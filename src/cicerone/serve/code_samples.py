@@ -7,6 +7,7 @@ from typing import Any
 
 HEALTH_PATH = "/health"
 RECOMMENDATIONS_PATH = "/recommendations/{user_id}"
+ITEM_SCORES_PATH = "/item-scores"
 RECOMMENDATIONS_PATH_PREFIX = RECOMMENDATIONS_PATH.rsplit("/", 1)[0] + "/"
 EVENTS_PATH = "/events"
 TRACK_PATH = "/track"
@@ -320,6 +321,31 @@ _TRACK_SHELL = (
     .replace('event_type:"purchase",quantity:1', 'kind:"impression",rank:1')
 )
 
+_ITEM_SCORES_PYTHON = f"""\
+import os
+from cicerone.serve_client import ServeClient
+
+client = ServeClient(
+    os.environ.get("{ENV_SERVE_URL}", "{DEFAULT_SERVE_URL}"),
+    token=os.environ["{ENV_SERVE_TOKEN}"],
+)
+body = client.item_scores(limit=100)
+for row in body.items:
+    print(row.item_id, row.popular_score, row.latest_score, row.n_users)
+print("next_cursor", body.next_cursor)
+"""
+
+_ITEM_SCORES_SHELL = f"""\
+curl -fsS -H "Authorization: Bearer ${{{ENV_SERVE_TOKEN}:?set {ENV_SERVE_TOKEN}}}" \\
+  "${{{ENV_SERVE_URL}:-{DEFAULT_SERVE_URL}}}{ITEM_SCORES_PATH}?limit=100" || exit 1
+"""
+
+ITEM_SCORES_CODE_SAMPLES: list[dict[str, str]] = [
+    {"lang": "Python", "label": "ServeClient", "source": _ITEM_SCORES_PYTHON},
+    {"lang": "Shell", "label": "curl", "source": _ITEM_SCORES_SHELL},
+]
+
+
 TRACK_CODE_SAMPLES: list[dict[str, str]] = [
     {"lang": "Ruby", "label": "Net::HTTP", "source": _TRACK_RUBY},
     {"lang": "Python", "label": "urllib", "source": _TRACK_PYTHON},
@@ -352,3 +378,6 @@ def attach_code_samples(schema: dict[str, Any]) -> None:
     track = paths.get(TRACK_PATH, {}).get("post")
     if isinstance(track, dict):
         _extend_code_samples(track, TRACK_CODE_SAMPLES)
+    item_scores = paths.get(ITEM_SCORES_PATH, {}).get("get")
+    if isinstance(item_scores, dict):
+        _extend_code_samples(item_scores, ITEM_SCORES_CODE_SAMPLES)

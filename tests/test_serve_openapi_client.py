@@ -21,6 +21,8 @@ from cicerone.serve.code_samples import (
     EVENTS_PATH,
     HEALTH_CODE_SAMPLES,
     HEALTH_PATH,
+    ITEM_SCORES_CODE_SAMPLES,
+    ITEM_SCORES_PATH,
     RECOMMENDATIONS_CODE_SAMPLES,
     RECOMMENDATIONS_PATH,
     TRACK_CODE_SAMPLES,
@@ -52,8 +54,11 @@ def test_openapi_json_lists_serve_paths_and_schemas():
     assert "cicerone export-openapi" in schema["info"]["description"]
     assert HEALTH_PATH in schema["paths"]
     assert RECOMMENDATIONS_PATH in schema["paths"]
+    assert ITEM_SCORES_PATH in schema["paths"]
 
     components = schema["components"]["schemas"]
+    assert "ItemScore" in components
+    assert "ItemScoresResponse" in components
     assert "RecommendationsResponse" in components
     assert "experiment_id" in components["RecommendationsResponse"]["properties"]
     assert "variant" in components["RecommendationsResponse"]["properties"]
@@ -84,6 +89,10 @@ def test_openapi_json_lists_serve_paths_and_schemas():
     ruby_rec = next(sample for sample in rec_samples if sample["lang"] == "Ruby")
     assert ENV_SERVE_URL in ruby_rec["source"]
     assert ENV_SERVE_TOKEN in ruby_rec["source"]
+
+    scores = schema["paths"][ITEM_SCORES_PATH]["get"]
+    assert scores["x-codeSamples"]
+    assert {s["lang"] for s in scores["x-codeSamples"]} >= {s["lang"] for s in ITEM_SCORES_CODE_SAMPLES}
 
 
 def test_exported_openapi_includes_events_code_samples():
@@ -172,6 +181,10 @@ def test_serve_client_health_and_recommendations(live_serve_url):
     assert body.generated_at == "2026-08-04T12:00:00+00:00"
     assert len(body.items) == 1
     assert body.items[0].item_id == "i1"
+
+    scores = client.item_scores(limit=2, cursor="a", item_id="missing")
+    assert scores.items == []
+    assert scores.next_cursor is None
 
 
 def test_serve_client_category_and_auth_errors(live_serve_url):

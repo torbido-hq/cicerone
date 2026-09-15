@@ -30,6 +30,7 @@ from cicerone.io.recommendation_reader_common import (
     normalize_items_snapshot,
     select_cold_start_fallback,
 )
+from cicerone.item_scores import ITEM_SCORES_FILENAME, normalize_item_scores
 from cicerone.serve.metrics import observe_cache_refresh, record_cache_hit, record_cache_miss
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,18 @@ class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             "recommendations.parquet",
             s3_client=self._get_s3_client() if self._backend == "s3" else None,
         )
+
+    def _read_item_scores(self) -> pd.DataFrame:
+        if self._backend == "local":
+            path = Path(require_option(self._options, "path", "local")) / ITEM_SCORES_FILENAME
+            if not path.exists():
+                raise FileNotFoundError(path)
+        frame = read_parquet(
+            self._options,
+            ITEM_SCORES_FILENAME,
+            s3_client=self._get_s3_client() if self._backend == "s3" else None,
+        )
+        return normalize_item_scores(frame)
 
     def _read_items_snapshot(self) -> pd.DataFrame | None:
         try:
@@ -104,6 +117,17 @@ class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
                 self._items_version += 1
         except Exception:
             logger.exception("Failed to refresh items snapshot; keeping previous data")
+        try:
+            scores = self._read_item_scores()
+            with self._lock:
+                self._item_scores = scores
+        except FileNotFoundError:
+            logger.debug("item_scores file not found; keeping previous data")
+        except Exception as exc:
+            if is_s3_not_found(exc):
+                logger.debug("item_scores object not found; keeping previous data")
+            else:
+                logger.exception("Failed to refresh item scores; keeping previous data")
         observe_cache_refresh(duration_seconds=time.perf_counter() - started, success=recommendations_ok)
 
     def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame:
