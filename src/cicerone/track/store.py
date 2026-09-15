@@ -137,7 +137,13 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
             self._write_eval_db(payload)
             return
         encoded = json.dumps(payload, indent=2).encode("utf-8")
-        self._write_bytes(EVAL_FILENAME, encoded, "application/json")
+        if self._writer_lock is not None and self._writer_lock.owned():
+            ensure_writer_owned(self._writer_lock)
+            self._write_bytes(EVAL_FILENAME, encoded, "application/json")
+            return
+        with held_writer_lock(self._writer_lock):
+            ensure_writer_owned(self._writer_lock)
+            self._write_bytes(EVAL_FILENAME, encoded, "application/json")
 
     def read_eval(self) -> dict[str, Any] | None:
         if self._kind == "db":
@@ -162,7 +168,14 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
         buf = BytesIO()
         frame.to_parquet(buf, index=False)
         part = f"{HISTORY_DIR}/{_history_part_name(generated_at)}"
-        self._write_bytes(part, buf.getvalue(), "application/octet-stream")
+        payload = buf.getvalue()
+        if self._writer_lock is not None and self._writer_lock.owned():
+            ensure_writer_owned(self._writer_lock)
+            self._write_bytes(part, payload, "application/octet-stream")
+            return
+        with held_writer_lock(self._writer_lock):
+            ensure_writer_owned(self._writer_lock)
+            self._write_bytes(part, payload, "application/octet-stream")
 
     def read_history(
         self,

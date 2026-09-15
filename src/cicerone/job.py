@@ -59,7 +59,7 @@ from cicerone.io.recommendation_schema import (
     filter_variant_rows,
     pick_fallback_variant,
 )
-from cicerone.locks import LockLostError, build_dataset_writer_lock
+from cicerone.locks import LockLostError, build_dataset_writer_lock, held_writer_lock
 from cicerone.model import (
     DEFAULT_MODELS,
     RRF_K,
@@ -254,9 +254,18 @@ def _persist_track_outputs(
                 lambda: store.append_history(recommendations, generated_at=generated_at),
             )
         )
-    if kind == "db":
+    lock = getattr(store, "_writer_lock", None)
+
+    def _run_serial() -> None:
         for label, fn in tasks:
             _try_load(label, fn, None)
+
+    if kind == "db":
+        _run_serial()
+        return
+    if lock is not None:
+        with held_writer_lock(lock):
+            _run_serial()
         return
     with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
         for label, fn in tasks:
@@ -833,7 +842,7 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
         logger.info("Job finished: %s", json.dumps(manifest))
         if manifest.get("status") == "success" and (settings.track.enabled or settings.eval.enabled):
             _persist_track_outputs(
-                TrackStore(settings.output),
+                TrackStore(settings.output, writer_lock=writer_lock),
                 kind=settings.output.kind,
                 eval_report={
                     "generated_at": eval_generated_at,

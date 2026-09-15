@@ -25,6 +25,7 @@ from cicerone.locks import (
     build_dataset_writer_lock,
     build_lock_backend,
     dataset_append_lock_key,
+    ensure_writer_owned,
     events_apply_lock_key,
     has_distributed_lock,
     held_writer_lock,
@@ -766,6 +767,46 @@ def test_held_writer_lock_fence_without_writer_lock():
     ):
         pass
     assert captured.value.kind == "apply"
+
+
+def test_held_writer_lock_rejects_stale_generation_after_reacquire():
+    class Lock:
+        def __init__(self) -> None:
+            self._held = False
+            self.hold_generation = 0
+
+        def acquire(self) -> bool:
+            if self._held:
+                return False
+            self._held = True
+            self.hold_generation += 1
+            return True
+
+        def release(self) -> None:
+            self._held = False
+
+        def release_generation(self, generation: int) -> None:
+            if generation != self.hold_generation or not self._held:
+                return
+            self._held = False
+            self.hold_generation += 1
+
+        def owned(self, generation: int | None = None) -> bool:
+            if not self._held:
+                return False
+            return generation is None or generation == self.hold_generation
+
+        def is_locked(self) -> bool:
+            return self._held
+
+    lock = Lock()
+    with held_writer_lock(lock):
+        first = lock.hold_generation
+        lock._held = False
+        assert lock.acquire() is True
+        assert lock.hold_generation != first
+        with pytest.raises(LockLostError, match="dataset writer lock lost before write"):
+            ensure_writer_owned(lock)
 
 
 def test_held_writer_lock_raises_when_lease_lost():

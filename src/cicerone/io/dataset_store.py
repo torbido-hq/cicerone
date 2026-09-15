@@ -205,12 +205,14 @@ class DatasetOutputSink:
         self._ensure_writer_still_held()
 
     def _ensure_writer_still_held(self) -> None:
-        from cicerone.locks import LockLostError
+        from cicerone.locks import ensure_writer_owned
 
-        if self._writer_lock is not None and not self._writer_lock.owned():
-            raise LockLostError("dataset writer lock lost before write", kind="writer")
-        if self._fence_check is not None and not self._fence_check():
-            raise LockLostError(self._fence_lost, kind=self._fence_kind)
+        ensure_writer_owned(
+            self._writer_lock,
+            fence_check=self._fence_check,
+            fence_lost=self._fence_lost,
+            fence_kind=self._fence_kind,
+        )
 
     def _write_recommendations_unlocked(self, df: pd.DataFrame) -> None:
         self._ensure_writer_still_held()

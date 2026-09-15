@@ -125,3 +125,29 @@ def test_exclusive_file_lock_serializes_without_fcntl(tmp_path, monkeypatch):
     first.join(timeout=2)
     second.join(timeout=2)
     assert seen == [1, 2]
+
+
+def test_exclusive_file_lock_times_out(tmp_path):
+    import threading
+
+    from cicerone.locks import WriterLockBusyError
+
+    path = tmp_path / "writers.lock"
+    entered = threading.Event()
+    hold = threading.Event()
+
+    def _hold() -> None:
+        with exclusive_file_lock(path):
+            entered.set()
+            hold.wait(timeout=2)
+
+    first = threading.Thread(target=_hold)
+    first.start()
+    assert entered.wait(timeout=2)
+    with (
+        pytest.raises(WriterLockBusyError, match="dataset writer lock busy"),
+        exclusive_file_lock(path, timeout_seconds=0.1),
+    ):
+        pass
+    hold.set()
+    first.join(timeout=2)

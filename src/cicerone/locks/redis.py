@@ -141,9 +141,11 @@ class RedisLock:
         self._start_refresh(generation)
         return True
 
-    def owned(self) -> bool:
+    def owned(self, generation: int | None = None) -> bool:
         with self._mutex:
             if not self._held:
+                return False
+            if generation is not None and self._hold_generation != generation:
                 return False
             token = self._token
         try:

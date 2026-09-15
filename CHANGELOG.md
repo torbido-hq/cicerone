@@ -165,6 +165,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   lock. A late Redis `_mark_lost` cannot stop a newer refresher.
   Legacy `write_manifest` fallback only applies when the sink lacks
   `skip_if_newer_than`.
+- Writer-lock ownership is generation-aware after a same-object
+  reacquire. Job track eval/history writes take that lease. Local
+  dataset file locks time out instead of blocking forever.
 
 
 ## [0.8.1] - 2026-09-11

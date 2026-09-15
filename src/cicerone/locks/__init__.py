@@ -6,6 +6,7 @@ Default single-instance exclusion is RunGuard's threading.Lock (no backend).
 
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -68,7 +69,7 @@ class LockBackend(Protocol):
 
     def release(self) -> None: ...
 
-    def owned(self) -> bool:
+    def owned(self, generation: int | None = None) -> bool:
         """True when this instance still holds the lease (fencing)."""
         ...
 
@@ -96,14 +97,55 @@ def acquire_blocking(
         time.sleep(interval_seconds)
 
 
+_writer_hold = threading.local()
+
+
+def _bind_writer_generation(lock: LockBackend, generation: int | None) -> None:
+    stack = getattr(_writer_hold, "stack", None)
+    if stack is None:
+        _writer_hold.stack = []
+        stack = _writer_hold.stack
+    stack.append((id(lock), generation))
+
+
+def _unbind_writer_generation() -> None:
+    stack = getattr(_writer_hold, "stack", None)
+    if stack:
+        stack.pop()
+
+
+def _bound_writer_generation(lock: LockBackend) -> int | None:
+    stack = getattr(_writer_hold, "stack", None)
+    if not stack:
+        return None
+    lock_id = id(lock)
+    for stored_id, generation in reversed(stack):
+        if stored_id == lock_id:
+            return generation
+    return None
+
+
+def _lock_owned(lock: LockBackend, generation: int | None) -> bool:
+    expected = generation if generation is not None else _bound_writer_generation(lock)
+    owned = lock.owned
+    if expected is None:
+        return bool(owned())
+    try:
+        return bool(owned(generation=expected))
+    except TypeError:
+        current = getattr(lock, "hold_generation", None)
+        return bool(owned()) and current == expected
+
+
 def ensure_writer_owned(
     lock: LockBackend | None,
     *,
+    generation: int | None = None,
     fence_check: Callable[[], bool] | None = None,
     fence_lost: str = "lock lost before write",
     fence_kind: str = "lock",
 ) -> None:
-    if lock is not None and not lock.owned():
+    if lock is not None and not _lock_owned(lock, generation):
         raise LockLostError("dataset writer lock lost before write", kind="writer")
     if fence_check is not None and not fence_check():
         raise LockLostError(fence_lost, kind=fence_kind)
@@ -125,10 +167,18 @@ def held_writer_lock(
     if not acquire_blocking(lock):
         raise WriterLockBusyError("dataset writer lock busy")
     generation = getattr(lock, "hold_generation", None)
+    _bind_writer_generation(lock, generation)
     try:
-        ensure_writer_owned(lock, fence_check=fence_check, fence_lost=fence_lost, fence_kind=fence_kind)
+        ensure_writer_owned(
+            lock,
+            generation=generation,
+            fence_check=fence_check,
+            fence_lost=fence_lost,
+            fence_kind=fence_kind,
+        )
         yield
     finally:
+        _unbind_writer_generation()
         release_generation = getattr(lock, "release_generation", None)
         if callable(release_generation) and generation is not None:
             release_generation(generation)
