@@ -171,11 +171,9 @@ class KafkaEventSource(EventSource):
             return
         with self._lock:
             done: dict[int, set[int]] = {}
-            by_partition: dict[int, list[tuple[str, Any]]] = {}
-            for eid, message in resolved:
+            for _eid, message in resolved:
                 partition = int(message.partition())
                 done.setdefault(partition, set()).add(int(message.offset()))
-                by_partition.setdefault(partition, []).append((eid, message))
             watermarks = {
                 partition: self._next_commit_offset(partition, extra_done=offsets)
                 for partition, offsets in done.items()
@@ -183,9 +181,13 @@ class KafkaEventSource(EventSource):
         finished: list[tuple[str, Any]] = []
         try:
             for partition, nxt in watermarks.items():
-                if nxt is not None:
-                    self._commit_watermarks(consumer, {partition: nxt})
-                finished.extend(by_partition.get(partition, []))
+                if nxt is None:
+                    continue
+                self._commit_watermarks(consumer, {partition: nxt})
+                with self._lock:
+                    for eid, message in self._messages.items():
+                        if int(message.partition()) == partition and int(message.offset()) < nxt:
+                            finished.append((eid, message))
         finally:
             with self._lock:
                 for eid, message in finished:
@@ -196,6 +198,13 @@ class KafkaEventSource(EventSource):
                     self._max_offset[partition] = max(self._max_offset.get(partition, -1), offset)
                     self._in_flight.discard(eid)
                     self._pending_ids.discard(eid)
+                for eid, message in resolved:
+                    if eid not in self._messages:
+                        continue
+                    partition = int(message.partition())
+                    offset = int(message.offset())
+                    self._held_offsets.discard((partition, offset))
+                    self._max_offset[partition] = max(self._max_offset.get(partition, -1), offset)
 
     def nack(self, events: Sequence[NormalizedEvent]) -> Sequence[NormalizedEvent]:
         if not events:

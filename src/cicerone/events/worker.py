@@ -118,6 +118,7 @@ class EventWorker:
         self._finalized = False
         self._source_unhealthy = False
         self._stop_epoch = 0
+        self._starting = False
         self._thread: threading.Thread | None = None
         self._held: list[NormalizedEvent] = []
         self._deferred_acks: list[NormalizedEvent] = []
@@ -132,34 +133,52 @@ class EventWorker:
         if self._thread is not None and self._thread.is_alive():
             return
         epoch = self._stop_epoch
+        connect_error: BaseException | None = None
         with self._source_guard:
             if self._thread is not None and self._thread.is_alive():
                 return
-            if self._stop_epoch != epoch:
+            if self._starting or self._stop_epoch != epoch:
                 return
+            self._starting = True
             self._stop.clear()
             self._finalized = False
             try:
                 self._source.connect()
-            except Exception:
-                if self._stop.is_set() or self._stop_epoch != epoch:
-                    with self._tick_guard:
-                        self._drain_and_close()
-                raise
-            if self._stop.is_set() or self._stop_epoch != epoch:
-                with self._tick_guard:
-                    self._drain_and_close()
+            except Exception as exc:
+                connect_error = exc
+        try:
+            if self._start_aborted(epoch):
+                self._drain_stopped_start()
+                if connect_error is not None:
+                    raise connect_error
                 return
-            with self._tick_guard:
+            if connect_error is not None:
+                raise connect_error
+            with self._tick_guard, self._source_guard:
+                if self._start_aborted(epoch):
+                    self._drain_and_close()
+                    return
                 self._source_unhealthy = not self.refresh_source_health_metrics()
-            if self._stop.is_set() or self._stop_epoch != epoch:
-                with self._tick_guard:
+                if self._start_aborted(epoch):
                     self._drain_and_close()
-                return
-            self._thread = threading.Thread(target=self._loop, name="cicerone-events", daemon=True)
-            self._thread.start()
-            if self._stop.is_set() or self._stop_epoch != epoch:
-                return
+                    return
+            with self._source_guard:
+                if not self._start_aborted(epoch):
+                    self._thread = threading.Thread(target=self._loop, name="cicerone-events", daemon=True)
+                    self._thread.start()
+                    if self._start_aborted(epoch):
+                        return
+                    return
+            self._drain_stopped_start()
+        finally:
+            self._starting = False
+
+    def _start_aborted(self, epoch: int) -> bool:
+        return self._stop.is_set() or self._stop_epoch != epoch
+
+    def _drain_stopped_start(self) -> None:
+        with self._tick_guard, self._source_guard:
+            self._drain_and_close()
 
     def stop(self, *, join_timeout_seconds: float = 5.0) -> bool:
         self._stop.set()

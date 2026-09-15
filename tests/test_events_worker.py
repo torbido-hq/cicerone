@@ -684,6 +684,7 @@ def test_event_worker_start_health_holds_tick_guard(tmp_path, feature_config: Fe
     try:
         assert started.wait(timeout=2)
         assert worker._tick_guard.acquire(blocking=False) is False
+        assert worker._source_guard.acquire(blocking=False) is False
     finally:
         release.set()
         starter.join(timeout=2)
@@ -1119,6 +1120,59 @@ def test_event_worker_stop_does_not_block_on_dead_thread_during_restart(
     starter.join(timeout=2)
 
 
+def test_event_worker_start_never_acquires_tick_while_holding_source(tmp_path, feature_config: FeatureConfig):
+    import threading
+
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    owned = threading.local()
+    inversions: list[str] = []
+
+    class _OrderLock:
+        def __init__(self, name: str) -> None:
+            self.name = name
+            self._inner = threading.Lock()
+
+        def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+            if self.name == "tick" and getattr(owned, "source", False):
+                inversions.append("tick-while-source")
+            got = self._inner.acquire(blocking, timeout)
+            if got and self.name == "source":
+                owned.source = True
+            return got
+
+        def release(self) -> None:
+            if self.name == "source":
+                owned.source = False
+            self._inner.release()
+
+        def __enter__(self) -> _OrderLock:
+            self.acquire()
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            self.release()
+
+    worker = EventWorker(
+        WebhookEventSource({}),
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+        poll_interval_seconds=0.01,
+    )
+    worker._source_guard = _OrderLock("source")  # type: ignore[assignment]
+    worker._tick_guard = _OrderLock("tick")  # type: ignore[assignment]
+    worker.start()
+    assert inversions == []
+    assert worker.stop(join_timeout_seconds=2.0) is True
+    assert inversions == []
+
+
 def test_event_worker_start_does_not_revive_after_completed_stop(tmp_path, feature_config: FeatureConfig):
     import threading
 
@@ -1189,7 +1243,12 @@ def test_event_worker_start_does_not_reacquire_guard_after_launch(tmp_path, feat
 
     class _GateLock:
         def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
-            if starter_thread and threading.current_thread() is starter_thread[0] and released.is_set():
+            if (
+                starter_thread
+                and threading.current_thread() is starter_thread[0]
+                and worker._thread is not None
+                and worker._thread.is_alive()
+            ):
                 block_second.wait(timeout=2)
             return inner.acquire(blocking, timeout)
 

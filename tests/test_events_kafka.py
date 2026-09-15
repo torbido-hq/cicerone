@@ -235,6 +235,39 @@ def test_ack_does_not_skip_earlier_offset(monkeypatch):
     assert broker.committed == [(0, 2)]
 
 
+def test_ack_keeps_local_state_when_watermark_cannot_advance(monkeypatch):
+    broker = install_fake_kafka(monkeypatch)
+    broker.add("cicerone.events", event_payload(event_id="e1"))
+    broker.add("cicerone.events", event_payload(event_id="e2"))
+    source = KafkaEventSource(_options())
+    source.connect()
+    events = list(source.poll(10))
+    source.ack([events[1].event_id])
+    assert broker.committed == []
+    assert events[1].event_id in source._messages
+    assert source.nack([events[1]]) == ()
+    again = list(source.poll(10))
+    assert [event.event_id for event in again] == ["e2"]
+    source.close()
+
+
+def test_ack_keeps_later_offset_when_earlier_offset_is_held(monkeypatch):
+    broker = install_fake_kafka(monkeypatch)
+    for index in range(4):
+        broker.add("cicerone.events", event_payload(event_id=f"e{index}"))
+    source = KafkaEventSource(_options())
+    source.connect()
+    events = list(source.poll(10))
+    source.ack([events[0].event_id, events[1].event_id])
+    assert broker.committed == [(0, 2)]
+    source.ack([events[3].event_id])
+    assert events[3].event_id in source._messages
+    assert source.nack([events[3]]) == ()
+    again = list(source.poll(10))
+    assert [event.event_id for event in again] == ["e3"]
+    source.close()
+
+
 def test_ack_keeps_local_state_when_commit_fails(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
     broker.add("cicerone.events", event_payload(event_id="e1"))

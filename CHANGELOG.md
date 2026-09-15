@@ -95,6 +95,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Event worker stop does not close a worker started after a leftover dead thread.
 - A RabbitMQ I/O timeout cannot run a job after invoke starts but before the broker call.
 - A RabbitMQ I/O timeout detaches the channel so a late get or ack cannot use the abandoned connection.
+- Event worker start takes the tick lock before the source lock.
+- Kafka ack keeps local offsets when a partition watermark cannot advance.
 
 ## [0.8.1] - 2026-09-11
 
