@@ -96,8 +96,8 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
                     seen.add(event_id)
             if not fresh:
                 return []
-            ensure_writer_owned(self._writer_lock)
             encoded = "".join(json.dumps(row, separators=(",", ":")) + "\n" for row in fresh).encode("utf-8")
+            ensure_writer_owned(self._writer_lock)
             self._append_bytes(TRACK_FILENAME, encoded)
             known.update(seen)
             self._track_size = (self._track_size or 0) + len(encoded)

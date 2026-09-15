@@ -903,6 +903,17 @@ def test_job_marks_partial_outputs_when_recommendation_write_fails(tmp_path, mon
     del original_write
 
 
+def test_write_job_manifest_accepts_legacy_signature():
+    written: dict[str, object] = {}
+
+    class _LegacySink:
+        def write_manifest(self, manifest):
+            written["manifest"] = manifest
+
+    assert job._write_job_manifest(_LegacySink(), {"status": "failed"}, skip_if_newer_than="x") is True
+    assert written["manifest"] == {"status": "failed"}
+
+
 def test_job_holds_writer_lock_for_artifact_and_items(tmp_path, monkeypatch):
     input_dir = tmp_path / "in"
     output_dir = tmp_path / "out"

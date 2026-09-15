@@ -62,9 +62,11 @@ class RedisLock:
         self._refresh_thread: threading.Thread | None = None
         self._refresh_lifecycle = threading.Lock()
 
-    def _mark_lost(self) -> None:
+    def _mark_lost(self, generation: int | None = None) -> None:
         """Clear local hold state so a later acquire() can succeed after TTL loss."""
         with self._mutex:
+            if generation is not None and (not self._held or self._hold_generation != generation):
+                return
             self._held = False
             self._token = str(uuid.uuid4())
         self._stop_refresh.set()
@@ -87,13 +89,13 @@ class RedisLock:
                             # Intentional release sets stop before clearing hold; skip _mark_lost.
                             if self._stop_refresh.is_set():
                                 break
-                            self._mark_lost()
+                            self._mark_lost(generation)
                             break
                     except Exception:
                         if self._stop_refresh.is_set():
                             break
                         logger.exception("Failed to refresh Redis lock TTL")
-                        self._mark_lost()
+                        self._mark_lost(generation)
                         break
 
             self._refresh_thread = threading.Thread(

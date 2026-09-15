@@ -106,6 +106,18 @@ def _ensure_publication_fence(sink: Any, fence_check: Callable[[], bool] | None)
         ensure()
 
 
+def _write_job_manifest(
+    sink: Any, manifest: dict[str, Any], *, skip_if_newer_than: str | None = None
+) -> bool:
+    write = sink.write_manifest
+    try:
+        result = write(manifest, skip_if_newer_than=skip_if_newer_than)
+    except TypeError:
+        write(manifest)
+        return True
+    return result is not False
+
+
 class ThompsonSelection(NamedTuple):
     recipes: tuple[ResolvedRecipe, ...]
     state: dict[str, Any] | None = None
@@ -760,8 +772,9 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
                         }
                     )
                     manifest["generated_at"] = datetime.now(UTC).isoformat()
-                    sink.write_manifest(manifest)
-                    manifest_written = True
+                    _ensure_publication_fence(sink, fence_check)
+                    if _write_job_manifest(sink, manifest):
+                        manifest_written = True
                 except Exception as exc:
                     if outputs_written or manifest.get("artifact_written"):
                         manifest["partial_outputs"] = True
@@ -776,7 +789,7 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
                         manifest["error"] = _truncate_job_error(exc)
                         manifest["generated_at"] = datetime.now(UTC).isoformat()
                         try:
-                            if sink.write_manifest(manifest, skip_if_newer_than=started_at):
+                            if _write_job_manifest(sink, manifest, skip_if_newer_than=started_at):
                                 manifest_written = True
                         except Exception:
                             logger.exception(
@@ -802,7 +815,7 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
         ):
             manifest["generated_at"] = datetime.now(UTC).isoformat()
             try:
-                sink.write_manifest(manifest, skip_if_newer_than=started_at)
+                _write_job_manifest(sink, manifest, skip_if_newer_than=started_at)
             except Exception:
                 logger.exception("Failed to write manifest; original job error (if any) is preserved")
                 if manifest.get("status") == "success":

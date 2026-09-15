@@ -390,8 +390,8 @@ def test_redis_lock_allows_reacquire_after_refresh_loss(monkeypatch):
     lost = threading.Event()
     real_mark_lost = lock._mark_lost
 
-    def mark_lost() -> None:
-        real_mark_lost()
+    def mark_lost(generation: int | None = None) -> None:
+        real_mark_lost(generation)
         lost.set()
 
     lock._mark_lost = mark_lost  # type: ignore[method-assign]
@@ -442,6 +442,25 @@ def test_redis_stale_release_does_not_drop_new_holder(monkeypatch):
     assert lock._held is False
 
 
+def test_redis_stale_mark_lost_does_not_clear_new_holder(monkeypatch):
+    client = _mock_redis_module(monkeypatch)
+    client.set.return_value = True
+    lock = RedisLock(
+        "redis://localhost:6379/0",
+        ttl_ms=200,
+        refresh_interval_ms=10_000,
+    )
+    assert lock.acquire() is True
+    stale_generation = lock._hold_generation
+    lock._mark_lost()
+    assert lock.acquire() is True
+    token = lock._token
+    lock._mark_lost(stale_generation)
+    assert lock._held is True
+    assert lock._token == token
+    lock.release()
+
+
 def test_redis_release_ignores_in_flight_refresh_failure(monkeypatch):
     """Release must not let a racing refresh call _mark_lost on a new acquire."""
     client = _mock_redis_module(monkeypatch)
@@ -465,9 +484,9 @@ def test_redis_release_ignores_in_flight_refresh_failure(monkeypatch):
     )
     real_mark_lost = lock._mark_lost
 
-    def mark_lost() -> None:
+    def mark_lost(generation: int | None = None) -> None:
         mark_lost_calls.append("lost")
-        real_mark_lost()
+        real_mark_lost(generation)
 
     lock._mark_lost = mark_lost  # type: ignore[method-assign]
 

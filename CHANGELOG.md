@@ -155,6 +155,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   write. Database failure manifests skip when a newer row already exists.
 - Redis acquire starts a new TTL refresher after release so a joining
   previous thread cannot leave the new holder without refresh.
+- The job rechecks the retrain fence immediately before writing a
+  success manifest. Track appends fence ownership after JSON encode.
+  A late Redis refresh failure cannot `_mark_lost` a newer acquire.
 
 
 ## [0.8.1] - 2026-09-11
