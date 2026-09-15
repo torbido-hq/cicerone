@@ -422,6 +422,32 @@ def test_write_state_db_rechecks_fence_on_legacy_fallback(tmp_path) -> None:
     assert checks["n"] >= 4
 
 
+def test_append_exposures_rechecks_after_file_lock(tmp_path, monkeypatch) -> None:
+    from contextlib import contextmanager
+
+    fence = {"ok": True}
+
+    @contextmanager
+    def _lock(_path):
+        fence["ok"] = False
+        yield
+
+    monkeypatch.setattr("cicerone.experiment.store.exclusive_file_lock", _lock)
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    store = ExperimentStore(
+        output,
+        fence_check=lambda: fence["ok"],
+        fence_lost="retrain lock lost before write",
+        fence_kind="retrain",
+    )
+    with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
+        store.append_exposures(
+            [{"experiment_id": "exp", "user_id": "u1", "variant": "control", "exposed_at": "t"}]
+        )
+    assert exc.value.kind == "retrain"
+    assert not (tmp_path / "exposures.jsonl").exists()
+
+
 def test_append_exposures_honors_fence(tmp_path) -> None:
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     store = ExperimentStore(

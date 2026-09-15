@@ -275,6 +275,12 @@ class ExperimentStore:
                 return
             assert encoded is not None and path is not None
             with exclusive_file_lock(path):
+                ensure_writer_owned(
+                    self._writer_lock,
+                    fence_check=self._fence_check,
+                    fence_lost=self._fence_lost,
+                    fence_kind=self._fence_kind,
+                )
                 self._append_bytes(EXPOSURES_FILENAME, encoded)
 
         if writer_lock_held_here(self._writer_lock):

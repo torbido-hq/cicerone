@@ -63,7 +63,7 @@ class LockLostError(RuntimeError):
 
 
 class WriterLockBusyError(RuntimeError):
-    """Another writer held the dataset-append lease until acquire timed out."""
+    """A blocking acquire timed out while another holder had the lease."""
 
 
 class LockBackend(Protocol):

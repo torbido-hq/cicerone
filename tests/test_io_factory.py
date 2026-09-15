@@ -81,6 +81,30 @@ def test_build_output_sink_db():
     assert callable(with_lock.recommendations_write)
 
 
+def test_database_write_honors_writer_lock(tmp_path):
+    from cicerone.locks import LockLostError
+
+    class _Lost:
+        def acquire(self) -> bool:
+            return True
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            return False
+
+        def is_locked(self) -> bool:
+            return True
+
+    import pandas as pd
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'recs.db'}"
+    sink = DatabaseOutputSink({"database_url": url}, writer_lock=_Lost())
+    with pytest.raises(LockLostError, match="dataset writer lock lost before write"):
+        sink.write_recommendations(pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1}]))
+
+
 def test_database_write_manifest_rechecks_fence_before_append(tmp_path):
     from cicerone.locks import LockLostError
 

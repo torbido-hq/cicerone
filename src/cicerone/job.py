@@ -893,7 +893,12 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
         ):
             manifest["generated_at"] = datetime.now(UTC).isoformat()
             try:
-                _write_job_manifest(sink, manifest, skip_if_newer_than=started_at)
+                holder = getattr(sink, "recommendations_write", None)
+                if callable(holder):
+                    with holder():
+                        _write_job_manifest(sink, manifest, skip_if_newer_than=started_at)
+                else:
+                    _write_job_manifest(sink, manifest, skip_if_newer_than=started_at)
             except Exception:
                 logger.exception("Failed to write manifest; original job error (if any) is preserved")
                 if manifest.get("status") == "success":

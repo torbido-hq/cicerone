@@ -182,6 +182,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   fence. DB manifests recheck it before append. Track sidecar lock
   errors stay best-effort. DB recommendation writes take the same
   output writer lease as dataset.
+- DB sink writes check writer ownership, not only the caller fence.
+  Failure manifests take `recommendations_write` again. Exposure
+  appends recheck after the local file lock.
 
 
 ## [0.8.1] - 2026-09-11

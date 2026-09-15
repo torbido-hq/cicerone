@@ -270,6 +270,7 @@ class DatasetOutputSink:
                 self._read_bytes("manifest.json"), skip_if_newer_than
             ):
                 return False
+            self._ensure_writer_still_held()
             self._write_bytes("manifest.json", payload, "application/json")
             return True
 

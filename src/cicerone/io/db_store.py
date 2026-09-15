@@ -275,8 +275,12 @@ class DatabaseOutputSink:
 
     @contextmanager
     def recommendations_write(self) -> Iterator[None]:
-        from cicerone.locks import held_writer_lock
+        from cicerone.locks import held_writer_lock, writer_lock_held_here
 
+        if writer_lock_held_here(self._writer_lock):
+            self._ensure_fence()
+            yield
+            return
         with held_writer_lock(
             self._writer_lock,
             fence_check=self._fence_check,
@@ -289,10 +293,14 @@ class DatabaseOutputSink:
         self._ensure_fence()
 
     def _ensure_fence(self) -> None:
-        if self._fence_check is not None and not self._fence_check():
-            from cicerone.locks import LockLostError
+        from cicerone.locks import ensure_writer_owned
 
-            raise LockLostError(self._fence_lost, kind=self._fence_kind)
+        ensure_writer_owned(
+            self._writer_lock,
+            fence_check=self._fence_check,
+            fence_lost=self._fence_lost,
+            fence_kind=self._fence_kind,
+        )
 
     def write_recommendations(self, df: pd.DataFrame) -> None:
         self._ensure_fence()
@@ -361,13 +369,12 @@ class DatabaseOutputSink:
         return int(value or 0)
 
     def write_manifest(self, manifest: dict, *, skip_if_newer_than: str | None = None) -> bool:
-        self._ensure_fence()
         table = sql_identifier(
             self._options.get("manifest_table", DEFAULT_MANIFEST_TABLE),
             option="manifest_table",
         )
         logger.info("Appending run manifest to database table %r", table)
-        with self._engine.begin() as conn:
+        with self.recommendations_write(), self._engine.begin() as conn:
             if skip_if_newer_than is not None and _db_manifest_newer(conn, table, skip_if_newer_than):
                 return False
             self._ensure_fence()
@@ -390,6 +397,7 @@ class DatabaseOutputSink:
             Column("written_at", DateTime(timezone=True), nullable=False),
         )
         with self._engine.begin() as conn:
+            self._ensure_fence()
             artifacts.create(conn, checkfirst=True)
             conn.execute(artifacts.delete())
             conn.execute(insert(artifacts).values(payload=payload, written_at=datetime.now(UTC)))
@@ -408,6 +416,7 @@ class DatabaseOutputSink:
             Column("written_at", DateTime(timezone=True), nullable=False),
         )
         with self._engine.begin() as conn:
+            self._ensure_fence()
             artifacts.create(conn, checkfirst=True)
             row = conn.execute(select(artifacts.c.written_at).limit(1).with_for_update()).first()
             if row is None or row[0] is None:
@@ -458,5 +467,6 @@ class DatabaseOutputSink:
         )
         logger.info("Writing %d item snapshot rows to database table %r", len(df), table)
         with self._engine.begin() as conn:
+            self._ensure_fence()
             _clear_table_for_replace(conn, table)
             df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
