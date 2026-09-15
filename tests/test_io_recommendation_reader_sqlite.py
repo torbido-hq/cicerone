@@ -11,6 +11,7 @@ from sqlalchemy import create_engine, text
 from cicerone.io.db_store import DatabaseOutputSink
 from cicerone.io.recommendation_reader import DbRecommendationReader
 from cicerone.io.replace_users import RecommendationSchemaError
+from cicerone.locks import LockLostError
 
 
 def _sqlite_url(tmp_path) -> str:
@@ -303,3 +304,50 @@ def test_sqlite_db_reader_does_not_cache_unrelated_missing_column(tmp_path, monk
     with pytest.raises(ProgrammingError, match="user_id"):
         reader.get_recommendations("u1", k=10, variant="treatment")
     assert reader._variant_supported is True
+
+
+def test_sqlite_write_manifest_skips_newer_row(tmp_path):
+    url = _sqlite_url(tmp_path)
+    sink = DatabaseOutputSink({"database_url": url})
+    assert (
+        sink.write_manifest(
+            {
+                "generated_at": "2099-01-01T00:00:00+00:00",
+                "status": "success",
+                "last_incremental_at": "2099-01-01T00:00:00+00:00",
+            }
+        )
+        is True
+    )
+    assert (
+        sink.write_manifest(
+            {"generated_at": "2026-01-01T00:00:00+00:00", "status": "failed"},
+            skip_if_newer_than="2026-01-01T00:00:00+00:00",
+        )
+        is False
+    )
+    engine = create_engine(url)
+    stored = pd.read_sql("SELECT generated_at, status FROM recommendation_runs", engine)
+    assert list(stored["status"]) == ["success"]
+
+
+def test_sqlite_db_sink_fence_rejects_writes(tmp_path):
+    url = _sqlite_url(tmp_path)
+    owned = {"v": True}
+    sink = DatabaseOutputSink(
+        {"database_url": url},
+        fence_check=lambda: owned["v"],
+        fence_lost="events apply lock lost before write",
+        fence_kind="apply",
+    )
+    recs = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "latest"}])
+    sink.write_recommendations(recs)
+    owned["v"] = False
+    with pytest.raises(LockLostError, match="events apply lock lost"):
+        sink.write_manifest({"status": "success"})
+    with pytest.raises(LockLostError, match="events apply lock lost"):
+        sink.replace_recommendations_for_users(recs, user_ids=["u1"])
+    with pytest.raises(LockLostError, match="events apply lock lost"):
+        sink.write_items_snapshot(pd.DataFrame([{"item_id": "i1"}]))
+    with pytest.raises(LockLostError, match="events apply lock lost"):
+        sink.write_model_artifact(b"x")

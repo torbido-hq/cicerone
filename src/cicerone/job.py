@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from datetime import UTC, datetime
 from typing import Any, NamedTuple
 
@@ -57,7 +59,17 @@ from cicerone.io.recommendation_schema import (
     filter_variant_rows,
     pick_fallback_variant,
 )
-from cicerone.locks import LockLostError
+from cicerone.locks import (
+    LockBackend,
+    LockLostError,
+    WriterLockBusyError,
+    acquire_blocking,
+    build_dataset_writer_lock,
+    build_lock_backend,
+    build_output_writer_lock,
+    has_distributed_lock,
+    held_writer_lock,
+)
 from cicerone.model import (
     DEFAULT_MODELS,
     RRF_K,
@@ -75,6 +87,52 @@ from cicerone.track.store_common import _utc_stamp
 logger = logging.getLogger(__name__)
 
 _MAX_ERROR_LENGTH = 500
+
+
+def _truncate_job_error(exc: BaseException) -> str:
+    error_message = str(exc)
+    if len(error_message) > _MAX_ERROR_LENGTH:
+        return error_message[:_MAX_ERROR_LENGTH] + "... (truncated)"
+    return error_message
+
+
+def _skip_stale_job_manifest(
+    *,
+    fence_check: Callable[[], bool] | None = None,
+    exc: BaseException | None = None,
+) -> bool:
+    if isinstance(exc, LockLostError):
+        logger.error("Skipping job manifest: %s", exc)
+        return True
+    if fence_check is not None and not fence_check():
+        logger.error("Skipping job manifest: retrain lock lost before write")
+        return True
+    return False
+
+
+def _ensure_publication_fence(sink: Any, fence_check: Callable[[], bool] | None) -> None:
+    _ensure_fence(fence_check)
+    ensure = getattr(sink, "ensure_writer_held", None)
+    if callable(ensure):
+        ensure()
+
+
+def _write_manifest_accepts_skip(write: Any) -> bool:
+    try:
+        return "skip_if_newer_than" in inspect.signature(write).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+def _write_job_manifest(
+    sink: Any, manifest: dict[str, Any], *, skip_if_newer_than: str | None = None
+) -> bool:
+    write = sink.write_manifest
+    if _write_manifest_accepts_skip(write):
+        result = write(manifest, skip_if_newer_than=skip_if_newer_than)
+        return result is not False
+    write(manifest)
+    return True
 
 
 class ThompsonSelection(NamedTuple):
@@ -170,6 +228,36 @@ def _try_load(label: str, fn: Callable[[], Any], default: Any) -> Any:
         return default
 
 
+def _try_load_pair(
+    left_label: str,
+    left: Callable[[], Any],
+    left_default: Any,
+    right_label: str,
+    right: Callable[[], Any],
+    right_default: Any,
+    *,
+    parallel: bool,
+) -> tuple[Any, Any]:
+    if not parallel:
+        return _try_load(left_label, left, left_default), _try_load(right_label, right, right_default)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        left_f = pool.submit(_try_load, left_label, left, left_default)
+        right_f = pool.submit(_try_load, right_label, right, right_default)
+        return left_f.result(), right_f.result()
+
+
+def _refresh_pending_thompson(store: ExperimentStore, pending: dict[str, Any]) -> dict[str, Any]:
+    latest = store.read_state()
+    if not latest or str(latest.get("experiment_id") or "") != str(pending.get("experiment_id") or ""):
+        return pending
+    return merge_experiment_state(
+        pending,
+        experiment_id=str(pending.get("experiment_id") or ""),
+        promoted_variant=(str(latest["promoted_variant"]) if latest.get("promoted_variant") else None),
+        promoted_at=(str(latest["promoted_at"]) if latest.get("promoted_at") else None),
+    )
+
+
 def _persist_track_outputs(
     store: TrackStore,
     *,
@@ -177,6 +265,7 @@ def _persist_track_outputs(
     eval_report: Mapping[str, Any],
     recommendations: pd.DataFrame | None,
     generated_at: str,
+    fence_check: Callable[[], bool] | None = None,
 ) -> None:
     tasks: list[tuple[str, Callable[[], Any]]] = [
         ("write track eval", lambda: store.write_eval(eval_report)),
@@ -188,9 +277,26 @@ def _persist_track_outputs(
                 lambda: store.append_history(recommendations, generated_at=generated_at),
             )
         )
-    if kind == "db":
+    lock = getattr(store, "_writer_lock", None)
+
+    def _run_serial() -> None:
         for label, fn in tasks:
             _try_load(label, fn, None)
+
+    if lock is not None:
+        try:
+            with held_writer_lock(
+                lock,
+                fence_check=fence_check,
+                fence_lost="retrain lock lost before write",
+                fence_kind="retrain",
+            ):
+                _run_serial()
+        except (WriterLockBusyError, LockLostError):
+            logger.exception("Failed to persist track outputs")
+        return
+    if kind == "db":
+        _run_serial()
         return
     with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
         for label, fn in tasks:
@@ -222,11 +328,15 @@ def _score_previous_run(
             return []
         return store.read_rows()
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        recs_f = pool.submit(_try_load, "load previous recommendations for eval", _load_recs, None)
-        track_f = pool.submit(_try_load, "read track rows", _load_track, [])
-        previous_recs = recs_f.result()
-        track_rows = track_f.result()
+    previous_recs, track_rows = _try_load_pair(
+        "load previous recommendations for eval",
+        _load_recs,
+        None,
+        "read track rows",
+        _load_track,
+        [],
+        parallel=settings.output.kind != "db",
+    )
     wanted = generated_ats_from_track(track_rows, previous_generated_at)
     history = None
     if wanted:
@@ -238,12 +348,21 @@ def _score_previous_run(
             logger.exception("Failed to read recommendation history")
             history = None
     recs_for_track = concat_history(history, stamp_recommendations(previous_recs, previous_generated_at))
-    track_payload = None
-    served_payload = None
-    if settings.track.enabled:
+    assigned: dict[str, str] | None = None
+    replay_failed = False
+    if settings.eval.enabled and previous_recs is not None and previous_generated_at:
+        try:
+            assigned = _replay_assignments(settings, previous_recs, track_rows)
+        except Exception:
+            logger.exception("Failed to compute served eval")
+            replay_failed = True
+
+    def _compute_track() -> dict[str, Any] | None:
+        if not settings.track.enabled:
+            return None
         try:
             conversions = conversion_events_for_settings(events, settings)
-            track_payload = evaluate_tracking(
+            return evaluate_tracking(
                 track_rows=track_rows,
                 conversions=conversions,
                 recommendations=recs_for_track,
@@ -251,7 +370,11 @@ def _score_previous_run(
             ).as_dict()
         except Exception:
             logger.exception("Failed to compute track eval")
-    if settings.eval.enabled and previous_recs is not None and previous_generated_at:
+            return None
+
+    def _compute_served() -> dict[str, Any] | None:
+        if replay_failed or not settings.eval.enabled or previous_recs is None or not previous_generated_at:
+            return None
         try:
             types = settings.eval.event_types or conversion_event_types(
                 settings.track.conversion_event_types,
@@ -265,12 +388,25 @@ def _score_previous_run(
                 event_types=types,
                 history=history,
                 catalog=items,
-                assigned=_replay_assignments(settings, previous_recs, track_rows),
+                assigned=assigned,
             )
-            served_payload = report.as_dict() if report is not None else None
+            return report.as_dict() if report is not None else None
         except Exception:
             logger.exception("Failed to compute served eval")
-    return track_payload, served_payload
+            return None
+
+    run_both = bool(
+        settings.track.enabled
+        and settings.eval.enabled
+        and previous_recs is not None
+        and previous_generated_at
+    )
+    if run_both:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            track_f = pool.submit(_compute_track)
+            served_f = pool.submit(_compute_served)
+            return track_f.result(), served_f.result()
+    return _compute_track(), _compute_served()
 
 
 def _read_input(
@@ -296,7 +432,7 @@ def _read_input(
 
 def _ensure_fence(fence_check: Callable[[], bool] | None) -> None:
     if fence_check is not None and not fence_check():
-        raise LockLostError("retrain lock lost before write")
+        raise LockLostError("retrain lock lost before write", kind="retrain")
 
 
 def _select_thompson_recipes(
@@ -308,19 +444,22 @@ def _select_thompson_recipes(
         return ThompsonSelection(recipes)
     experiment = settings.experiment
     store = ExperimentStore(settings.output)
-    try:
-        previous = store.read_state()
-    except Exception:
-        logger.exception("Thompson allocation fail closed: could not read experiment state")
+    failed = object()
+    raw_state = _try_load("read experiment state", store.read_state, failed)
+    raw_track = _try_load(
+        "read track rows",
+        lambda: TrackStore(settings.output).read_rows(experiment_id=experiment.id),
+        failed,
+    )
+    if raw_state is failed or not (raw_state is None or isinstance(raw_state, dict)):
         return ThompsonSelection(recipes)
+    previous: dict[str, Any] | None = raw_state
+    if raw_track is failed or not isinstance(raw_track, list):
+        return ThompsonSelection(recipes)
+    track_rows: list[dict[str, Any]] = raw_track
     if previous and str(previous.get("experiment_id") or "") != experiment.id:
         previous = None
     promoted = str(previous["promoted_variant"]) if previous and previous.get("promoted_variant") else None
-    try:
-        track_rows = TrackStore(settings.output).read_rows(experiment_id=experiment.id)
-    except Exception:
-        logger.exception("Thompson allocation fail closed: could not read track rows")
-        return ThompsonSelection(recipes)
     has_pair = bool(previous and previous.get("champion") and previous.get("challenger"))
     if not track_rows and not has_pair:
         logger.warning("Thompson allocation fail closed: empty track")
@@ -332,21 +471,15 @@ def _select_thompson_recipes(
     names = [recipe.name for recipe in recipes]
     try:
         conversions = conversion_events_for_settings(events, settings)
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            recs_f = pool.submit(
-                _try_load,
-                "load recommendations for Thompson guardrails",
-                lambda: load_recommendations_frame(settings.output),
-                None,
-            )
-            catalog_f = pool.submit(
-                _try_load,
-                "load catalog size for Thompson guardrails",
-                lambda: load_items_catalog_size(settings.output),
-                None,
-            )
-            recs = recs_f.result()
-            catalog_size = catalog_f.result()
+        recs, catalog_size = _try_load_pair(
+            "load recommendations for Thompson guardrails",
+            lambda: load_recommendations_frame(settings.output),
+            None,
+            "load catalog size for Thompson guardrails",
+            lambda: load_items_catalog_size(settings.output),
+            None,
+            parallel=settings.output.kind != "db",
+        )
         report = evaluate_tracking(
             track_rows=window_rows,
             conversions=conversions,
@@ -407,6 +540,17 @@ def _select_thompson_recipes(
         return ThompsonSelection(recipes)
 
 
+def _maybe_acquire_direct_retrain_lock(
+    settings: Settings, fence_check: Callable[[], bool] | None
+) -> LockBackend | None:
+    if fence_check is not None or not has_distributed_lock(settings):
+        return None
+    lock = build_lock_backend(settings)
+    if not acquire_blocking(lock):
+        raise WriterLockBusyError("retrain lock busy")
+    return lock
+
+
 def _recommendation_user_count(recommendations: pd.DataFrame) -> int:
     if recommendations.empty or USER_COLUMN not in recommendations.columns:
         return 0
@@ -416,8 +560,28 @@ def _recommendation_user_count(recommendations: pd.DataFrame) -> int:
 
 def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None = None) -> None:
     settings = load_settings()
+    retrain_lock = _maybe_acquire_direct_retrain_lock(settings, fence_check)
+    if retrain_lock is not None:
+        fence_check = retrain_lock.owned
+    try:
+        _run_job(settings, triggered_by=triggered_by, fence_check=fence_check)
+    finally:
+        if retrain_lock is not None:
+            retrain_lock.release()
+
+
+def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bool] | None) -> None:
+    started_at = datetime.now(UTC).isoformat()
     feature_config = load_feature_config(settings.feature_config_path)
-    sink = build_output_sink(settings.output)
+    publication_lock = build_output_writer_lock(settings)
+    writer_lock = build_dataset_writer_lock(settings)
+    sink = build_output_sink(
+        settings.output,
+        writer_lock=publication_lock,
+        fence_check=fence_check,
+        fence_lost="retrain lock lost before write",
+        fence_kind="retrain",
+    )
     publisher = None
 
     manifest = dict(_MANIFEST_DEFAULTS)
@@ -430,6 +594,7 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
     recommendations: pd.DataFrame | None = None
     eval_generated_at: str | None = None
     pending_thompson: dict[str, Any] | None = None
+    manifest_written = False
 
     try:
         publisher = build_publisher(settings)
@@ -630,63 +795,91 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
 
         # Artifact → snapshot → recommendations; success only after all writes.
         outputs_written = False
+        recs_write = getattr(sink, "recommendations_write", None)
         _ensure_fence(fence_check)
         try:
-            if artifact_bytes is not None:
-                _ensure_fence(fence_check)
-                sink.write_model_artifact(artifact_bytes)
-                manifest["artifact_written"] = True
-                manifest["artifact_schema_version"] = ARTIFACT_SCHEMA_VERSION
+            with recs_write() if callable(recs_write) else nullcontext():
+                try:
+                    if artifact_bytes is not None:
+                        _ensure_publication_fence(sink, fence_check)
+                        sink.write_model_artifact(artifact_bytes)
+                        manifest["artifact_written"] = True
+                        manifest["artifact_schema_version"] = ARTIFACT_SCHEMA_VERSION
 
-            if items is not None and not items.empty:
-                _ensure_fence(fence_check)
-                sink.write_items_snapshot(items)
+                    if items is not None and not items.empty:
+                        _ensure_publication_fence(sink, fence_check)
+                        sink.write_items_snapshot(items)
 
-            _ensure_fence(fence_check)
-            sink.write_recommendations(recommendations)
-            outputs_written = True
-            if pending_thompson is not None:
-                ExperimentStore(settings.output).write_state(pending_thompson)
-            if publisher is not None:
-                publisher.publish(recommendations)
+                    _ensure_publication_fence(sink, fence_check)
+                    sink.write_recommendations(recommendations)
+                    outputs_written = True
+                    if pending_thompson is not None:
+                        _ensure_publication_fence(sink, fence_check)
+                        store = ExperimentStore(
+                            settings.output,
+                            writer_lock=publication_lock,
+                            fence_check=fence_check,
+                            fence_lost="retrain lock lost before write",
+                            fence_kind="retrain",
+                        )
+                        store.write_state(_refresh_pending_thompson(store, pending_thompson))
+                    if publisher is not None:
+                        _ensure_publication_fence(sink, fence_check)
+                        publisher.publish(recommendations)
+                    _ensure_publication_fence(sink, fence_check)
+                    manifest.update(
+                        {
+                            "status": "success",
+                            "n_events": int(len(events)),
+                            "n_target_users": len(target_users),
+                            "n_users_with_recommendations": _recommendation_user_count(recommendations),
+                            "n_items": int(built.dataset.item_id_map.external_ids.shape[0]),
+                            "models": ",".join(run_models),
+                            "model_weights": model_weights_str,
+                            "rrf_k": rrf_k if rrf_k is not None else RRF_K,
+                            "automl_metrics": (
+                                ",".join(
+                                    f"{name}={automl_result.metrics[name]:.4f}"
+                                    for name in sorted(automl_result.metrics)
+                                )
+                                if automl_result is not None
+                                else ""
+                            ),
+                            "track_eval": json.dumps(track_eval_payload) if track_eval_payload else "",
+                            "served_eval": json.dumps(served_eval_payload) if served_eval_payload else "",
+                        }
+                    )
+                    manifest["generated_at"] = datetime.now(UTC).isoformat()
+                    _ensure_publication_fence(sink, fence_check)
+                    if _write_job_manifest(sink, manifest):
+                        manifest_written = True
+                except Exception as exc:
+                    if outputs_written or manifest.get("artifact_written"):
+                        manifest["partial_outputs"] = True
+                    if (
+                        not manifest_written
+                        and manifest.get("status") != "success"
+                        and not _skip_stale_job_manifest(
+                            fence_check=fence_check,
+                            exc=exc,
+                        )
+                    ):
+                        manifest["error"] = _truncate_job_error(exc)
+                        manifest["generated_at"] = datetime.now(UTC).isoformat()
+                        try:
+                            if _write_job_manifest(sink, manifest, skip_if_newer_than=started_at):
+                                manifest_written = True
+                        except Exception:
+                            logger.exception(
+                                "Failed to write manifest; original job error (if any) is preserved"
+                            )
+                    raise
         except Exception:
             if outputs_written or manifest.get("artifact_written"):
                 manifest["partial_outputs"] = True
             raise
-
-        try:
-            _ensure_fence(fence_check)
-        except LockLostError:
-            if outputs_written or manifest.get("artifact_written"):
-                manifest["partial_outputs"] = True
-            raise
-
-        manifest.update(
-            {
-                "status": "success",
-                "n_events": int(len(events)),
-                "n_target_users": len(target_users),
-                "n_users_with_recommendations": _recommendation_user_count(recommendations),
-                "n_items": int(built.dataset.item_id_map.external_ids.shape[0]),
-                "models": ",".join(run_models),
-                "model_weights": model_weights_str,
-                "rrf_k": rrf_k if rrf_k is not None else RRF_K,
-                "automl_metrics": (
-                    ",".join(
-                        f"{name}={automl_result.metrics[name]:.4f}" for name in sorted(automl_result.metrics)
-                    )
-                    if automl_result is not None
-                    else ""
-                ),
-                "track_eval": json.dumps(track_eval_payload) if track_eval_payload else "",
-                "served_eval": json.dumps(served_eval_payload) if served_eval_payload else "",
-            }
-        )
     except Exception as exc:
-        error_message = str(exc)
-        if len(error_message) > _MAX_ERROR_LENGTH:
-            error_message = error_message[:_MAX_ERROR_LENGTH] + "... (truncated)"
-        manifest["error"] = error_message
+        manifest["error"] = _truncate_job_error(exc)
         raise
     finally:
         if publisher is not None:
@@ -694,17 +887,32 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
                 publisher.close()
             except Exception:
                 logger.exception("Failed to close recommendation publisher")
-        manifest["generated_at"] = datetime.now(UTC).isoformat()
-        try:
-            sink.write_manifest(manifest)
-        except Exception:
-            logger.exception("Failed to write manifest; original job error (if any) is preserved")
-            if manifest.get("status") == "success":
-                raise
+        if not manifest_written and not _skip_stale_job_manifest(
+            fence_check=fence_check,
+            exc=sys.exc_info()[1],
+        ):
+            manifest["generated_at"] = datetime.now(UTC).isoformat()
+            try:
+                holder = getattr(sink, "recommendations_write", None)
+                if callable(holder):
+                    with holder():
+                        _write_job_manifest(sink, manifest, skip_if_newer_than=started_at)
+                else:
+                    _write_job_manifest(sink, manifest, skip_if_newer_than=started_at)
+            except Exception:
+                logger.exception("Failed to write manifest; original job error (if any) is preserved")
+                if manifest.get("status") == "success":
+                    raise
         logger.info("Job finished: %s", json.dumps(manifest))
         if manifest.get("status") == "success" and (settings.track.enabled or settings.eval.enabled):
             _persist_track_outputs(
-                TrackStore(settings.output),
+                TrackStore(
+                    settings.output,
+                    writer_lock=writer_lock,
+                    fence_check=fence_check,
+                    fence_lost="retrain lock lost before write",
+                    fence_kind="retrain",
+                ),
                 kind=settings.output.kind,
                 eval_report={
                     "generated_at": eval_generated_at,
@@ -713,6 +921,7 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
                 },
                 recommendations=recommendations,
                 generated_at=str(manifest["generated_at"]),
+                fence_check=fence_check,
             )
 
 

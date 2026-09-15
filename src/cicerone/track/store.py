@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from io import BytesIO
 from typing import Any
 
@@ -13,6 +14,7 @@ import pandas as pd
 from sqlalchemy import Engine
 
 from cicerone.config.settings import IOSettings
+from cicerone.locks import LockBackend, ensure_writer_owned, held_writer_lock, writer_lock_held_here
 from cicerone.track.store_common import (
     DEFAULT_EVAL_TABLE,  # noqa: F401
     DEFAULT_HISTORY_TABLE,  # noqa: F401
@@ -65,7 +67,15 @@ __all__ = [
 class TrackStore(TrackDbBackend, TrackDatasetBackend):
     """Output-store side channel for track rows, eval JSON, and rec snapshots."""
 
-    def __init__(self, output: IOSettings):
+    def __init__(
+        self,
+        output: IOSettings,
+        *,
+        writer_lock: LockBackend | None = None,
+        fence_check: Callable[[], bool] | None = None,
+        fence_lost: str = "lock lost before write",
+        fence_kind: str = "lock",
+    ):
         self._output = output
         self._kind = output.kind
         self._options = output.options
@@ -73,15 +83,42 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
         self._known_ids: set[str] | None = None
         self._track_size: int | None = None
         self._append_lock = threading.Lock()
+        self._writer_lock = writer_lock
+        self._fence_check = fence_check
+        self._fence_lost = fence_lost
+        self._fence_kind = fence_kind
+
+    def _ensure_fence(self) -> None:
+        ensure_writer_owned(
+            self._writer_lock,
+            fence_check=self._fence_check,
+            fence_lost=self._fence_lost,
+            fence_kind=self._fence_kind,
+        )
+
+    @contextmanager
+    def _writer_lease(self) -> Iterator[None]:
+        if writer_lock_held_here(self._writer_lock):
+            self._ensure_fence()
+            yield
+            return
+        with held_writer_lock(
+            self._writer_lock,
+            fence_check=self._fence_check,
+            fence_lost=self._fence_lost,
+            fence_kind=self._fence_kind,
+        ):
+            yield
 
     def append_accepted_rows(self, rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
         if not rows:
             return []
         payload = [_row_with_event_id(row) for row in rows]
         if self._kind == "db":
-            return self._append_rows_db(payload)
+            with self._writer_lease():
+                return self._append_rows_db(payload)
         require_appendable_track_log(self._output)
-        with self._dataset_append_lock():
+        with self._dataset_append_lock(), self._writer_lease():
             known = self._refresh_known_ids()
             fresh: list[dict[str, Any]] = []
             seen: set[str] = set()
@@ -95,6 +132,7 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
             if not fresh:
                 return []
             encoded = "".join(json.dumps(row, separators=(",", ":")) + "\n" for row in fresh).encode("utf-8")
+            self._ensure_fence()
             self._append_bytes(TRACK_FILENAME, encoded)
             known.update(seen)
             self._track_size = (self._track_size or 0) + len(encoded)
@@ -130,11 +168,14 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
 
     def write_eval(self, report: Mapping[str, Any]) -> None:
         payload = dict(report)
-        if self._kind == "db":
-            self._write_eval_db(payload)
-            return
-        encoded = json.dumps(payload, indent=2).encode("utf-8")
-        self._write_bytes(EVAL_FILENAME, encoded, "application/json")
+        encoded = None if self._kind == "db" else json.dumps(payload, indent=2).encode("utf-8")
+
+        with self._writer_lease():
+            if self._kind == "db":
+                self._write_eval_db(payload)
+                return
+            assert encoded is not None
+            self._write_bytes(EVAL_FILENAME, encoded, "application/json")
 
     def read_eval(self) -> dict[str, Any] | None:
         if self._kind == "db":
@@ -153,13 +194,20 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
         if recommendations.empty:
             return
         frame = _history_frame(recommendations, generated_at)
-        if self._kind == "db":
-            self._append_history_db(frame)
-            return
-        buf = BytesIO()
-        frame.to_parquet(buf, index=False)
-        part = f"{HISTORY_DIR}/{_history_part_name(generated_at)}"
-        self._write_bytes(part, buf.getvalue(), "application/octet-stream")
+        part = None
+        payload = None
+        if self._kind != "db":
+            buf = BytesIO()
+            frame.to_parquet(buf, index=False)
+            part = f"{HISTORY_DIR}/{_history_part_name(generated_at)}"
+            payload = buf.getvalue()
+
+        with self._writer_lease():
+            if self._kind == "db":
+                self._append_history_db(frame)
+                return
+            assert part is not None and payload is not None
+            self._write_bytes(part, payload, "application/octet-stream")
 
     def read_history(
         self,

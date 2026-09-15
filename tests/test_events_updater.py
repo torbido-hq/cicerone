@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 import pandas as pd
 import pytest
 from support.events import event_payload
@@ -13,6 +15,7 @@ from cicerone.events.updater import INCREMENTAL_SOURCE, IncrementalUpdater
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.factory import build_output_sink
 from cicerone.io.recommendation_reader import RECOMMENDATION_COLUMNS
+from cicerone.locks import LockLostError
 from cicerone.reasons import dump_source_reasons, parse_reasons
 
 
@@ -246,6 +249,84 @@ def test_incremental_updater_skips_when_busy(tmp_path, feature_config: FeatureCo
     assert updater.apply([normalize_event(event_payload())]) == 0
 
 
+def test_incremental_updater_remakes_under_writer_lock_after_retrain(tmp_path, feature_config: FeatureConfig):
+    from contextlib import contextmanager
+
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    sink = build_output_sink(settings.output)
+    retrain = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "job", "rank": 1, "score": 1.0, "source": "personalized"},
+            {"user_id": "u2", "item_id": "x", "rank": 1, "score": 0.5, "source": "personalized"},
+        ]
+    )
+    inner = sink.recommendations_write
+
+    @contextmanager
+    def after_retrain():
+        sink.write_recommendations(retrain)
+        with inner():
+            yield
+
+    sink.recommendations_write = after_retrain  # type: ignore[method-assign]
+    updater = IncrementalUpdater(
+        sink=sink,
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+    )
+    assert updater.apply([normalize_event(event_payload(user_id="u1", item_id="i9"))]) == 1
+    frame = load_recommendations_frame(settings.output)
+    u1 = set(frame.loc[frame["user_id"] == "u1", "item_id"].astype(str))
+    assert "job" in u1
+    assert "i9" in u1
+    assert list(frame.loc[frame["user_id"] == "u2", "item_id"]) == ["x"]
+
+
+def test_incremental_updater_rechecks_busy_after_merge(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+    )
+    checks = {"n": 0}
+    writes = {"n": 0}
+
+    def busy() -> bool:
+        checks["n"] += 1
+        return checks["n"] >= 3
+
+    sink = build_output_sink(settings.output)
+    real_replace = sink.replace_recommendations_for_users
+
+    def counting_replace(df, *, user_ids):  # type: ignore[no-untyped-def]
+        writes["n"] += 1
+        return real_replace(df, user_ids=user_ids)
+
+    sink.replace_recommendations_for_users = counting_replace  # type: ignore[method-assign]
+    updater = IncrementalUpdater(
+        sink=sink,
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=3,
+        busy_check=busy,
+    )
+    assert updater.apply([normalize_event(event_payload())]) == 0
+    assert writes["n"] == 0
+    assert checks["n"] >= 3
+
+
 def test_incremental_updater_rechecks_busy_before_write(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()
@@ -358,6 +439,124 @@ def test_persist_online_skipped_when_write_busy(tmp_path, feature_config: Featur
     updater.persist_online()
     assert online.commits == 0
     assert online.aborts == 1
+
+
+def test_persist_online_rechecks_busy_after_writer_wait(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    busy = {"v": False}
+
+    class _Sink:
+        def recommendations_write(self):
+            busy["v"] = True
+            return nullcontext()
+
+    class _FakeOnline:
+        def __init__(self) -> None:
+            self.commits = 0
+            self.aborts = 0
+
+        def refresh(self, events):  # type: ignore[no-untyped-def]
+            del events
+            return OnlineRefreshResult(rows=empty_online_rows())
+
+        def invalidate(self) -> None:
+            return None
+
+        def commit(self) -> None:
+            self.commits += 1
+
+        def abort(self) -> None:
+            self.aborts += 1
+
+    online = _FakeOnline()
+    updater = IncrementalUpdater(
+        sink=_Sink(),  # type: ignore[arg-type]
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=3,
+        write_busy_check=lambda: busy["v"],
+        online=online,
+    )
+    updater.persist_online()
+    assert online.commits == 0
+    assert online.aborts == 1
+
+
+def test_persist_online_holds_dataset_writer_lock(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    sink = build_output_sink(settings.output)
+    depths: list[int] = []
+
+    class _FakeOnline:
+        def refresh(self, events):  # type: ignore[no-untyped-def]
+            del events
+            return OnlineRefreshResult(rows=empty_online_rows())
+
+        def invalidate(self) -> None:
+            return None
+
+        def commit(self) -> None:
+            depths.append(sink._recs_write_depth())
+
+        def abort(self) -> None:
+            return None
+
+    updater = IncrementalUpdater(
+        sink=sink,
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=3,
+        online=_FakeOnline(),
+    )
+    updater.persist_online()
+    assert depths == [1]
+
+
+def test_persist_online_fences_without_dataset_lock(tmp_path, feature_config: FeatureConfig):
+    commits: list[int] = []
+    owned = {"v": True}
+
+    class _Sink:
+        pass
+
+    class _FakeOnline:
+        def refresh(self, events):  # type: ignore[no-untyped-def]
+            del events
+            return OnlineRefreshResult(rows=empty_online_rows())
+
+        def invalidate(self) -> None:
+            return None
+
+        def commit(self) -> None:
+            commits.append(1)
+
+        def abort(self) -> None:
+            return None
+
+    updater = IncrementalUpdater(
+        sink=_Sink(),  # type: ignore[arg-type]
+        output_settings=IOSettings(kind="db", options={"database_url": "sqlite+pysqlite://"}),
+        feature_config=feature_config,
+        top_k=3,
+        fence_check=lambda: owned["v"],
+        online=_FakeOnline(),
+    )
+    updater.persist_online()
+    assert commits == [1]
+    owned["v"] = False
+    with pytest.raises(LockLostError):
+        updater.persist_online()
+    assert commits == [1]
 
 
 def test_incremental_updater_empty_and_unknown_event_type(tmp_path, feature_config: FeatureConfig):
@@ -542,7 +741,7 @@ def test_incremental_updater_no_feature_config(tmp_path):
     assert "i1" in set(frame["item_id"].astype(str))
 
 
-def test_incremental_updater_caches_frame_across_applies(tmp_path, feature_config, monkeypatch):
+def test_incremental_updater_reloads_affected_users_each_apply(tmp_path, feature_config, monkeypatch):
     out = tmp_path / "out"
     out.mkdir()
     pd.DataFrame(
@@ -569,7 +768,7 @@ def test_incremental_updater_caches_frame_across_applies(tmp_path, feature_confi
     assert updater.apply([normalize_event(event_payload(event_id="c1", item_id="a"))]) == 1
     assert loads["n"] == 1
     assert updater.apply([normalize_event(event_payload(event_id="c2", item_id="b"))]) == 1
-    assert loads["n"] == 1
+    assert loads["n"] == 2
 
 
 def test_incremental_updater_busy_invalidates_cache(tmp_path, feature_config, monkeypatch):
@@ -647,6 +846,34 @@ def test_incremental_updater_preserves_untouched_via_scoped_write(tmp_path, feat
     assert list(frame[frame["user_id"] == "u2"]["item_id"]) == ["keep"]
     assert frame[frame["user_id"] == "u1"]["item_id"].astype(str).tolist()  # non-empty updated
     assert "i9" in set(frame[frame["user_id"] == "u1"]["item_id"].astype(str))
+
+
+def test_incremental_updater_reloads_users_under_fence(tmp_path, feature_config):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        fence_check=lambda: True,
+    )
+    assert updater.apply([normalize_event(event_payload(user_id="u1", item_id="i9", event_id="e1"))]) == 1
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "job", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    assert updater.apply([normalize_event(event_payload(user_id="u1", item_id="i8", event_id="e2"))]) == 1
+    frame = load_recommendations_frame(settings.output)
+    items = set(frame[frame["user_id"] == "u1"]["item_id"].astype(str))
+    assert "job" in items
+    assert "old" not in items
 
 
 def test_incremental_updater_user_cache_lru_evicts(tmp_path, feature_config):

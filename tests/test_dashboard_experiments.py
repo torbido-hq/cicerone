@@ -1132,3 +1132,80 @@ def test_thompson_ship_ignores_parked_empty_lists(tmp_path):
     assert {item.variant for item in context["report"].guardrails} == {"control", "treatment"}
     assert context["can_ship"] is True
     assert context["ship_variant"] == "control"
+
+
+def test_promote_winner_reads_state_under_writer_lock(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from cicerone.locks import writer_lock_held_here
+
+    settings = _settings(tmp_path, log_exposures=False)
+    seen = {"held": False}
+
+    class _Lock:
+        def acquire(self) -> bool:
+            return True
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            return True
+
+        def is_locked(self) -> bool:
+            return True
+
+    lock = _Lock()
+    original = ExperimentStore.read_state
+
+    def _read(self):
+        seen["held"] = writer_lock_held_here(self._writer_lock)
+        return original(self)
+
+    monkeypatch.setattr(
+        "cicerone.dashboard_experiments.experiment_context",
+        lambda _settings: {
+            "report": SimpleNamespace(
+                comparisons=(),
+                winner="treatment",
+                promote_blocked_by=(),
+            )
+        },
+    )
+    monkeypatch.setattr("cicerone.dashboard_experiments.build_output_writer_lock", lambda _settings: lock)
+    monkeypatch.setattr(ExperimentStore, "read_state", _read)
+    assert promote_winner(settings, "treatment") is None
+    assert seen["held"] is True
+
+
+def test_promote_winner_maps_writer_lock_errors(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from cicerone.locks import LockLostError, WriterLockBusyError
+
+    settings = _settings(tmp_path, log_exposures=False)
+    monkeypatch.setattr(
+        "cicerone.dashboard_experiments.experiment_context",
+        lambda _settings: {
+            "report": SimpleNamespace(
+                comparisons=(),
+                winner="treatment",
+                promote_blocked_by=(),
+            )
+        },
+    )
+    monkeypatch.setattr(
+        "cicerone.dashboard_experiments.held_writer_lock",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(WriterLockBusyError("dataset writer lock busy")),
+    )
+    assert promote_winner(settings, "treatment") == "Writer lock is busy"
+    monkeypatch.setattr(
+        "cicerone.dashboard_experiments.held_writer_lock",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(LockLostError("writer lock lost", kind="writer")),
+    )
+    assert promote_winner(settings, "treatment") == "Writer lock was lost"
+    monkeypatch.setattr(
+        "cicerone.dashboard_experiments.held_writer_lock",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(WriterLockBusyError("dataset writer lock busy")),
+    )
+    assert clear_promotion(settings) == "Writer lock is busy"

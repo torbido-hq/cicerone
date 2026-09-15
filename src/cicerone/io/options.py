@@ -2,16 +2,26 @@
 
 from __future__ import annotations
 
+import errno
 import io
 import logging
 import re
-from collections.abc import Sequence
+import threading
+import time
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+try:
+    import fcntl
+except ImportError:
+    fcntl = None  # type: ignore[assignment]
+
 import pandas as pd
 
-from cicerone.config.constants import ConfigError
+from cicerone.config.constants import DEFAULT_LOCK_ACQUIRE_TIMEOUT_SECONDS, ConfigError
+from cicerone.locks import WriterLockBusyError
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +34,18 @@ _READONLY_SELECT_FORBIDDEN = re.compile(
 )
 S3_NOT_FOUND_CODES = frozenset({"NoSuchKey", "404", "NotFound"})
 STORAGE_BACKENDS = frozenset({"s3", "local"})
+_PATH_LOCKS_GUARD = threading.Lock()
+_PATH_LOCKS: dict[str, threading.Lock] = {}
+
+
+def _process_path_lock(path: Path) -> threading.Lock:
+    key = str(path.resolve())
+    with _PATH_LOCKS_GUARD:
+        lock = _PATH_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _PATH_LOCKS[key] = lock
+        return lock
 
 
 def require_option(options: dict[str, Any], key: str, backend: str) -> Any:
@@ -31,6 +53,37 @@ def require_option(options: dict[str, Any], key: str, backend: str) -> Any:
     if value is None:
         raise ConfigError(f"Missing required option '{key}' for backend {backend!r}")
     return value
+
+
+@contextmanager
+def exclusive_file_lock(
+    path: Path, *, timeout_seconds: float = DEFAULT_LOCK_ACQUIRE_TIMEOUT_SECONDS
+) -> Iterator[None]:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock = _process_path_lock(path)
+    if not lock.acquire(timeout=timeout_seconds):
+        raise WriterLockBusyError("dataset writer lock busy")
+    try:
+        with path.open("a") as handle:
+            if fcntl is not None:
+                deadline = time.monotonic() + timeout_seconds
+                while True:
+                    try:
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except OSError as exc:
+                        if getattr(exc, "errno", None) not in {errno.EACCES, errno.EAGAIN}:
+                            raise
+                        if time.monotonic() >= deadline:
+                            raise WriterLockBusyError("dataset writer lock busy") from None
+                        time.sleep(0.05)
+            try:
+                yield
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    finally:
+        lock.release()
 
 
 def object_key(options: dict[str, Any], filename: str) -> str:

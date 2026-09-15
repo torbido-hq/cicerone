@@ -228,6 +228,42 @@ def test_post_track_records_error_when_append_fails(tmp_path, monkeypatch):
     assert after == before + 1
 
 
+def test_post_track_returns_503_when_writer_lock_busy(tmp_path, monkeypatch):
+    from cicerone.locks import WriterLockBusyError
+
+    monkeypatch.setattr(
+        "cicerone.track.store.TrackStore.append_accepted_rows",
+        lambda *args, **kwargs: (_ for _ in ()).throw(WriterLockBusyError("dataset writer lock busy")),
+    )
+    app = create_app(_settings(tmp_path), _FakeReader(_recs_df()))
+    response = TestClient(app, raise_server_exceptions=False).post(
+        "/track",
+        headers={"Authorization": "Bearer secret"},
+        json=_impression(),
+    )
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Writer lock is busy"
+
+
+def test_post_track_returns_503_when_writer_lock_lost(tmp_path, monkeypatch):
+    from cicerone.locks import LockLostError
+
+    monkeypatch.setattr(
+        "cicerone.track.store.TrackStore.append_accepted_rows",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            LockLostError("dataset writer lock lost before write", kind="writer")
+        ),
+    )
+    app = create_app(_settings(tmp_path), _FakeReader(_recs_df()))
+    response = TestClient(app, raise_server_exceptions=False).post(
+        "/track",
+        headers={"Authorization": "Bearer secret"},
+        json=_impression(),
+    )
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Writer lock was lost"
+
+
 def test_track_route_absent_when_disabled(tmp_path):
     app = create_app(
         make_settings(
@@ -346,6 +382,27 @@ def test_get_log_impressions_when_enabled(tmp_path):
     assert {row["item_id"] for row in rows} == {item["item_id"] for item in body["items"]}
     assert all(row["user_id"] == "u1" for row in rows)
     assert [row["rank"] for row in rows] == [item["rank"] for item in body["items"]]
+
+
+def test_get_log_impressions_retries_writer_lock_busy(tmp_path, monkeypatch):
+    from cicerone.locks import WriterLockBusyError
+    from cicerone.serve import app as serve_app
+
+    calls = {"n": 0}
+
+    def flaky(*args, **kwargs):
+        del args, kwargs
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise WriterLockBusyError("dataset writer lock busy")
+        return 1
+
+    monkeypatch.setattr("cicerone.track.store.TrackStore.append_rows", flaky)
+    monkeypatch.setattr(serve_app.time, "sleep", lambda _seconds: None)
+    app = create_app(_settings(tmp_path, serve_log_impressions=True), _FakeReader(_recs_df()))
+    response = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"})
+    assert response.status_code == 200
+    assert calls["n"] == 3
 
 
 def test_get_log_impressions_swallows_store_errors(tmp_path, monkeypatch):

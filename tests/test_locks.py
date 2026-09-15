@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from cicerone import locks as locks_mod
 from cicerone.config import (
     ConfigError,
     IOSettings,
@@ -17,11 +18,19 @@ from cicerone.config import (
 from cicerone.config.constants import DEFAULT_EVENTS_APPLY_LOCK_TTL_SECONDS
 from cicerone.locks import (
     REDIS_LOCK_TTL_MS,
+    LockLostError,
     PostgresAdvisoryLock,
     RedisLock,
+    acquire_blocking,
     advisory_keys_from_lock_key,
+    build_dataset_writer_lock,
     build_lock_backend,
+    build_output_writer_lock,
+    dataset_append_lock_key,
+    ensure_writer_owned,
     events_apply_lock_key,
+    has_distributed_lock,
+    held_writer_lock,
 )
 from cicerone.trigger import RunGuard
 
@@ -384,8 +393,8 @@ def test_redis_lock_allows_reacquire_after_refresh_loss(monkeypatch):
     lost = threading.Event()
     real_mark_lost = lock._mark_lost
 
-    def mark_lost() -> None:
-        real_mark_lost()
+    def mark_lost(generation: int | None = None) -> None:
+        real_mark_lost(generation)
         lost.set()
 
     lock._mark_lost = mark_lost  # type: ignore[method-assign]
@@ -395,6 +404,173 @@ def test_redis_lock_allows_reacquire_after_refresh_loss(monkeypatch):
     assert lock._held is False
     assert lock._token != first_token
     assert lock.acquire() is True
+    lock.release()
+
+
+def test_redis_acquire_starts_new_refresher_after_release(monkeypatch):
+    client = _mock_redis_module(monkeypatch)
+    client.set.return_value = True
+    lock = RedisLock(
+        "redis://localhost:6379/0",
+        ttl_ms=200,
+        refresh_interval_ms=10_000,
+    )
+    assert lock.acquire() is True
+    first = lock._refresh_thread
+    lock.release()
+    assert lock.acquire() is True
+    second = lock._refresh_thread
+    assert second is not None and second.is_alive()
+    assert second is not first
+    lock.release()
+
+
+def test_redis_stale_release_does_not_drop_new_holder(monkeypatch):
+    client = _mock_redis_module(monkeypatch)
+    client.set.return_value = True
+    lock = RedisLock(
+        "redis://localhost:6379/0",
+        ttl_ms=200,
+        refresh_interval_ms=10_000,
+    )
+    assert lock.acquire() is True
+    stale_generation = lock._hold_generation
+    lock._mark_lost()
+    assert lock.acquire() is True
+    token = lock._token
+    refresher = lock._refresh_thread
+    lock.release_generation(stale_generation)
+    assert lock._held is True
+    assert lock._token == token
+    assert refresher is not None and refresher.is_alive()
+    assert lock._refresh_thread is refresher
+    lock.release()
+
+
+def test_redis_try_acquire_releases_token_rotated_during_set(monkeypatch):
+    client = _mock_redis_module(monkeypatch)
+    lock = RedisLock(
+        "redis://localhost:6379/0",
+        ttl_ms=200,
+        refresh_interval_ms=10_000,
+    )
+    token = lock._token
+
+    def _set(*_args, **_kwargs):
+        lock._mark_lost()
+        return True
+
+    client.set.side_effect = _set
+    assert lock.try_acquire() is None
+    assert lock._held is False
+    client.release_script.assert_called_once_with(keys=[lock._key], args=[token])
+
+
+def test_redis_stale_token_release_failure_is_logged(monkeypatch, caplog):
+    client = _mock_redis_module(monkeypatch)
+    lock = RedisLock(
+        "redis://localhost:6379/0",
+        ttl_ms=200,
+        refresh_interval_ms=10_000,
+    )
+
+    def _set(*_args, **_kwargs):
+        lock._mark_lost()
+        return True
+
+    client.set.side_effect = _set
+    client.release_script.side_effect = RuntimeError("boom")
+    with caplog.at_level("ERROR"):
+        assert lock.try_acquire() is None
+    assert lock._held is False
+    assert "Failed to release stale Redis lock token" in caplog.text
+
+
+def test_redis_stale_start_refresh_does_not_stop_new_holder(monkeypatch):
+    client = _mock_redis_module(monkeypatch)
+    client.set.return_value = True
+    lock = RedisLock(
+        "redis://localhost:6379/0",
+        ttl_ms=200,
+        refresh_interval_ms=10_000,
+    )
+    assert lock.acquire() is True
+    stale = lock._hold_generation
+    lock._mark_lost()
+    assert lock.acquire() is True
+    refresher = lock._refresh_thread
+    lock._start_refresh(stale)
+    assert refresher is not None and refresher.is_alive()
+    assert lock._refresh_thread is refresher
+    lock.release()
+
+
+def test_redis_release_generation_skips_stop_after_reacquire(monkeypatch):
+    client = _mock_redis_module(monkeypatch)
+    client.set.return_value = True
+    lock = RedisLock(
+        "redis://localhost:6379/0",
+        ttl_ms=200,
+        refresh_interval_ms=10_000,
+    )
+    assert lock.acquire() is True
+    generation = lock._hold_generation
+    entered = threading.Event()
+    proceed = threading.Event()
+    real = lock._refresh_lifecycle
+
+    class _Gate:
+        def __init__(self) -> None:
+            self._n = 0
+
+        def __enter__(self):
+            self._n += 1
+            if self._n == 1:
+                entered.set()
+                proceed.wait(1)
+            return real.__enter__()
+
+        def __exit__(self, *exc):
+            return real.__exit__(*exc)
+
+    lock._refresh_lifecycle = _Gate()
+
+    def _release() -> None:
+        lock.release_generation(generation)
+
+    thread = threading.Thread(target=_release)
+    thread.start()
+    assert entered.wait(1)
+    assert lock.acquire() is True
+    refresher = lock._refresh_thread
+    proceed.set()
+    thread.join(1)
+    assert lock._held is True
+    assert refresher is not None and refresher.is_alive()
+    assert lock._refresh_thread is refresher
+    lock.release()
+    assert lock._held is False
+
+
+def test_redis_stale_mark_lost_does_not_clear_new_holder(monkeypatch):
+    client = _mock_redis_module(monkeypatch)
+    client.set.return_value = True
+    lock = RedisLock(
+        "redis://localhost:6379/0",
+        ttl_ms=200,
+        refresh_interval_ms=10_000,
+    )
+    assert lock.acquire() is True
+    stale_generation = lock._hold_generation
+    lock._mark_lost()
+    assert lock.acquire() is True
+    token = lock._token
+    refresher = lock._refresh_thread
+    lock._mark_lost(stale_generation)
+    assert lock._held is True
+    assert lock._token == token
+    assert refresher is not None and refresher.is_alive()
+    assert lock._refresh_thread is refresher
     lock.release()
 
 
@@ -421,9 +597,9 @@ def test_redis_release_ignores_in_flight_refresh_failure(monkeypatch):
     )
     real_mark_lost = lock._mark_lost
 
-    def mark_lost() -> None:
+    def mark_lost(generation: int | None = None) -> None:
         mark_lost_calls.append("lost")
-        real_mark_lost()
+        real_mark_lost(generation)
 
     lock._mark_lost = mark_lost  # type: ignore[method-assign]
 
@@ -597,6 +773,275 @@ def test_redis_owned_and_is_locked(monkeypatch):
     client.get.side_effect = RuntimeError("redis down")
     assert lock.owned() is False
     lock.release()
+
+
+def test_dataset_append_lock_key_and_optional_builder(monkeypatch):
+    assert dataset_append_lock_key("job-a") == "job-a:dataset:append"
+    assert has_distributed_lock(make_settings()) is False
+    settings = make_settings(
+        trigger_lock_backend="redis",
+        trigger_redis_url="redis://localhost:6379/0",
+        trigger_lock_key="job-a",
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": "/tmp/out"}),
+    )
+    assert has_distributed_lock(settings) is True
+    client = _mock_redis_module(monkeypatch)
+    client.set.return_value = True
+    lock = build_dataset_writer_lock(settings)
+    assert lock is not None
+    assert lock.acquire() is True
+    client.set.assert_called_with("job-a:dataset:append", lock._token, nx=True, px=10_000)
+    lock.release()
+    db_settings = make_settings(
+        trigger_lock_backend="redis",
+        trigger_redis_url="redis://localhost:6379/0",
+        output=IOSettings(kind="db", options={"database_url": "sqlite://"}),
+    )
+    assert build_dataset_writer_lock(db_settings) is None
+    client = _mock_redis_module(monkeypatch)
+    client.set.return_value = True
+    output_lock = build_output_writer_lock(db_settings)
+    assert output_lock is not None
+    assert output_lock.acquire() is True
+    output_lock.release()
+
+
+def test_held_writer_lock_owned_after_nested_wait():
+    from contextlib import contextmanager
+
+    events: list[str] = []
+
+    class Lock:
+        def acquire(self) -> bool:
+            events.append("acquire")
+            return True
+
+        def release(self) -> None:
+            events.append("release")
+
+        def owned(self) -> bool:
+            events.append("owned")
+            return True
+
+        def is_locked(self) -> bool:
+            return True
+
+    @contextmanager
+    def nested():
+        events.append("nested")
+        yield
+
+    with nested(), held_writer_lock(Lock()):
+        events.append("write")
+    assert events == ["nested", "acquire", "owned", "write", "release"]
+
+
+def test_held_writer_lock_binds_try_acquire_generation():
+    released: list[int] = []
+
+    class Lock:
+        hold_generation = 99
+
+        def try_acquire(self) -> int:
+            return 3
+
+        def acquire(self) -> bool:
+            raise AssertionError("held_writer_lock should use try_acquire")
+
+        def release(self) -> None:
+            raise AssertionError("should release by generation")
+
+        def release_generation(self, generation: int) -> None:
+            released.append(generation)
+
+        def owned(self, generation: int | None = None) -> bool:
+            return generation == 3
+
+        def is_locked(self) -> bool:
+            return True
+
+    lock = Lock()
+    with held_writer_lock(lock):
+        assert locks_mod._bound_writer_generation(lock) == 3
+        locks_mod.ensure_writer_owned(lock)
+    assert released == [3]
+
+
+def test_writer_lock_held_here_without_hold_generation():
+    class Lock:
+        def acquire(self) -> bool:
+            return True
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            return True
+
+        def is_locked(self) -> bool:
+            return True
+
+    lock = Lock()
+    assert not locks_mod.writer_lock_held_here(lock)
+    with held_writer_lock(lock):
+        assert locks_mod.writer_lock_held_here(lock)
+    assert not locks_mod.writer_lock_held_here(lock)
+
+
+def test_held_writer_lock_rechecks_caller_fence_after_acquire():
+    events: list[str] = []
+    held = {"v": True}
+
+    class Lock:
+        def acquire(self) -> bool:
+            events.append("acquire")
+            held["v"] = False
+            return True
+
+        def release(self) -> None:
+            events.append("release")
+
+        def owned(self) -> bool:
+            events.append("owned")
+            return True
+
+        def is_locked(self) -> bool:
+            return True
+
+    with (
+        pytest.raises(LockLostError, match="retrain lock lost before write") as captured,
+        held_writer_lock(
+            Lock(),
+            fence_check=lambda: held["v"],
+            fence_lost="retrain lock lost before write",
+            fence_kind="retrain",
+        ),
+    ):
+        events.append("write")
+    assert captured.value.kind == "retrain"
+    assert events == ["acquire", "owned", "release"]
+
+
+def test_held_writer_lock_fence_without_writer_lock():
+    with (
+        pytest.raises(LockLostError, match="events apply lock lost before write") as captured,
+        held_writer_lock(
+            None,
+            fence_check=lambda: False,
+            fence_lost="events apply lock lost before write",
+            fence_kind="apply",
+        ),
+    ):
+        pass
+    assert captured.value.kind == "apply"
+
+
+def test_held_writer_lock_rejects_stale_generation_after_reacquire():
+    class Lock:
+        def __init__(self) -> None:
+            self._held = False
+            self.hold_generation = 0
+
+        def acquire(self) -> bool:
+            if self._held:
+                return False
+            self._held = True
+            self.hold_generation += 1
+            return True
+
+        def release(self) -> None:
+            self._held = False
+
+        def release_generation(self, generation: int) -> None:
+            if generation != self.hold_generation or not self._held:
+                return
+            self._held = False
+            self.hold_generation += 1
+
+        def owned(self, generation: int | None = None) -> bool:
+            if not self._held:
+                return False
+            return generation is None or generation == self.hold_generation
+
+        def is_locked(self) -> bool:
+            return self._held
+
+    lock = Lock()
+    with held_writer_lock(lock):
+        first = lock.hold_generation
+        lock._held = False
+        assert lock.acquire() is True
+        assert lock.hold_generation != first
+        with pytest.raises(LockLostError, match="dataset writer lock lost before write"):
+            ensure_writer_owned(lock)
+
+
+def test_lock_owned_falls_back_when_owned_rejects_generation():
+    class Lock:
+        hold_generation = 3
+
+        def owned(self) -> bool:
+            return True
+
+    assert locks_mod._lock_owned(Lock(), 3) is True
+    assert locks_mod._lock_owned(Lock(), 2) is False
+
+
+def test_bound_writer_generation_ignores_other_lock():
+    class _Lock:
+        pass
+
+    held = _Lock()
+    other = _Lock()
+    locks_mod._bind_writer_generation(held, 4)
+    try:
+        assert locks_mod._bound_writer_generation(other) is None
+    finally:
+        locks_mod._unbind_writer_generation()
+
+
+def test_held_writer_lock_raises_when_lease_lost():
+    events: list[str] = []
+
+    class Lock:
+        def acquire(self) -> bool:
+            events.append("acquire")
+            return True
+
+        def release(self) -> None:
+            events.append("release")
+
+        def owned(self) -> bool:
+            events.append("owned")
+            return False
+
+        def is_locked(self) -> bool:
+            return True
+
+    with (
+        pytest.raises(LockLostError, match="dataset writer lock lost before write") as captured,
+        held_writer_lock(Lock()),
+    ):
+        events.append("write")
+    assert events == ["acquire", "owned", "release"]
+    assert captured.value.kind == "writer"
+
+
+def test_acquire_blocking_times_out():
+    class _Busy:
+        def acquire(self) -> bool:
+            return False
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            return False
+
+        def is_locked(self) -> bool:
+            return True
+
+    assert acquire_blocking(_Busy(), timeout_seconds=0.0) is False
 
 
 def test_events_apply_lock_key_and_build_override(monkeypatch):

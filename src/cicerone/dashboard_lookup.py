@@ -82,10 +82,13 @@ def lookup_inspector(
     history_reader: UserHistoryReader | None,
     user_id: str,
 ) -> dict[str, Any]:
+    user_id = user_id.strip()
+    if not user_id:
+        return empty_recommendations_context()
     recs = lookup_recommendations(settings, recommendation_reader, user_id)
-    if not recs["queried"]:
+    if not recs["queried"] or recommendation_reader is None:
         return recs
-    recs.update(lookup_history(settings, history_reader, recs["user_id"]))
+    recs.update(lookup_history(settings, history_reader, user_id))
     rec_ids = {row["item_id"] for row in recs["items"] if row["item_id"] and row["item_id"] != MISSING}
     event_ids = {row["item_id"] for row in recs["events"] if row["item_id"] and row["item_id"] != MISSING}
     recs["overlap_item_ids"] = sorted(rec_ids & event_ids)

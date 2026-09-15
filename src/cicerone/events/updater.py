@@ -113,6 +113,17 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             logger.info("Skipping online persist: full retrain in progress")
             self._abort_online()
             return
+        holder = getattr(self._sink, "recommendations_write", None)
+        if callable(holder):
+            with holder():
+                if self._write_busy_check is not None and self._write_busy_check():
+                    logger.info("Skipping online persist: full retrain in progress")
+                    self._abort_online()
+                    return
+                self._ensure_fence()
+                self._commit_online()
+            return
+        self._ensure_fence()
         self._commit_online()
 
     def abort_online(self) -> None:
@@ -131,17 +142,108 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         weights = self._row_signal_weights(batch)
         affected_users = sorted(set(batch[USER_COLUMN].astype(str)))
         affected_set = set(affected_users) | {COLD_START_USER_ID}
-        existing = self._load_users(affected_set)
-
-        if USER_COLUMN in existing.columns and not existing.empty:
-            existing = existing.copy()
-            existing[USER_COLUMN] = existing[USER_COLUMN].astype(str)
-
         popular_ranking = self._popular_ranking(batch, weights)
         latest_ranking = self._latest_ranking(batch, weights)
         online_result = self._refresh_online(events)
         online_by_user = {} if online_result.sequential_skipped else self._online_rows_by_user(online_result)
 
+        def _persist() -> int:
+            if not self._ensure_write_allowed():
+                self._abort_online()
+                return 0
+            merged, replace_ids = self._merge_affected(
+                batch,
+                weights,
+                affected_users,
+                affected_set,
+                popular_ranking,
+                latest_ranking,
+                online_by_user,
+            )
+            if merged is None or not replace_ids:
+                self._abort_online()
+                now = datetime.now(UTC)
+                self._last_success_at = now
+                self._events_applied += len(events)
+                if self._on_success is not None:
+                    self._on_success()
+                logger.info(
+                    "Incremental update skipped write: %d event(s) had no ranking signal",
+                    len(events),
+                )
+                return len(events)
+            if not self._ensure_write_allowed():
+                self._abort_online()
+                return 0
+            self._ensure_fence()
+            n_users = self._sink.replace_recommendations_for_users(merged, user_ids=sorted(set(replace_ids)))
+            now = datetime.now(UTC)
+            manifest = {
+                "triggered_by": "incremental",
+                "status": "success",
+                "error": None,
+                "generated_at": now.isoformat(),
+                "n_events": len(events),
+                "incremental_events_applied": len(events),
+                "last_incremental_at": now.isoformat(),
+                "n_users_with_recommendations": n_users,
+                "top_k": self._top_k,
+                "partial_outputs": True,
+            }
+            if self._online is not None:
+                manifest["online_fit_partial_epochs"] = online_result.fit_partial_epochs
+                manifest["online_users_refreshed"] = online_result.users_refreshed
+                manifest["online_events_dropped_unknown"] = online_result.events_dropped_unknown
+            self._ensure_fence()
+            ensure = getattr(self._sink, "ensure_writer_held", None)
+            if callable(ensure):
+                ensure()
+            self._sink.write_manifest(manifest)
+            if self._publisher is not None:
+                self._ensure_fence()
+                if callable(ensure):
+                    ensure()
+                try:
+                    self._publisher.publish(merged)
+                except Exception:
+                    logger.exception("Incremental publish failed after successful write")
+                    self._abort_online()
+                    raise
+            self._store_users_in_cache(set(replace_ids), merged)
+            if persist_online:
+                self._commit_online()
+            self._last_success_at = now
+            self._events_applied += len(events)
+            if self._on_success is not None:
+                self._on_success()
+            logger.info(
+                "Incremental update wrote recommendations for %d user(s) from %d event(s)",
+                len(replace_ids),
+                len(events),
+            )
+            return len(events)
+
+        holder = getattr(self._sink, "recommendations_write", None)
+        if callable(holder):
+            with holder():
+                return _persist()
+        return _persist()
+
+    def _merge_affected(
+        self,
+        batch: pd.DataFrame,
+        weights: pd.Series,
+        affected_users: list[str],
+        affected_set: set[str],
+        popular_ranking: pd.DataFrame,
+        latest_ranking: pd.DataFrame,
+        online_by_user: dict[str, pd.DataFrame],
+    ) -> tuple[pd.DataFrame | None, list[str]]:
+        self._evict_users(affected_set)
+        existing = self._load_users(affected_set)
+        if USER_COLUMN in existing.columns and not existing.empty:
+            existing = existing.copy()
+            existing[USER_COLUMN] = existing[USER_COLUMN].astype(str)
         by_user = (
             {user_id: group for user_id, group in existing.groupby(USER_COLUMN, sort=False)}
             if not existing.empty
@@ -155,7 +257,6 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             if not batch.empty
             else {}
         )
-
         frames: list[pd.DataFrame] = []
         replace_ids: list[str] = []
         empty_user_batch = batch.iloc[0:0]
@@ -180,66 +281,10 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         if not cold.empty:
             frames.append(cold)
             replace_ids.append(COLD_START_USER_ID)
-
         if not replace_ids:
-            self._abort_online()
-            now = datetime.now(UTC)
-            self._last_success_at = now
-            self._events_applied += len(events)
-            if self._on_success is not None:
-                self._on_success()
-            logger.info(
-                "Incremental update skipped write: %d event(s) had no ranking signal",
-                len(events),
-            )
-            return len(events)
-
+            return None, []
         merged = pd.concat(frames, ignore_index=True)
-        merged = merged[recommendation_output_columns(merged)]
-        if not self._ensure_write_allowed():
-            self._abort_online()
-            return 0
-        self._ensure_fence()
-        n_users = self._sink.replace_recommendations_for_users(merged, user_ids=sorted(set(replace_ids)))
-        now = datetime.now(UTC)
-        manifest = {
-            "triggered_by": "incremental",
-            "status": "success",
-            "error": None,
-            "generated_at": now.isoformat(),
-            "n_events": len(events),
-            "incremental_events_applied": len(events),
-            "last_incremental_at": now.isoformat(),
-            "n_users_with_recommendations": n_users,
-            "top_k": self._top_k,
-            "partial_outputs": True,
-        }
-        if self._online is not None:
-            manifest["online_fit_partial_epochs"] = online_result.fit_partial_epochs
-            manifest["online_users_refreshed"] = online_result.users_refreshed
-            manifest["online_events_dropped_unknown"] = online_result.events_dropped_unknown
-        self._ensure_fence()
-        self._sink.write_manifest(manifest)
-        if self._publisher is not None:
-            try:
-                self._publisher.publish(merged)
-            except Exception:
-                logger.exception("Incremental publish failed after successful write")
-                self._abort_online()
-                raise
-        self._store_users_in_cache(set(replace_ids), merged)
-        if persist_online:
-            self._commit_online()
-        self._last_success_at = now
-        self._events_applied += len(events)
-        if self._on_success is not None:
-            self._on_success()
-        logger.info(
-            "Incremental update wrote recommendations for %d user(s) from %d event(s)",
-            len(replace_ids),
-            len(events),
-        )
-        return len(events)
+        return merged[recommendation_output_columns(merged)], replace_ids
 
     def _commit_online(self) -> None:
         if self._online is None:
@@ -292,4 +337,4 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
 
     def _ensure_fence(self) -> None:
         if self._fence_check is not None and not self._fence_check():
-            raise LockLostError("events apply lock lost before write")
+            raise LockLostError("events apply lock lost before write", kind="apply")

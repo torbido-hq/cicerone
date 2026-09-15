@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 
 import boto3
 import pandas as pd
@@ -110,6 +111,414 @@ def test_local_replace_recommendations_for_users_preserves_others(tmp_path):
     assert len(after) == len(before)
     with pytest.raises(ValueError, match="requires user_ids"):
         sink.replace_recommendations_for_users(before, user_ids=[])
+
+
+def test_local_replace_recommendations_serializes_writers(tmp_path):
+    options = {"storage_backend": "local", "path": str(tmp_path)}
+    sink = DatasetOutputSink(options)
+    sink.write_recommendations(
+        pd.DataFrame(
+            [
+                {"user_id": "u1", "item_id": "old1", "rank": 1, "score": 1.0, "source": "personalized"},
+                {"user_id": "u2", "item_id": "old2", "rank": 1, "score": 1.0, "source": "personalized"},
+            ]
+        )
+    )
+    started = threading.Barrier(2)
+
+    def _replace(user_id: str, item_id: str) -> None:
+        started.wait()
+        sink.replace_recommendations_for_users(
+            pd.DataFrame(
+                [{"user_id": user_id, "item_id": item_id, "rank": 1, "score": 2.0, "source": "incremental"}]
+            ),
+            user_ids=[user_id],
+        )
+
+    threads = [
+        threading.Thread(target=_replace, args=("u1", "new1")),
+        threading.Thread(target=_replace, args=("u2", "new2")),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    stored = pd.read_parquet(tmp_path / "recommendations.parquet")
+    by_user = {
+        str(user_id): list(group["item_id"])
+        for user_id, group in stored.groupby(stored["user_id"].astype(str), sort=False)
+    }
+    assert by_user["u1"] == ["new1"]
+    assert by_user["u2"] == ["new2"]
+
+
+def test_local_write_and_replace_recommendations_share_lock(tmp_path):
+    options = {"storage_backend": "local", "path": str(tmp_path)}
+    sink = DatasetOutputSink(options)
+    sink.write_recommendations(
+        pd.DataFrame(
+            [
+                {"user_id": "u1", "item_id": "old1", "rank": 1, "score": 1.0, "source": "personalized"},
+                {"user_id": "u2", "item_id": "old2", "rank": 1, "score": 1.0, "source": "personalized"},
+            ]
+        )
+    )
+    started = threading.Barrier(2)
+
+    def _write_job() -> None:
+        started.wait()
+        sink.write_recommendations(
+            pd.DataFrame(
+                [
+                    {"user_id": "u1", "item_id": "job1", "rank": 1, "score": 1.0, "source": "personalized"},
+                    {"user_id": "u2", "item_id": "job2", "rank": 1, "score": 1.0, "source": "personalized"},
+                    {"user_id": "u3", "item_id": "job3", "rank": 1, "score": 1.0, "source": "personalized"},
+                ]
+            )
+        )
+
+    def _replace_u1() -> None:
+        started.wait()
+        sink.replace_recommendations_for_users(
+            pd.DataFrame(
+                [{"user_id": "u1", "item_id": "new1", "rank": 1, "score": 2.0, "source": "incremental"}]
+            ),
+            user_ids=["u1"],
+        )
+
+    threads = [threading.Thread(target=_write_job), threading.Thread(target=_replace_u1)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    stored = pd.read_parquet(tmp_path / "recommendations.parquet")
+    by_user = {
+        str(user_id): list(group["item_id"])
+        for user_id, group in stored.groupby(stored["user_id"].astype(str), sort=False)
+    }
+    assert set(by_user) == {"u1", "u2", "u3"}
+    assert by_user["u2"] == ["job2"]
+    assert by_user["u3"] == ["job3"]
+    assert by_user["u1"] in (["job1"], ["new1"])
+
+
+def test_write_recommendations_writer_lock_busy(tmp_path, monkeypatch) -> None:
+    class _Busy:
+        def acquire(self) -> bool:
+            return False
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            return False
+
+        def is_locked(self) -> bool:
+            return True
+
+    monkeypatch.setattr("cicerone.locks.acquire_blocking", lambda _lock, **_kwargs: False)
+    sink = DatasetOutputSink(
+        {"storage_backend": "local", "path": str(tmp_path)},
+        writer_lock=_Busy(),
+    )
+    with pytest.raises(RuntimeError, match="dataset writer lock busy"):
+        sink.write_recommendations(
+            pd.DataFrame(
+                [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"}]
+            )
+        )
+    assert not (tmp_path / "recommendations.parquet").exists()
+
+
+def test_recommendations_write_reentry_is_per_thread(tmp_path) -> None:
+    acquires: list[int] = []
+
+    class _Lock:
+        def acquire(self) -> bool:
+            acquires.append(threading.get_ident())
+            return True
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            return True
+
+        def is_locked(self) -> bool:
+            return True
+
+    sink = DatasetOutputSink(
+        {"storage_backend": "local", "path": str(tmp_path)},
+        writer_lock=_Lock(),
+    )
+    started = threading.Event()
+    release = threading.Event()
+    frame = pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"}]
+    )
+
+    def holder() -> None:
+        with sink.recommendations_write():
+            started.set()
+            release.wait(timeout=2)
+
+    def writer() -> None:
+        sink.write_recommendations(frame)
+
+    thread = threading.Thread(target=holder)
+    thread.start()
+    assert started.wait(timeout=2)
+    second = threading.Thread(target=writer)
+    second.start()
+    release.set()
+    thread.join(timeout=2)
+    second.join(timeout=2)
+    assert len(acquires) == 2
+    assert acquires[0] != acquires[1]
+
+
+def test_recommendations_write_skips_acquire_when_lock_held_here(tmp_path) -> None:
+    from cicerone.locks import held_writer_lock
+
+    acquires = {"n": 0}
+
+    class _Lock:
+        def acquire(self) -> bool:
+            acquires["n"] += 1
+            return True
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            return True
+
+        def is_locked(self) -> bool:
+            return True
+
+    lock = _Lock()
+    sink = DatasetOutputSink(
+        {"storage_backend": "local", "path": str(tmp_path)},
+        writer_lock=lock,
+    )
+    frame = pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"}]
+    )
+    with held_writer_lock(lock):
+        sink.write_recommendations(frame)
+        sink.write_model_artifact(b"artifact")
+        sink.write_items_snapshot(frame)
+    assert acquires["n"] == 1
+
+
+def test_nested_replace_rechecks_owned_before_unlocked_write(tmp_path) -> None:
+    from cicerone.locks import LockLostError
+
+    held = {"v": True}
+
+    class _Lock:
+        def acquire(self) -> bool:
+            return True
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            return held["v"]
+
+        def is_locked(self) -> bool:
+            return True
+
+    sink = DatasetOutputSink(
+        {"storage_backend": "local", "path": str(tmp_path)},
+        writer_lock=_Lock(),
+    )
+    with sink.recommendations_write():
+        held["v"] = False
+        with pytest.raises(LockLostError, match="dataset writer lock lost before write"):
+            sink.replace_recommendations_for_users(
+                pd.DataFrame(
+                    [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"}]
+                ),
+                user_ids=["u1"],
+            )
+    assert not (tmp_path / "recommendations.parquet").exists()
+
+
+def test_write_recommendations_rechecks_owned_after_serialize(tmp_path, monkeypatch) -> None:
+    from cicerone.locks import LockLostError
+
+    held = {"v": True}
+
+    class _Lock:
+        def acquire(self) -> bool:
+            return True
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            return held["v"]
+
+        def is_locked(self) -> bool:
+            return True
+
+    original = pd.DataFrame.to_parquet
+
+    def _to_parquet(self, *args, **kwargs):
+        result = original(self, *args, **kwargs)
+        held["v"] = False
+        return result
+
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", _to_parquet)
+    sink = DatasetOutputSink(
+        {"storage_backend": "local", "path": str(tmp_path)},
+        writer_lock=_Lock(),
+    )
+    with pytest.raises(LockLostError, match="dataset writer lock lost before write"):
+        sink.write_recommendations(
+            pd.DataFrame(
+                [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"}]
+            )
+        )
+    assert not (tmp_path / "recommendations.parquet").exists()
+
+
+def test_write_items_snapshot_rechecks_owned_after_serialize(tmp_path, monkeypatch) -> None:
+    from cicerone.locks import LockLostError
+
+    held = {"v": True}
+
+    class _Lock:
+        def acquire(self) -> bool:
+            return True
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            return held["v"]
+
+        def is_locked(self) -> bool:
+            return True
+
+    original = pd.DataFrame.to_parquet
+
+    def _to_parquet(self, *args, **kwargs):
+        result = original(self, *args, **kwargs)
+        held["v"] = False
+        return result
+
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", _to_parquet)
+    sink = DatasetOutputSink(
+        {"storage_backend": "local", "path": str(tmp_path)},
+        writer_lock=_Lock(),
+    )
+    with pytest.raises(LockLostError, match="dataset writer lock lost before write"):
+        sink.write_items_snapshot(pd.DataFrame([{"item_id": "i1", "category": "beer"}]))
+    assert not (tmp_path / "items_snapshot.parquet").exists()
+
+
+def test_write_model_artifact_rechecks_owned_when_nested(tmp_path) -> None:
+    from cicerone.locks import LockLostError
+
+    held = {"v": True}
+
+    class _Lock:
+        def acquire(self) -> bool:
+            return True
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            return held["v"]
+
+        def is_locked(self) -> bool:
+            return True
+
+    sink = DatasetOutputSink(
+        {"storage_backend": "local", "path": str(tmp_path)},
+        writer_lock=_Lock(),
+    )
+    with sink.recommendations_write():
+        held["v"] = False
+        with pytest.raises(LockLostError, match="dataset writer lock lost before write"):
+            sink.write_model_artifact(b"stale")
+    assert not (tmp_path / "model.artifact").exists()
+
+
+def test_write_manifest_skips_newer_under_lock(tmp_path) -> None:
+    sink = DatasetOutputSink({"storage_backend": "local", "path": str(tmp_path)})
+    newer = {"generated_at": "2099-01-01T00:00:00+00:00", "status": "success"}
+    (tmp_path / "manifest.json").write_text(json.dumps(newer))
+    assert sink.write_manifest({"status": "failed"}, skip_if_newer_than="2026-01-01T00:00:00+00:00") is False
+    assert json.loads((tmp_path / "manifest.json").read_text()) == newer
+
+
+def test_write_manifest_rechecks_owned_when_nested(tmp_path) -> None:
+    from cicerone.locks import LockLostError
+
+    held = {"v": True}
+
+    class _Lock:
+        def acquire(self) -> bool:
+            return True
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            return held["v"]
+
+        def is_locked(self) -> bool:
+            return True
+
+    sink = DatasetOutputSink(
+        {"storage_backend": "local", "path": str(tmp_path)},
+        writer_lock=_Lock(),
+    )
+    with sink.recommendations_write():
+        held["v"] = False
+        with pytest.raises(LockLostError, match="dataset writer lock lost before write"):
+            sink.write_manifest({"status": "success"})
+    assert not (tmp_path / "manifest.json").exists()
+
+
+def test_write_recommendations_rechecks_fence_after_writer_lock(tmp_path) -> None:
+    from cicerone.locks import LockLostError
+
+    held = {"v": True}
+
+    class _Lock:
+        def acquire(self) -> bool:
+            held["v"] = False
+            return True
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            return True
+
+        def is_locked(self) -> bool:
+            return True
+
+    sink = DatasetOutputSink(
+        {"storage_backend": "local", "path": str(tmp_path)},
+        writer_lock=_Lock(),
+        fence_check=lambda: held["v"],
+        fence_lost="retrain lock lost before write",
+        fence_kind="retrain",
+    )
+    with pytest.raises(LockLostError, match="retrain lock lost before write") as captured:
+        sink.write_recommendations(
+            pd.DataFrame(
+                [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"}]
+            )
+        )
+    assert captured.value.kind == "retrain"
+    assert not (tmp_path / "recommendations.parquet").exists()
 
 
 def test_local_replace_recommendations_when_file_missing(tmp_path):

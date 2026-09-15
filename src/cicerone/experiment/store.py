@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -19,6 +19,7 @@ from cicerone.io.db_errors import is_missing_column_error, is_missing_table_erro
 from cicerone.io.db_store import MISSING_TABLE_ERRORS
 from cicerone.io.options import (
     build_s3_client,
+    exclusive_file_lock,
     is_s3_not_found,
     object_key,
     require_option,
@@ -26,6 +27,7 @@ from cicerone.io.options import (
     storage_backend,
     validate_storage_options,
 )
+from cicerone.locks import LockBackend, ensure_writer_owned, held_writer_lock, writer_lock_held_here
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +139,15 @@ def _hydrate_state_row(row: dict[str, Any]) -> dict[str, Any]:
 class ExperimentStore:
     """Output-store side channel for promote state and exposure logs."""
 
-    def __init__(self, output: IOSettings):
+    def __init__(
+        self,
+        output: IOSettings,
+        *,
+        writer_lock: LockBackend | None = None,
+        fence_check: Callable[[], bool] | None = None,
+        fence_lost: str = "lock lost before write",
+        fence_kind: str = "lock",
+    ):
         self._output = output
         self._kind = output.kind
         self._options = output.options
@@ -147,6 +157,10 @@ class ExperimentStore:
         self._promote_experiment_id: str | None = None
         self._promote_value: str | None = None
         self._promote_state: dict[str, Any] | None = None
+        self._writer_lock = writer_lock
+        self._fence_check = fence_check
+        self._fence_lost = fence_lost
+        self._fence_kind = fence_kind
 
     def _db_engine(self) -> Engine:
         if self._engine is None:
@@ -205,11 +219,31 @@ class ExperimentStore:
 
     def write_state(self, state: Mapping[str, Any]) -> None:
         payload = dict(state)
-        if self._kind == "db":
-            self._write_state_db(payload)
-        else:
-            encoded = json.dumps(payload, indent=2).encode("utf-8")
+        encoded = None if self._kind == "db" else json.dumps(payload, indent=2).encode("utf-8")
+
+        def _persist() -> None:
+            ensure_writer_owned(
+                self._writer_lock,
+                fence_check=self._fence_check,
+                fence_lost=self._fence_lost,
+                fence_kind=self._fence_kind,
+            )
+            if self._kind == "db":
+                self._write_state_db(payload)
+                return
+            assert encoded is not None
             self._write_bytes(STATE_FILENAME, encoded, "application/json")
+
+        if writer_lock_held_here(self._writer_lock):
+            _persist()
+        else:
+            with held_writer_lock(
+                self._writer_lock,
+                fence_check=self._fence_check,
+                fence_lost=self._fence_lost,
+                fence_kind=self._fence_kind,
+            ):
+                _persist()
         promoted = payload.get("promoted_variant")
         with self._promote_lock:
             self._promote_loaded = True
@@ -220,12 +254,45 @@ class ExperimentStore:
     def append_exposures(self, rows: Sequence[Mapping[str, Any]]) -> None:
         if not rows:
             return
-        if self._kind == "db":
-            self._append_exposures_db(rows)
+        encoded = None
+        path = None
+        if self._kind != "db":
+            require_appendable_exposure_log(self._output)
+            encoded = "".join(json.dumps(dict(row), separators=(",", ":")) + "\n" for row in rows).encode(
+                "utf-8"
+            )
+            path = Path(require_option(self._options, "path", "local")) / ".exposures.jsonl.lock"
+
+        def _persist() -> None:
+            ensure_writer_owned(
+                self._writer_lock,
+                fence_check=self._fence_check,
+                fence_lost=self._fence_lost,
+                fence_kind=self._fence_kind,
+            )
+            if self._kind == "db":
+                self._append_exposures_db(rows)
+                return
+            assert encoded is not None and path is not None
+            with exclusive_file_lock(path):
+                ensure_writer_owned(
+                    self._writer_lock,
+                    fence_check=self._fence_check,
+                    fence_lost=self._fence_lost,
+                    fence_kind=self._fence_kind,
+                )
+                self._append_bytes(EXPOSURES_FILENAME, encoded)
+
+        if writer_lock_held_here(self._writer_lock):
+            _persist()
             return
-        require_appendable_exposure_log(self._output)
-        payload = "".join(json.dumps(dict(row), separators=(",", ":")) + "\n" for row in rows).encode("utf-8")
-        self._append_bytes(EXPOSURES_FILENAME, payload)
+        with held_writer_lock(
+            self._writer_lock,
+            fence_check=self._fence_check,
+            fence_lost=self._fence_lost,
+            fence_kind=self._fence_kind,
+        ):
+            _persist()
 
     def read_exposures(self, *, experiment_id: str | None = None) -> list[dict[str, Any]]:
         if self._kind == "db":
@@ -307,20 +374,34 @@ class ExperimentStore:
             f'INSERT INTO "{table}" (experiment_id, promoted_variant, promoted_at, payload) '
             "VALUES (:experiment_id, :promoted_variant, :promoted_at, :payload)"
         )
-        with engine.begin() as conn:
-            conn.execute(create_sql)
+
+        def _fence() -> None:
+            ensure_writer_owned(
+                self._writer_lock,
+                fence_check=self._fence_check,
+                fence_lost=self._fence_lost,
+                fence_kind=self._fence_kind,
+            )
+
+        def _replace_row(conn: Any) -> None:
+            _fence()
+            conn.execute(text(f'DELETE FROM "{table}"'))
+            _fence()
+            conn.execute(insert_sql, params)
+            _fence()
+
         try:
             with engine.begin() as conn:
-                conn.execute(text(f'DELETE FROM "{table}"'))
-                conn.execute(insert_sql, params)
+                _fence()
+                conn.execute(create_sql)
+                _replace_row(conn)
         except Exception as exc:
             if not is_missing_column_error(exc):
                 raise
             with engine.begin() as conn:
+                _fence()
                 conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN payload TEXT'))
-            with engine.begin() as conn:
-                conn.execute(text(f'DELETE FROM "{table}"'))
-                conn.execute(insert_sql, params)
+                _replace_row(conn)
 
     def _append_exposures_db(self, rows: Sequence[Mapping[str, Any]]) -> None:
         table = sql_identifier(
@@ -328,7 +409,20 @@ class ExperimentStore:
             option="exposures_table",
         )
         engine = self._db_engine()
-        pd.DataFrame(list(rows)).to_sql(table, engine, if_exists="append", index=False)
+        with engine.begin() as conn:
+            ensure_writer_owned(
+                self._writer_lock,
+                fence_check=self._fence_check,
+                fence_lost=self._fence_lost,
+                fence_kind=self._fence_kind,
+            )
+            pd.DataFrame(list(rows)).to_sql(table, conn, if_exists="append", index=False)
+            ensure_writer_owned(
+                self._writer_lock,
+                fence_check=self._fence_check,
+                fence_lost=self._fence_lost,
+                fence_kind=self._fence_kind,
+            )
 
     def _read_exposures_db(self, *, experiment_id: str | None = None) -> list[dict[str, Any]]:
         table = sql_identifier(

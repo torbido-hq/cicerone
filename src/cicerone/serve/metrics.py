@@ -87,7 +87,7 @@ EVENTS_LOCK_TOTAL = Counter(
 )
 EVENTS_LEADER = Gauge(
     "cicerone_events_leader",
-    "1 when this replica currently owns the incremental apply lock in HA mode (0 otherwise)",
+    "1 when this replica currently owns the incremental apply lock (0 otherwise)",
 )
 EVENTS_APPLY_BUSY_TOTAL = Counter(
     "cicerone_events_apply_busy_total",

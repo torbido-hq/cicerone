@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from cicerone.config import Settings
 from cicerone.http_auth import optional_bearer_deps
+from cicerone.locks import LockLostError, WriterLockBusyError, build_dataset_writer_lock
 from cicerone.serve.events_routes import (
     _max_body_bytes,
     _payloads_from_body,
@@ -73,7 +74,11 @@ def mount_track_routes(
 ) -> TrackStore | None:
     if not settings.track.enabled:
         return None
-    track_store = store if store is not None else TrackStore(settings.output)
+    track_store = (
+        store
+        if store is not None
+        else TrackStore(settings.output, writer_lock=build_dataset_writer_lock(settings))
+    )
     app.state.track_store = track_store
     dependencies = optional_bearer_deps(settings.serve.auth_token)
 
@@ -91,6 +96,7 @@ def mount_track_routes(
             },
             401: {"model": ErrorDetail, "description": "Missing or invalid bearer token"},
             413: {"model": ErrorDetail, "description": "Request body too large"},
+            503: {"model": ErrorDetail, "description": "Writer lock busy or lost"},
         },
     )
     async def post_track(request: Request) -> TrackIngestResponse:
@@ -114,6 +120,12 @@ def mount_track_routes(
         except TrackNormalizeError as exc:
             record_track_ingest(kind="other", status="error")
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except WriterLockBusyError as exc:
+            record_track_ingest(kind="other", status="error")
+            raise HTTPException(status_code=503, detail="Writer lock is busy") from exc
+        except LockLostError as exc:
+            record_track_ingest(kind="other", status="error")
+            raise HTTPException(status_code=503, detail="Writer lock was lost") from exc
         except Exception:
             record_track_ingest(kind="other", status="error")
             raise

@@ -60,7 +60,8 @@ class PostgresAdvisoryLock:
             self._conn = conn
             return True
 
-    def owned(self) -> bool:
+    def owned(self, generation: int | None = None) -> bool:
+        del generation
         from sqlalchemy import text
 
         with self._mutex:

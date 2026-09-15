@@ -29,6 +29,7 @@ from cicerone.http_security import SecurityHeadersMiddleware, token_equals
 from cicerone.io.base import ManifestReader, RecommendationReader
 from cicerone.io.recommendation_reader import SOURCE_COLUMN
 from cicerone.io.recommendation_schema import has_variant_column
+from cicerone.locks import WriterLockBusyError, build_dataset_writer_lock, build_output_writer_lock
 from cicerone.reasons import parse_reasons
 from cicerone.serve.bootstrap_events import start_events_runtime
 from cicerone.serve.code_samples import HEALTH_PATH, RECOMMENDATIONS_PATH, attach_code_samples
@@ -55,18 +56,45 @@ logging.basicConfig(level=logging.INFO, format=DEFAULT_LOG_FORMAT)
 logger = logging.getLogger(__name__)
 
 
+_APPEND_BUSY_ATTEMPTS = 3
+
+
+def _append_with_busy_retry(write: Any, *, label: str, user_id: str) -> None:
+    last: BaseException | None = None
+    for attempt in range(1, _APPEND_BUSY_ATTEMPTS + 1):
+        try:
+            write()
+            return
+        except WriterLockBusyError as exc:
+            last = exc
+            logger.warning(
+                "%s busy for user_id=%r (attempt %d/%d)",
+                label,
+                user_id,
+                attempt,
+                _APPEND_BUSY_ATTEMPTS,
+            )
+            time.sleep(0.05 * attempt)
+        except Exception:
+            logger.exception("Failed to %s for user_id=%r", label, user_id)
+            return
+    logger.error("Failed to %s for user_id=%r after retries: %s", label, user_id, last)
+
+
 def _append_exposures_safe(store: ExperimentStore, rows: list[dict[str, Any]], user_id: str) -> None:
-    try:
-        store.append_exposures(rows)
-    except Exception:
-        logger.exception("Failed to append experiment exposure for user_id=%r", user_id)
+    _append_with_busy_retry(
+        lambda: store.append_exposures(rows),
+        label="append experiment exposure",
+        user_id=user_id,
+    )
 
 
 def _append_impressions_safe(store: TrackStore, rows: list[dict[str, Any]], user_id: str) -> None:
-    try:
-        store.append_rows(rows)
-    except Exception:
-        logger.exception("Failed to append serve impressions for user_id=%r", user_id)
+    _append_with_busy_retry(
+        lambda: store.append_rows(rows),
+        label="append serve impressions",
+        user_id=user_id,
+    )
 
 
 SERVE_API_TITLE = "Cicerone Serve API"
@@ -181,8 +209,16 @@ def create_app(
     generated_at_cache = _GeneratedAtCache(manifest_reader)
     app.state.generated_at_cache = generated_at_cache
     app.state.events_worker = events_worker
-    experiment_store = ExperimentStore(settings.output) if settings.experiment.enabled else None
-    track_store = TrackStore(settings.output) if settings.track.enabled else None
+    experiment_store = (
+        ExperimentStore(settings.output, writer_lock=build_output_writer_lock(settings))
+        if settings.experiment.enabled
+        else None
+    )
+    track_store = (
+        TrackStore(settings.output, writer_lock=build_dataset_writer_lock(settings))
+        if settings.track.enabled
+        else None
+    )
     missing_category_warned = False
 
     @app.middleware("http")

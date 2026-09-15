@@ -4,13 +4,8 @@ from __future__ import annotations
 
 import json
 import threading
-from concurrent.futures import ThreadPoolExecutor
-
-try:
-    import fcntl
-except ImportError:
-    fcntl = None  # type: ignore[assignment]
 from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from io import BytesIO
 from pathlib import Path
@@ -20,6 +15,7 @@ import pandas as pd
 
 from cicerone.io.options import (
     build_s3_client,
+    exclusive_file_lock,
     is_s3_not_found,
     object_key,
     require_option,
@@ -141,15 +137,8 @@ class TrackDatasetBackend:
     @contextmanager
     def _dataset_append_lock(self) -> Iterator[None]:
         path = Path(require_option(self._options, "path", "local")) / ".track.jsonl.lock"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with self._append_lock, path.open("a") as handle:
-            if fcntl is not None:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                if fcntl is not None:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        with self._append_lock, exclusive_file_lock(path):
+            yield
 
     def _read_bytes(self, filename: str) -> bytes | None:
         backend = validate_storage_options(self._options)

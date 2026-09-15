@@ -409,4 +409,4 @@ class OnlineTrainer:
 
     def _ensure_fence(self) -> None:
         if self._fence_check is not None and not self._fence_check():
-            raise LockLostError("events apply lock lost before online write")
+            raise LockLostError("events apply lock lost before online write", kind="apply")

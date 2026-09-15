@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from typing import Any
@@ -388,7 +389,12 @@ def test_start_events_runtime_wires_apply_lock(tmp_path, feature_config: Feature
         seen_ttl["retrain"] = ttl_seconds
         return retrain_fake
 
+    writer_fake = SharedLock()
     monkeypatch.setattr("cicerone.serve.bootstrap_events.build_lock_backend", _build)
+    monkeypatch.setattr(
+        "cicerone.serve.bootstrap_events.build_output_writer_lock",
+        lambda _settings: writer_fake,
+    )
 
     class _Reader:
         def refresh(self) -> None:
@@ -407,18 +413,77 @@ def test_start_events_runtime_wires_apply_lock(tmp_path, feature_config: Feature
     assert runtime.apply_lock is apply_fake
     assert runtime.worker is not None
     assert runtime.worker._apply_lock is apply_fake
+    assert runtime.worker._updater._sink._writer_lock is writer_fake
+    assert runtime.worker._updater._sink._fence_kind == "apply"
+    assert runtime.worker._updater._sink._fence_check is not None
+    assert runtime.worker._updater._sink._fence_check() is apply_fake.owned()
     assert seen_ttl["apply"] == 60.0
     assert seen_ttl["retrain"] is None
     runtime.stop()
 
 
-def test_start_events_runtime_skips_apply_lock_without_ha(
+def test_start_events_runtime_wires_apply_lock_without_ha(
+    tmp_path, feature_config: FeatureConfig, monkeypatch, caplog
+):
+    out, _settings = _seed_out(tmp_path)
+    apply_fake = SharedLock()
+    retrain_fake = HeldLock()
+    retrain_fake.is_locked = lambda: False  # type: ignore[method-assign]
+
+    def _build(
+        _settings: Any,
+        *,
+        lock_key: str | None = None,
+        ttl_seconds: float | None = None,
+    ) -> SharedLock | HeldLock:
+        del ttl_seconds
+        if lock_key is not None and lock_key.endswith(":events:apply"):
+            return apply_fake
+        return retrain_fake
+
+    writer_fake = SharedLock()
+    monkeypatch.setattr("cicerone.serve.bootstrap_events.build_lock_backend", _build)
+    monkeypatch.setattr(
+        "cicerone.serve.bootstrap_events.build_output_writer_lock",
+        lambda _settings: writer_fake,
+    )
+
+    class _Reader:
+        def refresh(self) -> None:
+            return None
+
+    with caplog.at_level(logging.INFO, logger="cicerone.serve.bootstrap_events"):
+        runtime = start_events_runtime(
+            make_settings(
+                output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+                trigger_lock_backend="redis",
+                trigger_redis_url="redis://localhost:6379/0",
+                events=EventsSettings(enabled=True, kind="webhook", ha=False),
+            ),
+            feature_config=feature_config,
+            reader=_Reader(),  # type: ignore[arg-type]
+        )
+    assert runtime.apply_lock is apply_fake
+    assert runtime.worker is not None
+    assert runtime.worker._apply_lock is apply_fake
+    assert runtime.worker._updater._sink._writer_lock is writer_fake
+    assert runtime.worker._updater._sink._fence_kind == "apply"
+    assert runtime.worker._updater._sink._fence_check is not None
+    assert runtime.worker._updater._sink._fence_check() is apply_fake.owned()
+    messages = [record.getMessage() for record in caplog.records]
+    started = [message for message in messages if "Event worker started" in message]
+    assert started
+    assert ", ha=False)" in started[0]
+    runtime.stop()
+
+
+def test_start_events_runtime_skips_apply_lock_in_process(
     tmp_path, feature_config: FeatureConfig, monkeypatch
 ):
     out, _settings = _seed_out(tmp_path)
 
     def _boom(*_args: Any, **_kwargs: Any) -> None:
-        raise AssertionError("build_lock_backend must not run when events.ha is false")
+        raise AssertionError("build_lock_backend must not run when lock_backend is in_process")
 
     monkeypatch.setattr("cicerone.serve.bootstrap_events.build_lock_backend", _boom)
 
@@ -429,8 +494,6 @@ def test_start_events_runtime_skips_apply_lock_without_ha(
     runtime = start_events_runtime(
         make_settings(
             output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
-            trigger_lock_backend="redis",
-            trigger_redis_url="redis://localhost:6379/0",
             events=EventsSettings(enabled=True, kind="webhook", ha=False),
         ),
         feature_config=feature_config,
@@ -566,6 +629,62 @@ class _FakeOnline:
 
     def abort(self) -> None:
         self.aborts += 1
+
+
+def test_flush_logs_writer_lock_loss_not_apply(tmp_path, feature_config: FeatureConfig, caplog):
+    _out, settings = _seed_out(tmp_path)
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="wl1", user_id="u1", item_id="iw"))
+    worker = _worker(settings, source, feature_config, apply_lock=SharedLock())
+
+    def _boom(_events, persist_online=False):
+        del _events, persist_online
+        raise LockLostError("dataset writer lock lost before write", kind="writer")
+
+    worker._updater.apply = _boom  # type: ignore[method-assign]
+    with caplog.at_level(logging.ERROR, logger="cicerone.events.worker"):
+        assert worker.tick() == 0
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("dataset writer lock lost before write" in message for message in messages)
+    assert not any("Apply lease lost" in message for message in messages)
+    assert source.health().lag >= 1
+
+
+def test_flush_records_writer_lock_busy(tmp_path, feature_config: FeatureConfig):
+    from cicerone.locks import WriterLockBusyError
+
+    _out, settings = _seed_out(tmp_path)
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="wb1", user_id="u1", item_id="iwb"))
+    worker = _worker(settings, source, feature_config, apply_lock=SharedLock())
+
+    def _boom(_events, persist_online=False):
+        del _events, persist_online
+        raise WriterLockBusyError("dataset writer lock busy")
+
+    worker._updater.apply = _boom  # type: ignore[method-assign]
+    before = registry_metric_value("cicerone_events_apply_busy_total", {"reason": "lock"})
+    assert worker.tick() == 0
+    assert registry_metric_value("cicerone_events_apply_busy_total", {"reason": "lock"}) == before + 1
+    assert source.health().lag >= 1
+
+
+def test_flush_logs_apply_lock_loss(tmp_path, feature_config: FeatureConfig, caplog):
+    _out, settings = _seed_out(tmp_path)
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="al1", user_id="u1", item_id="ia"))
+    worker = _worker(settings, source, feature_config, apply_lock=SharedLock())
+
+    def _boom(_events, persist_online=False):
+        del _events, persist_online
+        raise LockLostError("events apply lock lost before write", kind="apply")
+
+    worker._updater.apply = _boom  # type: ignore[method-assign]
+    with caplog.at_level(logging.ERROR, logger="cicerone.events.worker"):
+        assert worker.tick() == 0
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("events apply lock lost before write" in message for message in messages)
+    assert source.health().lag >= 1
 
 
 def test_ha_online_commits_after_ack(tmp_path, feature_config: FeatureConfig):

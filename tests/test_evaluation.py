@@ -593,6 +593,91 @@ def test_score_previous_run_served_eval(tmp_path) -> None:
     assert "HitRate@5" in served["metrics"] or "HitRate@10" in served["metrics"] or served["metrics"]
 
 
+def test_score_previous_run_assignment_overlay_on_caller_thread(tmp_path, monkeypatch) -> None:
+    import threading
+
+    from cicerone.config import IOSettings, make_settings
+    from cicerone.config.settings import ExperimentSettings, VariantSettings
+    from cicerone.job import _score_previous_run
+    from cicerone.track.normalize import normalize_track
+    from cicerone.track.store import TrackStore
+
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    recs = pd.DataFrame(
+        [
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                "variant": "control",
+            },
+            {
+                "user_id": "bob",
+                "item_id": "stout",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                "variant": "treatment",
+            },
+        ]
+    )
+    recs.to_parquet(tmp_path / "recommendations.parquet", index=False)
+    store = TrackStore(output)
+    store.append_rows(
+        [
+            normalize_track(
+                {
+                    "kind": "impression",
+                    "user_id": "alice",
+                    "item_id": "ipa",
+                    "rank": 1,
+                    "variant": "control",
+                    "occurred_at": "2026-08-28T04:00:00Z",
+                    "event_id": "imp-a",
+                }
+            ).as_row()
+        ]
+    )
+    caller = threading.get_ident()
+    seen: list[int] = []
+
+    def _overlay(self, experiment_id: str):
+        del self, experiment_id
+        seen.append(threading.get_ident())
+        return None, None
+
+    monkeypatch.setattr("cicerone.job.ExperimentStore.assignment_overlay", _overlay)
+    settings = make_settings(
+        track={"enabled": True},
+        eval={"enabled": True},
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="ranking-cvr",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        output=output,
+    )
+    events = pd.DataFrame(
+        [
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "event_type": "purchase",
+                "occurred_at": "2026-08-28T12:00:00Z",
+            }
+        ]
+    )
+    track, served = _score_previous_run(settings, events, {"generated_at": "2026-08-28T03:00:00+00:00"})
+    assert seen == [caller]
+    assert track is not None
+    assert served is not None
+
+
 def test_score_previous_run_empty_history(tmp_path) -> None:
     from cicerone.config import IOSettings, make_settings
     from cicerone.job import _score_previous_run

@@ -4,7 +4,13 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.8.2] - 2026-09-14
+## [0.8.2] - 2026-09-15
+
+### Changed
+
+- Incremental apply takes the postgres/redis lease whenever
+  `lock_backend` is distributed, even if `events.ha` is false. Retrain
+  probe follows the same rule.
 
 ### Fixed
 
@@ -105,6 +111,93 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A RabbitMQ I/O timeout cannot start a dispatched job.
 - RabbitMQ get, ack, declare, and heartbeat raise after the I/O channel is detached instead of succeeding.
 - RabbitMQ abandoned cleanup closes the timed-out connection and any leftover live handle.
+- Dataset recommendation writes and user-replace share one host lock;
+  JSONL track/exposure appends do the same. A distributed lock serializes
+  those writers when `lock_backend` is postgres or redis.
+- Dashboard lookup keeps recommendation and history reads on the request
+  thread so in-memory SQLite does not miss rows.
+- `cicerone_events_leader` reports apply-lease ownership, not HA-only.
+- Local dataset file locks serialize in-process writers when `fcntl` is missing.
+- Incremental apply reloads cached users under the lease so another
+  replica's write is not overwritten.
+- Thompson and served-eval store reads stay on the job thread so
+  in-memory SQLite is not empty.
+- Dataset writes re-check the caller fence after waiting for the writer
+  lock. Writer-lease loss is logged as itself, not as apply-lease loss.
+- Incremental apply reloads and remakes affected users under the dataset
+  writer lock so a finished retrain is not overwritten.
+- Dataset writer-lock re-entry is per-thread, so a second writer cannot
+  skip the host/distributed lease.
+- The job writes a successful manifest under the same dataset write lock
+  as recommendations.
+- Nested dataset writes re-check writer ownership before replacing
+  parquet. A failed job does not write a manifest after fence loss.
+- Writer-lock contention is a busy nack, not an apply error. Serve
+  impression/exposure appends retry that busy path.
+- Dataset `write_manifest` takes the same writer lock and fence as
+  recommendation writes.
+- The job publishes artifact, items, recommendations, and the manifest
+  under one write lock. A failed job does not overwrite a newer
+  incremental manifest.
+- Nested recommendation writes re-check ownership after parquet serialize.
+- Artifact, items snapshot, Thompson state, and publish re-check the writer
+  fence immediately before each replacement. Incremental publish does the
+  same. Online persist after ack takes the dataset write lock again.
+- Failure manifests compare freshness under the writer lock. A stale Redis
+  `held_writer_lock` cannot release a later acquire on the same object.
+- Incremental apply rechecks the apply fence immediately before replace.
+  Track and exposure appends recheck writer ownership before the bytes
+  write. Database failure manifests skip when a newer row already exists.
+- Redis acquire starts a new TTL refresher after release so a joining
+  previous thread cannot leave the new holder without refresh.
+- The job rechecks the retrain fence immediately before writing a
+  success manifest. Track appends fence ownership after JSON encode.
+  A late Redis refresh failure cannot `_mark_lost` a newer acquire.
+- Database recommendation, manifest, and artifact writes honor the
+  caller fence. Online persist after ack fences even without a dataset
+  writer lock.
+- Job Thompson state and dashboard promote share the dataset writer
+  lock. A late Redis `_mark_lost` cannot stop a newer refresher.
+  Legacy `write_manifest` fallback only applies when the sink lacks
+  `skip_if_newer_than`.
+- Writer-lock ownership is generation-aware after a same-object
+  reacquire. Job track eval/history writes take that lease. Local
+  dataset file locks time out instead of blocking forever.
+- A direct job takes the retrain lease when `lock_backend` is
+  distributed. Experiment state writes re-enter only on the owning
+  thread and honor the retrain fence on DB output. Online persist
+  rechecks retrain-busy after the writer wait. Redis release does not
+  stop a newer refresher.
+- Dashboard promote reads and writes experiment state under one writer
+  lock. The job rematches `promoted_variant` before writing Thompson
+  state. Track eval and history writes honor the retrain fence.
+- Writer-lock acquire binds the Redis generation in the same step as
+  SET NX, so a later reacquire cannot fence stale work.
+- Experiment DB state fallback and exposure appends honor the caller
+  fence. DB manifests recheck it before append. Track sidecar lock
+  errors stay best-effort. DB recommendation writes take the same
+  output writer lease as dataset.
+- DB sink writes check writer ownership, not only the caller fence.
+  Failure manifests take `recommendations_write` again. Exposure
+  appends recheck after the local file lock.
+- DB mutating sink methods and dataset artifact writes take the writer
+  lease themselves. A stale Redis `try_acquire` does not replace a
+  newer refresher.
+- Dashboard promote maps writer-lock busy and loss to flash errors.
+  DB recommendation, artifact, and item writes recheck the fence after
+  each destructive step. Redis `SET NX` drops a token rotated while
+  the call was in flight. Track JSONL appends honor the caller fence.
+- Dataset writes re-enter a lock already held on this thread. DB track
+  append, eval, and history honor the writer lease and recheck the
+  fence before INSERT. Experiment state and exposure DB writes recheck
+  after DELETE. `POST /track` returns 503 on writer busy or lock loss.
+- DB sink, track, and experiment writes recheck the fence after the
+  last statement so a lost lease rolls back before commit. Local
+  `flock` retries only `EAGAIN`/`EACCES`.
+- DB exposure and history appends run `to_sql` on a transaction
+  connection so a failed final fence rolls the insert back.
+- Experiment state CREATE/ALTER stay in the fenced write transaction
+  so a lost lease does not leave an empty or migrated table.
 
 ## [0.8.1] - 2026-09-11
 

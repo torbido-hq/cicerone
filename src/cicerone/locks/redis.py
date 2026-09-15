@@ -54,54 +54,75 @@ class RedisLock:
         )
         self._token = str(uuid.uuid4())
         self._held = False
+        self._hold_generation = 0
         self._mutex = threading.Lock()
         self._release_script = self._client.register_script(_REDIS_RELEASE_SCRIPT)
         self._refresh_script = self._client.register_script(_REDIS_REFRESH_SCRIPT)
         self._stop_refresh = threading.Event()
         self._refresh_thread: threading.Thread | None = None
+        self._refresh_lifecycle = threading.Lock()
 
-    def _mark_lost(self) -> None:
+    def _mark_lost(self, generation: int | None = None) -> None:
         """Clear local hold state so a later acquire() can succeed after TTL loss."""
         with self._mutex:
+            if generation is not None and (not self._held or self._hold_generation != generation):
+                return
             self._held = False
             self._token = str(uuid.uuid4())
-        self._stop_refresh.set()
-        # Drop the handle so acquire() can start a new refresher (we may be that thread).
-        self._refresh_thread = None
+            marked = self._hold_generation
+        with self._refresh_lifecycle:
+            with self._mutex:
+                if self._hold_generation != marked or self._held:
+                    return
+            self._stop_refresh.set()
+            if threading.current_thread() is self._refresh_thread:
+                self._refresh_thread = None
+                return
+            self._stop_refresh_thread_unlocked()
 
-    def _start_refresh(self) -> None:
-        if self._refresh_thread is not None and self._refresh_thread.is_alive():
-            return
-        self._stop_refresh.clear()
+    def _start_refresh(self, generation: int) -> None:
+        with self._refresh_lifecycle:
+            with self._mutex:
+                if not self._held or self._hold_generation != generation:
+                    return
+            self._stop_refresh_thread_unlocked()
+            with self._mutex:
+                if not self._held or self._hold_generation != generation:
+                    return
+            self._stop_refresh.clear()
 
-        def _run() -> None:
-            while not self._stop_refresh.wait(self._refresh_interval_ms / 1000.0):
-                with self._mutex:
-                    if not self._held:
-                        break
-                    token = self._token
-                try:
-                    if not self._refresh_script(keys=[self._key], args=[token, self._ttl_ms]):
-                        # Intentional release sets stop before clearing hold; skip _mark_lost.
+            def _run() -> None:
+                while not self._stop_refresh.wait(self._refresh_interval_ms / 1000.0):
+                    with self._mutex:
+                        if not self._held or self._hold_generation != generation:
+                            break
+                        token = self._token
+                    try:
+                        if not self._refresh_script(keys=[self._key], args=[token, self._ttl_ms]):
+                            # Intentional release sets stop before clearing hold; skip _mark_lost.
+                            if self._stop_refresh.is_set():
+                                break
+                            self._mark_lost(generation)
+                            break
+                    except Exception:
                         if self._stop_refresh.is_set():
                             break
-                        self._mark_lost()
+                        logger.exception("Failed to refresh Redis lock TTL")
+                        self._mark_lost(generation)
                         break
-                except Exception:
-                    if self._stop_refresh.is_set():
-                        break
-                    logger.exception("Failed to refresh Redis lock TTL")
-                    self._mark_lost()
-                    break
 
-        self._refresh_thread = threading.Thread(
-            target=_run,
-            name=f"cicerone-redis-lock-refresh-{self._key}",
-            daemon=True,
-        )
-        self._refresh_thread.start()
+            self._refresh_thread = threading.Thread(
+                target=_run,
+                name=f"cicerone-redis-lock-refresh-{self._key}",
+                daemon=True,
+            )
+            self._refresh_thread.start()
 
     def _stop_refresh_thread(self) -> None:
+        with self._refresh_lifecycle:
+            self._stop_refresh_thread_unlocked()
+
+    def _stop_refresh_thread_unlocked(self) -> None:
         thread = self._refresh_thread
         if thread is None:
             return
@@ -111,22 +132,37 @@ class RedisLock:
         thread.join(timeout=0.25)
         self._refresh_thread = None
 
-    def acquire(self) -> bool:
+    def try_acquire(self) -> int | None:
         with self._mutex:
             if self._held:
-                return False
+                return None
             token = self._token
         ok = bool(self._client.set(self._key, token, nx=True, px=self._ttl_ms))
         if not ok:
-            return False
+            return None
+        generation: int | None = None
         with self._mutex:
-            self._held = True
-        self._start_refresh()
-        return True
+            if not self._held and self._token == token:
+                self._held = True
+                self._hold_generation += 1
+                generation = self._hold_generation
+        if generation is None:
+            try:
+                self._release_script(keys=[self._key], args=[token])
+            except Exception:
+                logger.exception("Failed to release stale Redis lock token")
+            return None
+        self._start_refresh(generation)
+        return generation
 
-    def owned(self) -> bool:
+    def acquire(self) -> bool:
+        return self.try_acquire() is not None
+
+    def owned(self, generation: int | None = None) -> bool:
         with self._mutex:
             if not self._held:
+                return False
+            if generation is not None and self._hold_generation != generation:
                 return False
             token = self._token
         try:
@@ -141,14 +177,31 @@ class RedisLock:
     def is_locked(self) -> bool:
         return bool(self._client.exists(self._key))
 
+    @property
+    def hold_generation(self) -> int:
+        return self._hold_generation
+
     def release(self) -> None:
-        self._stop_refresh_thread()
+        self.release_generation(self._hold_generation)
+
+    def release_generation(self, generation: int) -> None:
         with self._mutex:
-            if not self._held:
+            if generation != self._hold_generation or not self._held:
                 return
             token = self._token
             self._held = False
+            self._hold_generation += 1
+            marked = self._hold_generation
             self._token = str(uuid.uuid4())
+        stale = False
+        with self._refresh_lifecycle:
+            with self._mutex:
+                if self._hold_generation != marked or self._held:
+                    stale = True
+            if not stale:
+                self._stop_refresh_thread_unlocked()
+        if stale:
+            return
         try:
             self._release_script(keys=[self._key], args=[token])
         except Exception:
