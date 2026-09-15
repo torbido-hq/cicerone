@@ -36,6 +36,22 @@ from cicerone.io.user_lookup import filter_rows_for_user, newest_events
 logger = logging.getLogger(__name__)
 
 
+def _existing_manifest_newer(raw: bytes | None, started_at: str) -> bool:
+    if not raw:
+        return False
+    try:
+        existing = json.loads(raw)
+    except ValueError:
+        return False
+    if not isinstance(existing, dict):
+        return False
+    for key in ("generated_at", "last_incremental_at"):
+        value = existing.get(key)
+        if isinstance(value, str) and value > started_at:
+            return True
+    return False
+
+
 class DatasetInputSource:
     def __init__(self, options: dict[str, Any]):
         self._options = options
@@ -185,6 +201,9 @@ class DatasetOutputSink:
         client = build_s3_client(self._options)
         client.put_object(Bucket=bucket, Key=key, Body=payload, ContentType=content_type)
 
+    def ensure_writer_held(self) -> None:
+        self._ensure_writer_still_held()
+
     def _ensure_writer_still_held(self) -> None:
         from cicerone.locks import LockLostError
 
@@ -237,13 +256,20 @@ class DatasetOutputSink:
     def write_items_snapshot(self, df: pd.DataFrame) -> None:
         buffer = io.BytesIO()
         df.to_parquet(buffer, index=False)
-        self._write_bytes("items_snapshot.parquet", buffer.getvalue(), "application/octet-stream")
+        with self._maybe_recommendations_lock():
+            self._ensure_writer_still_held()
+            self._write_bytes("items_snapshot.parquet", buffer.getvalue(), "application/octet-stream")
 
-    def write_manifest(self, manifest: dict) -> None:
+    def write_manifest(self, manifest: dict, *, skip_if_newer_than: str | None = None) -> bool:
         payload = json.dumps(manifest, indent=2).encode("utf-8")
         with self._maybe_recommendations_lock():
             self._ensure_writer_still_held()
+            if skip_if_newer_than is not None and _existing_manifest_newer(
+                self._read_bytes("manifest.json"), skip_if_newer_than
+            ):
+                return False
             self._write_bytes("manifest.json", payload, "application/json")
+            return True
 
     def _read_bytes(self, filename: str) -> bytes | None:
         if self._backend == "local":
@@ -272,6 +298,7 @@ class DatasetOutputSink:
         from cicerone.artifact import ARTIFACT_FILENAME
 
         with self._artifact_lock():
+            self._ensure_writer_still_held()
             self._write_bytes(ARTIFACT_FILENAME, payload, "application/octet-stream")
 
     def replace_model_artifact_if(self, payload: bytes, expected_fingerprint: str) -> bool:
@@ -283,6 +310,7 @@ class DatasetOutputSink:
         with self._artifact_lock():
             if self.model_artifact_fingerprint() != expected_fingerprint:
                 return False
+            self._ensure_writer_still_held()
             self._write_bytes(ARTIFACT_FILENAME, payload, "application/octet-stream")
             return True
 

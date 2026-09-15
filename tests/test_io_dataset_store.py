@@ -345,6 +345,78 @@ def test_write_recommendations_rechecks_owned_after_serialize(tmp_path, monkeypa
     assert not (tmp_path / "recommendations.parquet").exists()
 
 
+def test_write_items_snapshot_rechecks_owned_after_serialize(tmp_path, monkeypatch) -> None:
+    from cicerone.locks import LockLostError
+
+    held = {"v": True}
+
+    class _Lock:
+        def acquire(self) -> bool:
+            return True
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            return held["v"]
+
+        def is_locked(self) -> bool:
+            return True
+
+    original = pd.DataFrame.to_parquet
+
+    def _to_parquet(self, *args, **kwargs):
+        result = original(self, *args, **kwargs)
+        held["v"] = False
+        return result
+
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", _to_parquet)
+    sink = DatasetOutputSink(
+        {"storage_backend": "local", "path": str(tmp_path)},
+        writer_lock=_Lock(),
+    )
+    with pytest.raises(LockLostError, match="dataset writer lock lost before write"):
+        sink.write_items_snapshot(pd.DataFrame([{"item_id": "i1", "category": "beer"}]))
+    assert not (tmp_path / "items_snapshot.parquet").exists()
+
+
+def test_write_model_artifact_rechecks_owned_when_nested(tmp_path) -> None:
+    from cicerone.locks import LockLostError
+
+    held = {"v": True}
+
+    class _Lock:
+        def acquire(self) -> bool:
+            return True
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            return held["v"]
+
+        def is_locked(self) -> bool:
+            return True
+
+    sink = DatasetOutputSink(
+        {"storage_backend": "local", "path": str(tmp_path)},
+        writer_lock=_Lock(),
+    )
+    with sink.recommendations_write():
+        held["v"] = False
+        with pytest.raises(LockLostError, match="dataset writer lock lost before write"):
+            sink.write_model_artifact(b"stale")
+    assert not (tmp_path / "model.artifact").exists()
+
+
+def test_write_manifest_skips_newer_under_lock(tmp_path) -> None:
+    sink = DatasetOutputSink({"storage_backend": "local", "path": str(tmp_path)})
+    newer = {"generated_at": "2099-01-01T00:00:00+00:00", "status": "success"}
+    (tmp_path / "manifest.json").write_text(json.dumps(newer))
+    assert sink.write_manifest({"status": "failed"}, skip_if_newer_than="2026-01-01T00:00:00+00:00") is False
+    assert json.loads((tmp_path / "manifest.json").read_text()) == newer
+
+
 def test_write_manifest_rechecks_owned_when_nested(tmp_path) -> None:
     from cicerone.locks import LockLostError
 

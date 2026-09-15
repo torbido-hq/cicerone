@@ -145,6 +145,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   under one write lock. A failed job does not overwrite a newer
   incremental manifest.
 - Nested recommendation writes re-check ownership after parquet serialize.
+- Artifact, items snapshot, Thompson state, and publish re-check the writer
+  fence immediately before each replacement. Incremental publish does the
+  same. Online persist after ack takes the dataset write lock again.
+- Failure manifests compare freshness under the writer lock. A stale Redis
+  `held_writer_lock` cannot release a later acquire on the same object.
 
 
 ## [0.8.1] - 2026-09-11

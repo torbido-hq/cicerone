@@ -438,6 +438,41 @@ def test_persist_online_skipped_when_write_busy(tmp_path, feature_config: Featur
     assert online.aborts == 1
 
 
+def test_persist_online_holds_dataset_writer_lock(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    sink = build_output_sink(settings.output)
+    depths: list[int] = []
+
+    class _FakeOnline:
+        def refresh(self, events):  # type: ignore[no-untyped-def]
+            del events
+            return OnlineRefreshResult(rows=empty_online_rows())
+
+        def invalidate(self) -> None:
+            return None
+
+        def commit(self) -> None:
+            depths.append(sink._recs_write_depth())
+
+        def abort(self) -> None:
+            return None
+
+    updater = IncrementalUpdater(
+        sink=sink,
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=3,
+        online=_FakeOnline(),
+    )
+    updater.persist_online()
+    assert depths == [1]
+
+
 def test_incremental_updater_empty_and_unknown_event_type(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()

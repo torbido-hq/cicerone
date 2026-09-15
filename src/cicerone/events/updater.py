@@ -113,6 +113,12 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             logger.info("Skipping online persist: full retrain in progress")
             self._abort_online()
             return
+        holder = getattr(self._sink, "recommendations_write", None)
+        if callable(holder):
+            with holder():
+                self._ensure_fence()
+                self._commit_online()
+            return
         self._commit_online()
 
     def abort_online(self) -> None:
@@ -183,8 +189,14 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
                 manifest["online_users_refreshed"] = online_result.users_refreshed
                 manifest["online_events_dropped_unknown"] = online_result.events_dropped_unknown
             self._ensure_fence()
+            ensure = getattr(self._sink, "ensure_writer_held", None)
+            if callable(ensure):
+                ensure()
             self._sink.write_manifest(manifest)
             if self._publisher is not None:
+                self._ensure_fence()
+                if callable(ensure):
+                    ensure()
                 try:
                     self._publisher.publish(merged)
                 except Exception:

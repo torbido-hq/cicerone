@@ -404,6 +404,26 @@ def test_redis_lock_allows_reacquire_after_refresh_loss(monkeypatch):
     lock.release()
 
 
+def test_redis_stale_release_does_not_drop_new_holder(monkeypatch):
+    client = _mock_redis_module(monkeypatch)
+    client.set.return_value = True
+    lock = RedisLock(
+        "redis://localhost:6379/0",
+        ttl_ms=200,
+        refresh_interval_ms=10_000,
+    )
+    assert lock.acquire() is True
+    stale_generation = lock._hold_generation
+    lock._mark_lost()
+    assert lock.acquire() is True
+    token = lock._token
+    lock.release_generation(stale_generation)
+    assert lock._held is True
+    assert lock._token == token
+    lock.release()
+    assert lock._held is False
+
+
 def test_redis_release_ignores_in_flight_refresh_failure(monkeypatch):
     """Release must not let a racing refresh call _mark_lost on a new acquire."""
     client = _mock_redis_module(monkeypatch)

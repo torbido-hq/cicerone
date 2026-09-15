@@ -110,6 +110,7 @@ def held_writer_lock(
         return
     if not acquire_blocking(lock):
         raise WriterLockBusyError("dataset writer lock busy")
+    generation = getattr(lock, "hold_generation", None)
     try:
         if not lock.owned():
             raise LockLostError("dataset writer lock lost before write", kind="writer")
@@ -117,7 +118,11 @@ def held_writer_lock(
             raise LockLostError(fence_lost, kind=fence_kind)
         yield
     finally:
-        lock.release()
+        release_generation = getattr(lock, "release_generation", None)
+        if callable(release_generation) and generation is not None:
+            release_generation(generation)
+        else:
+            lock.release()
 
 
 def build_dataset_writer_lock(settings: Settings) -> LockBackend | None:

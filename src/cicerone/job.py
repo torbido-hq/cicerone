@@ -85,23 +85,7 @@ def _truncate_job_error(exc: BaseException) -> str:
     return error_message
 
 
-def _output_manifest_newer(output: IOSettings, started_at: str) -> bool:
-    try:
-        existing = build_manifest_reader(output).read_latest()
-    except Exception:
-        return False
-    if not existing:
-        return False
-    for key in ("generated_at", "last_incremental_at"):
-        value = existing.get(key)
-        if isinstance(value, str) and value > started_at:
-            return True
-    return False
-
-
 def _skip_stale_job_manifest(
-    output: IOSettings,
-    started_at: str,
     *,
     fence_check: Callable[[], bool] | None = None,
     exc: BaseException | None = None,
@@ -112,10 +96,14 @@ def _skip_stale_job_manifest(
     if fence_check is not None and not fence_check():
         logger.error("Skipping job manifest: retrain lock lost before write")
         return True
-    if _output_manifest_newer(output, started_at):
-        logger.error("Skipping job manifest: newer output already published")
-        return True
     return False
+
+
+def _ensure_publication_fence(sink: Any, fence_check: Callable[[], bool] | None) -> None:
+    _ensure_fence(fence_check)
+    ensure = getattr(sink, "ensure_writer_held", None)
+    if callable(ensure):
+        ensure()
 
 
 class ThompsonSelection(NamedTuple):
@@ -730,23 +718,25 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
             with recs_write() if callable(recs_write) else nullcontext():
                 try:
                     if artifact_bytes is not None:
-                        _ensure_fence(fence_check)
+                        _ensure_publication_fence(sink, fence_check)
                         sink.write_model_artifact(artifact_bytes)
                         manifest["artifact_written"] = True
                         manifest["artifact_schema_version"] = ARTIFACT_SCHEMA_VERSION
 
                     if items is not None and not items.empty:
-                        _ensure_fence(fence_check)
+                        _ensure_publication_fence(sink, fence_check)
                         sink.write_items_snapshot(items)
 
-                    _ensure_fence(fence_check)
+                    _ensure_publication_fence(sink, fence_check)
                     sink.write_recommendations(recommendations)
                     outputs_written = True
                     if pending_thompson is not None:
+                        _ensure_publication_fence(sink, fence_check)
                         ExperimentStore(settings.output).write_state(pending_thompson)
                     if publisher is not None:
+                        _ensure_publication_fence(sink, fence_check)
                         publisher.publish(recommendations)
-                    _ensure_fence(fence_check)
+                    _ensure_publication_fence(sink, fence_check)
                     manifest.update(
                         {
                             "status": "success",
@@ -779,8 +769,6 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
                         not manifest_written
                         and manifest.get("status") != "success"
                         and not _skip_stale_job_manifest(
-                            settings.output,
-                            started_at,
                             fence_check=fence_check,
                             exc=exc,
                         )
@@ -788,8 +776,8 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
                         manifest["error"] = _truncate_job_error(exc)
                         manifest["generated_at"] = datetime.now(UTC).isoformat()
                         try:
-                            sink.write_manifest(manifest)
-                            manifest_written = True
+                            if sink.write_manifest(manifest, skip_if_newer_than=started_at):
+                                manifest_written = True
                         except Exception:
                             logger.exception(
                                 "Failed to write manifest; original job error (if any) is preserved"
@@ -809,14 +797,12 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
             except Exception:
                 logger.exception("Failed to close recommendation publisher")
         if not manifest_written and not _skip_stale_job_manifest(
-            settings.output,
-            started_at,
             fence_check=fence_check,
             exc=sys.exc_info()[1],
         ):
             manifest["generated_at"] = datetime.now(UTC).isoformat()
             try:
-                sink.write_manifest(manifest)
+                sink.write_manifest(manifest, skip_if_newer_than=started_at)
             except Exception:
                 logger.exception("Failed to write manifest; original job error (if any) is preserved")
                 if manifest.get("status") == "success":

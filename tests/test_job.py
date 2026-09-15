@@ -1005,7 +1005,8 @@ def test_job_preserves_success_when_manifest_write_fails(tmp_path, monkeypatch):
 
     from cicerone.io.dataset_store import DatasetOutputSink
 
-    def boom(self, manifest):
+    def boom(self, manifest, *, skip_if_newer_than=None):
+        del skip_if_newer_than
         raise RuntimeError("manifest unavailable")
 
     monkeypatch.setattr(DatasetOutputSink, "write_manifest", boom)

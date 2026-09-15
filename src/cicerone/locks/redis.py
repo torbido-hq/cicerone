@@ -54,6 +54,7 @@ class RedisLock:
         )
         self._token = str(uuid.uuid4())
         self._held = False
+        self._hold_generation = 0
         self._mutex = threading.Lock()
         self._release_script = self._client.register_script(_REDIS_RELEASE_SCRIPT)
         self._refresh_script = self._client.register_script(_REDIS_REFRESH_SCRIPT)
@@ -121,6 +122,7 @@ class RedisLock:
             return False
         with self._mutex:
             self._held = True
+            self._hold_generation += 1
         self._start_refresh()
         return True
 
@@ -141,14 +143,22 @@ class RedisLock:
     def is_locked(self) -> bool:
         return bool(self._client.exists(self._key))
 
+    @property
+    def hold_generation(self) -> int:
+        return self._hold_generation
+
     def release(self) -> None:
-        self._stop_refresh_thread()
+        self.release_generation(self._hold_generation)
+
+    def release_generation(self, generation: int) -> None:
         with self._mutex:
-            if not self._held:
+            if generation != self._hold_generation or not self._held:
                 return
             token = self._token
             self._held = False
+            self._hold_generation += 1
             self._token = str(uuid.uuid4())
+        self._stop_refresh_thread()
         try:
             self._release_script(keys=[self._key], args=[token])
         except Exception:

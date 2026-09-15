@@ -300,13 +300,15 @@ class DatabaseOutputSink:
                 return 0
         return int(value or 0)
 
-    def write_manifest(self, manifest: dict) -> None:
+    def write_manifest(self, manifest: dict, *, skip_if_newer_than: str | None = None) -> bool:
+        del skip_if_newer_than
         table = sql_identifier(
             self._options.get("manifest_table", DEFAULT_MANIFEST_TABLE),
             option="manifest_table",
         )
         logger.info("Appending run manifest to database table %r", table)
         pd.DataFrame([manifest]).to_sql(table, self._engine, if_exists="append", index=False)
+        return True
 
     def write_model_artifact(self, payload: bytes) -> None:
         """Replace the single-row model_artifacts table with the latest blob."""
