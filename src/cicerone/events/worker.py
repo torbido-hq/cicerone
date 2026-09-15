@@ -157,10 +157,9 @@ class EventWorker:
             launched = self._thread
             abort_after_launch = self._stop.is_set() or self._stop_epoch != epoch
         if abort_after_launch and launched is not None:
-            with self._tick_guard:
-                with self._source_guard:
-                    if self._thread is launched:
-                        self._drain_and_close()
+            with self._tick_guard, self._source_guard:
+                if self._thread is launched:
+                    self._drain_and_close()
 
     def stop(self, *, join_timeout_seconds: float = 5.0) -> bool:
         self._stop.set()
@@ -336,9 +335,8 @@ class EventWorker:
                 self._stop.wait(self._poll_interval_seconds)
         finally:
             if self._stop.is_set():
-                with self._tick_guard:
-                    with self._source_guard:
-                        self._drain_and_close()
+                with self._tick_guard, self._source_guard:
+                    self._drain_and_close()
 
     def tick(self) -> int:
         """One poll/flush cycle; returns events successfully applied."""

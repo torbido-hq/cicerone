@@ -1502,7 +1502,7 @@ def test_event_worker_restores_rejected_overflow(tmp_path, feature_config: Featu
         source.ingest(event_payload(event_id=f"ov-rej-{i}", item_id=f"i{i}"))
     worker = EventWorker(
         source,
-        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0, max_events=1),
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0, max_events=1),
         IncrementalUpdater(
             sink=build_output_sink(settings.output),
             output_settings=settings.output,
@@ -1648,17 +1648,19 @@ def test_event_worker_start_abort_after_launch_holds_tick_guard(tmp_path, featur
     )
     second = threading.Event()
     release = threading.Event()
-    acquires = {"n": 0}
+    start_acquires = {"n": 0}
+    starter_holder: list[threading.Thread] = []
 
     class _TickLock:
         def __init__(self) -> None:
             self._inner = threading.Lock()
 
         def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
-            acquires["n"] += 1
-            if acquires["n"] == 2:
-                second.set()
-                release.wait(timeout=2)
+            if starter_holder and threading.current_thread() is starter_holder[0]:
+                start_acquires["n"] += 1
+                if start_acquires["n"] == 2:
+                    second.set()
+                    release.wait(timeout=2)
             return self._inner.acquire(blocking, timeout)
 
         def release(self) -> None:
@@ -1670,12 +1672,6 @@ def test_event_worker_start_abort_after_launch_holds_tick_guard(tmp_path, featur
 
         def __exit__(self, *_exc: object) -> None:
             self.release()
-
-    class _AbortingThread(threading.Thread):
-        def start(self) -> None:  # type: ignore[override]
-            worker._stop.set()
-            worker._stop_epoch += 1
-            super().start()
 
     worker = EventWorker(
         WebhookEventSource({}),
@@ -1689,24 +1685,24 @@ def test_event_worker_start_abort_after_launch_holds_tick_guard(tmp_path, featur
         poll_interval_seconds=60.0,
     )
     worker._tick_guard = _TickLock()  # type: ignore[assignment]
-    import cicerone.events.worker as worker_mod
+    original_start = threading.Thread.start
 
-    original_thread = worker_mod.threading.Thread
-
-    def _factory(*args: object, **kwargs: object) -> threading.Thread:
-        if kwargs.get("target") is worker._loop or (args and args[0] is worker._loop):
-            return _AbortingThread(*args, **kwargs)  # type: ignore[misc]
-        return original_thread(*args, **kwargs)  # type: ignore[misc]
+    def _start(self: threading.Thread) -> None:
+        if self.name == "cicerone-events":
+            worker._stop.set()
+            worker._stop_epoch += 1
+        original_start(self)
 
     starter = threading.Thread(target=worker.start)
-    worker_mod.threading.Thread = _factory  # type: ignore[misc]
+    starter_holder.append(starter)
+    threading.Thread.start = _start  # type: ignore[method-assign]
     try:
         starter.start()
         assert second.wait(timeout=2)
         assert starter.is_alive()
     finally:
         release.set()
-        worker_mod.threading.Thread = original_thread
+        threading.Thread.start = original_start  # type: ignore[method-assign]
         starter.join(timeout=2)
         worker.stop(join_timeout_seconds=2.0)
 
