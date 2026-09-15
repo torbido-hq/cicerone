@@ -24,6 +24,12 @@ def test_normalize_event_and_errors():
     event = normalize_event(event_payload())
     assert event.user_id == "u1"
     assert event.quantity == 1
+    assert event.generated_event_id is False
+    payload = event_payload()
+    payload.pop("event_id")
+    generated = normalize_event(payload)
+    assert generated.generated_event_id is True
+    assert generated.event_id != ""
     with pytest.raises(EventNormalizeError, match="missing"):
         normalize_event({"user_id": "u1"})
     with pytest.raises(EventNormalizeError, match="quantity"):

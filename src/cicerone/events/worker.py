@@ -294,10 +294,13 @@ class EventWorker:
         while len(order) > _APPLIED_EVENT_ID_CAP:
             seen.discard(order.popleft())
 
+    def _fingerprint_dedupe(self, event: NormalizedEvent) -> bool:
+        return self._ephemeral_event_ids and event.generated_event_id
+
     def _remember_applied(self, events: Sequence[NormalizedEvent]) -> None:
         for event in events:
             self._remember_token(event.event_id, self._applied_event_ids, self._applied_event_id_order)
-            if self._ephemeral_event_ids:
+            if self._fingerprint_dedupe(event):
                 self._remember_token(
                     event_fingerprint(event), self._applied_fingerprints, self._applied_fingerprint_order
                 )
@@ -305,7 +308,7 @@ class EventWorker:
     def _is_applied(self, event: NormalizedEvent) -> bool:
         if event.event_id in self._applied_event_ids:
             return True
-        return self._ephemeral_event_ids and event_fingerprint(event) in self._applied_fingerprints
+        return self._fingerprint_dedupe(event) and event_fingerprint(event) in self._applied_fingerprints
 
     def _still_unapplied(self, event: NormalizedEvent) -> bool:
         if self._buffer.contains_event_id(event.event_id):
@@ -529,20 +532,22 @@ class EventWorker:
 
     def _drain_buffer_on_stop(self) -> None:
         leftover = self._take_buffered()
-        if leftover:
-            logger.info("Draining %d buffered event(s) on worker stop", len(leftover))
-            if not self._acquire_apply_lock():
-                logger.info("Stop drain skipped: apply lease held by another replica")
-                leftover.extend(self._take_pending_acks())
-                self._return_events(leftover)
-                return
-            try:
-                self._flush_ready(leftover)
-            finally:
-                self._release_apply_lock()
-        pending = self._take_pending_acks()
-        if pending:
-            self._return_events(pending)
+        try:
+            if leftover:
+                logger.info("Draining %d buffered event(s) on worker stop", len(leftover))
+                if not self._acquire_apply_lock():
+                    logger.info("Stop drain skipped: apply lease held by another replica")
+                    leftover.extend(self._take_pending_acks())
+                    self._return_events(leftover)
+                    return
+                try:
+                    self._flush_ready(leftover)
+                finally:
+                    self._release_apply_lock()
+        finally:
+            pending = self._take_pending_acks()
+            if pending:
+                self._return_events(pending)
 
     def _flush_ready(self, ready: list[NormalizedEvent]) -> int:
         try:

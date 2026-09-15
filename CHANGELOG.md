@@ -97,6 +97,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A RabbitMQ I/O timeout detaches the channel so a late get or ack cannot use the abandoned connection.
 - Event worker start takes the tick lock before the source lock.
 - Kafka ack keeps local offsets when a partition watermark cannot advance.
+- Event worker fingerprint dedupe applies only to generated event ids.
+- Event worker stop returns pending acks when a drain ack fails.
+- RabbitMQ ack clears ownership for events carried across reconnect.
 
 ## [0.8.1] - 2026-09-11
 

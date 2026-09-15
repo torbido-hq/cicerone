@@ -1794,8 +1794,13 @@ def test_event_worker_acks_fingerprint_redelivery_after_apply(tmp_path, feature_
         top_k=3,
     )
     applies: list[str] = []
-    original = normalize_event(event_payload(event_id="applied-fp-1", item_id="ifp"))
-    redelivery = normalize_event(event_payload(event_id="applied-fp-2", item_id="ifp"))
+    payload = event_payload(item_id="ifp")
+    payload.pop("event_id")
+    original = normalize_event(payload)
+    redelivery = normalize_event(payload)
+    assert original.generated_event_id is True
+    assert redelivery.generated_event_id is True
+    assert original.event_id != redelivery.event_id
 
     class _Redeliver:
         ephemeral_event_ids = True
@@ -1840,8 +1845,8 @@ def test_event_worker_acks_fingerprint_redelivery_after_apply(tmp_path, feature_
     assert worker.tick() == 1
     source._pending = [redelivery]
     assert worker.tick() == 0
-    assert applies == ["applied-fp-1"]
-    assert "applied-fp-2" in source.acked
+    assert applies == [original.event_id]
+    assert redelivery.event_id in source.acked
 
 
 def test_event_worker_applies_same_fingerprint_with_new_id(tmp_path, feature_config: FeatureConfig):
@@ -1900,6 +1905,68 @@ def test_event_worker_applies_same_fingerprint_with_new_id(tmp_path, feature_con
     source._pending = [second]
     assert worker.tick() == 1
     assert applies == ["shape-1", "shape-2"]
+
+
+def test_event_worker_applies_same_fingerprint_with_explicit_ids_on_ephemeral_source(
+    tmp_path, feature_config: FeatureConfig
+):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    applies: list[str] = []
+    first = normalize_event(event_payload(event_id="explicit-1", item_id="ishape"))
+    second = normalize_event(event_payload(event_id="explicit-2", item_id="ishape"))
+
+    class _TwoShots:
+        ephemeral_event_ids = True
+
+        def __init__(self) -> None:
+            self._pending = [first]
+            self.acked: list[str] = []
+
+        def connect(self) -> None:
+            return None
+
+        def poll(self, max_events: int = 100):  # type: ignore[no-untyped-def]
+            del max_events
+            return list(self._pending)
+
+        def ack(self, event_ids):  # type: ignore[no-untyped-def]
+            self.acked.extend(str(event_id) for event_id in event_ids)
+            self._pending = []
+
+        def nack(self, events):  # type: ignore[no-untyped-def]
+            return list(events)
+
+        def health(self) -> EventSourceHealth:
+            return EventSourceHealth(connected=True, lag=len(self._pending))
+
+    class _CountApply(IncrementalUpdater):
+        def apply(self, events, *, persist_online: bool = True):  # type: ignore[no-untyped-def,override]
+            applies.extend(item.event_id for item in events)
+            return super().apply(events, persist_online=persist_online)
+
+    source = _TwoShots()
+    worker = EventWorker(
+        source,  # type: ignore[arg-type]
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        _CountApply(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    assert worker.tick() == 1
+    source._pending = [second]
+    assert worker.tick() == 1
+    assert applies == ["explicit-1", "explicit-2"]
 
 
 def test_event_worker_acks_buffer_duplicates(tmp_path, feature_config: FeatureConfig):
@@ -2318,3 +2385,36 @@ def test_event_worker_stop_drains_buffer(tmp_path, feature_config: FeatureConfig
     assert worker.stop(join_timeout_seconds=2.0) is True
     frame = pd.read_parquet(out / "recommendations.parquet")
     assert "idrain" in set(frame["item_id"].astype(str))
+
+
+def test_event_worker_stop_returns_retry_acks_when_drain_ack_fails(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+
+    class _AckBoom(WebhookEventSource):
+        def ack(self, event_ids):  # type: ignore[no-untyped-def]
+            del event_ids
+            raise RuntimeError("ack failed")
+
+    source = _AckBoom({})
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    worker._buffer.extend([normalize_event(event_payload(event_id="retry-drain", item_id="idrain"))])
+    assert worker.stop(join_timeout_seconds=2.0) is True
+    again = list(source.poll(10))
+    assert [event.event_id for event in again] == ["retry-drain"]

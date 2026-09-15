@@ -1217,6 +1217,23 @@ def test_connect_preserves_nacked_pending(monkeypatch):
     assert [event.event_id for event in again] == ["kept"]
     source.ack([event.event_id for event in again])
     assert source.health().lag == 0
+    assert source._event_io == {}
+    source.close()
+
+
+def test_ack_clears_event_io_for_carried_events(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.enqueue("cicerone.events", event_payload(event_id="carried", item_id="i1"))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    first = list(source.poll(1))
+    source.nack(first)
+    source.connect()
+    again = list(source.poll(10))
+    assert [event.event_id for event in again] == ["carried"]
+    assert source._event_io
+    source.ack([event.event_id for event in again])
+    assert source._event_io == {}
     source.close()
 
 

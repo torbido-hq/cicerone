@@ -16,6 +16,7 @@ class NormalizedEvent:
     quantity: int
     occurred_at: datetime
     event_id: str
+    generated_event_id: bool = False
 
 
 @dataclass(frozen=True)

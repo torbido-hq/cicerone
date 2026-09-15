@@ -454,8 +454,7 @@ class RabbitMQEventSource(EventSource):
                 elif eid in self._in_flight or eid in self._pending_ids:
                     local_only.append(eid)
             for eid in local_only:
-                self._in_flight.discard(eid)
-                self._pending_ids.discard(eid)
+                self._forget_event(eid)
         if not resolved:
             return
         for eid, tag in resolved:
@@ -467,11 +466,14 @@ class RabbitMQEventSource(EventSource):
                     continue
                 self._delivery_tags.pop(eid, None)
                 self._held_tags.discard(tag)
-                self._in_flight.discard(eid)
-                self._pending_ids.discard(eid)
-                stale = [key for key, (_owner, event_id) in self._event_io.items() if event_id == eid]
-                for key in stale:
-                    self._event_io.pop(key, None)
+                self._forget_event(eid)
+
+    def _forget_event(self, eid: str) -> None:
+        self._in_flight.discard(eid)
+        self._pending_ids.discard(eid)
+        stale = [key for key, (_owner, event_id) in self._event_io.items() if event_id == eid]
+        for key in stale:
+            self._event_io.pop(key, None)
 
     def nack(self, events: Sequence[NormalizedEvent]) -> Sequence[NormalizedEvent]:
         if not events:
