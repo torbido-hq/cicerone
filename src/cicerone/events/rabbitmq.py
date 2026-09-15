@@ -99,7 +99,7 @@ class _PikaIo:
         try:
             status, payload = reply.get(timeout=self._timeout_seconds)
         except queue.Empty as exc:
-            self._failed = True
+            self._mark_failed()
             raise TimeoutError(f"RabbitMQ I/O call timed out after {self._timeout_seconds}s") from exc
         finally:
             if not self._failed:
@@ -110,8 +110,16 @@ class _PikaIo:
             raise RuntimeError("RabbitMQ I/O worker abandoned")
         return payload
 
+    def _mark_failed(self) -> None:
+        with self._state_lock:
+            self._failed = True
+
+    def _claim_dequeued(self) -> bool:
+        with self._state_lock:
+            return not self._failed
+
     def abandon(self, channel: Any, connection: Any) -> None:
-        self._failed = True
+        self._mark_failed()
         self._abandon_channel = channel
         self._abandon_connection = connection
         self.stop()
@@ -164,7 +172,7 @@ class _PikaIo:
                     self._exit_failed()
                 return
             fn, reply = job
-            if self._failed:
+            if not self._claim_dequeued():
                 with suppress(queue.Full):
                     reply.put_nowait(("err", RuntimeError("RabbitMQ I/O worker abandoned")))
                 self._exit_failed()
@@ -190,8 +198,7 @@ class _PikaIo:
         try:
             connection.process_data_events(time_limit=0)
         except Exception:
-            with self._state_lock:
-                self._failed = True
+            self._mark_failed()
             logger.exception("RabbitMQ I/O thread process_data_events failed")
 
     def _fail_pending(self, exc: BaseException) -> None:
