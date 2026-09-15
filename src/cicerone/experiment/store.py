@@ -27,7 +27,7 @@ from cicerone.io.options import (
     storage_backend,
     validate_storage_options,
 )
-from cicerone.locks import LockBackend, held_writer_lock
+from cicerone.locks import LockBackend, ensure_writer_owned, held_writer_lock
 
 logger = logging.getLogger(__name__)
 
@@ -230,6 +230,7 @@ class ExperimentStore:
         payload = "".join(json.dumps(dict(row), separators=(",", ":")) + "\n" for row in rows).encode("utf-8")
         path = Path(require_option(self._options, "path", "local")) / ".exposures.jsonl.lock"
         with exclusive_file_lock(path), held_writer_lock(self._writer_lock):
+            ensure_writer_owned(self._writer_lock)
             self._append_bytes(EXPOSURES_FILENAME, payload)
 
     def read_exposures(self, *, experiment_id: str | None = None) -> list[dict[str, Any]]:

@@ -84,6 +84,28 @@ DEFAULT_DB_TABLES = frozenset(
 )
 
 
+def _db_manifest_newer(conn, table: str, started_at: str) -> bool:
+    if not inspect(conn).has_table(table):
+        return False
+    runs = Table(table, MetaData(), autoload_with=conn)
+    if "generated_at" not in runs.c:
+        return False
+    columns = [runs.c.generated_at]
+    if "last_incremental_at" in runs.c:
+        columns.append(runs.c.last_incremental_at)
+    row = conn.execute(select(*columns).order_by(runs.c.generated_at.desc()).limit(1)).mappings().first()
+    if not row:
+        return False
+    for key in ("generated_at", "last_incremental_at"):
+        value = row.get(key)
+        if value is None:
+            continue
+        stamp = value.isoformat() if hasattr(value, "isoformat") else str(value)
+        if stamp > started_at:
+            return True
+    return False
+
+
 def _clear_table_for_replace(conn, table: str) -> None:
     """Empty ``table`` before a full rewrite; prefer TRUNCATE, fall back to DELETE.
 
@@ -301,13 +323,15 @@ class DatabaseOutputSink:
         return int(value or 0)
 
     def write_manifest(self, manifest: dict, *, skip_if_newer_than: str | None = None) -> bool:
-        del skip_if_newer_than
         table = sql_identifier(
             self._options.get("manifest_table", DEFAULT_MANIFEST_TABLE),
             option="manifest_table",
         )
         logger.info("Appending run manifest to database table %r", table)
-        pd.DataFrame([manifest]).to_sql(table, self._engine, if_exists="append", index=False)
+        with self._engine.begin() as conn:
+            if skip_if_newer_than is not None and _db_manifest_newer(conn, table, skip_if_newer_than):
+                return False
+            pd.DataFrame([manifest]).to_sql(table, conn, if_exists="append", index=False)
         return True
 
     def write_model_artifact(self, payload: bytes) -> None:

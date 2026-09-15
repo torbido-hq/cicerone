@@ -262,6 +262,30 @@ def test_append_exposures_writer_lock_lost(tmp_path) -> None:
     assert store.read_exposures() == []
 
 
+def test_append_exposures_rechecks_owned_before_write(tmp_path) -> None:
+    calls = {"n": 0}
+
+    class _Lock:
+        def acquire(self) -> bool:
+            return True
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            calls["n"] += 1
+            return calls["n"] < 2
+
+        def is_locked(self) -> bool:
+            return True
+
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    store = ExperimentStore(output, writer_lock=_Lock())
+    with pytest.raises(LockLostError, match="dataset writer lock lost before write"):
+        store.append_exposures([_exposure("u1")])
+    assert store.read_exposures() == []
+
+
 def test_append_exposures_empty_is_noop(tmp_path) -> None:
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     ExperimentStore(output).append_exposures([])

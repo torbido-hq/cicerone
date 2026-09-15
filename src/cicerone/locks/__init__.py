@@ -46,6 +46,7 @@ __all__ = [
     "dataset_append_lock_key",
     "events_apply_lock_key",
     "has_distributed_lock",
+    "ensure_writer_owned",
     "held_writer_lock",
 ]
 
@@ -95,6 +96,19 @@ def acquire_blocking(
         time.sleep(interval_seconds)
 
 
+def ensure_writer_owned(
+    lock: LockBackend | None,
+    *,
+    fence_check: Callable[[], bool] | None = None,
+    fence_lost: str = "lock lost before write",
+    fence_kind: str = "lock",
+) -> None:
+    if lock is not None and not lock.owned():
+        raise LockLostError("dataset writer lock lost before write", kind="writer")
+    if fence_check is not None and not fence_check():
+        raise LockLostError(fence_lost, kind=fence_kind)
+
+
 @contextmanager
 def held_writer_lock(
     lock: LockBackend | None,
@@ -112,10 +126,7 @@ def held_writer_lock(
         raise WriterLockBusyError("dataset writer lock busy")
     generation = getattr(lock, "hold_generation", None)
     try:
-        if not lock.owned():
-            raise LockLostError("dataset writer lock lost before write", kind="writer")
-        if fence_check is not None and not fence_check():
-            raise LockLostError(fence_lost, kind=fence_kind)
+        ensure_writer_owned(lock, fence_check=fence_check, fence_lost=fence_lost, fence_kind=fence_kind)
         yield
     finally:
         release_generation = getattr(lock, "release_generation", None)

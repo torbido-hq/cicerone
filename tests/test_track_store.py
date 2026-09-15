@@ -461,6 +461,32 @@ def test_track_jsonl_append_writer_lock_busy(tmp_path, monkeypatch) -> None:
         store.append_rows([_row()])
 
 
+def test_track_jsonl_append_rechecks_owned_before_write(tmp_path) -> None:
+    from cicerone.locks import LockLostError
+
+    calls = {"n": 0}
+
+    class _Lock:
+        def acquire(self) -> bool:
+            return True
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            calls["n"] += 1
+            return calls["n"] < 2
+
+        def is_locked(self) -> bool:
+            return True
+
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    store = TrackStore(output, writer_lock=_Lock())
+    with pytest.raises(LockLostError, match="dataset writer lock lost before write"):
+        store.append_rows([_row()])
+    assert store.read_rows() == []
+
+
 def test_track_jsonl_append_without_fcntl(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("cicerone.io.options.fcntl", None)
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})

@@ -404,6 +404,24 @@ def test_redis_lock_allows_reacquire_after_refresh_loss(monkeypatch):
     lock.release()
 
 
+def test_redis_acquire_starts_new_refresher_after_release(monkeypatch):
+    client = _mock_redis_module(monkeypatch)
+    client.set.return_value = True
+    lock = RedisLock(
+        "redis://localhost:6379/0",
+        ttl_ms=200,
+        refresh_interval_ms=10_000,
+    )
+    assert lock.acquire() is True
+    first = lock._refresh_thread
+    lock.release()
+    assert lock.acquire() is True
+    second = lock._refresh_thread
+    assert second is not None and second.is_alive()
+    assert second is not first
+    lock.release()
+
+
 def test_redis_stale_release_does_not_drop_new_holder(monkeypatch):
     client = _mock_redis_module(monkeypatch)
     client.set.return_value = True

@@ -150,6 +150,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   same. Online persist after ack takes the dataset write lock again.
 - Failure manifests compare freshness under the writer lock. A stale Redis
   `held_writer_lock` cannot release a later acquire on the same object.
+- Incremental apply rechecks the apply fence immediately before replace.
+  Track and exposure appends recheck writer ownership before the bytes
+  write. Database failure manifests skip when a newer row already exists.
+- Redis acquire starts a new TTL refresher after release so a joining
+  previous thread cannot leave the new holder without refresh.
 
 
 ## [0.8.1] - 2026-09-11

@@ -13,7 +13,7 @@ import pandas as pd
 from sqlalchemy import Engine
 
 from cicerone.config.settings import IOSettings
-from cicerone.locks import LockBackend, held_writer_lock
+from cicerone.locks import LockBackend, ensure_writer_owned, held_writer_lock
 from cicerone.track.store_common import (
     DEFAULT_EVAL_TABLE,  # noqa: F401
     DEFAULT_HISTORY_TABLE,  # noqa: F401
@@ -96,6 +96,7 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
                     seen.add(event_id)
             if not fresh:
                 return []
+            ensure_writer_owned(self._writer_lock)
             encoded = "".join(json.dumps(row, separators=(",", ":")) + "\n" for row in fresh).encode("utf-8")
             self._append_bytes(TRACK_FILENAME, encoded)
             known.update(seen)

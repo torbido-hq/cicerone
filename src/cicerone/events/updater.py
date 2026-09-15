@@ -170,6 +170,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             if not self._ensure_write_allowed():
                 self._abort_online()
                 return 0
+            self._ensure_fence()
             n_users = self._sink.replace_recommendations_for_users(merged, user_ids=sorted(set(replace_ids)))
             now = datetime.now(UTC)
             manifest = {
