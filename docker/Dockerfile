@@ -40,14 +40,18 @@ RUN npx tailwindcss -i ./tailwind.input.css -o ./tailwind.css --minify
 FROM python:3.11-slim-bookworm AS package
 
 WORKDIR /app
-RUN pip install --no-cache-dir build==1.5.0 twine==7.0.0
+RUN pip install --no-cache-dir \
+        build==1.5.0 \
+        twine==7.0.0 \
+        setuptools==84.0.0 \
+        wheel==0.48.0
 
 COPY pyproject.toml MANIFEST.in LICENSE README.md CHANGELOG.md ./
 COPY requirements.txt requirements-redis.txt requirements-sequential.txt requirements-kafka.txt requirements-rabbitmq.txt requirements-bandits.txt ./
 COPY src/ ./src/
 COPY --from=frontend /build/tailwind.css ./src/cicerone/static/tailwind.css
 
-RUN python -m build \
+RUN python -m build --no-isolation \
     && python -m twine check dist/* \
     && PYTHONPATH=src python -m cicerone.packaging
 
