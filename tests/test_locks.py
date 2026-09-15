@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from cicerone import locks as locks_mod
 from cicerone.config import (
     ConfigError,
     IOSettings,
@@ -807,6 +808,30 @@ def test_held_writer_lock_rejects_stale_generation_after_reacquire():
         assert lock.hold_generation != first
         with pytest.raises(LockLostError, match="dataset writer lock lost before write"):
             ensure_writer_owned(lock)
+
+
+def test_lock_owned_falls_back_when_owned_rejects_generation():
+    class Lock:
+        hold_generation = 3
+
+        def owned(self) -> bool:
+            return True
+
+    assert locks_mod._lock_owned(Lock(), 3) is True
+    assert locks_mod._lock_owned(Lock(), 2) is False
+
+
+def test_bound_writer_generation_ignores_other_lock():
+    class _Lock:
+        pass
+
+    held = _Lock()
+    other = _Lock()
+    locks_mod._bind_writer_generation(held, 4)
+    try:
+        assert locks_mod._bound_writer_generation(other) is None
+    finally:
+        locks_mod._unbind_writer_generation()
 
 
 def test_held_writer_lock_raises_when_lease_lost():

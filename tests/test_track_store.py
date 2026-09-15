@@ -487,6 +487,29 @@ def test_track_jsonl_append_rechecks_owned_before_write(tmp_path) -> None:
     assert store.read_rows() == []
 
 
+def test_write_eval_and_history_skip_acquire_when_owned(tmp_path) -> None:
+    class _Held:
+        def acquire(self) -> bool:
+            raise AssertionError("already owned")
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            return True
+
+        def is_locked(self) -> bool:
+            return True
+
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    store = TrackStore(output, writer_lock=_Held())
+    store.write_eval({"ok": True})
+    recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
+    store.append_history(recs, generated_at="2026-08-28T03:00:00+00:00")
+    assert store.read_eval() == {"ok": True}
+    assert len(store.read_history()) == 1
+
+
 def test_write_eval_takes_writer_lock(tmp_path) -> None:
     from cicerone.locks import LockLostError
 
