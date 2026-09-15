@@ -697,12 +697,15 @@ def test_heartbeat_pumps_connection(monkeypatch):
     source.ack([events[0].event_id])
 
 
-def test_heartbeat_logs_process_failure(monkeypatch):
+def test_heartbeat_reraises_and_marks_failed_on_pump_error(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     source = RabbitMQEventSource(_options())
     source.connect()
     broker.connection.process_error = RuntimeError("hb")
-    source.heartbeat([])
+    with pytest.raises(RuntimeError, match="abandoned|hb"):
+        source.heartbeat([])
+    assert source._io is not None
+    assert source._io.failed is True
 
 
 def test_heartbeat_reraises_timeout(monkeypatch):

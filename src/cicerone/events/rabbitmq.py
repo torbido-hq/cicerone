@@ -415,13 +415,9 @@ class RabbitMQEventSource(EventSource):
             return
         try:
             io.submit(partial(self._pump_connection, io))
-        except TimeoutError:
-            logger.exception("RabbitMQ heartbeat process_data_events failed")
-            raise
         except Exception:
             logger.exception("RabbitMQ heartbeat process_data_events failed")
-            if io.failed or io.closing:
-                raise
+            raise
 
     def health(self) -> EventSourceHealth:
         with self._lock:
@@ -491,7 +487,11 @@ class RabbitMQEventSource(EventSource):
         connection = io._connection
         if connection is None:
             return
-        connection.process_data_events(time_limit=0)
+        try:
+            connection.process_data_events(time_limit=0)
+        except Exception:
+            io._mark_failed()
+            raise
 
     def _require_io(self) -> _PikaIo:
         with self._lock:
