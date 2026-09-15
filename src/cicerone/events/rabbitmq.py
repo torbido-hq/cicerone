@@ -116,15 +116,12 @@ class _PikaIo:
                 if self._failed or not job.permit or job.state != _JOB_STARTED:
                     raise RuntimeError("RabbitMQ I/O worker abandoned")
                 job.state = _JOB_INVOKING
+            with self._state_lock:
+                if self._failed or not job.permit or job.state != _JOB_INVOKING:
+                    raise RuntimeError("RabbitMQ I/O worker abandoned")
+                job.state = _JOB_DISPATCHED
             job.run_lock.acquire()
             try:
-                with self._state_lock:
-                    if self._failed or not job.permit or job.state != _JOB_INVOKING:
-                        raise RuntimeError("RabbitMQ I/O worker abandoned")
-                    job.state = _JOB_DISPATCHED
-                    if self._failed or not job.permit:
-                        job.state = _JOB_ABANDONED
-                        raise RuntimeError("RabbitMQ I/O worker abandoned")
                 with self._state_lock:
                     if self._failed or not job.permit:
                         job.state = _JOB_ABANDONED
