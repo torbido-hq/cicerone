@@ -52,7 +52,9 @@ def optional_float(
         value = float(raw)
     except (TypeError, ValueError, OverflowError) as exc:
         raise ConfigError(f"{prefix}.{key} must be a number{_option_detail(raw)}") from exc
-    if not math.isfinite(value) or value <= minimum_exclusive:
+    if not math.isfinite(value):
+        raise ConfigError(f"{prefix}.{key} must be finite{_option_detail(raw)}")
+    if value <= minimum_exclusive:
         raise ConfigError(f"{prefix}.{key} must be > {minimum_exclusive}{_option_detail(raw)}")
     if minimum is not None and value < minimum:
         raise ConfigError(f"{prefix}.{key} must be >= {minimum}{_option_detail(raw)}")
