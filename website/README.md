@@ -27,7 +27,7 @@ npm run preview  # serve dist/
 | `astro.config.mjs` | Site URL, sidebar, logo, social, articles plugin |
 | `src/lib/consent.mjs` | Cookie banner + Consent Mode v2 (`G-E38EP8PJSR`) |
 | `public/CNAME` | Custom domain (`cicerone.dev`) |
-| `public/apple-touch-icon.png`, `favicon-32.png` | PNG icon fallbacks (committed next to the SVG logo) |
+| `public/apple-touch-icon.png`, `favicon-32.png` | Committed PNG fallbacks. Update both when `src/assets/cicerone-logo.svg` changes. |
 | `public/images/` | Site diagrams (`flow.svg`) |
 | `public/images/docs/` | Copied from `../docs/images/` at build time (gitignored) |
 
