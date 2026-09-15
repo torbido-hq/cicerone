@@ -14,7 +14,12 @@ from cicerone.config.constants import ConfigError
 from cicerone.events.base import EventSource, EventSourceHealth, NormalizedEvent
 from cicerone.events.json_payload import decode_json_object
 from cicerone.events.normalize import EventNormalizeError, normalize_event
-from cicerone.kafka_options import kafka_client_config, optional_nonempty_str, require_nonempty_str
+from cicerone.kafka_options import (
+    kafka_client_config,
+    kafka_timeout_seconds,
+    optional_nonempty_str,
+    require_nonempty_str,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +46,7 @@ class KafkaEventSource(EventSource):
     def __init__(self, options: dict[str, Any]):
         validate_kafka_event_options(options)
         self._conf = kafka_client_config(options, prefix=_EVENTS_PREFIX)
+        self._timeout_seconds = kafka_timeout_seconds(options, prefix=_EVENTS_PREFIX)
         self._topic = require_nonempty_str(options, "topic", prefix=_EVENTS_PREFIX)
         self._group_id = require_nonempty_str(options, "group_id", prefix=_EVENTS_PREFIX)
         raw_name = optional_nonempty_str(options, "consumer_name", prefix=_EVENTS_PREFIX)
@@ -73,7 +79,7 @@ class KafkaEventSource(EventSource):
         }
         consumer = Consumer(conf)
         try:
-            consumer.list_topics(topic=self._topic, timeout=10)
+            consumer.list_topics(topic=self._topic, timeout=self._timeout_seconds)
         except Exception as exc:
             try:
                 consumer.close()
@@ -150,9 +156,9 @@ class KafkaEventSource(EventSource):
                 self._last_event_at = newest
         return out
 
-    def ack(self, event_ids: Sequence[str]) -> None:
+    def ack(self, event_ids: Sequence[str]) -> Sequence[str]:
         if not event_ids:
-            return
+            return ()
         consumer = self._require_client()
         with self._lock:
             resolved: list[tuple[str, Any]] = []
@@ -162,38 +168,60 @@ class KafkaEventSource(EventSource):
                 if message is not None:
                     resolved.append((eid, message))
         if not resolved:
-            return
+            return ()
         with self._lock:
             done: dict[int, set[int]] = {}
-            for _, message in resolved:
+            for _eid, message in resolved:
                 partition = int(message.partition())
                 done.setdefault(partition, set()).add(int(message.offset()))
             watermarks = {
                 partition: self._next_commit_offset(partition, extra_done=offsets)
                 for partition, offsets in done.items()
             }
-            for eid, message in resolved:
-                self._messages.pop(eid, None)
-                partition = int(message.partition())
-                offset = int(message.offset())
-                self._held_offsets.discard((partition, offset))
-                self._max_offset[partition] = max(self._max_offset.get(partition, -1), offset)
-                self._in_flight.discard(eid)
-                self._pending_ids.discard(eid)
-        self._commit_watermarks(consumer, watermarks)
+        finished: list[tuple[str, Any]] = []
+        try:
+            for partition, nxt in watermarks.items():
+                if nxt is None:
+                    continue
+                self._commit_watermarks(consumer, {partition: nxt})
+                with self._lock:
+                    for eid, message in self._messages.items():
+                        if int(message.partition()) == partition and int(message.offset()) < nxt:
+                            finished.append((eid, message))
+        finally:
+            with self._lock:
+                for eid, message in finished:
+                    self._messages.pop(eid, None)
+                    partition = int(message.partition())
+                    offset = int(message.offset())
+                    self._held_offsets.discard((partition, offset))
+                    self._max_offset[partition] = max(self._max_offset.get(partition, -1), offset)
+                    self._in_flight.discard(eid)
+                    self._pending_ids.discard(eid)
+                for eid, message in resolved:
+                    if eid not in self._messages:
+                        continue
+                    partition = int(message.partition())
+                    offset = int(message.offset())
+                    self._held_offsets.discard((partition, offset))
+                    self._max_offset[partition] = max(self._max_offset.get(partition, -1), offset)
+        return tuple(eid for eid, _message in finished)
 
-    def nack(self, events: Sequence[NormalizedEvent]) -> None:
+    def nack(self, events: Sequence[NormalizedEvent]) -> Sequence[NormalizedEvent]:
         if not events:
-            return
+            return ()
+        kept: set[int] = set()
         with self._lock:
             for event in reversed(list(events)):
                 if event.event_id not in self._messages:
                     continue
                 self._in_flight.discard(event.event_id)
+                kept.add(id(event))
                 if event.event_id in self._pending_ids:
                     continue
                 self._pending.appendleft(event)
                 self._pending_ids.add(event.event_id)
+        return tuple(event for event in events if id(event) not in kept)
 
     def heartbeat(self, events: Sequence[NormalizedEvent]) -> None:
         del events

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
+from hashlib import sha256
 from typing import Any
 from uuid import uuid4
 
@@ -59,15 +60,19 @@ def _parse_quantity(value: Any) -> int:
 
 
 def event_fingerprint(event: NormalizedEvent) -> str:
-    return "|".join(
-        (
-            event.user_id,
-            event.item_id,
-            event.event_type,
-            str(event.quantity),
-            event.occurred_at.isoformat(),
-        )
+    parts = (
+        event.user_id,
+        event.item_id,
+        event.event_type,
+        str(event.quantity),
+        event.occurred_at.isoformat(),
     )
+    payload = bytearray()
+    for part in parts:
+        encoded = part.encode("utf-8")
+        payload.extend(len(encoded).to_bytes(4, "big"))
+        payload.extend(encoded)
+    return sha256(payload).hexdigest()
 
 
 def normalize_event(payload: Any) -> NormalizedEvent:
@@ -82,14 +87,17 @@ def normalize_event(payload: Any) -> NormalizedEvent:
     if not user_id or not item_id or not event_type:
         raise EventNormalizeError("user_id, item_id, and event_type must be non-empty")
 
-    event_id = raw.get("event_id") or raw.get("idempotency_key") or str(uuid4())
+    supplied = raw.get("event_id") or raw.get("idempotency_key")
+    generated = not supplied
+    event_id = str(supplied) if supplied else str(uuid4())
     return NormalizedEvent(
         user_id=user_id,
         item_id=item_id,
         event_type=event_type,
         quantity=_parse_quantity(raw.get("quantity")),
         occurred_at=parse_occurred_at(raw["occurred_at"]),
-        event_id=str(event_id),
+        event_id=event_id,
+        generated_event_id=generated,
     )
 
 

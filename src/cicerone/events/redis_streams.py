@@ -161,9 +161,9 @@ class RedisStreamsEventSource(EventSource):
                 self._last_event_at = newest
         return out
 
-    def ack(self, event_ids: Sequence[str]) -> None:
+    def ack(self, event_ids: Sequence[str]) -> Sequence[str]:
         if not event_ids:
-            return
+            return ()
         client = self._require_client()
         with self._lock:
             resolved: list[tuple[str, str]] = []
@@ -173,7 +173,7 @@ class RedisStreamsEventSource(EventSource):
                 if entry_id is not None:
                     resolved.append((eid, entry_id))
         if not resolved:
-            return
+            return ()
         # XACK before dropping local maps so a failed ack can still nack/retry.
         client.xack(self._stream, self._group, *(entry_id for _, entry_id in resolved))
         with self._lock:
@@ -182,19 +182,23 @@ class RedisStreamsEventSource(EventSource):
                 self._held_entries.discard(entry_id)
                 self._in_flight.discard(eid)
                 self._pending_ids.discard(eid)
+        return tuple(eid for eid, _entry_id in resolved)
 
-    def nack(self, events: Sequence[NormalizedEvent]) -> None:
+    def nack(self, events: Sequence[NormalizedEvent]) -> Sequence[NormalizedEvent]:
         if not events:
-            return
+            return ()
+        kept: set[int] = set()
         with self._lock:
             for event in reversed(list(events)):
                 if event.event_id not in self._entry_ids:
                     continue
                 self._in_flight.discard(event.event_id)
+                kept.add(id(event))
                 if event.event_id in self._pending_ids:
                     continue
                 self._pending.appendleft(event)
                 self._pending_ids.add(event.event_id)
+        return tuple(event for event in events if id(event) not in kept)
 
     def heartbeat(self, events: Sequence[NormalizedEvent]) -> None:
         if not events:

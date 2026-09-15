@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from typing import Any
 
 import pytest
@@ -36,6 +38,974 @@ def test_validate_requires_core_options():
         validate_rabbitmq_event_options({"amqp_url": "amqp://localhost/"})
     with pytest.raises(ConfigError, match="prefetch"):
         validate_rabbitmq_event_options(_options(prefetch=0))
+    with pytest.raises(ConfigError, match="timeout_seconds"):
+        validate_rabbitmq_event_options(_options(timeout_seconds=0))
+    with pytest.raises(ConfigError, match="timeout_seconds"):
+        validate_rabbitmq_event_options(_options(timeout_seconds=1e308))
+
+
+def test_amqp_timeouts_applied_on_connect(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options(timeout_seconds=2.5))
+    source.connect()
+    params = broker.last_url_params
+    assert params is not None
+    assert params.socket_timeout == 2.5
+    assert params.blocked_connection_timeout == 2.5
+    assert params.stack_timeout == 2.5
+    assert source._io is not None
+    assert source._io._timeout_seconds == 2.5
+    source.close()
+
+
+def test_pika_io_skips_job_queued_during_timed_out_pump():
+    from cicerone.events.rabbitmq import _PikaIo
+
+    entered = threading.Event()
+    released = threading.Event()
+    executed = threading.Event()
+
+    class _Conn:
+        def process_data_events(self, time_limit: float | int = 0) -> None:
+            del time_limit
+            entered.set()
+            released.wait(timeout=2)
+
+    io = _PikaIo(timeout_seconds=0.05)
+    io._connection = _Conn()
+    io.start()
+    try:
+        assert entered.wait(timeout=2)
+        with pytest.raises(TimeoutError, match="timed out"):
+            io.submit(executed.set)
+        released.set()
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and io._thread.is_alive():
+            time.sleep(0.01)
+        assert io.failed is True
+        assert io._thread.is_alive() is False
+        assert executed.is_set() is False
+    finally:
+        released.set()
+        io.stop()
+
+
+def test_pika_io_marks_failed_when_pump_raises():
+    from cicerone.events.rabbitmq import _PikaIo
+
+    class _Conn:
+        def process_data_events(self, time_limit: float | int = 0) -> None:
+            del time_limit
+            raise ConnectionError("socket closed")
+
+    io = _PikaIo(timeout_seconds=1)
+    io._connection = _Conn()
+    io.start()
+    try:
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and not io.failed:
+            time.sleep(0.01)
+        assert io.failed is True
+        while time.monotonic() < deadline and io._thread.is_alive():
+            time.sleep(0.01)
+        assert io._thread.is_alive() is False
+    finally:
+        io.stop()
+
+
+def test_abandoned_io_does_not_return_late_ok():
+    from cicerone.events.rabbitmq import _PikaIo
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def _job() -> str:
+        started.set()
+        release.wait(timeout=2)
+        return "late-delivery"
+
+    io = _PikaIo(timeout_seconds=2)
+    io.start()
+    result: dict[str, Any] = {"value": None, "err": None}
+
+    def _caller() -> None:
+        try:
+            result["value"] = io.submit(_job)
+        except Exception as exc:
+            result["err"] = exc
+
+    waiter = threading.Thread(target=_caller)
+    waiter.start()
+    try:
+        assert started.wait(timeout=2)
+        io.abandon(None, None)
+        release.set()
+        waiter.join(timeout=2)
+        assert result["value"] is None
+        assert result["err"] is not None
+        assert "abandoned" in str(result["err"])
+    finally:
+        release.set()
+        io.stop()
+
+
+def test_pika_io_timeout_does_not_run_unclaimed_job():
+    from cicerone.events.rabbitmq import _IO_STOP, _JOB_ABANDONED, _PikaIo
+
+    io = _PikaIo(timeout_seconds=0.05)
+    original_get = io._jobs.get
+    dequeued = threading.Event()
+    release = threading.Event()
+    executed = threading.Event()
+    held: list[Any] = []
+
+    def _hold_after_dequeue(*args: Any, **kwargs: Any) -> object:
+        job = original_get(*args, **kwargs)
+        if job is not _IO_STOP:
+            held.append(job)
+            dequeued.set()
+            release.wait(timeout=2)
+        return job
+
+    io._jobs.get = _hold_after_dequeue  # type: ignore[method-assign]
+    io.start()
+    err: list[BaseException] = []
+
+    def _caller() -> None:
+        try:
+            io.submit(executed.set)
+        except BaseException as exc:
+            err.append(exc)
+
+    waiter = threading.Thread(target=_caller)
+    waiter.start()
+    try:
+        assert dequeued.wait(timeout=2)
+        waiter.join(timeout=2)
+        assert err and isinstance(err[0], TimeoutError)
+        assert held and held[0].state == _JOB_ABANDONED
+        release.set()
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and io._thread.is_alive():
+            time.sleep(0.01)
+        assert io.failed is True
+        assert executed.is_set() is False
+    finally:
+        release.set()
+        io.stop()
+
+
+def test_pika_io_timeout_does_not_run_claimed_job():
+    from cicerone.events.rabbitmq import _JOB_ABANDONED, _JOB_CLAIMED, _PikaIo
+
+    io = _PikaIo(timeout_seconds=0.05)
+    original_take = io._take_job
+    claimed = threading.Event()
+    release = threading.Event()
+    executed = threading.Event()
+    held: list[Any] = []
+
+    def _hold_after_claim(job: Any) -> bool:
+        taken = original_take(job)
+        if taken:
+            held.append(job)
+            claimed.set()
+            release.wait(timeout=2)
+        return taken
+
+    io._take_job = _hold_after_claim  # type: ignore[method-assign]
+    io.start()
+    err: list[BaseException] = []
+
+    def _caller() -> None:
+        try:
+            io.submit(executed.set)
+        except BaseException as exc:
+            err.append(exc)
+
+    waiter = threading.Thread(target=_caller)
+    waiter.start()
+    try:
+        assert claimed.wait(timeout=2)
+        waiter.join(timeout=2)
+        assert err and isinstance(err[0], TimeoutError)
+        assert held and held[0].state == _JOB_ABANDONED
+        assert held[0].state != _JOB_CLAIMED
+        release.set()
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and io._thread.is_alive():
+            time.sleep(0.01)
+        assert io.failed is True
+        assert executed.is_set() is False
+    finally:
+        release.set()
+        io.stop()
+
+
+def test_pika_io_timeout_does_not_run_after_started_when_failed():
+    from cicerone.events.rabbitmq import _JOB_ABANDONED, _PikaIo
+
+    io = _PikaIo(timeout_seconds=0.05)
+    original_should_run = io._should_run
+    entered = threading.Event()
+    release = threading.Event()
+    executed = threading.Event()
+    held: list[Any] = []
+
+    def _hold_after_started(job: Any) -> bool:
+        taken = original_should_run(job)
+        if taken:
+            held.append(job)
+            entered.set()
+            release.wait(timeout=2)
+        return taken
+
+    io._should_run = _hold_after_started  # type: ignore[method-assign]
+    io.start()
+    err: list[BaseException] = []
+
+    def _caller() -> None:
+        try:
+            io.submit(executed.set)
+        except BaseException as exc:
+            err.append(exc)
+
+    waiter = threading.Thread(target=_caller)
+    waiter.start()
+    try:
+        assert entered.wait(timeout=2)
+        waiter.join(timeout=2)
+        assert err and isinstance(err[0], TimeoutError)
+        release.set()
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and io._thread.is_alive():
+            time.sleep(0.01)
+        assert io.failed is True
+        assert executed.is_set() is False
+        assert held and held[0].state == _JOB_ABANDONED
+    finally:
+        release.set()
+        io.stop()
+
+
+def test_pika_io_timeout_does_not_run_after_running_when_failed():
+    from cicerone.events.rabbitmq import _JOB_ABANDONED, _PikaIo
+
+    io = _PikaIo(timeout_seconds=0.05)
+    original_should_run = io._should_run
+    entered = threading.Event()
+    release = threading.Event()
+    executed = threading.Event()
+    held: list[Any] = []
+
+    def _hold_before_dispatch(job: Any) -> bool:
+        held.append(job)
+        entered.set()
+        release.wait(timeout=2)
+        return original_should_run(job)
+
+    io._should_run = _hold_before_dispatch  # type: ignore[method-assign]
+    io.start()
+    err: list[BaseException] = []
+
+    def _caller() -> None:
+        try:
+            io.submit(executed.set)
+        except BaseException as exc:
+            err.append(exc)
+
+    waiter = threading.Thread(target=_caller)
+    waiter.start()
+    try:
+        assert entered.wait(timeout=2)
+        waiter.join(timeout=2)
+        assert err and isinstance(err[0], TimeoutError)
+        release.set()
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and io._thread.is_alive():
+            time.sleep(0.01)
+        assert io.failed is True
+        assert executed.is_set() is False
+        assert held and held[0].state == _JOB_ABANDONED
+    finally:
+        release.set()
+        io.stop()
+
+
+def test_pika_io_timeout_does_not_run_after_invoking_when_failed():
+    from cicerone.events.rabbitmq import _IO_STOP, _JOB_ABANDONED, _PikaIo
+
+    io = _PikaIo(timeout_seconds=0.05)
+    original_put = io._jobs.put
+    invoking = threading.Event()
+    release = threading.Event()
+    executed = threading.Event()
+    held: list[Any] = []
+
+    class _GapLock:
+        def __init__(self, lock: threading.Lock) -> None:
+            self._lock = lock
+
+        def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+            if blocking:
+                invoking.set()
+                release.wait(timeout=2)
+            return self._lock.acquire(blocking, timeout)
+
+        def release(self) -> None:
+            self._lock.release()
+
+    def _put(item: object) -> None:
+        if item is not _IO_STOP:
+            held.append(item)
+            item.run_lock = _GapLock(item.run_lock)  # type: ignore[attr-defined]
+        original_put(item)
+
+    io._jobs.put = _put  # type: ignore[method-assign]
+    io.start()
+    err: list[BaseException] = []
+
+    def _caller() -> None:
+        try:
+            io.submit(executed.set)
+        except BaseException as exc:
+            err.append(exc)
+
+    waiter = threading.Thread(target=_caller)
+    waiter.start()
+    try:
+        assert invoking.wait(timeout=2)
+        waiter.join(timeout=2)
+        assert err and isinstance(err[0], TimeoutError)
+        release.set()
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and io._thread.is_alive():
+            time.sleep(0.01)
+        assert io.failed is True
+        assert executed.is_set() is False
+        assert held and held[0].state == _JOB_ABANDONED
+    finally:
+        release.set()
+        io.stop()
+
+
+def test_pika_io_timeout_does_not_run_dispatched_job():
+    from cicerone.events.rabbitmq import _IO_STOP, _JOB_DISPATCHED, _PikaIo
+
+    io = _PikaIo(timeout_seconds=0.05)
+    inner = io._state_lock
+    original_put = io._jobs.put
+    held: list[Any] = []
+    dispatched = threading.Event()
+    release = threading.Event()
+    executed = threading.Event()
+
+    class _GapLock:
+        def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+            return inner.acquire(blocking, timeout)
+
+        def release(self) -> None:
+            inner.release()
+            if held and held[0].state == _JOB_DISPATCHED:
+                dispatched.set()
+                release.wait(timeout=2)
+
+        def __enter__(self) -> _GapLock:
+            self.acquire()
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            self.release()
+
+    def _put(item: object) -> None:
+        if item is not _IO_STOP:
+            held.append(item)
+        original_put(item)
+
+    io._jobs.put = _put  # type: ignore[method-assign]
+    io._state_lock = _GapLock()  # type: ignore[assignment]
+    io.start()
+    err: list[BaseException] = []
+
+    def _caller() -> None:
+        try:
+            io.submit(executed.set)
+        except BaseException as exc:
+            err.append(exc)
+
+    waiter = threading.Thread(target=_caller)
+    waiter.start()
+    try:
+        assert dispatched.wait(timeout=2)
+        waiter.join(timeout=2)
+        assert err and isinstance(err[0], TimeoutError)
+        release.set()
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and io._thread.is_alive():
+            time.sleep(0.01)
+        assert io.failed is True
+        assert executed.is_set() is False
+    finally:
+        release.set()
+        io.stop()
+
+
+def test_pika_io_timeout_detaches_channel_so_late_ack_cannot_run():
+    from types import SimpleNamespace
+
+    from cicerone.events.rabbitmq import RabbitMQEventSource, _PikaIo
+
+    io = _PikaIo(timeout_seconds=0.05)
+    acks: list[int] = []
+    io._channel = SimpleNamespace(basic_ack=lambda delivery_tag: acks.append(delivery_tag))
+    entered = threading.Event()
+    release = threading.Event()
+    source = RabbitMQEventSource(_options())
+
+    def _late_ack() -> None:
+        entered.set()
+        release.wait(timeout=2)
+        source._basic_ack(io, 7)
+
+    io.start()
+    err: list[BaseException] = []
+
+    def _caller() -> None:
+        try:
+            io.submit(_late_ack)
+        except BaseException as exc:
+            err.append(exc)
+
+    waiter = threading.Thread(target=_caller)
+    waiter.start()
+    try:
+        assert entered.wait(timeout=2)
+        waiter.join(timeout=2)
+        assert err and isinstance(err[0], TimeoutError)
+        assert io.failed is True
+        assert io._channel is None
+        release.set()
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and io._thread.is_alive():
+            time.sleep(0.01)
+        assert acks == []
+        with pytest.raises(RuntimeError, match="abandoned"):
+            io.broker_channel()
+    finally:
+        release.set()
+        io.stop()
+
+
+def test_broker_ops_raise_when_channel_is_detached():
+    from types import SimpleNamespace
+
+    from cicerone.events.rabbitmq import RabbitMQEventSource, _PikaIo
+
+    acks: list[int] = []
+    gets: list[str] = []
+    pumps: list[float] = []
+    declares: list[str] = []
+    io = _PikaIo(timeout_seconds=0.05)
+    io._channel = SimpleNamespace(
+        basic_ack=lambda delivery_tag: acks.append(delivery_tag),
+        basic_get=lambda queue, auto_ack=False: gets.append(queue) or (None, None, None),
+        queue_declare=lambda **kwargs: (
+            declares.append(str(kwargs.get("queue")))
+            or SimpleNamespace(method=SimpleNamespace(message_count=0))
+        ),
+    )
+    io._connection = SimpleNamespace(process_data_events=lambda time_limit=0: pumps.append(time_limit))
+    io._mark_failed()
+    source = RabbitMQEventSource(_options())
+    with pytest.raises(RuntimeError, match="abandoned"):
+        source._basic_get(io)
+    with pytest.raises(RuntimeError, match="abandoned"):
+        source._basic_ack(io, 9)
+    with pytest.raises(RuntimeError, match="abandoned"):
+        source._passive_declare(io)
+    with pytest.raises(RuntimeError, match="abandoned"):
+        source._pump_connection(io)
+    assert acks == []
+    assert gets == []
+    assert declares == []
+    assert pumps == []
+
+
+def test_bind_handles_does_not_reborn_abandoned_io():
+    from cicerone.events.rabbitmq import _PikaIo
+
+    io = _PikaIo(timeout_seconds=0.05)
+    io._mark_failed()
+    with pytest.raises(RuntimeError, match="abandoned"):
+        io._bind_handles(connection=object(), channel=object())
+    assert io._connection is None
+    assert io._channel is None
+
+
+def test_cleanup_abandoned_closes_abandon_handles_and_leftover_live():
+    from types import SimpleNamespace
+
+    from cicerone.events.rabbitmq import _PikaIo
+
+    def _handle() -> SimpleNamespace:
+        state = SimpleNamespace(closed=False)
+
+        def _close() -> None:
+            state.closed = True
+
+        state.close = _close
+        return state
+
+    abandon_channel = _handle()
+    abandon_connection = _handle()
+    live_channel = _handle()
+    live_connection = _handle()
+    io = _PikaIo(timeout_seconds=0.05)
+    io._abandon_channel = abandon_channel
+    io._abandon_connection = abandon_connection
+    io._channel = live_channel
+    io._connection = live_connection
+    io._cleanup_abandoned()
+    assert abandon_channel.closed is True
+    assert abandon_connection.closed is True
+    assert live_channel.closed is True
+    assert live_connection.closed is True
+    assert io._channel is None
+    assert io._connection is None
+    assert io._abandon_channel is None
+    assert io._abandon_connection is None
+
+
+def test_pika_io_timeout_does_not_run_after_enter_when_failed():
+    from cicerone.events.rabbitmq import _JOB_ABANDONED, _PikaIo
+
+    io = _PikaIo(timeout_seconds=0.05)
+    original_enter = io._enter_job
+    entered = threading.Event()
+    release = threading.Event()
+    executed = threading.Event()
+    held: list[Any] = []
+
+    def _hold_after_enter(job: Any) -> bool:
+        taken = original_enter(job)
+        if taken:
+            held.append(job)
+            entered.set()
+            release.wait(timeout=2)
+        return taken
+
+    io._enter_job = _hold_after_enter  # type: ignore[method-assign]
+    io.start()
+    err: list[BaseException] = []
+
+    def _caller() -> None:
+        try:
+            io.submit(executed.set)
+        except BaseException as exc:
+            err.append(exc)
+
+    waiter = threading.Thread(target=_caller)
+    waiter.start()
+    try:
+        assert entered.wait(timeout=2)
+        waiter.join(timeout=2)
+        assert err and isinstance(err[0], TimeoutError)
+        release.set()
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and io._thread.is_alive():
+            time.sleep(0.01)
+        assert io.failed is True
+        assert executed.is_set() is False
+        assert held and held[0].state == _JOB_ABANDONED
+    finally:
+        release.set()
+        io.stop()
+
+
+def test_pika_io_replies_abandoned_for_job_dequeued_after_fail():
+    from cicerone.events.rabbitmq import _IO_STOP, _PikaIo
+
+    io = _PikaIo(timeout_seconds=5)
+    original_get = io._jobs.get
+
+    def _fail_after_dequeue(*args: Any, **kwargs: Any) -> object:
+        job = original_get(*args, **kwargs)
+        if job is not _IO_STOP:
+            io._failed = True
+        return job
+
+    io._jobs.get = _fail_after_dequeue  # type: ignore[method-assign]
+    io.start()
+    try:
+        began = time.monotonic()
+        with pytest.raises(RuntimeError, match="abandoned"):
+            io.submit(lambda: "should-not-run")
+        assert time.monotonic() - began < 1.0
+    finally:
+        io.stop()
+
+
+def test_pika_io_wakes_queued_submit_when_pump_fails():
+    from cicerone.events.rabbitmq import _PikaIo
+
+    entered = threading.Event()
+
+    class _Conn:
+        def process_data_events(self, time_limit: float | int = 0) -> None:
+            del time_limit
+            entered.set()
+            time.sleep(0.05)
+            raise ConnectionError("socket closed")
+
+    io = _PikaIo(timeout_seconds=5)
+    io._connection = _Conn()
+    io.start()
+    try:
+        assert entered.wait(timeout=2)
+        began = time.monotonic()
+        with pytest.raises(RuntimeError, match="abandoned|not running"):
+            io.submit(lambda: "late")
+        assert time.monotonic() - began < 1.0
+    finally:
+        io.stop()
+
+
+def test_pika_io_submit_rejected_after_shutdown_reserved():
+    from cicerone.events.rabbitmq import _PikaIo
+
+    io = _PikaIo(timeout_seconds=1)
+    io.start()
+    try:
+        assert io._try_begin_shutdown() is True
+        with pytest.raises(RuntimeError, match="not running"):
+            io.submit(lambda: None)
+        io.submit(lambda: None, allow_closing=True)
+    finally:
+        io.stop()
+
+
+def test_pika_io_submit_times_out():
+    from cicerone.events.rabbitmq import _PikaIo
+
+    io = _PikaIo(timeout_seconds=0.05)
+    io.start()
+    try:
+        with pytest.raises(TimeoutError, match="timed out"):
+            io.submit(lambda: time.sleep(5))
+        assert io.failed is True
+        started = time.monotonic()
+        io.stop()
+        assert time.monotonic() - started < 1.0
+        with pytest.raises(RuntimeError, match="not running"):
+            io.submit(lambda: None)
+    finally:
+        io.stop()
+
+
+def test_close_abandons_hung_idle_pump(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    connection = broker.connection
+    channel = connection.channel_obj
+    entered = threading.Event()
+    released = threading.Event()
+
+    def _hang_pump(time_limit: float | int = 0) -> None:
+        del time_limit
+        entered.set()
+        released.wait(timeout=2)
+
+    connection.process_data_events = _hang_pump  # type: ignore[method-assign]
+    assert entered.wait(timeout=2)
+    began = time.monotonic()
+    source.close()
+    assert time.monotonic() - began < 1.0
+    released.set()
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline and not (channel.closed and connection.closed):
+        time.sleep(0.01)
+    assert channel.closed is True
+    assert connection.closed is True
+
+
+def test_pika_io_busy_survives_overlapping_pump():
+    from cicerone.events.rabbitmq import _PikaIo
+
+    entered = threading.Event()
+    released = threading.Event()
+    job_started = threading.Event()
+    hold_job = threading.Event()
+
+    class _Conn:
+        def process_data_events(self, time_limit: float | int = 0) -> None:
+            del time_limit
+            entered.set()
+            released.wait(timeout=2)
+
+    io = _PikaIo(timeout_seconds=2)
+    io._connection = _Conn()
+    io.start()
+    try:
+        assert entered.wait(timeout=2)
+        assert io.busy is True
+
+        def _job() -> None:
+            job_started.set()
+            hold_job.wait(timeout=2)
+
+        waiter = threading.Thread(target=lambda: io.submit(_job))
+        waiter.start()
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and io._busy < 2:
+            time.sleep(0.01)
+        assert io._busy >= 2
+        released.set()
+        assert job_started.wait(timeout=2)
+        assert io.busy is True
+        hold_job.set()
+        waiter.join(timeout=2)
+        io._connection = None
+        idle_deadline = time.monotonic() + 2.0
+        while time.monotonic() < idle_deadline and io.busy:
+            time.sleep(0.01)
+        assert io.busy is False
+    finally:
+        released.set()
+        hold_job.set()
+        io.stop()
+
+
+def test_close_abandons_when_submit_overlaps_pump(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options(timeout_seconds=2))
+    source.connect()
+    connection = broker.connection
+    channel = connection.channel_obj
+    pump_entered = threading.Event()
+    pump_released = threading.Event()
+    get_entered = threading.Event()
+
+    def _hang_pump(time_limit: float | int = 0) -> None:
+        del time_limit
+        pump_entered.set()
+        pump_released.wait(timeout=2)
+
+    def _hang_get(*_args: Any, **_kwargs: Any) -> tuple[Any, None, Any]:
+        get_entered.set()
+        time.sleep(2)
+        return None, None, None
+
+    connection.process_data_events = _hang_pump  # type: ignore[method-assign]
+    assert pump_entered.wait(timeout=2)
+    source._basic_get = _hang_get  # type: ignore[method-assign]
+    poller = threading.Thread(target=lambda: list(source.poll(1)))
+    poller.start()
+    queued = time.monotonic() + 2.0
+    io = source._io
+    while time.monotonic() < queued:
+        io = source._io
+        if io is not None and io._busy >= 2:
+            break
+        time.sleep(0.01)
+    assert io is not None and io._busy >= 2
+    pump_released.set()
+    assert get_entered.wait(timeout=2)
+    began = time.monotonic()
+    source.close()
+    assert time.monotonic() - began < 1.0
+    poller.join(timeout=2)
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline and not (channel.closed and connection.closed):
+        time.sleep(0.01)
+    assert channel.closed is True
+    assert connection.closed is True
+
+
+def test_amqp_callbacks_use_io_handles(monkeypatch):
+    from types import SimpleNamespace
+
+    install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    io = source._io
+    assert io is not None
+    used: list[str] = []
+    io_channel = io._channel
+    io_connection = io._connection
+    assert io_channel is not None
+    assert io_connection is not None
+
+    def _get(queue: str, auto_ack: bool = False) -> tuple[Any, None, Any]:
+        del auto_ack
+        used.append(f"get:{queue}")
+        return None, None, None
+
+    def _ack(delivery_tag: int) -> None:
+        used.append(f"ack:{delivery_tag}")
+
+    def _declare(*, queue: str, durable: bool = True, passive: bool = False) -> Any:
+        del durable
+        used.append(f"declare:{queue}:{passive}")
+        return SimpleNamespace(method=SimpleNamespace(message_count=0))
+
+    def _pump(time_limit: float | int = 0) -> None:
+        used.append(f"pump:{time_limit}")
+
+    def _fail(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("callback used source handles")
+
+    io_channel.basic_get = _get  # type: ignore[method-assign]
+    io_channel.basic_ack = _ack  # type: ignore[method-assign]
+    io_channel.queue_declare = _declare  # type: ignore[method-assign]
+    io_connection.process_data_events = _pump  # type: ignore[method-assign]
+    source._channel = SimpleNamespace(basic_get=_fail, basic_ack=_fail, queue_declare=_fail)
+    source._connection = SimpleNamespace(process_data_events=_fail)
+
+    assert source._basic_get(io) == (None, None, None)
+    source._basic_ack(io, 9)
+    declared = source._passive_declare(io)
+    assert declared.method.message_count == 0
+    source._pump_connection(io)
+    assert used == [f"get:{source._queue}", "ack:9", f"declare:{source._queue}:True", "pump:0"]
+    source.close()
+
+
+def test_reconnect_does_not_run_old_callback_on_new_channel(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options(timeout_seconds=0.4))
+    source.connect()
+    old_connection = broker.connection
+    old_channel = old_connection.channel_obj
+    pump_entered = threading.Event()
+    pump_released = threading.Event()
+    new_gets: list[int] = []
+
+    def _hang_pump(time_limit: float | int = 0) -> None:
+        del time_limit
+        pump_entered.set()
+        pump_released.wait(timeout=2)
+
+    old_connection.process_data_events = _hang_pump  # type: ignore[method-assign]
+    assert pump_entered.wait(timeout=2)
+    poller = threading.Thread(target=lambda: list(source.poll(1)))
+    poller.start()
+    queued = time.monotonic() + 2.0
+    old_io = source._io
+    while time.monotonic() < queued:
+        old_io = source._io
+        if old_io is not None and old_io._busy >= 2:
+            break
+        time.sleep(0.01)
+    assert old_io is not None and old_io._busy >= 2
+    source.connect()
+    new_channel = broker.connection.channel_obj
+    assert new_channel is not old_channel
+    original_get = new_channel.basic_get
+
+    def _spy_get(queue: str, auto_ack: bool = False) -> tuple[Any, None, Any]:
+        new_gets.append(1)
+        return original_get(queue, auto_ack=auto_ack)
+
+    new_channel.basic_get = _spy_get  # type: ignore[method-assign]
+    pump_released.set()
+    poller.join(timeout=2)
+    assert new_gets == []
+    assert old_channel.closed is True
+    source.close()
+
+
+def test_close_abandons_in_flight_submit(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options(timeout_seconds=2))
+    source.connect()
+    connection = broker.connection
+    channel = connection.channel_obj
+    started = threading.Event()
+
+    def _hang(*_args: Any, **_kwargs: Any) -> tuple[Any, None, Any]:
+        started.set()
+        time.sleep(0.4)
+        return None, None, None
+
+    source._basic_get = _hang  # type: ignore[method-assign]
+    poller = threading.Thread(target=lambda: list(source.poll(1)))
+    poller.start()
+    assert started.wait(timeout=2)
+    began = time.monotonic()
+    source.close()
+    assert time.monotonic() - began < 1.0
+    poller.join(timeout=2)
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline and not (channel.closed and connection.closed):
+        time.sleep(0.01)
+    assert channel.closed is True
+    assert connection.closed is True
+
+
+def test_close_after_io_timeout_does_not_block(monkeypatch):
+    install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options(timeout_seconds=0.05))
+    source.connect()
+
+    def _hang(*_args: Any, **_kwargs: Any) -> tuple[Any, None, Any]:
+        time.sleep(5)
+        return None, None, None
+
+    source._basic_get = _hang  # type: ignore[method-assign]
+    assert list(source.poll(1)) == []
+    assert source.health().connected is False
+    started = time.monotonic()
+    source.close()
+    assert time.monotonic() - started < 1.0
+
+
+def test_close_after_io_timeout_closes_handles_when_call_unwinds(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options(timeout_seconds=0.05))
+    source.connect()
+    connection = broker.connection
+    channel = connection.channel_obj
+    done = threading.Event()
+
+    def _hang(*_args: Any, **_kwargs: Any) -> tuple[Any, None, Any]:
+        time.sleep(0.2)
+        done.set()
+        return None, None, None
+
+    source._basic_get = _hang  # type: ignore[method-assign]
+    assert list(source.poll(1)) == []
+    source.close()
+    assert done.wait(timeout=2)
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline and not (channel.closed and connection.closed):
+        time.sleep(0.01)
+    assert channel.closed is True
+    assert connection.closed is True
+
+
+def test_close_after_timed_out_worker_exits_closes_channel(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options(timeout_seconds=0.05))
+    source.connect()
+    connection = broker.connection
+    channel = connection.channel_obj
+    io = source._io
+    assert io is not None
+
+    def _hang(*_args: Any, **_kwargs: Any) -> tuple[Any, None, Any]:
+        time.sleep(0.15)
+        return None, None, None
+
+    source._basic_get = _hang  # type: ignore[method-assign]
+    assert list(source.poll(1)) == []
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and io._thread.is_alive():
+        time.sleep(0.01)
+    assert io._thread.is_alive() is False
+    source.close()
+    assert channel.closed is True
+    assert connection.closed is True
 
 
 def test_poll_ack_and_health(monkeypatch):
@@ -63,13 +1033,51 @@ def test_nack_allows_repoll(monkeypatch):
     source.connect()
     first = list(source.poll(10))
     assert len(first) == 1
-    source.nack(first)
-    source.nack(first)
+    assert source.nack(first) == ()
+    assert source.nack(first) == ()
     again = list(source.poll(10))
     assert [event.event_id for event in again] == ["e1"]
     source.ack(["missing", again[0].event_id])
     assert list(source.poll(10)) == []
     assert broker.connection.channel_obj.nacked == []
+
+
+def test_nack_rejects_if_io_fails_during_requeue(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.enqueue("cicerone.events", event_payload(event_id="e1"))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    first = list(source.poll(1))
+    assert [event.event_id for event in first] == ["e1"]
+    io = source._io
+    assert io is not None
+
+    class _FailingTags(dict):
+        def __contains__(self, key: object) -> bool:
+            io._failed = True
+            return super().__contains__(key)
+
+    source._delivery_tags = _FailingTags(source._delivery_tags)
+    rejected = source.nack(first)
+    assert [event.event_id for event in rejected] == ["e1"]
+    assert first[0].event_id not in source._pending_ids
+    source.close()
+
+
+def test_nack_rejects_when_io_failed(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.enqueue("cicerone.events", event_payload(event_id="e1"))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    first = list(source.poll(1))
+    assert [event.event_id for event in first] == ["e1"]
+    io = source._io
+    assert io is not None
+    io._failed = True
+    rejected = source.nack(first)
+    assert [event.event_id for event in rejected] == ["e1"]
+    assert first[0].event_id not in source._pending_ids
+    source.close()
 
 
 def test_ack_forgets_succeeded_tags_when_later_ack_fails(monkeypatch):
@@ -96,7 +1104,9 @@ def test_ack_forgets_succeeded_tags_when_later_ack_fails(monkeypatch):
     source.close()
 
 
-def test_missing_event_id_uses_delivery_tag(monkeypatch):
+def test_missing_event_id_uses_generated_id(monkeypatch):
+    from uuid import UUID
+
     broker = install_fake_rabbitmq(monkeypatch)
     payload = event_payload()
     payload.pop("event_id")
@@ -105,7 +1115,28 @@ def test_missing_event_id_uses_delivery_tag(monkeypatch):
     source.connect()
     events = list(source.poll(10))
     assert len(events) == 1
-    assert events[0].event_id == "1"
+    UUID(events[0].event_id)
+    source.ack([events[0].event_id])
+    assert 1 in broker.connection.channel_obj.acked
+    source.close()
+
+
+def test_missing_event_id_does_not_collide_with_user_delivery_prefix(monkeypatch):
+    from uuid import UUID
+
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.enqueue("cicerone.events", event_payload(event_id="rmq:delivery:1", item_id="i1"))
+    payload = event_payload(item_id="i2")
+    payload.pop("event_id")
+    broker.enqueue("cicerone.events", payload)
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    events = list(source.poll(10))
+    assert [event.event_id for event in events[:1]] == ["rmq:delivery:1"]
+    assert len(events) == 2
+    UUID(events[1].event_id)
+    assert events[1].event_id != "rmq:delivery:1"
+    source.close()
 
 
 def test_poison_entry_is_acked(monkeypatch):
@@ -154,12 +1185,51 @@ def test_heartbeat_pumps_connection(monkeypatch):
     source.ack([events[0].event_id])
 
 
-def test_heartbeat_logs_process_failure(monkeypatch):
+def test_heartbeat_reraises_and_marks_failed_on_pump_error(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     source = RabbitMQEventSource(_options())
     source.connect()
     broker.connection.process_error = RuntimeError("hb")
-    source.heartbeat([])
+    with pytest.raises(RuntimeError, match="abandoned|hb"):
+        source.heartbeat([])
+    assert source._io is not None
+    assert source._io.failed is True
+
+
+def test_heartbeat_reraises_timeout(monkeypatch):
+    install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options(timeout_seconds=0.05))
+    source.connect()
+
+    def _hang(_io: object) -> None:
+        time.sleep(5)
+
+    source._pump_connection = _hang  # type: ignore[method-assign]
+    with pytest.raises(TimeoutError, match="timed out"):
+        source.heartbeat([])
+    source.close()
+
+
+def test_heartbeat_reraises_when_io_failed(monkeypatch):
+    install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    io = source._io
+    assert io is not None
+    io._failed = True
+    with pytest.raises(RuntimeError, match="not running"):
+        source.heartbeat([])
+
+
+def test_heartbeat_reraises_when_io_closing(monkeypatch):
+    install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    io = source._io
+    assert io is not None
+    io._closing = True
+    with pytest.raises(RuntimeError, match="not running"):
+        source.heartbeat([])
 
 
 def test_heartbeat_when_disconnected(monkeypatch):
@@ -231,6 +1301,31 @@ def test_health_tolerates_queue_probe_failure(monkeypatch):
     assert health.connected is True
 
 
+def test_health_disconnected_when_io_closing(monkeypatch):
+    install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    assert source._io is not None
+    assert source._io._try_begin_shutdown() is True
+    assert source.health().connected is False
+    source.close()
+
+
+def test_health_disconnected_when_probe_times_out(monkeypatch):
+    install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options(timeout_seconds=0.05))
+    source.connect()
+
+    def _hang(*_args: Any, **_kwargs: Any) -> Any:
+        time.sleep(5)
+        raise RuntimeError("unreachable")
+
+    source._passive_declare = _hang  # type: ignore[method-assign]
+    health = source.health()
+    assert health.connected is False
+    source.close()
+
+
 def test_basic_get_failure_returns_partial(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     broker.enqueue("cicerone.events", event_payload(event_id="e1"))
@@ -245,6 +1340,42 @@ def test_basic_get_failure_returns_partial(monkeypatch):
     broker.connection.channel_obj.basic_get = _boom  # type: ignore[method-assign]
     again = list(source.poll(10))
     assert [event.event_id for event in again] == ["e1"]
+    assert source._io is not None and source._io.failed is True
+    assert source.health().connected is False
+    source.close()
+
+
+def test_connect_preserves_nacked_pending(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.enqueue("cicerone.events", event_payload(event_id="kept", item_id="i1"))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    first = list(source.poll(1))
+    assert [event.event_id for event in first] == ["kept"]
+    source.nack(first)
+    source.connect()
+    again = list(source.poll(10))
+    assert [event.event_id for event in again] == ["kept"]
+    source.ack([event.event_id for event in again])
+    assert source.health().lag == 0
+    assert source._event_io == {}
+    source.close()
+
+
+def test_ack_clears_event_io_for_carried_events(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.enqueue("cicerone.events", event_payload(event_id="carried", item_id="i1"))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    first = list(source.poll(1))
+    source.nack(first)
+    source.connect()
+    again = list(source.poll(10))
+    assert [event.event_id for event in again] == ["carried"]
+    assert source._event_io
+    source.ack([event.event_id for event in again])
+    assert source._event_io == {}
+    source.close()
 
 
 def test_connect_failure(monkeypatch):
@@ -253,6 +1384,23 @@ def test_connect_failure(monkeypatch):
     source = RabbitMQEventSource(_options())
     with pytest.raises(ConfigError, match="unreachable"):
         source.connect()
+
+
+def test_connect_timeout_during_open_closes_connection(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.channel_hang_seconds = 0.3
+    source = RabbitMQEventSource(_options(timeout_seconds=0.05))
+    with pytest.raises(ConfigError, match="unreachable"):
+        source.connect()
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline and not getattr(broker, "connection", None):
+        time.sleep(0.01)
+    connection = getattr(broker, "connection", None)
+    assert connection is not None
+    while time.monotonic() < deadline and not connection.closed:
+        time.sleep(0.01)
+    assert connection.closed is True
+    assert connection.channel_obj.closed is True
 
 
 def test_connect_closes_connection_when_declare_fails(monkeypatch):
@@ -307,6 +1455,291 @@ def test_reconnect_closes_previous(monkeypatch):
     first = broker.connection
     source.connect()
     assert first.closed is True
+    source.close()
+
+
+def test_poll_drops_delivery_if_reconnect_clears_tags(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.enqueue("cicerone.events", event_payload(event_id="stale", item_id="i1"))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    original = source._delivery_to_event
+
+    def _reconnect_after(io: object, method: object, body: object) -> object:
+        event = original(io, method, body)
+        source.connect()
+        return event
+
+    source._delivery_to_event = _reconnect_after  # type: ignore[method-assign]
+    assert list(source.poll(1)) == []
+    assert source._delivery_tags == {}
+    source.close()
+
+
+def test_poll_drops_delivery_after_reconnect_replaces_io(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.enqueue("cicerone.events", event_payload(event_id="stale", item_id="i1"))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    entered = threading.Event()
+    release = threading.Event()
+    original = source._delivery_to_event
+
+    def _gated(io: object, method: object, body: object) -> object:
+        entered.set()
+        release.wait(timeout=2)
+        return original(io, method, body)
+
+    source._delivery_to_event = _gated  # type: ignore[method-assign]
+    got: list[str] = []
+
+    def _poll() -> None:
+        got.extend(event.event_id for event in source.poll(1))
+
+    poller = threading.Thread(target=_poll)
+    poller.start()
+    assert entered.wait(timeout=2)
+    source.connect()
+    release.set()
+    poller.join(timeout=2)
+    assert got == []
+    assert source._delivery_tags == {}
+    source.close()
+
+
+def test_reconnect_does_not_ack_late_delivery_on_new_channel(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options(timeout_seconds=2))
+    source.connect()
+    old_channel = broker.connection.channel_obj
+    started = threading.Event()
+    release = threading.Event()
+    new_acks: list[int] = []
+
+    def _late_get(*_args: Any, **_kwargs: Any) -> tuple[Any, None, Any]:
+        started.set()
+        release.wait(timeout=2)
+        return old_channel.basic_get(source._queue, auto_ack=False)
+
+    broker.enqueue("cicerone.events", event_payload(event_id="stale", item_id="i1"))
+    source._basic_get = _late_get  # type: ignore[method-assign]
+    got: list[str] = []
+
+    def _poll() -> None:
+        got.extend(event.event_id for event in source.poll(1))
+
+    poller = threading.Thread(target=_poll)
+    poller.start()
+    assert started.wait(timeout=2)
+    source.connect()
+    new_channel = broker.connection.channel_obj
+    original_ack = new_channel.basic_ack
+
+    def _spy_ack(delivery_tag: int) -> None:
+        new_acks.append(delivery_tag)
+        original_ack(delivery_tag)
+
+    new_channel.basic_ack = _spy_ack  # type: ignore[method-assign]
+    release.set()
+    poller.join(timeout=2)
+    if got:
+        source.ack(got)
+    assert got == []
+    assert new_acks == []
+    source.close()
+
+
+def test_release_io_closes_handles_if_thread_already_exited(monkeypatch):
+    from cicerone.events.rabbitmq import _PikaIo, _release_io
+
+    class _Handle:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    io = _PikaIo(timeout_seconds=0.05)
+    io.start()
+    io._failed = True
+    io.stop()
+    assert io._thread.is_alive() is False
+    channel = _Handle()
+    connection = _Handle()
+    _release_io(io, channel, connection)
+    assert channel.closed is True
+    assert connection.closed is True
+
+
+def test_poll_drops_stale_pending_when_tag_reborn(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.enqueue("cicerone.events", event_payload(event_id="e1"))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    first = list(source.poll(1))
+    assert [event.event_id for event in first] == ["e1"]
+    source.nack(first)
+    old_tag = source._delivery_tags["e1"]
+
+    def _reborn(_io: object) -> tuple[None, None, None]:
+        source._delivery_tags["e1"] = old_tag + 99
+        source._held_tags.add(old_tag + 99)
+        return None, None, None
+
+    source._basic_get = _reborn  # type: ignore[method-assign]
+    got = list(source.poll(2))
+    assert got == []
+    assert source._delivery_tags.get("e1") == old_tag + 99
+    source.close()
+
+
+def test_poll_drops_stale_pending_when_io_replaced_with_same_tag(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.enqueue("cicerone.events", event_payload(event_id="e1"))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    first = list(source.poll(1))
+    assert [event.event_id for event in first] == ["e1"]
+    source.nack(first)
+    old_tag = source._delivery_tags["e1"]
+    old_io = source._io
+
+    def _reborn(_io: object) -> tuple[None, None, None]:
+        source._io = object()  # type: ignore[assignment]
+        source._delivery_tags["e1"] = old_tag
+        source._held_tags.add(old_tag)
+        return None, None, None
+
+    source._basic_get = _reborn  # type: ignore[method-assign]
+    got = list(source.poll(2))
+    assert got == []
+    assert source._io is not old_io
+    assert source._delivery_tags.get("e1") == old_tag
+    source._io = old_io
+    source.close()
+
+
+def test_poll_stops_getting_after_io_replaced(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.enqueue("cicerone.events", event_payload(event_id="e1"))
+    broker.enqueue("cicerone.events", event_payload(event_id="e2"))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    gets = {"n": 0}
+    original_get = source._basic_get
+
+    def _get(io: object) -> Any:
+        gets["n"] += 1
+        if gets["n"] == 1:
+            source._io = object()  # type: ignore[assignment]
+        return original_get(io)
+
+    old_io = source._io
+    source._basic_get = _get  # type: ignore[method-assign]
+    list(source.poll(2))
+    assert gets["n"] == 1
+    source._io = old_io
+    source.close()
+
+
+def test_ack_clears_event_io_ownership(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.enqueue("cicerone.events", event_payload(event_id="e1"))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    events = list(source.poll(1))
+    assert source._event_io
+    source.ack([events[0].event_id])
+    assert source._event_io == {}
+    source.close()
+
+
+def test_nack_ignores_event_after_io_replaced(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.enqueue("cicerone.events", event_payload(event_id="e1"))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    first = list(source.poll(1))
+    assert [event.event_id for event in first] == ["e1"]
+    source.connect()
+    broker.enqueue("cicerone.events", event_payload(event_id="e1"))
+    second = list(source.poll(1))
+    assert [event.event_id for event in second] == ["e1"]
+    new_tag = source._delivery_tags["e1"]
+    rejected = source.nack(first)
+    assert [event.event_id for event in rejected] == ["e1"]
+    assert first[0].event_id not in source._pending_ids
+    assert source._delivery_tags.get("e1") == new_tag
+    source.close()
+
+
+def test_ack_skips_when_io_replaced_before_resolve(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.enqueue("cicerone.events", event_payload(event_id="e1"))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    first = list(source.poll(1))
+    assert [event.event_id for event in first] == ["e1"]
+    old_io = source._io
+    assert old_io is not None
+    source.connect()
+    broker.enqueue("cicerone.events", event_payload(event_id="e1"))
+    second = list(source.poll(1))
+    assert [event.event_id for event in second] == ["e1"]
+    new_tag = source._delivery_tags["e1"]
+
+    def _require() -> object:
+        return old_io
+
+    source._require_io = _require  # type: ignore[method-assign]
+    source.ack(["e1"])
+    assert source._delivery_tags.get("e1") == new_tag
+    source.close()
+
+
+def test_ack_does_not_clear_reborn_delivery_tag(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.enqueue("cicerone.events", event_payload(event_id="e1"))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    first = list(source.poll(1))
+    assert [event.event_id for event in first] == ["e1"]
+    old_io = source._io
+    assert old_io is not None
+    submitted = threading.Event()
+    proceed = threading.Event()
+    original_submit = old_io.submit
+
+    def _gate(fn: Any, *, allow_closing: bool = False) -> Any:
+        result = original_submit(fn, allow_closing=allow_closing)
+        submitted.set()
+        proceed.wait(timeout=2)
+        return result
+
+    old_io.submit = _gate  # type: ignore[method-assign]
+    errors: list[BaseException] = []
+
+    def _ack() -> None:
+        try:
+            source.ack(["e1"])
+        except Exception as exc:
+            errors.append(exc)
+
+    waiter = threading.Thread(target=_ack)
+    waiter.start()
+    assert submitted.wait(timeout=2)
+    source.connect()
+    broker.enqueue("cicerone.events", event_payload(event_id="e1"))
+    second = list(source.poll(1))
+    assert [event.event_id for event in second] == ["e1"]
+    new_tag = source._delivery_tags["e1"]
+    proceed.set()
+    waiter.join(timeout=2)
+    assert errors == []
+    assert source._delivery_tags.get("e1") == new_tag
+    source.ack(["e1"])
+    assert source._delivery_tags == {}
+    assert new_tag in broker.connection.channel_obj.acked
     source.close()
 
 

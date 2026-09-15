@@ -162,6 +162,8 @@ def test_evaluate_tracking_slices_by_impression_event_id() -> None:
     assert report.by_variant["treatment"].n_clicks == 1
     assert report.by_rank["5"].n_conversions_click == 1
     assert report.by_rank["1"].n_conversions_click == 0
+    assert report.overall.n_conversions_click == 1
+    assert report.overall.cvr_click == pytest.approx(0.5)
 
 
 def test_evaluate_tracking_empty_and_helpers() -> None:
@@ -968,6 +970,67 @@ def test_evaluate_tracking_orphan_click_does_not_count_click_through() -> None:
     assert report.overall.n_impressions == 1
     assert report.overall.n_clicks == 0
     assert report.overall.n_conversions_click == 0
+    assert report.overall.n_conversions_view == 0
+    assert report.overall.cvr_click == 0.0
+
+
+def test_evaluate_tracking_overall_excludes_unattributed_click_and_conversion() -> None:
+    rows = _track(
+        {
+            "kind": "impression",
+            "user_id": "alice",
+            "item_id": "ipa",
+            "rank": 1,
+            "occurred_at": "2026-08-28T12:00:00Z",
+            "event_id": "imp-rank-1",
+        },
+        {
+            "kind": "impression",
+            "user_id": "alice",
+            "item_id": "ipa",
+            "rank": 5,
+            "occurred_at": "2026-08-28T12:10:00Z",
+            "event_id": "imp-rank-5",
+        },
+        {
+            "kind": "click",
+            "user_id": "alice",
+            "item_id": "ipa",
+            "occurred_at": "2026-08-28T12:11:00Z",
+            "event_id": "clk-1",
+        },
+        {
+            "kind": "click",
+            "user_id": "bob",
+            "item_id": "other",
+            "occurred_at": "2026-08-28T12:11:00Z",
+            "event_id": "clk-orphan",
+        },
+    )
+    conversions = pd.DataFrame(
+        [
+            {
+                "user_id": "bob",
+                "item_id": "other",
+                "event_type": "purchase",
+                "occurred_at": "2026-08-28T12:12:00Z",
+            },
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "event_type": "purchase",
+                "occurred_at": "2026-08-28T12:12:00Z",
+            },
+        ]
+    )
+    report = evaluate_tracking(track_rows=rows, conversions=conversions, window_hours=24.0)
+    assert report.overall.n_impressions == 2
+    assert report.overall.n_clicks == 1
+    assert report.overall.n_conversions_click == 1
+    assert report.overall.n_conversions_view == 1
+    assert report.by_rank["1"].n_clicks == 0
+    assert report.by_rank["5"].n_clicks == 1
+    assert report.by_rank["5"].n_conversions_click == 1
 
 
 def test_annotate_source_unmatched_generated_at_does_not_take_later_snap() -> None:

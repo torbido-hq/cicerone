@@ -118,8 +118,9 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
         out.extend(self._drain_pending(max_events - len(out)))
         return out
 
-    def nack(self, events: Sequence[NormalizedEvent]) -> None:
+    def nack(self, events: Sequence[NormalizedEvent]) -> Sequence[NormalizedEvent]:
         receipts: list[str] = []
+        kept: set[int] = set()
         with self._lock:
             pending_ids = {item.event_id for item in self._pending}
             seen_batches: set[int] = set()
@@ -129,6 +130,7 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
                 batch = self._event_batch.get(eid)
                 if batch is None:
                     continue
+                kept.add(id(event))
                 if eid not in pending_ids:
                     self._pending.appendleft(event)
                     pending_ids.add(eid)
@@ -143,6 +145,7 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
             queue_url=queue_url,
             timeout_seconds=_SQS_NACK_VISIBILITY_TIMEOUT_SECONDS,
         )
+        return tuple(event for event in events if id(event) not in kept)
 
     def heartbeat(self, events: Sequence[NormalizedEvent]) -> None:
         receipts: list[str] = []
@@ -165,11 +168,14 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
             timeout_seconds=_SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS,
         )
 
-    def ack(self, event_ids: Sequence[str]) -> None:
+    def ack(self, event_ids: Sequence[str]) -> Sequence[str]:
         completed: list[_Batch] = []
+        confirmed: list[str] = []
         with self._lock:
             for event_id in event_ids:
                 eid = str(event_id)
+                if eid in self._in_flight:
+                    confirmed.append(eid)
                 self._in_flight.pop(eid, None)
                 batch = self._event_batch.pop(eid, None)
                 if batch is None:
@@ -179,6 +185,7 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
             sqs = self._sqs
             queue_url = self._queue_url
         self._finish_completed(completed, sqs=sqs, queue_url=queue_url)
+        return tuple(confirmed)
 
     def health(self) -> EventSourceHealth:
         with self._lock:

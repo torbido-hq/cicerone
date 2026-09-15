@@ -56,6 +56,12 @@ class MicroBatchBuffer:
     def remaining_capacity(self) -> int:
         return max(0, self._max_events - len(self._events))
 
+    def contains_event_id(self, event_id: str) -> bool:
+        return event_id in self._event_ids
+
+    def contains_fingerprint(self, fingerprint: str) -> bool:
+        return fingerprint in self._fingerprints
+
     def extend(self, events: Sequence[NormalizedEvent]) -> BufferExtendResult:
         """Append events; classify kept vs duplicate vs capacity overflow for ack/nack."""
         kept: list[NormalizedEvent] = []

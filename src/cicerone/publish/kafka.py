@@ -8,7 +8,7 @@ from typing import Any
 import pandas as pd
 
 from cicerone.config.constants import ConfigError
-from cicerone.kafka_options import kafka_client_config, require_nonempty_str
+from cicerone.kafka_options import kafka_client_config, kafka_timeout_seconds, require_nonempty_str
 from cicerone.publish.payload import user_recommendation_messages
 
 logger = logging.getLogger(__name__)
@@ -32,6 +32,7 @@ class KafkaPublisher:
     def __init__(self, options: dict[str, Any]):
         validate_kafka_publish_options(options)
         self._conf = kafka_client_config(options, prefix=_PREFIX)
+        self._timeout_seconds = kafka_timeout_seconds(options, prefix=_PREFIX)
         self._topic = require_nonempty_str(options, "topic", prefix=_PREFIX)
         self._producer: Any | None = None
 
@@ -42,10 +43,10 @@ class KafkaPublisher:
             raise _missing_extra() from exc
         producer = Producer(self._conf)
         try:
-            producer.list_topics(timeout=10)
+            producer.list_topics(timeout=self._timeout_seconds)
         except Exception as exc:
             try:
-                producer.flush(1)
+                producer.flush(self._timeout_seconds)
             except Exception:
                 logger.exception("Kafka publisher flush after connect failure")
             raise ConfigError(f"publish.options.bootstrap_servers is unreachable: {exc}") from exc
@@ -55,7 +56,7 @@ class KafkaPublisher:
         producer = self._require()
         for user_id, body in user_recommendation_messages(df):
             producer.produce(self._topic, value=body, key=user_id.encode("utf-8"))
-        remaining = producer.flush(10)
+        remaining = producer.flush(self._timeout_seconds)
         if remaining:
             raise RuntimeError(f"Kafka publish timed out with {remaining} message(s) in queue")
 
@@ -65,7 +66,7 @@ class KafkaPublisher:
         if producer is None:
             return
         try:
-            producer.flush(10)
+            producer.flush(self._timeout_seconds)
         except Exception:
             logger.exception("Kafka publisher flush on close failed")
 

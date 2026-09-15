@@ -4,7 +4,7 @@ import pytest
 from support.events import event_payload
 
 from cicerone.events.buffer import MicroBatchBuffer
-from cicerone.events.normalize import normalize_event
+from cicerone.events.normalize import event_fingerprint, normalize_event
 
 
 def test_micro_batch_buffer_count_and_dedupe():
@@ -42,6 +42,15 @@ def test_buffer_validation_and_len():
     buffer.extend([normalize_event(event_payload()), normalize_event(event_payload(event_id="same-fp"))])
     assert len(buffer) == 2
     assert buffer.ready() is False
+
+
+def test_buffer_contains_fingerprint():
+    buffer = MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0)
+    event = normalize_event(event_payload(event_id="fp-1", item_id="a"))
+    assert buffer.contains_fingerprint(event_fingerprint(event)) is False
+    buffer.extend([event])
+    assert buffer.contains_event_id("fp-1") is True
+    assert buffer.contains_fingerprint(event_fingerprint(event)) is True
 
 
 def test_buffer_dedupes_by_event_id():

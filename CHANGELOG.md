@@ -4,6 +4,108 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.2] - 2026-09-14
+
+### Fixed
+
+- Kafka and RabbitMQ ingest and publish time out broker calls after 10s (`timeout_seconds`).
+- Broker `timeout_seconds` values that overflow client millisecond limits raise `ConfigError`.
+- Kafka `timeout_seconds` below 10 ms raises `ConfigError` (librdkafka `socket.timeout.ms`).
+- A timed-out RabbitMQ I/O call queued during the idle pump is not executed.
+- Event worker stop closes the source even when the worker thread misses its join deadline.
+- Event worker stop interrupts a hung source without taking the reconnect lock.
+- Event worker stop does not close the source during an in-flight apply/ack.
+- Event worker stop does not close the source during an in-flight tick.
+- A failed RabbitMQ I/O worker replies abandoned to a job already dequeued.
+- RabbitMQ ack does not drop a new connection's delivery tag after reconnect.
+- The event worker reconnects when the source reports disconnected after a broker timeout.
+- Event worker stop closes a reconnect that finishes after shutdown.
+- Event worker stop does not wait on a reconnect that is still opening a broker connection.
+- Abandoned RabbitMQ I/O does not return a late poll result onto a new connection.
+- RabbitMQ poll drops a delivery whose I/O handle was replaced before the tag is recorded.
+- A RabbitMQ heartbeat timeout fails closed so apply nacks before writing.
+- Event worker start aborts if stop wins during the initial connect.
+- Event worker stop does not wait on the initial connect lock.
+- RabbitMQ I/O rejects new broker calls after close reserves the thread.
+- A failed RabbitMQ idle pump wakes queued I/O callers instead of leaving them until timeout.
+- RabbitMQ poll does not return a delivery whose tag was cleared by reconnect or close.
+- Event worker reconnect closes the source after a failed in-flight connect when stop is set.
+- RabbitMQ close reserves the I/O thread for shutdown so a new idle pump cannot queue ahead of it.
+- A RabbitMQ idle-pump socket failure marks the source disconnected so the worker reconnects.
+- RabbitMQ reconnect keeps the previous I/O thread on its own connection.
+- Manual `popular_in_category` fails at job fit when items lack the category column.
+- Overall track CVR uses the same impression-slice attribution as rank, source, and variant.
+- Event worker drain runs before the source close on shutdown.
+- Event worker stop does not close during an in-flight reconnect.
+- RabbitMQ health reports disconnected when the I/O worker is closing or replaced.
+- Event worker stop closes the source once.
+- RabbitMQ heartbeat fails closed when the I/O worker is already failed or closing.
+- Event worker tick does not poll after stop has closed the source.
+- Event worker start abort drains before close.
+- RabbitMQ poll drops a stale delivery when the same event id is reborn after reconnect.
+- RabbitMQ close still closes channel handles when the failed I/O thread has already exited.
+- RabbitMQ poll drops a claimed event after reconnect even if the new channel reuses the same tag.
+- Event worker skips poll after a failed reconnect until connect succeeds.
+- Event worker start abort drains when the initial connect raises.
+- RabbitMQ poll stops getting once reconnect replaces the I/O handle.
+- RabbitMQ ack does not resolve tags from a connection that was replaced.
+- Event worker stop returns false when the initial connect still holds the source lock.
+- Event worker health probes run under the tick lock so stop cannot close during health.
+- RabbitMQ nack ignores an event whose I/O handle was replaced after poll.
+- Event worker start does not clear a stop that already finished before connect.
+- RabbitMQ ack drops ownership stamps so the poll map does not grow without bound.
+- Event worker stop does not block on the source lock for a leftover dead thread.
+- Event worker start refreshes source health before the first tick.
+- Event worker reconnect requeues buffered events after the new connection is up and restores only what nack did not keep.
+- Event worker restores a batch when the source cannot keep a nack after a broker timeout.
+- Event worker reconnect takes the tick lock so it cannot interleave with poll/apply.
+- A timed-out event-source ack after a successful apply persists and does not nack.
+- Event worker start health runs under the tick lock.
+- Event worker start abort does not close a worker started after a later stop.
+- Event worker skips the first poll when startup health reports disconnected.
+- A timed-out RabbitMQ I/O job is not started after submit fails.
+- RabbitMQ I/O timeout abandons an unclaimed job so it cannot run after submit fails.
+- A RabbitMQ I/O timeout abandons a claimed job before the broker call starts.
+- A RabbitMQ I/O timeout cannot start a job after the waiter has already failed.
+- Event worker stop does not close the source during a never-started in-flight tick.
+- A RabbitMQ heartbeat broker error marks the I/O worker failed and fails closed.
+- Event worker overflow nacks restore events the source did not keep.
+- Event worker start abort waits for the tick lock before closing a launched worker.
+- A RabbitMQ I/O timeout cannot start a job after it was marked running.
+- RabbitMQ nack does not keep a batch if I/O fails during requeue.
+- Event worker stop does not close a worker started after the previous thread joined.
+- Event worker does not apply a reconnect-restored event again when the broker redelivers it.
+- Event worker start abort after launch leaves drain to the worker thread.
+- Event worker does not ack a redelivery while the same unapplied event is still buffered.
+- Event worker persists after a successful apply if ack fails, instead of nacking written events.
+- Kafka ack keeps local offsets when a partition commit fails.
+- Event worker remembers numeric event ids so a timed-out ack cannot apply them twice.
+- A RabbitMQ I/O timeout cannot start a job after it was marked started.
+- RabbitMQ messages without an event id get a generated id mapped to the delivery tag.
+- Event worker remembers applied fingerprints only for sources whose event ids change on reconnect.
+- Event worker does not ack a fingerprint-matching redelivery while the original is still unapplied.
+- Event worker acks a deferred fingerprint duplicate after the original is applied.
+- Event worker retries a failed post-apply ack instead of leaving the source offset stuck.
+- Event fingerprints length-prefix fields so values containing `|` cannot collide.
+- A RabbitMQ `basic_get` failure marks the I/O worker failed so health reconnects.
+- RabbitMQ reconnect keeps nacked local pending events across the new connection.
+- Event worker stop waits for an in-flight tick before closing a joined worker.
+- Event worker retries a failed unbuffered or deferred ack on the next tick.
+- A RabbitMQ I/O timeout abandons a job that has not been dispatched to the broker.
+- Event worker stop does not close a worker started after a leftover dead thread.
+- A RabbitMQ I/O timeout cannot run a job after invoke starts but before the broker call.
+- A RabbitMQ I/O timeout detaches the channel so a late get or ack cannot use the abandoned connection.
+- Event worker start takes the tick lock before the source lock.
+- Kafka ack keeps local offsets when a partition watermark cannot advance.
+- Event worker fingerprint dedupe applies only to generated event ids.
+- Event worker stop returns pending acks when a drain ack fails.
+- RabbitMQ ack clears ownership for events carried across reconnect.
+- Event worker reconnect does not nack post-apply ack retries.
+- Event source ack returns only ids bound to a live delivery.
+- A RabbitMQ I/O timeout cannot start a dispatched job.
+- RabbitMQ get, ack, declare, and heartbeat raise after the I/O channel is detached instead of succeeding.
+- RabbitMQ abandoned cleanup closes the timed-out connection and any leftover live handle.
+
 ## [0.8.1] - 2026-09-11
 
 ### Fixed

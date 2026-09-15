@@ -16,6 +16,7 @@ class NormalizedEvent:
     quantity: int
     occurred_at: datetime
     event_id: str
+    generated_event_id: bool = False
 
 
 @dataclass(frozen=True)
@@ -39,12 +40,12 @@ class EventSource(Protocol):
         """Return up to ``max_events`` pending events (may be empty)."""
         ...
 
-    def ack(self, event_ids: Sequence[str]) -> None:
-        """Confirm successful processing for the given event ids."""
+    def ack(self, event_ids: Sequence[str]) -> Sequence[str]:
+        """Ack ids that still have a live delivery; return those ids."""
         ...
 
-    def nack(self, events: Sequence[NormalizedEvent]) -> None:
-        """Return events to the pending queue after a failed flush."""
+    def nack(self, events: Sequence[NormalizedEvent]) -> Sequence[NormalizedEvent]:
+        """Requeue events; return those the source did not keep."""
         ...
 
     def health(self) -> EventSourceHealth:

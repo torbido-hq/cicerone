@@ -175,7 +175,9 @@ RabbitMQ are extras for shops that already have those brokers.
 Consumer group, JSON objects matching the event contract. Required:
 `bootstrap_servers`, `topic`, `group_id`. Optional `consumer_name`
 (default hostname), `security_protocol`, `sasl_mechanism`,
-`sasl_username`, `sasl_password`. Missing `event_id` uses
+`sasl_username`, `sasl_password`, `timeout_seconds` (default 10, min 10 ms,
+max signed 32-bit milliseconds; sets librdkafka `socket.timeout.ms` /
+`request.timeout.ms` and `list_topics`). Missing `event_id` uses
 `{partition}-{offset}`. Manual commits of the contiguous watermark per
 partition (an out-of-order ack cannot skip an earlier offset). `nack`
 returns the batch to a local deque without committing. Librdkafka session
@@ -186,8 +188,12 @@ or `pip install -r requirements-kafka.txt`.
 ### `rabbitmq`
 
 JSON objects from one durable queue (`basic_get` / `basic_ack`). Required:
-`amqp_url`, `queue`. Optional `prefetch` (default 100). Missing `event_id`
-uses the delivery tag. `nack` returns events to a local deque (broker
+`amqp_url`, `queue`. Optional `prefetch` (default 100), `timeout_seconds`
+(default 10, same millisecond ceiling as Kafka; socket / blocked / stack
+timeouts and I/O-thread `reply.get`).
+Missing `event_id` / `idempotency_key` gets a generated UUID; the adapter maps that
+id to the delivery tag for ack. Reconnect redeliveries get a new id and are
+deduped by event fingerprint. `nack` returns events to a local deque (broker
 delivery stays unacked). AMQP calls run on one I/O thread; `heartbeat`
 pumps `process_data_events` there so apply does not share the connection
 with the worker thread. Poison messages are acked and dropped. Requires
@@ -211,8 +217,10 @@ bootstrap_servers = "${KAFKA_BOOTSTRAP_SERVERS}"
 topic = "cicerone.recommendations"
 ```
 
-RabbitMQ: `amqp_url` + `queue`, or `exchange` + optional `routing_key`
-(empty is valid, e.g. fanout; omitted queue-mode key is the queue name).
+Optional `timeout_seconds` (default 10; Kafka min 10 ms, max signed 32-bit
+milliseconds) applies to Kafka connect/flush and RabbitMQ socket timeouts. RabbitMQ: `amqp_url` + `queue`, or `exchange` +
+optional `routing_key` (empty is valid, e.g. fanout; omitted queue-mode
+key is the queue name).
 Payload: `{user_id, recommendations: [{user_id, item_id, rank, score, source, …}]}`.
 Kafka key is `user_id`. Publish failures fail the job/flush so events are
 nacked. Requires the matching extra.
@@ -301,7 +309,7 @@ next flush (prefer a DB output for history).
 | S3 list (R2) / SQS | At-least-once | Object key + ETag dedupe |
 | Redis Streams | At-least-once | `XACK` after successful flush; stream entry id fallback |
 | Kafka | At-least-once | Commit offsets after successful flush; `{partition}-{offset}` fallback |
-| RabbitMQ | At-least-once | `basic_ack` after successful flush; delivery tag fallback |
+| RabbitMQ | At-least-once | `basic_ack` after successful flush; generated id when missing; fingerprint dedupe after reconnect |
 
 Duplicate delivery can inflate weights for `quantity_scaled_events` on the
 popular/latest path. Online LightFM persists the model artifact only after

@@ -7,11 +7,18 @@ import queue
 import threading
 from collections import deque
 from collections.abc import Callable, Sequence
+from contextlib import suppress
 from datetime import datetime
 from functools import partial
 from typing import Any
 
-from cicerone.amqp_options import prefetch_count, require_amqp_url, require_queue
+from cicerone.amqp_options import (
+    amqp_timeout_seconds,
+    apply_amqp_timeouts,
+    prefetch_count,
+    require_amqp_url,
+    require_queue,
+)
 from cicerone.config.constants import ConfigError
 from cicerone.events.base import EventSource, EventSourceHealth, NormalizedEvent
 from cicerone.events.json_payload import decode_json_object
@@ -22,12 +29,31 @@ logger = logging.getLogger(__name__)
 _EVENTS_PREFIX = "events.options"
 _IO_STOP = object()
 _IO_IDLE_SECONDS = 0.5
+_JOB_QUEUED = "queued"
+_JOB_CLAIMED = "claimed"
+_JOB_RUNNING = "running"
+_JOB_STARTED = "started"
+_JOB_INVOKING = "invoking"
+_JOB_DISPATCHED = "dispatched"
+_JOB_ABANDONED = "abandoned"
+
+
+class _IoJob:
+    __slots__ = ("fn", "reply", "state", "run_lock", "permit")
+
+    def __init__(self, fn: Callable[[], Any], reply: queue.Queue[tuple[str, Any]]) -> None:
+        self.fn = fn
+        self.reply = reply
+        self.state = _JOB_QUEUED
+        self.run_lock = threading.Lock()
+        self.permit = True
 
 
 def validate_rabbitmq_event_options(options: dict[str, Any]) -> None:
     require_amqp_url(options, prefix=_EVENTS_PREFIX)
     require_queue(options, prefix=_EVENTS_PREFIX)
     prefetch_count(options, prefix=_EVENTS_PREFIX)
+    amqp_timeout_seconds(options, prefix=_EVENTS_PREFIX)
 
 
 def _missing_extra() -> ConfigError:
@@ -40,42 +66,241 @@ def _missing_extra() -> ConfigError:
 class _PikaIo:
     """Run BlockingConnection calls on one thread (pika is not thread-safe)."""
 
-    def __init__(self) -> None:
+    def __init__(self, timeout_seconds: float) -> None:
         self._jobs: queue.Queue[Any] = queue.Queue()
         self._thread = threading.Thread(target=self._loop, name="cicerone-amqp-io", daemon=True)
         self._connection: Any | None = None
+        self._channel: Any | None = None
+        self._timeout_seconds = timeout_seconds
+        self._failed = False
+        self._closing = False
+        self._state_lock = threading.Lock()
+        self._busy = 0
+        self._abandon_channel: Any | None = None
+        self._abandon_connection: Any | None = None
+
+    @property
+    def failed(self) -> bool:
+        return self._failed
+
+    @property
+    def closing(self) -> bool:
+        return self._closing
+
+    @property
+    def busy(self) -> bool:
+        with self._state_lock:
+            return self._busy > 0
+
+    def _clear_busy(self) -> None:
+        with self._state_lock:
+            if self._busy > 0:
+                self._busy -= 1
+
+    def _try_begin_shutdown(self) -> bool:
+        with self._state_lock:
+            if self._failed or self._closing or self._busy > 0:
+                return False
+            self._closing = True
+            return True
 
     def start(self) -> None:
         self._thread.start()
 
-    def submit(self, fn: Callable[[], Any]) -> Any:
-        if not self._thread.is_alive():
-            raise RuntimeError("RabbitMQ I/O thread is not running")
+    def submit(self, fn: Callable[[], Any], *, allow_closing: bool = False) -> Any:
         reply: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
-        self._jobs.put((fn, reply))
-        status, payload = reply.get()
+        job = _IoJob(fn, reply)
+
+        def _guarded() -> Any:
+            with self._state_lock:
+                if self._failed or not job.permit or job.state != _JOB_STARTED:
+                    raise RuntimeError("RabbitMQ I/O worker abandoned")
+                job.state = _JOB_INVOKING
+            job.run_lock.acquire()
+            try:
+                with self._state_lock:
+                    if self._failed or not job.permit or job.state != _JOB_INVOKING:
+                        raise RuntimeError("RabbitMQ I/O worker abandoned")
+                    job.state = _JOB_DISPATCHED
+                    if self._failed or not job.permit:
+                        job.state = _JOB_ABANDONED
+                        raise RuntimeError("RabbitMQ I/O worker abandoned")
+                with self._state_lock:
+                    if self._failed or not job.permit:
+                        job.state = _JOB_ABANDONED
+                        raise RuntimeError("RabbitMQ I/O worker abandoned")
+                return fn()
+            finally:
+                job.run_lock.release()
+
+        job.fn = _guarded
+        with self._state_lock:
+            if self._failed or not self._thread.is_alive() or (self._closing and not allow_closing):
+                raise RuntimeError("RabbitMQ I/O thread is not running")
+            self._busy += 1
+            self._jobs.put(job)
+        try:
+            status, payload = reply.get(timeout=self._timeout_seconds)
+        except queue.Empty as exc:
+            self._abandon_unclaimed(job)
+            raise TimeoutError(f"RabbitMQ I/O call timed out after {self._timeout_seconds}s") from exc
+        finally:
+            if not self._failed:
+                self._clear_busy()
         if status == "err":
             raise payload
+        if self._failed:
+            raise RuntimeError("RabbitMQ I/O worker abandoned")
         return payload
+
+    def _mark_failed(self) -> None:
+        with self._state_lock:
+            self._failed = True
+            self._detach_handles()
+
+    def _detach_handles(self) -> None:
+        if self._abandon_channel is None:
+            self._abandon_channel = self._channel
+        if self._abandon_connection is None:
+            self._abandon_connection = self._connection
+        self._channel = None
+        self._connection = None
+
+    def broker_channel(self) -> Any:
+        with self._state_lock:
+            if self._failed or self._channel is None:
+                raise RuntimeError("RabbitMQ I/O worker abandoned")
+            return self._channel
+
+    def broker_connection(self) -> Any:
+        with self._state_lock:
+            if self._failed or self._connection is None:
+                raise RuntimeError("RabbitMQ I/O worker abandoned")
+            return self._connection
+
+    def _bind_handles(self, *, connection: Any | None = None, channel: Any | None = None) -> None:
+        with self._state_lock:
+            if self._failed:
+                raise RuntimeError("RabbitMQ I/O worker abandoned")
+            if connection is not None:
+                self._connection = connection
+            if channel is not None:
+                self._channel = channel
+
+    def _abandon_unclaimed(self, job: _IoJob) -> None:
+        with self._state_lock:
+            self._failed = True
+            job.permit = False
+            job.state = _JOB_ABANDONED
+            self._detach_handles()
+
+    def _take_job(self, job: _IoJob) -> bool:
+        with self._state_lock:
+            if self._failed or job.state != _JOB_QUEUED:
+                job.state = _JOB_ABANDONED
+                return False
+            job.state = _JOB_CLAIMED
+            return True
+
+    def _enter_job(self, job: _IoJob) -> bool:
+        with self._state_lock:
+            if self._failed or job.state != _JOB_CLAIMED:
+                job.state = _JOB_ABANDONED
+                return False
+            job.state = _JOB_RUNNING
+            return True
+
+    def _should_run(self, job: _IoJob) -> bool:
+        with self._state_lock:
+            if self._failed or job.state != _JOB_RUNNING:
+                job.state = _JOB_ABANDONED
+                return False
+            job.state = _JOB_STARTED
+            return True
+
+    def abandon(self, channel: Any, connection: Any) -> None:
+        self._mark_failed()
+        if channel is not None:
+            self._abandon_channel = channel
+        if connection is not None:
+            self._abandon_connection = connection
+        self.stop()
 
     def stop(self) -> None:
         self._jobs.put(_IO_STOP)
-        self._thread.join(timeout=5.0)
+        self._thread.join(timeout=0.1 if self._failed else 5.0)
+
+    def _cleanup_abandoned(self) -> None:
+        channel = self._abandon_channel if self._abandon_channel is not None else self._channel
+        connection = self._abandon_connection if self._abandon_connection is not None else self._connection
+        leftover_channel = self._channel
+        leftover_connection = self._connection
+        self._connection = None
+        self._channel = None
+        self._abandon_channel = None
+        self._abandon_connection = None
+        _close_handles(channel, connection)
+        if leftover_channel is not None and leftover_channel is not channel:
+            _close_quietly(leftover_channel, "channel")
+        if leftover_connection is not None and leftover_connection is not connection:
+            _close_quietly(leftover_connection, "connection")
 
     def _loop(self) -> None:
         while True:
             try:
                 job = self._jobs.get(timeout=_IO_IDLE_SECONDS)
             except queue.Empty:
-                self._pump()
+                if self._failed:
+                    self._exit_failed()
+                    return
+                with self._state_lock:
+                    if self._failed:
+                        self._exit_failed()
+                        return
+                    if self._closing:
+                        continue
+                    self._busy += 1
+                try:
+                    self._pump()
+                finally:
+                    if not self._failed:
+                        self._clear_busy()
+                if self._failed:
+                    self._exit_failed()
+                    return
                 continue
             if job is _IO_STOP:
+                if self._failed:
+                    self._exit_failed()
                 return
-            fn, reply = job
+            if not self._take_job(job):
+                with suppress(queue.Full):
+                    job.reply.put_nowait(("err", RuntimeError("RabbitMQ I/O worker abandoned")))
+                self._exit_failed()
+                return
+            if not self._enter_job(job):
+                with suppress(queue.Full):
+                    job.reply.put_nowait(("err", RuntimeError("RabbitMQ I/O worker abandoned")))
+                self._exit_failed()
+                return
+            if not self._should_run(job):
+                with suppress(queue.Full):
+                    job.reply.put_nowait(("err", RuntimeError("RabbitMQ I/O worker abandoned")))
+                self._exit_failed()
+                return
             try:
-                reply.put(("ok", fn()))
+                result = job.fn()
             except Exception as exc:
-                reply.put(("err", exc))
+                payload: tuple[str, Any] = ("err", exc)
+            else:
+                payload = ("ok", result)
+            if self._failed:
+                payload = ("err", RuntimeError("RabbitMQ I/O worker abandoned"))
+            with suppress(queue.Full):
+                job.reply.put_nowait(payload)
+            if self._failed:
+                self._exit_failed()
+                return
 
     def _pump(self) -> None:
         connection = self._connection
@@ -84,17 +309,36 @@ class _PikaIo:
         try:
             connection.process_data_events(time_limit=0)
         except Exception:
+            self._mark_failed()
             logger.exception("RabbitMQ I/O thread process_data_events failed")
+
+    def _fail_pending(self, exc: BaseException) -> None:
+        while True:
+            try:
+                job = self._jobs.get_nowait()
+            except queue.Empty:
+                return
+            if job is _IO_STOP:
+                continue
+            with suppress(queue.Full):
+                job.reply.put_nowait(("err", exc))
+
+    def _exit_failed(self) -> None:
+        self._fail_pending(RuntimeError("RabbitMQ I/O worker abandoned"))
+        self._cleanup_abandoned()
 
 
 class RabbitMQEventSource(EventSource):
     """Consume JSON events from one queue; ack with ``basic_ack``."""
+
+    ephemeral_event_ids = True
 
     def __init__(self, options: dict[str, Any]):
         validate_rabbitmq_event_options(options)
         self._amqp_url = require_amqp_url(options, prefix=_EVENTS_PREFIX)
         self._queue = require_queue(options, prefix=_EVENTS_PREFIX)
         self._prefetch = prefetch_count(options, prefix=_EVENTS_PREFIX)
+        self._timeout_seconds = amqp_timeout_seconds(options, prefix=_EVENTS_PREFIX)
 
         self._io: _PikaIo | None = None
         self._connection: Any | None = None
@@ -106,6 +350,7 @@ class RabbitMQEventSource(EventSource):
         self._in_flight: set[str] = set()
         self._delivery_tags: dict[str, int] = {}
         self._held_tags: set[int] = set()
+        self._event_io: dict[int, tuple[_PikaIo, str]] = {}
         self._last_event_at: datetime | None = None
 
     def connect(self) -> None:
@@ -114,18 +359,19 @@ class RabbitMQEventSource(EventSource):
         except ImportError as exc:
             raise _missing_extra() from exc
 
-        io = _PikaIo()
+        io = _PikaIo(self._timeout_seconds)
         io.start()
         try:
             connection, channel = io.submit(partial(self._open, pika, io))
         except Exception as exc:
-            io.stop()
+            io.abandon(None, io._connection)
             raise ConfigError(f"events.options.amqp_url is unreachable: {exc}") from exc
 
         with self._lock:
             previous_io = self._io
             previous_channel = self._channel
             previous_connection = self._connection
+            carried = list(self._pending)
             self._io = io
             self._connection = connection
             self._channel = channel
@@ -135,17 +381,12 @@ class RabbitMQEventSource(EventSource):
             self._in_flight.clear()
             self._delivery_tags.clear()
             self._held_tags.clear()
+            self._event_io.clear()
+            for event in carried:
+                self._pending.append(event)
+                self._pending_ids.add(event.event_id)
         if previous_io is not None:
-            try:
-
-                def _close_previous() -> None:
-                    previous_io._connection = None
-                    _close_handles(previous_channel, previous_connection)
-
-                previous_io.submit(_close_previous)
-            except Exception:
-                logger.exception("Failed to close previous RabbitMQ connection")
-            previous_io.stop()
+            _release_io(previous_io, previous_channel, previous_connection)
 
     def close(self) -> None:
         with self._lock:
@@ -161,85 +402,136 @@ class RabbitMQEventSource(EventSource):
             self._in_flight.clear()
             self._delivery_tags.clear()
             self._held_tags.clear()
+            self._event_io.clear()
         if io is None:
             return
-        try:
-
-            def _shutdown() -> None:
-                io._connection = None
-                _close_handles(channel, connection)
-
-            io.submit(_shutdown)
-        except Exception:
-            logger.exception("RabbitMQ close on I/O thread failed")
-        io.stop()
+        _release_io(io, channel, connection)
 
     def poll(self, max_events: int = 100) -> Sequence[NormalizedEvent]:
         if max_events < 1:
             return []
         io = self._require_io()
-        out: list[NormalizedEvent] = []
+        claimed: list[tuple[NormalizedEvent, int | None]] = []
         with self._lock:
-            while self._pending and len(out) < max_events:
+            while self._pending and len(claimed) < max_events:
                 event = self._pending.popleft()
                 self._pending_ids.discard(event.event_id)
+                tag = self._delivery_tags.get(event.event_id)
                 self._in_flight.add(event.event_id)
-                out.append(event)
+                claimed.append((event, tag))
 
-        remaining = max_events - len(out)
+        remaining = max_events - len(claimed)
         while remaining > 0:
+            if not self._owns_io(io):
+                break
             try:
-                method, _properties, body = io.submit(self._basic_get)
+                method, _properties, body = io.submit(partial(self._basic_get, io))
             except Exception:
                 logger.exception("RabbitMQ basic_get failed")
+                io._mark_failed()
                 break
             if method is None:
                 break
             incoming = self._delivery_to_event(io, method, body)
             if incoming is None:
+                if not self._owns_io(io):
+                    break
                 continue
-            out.append(incoming)
+            with self._lock:
+                tag = self._delivery_tags.get(incoming.event_id)
+            if tag is None:
+                continue
+            claimed.append((incoming, tag))
             remaining -= 1
 
-        if out:
-            newest = max(event.occurred_at for event in out)
-            with self._lock:
-                self._last_event_at = newest
+        with self._lock:
+            out = [
+                event
+                for event, tag in claimed
+                if self._io is io and (tag is None or self._delivery_tags.get(event.event_id) == tag)
+            ]
+            if out:
+                self._last_event_at = max(event.occurred_at for event in out)
+            for event in out:
+                self._event_io[id(event)] = (io, event.event_id)
         return out
 
-    def ack(self, event_ids: Sequence[str]) -> None:
+    def ack(self, event_ids: Sequence[str]) -> Sequence[str]:
         if not event_ids:
-            return
+            return ()
         io = self._require_io()
+        confirmed: list[str] = []
         with self._lock:
+            if self._io is not io:
+                return ()
             resolved: list[tuple[str, int]] = []
+            local_only: list[str] = []
             for event_id in event_ids:
                 eid = str(event_id)
                 tag = self._delivery_tags.get(eid)
                 if tag is not None:
                     resolved.append((eid, tag))
+                elif eid in self._in_flight or eid in self._pending_ids:
+                    local_only.append(eid)
+            for eid in local_only:
+                self._forget_event(eid)
+                confirmed.append(eid)
         if not resolved:
-            return
+            return tuple(confirmed)
         for eid, tag in resolved:
-            io.submit(partial(self._basic_ack, tag))
+            if not self._owns_io(io):
+                return tuple(confirmed)
+            io.submit(partial(self._basic_ack, io, tag))
             with self._lock:
+                if self._io is not io or self._delivery_tags.get(eid) != tag:
+                    continue
                 self._delivery_tags.pop(eid, None)
                 self._held_tags.discard(tag)
-                self._in_flight.discard(eid)
-                self._pending_ids.discard(eid)
+                self._forget_event(eid)
+                confirmed.append(eid)
+        return tuple(confirmed)
 
-    def nack(self, events: Sequence[NormalizedEvent]) -> None:
+    def _forget_event(self, eid: str) -> None:
+        self._in_flight.discard(eid)
+        self._pending_ids.discard(eid)
+        stale = [key for key, (_owner, event_id) in self._event_io.items() if event_id == eid]
+        for key in stale:
+            self._event_io.pop(key, None)
+
+    def nack(self, events: Sequence[NormalizedEvent]) -> Sequence[NormalizedEvent]:
         if not events:
-            return
+            return ()
         with self._lock:
+            io = self._io
+            if io is None or io.failed or io.closing:
+                return tuple(events)
+            retained: list[NormalizedEvent] = []
             for event in reversed(list(events)):
+                owner = self._event_io.get(id(event))
+                if owner is None or owner[0] is not io:
+                    continue
                 if event.event_id not in self._delivery_tags:
                     continue
+                retained.append(event)
+            if self._io is not io or io.failed or io.closing:
+                return tuple(events)
+            kept: set[int] = set()
+            added: list[NormalizedEvent] = []
+            for event in retained:
                 self._in_flight.discard(event.event_id)
+                kept.add(id(event))
                 if event.event_id in self._pending_ids:
                     continue
                 self._pending.appendleft(event)
                 self._pending_ids.add(event.event_id)
+                added.append(event)
+            if self._io is not io or io.failed or io.closing:
+                for event in added:
+                    with suppress(ValueError):
+                        self._pending.remove(event)
+                    self._pending_ids.discard(event.event_id)
+                return tuple(events)
+        return tuple(event for event in events if id(event) not in kept)
 
     def heartbeat(self, events: Sequence[NormalizedEvent]) -> None:
         del events
@@ -247,9 +539,10 @@ class RabbitMQEventSource(EventSource):
         if io is None:
             return
         try:
-            io.submit(self._pump_connection)
+            io.submit(partial(self._pump_connection, io))
         except Exception:
             logger.exception("RabbitMQ heartbeat process_data_events failed")
+            raise
 
     def health(self) -> EventSourceHealth:
         with self._lock:
@@ -258,15 +551,19 @@ class RabbitMQEventSource(EventSource):
             channel = self._channel
             local_held = len(self._pending_ids) + len(self._in_flight)
             last_event_at = self._last_event_at
-        if not connected or io is None or channel is None:
+        if not connected or io is None or channel is None or io.failed or io.closing:
             return EventSourceHealth(connected=False, lag=None, last_event_at=last_event_at)
         ready = 0
         try:
-            declared = io.submit(self._passive_declare)
+            declared = io.submit(partial(self._passive_declare, io))
             ready = int(declared.method.message_count)
         except Exception:
             logger.exception("RabbitMQ queue_declare (passive) failed")
+            if io.failed or io.closing or not self._owns_io(io):
+                return EventSourceHealth(connected=False, lag=None, last_event_at=last_event_at)
             ready = 0
+        if io.failed or io.closing or not self._owns_io(io):
+            return EventSourceHealth(connected=False, lag=None, last_event_at=last_event_at)
         lag = ready + local_held
         return EventSourceHealth(
             connected=True,
@@ -275,42 +572,42 @@ class RabbitMQEventSource(EventSource):
             detail=f"queue={self._queue}",
         )
 
-    def _basic_get(self) -> Any:
-        channel = self._channel
-        if channel is None:
-            return None, None, None
-        return channel.basic_get(self._queue, auto_ack=False)
+    def _basic_get(self, io: _PikaIo) -> Any:
+        return io.broker_channel().basic_get(self._queue, auto_ack=False)
 
-    def _basic_ack(self, tag: int) -> None:
-        channel = self._channel
-        if channel is None:
-            return
-        channel.basic_ack(delivery_tag=tag)
+    def _basic_ack(self, io: _PikaIo, tag: int) -> None:
+        io.broker_channel().basic_ack(delivery_tag=tag)
 
-    def _passive_declare(self) -> Any:
-        channel = self._channel
-        if channel is None:
-            raise RuntimeError("RabbitMQEventSource is not connected")
-        return channel.queue_declare(queue=self._queue, durable=True, passive=True)
+    def _passive_declare(self, io: _PikaIo) -> Any:
+        return io.broker_channel().queue_declare(queue=self._queue, durable=True, passive=True)
 
     def _open(self, pika: Any, io: _PikaIo) -> tuple[Any, Any]:
-        connection = pika.BlockingConnection(pika.URLParameters(self._amqp_url))
-        io._connection = connection
+        if io.failed:
+            raise RuntimeError("RabbitMQ I/O worker abandoned")
+        connection = pika.BlockingConnection(
+            apply_amqp_timeouts(pika.URLParameters(self._amqp_url), self._timeout_seconds)
+        )
+        channel = None
         try:
+            io._bind_handles(connection=connection)
             channel = connection.channel()
+            io._bind_handles(channel=channel)
             channel.basic_qos(prefetch_count=self._prefetch)
             channel.queue_declare(queue=self._queue, durable=True)
         except Exception:
+            io._channel = None
             io._connection = None
-            _close_quietly(connection, "connection")
+            _close_handles(channel, connection)
             raise
         return connection, channel
 
-    def _pump_connection(self) -> None:
-        connection = self._connection
-        if connection is None:
-            return
-        connection.process_data_events(time_limit=0)
+    def _pump_connection(self, io: _PikaIo) -> None:
+        connection = io.broker_connection()
+        try:
+            connection.process_data_events(time_limit=0)
+        except Exception:
+            io._mark_failed()
+            raise
 
     def _require_io(self) -> _PikaIo:
         with self._lock:
@@ -318,10 +615,14 @@ class RabbitMQEventSource(EventSource):
                 raise RuntimeError("RabbitMQEventSource is not connected")
             return self._io
 
+    def _owns_io(self, io: _PikaIo) -> bool:
+        with self._lock:
+            return self._io is io and not io.failed
+
     def _delivery_to_event(self, io: _PikaIo, method: Any, body: Any) -> NormalizedEvent | None:
         tag = int(method.delivery_tag)
         with self._lock:
-            if tag in self._held_tags:
+            if self._io is not io or tag in self._held_tags:
                 return None
         try:
             payload = decode_json_object(body)
@@ -329,8 +630,6 @@ class RabbitMQEventSource(EventSource):
             logger.warning("Skipping invalid RabbitMQ message %s: %s", tag, exc)
             self._ack_discard(io, tag)
             return None
-        if payload.get("event_id") in (None, "") and payload.get("idempotency_key") in (None, ""):
-            payload["event_id"] = str(tag)
         try:
             event = normalize_event(payload)
         except EventNormalizeError as exc:
@@ -338,6 +637,8 @@ class RabbitMQEventSource(EventSource):
             self._ack_discard(io, tag)
             return None
         with self._lock:
+            if self._io is not io:
+                return None
             if event.event_id in self._delivery_tags:
                 logger.warning(
                     "Duplicate event_id %r on RabbitMQ delivery %s; acking duplicate",
@@ -357,9 +658,29 @@ class RabbitMQEventSource(EventSource):
 
     def _ack_discard(self, io: _PikaIo, tag: int) -> None:
         try:
-            io.submit(partial(self._basic_ack, tag))
+            io.submit(partial(self._basic_ack, io, tag))
         except Exception:
             logger.exception("Failed to ack discarded RabbitMQ message")
+
+
+def _release_io(io: _PikaIo, channel: Any, connection: Any) -> None:
+    if io.failed or not io._try_begin_shutdown():
+        io.abandon(channel, connection)
+        if not io._thread.is_alive():
+            _close_handles(channel, connection)
+        return
+    try:
+
+        def _shutdown() -> None:
+            io._connection = None
+            _close_handles(channel, connection)
+
+        io.submit(_shutdown, allow_closing=True)
+    except Exception:
+        logger.exception("Failed to close RabbitMQ connection on I/O thread")
+        io.abandon(channel, connection)
+        return
+    io.stop()
 
 
 def _close_handles(channel: Any, connection: Any) -> None:
