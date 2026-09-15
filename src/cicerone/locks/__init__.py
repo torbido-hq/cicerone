@@ -49,6 +49,7 @@ __all__ = [
     "has_distributed_lock",
     "ensure_writer_owned",
     "held_writer_lock",
+    "writer_lock_held_here",
 ]
 
 
@@ -112,6 +113,16 @@ def _unbind_writer_generation() -> None:
     stack = getattr(_writer_hold, "stack", None)
     if stack:
         stack.pop()
+
+
+def writer_lock_held_here(lock: LockBackend | None) -> bool:
+    if lock is None:
+        return False
+    stack = getattr(_writer_hold, "stack", None)
+    if not stack:
+        return False
+    lock_id = id(lock)
+    return any(stored_id == lock_id for stored_id, _generation in stack)
 
 
 def _bound_writer_generation(lock: LockBackend) -> int | None:

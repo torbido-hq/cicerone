@@ -434,6 +434,18 @@ def test_read_input_swallows_manifest_reader_construction(monkeypatch):
     assert manifest is None
 
 
+def test_refresh_pending_thompson_keeps_live_promotion(tmp_path):
+    from cicerone.experiment.store import ExperimentStore, experiment_state
+
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    store = ExperimentStore(output)
+    store.write_state(experiment_state("exp", promoted_variant="treatment", champion="control"))
+    pending = experiment_state("exp", promoted_variant=None, champion="treatment")
+    merged = job._refresh_pending_thompson(store, pending)
+    assert merged["promoted_variant"] == "treatment"
+    assert merged["champion"] == "treatment"
+
+
 def test_persist_track_outputs_serializes_db_writes(monkeypatch):
     active = 0
     max_active = 0
@@ -859,6 +871,22 @@ def test_job_run_records_configured_lock_backend(tmp_path, monkeypatch):
     monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
     monkeypatch.setattr("cicerone.job.build_dataset_writer_lock", lambda _settings: None)
 
+    class _Held:
+        def acquire(self) -> bool:
+            return True
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            return True
+
+        def is_locked(self) -> bool:
+            return True
+
+    monkeypatch.setattr("cicerone.job.build_lock_backend", lambda _settings: _Held())
+    monkeypatch.setattr("cicerone.job.acquire_blocking", lambda _lock, **_kwargs: True)
+
     job.run(triggered_by="cron")
 
     manifest = json.loads((output_dir / "manifest.json").read_text())
@@ -912,6 +940,70 @@ def test_write_job_manifest_accepts_legacy_signature():
 
     assert job._write_job_manifest(_LegacySink(), {"status": "failed"}, skip_if_newer_than="x") is True
     assert written["manifest"] == {"status": "failed"}
+
+
+def test_direct_job_acquires_retrain_lock_when_distributed(monkeypatch):
+    from cicerone.locks import WriterLockBusyError
+
+    class _Busy:
+        def acquire(self) -> bool:
+            return False
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            return False
+
+        def is_locked(self) -> bool:
+            return True
+
+    monkeypatch.setattr("cicerone.job.has_distributed_lock", lambda _settings: True)
+    monkeypatch.setattr("cicerone.job.build_lock_backend", lambda _settings: _Busy())
+    monkeypatch.setattr("cicerone.job.acquire_blocking", lambda _lock, **_kwargs: False)
+    monkeypatch.setattr("cicerone.job.load_settings", lambda: object())
+    with pytest.raises(WriterLockBusyError, match="retrain lock busy"):
+        job.run()
+
+
+def test_direct_job_releases_retrain_lock_after_run(monkeypatch):
+    released = {"n": 0}
+
+    class _Lock:
+        def acquire(self) -> bool:
+            return True
+
+        def release(self) -> None:
+            released["n"] += 1
+
+        def owned(self) -> bool:
+            return True
+
+        def is_locked(self) -> bool:
+            return True
+
+    monkeypatch.setattr("cicerone.job.has_distributed_lock", lambda _settings: True)
+    monkeypatch.setattr("cicerone.job.build_lock_backend", lambda _settings: _Lock())
+    monkeypatch.setattr("cicerone.job.acquire_blocking", lambda _lock, **_kwargs: True)
+    monkeypatch.setattr("cicerone.job.load_settings", lambda: object())
+    monkeypatch.setattr("cicerone.job._run_job", lambda *_args, **_kwargs: None)
+    job.run()
+    assert released["n"] == 1
+
+
+def test_scheduler_job_skips_direct_retrain_lock(monkeypatch):
+    built = {"n": 0}
+
+    def _build(_settings):
+        built["n"] += 1
+        raise AssertionError("should not build")
+
+    monkeypatch.setattr("cicerone.job.has_distributed_lock", lambda _settings: True)
+    monkeypatch.setattr("cicerone.job.build_lock_backend", _build)
+    monkeypatch.setattr("cicerone.job.load_settings", lambda: object())
+    monkeypatch.setattr("cicerone.job._run_job", lambda *_args, **_kwargs: None)
+    job.run(fence_check=lambda: True)
+    assert built["n"] == 0
 
 
 def test_write_job_manifest_reraises_implementation_type_error():

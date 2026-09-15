@@ -437,9 +437,58 @@ def test_redis_stale_release_does_not_drop_new_holder(monkeypatch):
     lock._mark_lost()
     assert lock.acquire() is True
     token = lock._token
+    refresher = lock._refresh_thread
     lock.release_generation(stale_generation)
     assert lock._held is True
     assert lock._token == token
+    assert refresher is not None and refresher.is_alive()
+    assert lock._refresh_thread is refresher
+    lock.release()
+
+
+def test_redis_release_generation_skips_stop_after_reacquire(monkeypatch):
+    client = _mock_redis_module(monkeypatch)
+    client.set.return_value = True
+    lock = RedisLock(
+        "redis://localhost:6379/0",
+        ttl_ms=200,
+        refresh_interval_ms=10_000,
+    )
+    assert lock.acquire() is True
+    generation = lock._hold_generation
+    entered = threading.Event()
+    proceed = threading.Event()
+    real = lock._refresh_lifecycle
+
+    class _Gate:
+        def __init__(self) -> None:
+            self._n = 0
+
+        def __enter__(self):
+            self._n += 1
+            if self._n == 1:
+                entered.set()
+                proceed.wait(1)
+            return real.__enter__()
+
+        def __exit__(self, *exc):
+            return real.__exit__(*exc)
+
+    lock._refresh_lifecycle = _Gate()
+
+    def _release() -> None:
+        lock.release_generation(generation)
+
+    thread = threading.Thread(target=_release)
+    thread.start()
+    assert entered.wait(1)
+    assert lock.acquire() is True
+    refresher = lock._refresh_thread
+    proceed.set()
+    thread.join(1)
+    assert lock._held is True
+    assert refresher is not None and refresher.is_alive()
+    assert lock._refresh_thread is refresher
     lock.release()
     assert lock._held is False
 
@@ -720,6 +769,27 @@ def test_held_writer_lock_owned_after_nested_wait():
     with nested(), held_writer_lock(Lock()):
         events.append("write")
     assert events == ["nested", "acquire", "owned", "write", "release"]
+
+
+def test_writer_lock_held_here_without_hold_generation():
+    class Lock:
+        def acquire(self) -> bool:
+            return True
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            return True
+
+        def is_locked(self) -> bool:
+            return True
+
+    lock = Lock()
+    assert not locks_mod.writer_lock_held_here(lock)
+    with held_writer_lock(lock):
+        assert locks_mod.writer_lock_held_here(lock)
+    assert not locks_mod.writer_lock_held_here(lock)
 
 
 def test_held_writer_lock_rechecks_caller_fence_after_acquire():

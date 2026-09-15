@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 import pandas as pd
 import pytest
 from support.events import event_payload
@@ -434,6 +436,52 @@ def test_persist_online_skipped_when_write_busy(tmp_path, feature_config: Featur
     assert updater.apply([normalize_event(event_payload())], persist_online=False) == 1
     assert online.commits == 0
     busy["v"] = True
+    updater.persist_online()
+    assert online.commits == 0
+    assert online.aborts == 1
+
+
+def test_persist_online_rechecks_busy_after_writer_wait(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    busy = {"v": False}
+
+    class _Sink:
+        def recommendations_write(self):
+            busy["v"] = True
+            return nullcontext()
+
+    class _FakeOnline:
+        def __init__(self) -> None:
+            self.commits = 0
+            self.aborts = 0
+
+        def refresh(self, events):  # type: ignore[no-untyped-def]
+            del events
+            return OnlineRefreshResult(rows=empty_online_rows())
+
+        def invalidate(self) -> None:
+            return None
+
+        def commit(self) -> None:
+            self.commits += 1
+
+        def abort(self) -> None:
+            self.aborts += 1
+
+    online = _FakeOnline()
+    updater = IncrementalUpdater(
+        sink=_Sink(),  # type: ignore[arg-type]
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=3,
+        write_busy_check=lambda: busy["v"],
+        online=online,
+    )
     updater.persist_online()
     assert online.commits == 0
     assert online.aborts == 1

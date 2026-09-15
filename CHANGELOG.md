@@ -168,6 +168,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Writer-lock ownership is generation-aware after a same-object
   reacquire. Job track eval/history writes take that lease. Local
   dataset file locks time out instead of blocking forever.
+- A direct job takes the retrain lease when `lock_backend` is
+  distributed. Experiment state writes re-enter only on the owning
+  thread and honor the retrain fence on DB output. Online persist
+  rechecks retrain-busy after the writer wait. Redis release does not
+  stop a newer refresher.
+- Dashboard promote reads and writes experiment state under one writer
+  lock. The job rematches `promoted_variant` before writing Thompson
+  state. Track eval and history writes honor the retrain fence.
 
 
 ## [0.8.1] - 2026-09-11

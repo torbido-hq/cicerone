@@ -59,7 +59,16 @@ from cicerone.io.recommendation_schema import (
     filter_variant_rows,
     pick_fallback_variant,
 )
-from cicerone.locks import LockLostError, build_dataset_writer_lock, held_writer_lock
+from cicerone.locks import (
+    LockBackend,
+    LockLostError,
+    WriterLockBusyError,
+    acquire_blocking,
+    build_dataset_writer_lock,
+    build_lock_backend,
+    has_distributed_lock,
+    held_writer_lock,
+)
 from cicerone.model import (
     DEFAULT_MODELS,
     RRF_K,
@@ -236,6 +245,18 @@ def _try_load_pair(
         return left_f.result(), right_f.result()
 
 
+def _refresh_pending_thompson(store: ExperimentStore, pending: dict[str, Any]) -> dict[str, Any]:
+    latest = store.read_state()
+    if not latest or str(latest.get("experiment_id") or "") != str(pending.get("experiment_id") or ""):
+        return pending
+    return merge_experiment_state(
+        pending,
+        experiment_id=str(pending.get("experiment_id") or ""),
+        promoted_variant=(str(latest["promoted_variant"]) if latest.get("promoted_variant") else None),
+        promoted_at=(str(latest["promoted_at"]) if latest.get("promoted_at") else None),
+    )
+
+
 def _persist_track_outputs(
     store: TrackStore,
     *,
@@ -243,6 +264,7 @@ def _persist_track_outputs(
     eval_report: Mapping[str, Any],
     recommendations: pd.DataFrame | None,
     generated_at: str,
+    fence_check: Callable[[], bool] | None = None,
 ) -> None:
     tasks: list[tuple[str, Callable[[], Any]]] = [
         ("write track eval", lambda: store.write_eval(eval_report)),
@@ -264,7 +286,12 @@ def _persist_track_outputs(
         _run_serial()
         return
     if lock is not None:
-        with held_writer_lock(lock):
+        with held_writer_lock(
+            lock,
+            fence_check=fence_check,
+            fence_lost="retrain lock lost before write",
+            fence_kind="retrain",
+        ):
             _run_serial()
         return
     with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
@@ -509,6 +536,17 @@ def _select_thompson_recipes(
         return ThompsonSelection(recipes)
 
 
+def _maybe_acquire_direct_retrain_lock(
+    settings: Settings, fence_check: Callable[[], bool] | None
+) -> LockBackend | None:
+    if fence_check is not None or not has_distributed_lock(settings):
+        return None
+    lock = build_lock_backend(settings)
+    if not acquire_blocking(lock):
+        raise WriterLockBusyError("retrain lock busy")
+    return lock
+
+
 def _recommendation_user_count(recommendations: pd.DataFrame) -> int:
     if recommendations.empty or USER_COLUMN not in recommendations.columns:
         return 0
@@ -518,6 +556,17 @@ def _recommendation_user_count(recommendations: pd.DataFrame) -> int:
 
 def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None = None) -> None:
     settings = load_settings()
+    retrain_lock = _maybe_acquire_direct_retrain_lock(settings, fence_check)
+    if retrain_lock is not None:
+        fence_check = retrain_lock.owned
+    try:
+        _run_job(settings, triggered_by=triggered_by, fence_check=fence_check)
+    finally:
+        if retrain_lock is not None:
+            retrain_lock.release()
+
+
+def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bool] | None) -> None:
     started_at = datetime.now(UTC).isoformat()
     feature_config = load_feature_config(settings.feature_config_path)
     writer_lock = build_dataset_writer_lock(settings)
@@ -761,9 +810,14 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
                     outputs_written = True
                     if pending_thompson is not None:
                         _ensure_publication_fence(sink, fence_check)
-                        ExperimentStore(settings.output, writer_lock=writer_lock).write_state(
-                            pending_thompson
+                        store = ExperimentStore(
+                            settings.output,
+                            writer_lock=writer_lock,
+                            fence_check=fence_check,
+                            fence_lost="retrain lock lost before write",
+                            fence_kind="retrain",
                         )
+                        store.write_state(_refresh_pending_thompson(store, pending_thompson))
                     if publisher is not None:
                         _ensure_publication_fence(sink, fence_check)
                         publisher.publish(recommendations)
@@ -842,7 +896,13 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
         logger.info("Job finished: %s", json.dumps(manifest))
         if manifest.get("status") == "success" and (settings.track.enabled or settings.eval.enabled):
             _persist_track_outputs(
-                TrackStore(settings.output, writer_lock=writer_lock),
+                TrackStore(
+                    settings.output,
+                    writer_lock=writer_lock,
+                    fence_check=fence_check,
+                    fence_lost="retrain lock lost before write",
+                    fence_kind="retrain",
+                ),
                 kind=settings.output.kind,
                 eval_report={
                     "generated_at": eval_generated_at,
@@ -851,6 +911,7 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
                 },
                 recommendations=recommendations,
                 generated_at=str(manifest["generated_at"]),
+                fence_check=fence_check,
             )
 
 

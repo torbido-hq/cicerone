@@ -174,8 +174,17 @@ class RedisLock:
             token = self._token
             self._held = False
             self._hold_generation += 1
+            marked = self._hold_generation
             self._token = str(uuid.uuid4())
-        self._stop_refresh_thread()
+        stale = False
+        with self._refresh_lifecycle:
+            with self._mutex:
+                if self._hold_generation != marked or self._held:
+                    stale = True
+            if not stale:
+                self._stop_refresh_thread_unlocked()
+        if stale:
+            return
         try:
             self._release_script(keys=[self._key], args=[token])
         except Exception:

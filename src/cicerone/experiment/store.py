@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -27,7 +27,7 @@ from cicerone.io.options import (
     storage_backend,
     validate_storage_options,
 )
-from cicerone.locks import LockBackend, ensure_writer_owned, held_writer_lock
+from cicerone.locks import LockBackend, ensure_writer_owned, held_writer_lock, writer_lock_held_here
 
 logger = logging.getLogger(__name__)
 
@@ -139,7 +139,15 @@ def _hydrate_state_row(row: dict[str, Any]) -> dict[str, Any]:
 class ExperimentStore:
     """Output-store side channel for promote state and exposure logs."""
 
-    def __init__(self, output: IOSettings, *, writer_lock: LockBackend | None = None):
+    def __init__(
+        self,
+        output: IOSettings,
+        *,
+        writer_lock: LockBackend | None = None,
+        fence_check: Callable[[], bool] | None = None,
+        fence_lost: str = "lock lost before write",
+        fence_kind: str = "lock",
+    ):
         self._output = output
         self._kind = output.kind
         self._options = output.options
@@ -150,6 +158,9 @@ class ExperimentStore:
         self._promote_value: str | None = None
         self._promote_state: dict[str, Any] | None = None
         self._writer_lock = writer_lock
+        self._fence_check = fence_check
+        self._fence_lost = fence_lost
+        self._fence_kind = fence_kind
 
     def _db_engine(self) -> Engine:
         if self._engine is None:
@@ -211,17 +222,27 @@ class ExperimentStore:
         encoded = None if self._kind == "db" else json.dumps(payload, indent=2).encode("utf-8")
 
         def _persist() -> None:
+            ensure_writer_owned(
+                self._writer_lock,
+                fence_check=self._fence_check,
+                fence_lost=self._fence_lost,
+                fence_kind=self._fence_kind,
+            )
             if self._kind == "db":
                 self._write_state_db(payload)
                 return
-            ensure_writer_owned(self._writer_lock)
             assert encoded is not None
             self._write_bytes(STATE_FILENAME, encoded, "application/json")
 
-        if self._writer_lock is not None and self._writer_lock.owned():
+        if writer_lock_held_here(self._writer_lock):
             _persist()
         else:
-            with held_writer_lock(self._writer_lock):
+            with held_writer_lock(
+                self._writer_lock,
+                fence_check=self._fence_check,
+                fence_lost=self._fence_lost,
+                fence_kind=self._fence_kind,
+            ):
                 _persist()
         promoted = payload.get("promoted_variant")
         with self._promote_lock:
@@ -326,6 +347,12 @@ class ExperimentStore:
         with engine.begin() as conn:
             conn.execute(create_sql)
         try:
+            ensure_writer_owned(
+                self._writer_lock,
+                fence_check=self._fence_check,
+                fence_lost=self._fence_lost,
+                fence_kind=self._fence_kind,
+            )
             with engine.begin() as conn:
                 conn.execute(text(f'DELETE FROM "{table}"'))
                 conn.execute(insert_sql, params)

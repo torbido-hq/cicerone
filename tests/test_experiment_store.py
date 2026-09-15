@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, text
 
 from cicerone.config import ConfigError, IOSettings
 from cicerone.experiment.store import ExperimentStore, experiment_state
-from cicerone.locks import LockLostError
+from cicerone.locks import LockLostError, WriterLockBusyError, held_writer_lock
 
 
 def test_experiment_store_roundtrip_dataset(tmp_path) -> None:
@@ -307,12 +307,37 @@ def test_write_state_writer_lock_lost(tmp_path) -> None:
     assert store.read_state() is None
 
 
-def test_write_state_skips_acquire_when_already_owned(tmp_path) -> None:
+def test_write_state_skips_acquire_when_held_here(tmp_path) -> None:
     acquires = {"n": 0}
 
-    class _Held:
+    class _Lock:
         def acquire(self) -> bool:
             acquires["n"] += 1
+            return True
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            return True
+
+        def is_locked(self) -> bool:
+            return True
+
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    lock = _Lock()
+    store = ExperimentStore(output, writer_lock=lock)
+    with held_writer_lock(lock):
+        store.write_state(experiment_state("exp", promoted_variant="treatment"))
+    assert acquires["n"] == 1
+    assert store.read_state() is not None
+
+
+def test_write_state_other_thread_does_not_skip_acquire(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("cicerone.locks.acquire_blocking", lambda _lock, **_kwargs: False)
+
+    class _Busy:
+        def acquire(self) -> bool:
             return False
 
         def release(self) -> None:
@@ -325,10 +350,45 @@ def test_write_state_skips_acquire_when_already_owned(tmp_path) -> None:
             return True
 
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    store = ExperimentStore(output, writer_lock=_Held())
-    store.write_state(experiment_state("exp", promoted_variant="treatment"))
-    assert acquires["n"] == 0
-    assert store.read_state() is not None
+    store = ExperimentStore(output, writer_lock=_Busy())
+    with pytest.raises(WriterLockBusyError, match="dataset writer lock busy"):
+        store.write_state(experiment_state("exp", promoted_variant="treatment"))
+    assert store.read_state() is None
+
+
+def test_write_state_db_honors_fence(tmp_path) -> None:
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    output = IOSettings(kind="db", options={"database_url": url})
+    store = ExperimentStore(
+        output,
+        fence_check=lambda: False,
+        fence_lost="retrain lock lost before write",
+        fence_kind="retrain",
+    )
+    with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
+        store.write_state(experiment_state("exp", promoted_variant="treatment"))
+    assert exc.value.kind == "retrain"
+
+
+def test_write_state_db_rechecks_fence_before_replace(tmp_path) -> None:
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    output = IOSettings(kind="db", options={"database_url": url})
+    checks = {"n": 0}
+
+    def fence() -> bool:
+        checks["n"] += 1
+        return checks["n"] < 3
+
+    store = ExperimentStore(
+        output,
+        fence_check=fence,
+        fence_lost="retrain lock lost before write",
+        fence_kind="retrain",
+    )
+    with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
+        store.write_state(experiment_state("exp", promoted_variant="treatment"))
+    assert exc.value.kind == "retrain"
+    assert checks["n"] >= 3
 
 
 def test_append_exposures_empty_is_noop(tmp_path) -> None:

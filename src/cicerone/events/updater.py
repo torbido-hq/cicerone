@@ -116,6 +116,10 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         holder = getattr(self._sink, "recommendations_write", None)
         if callable(holder):
             with holder():
+                if self._write_busy_check is not None and self._write_busy_check():
+                    logger.info("Skipping online persist: full retrain in progress")
+                    self._abort_online()
+                    return
                 self._ensure_fence()
                 self._commit_online()
             return
