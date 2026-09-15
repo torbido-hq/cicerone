@@ -333,3 +333,96 @@ def test_jsonish_numpy_scalar_and_na() -> None:
 
     assert _jsonish(np.int64(3)) == 3
     assert _jsonish(pd.NA) is None
+
+
+def test_experiment_state_extra_keys_roundtrip_dataset(tmp_path) -> None:
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    store = ExperimentStore(output)
+    store.write_state(
+        experiment_state(
+            "exp",
+            promoted_variant=None,
+            champion="control",
+            challenger="blend",
+            arms={"control": {"successes": 3, "failures": 1}},
+            p_best={"control": 0.8, "blend": 0.2},
+            pair_impressions=12,
+        )
+    )
+    state = store.read_state()
+    assert state is not None
+    assert state["champion"] == "control"
+    assert state["challenger"] == "blend"
+    assert state["arms"]["control"]["successes"] == 3
+    promoted, pair = store.assignment_overlay("exp")
+    assert promoted is None
+    assert pair == ("control", "blend")
+
+
+def test_experiment_state_payload_roundtrip_sqlite(tmp_path) -> None:
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    output = IOSettings(kind="db", options={"database_url": url})
+    store = ExperimentStore(output)
+    store.write_state(
+        experiment_state("exp", promoted_variant="control", champion="control", challenger="treatment")
+    )
+    state = store.read_state()
+    assert state is not None
+    assert state["promoted_variant"] == "control"
+    assert state["champion"] == "control"
+    assert state["challenger"] == "treatment"
+    assert "payload" not in state
+    promoted, pair = store.assignment_overlay("exp")
+    assert promoted == "control"
+    assert pair == ("control", "treatment")
+
+
+def test_experiment_state_alters_legacy_sqlite_table(tmp_path) -> None:
+    url = f"sqlite+pysqlite:///{tmp_path / 'legacy.db'}"
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE experiment_state (experiment_id TEXT, promoted_variant TEXT, promoted_at TEXT)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO experiment_state (experiment_id, promoted_variant, promoted_at) "
+                "VALUES ('exp', 'control', '2026-09-01T00:00:00Z')"
+            )
+        )
+    output = IOSettings(kind="db", options={"database_url": url})
+    store = ExperimentStore(output)
+    store.write_state(experiment_state("exp", promoted_variant=None, champion="a", challenger="b"))
+    state = store.read_state()
+    assert state is not None
+    assert state["champion"] == "a"
+    assert state["challenger"] == "b"
+
+
+def test_hydrate_state_row_ignores_invalid_payload() -> None:
+    from cicerone.experiment.store import (
+        _hydrate_state_row,
+        active_pair_from_state,
+        merge_experiment_state,
+    )
+
+    assert _hydrate_state_row({"experiment_id": "exp", "payload": "{not-json"}) == {"experiment_id": "exp"}
+    assert _hydrate_state_row({"experiment_id": "exp", "payload": '["list"]'}) == {"experiment_id": "exp"}
+    hydrated = _hydrate_state_row(
+        {"experiment_id": "exp", "promoted_variant": "control", "payload": {"champion": "a", "payload": "x"}}
+    )
+    assert hydrated["champion"] == "a"
+    assert "payload" not in hydrated
+    assert active_pair_from_state(None) is None
+    assert active_pair_from_state({"champion": "a"}) is None
+    merged = merge_experiment_state(
+        {"champion": "old", "extra": 1},
+        experiment_id="exp",
+        promoted_variant=None,
+        challenger="new",
+    )
+    assert merged["champion"] == "old"
+    assert merged["challenger"] == "new"
+    assert merged["extra"] == 1

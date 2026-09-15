@@ -18,7 +18,8 @@ torch-free. New catalog IDs still wait for a full retrain.
 
 The incremental path always refreshes **popular / latest slices** (and recency
 boosts) for affected users plus `__cold_start__`. When `[experiment]` is
-on, that popular/latest refresh runs **in every variant**. Online LightFM
+on, that popular/latest refresh runs only on the **assigned** (or promoted)
+variant; other variants keep their last batch lists. Online LightFM
 rewrite is skipped while `[experiment]` is on so arms stay isolated.
 [how-it-works.md](how-it-works.md) explains the split. Experiments:
 [experiments.md](experiments.md).
@@ -37,6 +38,7 @@ Batch I/O and serve packages: [architecture.md](architecture.md).
 - Growing LightFM embeddings for brand-new user/item IDs (those wait for `job.run()`)
 - Sequential `fit_partial` (SASRec/BERT4Rec/HSTU stay batch)
 - A public plugin API (`EventSource` is internal, same spirit as `io/` kinds)
+- Impression/click tracking (`POST /track` — see [evaluation.md](evaluation.md))
 
 ## Event contract
 
@@ -80,7 +82,7 @@ poll_interval_seconds = 1
 Optional `[events.online]` continues LightFM on the last model artifact and
 rewrites personalized / item-KNN / content-fallback rows for **affected
 users only**. While `[experiment]` is on, that rewrite is skipped so arms
-stay isolated (popular/latest still refresh every variant).
+stay isolated (popular/latest still refresh only the assigned variant).
 `GET /recommendations` is still a lookup.
 
 ```toml
@@ -127,7 +129,7 @@ are a separate cheap path between those runs.
 ## Other sources
 
 `kind` is one of the **shipped** backends: `webhook`, `db`, `s3`,
-`redis_streams`. Annotated examples: `config/cicerone.toml`.
+`redis_streams`, `kafka`, `rabbitmq`. Annotated examples: `config/cicerone.toml`.
 
 ### `db`
 
@@ -164,6 +166,56 @@ recovery). Required: `redis_url`, `stream`, `consumer_group`. Optional
 `event_id` uses the stream entry id. Requires
 `pip install 'cicerone-recommender[redis]'` or
 `pip install -r requirements-redis.txt` (same extra as the Redis lock).
+
+Prefer Redis Streams when you already run Redis for the lock; Kafka and
+RabbitMQ are extras for shops that already have those brokers.
+
+### `kafka`
+
+Consumer group, JSON objects matching the event contract. Required:
+`bootstrap_servers`, `topic`, `group_id`. Optional `consumer_name`
+(default hostname), `security_protocol`, `sasl_mechanism`,
+`sasl_username`, `sasl_password`. Missing `event_id` uses
+`{partition}-{offset}`. Manual commits of the contiguous watermark per
+partition (an out-of-order ack cannot skip an earlier offset). `nack`
+returns the batch to a local deque without committing. Librdkafka session
+heartbeats cover apply; raise `max.poll.interval.ms` if a flush can exceed
+the default (~5 minutes). Requires `pip install 'cicerone-recommender[kafka]'`
+or `pip install -r requirements-kafka.txt`.
+
+### `rabbitmq`
+
+JSON objects from one durable queue (`basic_get` / `basic_ack`). Required:
+`amqp_url`, `queue`. Optional `prefetch` (default 100). Missing `event_id`
+uses the delivery tag. `nack` returns events to a local deque (broker
+delivery stays unacked). AMQP calls run on one I/O thread; `heartbeat`
+pumps `process_data_events` there so apply does not share the connection
+with the worker thread. Poison messages are acked and dropped. Requires
+`pip install 'cicerone-recommender[rabbitmq]'` or
+`pip install -r requirements-rabbitmq.txt`.
+
+## Publish sidecar
+
+Optional `[publish]` emits one JSON message per `user_id` after the store
+write (batch `write_recommendations` and incremental
+`replace_recommendations_for_users`). Serve still reads `[output]`.
+Independent of `[events]` — the batch job can publish with events off.
+
+```toml
+[publish]
+enabled = true
+kind = "kafka"   # kafka | rabbitmq
+
+[publish.options]
+bootstrap_servers = "${KAFKA_BOOTSTRAP_SERVERS}"
+topic = "cicerone.recommendations"
+```
+
+RabbitMQ: `amqp_url` + `queue`, or `exchange` + optional `routing_key`
+(empty is valid, e.g. fanout; omitted queue-mode key is the queue name).
+Payload: `{user_id, recommendations: [{user_id, item_id, rank, score, source, …}]}`.
+Kafka key is `user_id`. Publish failures fail the job/flush so events are
+nacked. Requires the matching extra.
 
 ## High availability
 
@@ -202,6 +254,8 @@ artifact are capped (`events.online.max_extra_interactions`).
 | s3 list | Single consumer; non-leader skips poll |
 | s3 sqs | Delivery fan-out OK; apply still under the lease |
 | redis_streams | Consumer groups + unique `consumer_name`; apply is leader-only |
+| kafka | Consumer groups + unique `consumer_name`; apply is leader-only |
+| rabbitmq | Competing consumers on one queue; apply is leader-only |
 
 The retrain interlock only engages when something supplies a busy check.
 `start_events_runtime` builds the retrain probe solely when
@@ -246,6 +300,8 @@ next flush (prefer a DB output for history).
 | DB watermark | Near exactly-once | Advance watermark only after successful flush |
 | S3 list (R2) / SQS | At-least-once | Object key + ETag dedupe |
 | Redis Streams | At-least-once | `XACK` after successful flush; stream entry id fallback |
+| Kafka | At-least-once | Commit offsets after successful flush; `{partition}-{offset}` fallback |
+| RabbitMQ | At-least-once | `basic_ack` after successful flush; delivery tag fallback |
 
 Duplicate delivery can inflate weights for `quantity_scaled_events` on the
 popular/latest path. Online LightFM persists the model artifact only after
@@ -260,10 +316,3 @@ interface. Built-in backends register by `kind` at import time; unknown
 kinds raise `ValueError`. Package layout:
 [architecture.md](architecture.md) (`events/`, `serve/events_routes.py`,
 `serve/bootstrap_events.py`).
-
-## Roadmap
-
-Shipped: webhook, db watermark, S3 list / AWS SQS, Redis Streams.
-Possible later backends (not configured today): RabbitMQ, Kafka. Prefer
-Redis Streams when you already run Redis for the lock; do not add Kafka
-only for this feature.

@@ -35,3 +35,26 @@ console.log(
 for (const row of body.items) {
   console.log(`  #${row.rank} ${row.item_id} score=${row.score} source=${row.source}`);
 }
+
+if (process.env.CICERONE_POST_TRACK === "1" && body.items?.length) {
+  const tracked = await fetch(`${baseUrl}/track`, {
+    method: "POST",
+    headers: { ...headers(), "Content-Type": "application/json" },
+    body: JSON.stringify(
+      body.items.map((row) => ({
+        kind: "impression",
+        user_id: userId,
+        item_id: row.item_id,
+        rank: row.rank,
+        occurred_at: new Date().toISOString(),
+        variant: body.variant,
+        generated_at: body.generated_at,
+      })),
+    ),
+  });
+  if (!tracked.ok) {
+    console.error("track failed:", tracked.status, await tracked.text());
+    process.exit(1);
+  }
+  console.log("track:", await tracked.json());
+}

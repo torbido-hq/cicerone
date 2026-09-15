@@ -5,16 +5,19 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
+from uuid import uuid4
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Query, Request, Response
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request, Response
 from fastapi.openapi.utils import get_openapi
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from cicerone import __version__
 from cicerone.config import Settings, load_settings
-from cicerone.config.constants import DEFAULT_LOG_FORMAT
+from cicerone.config.constants import DEFAULT_LOG_FORMAT, DEFAULT_SERVE_MAX_K, TRACK_KIND_IMPRESSION
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
 from cicerone.experiment.assignment import resolve_assignment
@@ -22,6 +25,7 @@ from cicerone.experiment.evaluate import exposure_row
 from cicerone.experiment.store import ExperimentStore
 from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.http_auth import optional_bearer_deps
+from cicerone.http_security import SecurityHeadersMiddleware, token_equals
 from cicerone.io.base import ManifestReader, RecommendationReader
 from cicerone.io.recommendation_reader import SOURCE_COLUMN
 from cicerone.io.recommendation_schema import has_variant_column
@@ -44,9 +48,26 @@ from cicerone.serve.metrics import (
     update_events_source_health,
 )
 from cicerone.serve_schemas import ErrorDetail, HealthResponse, RecommendationItem, RecommendationsResponse
+from cicerone.track.routes import attach_track_ingest_openapi, mount_track_routes
+from cicerone.track.store import TrackStore
 
 logging.basicConfig(level=logging.INFO, format=DEFAULT_LOG_FORMAT)
 logger = logging.getLogger(__name__)
+
+
+def _append_exposures_safe(store: ExperimentStore, rows: list[dict[str, Any]], user_id: str) -> None:
+    try:
+        store.append_exposures(rows)
+    except Exception:
+        logger.exception("Failed to append experiment exposure for user_id=%r", user_id)
+
+
+def _append_impressions_safe(store: TrackStore, rows: list[dict[str, Any]], user_id: str) -> None:
+    try:
+        store.append_rows(rows)
+    except Exception:
+        logger.exception("Failed to append serve impressions for user_id=%r", user_id)
+
 
 SERVE_API_TITLE = "Cicerone Serve API"
 SERVE_API_VERSION = __version__
@@ -59,6 +80,9 @@ looks up rows already stored in the configured output (dataset parquet or DB).
 When `[events]` is enabled with `kind = "webhook"`, `POST /events` accepts
 interaction events for micro-batch incremental updates (write-through to the
 same output store). See `docs/incremental-events.md`.
+
+When `[track]` is enabled, `POST /track` accepts recommendation impressions
+and clicks (not used for training). See `docs/evaluation.md`.
 
 Interactive docs: `/docs` (Swagger UI) and `/redoc` (includes language
 code samples via ``x-codeSamples``). Machine-readable schema: `/openapi.json`.
@@ -123,10 +147,12 @@ def _route_endpoint(request: Request) -> str:
     return request.url.path
 
 
-def _promoted_variant(settings: Settings, store: ExperimentStore | None) -> str | None:
+def _assignment_overlay(
+    settings: Settings, store: ExperimentStore | None
+) -> tuple[str | None, tuple[str, str] | None]:
     if store is None or not settings.experiment.enabled:
-        return None
-    return store.promoted_variant(settings.experiment.id)
+        return None, None
+    return store.assignment_overlay(settings.experiment.id)
 
 
 def create_app(
@@ -143,6 +169,7 @@ def create_app(
         version=SERVE_API_VERSION,
         description=SERVE_API_DESCRIPTION,
     )
+    app.add_middleware(SecurityHeadersMiddleware)
     dependencies = optional_bearer_deps(settings.serve.auth_token)
     availability_filters = list(feature_config.item_availability_filters) if feature_config else []
     category_column = settings.serve.category_column
@@ -155,6 +182,7 @@ def create_app(
     app.state.generated_at_cache = generated_at_cache
     app.state.events_worker = events_worker
     experiment_store = ExperimentStore(settings.output) if settings.experiment.enabled else None
+    track_store = TrackStore(settings.output) if settings.track.enabled else None
     missing_category_warned = False
 
     @app.middleware("http")
@@ -196,7 +224,9 @@ def create_app(
         @app.get("/metrics", tags=["metrics"], include_in_schema=False)
         def metrics(request: Request) -> Response:
             metrics_token = settings.serve.metrics_token
-            if metrics_token and request.headers.get(METRICS_TOKEN_HEADER) != metrics_token:
+            if not metrics_token or not token_equals(
+                request.headers.get(METRICS_TOKEN_HEADER), metrics_token
+            ):
                 raise HTTPException(status_code=401, detail="Invalid or missing metrics token")
             update_cache_age_gauge()
             # Event source lag/connected are refreshed by the worker loop (not on scrape).
@@ -219,8 +249,13 @@ def create_app(
     def get_recommendations(
         user_id: str,
         response: Response,
-        limit: int | None = Query(default=None, gt=0, description="Top-K rows to return"),
-        k: int | None = Query(default=None, gt=0, description="Alias for limit (back-compat)"),
+        background_tasks: BackgroundTasks,
+        limit: int | None = Query(
+            default=None, gt=0, le=DEFAULT_SERVE_MAX_K, description="Top-K rows to return"
+        ),
+        k: int | None = Query(
+            default=None, gt=0, le=DEFAULT_SERVE_MAX_K, description="Alias for limit (back-compat)"
+        ),
         category: str | None = Query(
             default=None,
             description="Keep only items whose configured category column matches this value",
@@ -241,6 +276,7 @@ def create_app(
             top_k = k
         else:
             top_k = settings.serve.default_k
+        top_k = min(top_k, DEFAULT_SERVE_MAX_K)
         items, available_ids, ids_by_category = items_cache.get()
         can_filter = bool(
             items is not None
@@ -248,8 +284,9 @@ def create_app(
             and (category is not None or (exclude_unavailable and availability_filters))
         )
         fetch_k = max(top_k * 5, top_k) if can_filter else top_k
+        promoted, active_pair = _assignment_overlay(settings, experiment_store)
         experiment_id, variant = resolve_assignment(
-            settings, user_id, promoted_variant=_promoted_variant(settings, experiment_store)
+            settings, user_id, promoted_variant=promoted, active_pair=active_pair
         )
         recs = reader.get_recommendations(user_id, fetch_k, variant=variant)
         used_fallback = False
@@ -281,19 +318,36 @@ def create_app(
         if experiment_id and variant:
             record_experiment_served(experiment_id, variant)
             if settings.experiment.log_exposures and experiment_store is not None:
-                try:
-                    experiment_store.append_exposures(
-                        [
-                            exposure_row(
-                                user_id=user_id,
-                                experiment_id=experiment_id,
-                                variant=variant,
-                                generated_at=generated_at,
-                            )
-                        ]
-                    )
-                except Exception:
-                    logger.exception("Failed to append experiment exposure for user_id=%r", user_id)
+                background_tasks.add_task(
+                    _append_exposures_safe,
+                    experiment_store,
+                    [
+                        exposure_row(
+                            user_id=user_id,
+                            experiment_id=experiment_id,
+                            variant=variant,
+                            generated_at=generated_at,
+                        )
+                    ],
+                    user_id,
+                )
+        if settings.serve.log_impressions and track_store is not None and not filtered.empty:
+            occurred = datetime.now(UTC).isoformat()
+            rows = [
+                {
+                    "kind": TRACK_KIND_IMPRESSION,
+                    "user_id": user_id,
+                    "item_id": str(row.item_id),
+                    "rank": int(row.rank),
+                    "occurred_at": occurred,
+                    "event_id": str(uuid4()),
+                    "variant": variant,
+                    "experiment_id": experiment_id,
+                    "generated_at": generated_at,
+                }
+                for row in filtered.itertuples(index=False)
+            ]
+            background_tasks.add_task(_append_impressions_safe, track_store, rows, user_id)
 
         body = RecommendationsResponse(
             generated_at=generated_at,
@@ -317,6 +371,7 @@ def create_app(
         return body
 
     mount_events_routes(app, settings, event_source=event_source)
+    mount_track_routes(app, settings, store=track_store)
 
     def custom_openapi() -> dict:
         if app.openapi_schema is not None:
@@ -341,6 +396,7 @@ def create_app(
             }
         attach_code_samples(schema)
         attach_events_ingest_openapi(schema)
+        attach_track_ingest_openapi(schema)
         app.openapi_schema = schema
         return app.openapi_schema
 

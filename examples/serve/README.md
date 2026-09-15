@@ -5,9 +5,9 @@ serve process (`cicerone serve` or the serve container — see the README
 Serve section and [docs/tutorial.md](../../docs/tutorial.md) step 12).
 
 OpenAPI / ReDoc also embed language samples (`x-codeSamples`, including
-Ruby) on `/health`, `/recommendations/{user_id}`, and `POST /events`
-(when webhook events are enabled) — open `http://localhost:8000/redoc` or
-the checked-in
+Ruby) on `/health`, `/recommendations/{user_id}`, `POST /events` (when
+webhook events are enabled), and `POST /track` (when `[track]` is enabled)
+— open `http://localhost:8000/redoc` or the checked-in
 [`docs/openapi/serve.openapi.json`](../../docs/openapi/serve.openapi.json).
 
 ```sh
@@ -30,4 +30,8 @@ section.
 `POST /events` is present only when `[events]` webhook ingest is enabled
 on that serve process. Tutorial step 13 walks through a local webhook;
 see [docs/incremental-events.md](../../docs/incremental-events.md).
-The curl script JSON-encodes `CICERONE_USER_ID` with `python3` (or `python`).
+`POST /track` is present when `[track]` is enabled — impressions and clicks,
+not training events; see [docs/evaluation.md](../../docs/evaluation.md).
+Set `CICERONE_POST_TRACK=1` (and `CICERONE_POST_EVENTS=1` for `/events`)
+before the curl script. The script JSON-encodes `CICERONE_USER_ID` with
+`python3` (or `python`).

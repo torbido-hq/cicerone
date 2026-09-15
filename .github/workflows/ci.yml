@@ -12,7 +12,7 @@ jobs:
       python: ${{ steps.filter.outputs.python }}
     steps:
       - uses: actions/checkout@v7
-      - uses: dorny/paths-filter@v4
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
         with:
           filters: |
@@ -44,7 +44,7 @@ jobs:
         run: docker run --rm cicerone-test mypy src
 
       - name: pip-audit (dependency vulnerability scan)
-        run: docker run --rm cicerone-test pip-audit -r requirements.txt -r requirements-dev.txt
+        run: docker run --rm cicerone-test pip-audit -r requirements.txt -r requirements-dev.txt -r requirements-bandits.txt
 
       - name: Build sdist and wheel
         run: docker build --target package -t cicerone-package -f docker/Dockerfile .

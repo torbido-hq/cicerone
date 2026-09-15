@@ -24,6 +24,27 @@ def main() -> int:
     print(f"user={body.user_id} fallback={body.fallback} generated_at={body.generated_at} experiment={body.experiment_id} variant={body.variant}")
     for row in body.items:
         print(f"  #{row.rank} {row.item_id} score={row.score:.4f} source={row.source}")
+    if os.environ.get("CICERONE_POST_TRACK") == "1" and body.items:
+        from datetime import UTC, datetime
+
+        payload = [
+            {
+                "kind": "impression",
+                "user_id": user_id,
+                "item_id": row.item_id,
+                "rank": row.rank,
+                "occurred_at": datetime.now(UTC).isoformat(),
+                "variant": body.variant,
+                "generated_at": body.generated_at,
+            }
+            for row in body.items
+        ]
+        try:
+            tracked = client.track(payload)
+        except ServeClientError as exc:
+            print(f"track failed: {exc}", file=sys.stderr)
+            return 1
+        print(f"track accepted={tracked.accepted}")
     return 0
 
 

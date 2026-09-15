@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import hmac
-
 import bcrypt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBasic, HTTPBasicCredentials, HTTPBearer
+
+from cicerone.http_security import token_equals
 
 _bearer_scheme = HTTPBearer(auto_error=True)
 _basic_scheme = HTTPBasic(auto_error=True)
@@ -19,7 +19,7 @@ def require_bearer_token(expected_token: str):
     def _dependency(
         credentials: HTTPAuthorizationCredentials = Depends(_bearer_scheme),  # noqa: B008
     ) -> None:
-        if not hmac.compare_digest(credentials.credentials, expected_token):
+        if not token_equals(credentials.credentials, expected_token):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
     return _dependency
@@ -37,7 +37,10 @@ def require_basic_auth(users: dict[str, str]):
     ) -> None:
         password_hash = users.get(credentials.username)
         candidate_hash = password_hash.encode("utf-8") if password_hash is not None else _DUMMY_HASH
-        password_ok = bcrypt.checkpw(credentials.password.encode("utf-8"), candidate_hash)
+        try:
+            password_ok = bcrypt.checkpw(credentials.password.encode("utf-8"), candidate_hash)
+        except Exception:
+            password_ok = False
         if password_hash is None or not password_ok:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,

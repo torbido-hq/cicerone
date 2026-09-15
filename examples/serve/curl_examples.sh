@@ -69,3 +69,24 @@ print(json.dumps({
     -d "$events_body" \
     "${BASE_URL}/events" | "$PYTHON" -m json.tool
 fi
+
+if [[ "${CICERONE_POST_TRACK:-}" == "1" ]]; then
+  echo
+  echo "## POST /track (set CICERONE_POST_TRACK=1; [track] ingest must be enabled)"
+  track_body="$(
+    USER_ID="$USER_ID" "$PYTHON" -c '
+import json, os
+print(json.dumps({
+    "kind": "impression",
+    "user_id": os.environ["USER_ID"],
+    "item_id": "ipa-001",
+    "rank": 1,
+    "occurred_at": "2026-08-28T12:00:00Z",
+}))
+'
+  )"
+  curl -sS "${auth_header[@]}" -X POST \
+    -H "Content-Type: application/json" \
+    -d "$track_body" \
+    "${BASE_URL}/track" | "$PYTHON" -m json.tool
+fi

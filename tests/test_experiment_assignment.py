@@ -3,7 +3,8 @@ from __future__ import annotations
 import pytest
 from conftest import make_settings
 
-from cicerone.config.settings import ExperimentSettings, VariantSettings
+from cicerone.config.constants import ALLOCATION_THOMPSON
+from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
 from cicerone.experiment.assignment import (
     assign_variant,
     assignment_bucket,
@@ -111,3 +112,32 @@ def test_resolve_assignment_normalizes_numeric_user_id() -> None:
         )
     )
     assert resolve_assignment(settings, 123) == resolve_assignment(settings, "123")
+
+
+def test_resolve_assignment_hashes_active_pair_not_toml_traffic() -> None:
+    settings = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="exp",
+            allocation=ALLOCATION_THOMPSON,
+            explore_traffic=1.0,
+            variants=(
+                VariantSettings(name="control", traffic=0.9),
+                VariantSettings(name="treatment", traffic=0.05),
+                VariantSettings(name="blend", traffic=0.05),
+            ),
+        ),
+        track=TrackSettings(enabled=True),
+    )
+    seen = {resolve_assignment(settings, f"u{i}", active_pair=("control", "blend"))[1] for i in range(40)}
+    assert seen == {"blend"}
+    promoted = resolve_assignment(
+        settings, "u1", promoted_variant="treatment", active_pair=("control", "blend")
+    )
+    assert promoted == ("exp", "treatment")
+    same = resolve_assignment(settings, "u1", active_pair=("control", "control"))
+    assert same[1] == "control"
+    ignored = resolve_assignment(settings, "u1", active_pair=("missing", "gone"))
+    assert ignored[1] in {"control", "treatment", "blend"}
+    half = resolve_assignment(settings, "u1", active_pair=("control", "missing-arm"))
+    assert half[1] in {"control", "treatment", "blend"}

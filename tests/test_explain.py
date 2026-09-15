@@ -231,6 +231,43 @@ def test_attach_reasons_uses_source_when_contribs_empty():
     assert parsed.sources[0].label == "popular_fallback"
 
 
+def test_attach_reasons_scopes_interactions_to_rec_users():
+    recs = pd.DataFrame(
+        [
+            {
+                Columns.User: "u1",
+                Columns.Item: "rec",
+                Columns.Rank: 1,
+                Columns.Score: 1.0,
+                "source": "personalized",
+            }
+        ]
+    )
+    items = pd.DataFrame(
+        [
+            {"item_id": "rec", "style": "lager"},
+            {"item_id": "hist", "style": "lager"},
+            {"item_id": "other", "style": "lager"},
+        ]
+    )
+    interactions = pd.DataFrame(
+        [
+            {Columns.User: "u1", Columns.Item: "hist"},
+            {Columns.User: "u2", Columns.Item: "other"},
+        ]
+    )
+    out = attach_reasons(
+        recs,
+        items=items,
+        interactions=interactions,
+        feature_columns=[FeatureColumn(column="style", type="categorical")],
+        settings=ExplainSettings(enabled=True, max_similar_items=3, max_attributes=5),
+    )
+    parsed = parse_reasons(out.iloc[0][REASONS_COLUMN])
+    assert parsed is not None
+    assert [item.item_id for item in parsed.similar_items] == ["hist"]
+
+
 def test_attach_reasons_disabled_drops_internal_columns():
     recs = pd.DataFrame(
         [

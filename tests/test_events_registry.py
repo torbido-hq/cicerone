@@ -11,6 +11,8 @@ def test_register_and_build_webhook():
     assert "db" in registered_event_source_kinds()
     assert "s3" in registered_event_source_kinds()
     assert "redis_streams" in registered_event_source_kinds()
+    assert "kafka" in registered_event_source_kinds()
+    assert "rabbitmq" in registered_event_source_kinds()
     source = build_event_source("webhook", {})
     assert isinstance(source, WebhookEventSource)
 

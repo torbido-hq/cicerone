@@ -1,4 +1,4 @@
-"""Always-valid two-sample comparison (mixture confidence sequence)."""
+"""Approximate mixture interval for a two-sample mean difference."""
 
 from __future__ import annotations
 

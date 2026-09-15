@@ -1,0 +1,9 @@
+{
+  "name": "sharp",
+  "version": "0.35.4",
+  "private": true,
+  "license": "MIT",
+  "description": "Stand-in for Astro's optional sharp so LGPL libvips is not locked.",
+  "type": "module",
+  "exports": "./index.js"
+}

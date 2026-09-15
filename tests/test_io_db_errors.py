@@ -10,6 +10,8 @@ def test_is_missing_column_error():
     assert is_missing_column_error(exc)
     exc = ProgrammingError("stmt", {}, Exception('column "user_id" does not exist'))
     assert is_missing_column_error(exc)
+    exc = OperationalError("stmt", {}, Exception("table experiment_state has no column named payload"))
+    assert is_missing_column_error(exc)
     assert not is_missing_column_error(OperationalError("stmt", {}, Exception("connection refused")))
 
 

@@ -27,14 +27,19 @@ npm run preview  # serve dist/
 | `astro.config.mjs` | Site URL, sidebar, logo, social, articles plugin |
 | `src/lib/consent.mjs` | Cookie banner + Consent Mode v2 (`G-E38EP8PJSR`) |
 | `public/CNAME` | Custom domain (`cicerone.dev`) |
-| `public/apple-touch-icon.png`, `favicon-32.png` | PNG icon fallbacks (written from the logo SVG by `sync-docs`) |
+| `public/apple-touch-icon.png`, `favicon-32.png` | Committed PNG fallbacks. Update both when `src/assets/cicerone-logo.svg` changes. |
 | `public/images/` | Site diagrams (`flow.svg`) |
 | `public/images/docs/` | Copied from `../docs/images/` at build time (gitignored) |
 
 Generated `src/content/docs/how-it-works.md`, `tutorial.md`,
-`architecture.md`, `incremental-events.md`, `experiments.md`, `src/generated/latest-release.json`,
+`architecture.md`, `incremental-events.md`, `experiments.md`, `evaluation.md`, `src/generated/latest-release.json`,
 and `public/images/docs/` are gitignored; they are created at build/dev time. CI and local builds always
-sync from `docs/`. Articles are **not** synced from `docs/` — add Markdown
+sync from `docs/`. The homepage release line is the latest
+[`cicerone-recommender`](https://pypi.org/project/cicerone-recommender/)
+version on PyPI (date and “what changed” come from that version’s
+`CHANGELOG.md` heading when present). If PyPI is down, `sync-docs` keeps the
+last generated `latest-release.json` when valid, otherwise the newest dated
+CHANGELOG heading. Articles are **not** synced from `docs/` — add Markdown
 under `src/content/docs/articles/` (see below).
 
 ## Articles
