@@ -574,6 +574,159 @@ def test_event_worker_reconnect_restores_buffer_when_connect_fails(tmp_path, fea
     assert [event.event_id for event in worker._buffer.flush()] == ["buf-3"]
 
 
+def test_event_worker_flush_restores_rejected_nack(tmp_path, feature_config: FeatureConfig):
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+
+    class _RejectNack(WebhookEventSource):
+        def heartbeat(self, events):  # type: ignore[no-untyped-def]
+            del events
+            raise RuntimeError("heartbeat failed")
+
+        def nack(self, events):  # type: ignore[no-untyped-def,override]
+            return list(events)
+
+    source = _RejectNack({})
+    source.connect()
+    source.ingest(event_payload(event_id="rej-1", item_id="i11"))
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    kept = worker._buffer.extend(source.poll(1))
+    ready = worker._buffer.flush()
+    assert kept.kept_count == 1
+    assert worker._flush_ready(ready) == 0
+    assert [event.event_id for event in worker._buffer.flush()] == ["rej-1"]
+
+
+def test_event_worker_reconnect_holds_tick_guard(tmp_path, feature_config: FeatureConfig):
+    import threading
+
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    started = threading.Event()
+    release = threading.Event()
+
+    class _SlowReconnect(WebhookEventSource):
+        def connect(self) -> None:
+            self._opens = getattr(self, "_opens", 0) + 1
+            if self._opens > 1:
+                started.set()
+                release.wait(timeout=2)
+            super().connect()
+
+    source = _SlowReconnect({})
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    source.connect()
+    source.ingest(event_payload(event_id="tick-1", item_id="i12"))
+    worker._buffer.extend(source.poll(1))
+
+    def _reconnect() -> None:
+        worker._reconnect_source()
+
+    thread = threading.Thread(target=_reconnect)
+    thread.start()
+    try:
+        assert started.wait(timeout=2)
+        assert worker._tick_guard.acquire(blocking=False) is False
+    finally:
+        release.set()
+        thread.join(timeout=2)
+
+
+def test_event_worker_start_health_holds_tick_guard(tmp_path, feature_config: FeatureConfig):
+    import threading
+
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    started = threading.Event()
+    release = threading.Event()
+
+    class _SlowHealth(WebhookEventSource):
+        def health(self) -> EventSourceHealth:
+            started.set()
+            release.wait(timeout=2)
+            return super().health()
+
+    worker = EventWorker(
+        _SlowHealth({}),
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+        poll_interval_seconds=0.01,
+    )
+    starter = threading.Thread(target=worker.start)
+    starter.start()
+    try:
+        assert started.wait(timeout=2)
+        assert worker._tick_guard.acquire(blocking=False) is False
+    finally:
+        release.set()
+        starter.join(timeout=2)
+        worker.stop(join_timeout_seconds=2.0)
+
+
+def test_event_worker_ack_timeout_persists_without_nack(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    nacked: list[str] = []
+
+    class _AckTimeout(WebhookEventSource):
+        def ack(self, event_ids):  # type: ignore[no-untyped-def,override]
+            raise TimeoutError("ack timed out")
+
+        def nack(self, events):  # type: ignore[no-untyped-def,override]
+            nacked.extend(event.event_id for event in events)
+            return super().nack(events)
+
+    source = _AckTimeout({})
+    source.ingest(event_payload(event_id="ack-to", item_id="i13"))
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    assert worker.tick() == 1
+    assert nacked == []
+    frame = pd.read_parquet(out / "recommendations.parquet")
+    assert "i13" in set(frame["item_id"].astype(str))
+
+
 def test_event_worker_skips_poll_when_startup_health_disconnected(tmp_path, feature_config: FeatureConfig):
     import time
 

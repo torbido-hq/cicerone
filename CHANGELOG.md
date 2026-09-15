@@ -57,6 +57,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Event worker stop does not block on the source lock for a leftover dead thread.
 - Event worker start refreshes source health before the first tick.
 - Event worker reconnect requeues buffered events after the new connection is up and restores only what nack did not keep.
+- Event worker restores a batch when the source cannot keep a nack after a broker timeout.
+- Event worker reconnect takes the tick lock so it cannot interleave with poll/apply.
+- A timed-out event-source ack after a successful apply persists and does not nack.
+- Event worker start health runs under the tick lock.
 - Event worker start abort does not close a worker started after a later stop.
 - Event worker skips the first poll when startup health reports disconnected.
 - A timed-out RabbitMQ I/O job is not started after submit fails.

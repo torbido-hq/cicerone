@@ -708,6 +708,22 @@ def test_nack_allows_repoll(monkeypatch):
     assert broker.connection.channel_obj.nacked == []
 
 
+def test_nack_rejects_when_io_failed(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.enqueue("cicerone.events", event_payload(event_id="e1"))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    first = list(source.poll(1))
+    assert [event.event_id for event in first] == ["e1"]
+    io = source._io
+    assert io is not None
+    io._failed = True
+    rejected = source.nack(first)
+    assert [event.event_id for event in rejected] == ["e1"]
+    assert first[0].event_id not in source._pending_ids
+    source.close()
+
+
 def test_ack_forgets_succeeded_tags_when_later_ack_fails(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     broker.enqueue("cicerone.events", event_payload(event_id="e1"))

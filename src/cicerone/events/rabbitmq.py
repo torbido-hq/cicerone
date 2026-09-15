@@ -430,9 +430,12 @@ class RabbitMQEventSource(EventSource):
             return ()
         kept: set[int] = set()
         with self._lock:
+            io = self._io
+            if io is None or io.failed or io.closing:
+                return tuple(events)
             for event in reversed(list(events)):
                 owner = self._event_io.get(id(event))
-                if owner is None or owner[0] is not self._io:
+                if owner is None or owner[0] is not io:
                     continue
                 if event.event_id not in self._delivery_tags:
                     continue

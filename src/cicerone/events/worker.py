@@ -137,7 +137,8 @@ class EventWorker:
             if self._stop.is_set() or self._stop_epoch != epoch:
                 self._drain_and_close()
                 return
-            self._source_unhealthy = not self.refresh_source_health_metrics()
+            with self._tick_guard:
+                self._source_unhealthy = not self.refresh_source_health_metrics()
             if self._stop.is_set() or self._stop_epoch != epoch:
                 self._drain_and_close()
                 return
@@ -243,14 +244,15 @@ class EventWorker:
         rejected_ids = {id(event) for event in result}
         return [event for event in leftover if id(event) in rejected_ids]
 
-    def _requeue_buffer_after_reconnect(self, leftover: list[NormalizedEvent]) -> None:
+    def _return_events(self, events: Sequence[NormalizedEvent]) -> None:
+        leftover = list(events)
         if not leftover:
             return
         try:
             rejected = self._rejected_nacks(leftover, self._source.nack(leftover))
         except Exception:
             logger.exception(
-                "Event worker failed to return %d buffered event(s) after reconnect",
+                "Event worker failed to return %d event(s) to the source",
                 len(leftover),
             )
             self._restore_buffer(leftover)
@@ -258,29 +260,33 @@ class EventWorker:
         if rejected:
             self._restore_buffer(rejected)
 
+    def _requeue_buffer_after_reconnect(self, leftover: list[NormalizedEvent]) -> None:
+        self._return_events(leftover)
+
     def _reconnect_source(self) -> bool:
-        with self._source_guard:
-            if self._stop.is_set():
-                self._drain_and_close()
-                return False
-            leftover = self._buffer.flush()
-            try:
-                self._source.connect()
-            except Exception:
-                logger.exception("Event source reconnect failed")
-                self._restore_buffer(leftover)
+        with self._tick_guard:
+            with self._source_guard:
                 if self._stop.is_set():
                     self._drain_and_close()
-                return False
-            self._requeue_buffer_after_reconnect(leftover)
+                    return False
+                leftover = self._buffer.flush()
+                try:
+                    self._source.connect()
+                except Exception:
+                    logger.exception("Event source reconnect failed")
+                    self._restore_buffer(leftover)
+                    if self._stop.is_set():
+                        self._drain_and_close()
+                    return False
+                self._requeue_buffer_after_reconnect(leftover)
+                if self._stop.is_set():
+                    self._drain_and_close()
+                    return False
             if self._stop.is_set():
-                self._drain_and_close()
+                with self._source_guard:
+                    self._drain_and_close()
                 return False
-        if self._stop.is_set():
-            with self._source_guard:
-                self._drain_and_close()
-            return False
-        return True
+            return True
 
     def _loop(self) -> None:
         disconnected = self._source_unhealthy
@@ -375,7 +381,7 @@ class EventWorker:
         if not self._acquire_apply_lock():
             record_events_flush(status="busy")
             record_events_apply_busy(reason="lock")
-            self._source.nack(ready)
+            self._return_events(ready)
             return 0
         try:
             return self._flush_ready(ready)
@@ -389,7 +395,7 @@ class EventWorker:
         logger.info("Draining %d buffered event(s) on worker stop", len(leftover))
         if not self._acquire_apply_lock():
             logger.info("Stop drain skipped: apply lease held by another replica")
-            self._source.nack(leftover)
+            self._return_events(leftover)
             return
         try:
             self._flush_ready(leftover)
@@ -404,7 +410,7 @@ class EventWorker:
             record_events_flush(status="error")
             logger.error("In-flight heartbeat failed; returning %d event(s) to source", len(ready))
             self._updater.abort_online()
-            self._source.nack(ready)
+            self._return_events(ready)
             return 0
         except LockLostError:
             record_events_flush(status="error")
@@ -414,19 +420,19 @@ class EventWorker:
                 len(ready),
             )
             self._updater.abort_online()
-            self._source.nack(ready)
+            self._return_events(ready)
             return 0
         except Exception:
             record_events_flush(status="error")
             logger.exception("Incremental apply failed; returning %d event(s) to source", len(ready))
             self._updater.abort_online()
-            self._source.nack(ready)
+            self._return_events(ready)
             return 0
         if applied == 0:
             record_events_flush(status="busy")
             record_events_apply_busy(reason="retrain")
             self._updater.abort_online()
-            self._source.nack(ready)
+            self._return_events(ready)
             return 0
         if applied != len(ready):
             record_events_flush(status="error")
@@ -436,15 +442,20 @@ class EventWorker:
                 len(ready),
             )
             self._updater.abort_online()
-            self._source.nack(ready)
+            self._return_events(ready)
             return 0
         try:
             self._source.ack([event.event_id for event in ready])
+        except TimeoutError:
+            record_events_flush(status="error")
+            logger.exception("Event source ack timed out after successful apply; persisting without nack")
+            self._persist_online_after_ack()
+            return applied
         except Exception:
             record_events_flush(status="error")
             logger.exception("Event source ack failed after successful apply; nacking batch")
             self._updater.abort_online()
-            self._source.nack(ready)
+            self._return_events(ready)
             raise
         self._persist_online_after_ack()
         record_events_flush(status="success", events=applied)
