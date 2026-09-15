@@ -447,6 +447,25 @@ def test_redis_stale_release_does_not_drop_new_holder(monkeypatch):
     lock.release()
 
 
+def test_redis_stale_start_refresh_does_not_stop_new_holder(monkeypatch):
+    client = _mock_redis_module(monkeypatch)
+    client.set.return_value = True
+    lock = RedisLock(
+        "redis://localhost:6379/0",
+        ttl_ms=200,
+        refresh_interval_ms=10_000,
+    )
+    assert lock.acquire() is True
+    stale = lock._hold_generation
+    lock._mark_lost()
+    assert lock.acquire() is True
+    refresher = lock._refresh_thread
+    lock._start_refresh(stale)
+    assert refresher is not None and refresher.is_alive()
+    assert lock._refresh_thread is refresher
+    lock.release()
+
+
 def test_redis_release_generation_skips_stop_after_reacquire(monkeypatch):
     client = _mock_redis_module(monkeypatch)
     client.set.return_value = True

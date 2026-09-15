@@ -303,22 +303,25 @@ class DatabaseOutputSink:
         )
 
     def write_recommendations(self, df: pd.DataFrame) -> None:
-        self._ensure_fence()
-        table, _columns, _user_col = recommendations_sql_names(
-            self._options, default_table=DEFAULT_RECOMMENDATIONS_TABLE
-        )
-        logger.info("Writing %d rows to database table %r", len(df), table)
-        _require_optional_recommendation_columns(self._engine, table, df)
-        with self._engine.begin() as conn:
-            self._ensure_fence()
-            _clear_table_for_replace(conn, table)
-            df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
+        with self.recommendations_write():
+            table, _columns, _user_col = recommendations_sql_names(
+                self._options, default_table=DEFAULT_RECOMMENDATIONS_TABLE
+            )
+            logger.info("Writing %d rows to database table %r", len(df), table)
+            _require_optional_recommendation_columns(self._engine, table, df)
+            with self._engine.begin() as conn:
+                self._ensure_fence()
+                _clear_table_for_replace(conn, table)
+                df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
 
     def replace_recommendations_for_users(self, df: pd.DataFrame, *, user_ids: Sequence[str]) -> int:
-        self._ensure_fence()
         ids = normalize_replace_user_ids(df, user_ids)
         if not ids:
             return 0
+        with self.recommendations_write():
+            return self._replace_recommendations_for_users_unlocked(df, ids)
+
+    def _replace_recommendations_for_users_unlocked(self, df: pd.DataFrame, ids: list[str]) -> int:
         table, _columns, user_col = recommendations_sql_names(
             self._options, default_table=DEFAULT_RECOMMENDATIONS_TABLE
         )
@@ -383,7 +386,6 @@ class DatabaseOutputSink:
 
     def write_model_artifact(self, payload: bytes) -> None:
         """Replace the single-row model_artifacts table with the latest blob."""
-        self._ensure_fence()
         table_name = sql_identifier(
             self._options.get("model_artifact_table", DEFAULT_MODEL_ARTIFACT_TABLE),
             option="model_artifact_table",
@@ -396,14 +398,13 @@ class DatabaseOutputSink:
             Column("payload", LargeBinary, nullable=False),
             Column("written_at", DateTime(timezone=True), nullable=False),
         )
-        with self._engine.begin() as conn:
+        with self.recommendations_write(), self._engine.begin() as conn:
             self._ensure_fence()
             artifacts.create(conn, checkfirst=True)
             conn.execute(artifacts.delete())
             conn.execute(insert(artifacts).values(payload=payload, written_at=datetime.now(UTC)))
 
     def replace_model_artifact_if(self, payload: bytes, expected_fingerprint: str) -> bool:
-        self._ensure_fence()
         table_name = sql_identifier(
             self._options.get("model_artifact_table", DEFAULT_MODEL_ARTIFACT_TABLE),
             option="model_artifact_table",
@@ -415,7 +416,7 @@ class DatabaseOutputSink:
             Column("payload", LargeBinary, nullable=False),
             Column("written_at", DateTime(timezone=True), nullable=False),
         )
-        with self._engine.begin() as conn:
+        with self.recommendations_write(), self._engine.begin() as conn:
             self._ensure_fence()
             artifacts.create(conn, checkfirst=True)
             row = conn.execute(select(artifacts.c.written_at).limit(1).with_for_update()).first()
@@ -460,13 +461,12 @@ class DatabaseOutputSink:
         return f"db:{stamp}"
 
     def write_items_snapshot(self, df: pd.DataFrame) -> None:
-        self._ensure_fence()
         table = sql_identifier(
             self._options.get("recommendation_items_table", DEFAULT_RECOMMENDATION_ITEMS_TABLE),
             option="recommendation_items_table",
         )
         logger.info("Writing %d item snapshot rows to database table %r", len(df), table)
-        with self._engine.begin() as conn:
+        with self.recommendations_write(), self._engine.begin() as conn:
             self._ensure_fence()
             _clear_table_for_replace(conn, table)
             df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)

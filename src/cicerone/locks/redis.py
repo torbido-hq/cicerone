@@ -82,7 +82,13 @@ class RedisLock:
 
     def _start_refresh(self, generation: int) -> None:
         with self._refresh_lifecycle:
+            with self._mutex:
+                if not self._held or self._hold_generation != generation:
+                    return
             self._stop_refresh_thread_unlocked()
+            with self._mutex:
+                if not self._held or self._hold_generation != generation:
+                    return
             self._stop_refresh.clear()
 
             def _run() -> None:

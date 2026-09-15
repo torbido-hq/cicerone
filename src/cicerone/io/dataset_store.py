@@ -300,7 +300,7 @@ class DatasetOutputSink:
     def write_model_artifact(self, payload: bytes) -> None:
         from cicerone.artifact import ARTIFACT_FILENAME
 
-        with self._artifact_lock():
+        with self._maybe_recommendations_lock(), self._artifact_lock():
             self._ensure_writer_still_held()
             self._write_bytes(ARTIFACT_FILENAME, payload, "application/octet-stream")
 
@@ -310,7 +310,7 @@ class DatasetOutputSink:
         if self._backend != "local":
             logger.warning("Skipping model artifact replace: S3 is not compare-and-swap")
             return False
-        with self._artifact_lock():
+        with self._maybe_recommendations_lock(), self._artifact_lock():
             if self.model_artifact_fingerprint() != expected_fingerprint:
                 return False
             self._ensure_writer_still_held()

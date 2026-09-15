@@ -230,7 +230,7 @@ def test_write_recommendations_writer_lock_busy(tmp_path, monkeypatch) -> None:
     assert not (tmp_path / "recommendations.parquet").exists()
 
 
-def test_recommendations_write_reentry_is_per_thread(tmp_path, monkeypatch) -> None:
+def test_recommendations_write_reentry_is_per_thread(tmp_path) -> None:
     acquires: list[int] = []
 
     class _Lock:
@@ -247,27 +247,32 @@ def test_recommendations_write_reentry_is_per_thread(tmp_path, monkeypatch) -> N
         def is_locked(self) -> bool:
             return True
 
-    monkeypatch.setattr("cicerone.locks.acquire_blocking", lambda lock, **_kwargs: lock.acquire())
     sink = DatasetOutputSink(
         {"storage_backend": "local", "path": str(tmp_path)},
         writer_lock=_Lock(),
     )
     started = threading.Event()
     release = threading.Event()
+    frame = pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"}]
+    )
 
     def holder() -> None:
         with sink.recommendations_write():
             started.set()
             release.wait(timeout=2)
 
+    def writer() -> None:
+        sink.write_recommendations(frame)
+
     thread = threading.Thread(target=holder)
     thread.start()
     assert started.wait(timeout=2)
-    sink.write_recommendations(
-        pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"}])
-    )
+    second = threading.Thread(target=writer)
+    second.start()
     release.set()
     thread.join(timeout=2)
+    second.join(timeout=2)
     assert len(acquires) == 2
     assert acquires[0] != acquires[1]
 
