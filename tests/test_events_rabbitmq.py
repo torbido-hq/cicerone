@@ -150,17 +150,19 @@ def test_abandoned_io_does_not_return_late_ok():
 
 
 def test_pika_io_timeout_does_not_run_unclaimed_job():
-    from cicerone.events.rabbitmq import _IO_STOP, _PikaIo
+    from cicerone.events.rabbitmq import _IO_STOP, _JOB_ABANDONED, _PikaIo
 
     io = _PikaIo(timeout_seconds=0.05)
     original_get = io._jobs.get
     dequeued = threading.Event()
     release = threading.Event()
     executed = threading.Event()
+    held: list[Any] = []
 
     def _hold_after_dequeue(*args: Any, **kwargs: Any) -> object:
         job = original_get(*args, **kwargs)
         if job is not _IO_STOP:
+            held.append(job)
             dequeued.set()
             release.wait(timeout=2)
         return job
@@ -181,6 +183,7 @@ def test_pika_io_timeout_does_not_run_unclaimed_job():
         assert dequeued.wait(timeout=2)
         waiter.join(timeout=2)
         assert err and isinstance(err[0], TimeoutError)
+        assert held and held[0].state == _JOB_ABANDONED
         release.set()
         deadline = time.monotonic() + 2.0
         while time.monotonic() < deadline and io._thread.is_alive():

@@ -59,6 +59,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Event worker reconnect returns buffered events to the source before replacing the connection.
 - Event worker skips the first poll when startup health reports disconnected.
 - A timed-out RabbitMQ I/O job is not started after submit fails.
+- RabbitMQ I/O timeout abandons an unclaimed job so it cannot run after submit fails.
 
 ## [0.8.1] - 2026-09-11
 

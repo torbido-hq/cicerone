@@ -29,6 +29,18 @@ logger = logging.getLogger(__name__)
 _EVENTS_PREFIX = "events.options"
 _IO_STOP = object()
 _IO_IDLE_SECONDS = 0.5
+_JOB_QUEUED = "queued"
+_JOB_RUNNING = "running"
+_JOB_ABANDONED = "abandoned"
+
+
+class _IoJob:
+    __slots__ = ("fn", "reply", "state")
+
+    def __init__(self, fn: Callable[[], Any], reply: queue.Queue[tuple[str, Any]]) -> None:
+        self.fn = fn
+        self.reply = reply
+        self.state = _JOB_QUEUED
 
 
 def validate_rabbitmq_event_options(options: dict[str, Any]) -> None:
@@ -91,15 +103,16 @@ class _PikaIo:
 
     def submit(self, fn: Callable[[], Any], *, allow_closing: bool = False) -> Any:
         reply: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
+        job = _IoJob(fn, reply)
         with self._state_lock:
             if self._failed or not self._thread.is_alive() or (self._closing and not allow_closing):
                 raise RuntimeError("RabbitMQ I/O thread is not running")
             self._busy += 1
-            self._jobs.put((fn, reply))
+            self._jobs.put(job)
         try:
             status, payload = reply.get(timeout=self._timeout_seconds)
         except queue.Empty as exc:
-            self._mark_failed()
+            self._abandon_unclaimed(job)
             raise TimeoutError(f"RabbitMQ I/O call timed out after {self._timeout_seconds}s") from exc
         finally:
             if not self._failed:
@@ -114,9 +127,19 @@ class _PikaIo:
         with self._state_lock:
             self._failed = True
 
-    def _claim_dequeued(self) -> bool:
+    def _abandon_unclaimed(self, job: _IoJob) -> None:
         with self._state_lock:
-            return not self._failed
+            self._failed = True
+            if job.state == _JOB_QUEUED:
+                job.state = _JOB_ABANDONED
+
+    def _take_job(self, job: _IoJob) -> bool:
+        with self._state_lock:
+            if self._failed or job.state != _JOB_QUEUED:
+                job.state = _JOB_ABANDONED
+                return False
+            job.state = _JOB_RUNNING
+            return True
 
     def abandon(self, channel: Any, connection: Any) -> None:
         self._mark_failed()
@@ -171,14 +194,13 @@ class _PikaIo:
                 if self._failed:
                     self._exit_failed()
                 return
-            fn, reply = job
-            if not self._claim_dequeued():
+            if not self._take_job(job):
                 with suppress(queue.Full):
-                    reply.put_nowait(("err", RuntimeError("RabbitMQ I/O worker abandoned")))
+                    job.reply.put_nowait(("err", RuntimeError("RabbitMQ I/O worker abandoned")))
                 self._exit_failed()
                 return
             try:
-                result = fn()
+                result = job.fn()
             except Exception as exc:
                 payload: tuple[str, Any] = ("err", exc)
             else:
@@ -186,7 +208,7 @@ class _PikaIo:
             if self._failed:
                 payload = ("err", RuntimeError("RabbitMQ I/O worker abandoned"))
             with suppress(queue.Full):
-                reply.put_nowait(payload)
+                job.reply.put_nowait(payload)
             if self._failed:
                 self._exit_failed()
                 return
@@ -209,9 +231,8 @@ class _PikaIo:
                 return
             if job is _IO_STOP:
                 continue
-            _fn, reply = job
             with suppress(queue.Full):
-                reply.put_nowait(("err", exc))
+                job.reply.put_nowait(("err", exc))
 
     def _exit_failed(self) -> None:
         self._fail_pending(RuntimeError("RabbitMQ I/O worker abandoned"))
