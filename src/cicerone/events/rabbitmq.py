@@ -138,8 +138,7 @@ class _PikaIo:
         if job.run_lock.acquire(blocking=False):
             try:
                 with self._state_lock:
-                    if job.state != _JOB_RUNNING:
-                        job.state = _JOB_ABANDONED
+                    job.state = _JOB_ABANDONED
             finally:
                 job.run_lock.release()
 
@@ -224,6 +223,13 @@ class _PikaIo:
                         job.reply.put_nowait(("err", RuntimeError("RabbitMQ I/O worker abandoned")))
                     self._exit_failed()
                     return
+                with self._state_lock:
+                    if self._failed:
+                        job.state = _JOB_ABANDONED
+                        with suppress(queue.Full):
+                            job.reply.put_nowait(("err", RuntimeError("RabbitMQ I/O worker abandoned")))
+                        self._exit_failed()
+                        return
                 try:
                     result = job.fn()
                 except Exception as exc:
