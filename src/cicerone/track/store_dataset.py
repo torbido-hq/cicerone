@@ -13,6 +13,7 @@ from typing import Any
 
 import pandas as pd
 
+from cicerone.io.blob import append_storage_bytes, read_storage_bytes, write_storage_bytes
 from cicerone.io.options import (
     build_s3_client,
     exclusive_file_lock,
@@ -141,42 +142,13 @@ class TrackDatasetBackend:
             yield
 
     def _read_bytes(self, filename: str) -> bytes | None:
-        backend = validate_storage_options(self._options)
-        if backend == "local":
-            path = Path(require_option(self._options, "path", "local")) / filename
-            if not path.exists():
-                return None
-            return path.read_bytes()
-        bucket = require_option(self._options, "bucket", "s3")
-        key = object_key(self._options, filename)
-        client = build_s3_client(self._options)
-        try:
-            obj = client.get_object(Bucket=bucket, Key=key)
-        except Exception as exc:
-            if is_s3_not_found(exc):
-                return None
-            raise
-        return obj["Body"].read()
+        return read_storage_bytes(self._options, filename)
 
     def _write_bytes(self, filename: str, payload: bytes, content_type: str) -> None:
-        backend = validate_storage_options(self._options)
-        if backend == "local":
-            path = Path(require_option(self._options, "path", "local")) / filename
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_name(f".{path.name}.tmp")
-            tmp.write_bytes(payload)
-            tmp.replace(path)
-            return
-        bucket = require_option(self._options, "bucket", "s3")
-        key = object_key(self._options, filename)
-        client = build_s3_client(self._options)
-        client.put_object(Bucket=bucket, Key=key, Body=payload, ContentType=content_type)
+        write_storage_bytes(self._options, filename, payload, content_type)
 
     def _append_bytes(self, filename: str, payload: bytes) -> None:
-        path = Path(require_option(self._options, "path", "local")) / filename
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("ab") as handle:
-            handle.write(payload)
+        append_storage_bytes(self._options, filename, payload)
 
 
 def _history_part_name(generated_at: str) -> str:
