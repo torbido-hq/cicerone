@@ -191,7 +191,9 @@ JSON objects from one durable queue (`basic_get` / `basic_ack`). Required:
 `amqp_url`, `queue`. Optional `prefetch` (default 100), `timeout_seconds`
 (default 10, same millisecond ceiling as Kafka; socket / blocked / stack
 timeouts and I/O-thread `reply.get`).
-Missing `event_id` uses the delivery tag. `nack` returns events to a local deque (broker
+Missing `event_id` / `idempotency_key` gets a generated UUID; the adapter maps that
+id to the delivery tag for ack. Reconnect redeliveries get a new id and are
+deduped by event fingerprint. `nack` returns events to a local deque (broker
 delivery stays unacked). AMQP calls run on one I/O thread; `heartbeat`
 pumps `process_data_events` there so apply does not share the connection
 with the worker thread. Poison messages are acked and dropped. Requires
@@ -307,7 +309,7 @@ next flush (prefer a DB output for history).
 | S3 list (R2) / SQS | At-least-once | Object key + ETag dedupe |
 | Redis Streams | At-least-once | `XACK` after successful flush; stream entry id fallback |
 | Kafka | At-least-once | Commit offsets after successful flush; `{partition}-{offset}` fallback |
-| RabbitMQ | At-least-once | `basic_ack` after successful flush; delivery tag fallback |
+| RabbitMQ | At-least-once | `basic_ack` after successful flush; generated id when missing; fingerprint dedupe after reconnect |
 
 Duplicate delivery can inflate weights for `quantity_scaled_events` on the
 popular/latest path. Online LightFM persists the model artifact only after

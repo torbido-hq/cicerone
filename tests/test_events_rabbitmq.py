@@ -332,6 +332,63 @@ def test_pika_io_timeout_does_not_run_after_running_when_failed():
         io.stop()
 
 
+def test_pika_io_timeout_does_not_run_after_invoking_when_failed():
+    from cicerone.events.rabbitmq import _IO_STOP, _JOB_ABANDONED, _PikaIo
+
+    io = _PikaIo(timeout_seconds=0.05)
+    original_put = io._jobs.put
+    invoking = threading.Event()
+    release = threading.Event()
+    executed = threading.Event()
+    held: list[Any] = []
+
+    class _GapLock:
+        def __init__(self, lock: threading.Lock) -> None:
+            self._lock = lock
+
+        def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+            if blocking:
+                invoking.set()
+                release.wait(timeout=2)
+            return self._lock.acquire(blocking, timeout)
+
+        def release(self) -> None:
+            self._lock.release()
+
+    def _put(item: object) -> None:
+        if item is not _IO_STOP:
+            held.append(item)
+            item.run_lock = _GapLock(item.run_lock)  # type: ignore[attr-defined]
+        original_put(item)
+
+    io._jobs.put = _put  # type: ignore[method-assign]
+    io.start()
+    err: list[BaseException] = []
+
+    def _caller() -> None:
+        try:
+            io.submit(executed.set)
+        except BaseException as exc:
+            err.append(exc)
+
+    waiter = threading.Thread(target=_caller)
+    waiter.start()
+    try:
+        assert invoking.wait(timeout=2)
+        waiter.join(timeout=2)
+        assert err and isinstance(err[0], TimeoutError)
+        release.set()
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and io._thread.is_alive():
+            time.sleep(0.01)
+        assert io.failed is True
+        assert executed.is_set() is False
+        assert held and held[0].state == _JOB_ABANDONED
+    finally:
+        release.set()
+        io.stop()
+
+
 def test_pika_io_timeout_does_not_run_after_enter_when_failed():
     from cicerone.events.rabbitmq import _JOB_ABANDONED, _PikaIo
 
@@ -860,7 +917,9 @@ def test_ack_forgets_succeeded_tags_when_later_ack_fails(monkeypatch):
     source.close()
 
 
-def test_missing_event_id_uses_delivery_tag(monkeypatch):
+def test_missing_event_id_uses_generated_id(monkeypatch):
+    from uuid import UUID
+
     broker = install_fake_rabbitmq(monkeypatch)
     payload = event_payload()
     payload.pop("event_id")
@@ -869,7 +928,28 @@ def test_missing_event_id_uses_delivery_tag(monkeypatch):
     source.connect()
     events = list(source.poll(10))
     assert len(events) == 1
-    assert events[0].event_id == "rmq:delivery:1"
+    UUID(events[0].event_id)
+    source.ack([events[0].event_id])
+    assert 1 in broker.connection.channel_obj.acked
+    source.close()
+
+
+def test_missing_event_id_does_not_collide_with_user_delivery_prefix(monkeypatch):
+    from uuid import UUID
+
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.enqueue("cicerone.events", event_payload(event_id="rmq:delivery:1", item_id="i1"))
+    payload = event_payload(item_id="i2")
+    payload.pop("event_id")
+    broker.enqueue("cicerone.events", payload)
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    events = list(source.poll(10))
+    assert [event.event_id for event in events[:1]] == ["rmq:delivery:1"]
+    assert len(events) == 2
+    UUID(events[1].event_id)
+    assert events[1].event_id != "rmq:delivery:1"
+    source.close()
 
 
 def test_poison_entry_is_acked(monkeypatch):

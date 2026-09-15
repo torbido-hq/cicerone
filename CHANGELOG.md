@@ -81,7 +81,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Kafka ack keeps local offsets when a partition commit fails.
 - Event worker remembers numeric event ids so a timed-out ack cannot apply them twice.
 - A RabbitMQ I/O timeout cannot start a job after it was marked started.
-- RabbitMQ messages without an event id use a delivery-tag prefix, not the bare tag.
+- RabbitMQ messages without an event id get a generated id mapped to the delivery tag.
+- Event worker remembers applied fingerprints so a new generated id cannot replay the same event.
+- Event worker does not ack a fingerprint-matching redelivery while the original is still unapplied.
+- Event worker stop does not close a worker started after a leftover dead thread.
+- A RabbitMQ I/O timeout cannot run a job after invoke starts but before the broker call.
 
 ## [0.8.1] - 2026-09-11
 

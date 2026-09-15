@@ -1519,6 +1519,108 @@ def test_event_worker_stop_swallows_source_close_errors(tmp_path, feature_config
     assert any("close()" in record.getMessage() for record in caplog.records)
 
 
+def test_event_worker_does_not_ack_fingerprint_redelivery_while_buffered(
+    tmp_path, feature_config: FeatureConfig
+):
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    original = normalize_event(event_payload(event_id="pending-fp-1", item_id="ipend"))
+    redelivery = normalize_event(event_payload(event_id="pending-fp-2", item_id="ipend"))
+    acked: list[str] = []
+
+    class _Replay:
+        def connect(self) -> None:
+            return None
+
+        def poll(self, max_events: int = 100):  # type: ignore[no-untyped-def]
+            del max_events
+            return [redelivery]
+
+        def ack(self, event_ids):  # type: ignore[no-untyped-def]
+            acked.extend(str(event_id) for event_id in event_ids)
+
+        def nack(self, events):  # type: ignore[no-untyped-def]
+            return list(events)
+
+        def health(self) -> EventSourceHealth:
+            return EventSourceHealth(connected=True, lag=1)
+
+    worker = EventWorker(
+        _Replay(),  # type: ignore[arg-type]
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    worker._buffer.extend([original])
+    worker._poll_into_buffer()
+    assert acked == []
+    assert [item.event_id for item in worker._buffer.flush()] == ["pending-fp-1"]
+
+
+def test_event_worker_acks_fingerprint_redelivery_after_apply(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    applies: list[str] = []
+    original = normalize_event(event_payload(event_id="applied-fp-1", item_id="ifp"))
+    redelivery = normalize_event(event_payload(event_id="applied-fp-2", item_id="ifp"))
+
+    class _Redeliver:
+        def __init__(self) -> None:
+            self._pending = [original]
+            self.acked: list[str] = []
+
+        def connect(self) -> None:
+            return None
+
+        def poll(self, max_events: int = 100):  # type: ignore[no-untyped-def]
+            del max_events
+            return list(self._pending)
+
+        def ack(self, event_ids):  # type: ignore[no-untyped-def]
+            self.acked.extend(str(event_id) for event_id in event_ids)
+            self._pending = []
+
+        def nack(self, events):  # type: ignore[no-untyped-def]
+            return list(events)
+
+        def health(self) -> EventSourceHealth:
+            return EventSourceHealth(connected=True, lag=len(self._pending))
+
+    class _CountApply(IncrementalUpdater):
+        def apply(self, events, *, persist_online: bool = True):  # type: ignore[no-untyped-def,override]
+            applies.extend(item.event_id for item in events)
+            return super().apply(events, persist_online=persist_online)
+
+    source = _Redeliver()
+    worker = EventWorker(
+        source,  # type: ignore[arg-type]
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        _CountApply(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    assert worker.tick() == 1
+    source._pending = [redelivery]
+    assert worker.tick() == 0
+    assert applies == ["applied-fp-1"]
+    assert "applied-fp-2" in source.acked
+
+
 def test_event_worker_acks_buffer_duplicates(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()
@@ -1543,7 +1645,7 @@ def test_event_worker_acks_buffer_duplicates(tmp_path, feature_config: FeatureCo
         ),
     )
     assert worker.tick() == 0  # window fills buffer; not ready until size/window
-    assert source.health().lag == 1  # duplicate acked; one remains buffered/in-flight
+    assert source.health().lag == 2  # fingerprint duplicate stays unacked while original is buffered
 
 
 def test_event_worker_restores_rejected_overflow(tmp_path, feature_config: FeatureConfig):
@@ -1733,6 +1835,67 @@ def test_event_worker_stop_does_not_drain_newer_start(tmp_path, feature_config: 
     worker.start()
     second = worker._thread
     assert second is not None and second is not first and second.is_alive()
+    started_second.set()
+    stopper.join(timeout=2)
+    assert worker._thread is second and second.is_alive()
+    assert worker.stop(join_timeout_seconds=2.0) is True
+
+
+def test_event_worker_stop_dead_thread_does_not_drain_newer_start(tmp_path, feature_config: FeatureConfig):
+    import threading
+
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    inner = threading.Lock()
+    stop_thread: list[threading.Thread] = []
+    captured = threading.Event()
+    started_second = threading.Event()
+
+    class _GateLock:
+        def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+            if stop_thread and threading.current_thread() is stop_thread[0]:
+                captured.set()
+                started_second.wait(timeout=2)
+            return inner.acquire(blocking, timeout)
+
+        def release(self) -> None:
+            inner.release()
+
+        def __enter__(self) -> _GateLock:
+            self.acquire()
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            self.release()
+
+    worker = EventWorker(
+        WebhookEventSource({}),
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+        poll_interval_seconds=0.01,
+    )
+    dead = threading.Thread(target=lambda: None)
+    dead.start()
+    dead.join()
+    worker._thread = dead
+    worker._tick_guard = _GateLock()  # type: ignore[assignment]
+
+    def _stop() -> None:
+        stop_thread.append(threading.current_thread())
+        worker.stop(join_timeout_seconds=2.0)
+
+    stopper = threading.Thread(target=_stop)
+    stopper.start()
+    assert captured.wait(timeout=2)
+    worker.start()
+    second = worker._thread
+    assert second is not None and second is not dead and second.is_alive()
     started_second.set()
     stopper.join(timeout=2)
     assert worker._thread is second and second.is_alive()

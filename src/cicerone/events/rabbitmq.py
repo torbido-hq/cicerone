@@ -35,7 +35,6 @@ _JOB_RUNNING = "running"
 _JOB_STARTED = "started"
 _JOB_INVOKING = "invoking"
 _JOB_ABANDONED = "abandoned"
-DELIVERY_TAG_EVENT_ID_PREFIX = "rmq:delivery:"
 
 
 class _IoJob:
@@ -115,7 +114,14 @@ class _PikaIo:
                 if self._failed or job.state != _JOB_STARTED:
                     raise RuntimeError("RabbitMQ I/O worker abandoned")
                 job.state = _JOB_INVOKING
-            return fn()
+            job.run_lock.acquire()
+            try:
+                with self._state_lock:
+                    if self._failed or job.state != _JOB_INVOKING:
+                        raise RuntimeError("RabbitMQ I/O worker abandoned")
+                return fn()
+            finally:
+                job.run_lock.release()
 
         job.fn = _guarded
         with self._state_lock:
@@ -150,7 +156,7 @@ class _PikaIo:
         if job.run_lock.acquire(blocking=False):
             try:
                 with self._state_lock:
-                    if job.state != _JOB_INVOKING:
+                    if job.state == _JOB_INVOKING:
                         job.state = _JOB_ABANDONED
             finally:
                 job.run_lock.release()
@@ -237,33 +243,29 @@ class _PikaIo:
                     job.reply.put_nowait(("err", RuntimeError("RabbitMQ I/O worker abandoned")))
                 self._exit_failed()
                 return
-            job.run_lock.acquire()
-            try:
-                if not self._enter_job(job):
-                    with suppress(queue.Full):
-                        job.reply.put_nowait(("err", RuntimeError("RabbitMQ I/O worker abandoned")))
-                    self._exit_failed()
-                    return
-                if not self._should_run(job):
-                    with suppress(queue.Full):
-                        job.reply.put_nowait(("err", RuntimeError("RabbitMQ I/O worker abandoned")))
-                    self._exit_failed()
-                    return
-                try:
-                    result = job.fn()
-                except Exception as exc:
-                    payload: tuple[str, Any] = ("err", exc)
-                else:
-                    payload = ("ok", result)
-                if self._failed:
-                    payload = ("err", RuntimeError("RabbitMQ I/O worker abandoned"))
+            if not self._enter_job(job):
                 with suppress(queue.Full):
-                    job.reply.put_nowait(payload)
-                if self._failed:
-                    self._exit_failed()
-                    return
-            finally:
-                job.run_lock.release()
+                    job.reply.put_nowait(("err", RuntimeError("RabbitMQ I/O worker abandoned")))
+                self._exit_failed()
+                return
+            if not self._should_run(job):
+                with suppress(queue.Full):
+                    job.reply.put_nowait(("err", RuntimeError("RabbitMQ I/O worker abandoned")))
+                self._exit_failed()
+                return
+            try:
+                result = job.fn()
+            except Exception as exc:
+                payload: tuple[str, Any] = ("err", exc)
+            else:
+                payload = ("ok", result)
+            if self._failed:
+                payload = ("err", RuntimeError("RabbitMQ I/O worker abandoned"))
+            with suppress(queue.Full):
+                job.reply.put_nowait(payload)
+            if self._failed:
+                self._exit_failed()
+                return
 
     def _pump(self) -> None:
         connection = self._connection
@@ -585,8 +587,6 @@ class RabbitMQEventSource(EventSource):
             logger.warning("Skipping invalid RabbitMQ message %s: %s", tag, exc)
             self._ack_discard(io, tag)
             return None
-        if payload.get("event_id") in (None, "") and payload.get("idempotency_key") in (None, ""):
-            payload["event_id"] = f"{DELIVERY_TAG_EVENT_ID_PREFIX}{tag}"
         try:
             event = normalize_event(payload)
         except EventNormalizeError as exc:

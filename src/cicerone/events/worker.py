@@ -15,7 +15,7 @@ from cicerone.config.constants import (
 )
 from cicerone.events.base import EventSource, NormalizedEvent
 from cicerone.events.buffer import MicroBatchBuffer
-from cicerone.events.rabbitmq import DELIVERY_TAG_EVENT_ID_PREFIX
+from cicerone.events.normalize import event_fingerprint
 from cicerone.events.updater import IncrementalUpdater
 from cicerone.locks import LockBackend, LockLostError
 from cicerone.serve.metrics import (
@@ -122,6 +122,8 @@ class EventWorker:
         self._held: list[NormalizedEvent] = []
         self._applied_event_ids: set[str] = set()
         self._applied_event_id_order: deque[str] = deque()
+        self._applied_fingerprints: set[str] = set()
+        self._applied_fingerprint_order: deque[str] = deque()
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -187,7 +189,8 @@ class EventWorker:
                 try:
                     if self._source_guard.acquire(blocking=False):
                         try:
-                            self._drain_and_close()
+                            if self._stop.is_set() and self._thread is thread:
+                                self._drain_and_close()
                         finally:
                             self._source_guard.release()
                 finally:
@@ -196,7 +199,8 @@ class EventWorker:
             try:
                 if self._source_guard.acquire(blocking=False):
                     try:
-                        self._drain_and_close()
+                        if self._stop.is_set() and self._thread is thread:
+                            self._drain_and_close()
                     finally:
                         self._source_guard.release()
                 else:
@@ -249,19 +253,39 @@ class EventWorker:
         self._held = []
         return leftover
 
+    def _remember_token(self, token: str, seen: set[str], order: deque[str]) -> None:
+        if token in seen:
+            return
+        seen.add(token)
+        order.append(token)
+        while len(order) > _APPLIED_EVENT_ID_CAP:
+            seen.discard(order.popleft())
+
     def _remember_applied(self, events: Sequence[NormalizedEvent]) -> None:
         for event in events:
-            eid = event.event_id
-            if eid.startswith(DELIVERY_TAG_EVENT_ID_PREFIX) or eid in self._applied_event_ids:
-                continue
-            self._applied_event_ids.add(eid)
-            self._applied_event_id_order.append(eid)
-            while len(self._applied_event_id_order) > _APPLIED_EVENT_ID_CAP:
-                old = self._applied_event_id_order.popleft()
-                self._applied_event_ids.discard(old)
+            self._remember_token(event.event_id, self._applied_event_ids, self._applied_event_id_order)
+            self._remember_token(
+                event_fingerprint(event), self._applied_fingerprints, self._applied_fingerprint_order
+            )
+
+    def _is_applied(self, event: NormalizedEvent) -> bool:
+        return (
+            event.event_id in self._applied_event_ids
+            or event_fingerprint(event) in self._applied_fingerprints
+        )
+
+    def _still_unapplied(self, event: NormalizedEvent) -> bool:
+        if self._buffer.contains_event_id(event.event_id):
+            return True
+        fingerprint = event_fingerprint(event)
+        if self._buffer.contains_fingerprint(fingerprint):
+            return True
+        return any(
+            held.event_id == event.event_id or event_fingerprint(held) == fingerprint for held in self._held
+        )
 
     def _ack_unbuffered(self, events: Sequence[NormalizedEvent]) -> None:
-        to_ack = [event.event_id for event in events if not self._buffer.contains_event_id(event.event_id)]
+        to_ack = [event.event_id for event in events if not self._still_unapplied(event)]
         if to_ack:
             self._source.ack(to_ack)
 
@@ -383,8 +407,8 @@ class EventWorker:
         polled = list(self._source.poll(self._poll_max_events))
         if not polled:
             return
-        already = [event for event in polled if event.event_id in self._applied_event_ids]
-        fresh = [event for event in polled if event.event_id not in self._applied_event_ids]
+        already = [event for event in polled if self._is_applied(event)]
+        fresh = [event for event in polled if not self._is_applied(event)]
         result = self._buffer.extend(fresh) if fresh else None
         if result is not None and result.overflow:
             self._return_events(result.overflow)
