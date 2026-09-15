@@ -340,6 +340,53 @@ def test_event_worker_stop_skips_close_during_poll(tmp_path, feature_config: Fea
     assert order.index("poll-start") < order.index("close")
 
 
+def test_event_worker_stop_skips_close_during_never_started_tick(
+    tmp_path, feature_config: FeatureConfig
+):
+    import threading
+
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    poll_started = threading.Event()
+    poll_release = threading.Event()
+    order: list[str] = []
+
+    class _GatePoll(WebhookEventSource):
+        def poll(self, max_events: int = 100):  # type: ignore[override]
+            poll_started.set()
+            poll_release.wait(timeout=2)
+            return super().poll(max_events)
+
+        def close(self) -> None:
+            order.append("close")
+            super().close()
+
+    worker = EventWorker(
+        _GatePoll({}),
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+
+    def _tick() -> None:
+        worker.tick()
+
+    ticker = threading.Thread(target=_tick)
+    ticker.start()
+    try:
+        assert poll_started.wait(timeout=2)
+        assert worker.stop(join_timeout_seconds=0.05) is False
+        assert "close" not in order
+    finally:
+        poll_release.set()
+        ticker.join(timeout=2)
+
+
 def test_event_worker_stop_does_not_close_before_in_flight_ack(tmp_path, feature_config: FeatureConfig):
     import threading
     import time
@@ -395,7 +442,7 @@ def test_event_worker_stop_does_not_close_before_in_flight_ack(tmp_path, feature
     assert order.index("ack-done") < order.index("close")
 
 
-def test_event_worker_reconnect_nacks_buffer_before_connect(tmp_path, feature_config: FeatureConfig):
+def test_event_worker_reconnect_nacks_buffer_after_connect(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
     )
@@ -429,8 +476,109 @@ def test_event_worker_reconnect_nacks_buffer_before_connect(tmp_path, feature_co
     assert kept.kept_count == 1
     assert worker._reconnect_source() is True
     assert nacked == ["buf-1"]
-    assert len(worker._buffer) == 0
-    assert order == ["connect", "nack", "connect"]
+    assert [event.event_id for event in worker._buffer.flush()] == ["buf-1"]
+    assert order == ["connect", "connect", "nack"]
+
+
+def test_event_worker_reconnect_restores_buffer_when_nack_fails(
+    tmp_path, feature_config: FeatureConfig
+):
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+
+    class _NackBoom(WebhookEventSource):
+        def nack(self, events):  # type: ignore[no-untyped-def,override]
+            raise RuntimeError("nack unavailable")
+
+    source = _NackBoom({})
+    source.connect()
+    source.ingest(event_payload(event_id="buf-2", item_id="i8"))
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    kept = worker._buffer.extend(source.poll(1))
+    assert kept.kept_count == 1
+    assert worker._reconnect_source() is True
+    assert [event.event_id for event in worker._buffer.flush()] == ["buf-2"]
+
+
+def test_event_worker_reconnect_keeps_buffer_when_nack_is_noop(
+    tmp_path, feature_config: FeatureConfig
+):
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+
+    class _SilentNack(WebhookEventSource):
+        def connect(self) -> None:
+            super().connect()
+            with self._lock:
+                self._pending.clear()
+                self._pending_ids.clear()
+                self._in_flight.clear()
+
+        def nack(self, events):  # type: ignore[no-untyped-def,override]
+            del events
+
+    source = _SilentNack({})
+    source.connect()
+    source.ingest(event_payload(event_id="buf-4", item_id="i10"))
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    kept = worker._buffer.extend(source.poll(1))
+    assert kept.kept_count == 1
+    assert worker._reconnect_source() is True
+    assert [event.event_id for event in worker._buffer.flush()] == ["buf-4"]
+
+
+def test_event_worker_reconnect_restores_buffer_when_connect_fails(
+    tmp_path, feature_config: FeatureConfig
+):
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    connects = {"n": 0}
+
+    class _ConnectBoom(WebhookEventSource):
+        def connect(self) -> None:
+            connects["n"] += 1
+            if connects["n"] > 1:
+                raise RuntimeError("reconnect refused")
+            super().connect()
+
+    source = _ConnectBoom({})
+    source.connect()
+    source.ingest(event_payload(event_id="buf-3", item_id="i9"))
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    kept = worker._buffer.extend(source.poll(1))
+    assert kept.kept_count == 1
+    assert worker._reconnect_source() is False
+    assert [event.event_id for event in worker._buffer.flush()] == ["buf-3"]
 
 
 def test_event_worker_skips_poll_when_startup_health_disconnected(tmp_path, feature_config: FeatureConfig):

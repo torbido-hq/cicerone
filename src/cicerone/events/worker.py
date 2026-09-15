@@ -182,11 +182,17 @@ class EventWorker:
                             self._source_guard.release()
                 finally:
                     self._tick_guard.release()
-        elif self._source_guard.acquire(blocking=False):
+        elif self._tick_guard.acquire(blocking=False):
             try:
-                self._drain_and_close()
+                if self._source_guard.acquire(blocking=False):
+                    try:
+                        self._drain_and_close()
+                    finally:
+                        self._source_guard.release()
+                else:
+                    return False
             finally:
-                self._source_guard.release()
+                self._tick_guard.release()
         else:
             return False
         return joined
@@ -220,31 +226,45 @@ class EventWorker:
             logger.exception("Event worker drain on stop failed")
         self._close_source()
 
-    def _return_buffer_before_reconnect(self) -> None:
-        leftover = self._buffer.flush()
+    def _restore_buffer(self, events: list[NormalizedEvent]) -> None:
+        if not events:
+            return
+        result = self._buffer.extend(events)
+        if result.overflow:
+            logger.error(
+                "Event worker could not restore %d buffered event(s) after reconnect",
+                len(result.overflow),
+            )
+
+    def _requeue_buffer_after_reconnect(self, leftover: list[NormalizedEvent]) -> None:
         if not leftover:
             return
         try:
             self._source.nack(leftover)
         except Exception:
             logger.exception(
-                "Event worker failed to return %d buffered event(s) before reconnect",
+                "Event worker failed to return %d buffered event(s) after reconnect",
                 len(leftover),
             )
+        # Keep the batch even when nack is a no-op (RabbitMQ/Kafka maps were
+        # cleared by connect) or when nack raised.
+        self._restore_buffer(leftover)
 
     def _reconnect_source(self) -> bool:
         with self._source_guard:
             if self._stop.is_set():
                 self._drain_and_close()
                 return False
-            self._return_buffer_before_reconnect()
+            leftover = self._buffer.flush()
             try:
                 self._source.connect()
             except Exception:
                 logger.exception("Event source reconnect failed")
+                self._restore_buffer(leftover)
                 if self._stop.is_set():
                     self._drain_and_close()
                 return False
+            self._requeue_buffer_after_reconnect(leftover)
             if self._stop.is_set():
                 self._drain_and_close()
                 return False
