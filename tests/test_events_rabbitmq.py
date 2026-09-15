@@ -242,6 +242,50 @@ def test_pika_io_timeout_does_not_run_claimed_job():
         io.stop()
 
 
+def test_pika_io_timeout_does_not_run_after_running_when_failed():
+    from cicerone.events.rabbitmq import _JOB_ABANDONED, _PikaIo
+
+    io = _PikaIo(timeout_seconds=0.05)
+    original_should_run = io._should_run
+    entered = threading.Event()
+    release = threading.Event()
+    executed = threading.Event()
+    held: list[Any] = []
+
+    def _hold_before_dispatch(job: Any) -> bool:
+        held.append(job)
+        entered.set()
+        release.wait(timeout=2)
+        return original_should_run(job)
+
+    io._should_run = _hold_before_dispatch  # type: ignore[method-assign]
+    io.start()
+    err: list[BaseException] = []
+
+    def _caller() -> None:
+        try:
+            io.submit(executed.set)
+        except BaseException as exc:
+            err.append(exc)
+
+    waiter = threading.Thread(target=_caller)
+    waiter.start()
+    try:
+        assert entered.wait(timeout=2)
+        waiter.join(timeout=2)
+        assert err and isinstance(err[0], TimeoutError)
+        release.set()
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and io._thread.is_alive():
+            time.sleep(0.01)
+        assert io.failed is True
+        assert executed.is_set() is False
+        assert held and held[0].state == _JOB_ABANDONED
+    finally:
+        release.set()
+        io.stop()
+
+
 def test_pika_io_timeout_does_not_run_after_enter_when_failed():
     from cicerone.events.rabbitmq import _JOB_ABANDONED, _PikaIo
 
@@ -706,6 +750,28 @@ def test_nack_allows_repoll(monkeypatch):
     source.ack(["missing", again[0].event_id])
     assert list(source.poll(10)) == []
     assert broker.connection.channel_obj.nacked == []
+
+
+def test_nack_rejects_if_io_fails_during_requeue(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.enqueue("cicerone.events", event_payload(event_id="e1"))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    first = list(source.poll(1))
+    assert [event.event_id for event in first] == ["e1"]
+    io = source._io
+    assert io is not None
+
+    class _FailingTags(dict):
+        def __contains__(self, key: object) -> bool:
+            io._failed = True
+            return super().__contains__(key)
+
+    source._delivery_tags = _FailingTags(source._delivery_tags)
+    rejected = source.nack(first)
+    assert [event.event_id for event in rejected] == ["e1"]
+    assert first[0].event_id not in source._pending_ids
+    source.close()
 
 
 def test_nack_rejects_when_io_failed(monkeypatch):

@@ -1487,6 +1487,230 @@ def test_event_worker_acks_buffer_duplicates(tmp_path, feature_config: FeatureCo
     assert source.health().lag == 1  # duplicate acked; one remains buffered/in-flight
 
 
+def test_event_worker_restores_rejected_overflow(tmp_path, feature_config: FeatureConfig):
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+
+    class _RejectOverflow(WebhookEventSource):
+        def nack(self, events):  # type: ignore[no-untyped-def,override]
+            return list(events)
+
+    source = _RejectOverflow({})
+    source.connect()
+    for i in range(2):
+        source.ingest(event_payload(event_id=f"ov-rej-{i}", item_id=f"i{i}"))
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0, max_events=1),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    worker._poll_into_buffer()
+    assert [event.event_id for event in worker._buffer.flush()] == ["ov-rej-0"]
+    assert [event.event_id for event in worker._held] == ["ov-rej-1"]
+    worker._poll_into_buffer()
+    assert [event.event_id for event in worker._buffer.flush()] == ["ov-rej-1"]
+    assert worker._held == []
+
+
+def test_event_worker_acks_redelivery_after_applied_restore(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    applies: list[str] = []
+    event = normalize_event(event_payload(event_id="rebind-1", item_id="irebind"))
+
+    class _Redeliver:
+        def __init__(self) -> None:
+            self._pending = [event]
+            self.acked: list[str] = []
+
+        def connect(self) -> None:
+            return None
+
+        def poll(self, max_events: int = 100):  # type: ignore[no-untyped-def]
+            del max_events
+            return list(self._pending)
+
+        def ack(self, event_ids):  # type: ignore[no-untyped-def]
+            self.acked.extend(str(event_id) for event_id in event_ids)
+            self._pending = []
+
+        def nack(self, events):  # type: ignore[no-untyped-def]
+            return list(events)
+
+        def health(self) -> EventSourceHealth:
+            return EventSourceHealth(connected=True, lag=len(self._pending))
+
+    class _CountApply(IncrementalUpdater):
+        def apply(self, events, *, persist_online: bool = True):  # type: ignore[no-untyped-def,override]
+            applies.extend(item.event_id for item in events)
+            return super().apply(events, persist_online=persist_online)
+
+    source = _Redeliver()
+    worker = EventWorker(
+        source,  # type: ignore[arg-type]
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        _CountApply(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    worker._buffer.extend([event])
+    assert worker._reconnect_source() is True
+    assert worker.tick() == 1
+    source._pending = [event]
+    assert worker.tick() == 0
+    assert applies == ["rebind-1"]
+    assert "rebind-1" in source.acked
+
+
+def test_event_worker_stop_does_not_drain_newer_start(tmp_path, feature_config: FeatureConfig):
+    import threading
+    import time
+
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    inner = threading.Lock()
+    stop_thread: list[threading.Thread] = []
+    started_second = threading.Event()
+
+    class _GateLock:
+        def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+            if stop_thread and threading.current_thread() is stop_thread[0]:
+                started_second.wait(timeout=2)
+            return inner.acquire(blocking, timeout)
+
+        def release(self) -> None:
+            inner.release()
+
+        def __enter__(self) -> _GateLock:
+            self.acquire()
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            self.release()
+
+    worker = EventWorker(
+        WebhookEventSource({}),
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+        poll_interval_seconds=0.01,
+    )
+    worker._source_guard = _GateLock()  # type: ignore[assignment]
+    worker.start()
+    first = worker._thread
+    assert first is not None and first.is_alive()
+
+    def _stop() -> None:
+        stop_thread.append(threading.current_thread())
+        worker.stop(join_timeout_seconds=2.0)
+
+    stopper = threading.Thread(target=_stop)
+    stopper.start()
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and first.is_alive():
+        time.sleep(0.01)
+    assert first.is_alive() is False
+    worker.start()
+    second = worker._thread
+    assert second is not None and second is not first and second.is_alive()
+    started_second.set()
+    stopper.join(timeout=2)
+    assert worker._thread is second and second.is_alive()
+    assert worker.stop(join_timeout_seconds=2.0) is True
+
+
+def test_event_worker_start_abort_after_launch_holds_tick_guard(tmp_path, feature_config: FeatureConfig):
+    import threading
+
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    second = threading.Event()
+    release = threading.Event()
+    acquires = {"n": 0}
+
+    class _TickLock:
+        def __init__(self) -> None:
+            self._inner = threading.Lock()
+
+        def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+            acquires["n"] += 1
+            if acquires["n"] == 2:
+                second.set()
+                release.wait(timeout=2)
+            return self._inner.acquire(blocking, timeout)
+
+        def release(self) -> None:
+            self._inner.release()
+
+        def __enter__(self) -> _TickLock:
+            self.acquire()
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            self.release()
+
+    class _AbortingThread(threading.Thread):
+        def start(self) -> None:  # type: ignore[override]
+            worker._stop.set()
+            worker._stop_epoch += 1
+            super().start()
+
+    worker = EventWorker(
+        WebhookEventSource({}),
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+        poll_interval_seconds=60.0,
+    )
+    worker._tick_guard = _TickLock()  # type: ignore[assignment]
+    import cicerone.events.worker as worker_mod
+
+    original_thread = worker_mod.threading.Thread
+
+    def _factory(*args: object, **kwargs: object) -> threading.Thread:
+        if kwargs.get("target") is worker._loop or (args and args[0] is worker._loop):
+            return _AbortingThread(*args, **kwargs)  # type: ignore[misc]
+        return original_thread(*args, **kwargs)  # type: ignore[misc]
+
+    starter = threading.Thread(target=worker.start)
+    worker_mod.threading.Thread = _factory  # type: ignore[misc]
+    try:
+        starter.start()
+        assert second.wait(timeout=2)
+        assert starter.is_alive()
+    finally:
+        release.set()
+        worker_mod.threading.Thread = original_thread
+        starter.join(timeout=2)
+        worker.stop(join_timeout_seconds=2.0)
+
+
 def test_event_worker_nacks_overflow(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()

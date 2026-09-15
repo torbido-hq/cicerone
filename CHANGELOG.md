@@ -69,6 +69,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A RabbitMQ I/O timeout cannot start a job after the waiter has already failed.
 - Event worker stop does not close the source during a never-started in-flight tick.
 - A RabbitMQ heartbeat broker error marks the I/O worker failed and fails closed.
+- Event worker overflow nacks restore events the source did not keep.
+- Event worker start abort waits for the tick lock before closing a launched worker.
+- A RabbitMQ I/O timeout cannot start a job after it was marked running.
+- RabbitMQ nack does not keep a batch if I/O fails during requeue.
+- Event worker stop does not close a worker started after the previous thread joined.
+- Event worker does not apply a reconnect-restored event again when the broker redelivers it.
 
 ## [0.8.1] - 2026-09-11
 
