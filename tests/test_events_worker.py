@@ -1518,6 +1518,46 @@ def test_event_worker_restores_rejected_overflow(tmp_path, feature_config: Featu
     assert worker._held == []
 
 
+def test_event_worker_does_not_ack_buffered_redelivery(tmp_path, feature_config: FeatureConfig):
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    event = normalize_event(event_payload(event_id="pending-1", item_id="ipend"))
+    acked: list[str] = []
+
+    class _Replay:
+        def connect(self) -> None:
+            return None
+
+        def poll(self, max_events: int = 100):  # type: ignore[no-untyped-def]
+            del max_events
+            return [event]
+
+        def ack(self, event_ids):  # type: ignore[no-untyped-def]
+            acked.extend(str(event_id) for event_id in event_ids)
+
+        def nack(self, events):  # type: ignore[no-untyped-def]
+            return list(events)
+
+        def health(self) -> EventSourceHealth:
+            return EventSourceHealth(connected=True, lag=1)
+
+    worker = EventWorker(
+        _Replay(),  # type: ignore[arg-type]
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    worker._buffer.extend([event])
+    worker._poll_into_buffer()
+    assert acked == []
+    assert [item.event_id for item in worker._buffer.flush()] == ["pending-1"]
+
+
 def test_event_worker_acks_redelivery_after_applied_restore(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()
@@ -1640,41 +1680,24 @@ def test_event_worker_stop_does_not_drain_newer_start(tmp_path, feature_config: 
     assert worker.stop(join_timeout_seconds=2.0) is True
 
 
-def test_event_worker_start_abort_after_launch_holds_tick_guard(tmp_path, feature_config: FeatureConfig):
+def test_event_worker_start_abort_after_launch_does_not_reacquire_locks(
+    tmp_path, feature_config: FeatureConfig
+):
     import threading
+    import time
 
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
     )
-    second = threading.Event()
-    release = threading.Event()
-    start_acquires = {"n": 0}
-    starter_holder: list[threading.Thread] = []
+    closes = {"n": 0}
 
-    class _TickLock:
-        def __init__(self) -> None:
-            self._inner = threading.Lock()
-
-        def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
-            if starter_holder and threading.current_thread() is starter_holder[0]:
-                start_acquires["n"] += 1
-                if start_acquires["n"] == 2:
-                    second.set()
-                    release.wait(timeout=2)
-            return self._inner.acquire(blocking, timeout)
-
-        def release(self) -> None:
-            self._inner.release()
-
-        def __enter__(self) -> _TickLock:
-            self.acquire()
-            return self
-
-        def __exit__(self, *_exc: object) -> None:
-            self.release()
+    class _CountClose(WebhookEventSource):
+        def close(self) -> None:
+            closes["n"] += 1
+            super().close()
 
     worker = EventWorker(
-        WebhookEventSource({}),
+        _CountClose({}),
         MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
         IncrementalUpdater(
             sink=build_output_sink(settings.output),
@@ -1682,9 +1705,8 @@ def test_event_worker_start_abort_after_launch_holds_tick_guard(tmp_path, featur
             feature_config=feature_config,
             top_k=3,
         ),
-        poll_interval_seconds=60.0,
+        poll_interval_seconds=0.01,
     )
-    worker._tick_guard = _TickLock()  # type: ignore[assignment]
     original_start = threading.Thread.start
 
     def _start(self: threading.Thread) -> None:
@@ -1693,18 +1715,20 @@ def test_event_worker_start_abort_after_launch_holds_tick_guard(tmp_path, featur
             worker._stop_epoch += 1
         original_start(self)
 
-    starter = threading.Thread(target=worker.start)
-    starter_holder.append(starter)
     threading.Thread.start = _start  # type: ignore[method-assign]
     try:
-        starter.start()
-        assert second.wait(timeout=2)
-        assert starter.is_alive()
+        worker.start()
+        assert worker._tick_guard.acquire(blocking=False)
+        worker._tick_guard.release()
+        assert worker._source_guard.acquire(blocking=False)
+        worker._source_guard.release()
     finally:
-        release.set()
         threading.Thread.start = original_start  # type: ignore[method-assign]
-        starter.join(timeout=2)
-        worker.stop(join_timeout_seconds=2.0)
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and closes["n"] < 1:
+        time.sleep(0.01)
+    assert closes["n"] >= 1
+    assert worker._thread is None or worker._thread.is_alive() is False
 
 
 def test_event_worker_nacks_overflow(tmp_path, feature_config: FeatureConfig):

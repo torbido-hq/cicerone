@@ -75,6 +75,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - RabbitMQ nack does not keep a batch if I/O fails during requeue.
 - Event worker stop does not close a worker started after the previous thread joined.
 - Event worker does not apply a reconnect-restored event again when the broker redelivers it.
+- Event worker start abort after launch leaves drain to the worker thread.
+- Event worker does not ack a redelivery while the same unapplied event is still buffered.
+- Event worker persists after a successful apply if ack fails, instead of nacking written events.
+- Kafka ack keeps local offsets when a partition commit fails.
 
 ## [0.8.1] - 2026-09-11
 

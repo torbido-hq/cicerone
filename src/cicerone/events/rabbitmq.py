@@ -107,6 +107,14 @@ class _PikaIo:
     def submit(self, fn: Callable[[], Any], *, allow_closing: bool = False) -> Any:
         reply: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
         job = _IoJob(fn, reply)
+
+        def _guarded() -> Any:
+            with self._state_lock:
+                if self._failed or job.state != _JOB_STARTED:
+                    raise RuntimeError("RabbitMQ I/O worker abandoned")
+            return fn()
+
+        job.fn = _guarded
         with self._state_lock:
             if self._failed or not self._thread.is_alive() or (self._closing and not allow_closing):
                 raise RuntimeError("RabbitMQ I/O thread is not running")

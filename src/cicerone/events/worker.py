@@ -126,8 +126,6 @@ class EventWorker:
         if self._thread is not None and self._thread.is_alive():
             return
         epoch = self._stop_epoch
-        launched: threading.Thread | None = None
-        abort_after_launch = False
         with self._source_guard:
             if self._thread is not None and self._thread.is_alive():
                 return
@@ -154,12 +152,8 @@ class EventWorker:
                 return
             self._thread = threading.Thread(target=self._loop, name="cicerone-events", daemon=True)
             self._thread.start()
-            launched = self._thread
-            abort_after_launch = self._stop.is_set() or self._stop_epoch != epoch
-        if abort_after_launch and launched is not None:
-            with self._tick_guard, self._source_guard:
-                if self._thread is launched:
-                    self._drain_and_close()
+            if self._stop.is_set() or self._stop_epoch != epoch:
+                return
 
     def stop(self, *, join_timeout_seconds: float = 5.0) -> bool:
         self._stop.set()
@@ -257,13 +251,18 @@ class EventWorker:
     def _remember_applied(self, events: Sequence[NormalizedEvent]) -> None:
         for event in events:
             eid = event.event_id
-            if eid in self._applied_event_ids:
+            if eid.isdigit() or eid in self._applied_event_ids:
                 continue
             self._applied_event_ids.add(eid)
             self._applied_event_id_order.append(eid)
             while len(self._applied_event_id_order) > _APPLIED_EVENT_ID_CAP:
                 old = self._applied_event_id_order.popleft()
                 self._applied_event_ids.discard(old)
+
+    def _ack_unbuffered(self, events: Sequence[NormalizedEvent]) -> None:
+        to_ack = [event.event_id for event in events if not self._buffer.contains_event_id(event.event_id)]
+        if to_ack:
+            self._source.ack(to_ack)
 
     def _rejected_nacks(
         self, leftover: list[NormalizedEvent], result: Sequence[NormalizedEvent] | None
@@ -319,6 +318,7 @@ class EventWorker:
 
     def _loop(self) -> None:
         disconnected = self._source_unhealthy
+        current = threading.current_thread()
         try:
             while not self._stop.is_set():
                 if disconnected and not self._reconnect_source():
@@ -336,7 +336,8 @@ class EventWorker:
         finally:
             if self._stop.is_set():
                 with self._tick_guard, self._source_guard:
-                    self._drain_and_close()
+                    if self._thread is current:
+                        self._drain_and_close()
 
     def tick(self) -> int:
         """One poll/flush cycle; returns events successfully applied."""
@@ -374,8 +375,6 @@ class EventWorker:
         if self._held:
             held_result = self._buffer.extend(self._held)
             self._held = list(held_result.overflow)
-            if held_result.duplicates:
-                self._source.ack([event.event_id for event in held_result.duplicates])
         room = self._buffer.remaining_capacity
         if room <= 0:
             return
@@ -385,17 +384,13 @@ class EventWorker:
             return
         already = [event for event in polled if event.event_id in self._applied_event_ids]
         fresh = [event for event in polled if event.event_id not in self._applied_event_ids]
-        if already:
-            self._source.ack([event.event_id for event in already])
-        if not fresh:
-            return
-        result = self._buffer.extend(fresh)
-        # Duplicates are already represented in the buffer — ack so sources
-        # do not leave them stuck in-flight / PEL.
-        if result.duplicates:
-            self._source.ack([event.event_id for event in result.duplicates])
-        if result.overflow:
+        result = self._buffer.extend(fresh) if fresh else None
+        if result is not None and result.overflow:
             self._return_events(result.overflow)
+        if already:
+            self._ack_unbuffered(already)
+        if result is not None and result.duplicates:
+            self._ack_unbuffered(result.duplicates)
 
     def _acquire_apply_lock(self) -> bool:
         lock = self._apply_lock
@@ -483,21 +478,19 @@ class EventWorker:
             self._updater.abort_online()
             self._return_events(ready)
             return 0
+        self._remember_applied(ready)
         try:
             self._source.ack([event.event_id for event in ready])
         except TimeoutError:
             record_events_flush(status="error")
             logger.exception("Event source ack timed out after successful apply; persisting without nack")
-            self._remember_applied(ready)
             self._persist_online_after_ack()
             return applied
         except Exception:
             record_events_flush(status="error")
-            logger.exception("Event source ack failed after successful apply; nacking batch")
-            self._updater.abort_online()
-            self._return_events(ready)
+            logger.exception("Event source ack failed after successful apply; persisting without nack")
+            self._persist_online_after_ack()
             raise
-        self._remember_applied(ready)
         self._persist_online_after_ack()
         record_events_flush(status="success", events=applied)
         return applied

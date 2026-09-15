@@ -235,7 +235,7 @@ def test_ack_does_not_skip_earlier_offset(monkeypatch):
     assert broker.committed == [(0, 2)]
 
 
-def test_ack_drops_local_state_when_commit_fails(monkeypatch):
+def test_ack_keeps_local_state_when_commit_fails(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
     broker.add("cicerone.events", event_payload(event_id="e1"))
     source = KafkaEventSource(_options())
@@ -244,8 +244,9 @@ def test_ack_drops_local_state_when_commit_fails(monkeypatch):
     broker.commit_error = RuntimeError("commit fail")
     with pytest.raises(RuntimeError, match="commit fail"):
         source.ack([events[0].event_id])
-    source.nack(events)
-    assert list(source.poll(10)) == []
+    assert source.nack(events) == ()
+    again = list(source.poll(10))
+    assert [event.event_id for event in again] == ["e1"]
     source.close()
 
 

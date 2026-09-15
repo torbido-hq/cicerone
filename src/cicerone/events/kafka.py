@@ -171,22 +171,31 @@ class KafkaEventSource(EventSource):
             return
         with self._lock:
             done: dict[int, set[int]] = {}
-            for _, message in resolved:
+            by_partition: dict[int, list[tuple[str, Any]]] = {}
+            for eid, message in resolved:
                 partition = int(message.partition())
                 done.setdefault(partition, set()).add(int(message.offset()))
+                by_partition.setdefault(partition, []).append((eid, message))
             watermarks = {
                 partition: self._next_commit_offset(partition, extra_done=offsets)
                 for partition, offsets in done.items()
             }
-            for eid, message in resolved:
-                self._messages.pop(eid, None)
-                partition = int(message.partition())
-                offset = int(message.offset())
-                self._held_offsets.discard((partition, offset))
-                self._max_offset[partition] = max(self._max_offset.get(partition, -1), offset)
-                self._in_flight.discard(eid)
-                self._pending_ids.discard(eid)
-        self._commit_watermarks(consumer, watermarks)
+        finished: list[tuple[str, Any]] = []
+        try:
+            for partition, nxt in watermarks.items():
+                if nxt is not None:
+                    self._commit_watermarks(consumer, {partition: nxt})
+                finished.extend(by_partition.get(partition, []))
+        finally:
+            with self._lock:
+                for eid, message in finished:
+                    self._messages.pop(eid, None)
+                    partition = int(message.partition())
+                    offset = int(message.offset())
+                    self._held_offsets.discard((partition, offset))
+                    self._max_offset[partition] = max(self._max_offset.get(partition, -1), offset)
+                    self._in_flight.discard(eid)
+                    self._pending_ids.discard(eid)
 
     def nack(self, events: Sequence[NormalizedEvent]) -> Sequence[NormalizedEvent]:
         if not events:
