@@ -384,6 +384,12 @@ class ExperimentStore:
                 fence_kind=self._fence_kind,
             )
             with engine.begin() as conn:
+                ensure_writer_owned(
+                    self._writer_lock,
+                    fence_check=self._fence_check,
+                    fence_lost=self._fence_lost,
+                    fence_kind=self._fence_kind,
+                )
                 conn.execute(text(f'DELETE FROM "{table}"'))
                 ensure_writer_owned(
                     self._writer_lock,
@@ -392,6 +398,12 @@ class ExperimentStore:
                     fence_kind=self._fence_kind,
                 )
                 conn.execute(insert_sql, params)
+                ensure_writer_owned(
+                    self._writer_lock,
+                    fence_check=self._fence_check,
+                    fence_lost=self._fence_lost,
+                    fence_kind=self._fence_kind,
+                )
         except Exception as exc:
             if not is_missing_column_error(exc):
                 raise
@@ -410,6 +422,12 @@ class ExperimentStore:
                 fence_kind=self._fence_kind,
             )
             with engine.begin() as conn:
+                ensure_writer_owned(
+                    self._writer_lock,
+                    fence_check=self._fence_check,
+                    fence_lost=self._fence_lost,
+                    fence_kind=self._fence_kind,
+                )
                 conn.execute(text(f'DELETE FROM "{table}"'))
                 ensure_writer_owned(
                     self._writer_lock,
@@ -418,6 +436,12 @@ class ExperimentStore:
                     fence_kind=self._fence_kind,
                 )
                 conn.execute(insert_sql, params)
+                ensure_writer_owned(
+                    self._writer_lock,
+                    fence_check=self._fence_check,
+                    fence_lost=self._fence_lost,
+                    fence_kind=self._fence_kind,
+                )
 
     def _append_exposures_db(self, rows: Sequence[Mapping[str, Any]]) -> None:
         table = sql_identifier(
@@ -432,6 +456,12 @@ class ExperimentStore:
             fence_kind=self._fence_kind,
         )
         pd.DataFrame(list(rows)).to_sql(table, engine, if_exists="append", index=False)
+        ensure_writer_owned(
+            self._writer_lock,
+            fence_check=self._fence_check,
+            fence_lost=self._fence_lost,
+            fence_kind=self._fence_kind,
+        )
 
     def _read_exposures_db(self, *, experiment_id: str | None = None) -> list[dict[str, Any]]:
         table = sql_identifier(

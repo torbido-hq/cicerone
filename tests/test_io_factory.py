@@ -162,6 +162,40 @@ def test_database_write_recommendations_rechecks_fence_after_clear(tmp_path, mon
         assert stored.empty
 
 
+def test_database_write_recommendations_rechecks_fence_after_append(tmp_path, monkeypatch):
+    import pandas as pd
+    from sqlalchemy import create_engine, inspect, text
+
+    from cicerone.locks import LockLostError
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'recs-after.db'}"
+    held = {"ok": True}
+
+    def fence() -> bool:
+        return held["ok"]
+
+    original = pd.DataFrame.to_sql
+
+    def _to_sql(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        held["ok"] = False
+
+    monkeypatch.setattr(pd.DataFrame, "to_sql", _to_sql)
+    sink = DatabaseOutputSink(
+        {"database_url": url},
+        fence_check=fence,
+        fence_lost="retrain lock lost before write",
+        fence_kind="retrain",
+    )
+    with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
+        sink.write_recommendations(pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1}]))
+    assert exc.value.kind == "retrain"
+    engine = create_engine(url)
+    if inspect(engine).has_table("recommendations"):
+        stored = pd.read_sql(text('SELECT * FROM "recommendations"'), engine)
+        assert stored.empty
+
+
 def test_database_write_items_rechecks_fence_after_clear(tmp_path, monkeypatch):
     import pandas as pd
     from sqlalchemy import create_engine, inspect, text

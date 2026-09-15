@@ -314,6 +314,7 @@ class DatabaseOutputSink:
                 _clear_table_for_replace(conn, table)
                 self._ensure_fence()
                 df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
+                self._ensure_fence()
 
     def replace_recommendations_for_users(self, df: pd.DataFrame, *, user_ids: Sequence[str]) -> int:
         ids = normalize_replace_user_ids(df, user_ids)
@@ -359,6 +360,7 @@ class DatabaseOutputSink:
             if not df.empty:
                 self._ensure_fence()
                 df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
+            self._ensure_fence()
             count_savepoint = conn.begin_nested()
             try:
                 value = conn.execute(count_sql).scalar()
@@ -384,6 +386,7 @@ class DatabaseOutputSink:
                 return False
             self._ensure_fence()
             pd.DataFrame([manifest]).to_sql(table, conn, if_exists="append", index=False)
+            self._ensure_fence()
         return True
 
     def write_model_artifact(self, payload: bytes) -> None:
@@ -407,6 +410,7 @@ class DatabaseOutputSink:
             conn.execute(artifacts.delete())
             self._ensure_fence()
             conn.execute(insert(artifacts).values(payload=payload, written_at=datetime.now(UTC)))
+            self._ensure_fence()
 
     def replace_model_artifact_if(self, payload: bytes, expected_fingerprint: str) -> bool:
         table_name = sql_identifier(
@@ -436,6 +440,7 @@ class DatabaseOutputSink:
                 return False
             self._ensure_fence()
             conn.execute(insert(artifacts).values(payload=payload, written_at=datetime.now(UTC)))
+            self._ensure_fence()
         return True
 
     def read_model_artifact(self) -> bytes | None:
@@ -477,3 +482,4 @@ class DatabaseOutputSink:
             _clear_table_for_replace(conn, table)
             self._ensure_fence()
             df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
+            self._ensure_fence()

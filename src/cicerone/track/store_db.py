@@ -99,6 +99,7 @@ class TrackDbBackend:
                 return []
             self._ensure_fence()
             conn.execute(insert_sql, fresh)
+            self._ensure_fence()
             return fresh
 
     def _read_rows_db(
@@ -146,6 +147,7 @@ class TrackDbBackend:
                 text(f'INSERT INTO "{table}" (payload, written_at) VALUES (:payload, :written_at)'),
                 {"payload": encoded, "written_at": pd.Timestamp.now(tz="UTC").isoformat()},
             )
+            self._ensure_fence()
 
     def _read_eval_db(self) -> dict[str, Any] | None:
         table = sql_identifier(
@@ -178,6 +180,7 @@ class TrackDbBackend:
         )
         self._ensure_fence()
         frame.to_sql(table, self._db_engine(), if_exists="append", index=False)
+        self._ensure_fence()
 
     def _read_history_db(
         self,

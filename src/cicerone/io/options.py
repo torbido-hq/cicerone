@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import io
 import logging
 import re
@@ -70,7 +71,9 @@ def exclusive_file_lock(
                     try:
                         fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                         break
-                    except OSError:
+                    except OSError as exc:
+                        if getattr(exc, "errno", None) not in {errno.EACCES, errno.EAGAIN}:
+                            raise
                         if time.monotonic() >= deadline:
                             raise WriterLockBusyError("dataset writer lock busy") from None
                         time.sleep(0.05)

@@ -196,6 +196,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   append, eval, and history honor the writer lease and recheck the
   fence before INSERT. Experiment state and exposure DB writes recheck
   after DELETE. `POST /track` returns 503 on writer busy or lock loss.
+- DB sink, track, and experiment writes recheck the fence after the
+  last statement so a lost lease rolls back before commit. Local
+  `flock` retries only `EAGAIN`/`EACCES`.
 
 
 ## [0.8.1] - 2026-09-11

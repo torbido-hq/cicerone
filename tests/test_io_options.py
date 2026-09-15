@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import errno
+
 import pytest
 from botocore.exceptions import ClientError
 
@@ -163,11 +165,29 @@ def test_exclusive_file_lock_flock_times_out(tmp_path, monkeypatch):
 
         def flock(self, _fd: int, op: int) -> None:
             if op != self.LOCK_UN:
-                raise OSError("busy")
+                raise OSError(errno.EAGAIN, "busy")
 
     monkeypatch.setattr("cicerone.io.options.fcntl", _Fcntl())
     with (
         pytest.raises(WriterLockBusyError, match="dataset writer lock busy"),
         exclusive_file_lock(tmp_path / "writers.lock", timeout_seconds=0.0),
+    ):
+        pass
+
+
+def test_exclusive_file_lock_reraises_unsupported_flock(tmp_path, monkeypatch):
+    class _Fcntl:
+        LOCK_EX = 2
+        LOCK_NB = 4
+        LOCK_UN = 8
+
+        def flock(self, _fd: int, op: int) -> None:
+            if op != self.LOCK_UN:
+                raise OSError(errno.ENOTSUP, "not supported")
+
+    monkeypatch.setattr("cicerone.io.options.fcntl", _Fcntl())
+    with (
+        pytest.raises(OSError, match="not supported"),
+        exclusive_file_lock(tmp_path / "writers.lock", timeout_seconds=0.1),
     ):
         pass
