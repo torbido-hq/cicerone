@@ -14,7 +14,6 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import sharp from "sharp";
 import { resolveLatestRelease } from "../src/lib/changelog.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -162,19 +161,4 @@ if (stale && source === "previous") {
   );
 } else {
   console.log(`synced PyPI ${release.version} → src/generated/latest-release.json`);
-}
-
-const logoSvg = join(websiteRoot, "src/assets/cicerone-logo.svg");
-if (existsSync(logoSvg)) {
-  const svg = readFileSync(logoSvg);
-  const containWhite = { fit: "contain", background: { r: 255, g: 255, b: 255, alpha: 1 } };
-  await sharp(svg)
-    .resize(180, 180, containWhite)
-    .png()
-    .toFile(join(websiteRoot, "public/apple-touch-icon.png"));
-  await sharp(svg)
-    .resize(32, 32, containWhite)
-    .png()
-    .toFile(join(websiteRoot, "public/favicon-32.png"));
-  console.log("wrote public/apple-touch-icon.png and public/favicon-32.png");
 }

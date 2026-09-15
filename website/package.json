@@ -17,8 +17,11 @@
     "@astrojs/sitemap": "^3.7.3",
     "@astrojs/starlight": "^0.41.7",
     "astro": "^7.2.8",
-    "sharp": "^0.35.4",
+    "sharp": "file:vendor/no-sharp",
     "starlight-blog": "^0.29.0",
     "yaml": "^2.8.0"
+  },
+  "overrides": {
+    "sharp": "$sharp"
   }
 }
