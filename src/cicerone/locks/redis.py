@@ -126,20 +126,23 @@ class RedisLock:
         thread.join(timeout=0.25)
         self._refresh_thread = None
 
-    def acquire(self) -> bool:
+    def try_acquire(self) -> int | None:
         with self._mutex:
             if self._held:
-                return False
+                return None
             token = self._token
         ok = bool(self._client.set(self._key, token, nx=True, px=self._ttl_ms))
         if not ok:
-            return False
+            return None
         with self._mutex:
             self._held = True
             self._hold_generation += 1
             generation = self._hold_generation
         self._start_refresh(generation)
-        return True
+        return generation
+
+    def acquire(self) -> bool:
+        return self.try_acquire() is not None
 
     def owned(self, generation: int | None = None) -> bool:
         with self._mutex:

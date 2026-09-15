@@ -83,19 +83,42 @@ def has_distributed_lock(settings: Settings) -> bool:
     return settings.trigger.lock_backend != "in_process"
 
 
+def _acquire_once(lock: LockBackend) -> tuple[bool, int | None]:
+    try_acquire = getattr(lock, "try_acquire", None)
+    if callable(try_acquire):
+        generation = try_acquire()
+        if generation is None:
+            return False, None
+        return True, generation
+    if lock.acquire():
+        return True, getattr(lock, "hold_generation", None)
+    return False, None
+
+
+def _acquire_until(
+    lock: LockBackend,
+    *,
+    timeout_seconds: float = DEFAULT_LOCK_ACQUIRE_TIMEOUT_SECONDS,
+    interval_seconds: float = 0.05,
+) -> tuple[bool, int | None]:
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        ok, generation = _acquire_once(lock)
+        if ok:
+            return True, generation
+        if time.monotonic() >= deadline:
+            return False, None
+        time.sleep(interval_seconds)
+
+
 def acquire_blocking(
     lock: LockBackend,
     *,
     timeout_seconds: float = DEFAULT_LOCK_ACQUIRE_TIMEOUT_SECONDS,
     interval_seconds: float = 0.05,
 ) -> bool:
-    deadline = time.monotonic() + timeout_seconds
-    while True:
-        if lock.acquire():
-            return True
-        if time.monotonic() >= deadline:
-            return False
-        time.sleep(interval_seconds)
+    ok, _generation = _acquire_until(lock, timeout_seconds=timeout_seconds, interval_seconds=interval_seconds)
+    return ok
 
 
 _writer_hold = threading.local()
@@ -175,9 +198,9 @@ def held_writer_lock(
             raise LockLostError(fence_lost, kind=fence_kind)
         yield
         return
-    if not acquire_blocking(lock):
+    ok, generation = _acquire_until(lock)
+    if not ok:
         raise WriterLockBusyError("dataset writer lock busy")
-    generation = getattr(lock, "hold_generation", None)
     _bind_writer_generation(lock, generation)
     try:
         ensure_writer_owned(

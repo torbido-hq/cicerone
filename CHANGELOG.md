@@ -176,6 +176,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Dashboard promote reads and writes experiment state under one writer
   lock. The job rematches `promoted_variant` before writing Thompson
   state. Track eval and history writes honor the retrain fence.
+- Writer-lock acquire binds the Redis generation in the same step as
+  SET NX, so a later reacquire cannot fence stale work.
 
 
 ## [0.8.1] - 2026-09-11

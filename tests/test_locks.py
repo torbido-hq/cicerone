@@ -771,6 +771,37 @@ def test_held_writer_lock_owned_after_nested_wait():
     assert events == ["nested", "acquire", "owned", "write", "release"]
 
 
+def test_held_writer_lock_binds_try_acquire_generation():
+    released: list[int] = []
+
+    class Lock:
+        hold_generation = 99
+
+        def try_acquire(self) -> int:
+            return 3
+
+        def acquire(self) -> bool:
+            raise AssertionError("held_writer_lock should use try_acquire")
+
+        def release(self) -> None:
+            raise AssertionError("should release by generation")
+
+        def release_generation(self, generation: int) -> None:
+            released.append(generation)
+
+        def owned(self, generation: int | None = None) -> bool:
+            return generation == 3
+
+        def is_locked(self) -> bool:
+            return True
+
+    lock = Lock()
+    with held_writer_lock(lock):
+        assert locks_mod._bound_writer_generation(lock) == 3
+        locks_mod.ensure_writer_owned(lock)
+    assert released == [3]
+
+
 def test_writer_lock_held_here_without_hold_generation():
     class Lock:
         def acquire(self) -> bool:
