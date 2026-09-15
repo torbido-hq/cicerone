@@ -12,7 +12,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `lock_backend` is distributed, even if `events.ha` is false. Retrain
   probe follows the same rule.
 
-
 ### Fixed
 
 - Kafka and RabbitMQ ingest and publish time out broker calls after 10s (`timeout_seconds`).
@@ -112,10 +111,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A RabbitMQ I/O timeout cannot start a dispatched job.
 - RabbitMQ get, ack, declare, and heartbeat raise after the I/O channel is detached instead of succeeding.
 - RabbitMQ abandoned cleanup closes the timed-out connection and any leftover live handle.
-- Dataset user-replace and local JSONL track/exposure append serialize
-  writers on one host; a distributed lock serializes those appends when
-  `lock_backend` is postgres or redis.
-
 - Dataset recommendation writes and user-replace share one host lock;
   JSONL track/exposure appends do the same. A distributed lock serializes
   those writers when `lock_backend` is postgres or redis.
@@ -203,7 +198,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   connection so a failed final fence rolls the insert back.
 - Experiment state CREATE/ALTER stay in the fenced write transaction
   so a lost lease does not leave an empty or migrated table.
-
 
 ## [0.8.1] - 2026-09-11
 
