@@ -480,6 +480,43 @@ def test_event_worker_reconnect_nacks_buffer_after_connect(tmp_path, feature_con
     assert order == ["connect", "connect", "nack"]
 
 
+def test_event_worker_reconnect_keeps_retry_acks_until_live_delivery(tmp_path, feature_config: FeatureConfig):
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    nacked: list[str] = []
+
+    class _TrackNack(WebhookEventSource):
+        def nack(self, events):  # type: ignore[no-untyped-def,override]
+            nacked.extend(event.event_id for event in events)
+            return super().nack(events)
+
+    source = _TrackNack({})
+    source.connect()
+    event = normalize_event(event_payload(event_id="retry-live", item_id="i9"))
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    worker._remember_applied([event])
+    worker._retry_acks = [event]
+    assert worker._reconnect_source() is True
+    assert nacked == []
+    assert [item.event_id for item in worker._retry_acks] == ["retry-live"]
+    worker._flush_retry_acks()
+    assert [item.event_id for item in worker._retry_acks] == ["retry-live"]
+    source.ingest(event_payload(event_id="retry-live", item_id="i9"))
+    assert [item.event_id for item in source.poll(1)] == ["retry-live"]
+    worker._flush_retry_acks()
+    assert worker._retry_acks == []
+
+
 def test_event_worker_reconnect_restores_buffer_when_nack_fails(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),

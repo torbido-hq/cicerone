@@ -389,6 +389,67 @@ def test_pika_io_timeout_does_not_run_after_invoking_when_failed():
         io.stop()
 
 
+def test_pika_io_timeout_does_not_run_dispatched_job():
+    from cicerone.events.rabbitmq import _IO_STOP, _JOB_DISPATCHED, _PikaIo
+
+    io = _PikaIo(timeout_seconds=0.05)
+    inner = io._state_lock
+    original_put = io._jobs.put
+    held: list[Any] = []
+    dispatched = threading.Event()
+    release = threading.Event()
+    executed = threading.Event()
+
+    class _GapLock:
+        def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+            return inner.acquire(blocking, timeout)
+
+        def release(self) -> None:
+            inner.release()
+            if held and held[0].state == _JOB_DISPATCHED:
+                dispatched.set()
+                release.wait(timeout=2)
+
+        def __enter__(self) -> _GapLock:
+            self.acquire()
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            self.release()
+
+    def _put(item: object) -> None:
+        if item is not _IO_STOP:
+            held.append(item)
+        original_put(item)
+
+    io._jobs.put = _put  # type: ignore[method-assign]
+    io._state_lock = _GapLock()  # type: ignore[assignment]
+    io.start()
+    err: list[BaseException] = []
+
+    def _caller() -> None:
+        try:
+            io.submit(executed.set)
+        except BaseException as exc:
+            err.append(exc)
+
+    waiter = threading.Thread(target=_caller)
+    waiter.start()
+    try:
+        assert dispatched.wait(timeout=2)
+        waiter.join(timeout=2)
+        assert err and isinstance(err[0], TimeoutError)
+        release.set()
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and io._thread.is_alive():
+            time.sleep(0.01)
+        assert io.failed is True
+        assert executed.is_set() is False
+    finally:
+        release.set()
+        io.stop()
+
+
 def test_pika_io_timeout_detaches_channel_so_late_ack_cannot_run():
     from types import SimpleNamespace
 

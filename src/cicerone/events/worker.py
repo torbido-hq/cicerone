@@ -280,11 +280,33 @@ class EventWorker:
         self._held = []
         return leftover
 
-    def _take_pending_acks(self) -> list[NormalizedEvent]:
-        pending = self._deferred_acks + self._retry_acks
+    def _take_deferred_acks(self) -> list[NormalizedEvent]:
+        pending = self._deferred_acks
         self._deferred_acks = []
+        return pending
+
+    def _take_pending_acks(self) -> list[NormalizedEvent]:
+        pending = self._take_deferred_acks() + self._retry_acks
         self._retry_acks = []
         return pending
+
+    def _ack_live_ids(self, event_ids: Sequence[str]) -> set[str]:
+        result = self._source.ack(event_ids)
+        if result is None:
+            return {str(event_id) for event_id in event_ids}
+        return {str(event_id) for event_id in result}
+
+    def _drop_retry_acks(self, live: Sequence[NormalizedEvent]) -> None:
+        if not self._retry_acks or not live:
+            return
+        live_ids = {event.event_id for event in live}
+        live_fps = {event_fingerprint(event) for event in live if self._fingerprint_dedupe(event)}
+        self._retry_acks = [
+            event
+            for event in self._retry_acks
+            if event.event_id not in live_ids
+            and not (self._fingerprint_dedupe(event) and event_fingerprint(event) in live_fps)
+        ]
 
     def _remember_token(self, token: str, seen: set[str], order: deque[str]) -> None:
         if token in seen:
@@ -330,10 +352,14 @@ class EventWorker:
         if not to_ack:
             return
         try:
-            self._source.ack([event.event_id for event in to_ack])
+            live_ids = self._ack_live_ids([event.event_id for event in to_ack])
         except Exception:
             self._retry_acks.extend(to_ack)
             raise
+        live = [event for event in to_ack if event.event_id in live_ids]
+        missing = [event for event in to_ack if event.event_id not in live_ids]
+        self._retry_acks.extend(missing)
+        self._drop_retry_acks(live)
 
     def _ack_deferred_matching(self, applied: Sequence[NormalizedEvent]) -> None:
         if not self._deferred_acks:
@@ -353,10 +379,13 @@ class EventWorker:
         if not matched:
             return
         try:
-            self._source.ack([event.event_id for event in matched])
+            live_ids = self._ack_live_ids([event.event_id for event in matched])
         except Exception:
             self._retry_acks.extend(matched)
             raise
+        live = [event for event in matched if event.event_id in live_ids]
+        self._retry_acks.extend(event for event in matched if event.event_id not in live_ids)
+        self._drop_retry_acks(live)
 
     def _flush_retry_acks(self) -> None:
         if not self._retry_acks:
@@ -364,11 +393,15 @@ class EventWorker:
         batch = self._retry_acks
         self._retry_acks = []
         try:
-            self._source.ack([event.event_id for event in batch])
-            self._ack_deferred_matching(batch)
+            live_ids = self._ack_live_ids([event.event_id for event in batch])
         except Exception:
             self._retry_acks.extend(batch)
             raise
+        live = [event for event in batch if event.event_id in live_ids]
+        self._retry_acks.extend(event for event in batch if event.event_id not in live_ids)
+        if live:
+            self._ack_deferred_matching(live)
+            self._drop_retry_acks(live)
 
     def _rejected_nacks(
         self, leftover: list[NormalizedEvent], result: Sequence[NormalizedEvent] | None
@@ -404,7 +437,7 @@ class EventWorker:
                     self._drain_and_close()
                     return False
                 leftover = self._take_buffered()
-                leftover.extend(self._take_pending_acks())
+                leftover.extend(self._take_deferred_acks())
                 try:
                     self._source.connect()
                 except Exception:
@@ -593,7 +626,7 @@ class EventWorker:
             return 0
         self._remember_applied(ready)
         try:
-            self._source.ack([event.event_id for event in ready])
+            live_ids = self._ack_live_ids([event.event_id for event in ready])
         except TimeoutError:
             record_events_flush(status="error")
             logger.exception("Event source ack timed out after successful apply; persisting without nack")
@@ -606,8 +639,14 @@ class EventWorker:
             self._retry_acks.extend(ready)
             self._persist_online_after_ack()
             raise
+        live = [event for event in ready if event.event_id in live_ids]
+        missing = [event for event in ready if event.event_id not in live_ids]
+        if missing:
+            self._retry_acks.extend(missing)
         try:
-            self._ack_deferred_matching(ready)
+            if live:
+                self._ack_deferred_matching(live)
+                self._drop_retry_acks(live)
         except Exception:
             record_events_flush(status="error")
             logger.exception(

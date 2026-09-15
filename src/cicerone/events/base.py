@@ -40,8 +40,8 @@ class EventSource(Protocol):
         """Return up to ``max_events`` pending events (may be empty)."""
         ...
 
-    def ack(self, event_ids: Sequence[str]) -> None:
-        """Confirm successful processing for the given event ids."""
+    def ack(self, event_ids: Sequence[str]) -> Sequence[str]:
+        """Ack ids that still have a live delivery; return those ids."""
         ...
 
     def nack(self, events: Sequence[NormalizedEvent]) -> Sequence[NormalizedEvent]:

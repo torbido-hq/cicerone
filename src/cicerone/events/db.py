@@ -146,13 +146,16 @@ class DbEventSource(EventSource):
                 self._in_flight.pop(event.event_id, None)
         return ()
 
-    def ack(self, event_ids: Sequence[str]) -> None:
+    def ack(self, event_ids: Sequence[str]) -> Sequence[str]:
+        confirmed: list[str] = []
         with self._lock:
             advanced = False
             for event_id in event_ids:
-                event = self._in_flight.pop(str(event_id), None)
+                eid = str(event_id)
+                event = self._in_flight.pop(eid, None)
                 if event is None:
                     continue
+                confirmed.append(eid)
                 key = _cursor_key(event)
                 if key > _cursor_tuple(self._watermark_at, self._watermark_event_id):
                     self._watermark_at = event.occurred_at
@@ -160,6 +163,7 @@ class DbEventSource(EventSource):
                     advanced = True
             if advanced:
                 self._persist_watermark_unlocked()
+        return tuple(confirmed)
 
     def health(self) -> EventSourceHealth:
         with self._lock:

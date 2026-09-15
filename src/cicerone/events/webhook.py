@@ -93,10 +93,19 @@ class WebhookEventSource(EventSource):
                 self._pending_ids.add(event.event_id)
         return ()
 
-    def ack(self, event_ids: Sequence[str]) -> None:
+    def ack(self, event_ids: Sequence[str]) -> Sequence[str]:
+        confirmed: list[str] = []
         with self._lock:
             for event_id in event_ids:
-                self._in_flight.pop(str(event_id), None)
+                eid = str(event_id)
+                if eid in self._in_flight:
+                    self._in_flight.pop(eid, None)
+                    confirmed.append(eid)
+        return tuple(confirmed)
+
+    def close(self) -> None:
+        with self._lock:
+            self._connected = False
 
     def health(self) -> EventSourceHealth:
         with self._lock:

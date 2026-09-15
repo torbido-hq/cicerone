@@ -168,11 +168,14 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
             timeout_seconds=_SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS,
         )
 
-    def ack(self, event_ids: Sequence[str]) -> None:
+    def ack(self, event_ids: Sequence[str]) -> Sequence[str]:
         completed: list[_Batch] = []
+        confirmed: list[str] = []
         with self._lock:
             for event_id in event_ids:
                 eid = str(event_id)
+                if eid in self._in_flight:
+                    confirmed.append(eid)
                 self._in_flight.pop(eid, None)
                 batch = self._event_batch.pop(eid, None)
                 if batch is None:
@@ -182,6 +185,7 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
             sqs = self._sqs
             queue_url = self._queue_url
         self._finish_completed(completed, sqs=sqs, queue_url=queue_url)
+        return tuple(confirmed)
 
     def health(self) -> EventSourceHealth:
         with self._lock:

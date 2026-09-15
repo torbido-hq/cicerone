@@ -100,6 +100,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Event worker fingerprint dedupe applies only to generated event ids.
 - Event worker stop returns pending acks when a drain ack fails.
 - RabbitMQ ack clears ownership for events carried across reconnect.
+- Event worker reconnect does not nack post-apply ack retries.
+- Event source ack returns only ids bound to a live delivery.
+- A RabbitMQ I/O timeout cannot start a dispatched job.
 
 ## [0.8.1] - 2026-09-11
 

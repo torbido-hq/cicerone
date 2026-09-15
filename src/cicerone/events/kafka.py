@@ -156,9 +156,9 @@ class KafkaEventSource(EventSource):
                 self._last_event_at = newest
         return out
 
-    def ack(self, event_ids: Sequence[str]) -> None:
+    def ack(self, event_ids: Sequence[str]) -> Sequence[str]:
         if not event_ids:
-            return
+            return ()
         consumer = self._require_client()
         with self._lock:
             resolved: list[tuple[str, Any]] = []
@@ -168,7 +168,7 @@ class KafkaEventSource(EventSource):
                 if message is not None:
                     resolved.append((eid, message))
         if not resolved:
-            return
+            return ()
         with self._lock:
             done: dict[int, set[int]] = {}
             for _eid, message in resolved:
@@ -205,6 +205,7 @@ class KafkaEventSource(EventSource):
                     offset = int(message.offset())
                     self._held_offsets.discard((partition, offset))
                     self._max_offset[partition] = max(self._max_offset.get(partition, -1), offset)
+        return tuple(eid for eid, _message in finished)
 
     def nack(self, events: Sequence[NormalizedEvent]) -> Sequence[NormalizedEvent]:
         if not events:

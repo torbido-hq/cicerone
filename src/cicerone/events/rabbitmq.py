@@ -121,6 +121,13 @@ class _PikaIo:
                     if self._failed or job.state != _JOB_INVOKING:
                         raise RuntimeError("RabbitMQ I/O worker abandoned")
                     job.state = _JOB_DISPATCHED
+                    if self._failed:
+                        job.state = _JOB_ABANDONED
+                        raise RuntimeError("RabbitMQ I/O worker abandoned")
+                if self._failed:
+                    with self._state_lock:
+                        job.state = _JOB_ABANDONED
+                    raise RuntimeError("RabbitMQ I/O worker abandoned")
                 return fn()
             finally:
                 job.run_lock.release()
@@ -171,8 +178,7 @@ class _PikaIo:
     def _abandon_unclaimed(self, job: _IoJob) -> None:
         with self._state_lock:
             self._failed = True
-            if job.state != _JOB_DISPATCHED:
-                job.state = _JOB_ABANDONED
+            job.state = _JOB_ABANDONED
             self._detach_handles()
 
     def _take_job(self, job: _IoJob) -> bool:
@@ -437,13 +443,14 @@ class RabbitMQEventSource(EventSource):
                 self._event_io[id(event)] = (io, event.event_id)
         return out
 
-    def ack(self, event_ids: Sequence[str]) -> None:
+    def ack(self, event_ids: Sequence[str]) -> Sequence[str]:
         if not event_ids:
-            return
+            return ()
         io = self._require_io()
+        confirmed: list[str] = []
         with self._lock:
             if self._io is not io:
-                return
+                return ()
             resolved: list[tuple[str, int]] = []
             local_only: list[str] = []
             for event_id in event_ids:
@@ -455,11 +462,12 @@ class RabbitMQEventSource(EventSource):
                     local_only.append(eid)
             for eid in local_only:
                 self._forget_event(eid)
+                confirmed.append(eid)
         if not resolved:
-            return
+            return tuple(confirmed)
         for eid, tag in resolved:
             if not self._owns_io(io):
-                return
+                return tuple(confirmed)
             io.submit(partial(self._basic_ack, io, tag))
             with self._lock:
                 if self._io is not io or self._delivery_tags.get(eid) != tag:
@@ -467,6 +475,8 @@ class RabbitMQEventSource(EventSource):
                 self._delivery_tags.pop(eid, None)
                 self._held_tags.discard(tag)
                 self._forget_event(eid)
+                confirmed.append(eid)
+        return tuple(confirmed)
 
     def _forget_event(self, eid: str) -> None:
         self._in_flight.discard(eid)
