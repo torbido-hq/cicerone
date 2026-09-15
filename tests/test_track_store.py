@@ -740,7 +740,7 @@ def test_track_read_bytes_s3_generic_error(monkeypatch) -> None:
         def get_object(self, **_kwargs):
             raise RuntimeError("network")
 
-    monkeypatch.setattr("cicerone.track.store_dataset.build_s3_client", lambda _options: _Boom())
+    monkeypatch.setattr("cicerone.io.blob.build_s3_client", lambda _options: _Boom())
     with mock_aws():
         boto3.client("s3", region_name="us-east-1").create_bucket(Bucket="recs")
         output = IOSettings(
