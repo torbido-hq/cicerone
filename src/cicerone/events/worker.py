@@ -120,10 +120,13 @@ class EventWorker:
         self._stop_epoch = 0
         self._thread: threading.Thread | None = None
         self._held: list[NormalizedEvent] = []
+        self._deferred_acks: list[NormalizedEvent] = []
+        self._retry_acks: list[NormalizedEvent] = []
         self._applied_event_ids: set[str] = set()
         self._applied_event_id_order: deque[str] = deque()
         self._applied_fingerprints: set[str] = set()
         self._applied_fingerprint_order: deque[str] = deque()
+        self._ephemeral_event_ids = bool(getattr(source, "ephemeral_event_ids", False))
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -241,6 +244,7 @@ class EventWorker:
         self._close_source()
 
     def _restore_buffer(self, events: list[NormalizedEvent]) -> None:
+        events = [event for event in events if not self._is_applied(event)]
         if not events:
             return
         result = self._buffer.extend(events)
@@ -253,6 +257,12 @@ class EventWorker:
         self._held = []
         return leftover
 
+    def _take_pending_acks(self) -> list[NormalizedEvent]:
+        pending = self._deferred_acks + self._retry_acks
+        self._deferred_acks = []
+        self._retry_acks = []
+        return pending
+
     def _remember_token(self, token: str, seen: set[str], order: deque[str]) -> None:
         if token in seen:
             return
@@ -264,15 +274,15 @@ class EventWorker:
     def _remember_applied(self, events: Sequence[NormalizedEvent]) -> None:
         for event in events:
             self._remember_token(event.event_id, self._applied_event_ids, self._applied_event_id_order)
-            self._remember_token(
-                event_fingerprint(event), self._applied_fingerprints, self._applied_fingerprint_order
-            )
+            if self._ephemeral_event_ids:
+                self._remember_token(
+                    event_fingerprint(event), self._applied_fingerprints, self._applied_fingerprint_order
+                )
 
     def _is_applied(self, event: NormalizedEvent) -> bool:
-        return (
-            event.event_id in self._applied_event_ids
-            or event_fingerprint(event) in self._applied_fingerprints
-        )
+        if event.event_id in self._applied_event_ids:
+            return True
+        return self._ephemeral_event_ids and event_fingerprint(event) in self._applied_fingerprints
 
     def _still_unapplied(self, event: NormalizedEvent) -> bool:
         if self._buffer.contains_event_id(event.event_id):
@@ -285,9 +295,42 @@ class EventWorker:
         )
 
     def _ack_unbuffered(self, events: Sequence[NormalizedEvent]) -> None:
-        to_ack = [event.event_id for event in events if not self._still_unapplied(event)]
+        to_ack: list[str] = []
+        for event in events:
+            if self._still_unapplied(event):
+                self._deferred_acks.append(event)
+            else:
+                to_ack.append(event.event_id)
         if to_ack:
             self._source.ack(to_ack)
+
+    def _ack_deferred_matching(self, applied: Sequence[NormalizedEvent]) -> None:
+        if not self._deferred_acks:
+            return
+        applied_ids = {event.event_id for event in applied}
+        applied_fps = {event_fingerprint(event) for event in applied}
+        keep: list[NormalizedEvent] = []
+        to_ack: list[str] = []
+        for event in self._deferred_acks:
+            matched = event.event_id in applied_ids or event_fingerprint(event) in applied_fps
+            if matched and not self._still_unapplied(event):
+                to_ack.append(event.event_id)
+            else:
+                keep.append(event)
+        if to_ack:
+            self._source.ack(to_ack)
+        self._deferred_acks = keep
+
+    def _flush_retry_acks(self) -> None:
+        if not self._retry_acks:
+            return
+        batch = self._retry_acks
+        self._retry_acks = []
+        try:
+            self._source.ack([event.event_id for event in batch])
+        except Exception:
+            self._retry_acks.extend(batch)
+            raise
 
     def _rejected_nacks(
         self, leftover: list[NormalizedEvent], result: Sequence[NormalizedEvent] | None
@@ -323,6 +366,7 @@ class EventWorker:
                     self._drain_and_close()
                     return False
                 leftover = self._take_buffered()
+                leftover.extend(self._take_pending_acks())
                 try:
                     self._source.connect()
                 except Exception:
@@ -375,6 +419,7 @@ class EventWorker:
                 self._source_unhealthy = not self.refresh_source_health_metrics()
 
     def _tick_locked(self) -> int:
+        self._flush_retry_acks()
         if self._apply_lock is None:
             self._poll_into_buffer()
             ready = self._buffer.flush_if_ready()
@@ -449,17 +494,20 @@ class EventWorker:
 
     def _drain_buffer_on_stop(self) -> None:
         leftover = self._take_buffered()
-        if not leftover:
-            return
-        logger.info("Draining %d buffered event(s) on worker stop", len(leftover))
-        if not self._acquire_apply_lock():
-            logger.info("Stop drain skipped: apply lease held by another replica")
-            self._return_events(leftover)
-            return
-        try:
-            self._flush_ready(leftover)
-        finally:
-            self._release_apply_lock()
+        if leftover:
+            logger.info("Draining %d buffered event(s) on worker stop", len(leftover))
+            if not self._acquire_apply_lock():
+                logger.info("Stop drain skipped: apply lease held by another replica")
+                leftover.extend(self._take_pending_acks())
+                self._return_events(leftover)
+                return
+            try:
+                self._flush_ready(leftover)
+            finally:
+                self._release_apply_lock()
+        pending = self._take_pending_acks()
+        if pending:
+            self._return_events(pending)
 
     def _flush_ready(self, ready: list[NormalizedEvent]) -> int:
         try:
@@ -509,11 +557,22 @@ class EventWorker:
         except TimeoutError:
             record_events_flush(status="error")
             logger.exception("Event source ack timed out after successful apply; persisting without nack")
+            self._retry_acks.extend(ready)
             self._persist_online_after_ack()
             return applied
         except Exception:
             record_events_flush(status="error")
             logger.exception("Event source ack failed after successful apply; persisting without nack")
+            self._retry_acks.extend(ready)
+            self._persist_online_after_ack()
+            raise
+        try:
+            self._ack_deferred_matching(ready)
+        except Exception:
+            record_events_flush(status="error")
+            logger.exception(
+                "Event source deferred ack failed after successful apply; persisting without nack"
+            )
             self._persist_online_after_ack()
             raise
         self._persist_online_after_ack()

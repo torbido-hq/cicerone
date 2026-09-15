@@ -82,8 +82,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Event worker remembers numeric event ids so a timed-out ack cannot apply them twice.
 - A RabbitMQ I/O timeout cannot start a job after it was marked started.
 - RabbitMQ messages without an event id get a generated id mapped to the delivery tag.
-- Event worker remembers applied fingerprints so a new generated id cannot replay the same event.
+- Event worker remembers applied fingerprints only for sources whose event ids change on reconnect.
 - Event worker does not ack a fingerprint-matching redelivery while the original is still unapplied.
+- Event worker acks a deferred fingerprint duplicate after the original is applied.
+- Event worker retries a failed post-apply ack instead of leaving the source offset stuck.
 - Event worker stop does not close a worker started after a leftover dead thread.
 - A RabbitMQ I/O timeout cannot run a job after invoke starts but before the broker call.
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 from support.events import event_payload
 from support.prometheus_metrics import registry_metric_value
 
@@ -784,6 +785,68 @@ def test_event_worker_ack_timeout_persists_without_nack(tmp_path, feature_config
     assert nacked == []
     frame = pd.read_parquet(out / "recommendations.parquet")
     assert "i13" in set(frame["item_id"].astype(str))
+
+
+def test_event_worker_retries_failed_post_apply_ack(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    applies: list[str] = []
+    event = normalize_event(event_payload(event_id="ack-retry", item_id="iretry"))
+
+    class _FailFirstAck:
+        def __init__(self) -> None:
+            self._pending = [event]
+            self.acked: list[str] = []
+
+        def connect(self) -> None:
+            return None
+
+        def poll(self, max_events: int = 100):  # type: ignore[no-untyped-def]
+            del max_events
+            return list(self._pending)
+
+        def ack(self, event_ids):  # type: ignore[no-untyped-def]
+            self.acked.extend(str(event_id) for event_id in event_ids)
+            if len(self.acked) == 1:
+                raise RuntimeError("commit failed")
+            self._pending = []
+
+        def nack(self, events):  # type: ignore[no-untyped-def]
+            return list(events)
+
+        def health(self) -> EventSourceHealth:
+            return EventSourceHealth(connected=True, lag=len(self._pending))
+
+    class _CountApply(IncrementalUpdater):
+        def apply(self, events, *, persist_online: bool = True):  # type: ignore[no-untyped-def,override]
+            applies.extend(item.event_id for item in events)
+            return super().apply(events, persist_online=persist_online)
+
+    source = _FailFirstAck()
+    worker = EventWorker(
+        source,  # type: ignore[arg-type]
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        _CountApply(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    with pytest.raises(RuntimeError, match="commit failed"):
+        worker.tick()
+    assert applies == ["ack-retry"]
+    assert worker.tick() == 0
+    assert applies == ["ack-retry"]
+    assert source.acked == ["ack-retry", "ack-retry"]
+    assert source._pending == []
 
 
 def test_event_worker_skips_poll_when_startup_health_disconnected(tmp_path, feature_config: FeatureConfig):
@@ -1577,6 +1640,8 @@ def test_event_worker_acks_fingerprint_redelivery_after_apply(tmp_path, feature_
     redelivery = normalize_event(event_payload(event_id="applied-fp-2", item_id="ifp"))
 
     class _Redeliver:
+        ephemeral_event_ids = True
+
         def __init__(self) -> None:
             self._pending = [original]
             self.acked: list[str] = []
@@ -1621,6 +1686,64 @@ def test_event_worker_acks_fingerprint_redelivery_after_apply(tmp_path, feature_
     assert "applied-fp-2" in source.acked
 
 
+def test_event_worker_applies_same_fingerprint_with_new_id(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    applies: list[str] = []
+    first = normalize_event(event_payload(event_id="shape-1", item_id="ishape"))
+    second = normalize_event(event_payload(event_id="shape-2", item_id="ishape"))
+
+    class _TwoShots:
+        def __init__(self) -> None:
+            self._pending = [first]
+            self.acked: list[str] = []
+
+        def connect(self) -> None:
+            return None
+
+        def poll(self, max_events: int = 100):  # type: ignore[no-untyped-def]
+            del max_events
+            return list(self._pending)
+
+        def ack(self, event_ids):  # type: ignore[no-untyped-def]
+            self.acked.extend(str(event_id) for event_id in event_ids)
+            self._pending = []
+
+        def nack(self, events):  # type: ignore[no-untyped-def]
+            return list(events)
+
+        def health(self) -> EventSourceHealth:
+            return EventSourceHealth(connected=True, lag=len(self._pending))
+
+    class _CountApply(IncrementalUpdater):
+        def apply(self, events, *, persist_online: bool = True):  # type: ignore[no-untyped-def,override]
+            applies.extend(item.event_id for item in events)
+            return super().apply(events, persist_online=persist_online)
+
+    source = _TwoShots()
+    worker = EventWorker(
+        source,  # type: ignore[arg-type]
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        _CountApply(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    assert worker.tick() == 1
+    source._pending = [second]
+    assert worker.tick() == 1
+    assert applies == ["shape-1", "shape-2"]
+
+
 def test_event_worker_acks_buffer_duplicates(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()
@@ -1646,6 +1769,35 @@ def test_event_worker_acks_buffer_duplicates(tmp_path, feature_config: FeatureCo
     )
     assert worker.tick() == 0  # window fills buffer; not ready until size/window
     assert source.health().lag == 2  # fingerprint duplicate stays unacked while original is buffered
+
+
+def test_event_worker_acks_deferred_fingerprint_duplicate_after_apply(
+    tmp_path, feature_config: FeatureConfig
+):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="dup-c", item_id="i1"))
+    source.ingest(event_payload(event_id="dup-d", item_id="i1"))
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0, max_events=10),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    assert worker.tick() == 1
+    assert source.health().lag == 0
 
 
 def test_event_worker_restores_rejected_overflow(tmp_path, feature_config: FeatureConfig):

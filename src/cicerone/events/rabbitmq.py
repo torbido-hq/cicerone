@@ -296,6 +296,8 @@ class _PikaIo:
 class RabbitMQEventSource(EventSource):
     """Consume JSON events from one queue; ack with ``basic_ack``."""
 
+    ephemeral_event_ids = True
+
     def __init__(self, options: dict[str, Any]):
         validate_rabbitmq_event_options(options)
         self._amqp_url = require_amqp_url(options, prefix=_EVENTS_PREFIX)
