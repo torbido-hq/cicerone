@@ -389,6 +389,52 @@ def test_pika_io_timeout_does_not_run_after_invoking_when_failed():
         io.stop()
 
 
+def test_pika_io_timeout_detaches_channel_so_late_ack_cannot_run():
+    from types import SimpleNamespace
+
+    from cicerone.events.rabbitmq import RabbitMQEventSource, _PikaIo
+
+    io = _PikaIo(timeout_seconds=0.05)
+    acks: list[int] = []
+    io._channel = SimpleNamespace(basic_ack=lambda delivery_tag: acks.append(delivery_tag))
+    entered = threading.Event()
+    release = threading.Event()
+    source = RabbitMQEventSource(_options())
+
+    def _late_ack() -> None:
+        entered.set()
+        release.wait(timeout=2)
+        source._basic_ack(io, 7)
+
+    io.start()
+    err: list[BaseException] = []
+
+    def _caller() -> None:
+        try:
+            io.submit(_late_ack)
+        except BaseException as exc:
+            err.append(exc)
+
+    waiter = threading.Thread(target=_caller)
+    waiter.start()
+    try:
+        assert entered.wait(timeout=2)
+        waiter.join(timeout=2)
+        assert err and isinstance(err[0], TimeoutError)
+        assert io.failed is True
+        assert io._channel is None
+        release.set()
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and io._thread.is_alive():
+            time.sleep(0.01)
+        assert acks == []
+        with pytest.raises(RuntimeError, match="abandoned"):
+            io.broker_channel()
+    finally:
+        release.set()
+        io.stop()
+
+
 def test_pika_io_timeout_does_not_run_after_enter_when_failed():
     from cicerone.events.rabbitmq import _JOB_ABANDONED, _PikaIo
 

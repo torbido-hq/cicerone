@@ -94,6 +94,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A RabbitMQ I/O timeout abandons a job that has not been dispatched to the broker.
 - Event worker stop does not close a worker started after a leftover dead thread.
 - A RabbitMQ I/O timeout cannot run a job after invoke starts but before the broker call.
+- A RabbitMQ I/O timeout detaches the channel so a late get or ack cannot use the abandoned connection.
 
 ## [0.8.1] - 2026-09-11
 
