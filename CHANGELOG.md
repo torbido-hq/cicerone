@@ -79,6 +79,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Event worker does not ack a redelivery while the same unapplied event is still buffered.
 - Event worker persists after a successful apply if ack fails, instead of nacking written events.
 - Kafka ack keeps local offsets when a partition commit fails.
+- Event worker remembers numeric event ids so a timed-out ack cannot apply them twice.
+- A RabbitMQ I/O timeout cannot start a job after it was marked started.
+- RabbitMQ messages without an event id use a delivery-tag prefix, not the bare tag.
 
 ## [0.8.1] - 2026-09-11
 

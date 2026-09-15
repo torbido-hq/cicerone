@@ -689,6 +689,65 @@ def test_event_worker_start_health_holds_tick_guard(tmp_path, feature_config: Fe
         worker.stop(join_timeout_seconds=2.0)
 
 
+def test_event_worker_remembers_numeric_event_id_after_ack_timeout(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    applies: list[str] = []
+    event = normalize_event(event_payload(event_id="42", item_id="inum"))
+
+    class _AckTimeout:
+        def __init__(self) -> None:
+            self._pending = [event]
+            self._acks = 0
+
+        def connect(self) -> None:
+            return None
+
+        def poll(self, max_events: int = 100):  # type: ignore[no-untyped-def]
+            del max_events
+            return list(self._pending)
+
+        def ack(self, event_ids):  # type: ignore[no-untyped-def]
+            del event_ids
+            self._acks += 1
+            if self._acks == 1:
+                raise TimeoutError("ack timed out")
+            self._pending = []
+
+        def nack(self, events):  # type: ignore[no-untyped-def]
+            return list(events)
+
+        def health(self) -> EventSourceHealth:
+            return EventSourceHealth(connected=True, lag=len(self._pending))
+
+    class _CountApply(IncrementalUpdater):
+        def apply(self, events, *, persist_online: bool = True):  # type: ignore[no-untyped-def,override]
+            applies.extend(item.event_id for item in events)
+            return super().apply(events, persist_online=persist_online)
+
+    worker = EventWorker(
+        _AckTimeout(),  # type: ignore[arg-type]
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        _CountApply(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    assert worker.tick() == 1
+    assert applies == ["42"]
+    assert worker.tick() == 0
+    assert applies == ["42"]
+
+
 def test_event_worker_ack_timeout_persists_without_nack(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()

@@ -15,6 +15,7 @@ from cicerone.config.constants import (
 )
 from cicerone.events.base import EventSource, NormalizedEvent
 from cicerone.events.buffer import MicroBatchBuffer
+from cicerone.events.rabbitmq import DELIVERY_TAG_EVENT_ID_PREFIX
 from cicerone.events.updater import IncrementalUpdater
 from cicerone.locks import LockBackend, LockLostError
 from cicerone.serve.metrics import (
@@ -251,7 +252,7 @@ class EventWorker:
     def _remember_applied(self, events: Sequence[NormalizedEvent]) -> None:
         for event in events:
             eid = event.event_id
-            if eid.isdigit() or eid in self._applied_event_ids:
+            if eid.startswith(DELIVERY_TAG_EVENT_ID_PREFIX) or eid in self._applied_event_ids:
                 continue
             self._applied_event_ids.add(eid)
             self._applied_event_id_order.append(eid)

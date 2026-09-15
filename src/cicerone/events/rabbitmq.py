@@ -33,7 +33,9 @@ _JOB_QUEUED = "queued"
 _JOB_CLAIMED = "claimed"
 _JOB_RUNNING = "running"
 _JOB_STARTED = "started"
+_JOB_INVOKING = "invoking"
 _JOB_ABANDONED = "abandoned"
+DELIVERY_TAG_EVENT_ID_PREFIX = "rmq:delivery:"
 
 
 class _IoJob:
@@ -112,6 +114,7 @@ class _PikaIo:
             with self._state_lock:
                 if self._failed or job.state != _JOB_STARTED:
                     raise RuntimeError("RabbitMQ I/O worker abandoned")
+                job.state = _JOB_INVOKING
             return fn()
 
         job.fn = _guarded
@@ -141,13 +144,13 @@ class _PikaIo:
     def _abandon_unclaimed(self, job: _IoJob) -> None:
         with self._state_lock:
             self._failed = True
-            if job.state in {_JOB_QUEUED, _JOB_CLAIMED, _JOB_RUNNING}:
+            if job.state in {_JOB_QUEUED, _JOB_CLAIMED, _JOB_RUNNING, _JOB_STARTED}:
                 job.state = _JOB_ABANDONED
                 return
         if job.run_lock.acquire(blocking=False):
             try:
                 with self._state_lock:
-                    if job.state != _JOB_STARTED:
+                    if job.state != _JOB_INVOKING:
                         job.state = _JOB_ABANDONED
             finally:
                 job.run_lock.release()
@@ -583,7 +586,7 @@ class RabbitMQEventSource(EventSource):
             self._ack_discard(io, tag)
             return None
         if payload.get("event_id") in (None, "") and payload.get("idempotency_key") in (None, ""):
-            payload["event_id"] = str(tag)
+            payload["event_id"] = f"{DELIVERY_TAG_EVENT_ID_PREFIX}{tag}"
         try:
             event = normalize_event(payload)
         except EventNormalizeError as exc:

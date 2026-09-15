@@ -242,6 +242,52 @@ def test_pika_io_timeout_does_not_run_claimed_job():
         io.stop()
 
 
+def test_pika_io_timeout_does_not_run_after_started_when_failed():
+    from cicerone.events.rabbitmq import _JOB_ABANDONED, _PikaIo
+
+    io = _PikaIo(timeout_seconds=0.05)
+    original_should_run = io._should_run
+    entered = threading.Event()
+    release = threading.Event()
+    executed = threading.Event()
+    held: list[Any] = []
+
+    def _hold_after_started(job: Any) -> bool:
+        taken = original_should_run(job)
+        if taken:
+            held.append(job)
+            entered.set()
+            release.wait(timeout=2)
+        return taken
+
+    io._should_run = _hold_after_started  # type: ignore[method-assign]
+    io.start()
+    err: list[BaseException] = []
+
+    def _caller() -> None:
+        try:
+            io.submit(executed.set)
+        except BaseException as exc:
+            err.append(exc)
+
+    waiter = threading.Thread(target=_caller)
+    waiter.start()
+    try:
+        assert entered.wait(timeout=2)
+        waiter.join(timeout=2)
+        assert err and isinstance(err[0], TimeoutError)
+        release.set()
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and io._thread.is_alive():
+            time.sleep(0.01)
+        assert io.failed is True
+        assert executed.is_set() is False
+        assert held and held[0].state == _JOB_ABANDONED
+    finally:
+        release.set()
+        io.stop()
+
+
 def test_pika_io_timeout_does_not_run_after_running_when_failed():
     from cicerone.events.rabbitmq import _JOB_ABANDONED, _PikaIo
 
@@ -823,7 +869,7 @@ def test_missing_event_id_uses_delivery_tag(monkeypatch):
     source.connect()
     events = list(source.poll(10))
     assert len(events) == 1
-    assert events[0].event_id == "1"
+    assert events[0].event_id == "rmq:delivery:1"
 
 
 def test_poison_entry_is_acked(monkeypatch):
