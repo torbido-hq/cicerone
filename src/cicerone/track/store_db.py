@@ -178,9 +178,10 @@ class TrackDbBackend:
             self._options.get("history_table", DEFAULT_HISTORY_TABLE),
             option="history_table",
         )
-        self._ensure_fence()
-        frame.to_sql(table, self._db_engine(), if_exists="append", index=False)
-        self._ensure_fence()
+        with self._db_engine().begin() as conn:
+            self._ensure_fence()
+            frame.to_sql(table, conn, if_exists="append", index=False)
+            self._ensure_fence()
 
     def _read_history_db(
         self,

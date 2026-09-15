@@ -199,6 +199,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - DB sink, track, and experiment writes recheck the fence after the
   last statement so a lost lease rolls back before commit. Local
   `flock` retries only `EAGAIN`/`EACCES`.
+- DB exposure and history appends run `to_sql` on a transaction
+  connection so a failed final fence rolls the insert back.
 
 
 ## [0.8.1] - 2026-09-11

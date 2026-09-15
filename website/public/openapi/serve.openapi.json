@@ -1144,6 +1144,16 @@
               }
             },
             "description": "Request body too large"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Writer lock busy or lost"
           }
         },
         "security": [

@@ -528,6 +528,34 @@ def test_append_exposures_db_rechecks_fence_before_insert(tmp_path) -> None:
     assert checks["n"] >= 3
 
 
+def test_append_exposures_db_rolls_back_when_fence_lost_after_insert(tmp_path, monkeypatch) -> None:
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    held = {"ok": True}
+
+    def fence() -> bool:
+        return held["ok"]
+
+    original = pd.DataFrame.to_sql
+
+    def _to_sql(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        held["ok"] = False
+
+    monkeypatch.setattr(pd.DataFrame, "to_sql", _to_sql)
+    store = ExperimentStore(
+        IOSettings(kind="db", options={"database_url": url}),
+        fence_check=fence,
+        fence_lost="retrain lock lost before write",
+        fence_kind="retrain",
+    )
+    with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
+        store.append_exposures(
+            [{"experiment_id": "exp", "user_id": "u1", "variant": "control", "exposed_at": "t"}]
+        )
+    assert exc.value.kind == "retrain"
+    assert store.read_exposures() == []
+
+
 def test_read_exposures_db_generic_missing_table_is_empty(tmp_path, monkeypatch) -> None:
     url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
     store = ExperimentStore(IOSettings(kind="db", options={"database_url": url}))

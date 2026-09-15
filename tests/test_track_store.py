@@ -559,6 +559,35 @@ def test_write_eval_db_rechecks_fence_after_delete(tmp_path) -> None:
     assert checks["n"] >= 2
 
 
+def test_append_history_db_rolls_back_when_fence_lost_after_insert(tmp_path, monkeypatch) -> None:
+    from cicerone.locks import LockLostError
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'hist.db'}"
+    held = {"ok": True}
+
+    def fence() -> bool:
+        return held["ok"]
+
+    original = pd.DataFrame.to_sql
+
+    def _to_sql(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        held["ok"] = False
+
+    monkeypatch.setattr(pd.DataFrame, "to_sql", _to_sql)
+    store = TrackStore(
+        IOSettings(kind="db", options={"database_url": url}),
+        fence_check=fence,
+        fence_lost="retrain lock lost before write",
+        fence_kind="retrain",
+    )
+    recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
+    with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
+        store.append_history(recs, generated_at="2026-08-28T03:00:00+00:00")
+    assert exc.value.kind == "retrain"
+    assert store.read_history().empty
+
+
 def test_write_eval_and_history_skip_acquire_when_held_here(tmp_path) -> None:
     from cicerone.locks import held_writer_lock
 
