@@ -283,9 +283,6 @@ def _persist_track_outputs(
         for label, fn in tasks:
             _try_load(label, fn, None)
 
-    if kind == "db":
-        _run_serial()
-        return
     if lock is not None:
         try:
             with held_writer_lock(
@@ -297,6 +294,9 @@ def _persist_track_outputs(
                 _run_serial()
         except (WriterLockBusyError, LockLostError):
             logger.exception("Failed to persist track outputs")
+        return
+    if kind == "db":
+        _run_serial()
         return
     with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
         for label, fn in tasks:

@@ -228,6 +228,42 @@ def test_post_track_records_error_when_append_fails(tmp_path, monkeypatch):
     assert after == before + 1
 
 
+def test_post_track_returns_503_when_writer_lock_busy(tmp_path, monkeypatch):
+    from cicerone.locks import WriterLockBusyError
+
+    monkeypatch.setattr(
+        "cicerone.track.store.TrackStore.append_accepted_rows",
+        lambda *args, **kwargs: (_ for _ in ()).throw(WriterLockBusyError("dataset writer lock busy")),
+    )
+    app = create_app(_settings(tmp_path), _FakeReader(_recs_df()))
+    response = TestClient(app, raise_server_exceptions=False).post(
+        "/track",
+        headers={"Authorization": "Bearer secret"},
+        json=_impression(),
+    )
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Writer lock is busy"
+
+
+def test_post_track_returns_503_when_writer_lock_lost(tmp_path, monkeypatch):
+    from cicerone.locks import LockLostError
+
+    monkeypatch.setattr(
+        "cicerone.track.store.TrackStore.append_accepted_rows",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            LockLostError("dataset writer lock lost before write", kind="writer")
+        ),
+    )
+    app = create_app(_settings(tmp_path), _FakeReader(_recs_df()))
+    response = TestClient(app, raise_server_exceptions=False).post(
+        "/track",
+        headers={"Authorization": "Bearer secret"},
+        json=_impression(),
+    )
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Writer lock was lost"
+
+
 def test_track_route_absent_when_disabled(tmp_path):
     app = create_app(
         make_settings(

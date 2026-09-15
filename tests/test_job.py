@@ -497,6 +497,38 @@ def test_persist_track_outputs_serializes_db_writes(monkeypatch):
     assert max_active == 1
 
 
+def test_persist_track_outputs_holds_lock_for_db(monkeypatch):
+    acquires = {"n": 0}
+
+    class _Lock:
+        def acquire(self) -> bool:
+            acquires["n"] += 1
+            return True
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            return True
+
+        def is_locked(self) -> bool:
+            return True
+
+    monkeypatch.setattr(TrackStore, "write_eval", lambda self, report: None)
+    monkeypatch.setattr(TrackStore, "append_history", lambda self, recommendations, *, generated_at: None)
+    job._persist_track_outputs(
+        TrackStore(
+            IOSettings(kind="db", options={"database_url": "sqlite://"}),
+            writer_lock=_Lock(),
+        ),
+        kind="db",
+        eval_report={"generated_at": "t"},
+        recommendations=pd.DataFrame([{"user_id": "u1"}]),
+        generated_at="t",
+    )
+    assert acquires["n"] == 1
+
+
 def test_recommendation_user_count_excludes_cold_start():
     frame = pd.DataFrame(
         [

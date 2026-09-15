@@ -277,6 +277,40 @@ def test_recommendations_write_reentry_is_per_thread(tmp_path) -> None:
     assert acquires[0] != acquires[1]
 
 
+def test_recommendations_write_skips_acquire_when_lock_held_here(tmp_path) -> None:
+    from cicerone.locks import held_writer_lock
+
+    acquires = {"n": 0}
+
+    class _Lock:
+        def acquire(self) -> bool:
+            acquires["n"] += 1
+            return True
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            return True
+
+        def is_locked(self) -> bool:
+            return True
+
+    lock = _Lock()
+    sink = DatasetOutputSink(
+        {"storage_backend": "local", "path": str(tmp_path)},
+        writer_lock=lock,
+    )
+    frame = pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"}]
+    )
+    with held_writer_lock(lock):
+        sink.write_recommendations(frame)
+        sink.write_model_artifact(b"artifact")
+        sink.write_items_snapshot(frame)
+    assert acquires["n"] == 1
+
+
 def test_nested_replace_rechecks_owned_before_unlocked_write(tmp_path) -> None:
     from cicerone.locks import LockLostError
 

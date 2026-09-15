@@ -385,6 +385,12 @@ class ExperimentStore:
             )
             with engine.begin() as conn:
                 conn.execute(text(f'DELETE FROM "{table}"'))
+                ensure_writer_owned(
+                    self._writer_lock,
+                    fence_check=self._fence_check,
+                    fence_lost=self._fence_lost,
+                    fence_kind=self._fence_kind,
+                )
                 conn.execute(insert_sql, params)
         except Exception as exc:
             if not is_missing_column_error(exc):
@@ -405,6 +411,12 @@ class ExperimentStore:
             )
             with engine.begin() as conn:
                 conn.execute(text(f'DELETE FROM "{table}"'))
+                ensure_writer_owned(
+                    self._writer_lock,
+                    fence_check=self._fence_check,
+                    fence_lost=self._fence_lost,
+                    fence_kind=self._fence_kind,
+                )
                 conn.execute(insert_sql, params)
 
     def _append_exposures_db(self, rows: Sequence[Mapping[str, Any]]) -> None:
@@ -413,6 +425,12 @@ class ExperimentStore:
             option="exposures_table",
         )
         engine = self._db_engine()
+        ensure_writer_owned(
+            self._writer_lock,
+            fence_check=self._fence_check,
+            fence_lost=self._fence_lost,
+            fence_kind=self._fence_kind,
+        )
         pd.DataFrame(list(rows)).to_sql(table, engine, if_exists="append", index=False)
 
     def _read_exposures_db(self, *, experiment_id: str | None = None) -> list[dict[str, Any]]:

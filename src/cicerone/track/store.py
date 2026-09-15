@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from io import BytesIO
 from typing import Any
 
@@ -87,22 +88,37 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
         self._fence_lost = fence_lost
         self._fence_kind = fence_kind
 
+    def _ensure_fence(self) -> None:
+        ensure_writer_owned(
+            self._writer_lock,
+            fence_check=self._fence_check,
+            fence_lost=self._fence_lost,
+            fence_kind=self._fence_kind,
+        )
+
+    @contextmanager
+    def _writer_lease(self) -> Iterator[None]:
+        if writer_lock_held_here(self._writer_lock):
+            self._ensure_fence()
+            yield
+            return
+        with held_writer_lock(
+            self._writer_lock,
+            fence_check=self._fence_check,
+            fence_lost=self._fence_lost,
+            fence_kind=self._fence_kind,
+        ):
+            yield
+
     def append_accepted_rows(self, rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
         if not rows:
             return []
         payload = [_row_with_event_id(row) for row in rows]
         if self._kind == "db":
-            return self._append_rows_db(payload)
+            with self._writer_lease():
+                return self._append_rows_db(payload)
         require_appendable_track_log(self._output)
-        with (
-            self._dataset_append_lock(),
-            held_writer_lock(
-                self._writer_lock,
-                fence_check=self._fence_check,
-                fence_lost=self._fence_lost,
-                fence_kind=self._fence_kind,
-            ),
-        ):
+        with self._dataset_append_lock(), self._writer_lease():
             known = self._refresh_known_ids()
             fresh: list[dict[str, Any]] = []
             seen: set[str] = set()
@@ -116,12 +132,7 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
             if not fresh:
                 return []
             encoded = "".join(json.dumps(row, separators=(",", ":")) + "\n" for row in fresh).encode("utf-8")
-            ensure_writer_owned(
-                self._writer_lock,
-                fence_check=self._fence_check,
-                fence_lost=self._fence_lost,
-                fence_kind=self._fence_kind,
-            )
+            self._ensure_fence()
             self._append_bytes(TRACK_FILENAME, encoded)
             known.update(seen)
             self._track_size = (self._track_size or 0) + len(encoded)
@@ -159,29 +170,12 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
         payload = dict(report)
         encoded = None if self._kind == "db" else json.dumps(payload, indent=2).encode("utf-8")
 
-        def _persist() -> None:
-            ensure_writer_owned(
-                self._writer_lock,
-                fence_check=self._fence_check,
-                fence_lost=self._fence_lost,
-                fence_kind=self._fence_kind,
-            )
+        with self._writer_lease():
             if self._kind == "db":
                 self._write_eval_db(payload)
                 return
             assert encoded is not None
             self._write_bytes(EVAL_FILENAME, encoded, "application/json")
-
-        if writer_lock_held_here(self._writer_lock):
-            _persist()
-            return
-        with held_writer_lock(
-            self._writer_lock,
-            fence_check=self._fence_check,
-            fence_lost=self._fence_lost,
-            fence_kind=self._fence_kind,
-        ):
-            _persist()
 
     def read_eval(self) -> dict[str, Any] | None:
         if self._kind == "db":
@@ -208,29 +202,12 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
             part = f"{HISTORY_DIR}/{_history_part_name(generated_at)}"
             payload = buf.getvalue()
 
-        def _persist() -> None:
-            ensure_writer_owned(
-                self._writer_lock,
-                fence_check=self._fence_check,
-                fence_lost=self._fence_lost,
-                fence_kind=self._fence_kind,
-            )
+        with self._writer_lease():
             if self._kind == "db":
                 self._append_history_db(frame)
                 return
             assert part is not None and payload is not None
             self._write_bytes(part, payload, "application/octet-stream")
-
-        if writer_lock_held_here(self._writer_lock):
-            _persist()
-            return
-        with held_writer_lock(
-            self._writer_lock,
-            fence_check=self._fence_check,
-            fence_lost=self._fence_lost,
-            fence_kind=self._fence_kind,
-        ):
-            _persist()
 
     def read_history(
         self,

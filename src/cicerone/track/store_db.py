@@ -30,6 +30,9 @@ class TrackDbBackend:
     _engine: Engine | None
     _options: dict[str, Any]
 
+    def _ensure_fence(self) -> None:
+        return None
+
     def _db_engine(self) -> Engine:
         if self._engine is None:
             self._engine = create_engine(
@@ -94,6 +97,7 @@ class TrackDbBackend:
             fresh = [row for row in params if not row["event_id"] or row["event_id"] not in existing]
             if not fresh:
                 return []
+            self._ensure_fence()
             conn.execute(insert_sql, fresh)
             return fresh
 
@@ -137,6 +141,7 @@ class TrackDbBackend:
                 )
             )
             conn.execute(text(f'DELETE FROM "{table}"'))
+            self._ensure_fence()
             conn.execute(
                 text(f'INSERT INTO "{table}" (payload, written_at) VALUES (:payload, :written_at)'),
                 {"payload": encoded, "written_at": pd.Timestamp.now(tz="UTC").isoformat()},
@@ -171,6 +176,7 @@ class TrackDbBackend:
             self._options.get("history_table", DEFAULT_HISTORY_TABLE),
             option="history_table",
         )
+        self._ensure_fence()
         frame.to_sql(table, self._db_engine(), if_exists="append", index=False)
 
     def _read_history_db(

@@ -192,6 +192,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   DB recommendation, artifact, and item writes recheck the fence after
   each destructive step. Redis `SET NX` drops a token rotated while
   the call was in flight. Track JSONL appends honor the caller fence.
+- Dataset writes re-enter a lock already held on this thread. DB track
+  append, eval, and history honor the writer lease and recheck the
+  fence before INSERT. Experiment state and exposure DB writes recheck
+  after DELETE. `POST /track` returns 503 on writer busy or lock loss.
 
 
 ## [0.8.1] - 2026-09-11

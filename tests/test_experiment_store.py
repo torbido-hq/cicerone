@@ -391,6 +391,28 @@ def test_write_state_db_rechecks_fence_before_replace(tmp_path) -> None:
     assert checks["n"] >= 3
 
 
+def test_write_state_db_rechecks_fence_after_delete(tmp_path) -> None:
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    output = IOSettings(kind="db", options={"database_url": url})
+    checks = {"n": 0}
+
+    def fence() -> bool:
+        checks["n"] += 1
+        return checks["n"] < 4
+
+    store = ExperimentStore(
+        output,
+        fence_check=fence,
+        fence_lost="retrain lock lost before write",
+        fence_kind="retrain",
+    )
+    with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
+        store.write_state(experiment_state("exp", promoted_variant="treatment"))
+    assert exc.value.kind == "retrain"
+    assert store.read_state() is None
+    assert checks["n"] >= 4
+
+
 def test_write_state_db_rechecks_fence_on_legacy_fallback(tmp_path) -> None:
     url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
     engine = create_engine(url)
@@ -420,6 +442,25 @@ def test_write_state_db_rechecks_fence_on_legacy_fallback(tmp_path) -> None:
         store.write_state(experiment_state("exp", promoted_variant="treatment"))
     assert exc.value.kind == "retrain"
     assert checks["n"] >= 4
+
+
+def test_write_state_db_legacy_fallback_completes(tmp_path) -> None:
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE experiment_state ("
+                "experiment_id TEXT PRIMARY KEY, "
+                "promoted_variant TEXT, "
+                "promoted_at TEXT"
+                ")"
+            )
+        )
+    store = ExperimentStore(IOSettings(kind="db", options={"database_url": url}))
+    payload = experiment_state("exp", promoted_variant="treatment")
+    store.write_state(payload)
+    assert store.read_state()["promoted_variant"] == "treatment"
 
 
 def test_append_exposures_rechecks_after_file_lock(tmp_path, monkeypatch) -> None:
@@ -462,6 +503,41 @@ def test_append_exposures_honors_fence(tmp_path) -> None:
         )
     assert exc.value.kind == "retrain"
     assert not (tmp_path / "exposures.jsonl").exists()
+
+
+def test_append_exposures_db_rechecks_fence_before_insert(tmp_path) -> None:
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    checks = {"n": 0}
+
+    def fence() -> bool:
+        checks["n"] += 1
+        return checks["n"] < 3
+
+    store = ExperimentStore(
+        IOSettings(kind="db", options={"database_url": url}),
+        fence_check=fence,
+        fence_lost="retrain lock lost before write",
+        fence_kind="retrain",
+    )
+    with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
+        store.append_exposures(
+            [{"experiment_id": "exp", "user_id": "u1", "variant": "control", "exposed_at": "t"}]
+        )
+    assert exc.value.kind == "retrain"
+    assert store.read_exposures() == []
+    assert checks["n"] >= 3
+
+
+def test_read_exposures_db_generic_missing_table_is_empty(tmp_path, monkeypatch) -> None:
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    store = ExperimentStore(IOSettings(kind="db", options={"database_url": url}))
+
+    def _read(*_args, **_kwargs):
+        raise RuntimeError("no such table: exposures")
+
+    monkeypatch.setattr("cicerone.experiment.store.pd.read_sql", _read)
+    monkeypatch.setattr("cicerone.experiment.store.is_missing_table_error", lambda _exc: True)
+    assert store.read_exposures() == []
 
 
 def test_append_exposures_empty_is_noop(tmp_path) -> None:
