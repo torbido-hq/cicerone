@@ -306,6 +306,74 @@ def test_nested_replace_rechecks_owned_before_unlocked_write(tmp_path) -> None:
     assert not (tmp_path / "recommendations.parquet").exists()
 
 
+def test_write_recommendations_rechecks_owned_after_serialize(tmp_path, monkeypatch) -> None:
+    from cicerone.locks import LockLostError
+
+    held = {"v": True}
+
+    class _Lock:
+        def acquire(self) -> bool:
+            return True
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            return held["v"]
+
+        def is_locked(self) -> bool:
+            return True
+
+    original = pd.DataFrame.to_parquet
+
+    def _to_parquet(self, *args, **kwargs):
+        result = original(self, *args, **kwargs)
+        held["v"] = False
+        return result
+
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", _to_parquet)
+    sink = DatasetOutputSink(
+        {"storage_backend": "local", "path": str(tmp_path)},
+        writer_lock=_Lock(),
+    )
+    with pytest.raises(LockLostError, match="dataset writer lock lost before write"):
+        sink.write_recommendations(
+            pd.DataFrame(
+                [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"}]
+            )
+        )
+    assert not (tmp_path / "recommendations.parquet").exists()
+
+
+def test_write_manifest_rechecks_owned_when_nested(tmp_path) -> None:
+    from cicerone.locks import LockLostError
+
+    held = {"v": True}
+
+    class _Lock:
+        def acquire(self) -> bool:
+            return True
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            return held["v"]
+
+        def is_locked(self) -> bool:
+            return True
+
+    sink = DatasetOutputSink(
+        {"storage_backend": "local", "path": str(tmp_path)},
+        writer_lock=_Lock(),
+    )
+    with sink.recommendations_write():
+        held["v"] = False
+        with pytest.raises(LockLostError, match="dataset writer lock lost before write"):
+            sink.write_manifest({"status": "success"})
+    assert not (tmp_path / "manifest.json").exists()
+
+
 def test_write_recommendations_rechecks_fence_after_writer_lock(tmp_path) -> None:
     from cicerone.locks import LockLostError
 

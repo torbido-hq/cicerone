@@ -78,6 +78,46 @@ logger = logging.getLogger(__name__)
 _MAX_ERROR_LENGTH = 500
 
 
+def _truncate_job_error(exc: BaseException) -> str:
+    error_message = str(exc)
+    if len(error_message) > _MAX_ERROR_LENGTH:
+        return error_message[:_MAX_ERROR_LENGTH] + "... (truncated)"
+    return error_message
+
+
+def _output_manifest_newer(output: IOSettings, started_at: str) -> bool:
+    try:
+        existing = build_manifest_reader(output).read_latest()
+    except Exception:
+        return False
+    if not existing:
+        return False
+    for key in ("generated_at", "last_incremental_at"):
+        value = existing.get(key)
+        if isinstance(value, str) and value > started_at:
+            return True
+    return False
+
+
+def _skip_stale_job_manifest(
+    output: IOSettings,
+    started_at: str,
+    *,
+    fence_check: Callable[[], bool] | None = None,
+    exc: BaseException | None = None,
+) -> bool:
+    if isinstance(exc, LockLostError):
+        logger.error("Skipping job manifest: %s", exc)
+        return True
+    if fence_check is not None and not fence_check():
+        logger.error("Skipping job manifest: retrain lock lost before write")
+        return True
+    if _output_manifest_newer(output, started_at):
+        logger.error("Skipping job manifest: newer output already published")
+        return True
+    return False
+
+
 class ThompsonSelection(NamedTuple):
     recipes: tuple[ResolvedRecipe, ...]
     state: dict[str, Any] | None = None
@@ -462,6 +502,7 @@ def _recommendation_user_count(recommendations: pd.DataFrame) -> int:
 
 def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None = None) -> None:
     settings = load_settings()
+    started_at = datetime.now(UTC).isoformat()
     feature_config = load_feature_config(settings.feature_config_path)
     sink = build_output_sink(
         settings.output,
@@ -686,59 +727,80 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
         recs_write = getattr(sink, "recommendations_write", None)
         _ensure_fence(fence_check)
         try:
-            if artifact_bytes is not None:
-                _ensure_fence(fence_check)
-                sink.write_model_artifact(artifact_bytes)
-                manifest["artifact_written"] = True
-                manifest["artifact_schema_version"] = ARTIFACT_SCHEMA_VERSION
-
-            if items is not None and not items.empty:
-                _ensure_fence(fence_check)
-                sink.write_items_snapshot(items)
-
-            _ensure_fence(fence_check)
             with recs_write() if callable(recs_write) else nullcontext():
-                sink.write_recommendations(recommendations)
-                outputs_written = True
-                if pending_thompson is not None:
-                    ExperimentStore(settings.output).write_state(pending_thompson)
-                if publisher is not None:
-                    publisher.publish(recommendations)
-                _ensure_fence(fence_check)
-                manifest.update(
-                    {
-                        "status": "success",
-                        "n_events": int(len(events)),
-                        "n_target_users": len(target_users),
-                        "n_users_with_recommendations": _recommendation_user_count(recommendations),
-                        "n_items": int(built.dataset.item_id_map.external_ids.shape[0]),
-                        "models": ",".join(run_models),
-                        "model_weights": model_weights_str,
-                        "rrf_k": rrf_k if rrf_k is not None else RRF_K,
-                        "automl_metrics": (
-                            ",".join(
-                                f"{name}={automl_result.metrics[name]:.4f}"
-                                for name in sorted(automl_result.metrics)
+                try:
+                    if artifact_bytes is not None:
+                        _ensure_fence(fence_check)
+                        sink.write_model_artifact(artifact_bytes)
+                        manifest["artifact_written"] = True
+                        manifest["artifact_schema_version"] = ARTIFACT_SCHEMA_VERSION
+
+                    if items is not None and not items.empty:
+                        _ensure_fence(fence_check)
+                        sink.write_items_snapshot(items)
+
+                    _ensure_fence(fence_check)
+                    sink.write_recommendations(recommendations)
+                    outputs_written = True
+                    if pending_thompson is not None:
+                        ExperimentStore(settings.output).write_state(pending_thompson)
+                    if publisher is not None:
+                        publisher.publish(recommendations)
+                    _ensure_fence(fence_check)
+                    manifest.update(
+                        {
+                            "status": "success",
+                            "n_events": int(len(events)),
+                            "n_target_users": len(target_users),
+                            "n_users_with_recommendations": _recommendation_user_count(recommendations),
+                            "n_items": int(built.dataset.item_id_map.external_ids.shape[0]),
+                            "models": ",".join(run_models),
+                            "model_weights": model_weights_str,
+                            "rrf_k": rrf_k if rrf_k is not None else RRF_K,
+                            "automl_metrics": (
+                                ",".join(
+                                    f"{name}={automl_result.metrics[name]:.4f}"
+                                    for name in sorted(automl_result.metrics)
+                                )
+                                if automl_result is not None
+                                else ""
+                            ),
+                            "track_eval": json.dumps(track_eval_payload) if track_eval_payload else "",
+                            "served_eval": json.dumps(served_eval_payload) if served_eval_payload else "",
+                        }
+                    )
+                    manifest["generated_at"] = datetime.now(UTC).isoformat()
+                    sink.write_manifest(manifest)
+                    manifest_written = True
+                except Exception as exc:
+                    if outputs_written or manifest.get("artifact_written"):
+                        manifest["partial_outputs"] = True
+                    if (
+                        not manifest_written
+                        and manifest.get("status") != "success"
+                        and not _skip_stale_job_manifest(
+                            settings.output,
+                            started_at,
+                            fence_check=fence_check,
+                            exc=exc,
+                        )
+                    ):
+                        manifest["error"] = _truncate_job_error(exc)
+                        manifest["generated_at"] = datetime.now(UTC).isoformat()
+                        try:
+                            sink.write_manifest(manifest)
+                            manifest_written = True
+                        except Exception:
+                            logger.exception(
+                                "Failed to write manifest; original job error (if any) is preserved"
                             )
-                            if automl_result is not None
-                            else ""
-                        ),
-                        "track_eval": json.dumps(track_eval_payload) if track_eval_payload else "",
-                        "served_eval": json.dumps(served_eval_payload) if served_eval_payload else "",
-                    }
-                )
-                manifest["generated_at"] = datetime.now(UTC).isoformat()
-                sink.write_manifest(manifest)
-                manifest_written = True
+                    raise
         except Exception:
             if outputs_written or manifest.get("artifact_written"):
                 manifest["partial_outputs"] = True
             raise
     except Exception as exc:
-        error_message = str(exc)
-        if len(error_message) > _MAX_ERROR_LENGTH:
-            error_message = error_message[:_MAX_ERROR_LENGTH] + "... (truncated)"
-        manifest["error"] = error_message
+        manifest["error"] = _truncate_job_error(exc)
         raise
     finally:
         if publisher is not None:
@@ -746,17 +808,19 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
                 publisher.close()
             except Exception:
                 logger.exception("Failed to close recommendation publisher")
-        if not manifest_written:
-            if fence_check is not None and not fence_check():
-                logger.error("Skipping job manifest: retrain lock lost before write")
-            else:
-                manifest["generated_at"] = datetime.now(UTC).isoformat()
-                try:
-                    sink.write_manifest(manifest)
-                except Exception:
-                    logger.exception("Failed to write manifest; original job error (if any) is preserved")
-                    if manifest.get("status") == "success":
-                        raise
+        if not manifest_written and not _skip_stale_job_manifest(
+            settings.output,
+            started_at,
+            fence_check=fence_check,
+            exc=sys.exc_info()[1],
+        ):
+            manifest["generated_at"] = datetime.now(UTC).isoformat()
+            try:
+                sink.write_manifest(manifest)
+            except Exception:
+                logger.exception("Failed to write manifest; original job error (if any) is preserved")
+                if manifest.get("status") == "success":
+                    raise
         logger.info("Job finished: %s", json.dumps(manifest))
         if manifest.get("status") == "success" and (settings.track.enabled or settings.eval.enabled):
             _persist_track_outputs(

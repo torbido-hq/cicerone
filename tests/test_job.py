@@ -903,6 +903,87 @@ def test_job_marks_partial_outputs_when_recommendation_write_fails(tmp_path, mon
     del original_write
 
 
+def test_job_holds_writer_lock_for_artifact_and_items(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+
+    now = pd.Timestamp.now(tz="UTC")
+    events = pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    )
+    items = pd.DataFrame(
+        [{"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True}]
+    )
+    events.to_parquet(input_dir / "events.parquet", index=False)
+    items.to_parquet(input_dir / "items.parquet", index=False)
+
+    config_path = _write_config(tmp_path, input_dir, output_dir, extra_job="save_model_artifact = true")
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
+
+    from cicerone.io.dataset_store import DatasetOutputSink
+
+    depths: list[tuple[str, int]] = []
+    original_artifact = DatasetOutputSink.write_model_artifact
+    original_items = DatasetOutputSink.write_items_snapshot
+
+    def capture_artifact(self, payload):
+        depths.append(("artifact", self._recs_write_depth()))
+        return original_artifact(self, payload)
+
+    def capture_items(self, df):
+        depths.append(("items", self._recs_write_depth()))
+        return original_items(self, df)
+
+    monkeypatch.setattr(DatasetOutputSink, "write_model_artifact", capture_artifact)
+    monkeypatch.setattr(DatasetOutputSink, "write_items_snapshot", capture_items)
+
+    job.run()
+
+    assert depths == [("artifact", 1), ("items", 1)]
+
+
+def test_job_skips_failure_manifest_when_incremental_is_newer(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+
+    now = pd.Timestamp.now(tz="UTC")
+    events = pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    )
+    items = pd.DataFrame(
+        [{"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True}]
+    )
+    events.to_parquet(input_dir / "events.parquet", index=False)
+    items.to_parquet(input_dir / "items.parquet", index=False)
+
+    incremental = {
+        "triggered_by": "incremental",
+        "status": "success",
+        "generated_at": "2099-01-01T00:00:00+00:00",
+        "last_incremental_at": "2099-01-01T00:00:00+00:00",
+    }
+    (output_dir / "manifest.json").write_text(json.dumps(incremental))
+
+    config_path = _write_config(tmp_path, input_dir, output_dir)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
+
+    from cicerone.io.dataset_store import DatasetOutputSink
+
+    def boom(self, df):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(DatasetOutputSink, "write_recommendations", boom)
+
+    with pytest.raises(RuntimeError, match="disk full"):
+        job.run()
+
+    assert json.loads((output_dir / "manifest.json").read_text()) == incremental
+
+
 def test_job_preserves_success_when_manifest_write_fails(tmp_path, monkeypatch):
     input_dir = tmp_path / "in"
     output_dir = tmp_path / "out"

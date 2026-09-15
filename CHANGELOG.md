@@ -139,6 +139,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   parquet. A failed job does not write a manifest after fence loss.
 - Writer-lock contention is a busy nack, not an apply error. Serve
   impression/exposure appends retry that busy path.
+- Dataset `write_manifest` takes the same writer lock and fence as
+  recommendation writes.
+- The job publishes artifact, items, recommendations, and the manifest
+  under one write lock. A failed job does not overwrite a newer
+  incremental manifest.
+- Nested recommendation writes re-check ownership after parquet serialize.
 
 
 ## [0.8.1] - 2026-09-11
