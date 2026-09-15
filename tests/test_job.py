@@ -990,7 +990,7 @@ def test_write_job_manifest_accepts_legacy_signature():
         def write_manifest(self, manifest):
             written["manifest"] = manifest
 
-    assert job._write_job_manifest(_LegacySink(), {"status": "failed"}, skip_if_newer_than="x") is True
+    assert job.write_job_manifest(_LegacySink(), {"status": "failed"}, skip_if_newer_than="x") is True
     assert written["manifest"] == {"status": "failed"}
 
 
@@ -1064,7 +1064,7 @@ def test_write_job_manifest_reraises_implementation_type_error():
             raise TypeError("bad payload")
 
     with pytest.raises(TypeError, match="bad payload"):
-        job._write_job_manifest(_Sink(), {"status": "failed"}, skip_if_newer_than="x")
+        job.write_job_manifest(_Sink(), {"status": "failed"}, skip_if_newer_than="x")
 
 
 def test_job_holds_writer_lock_for_artifact_and_items(tmp_path, monkeypatch):
