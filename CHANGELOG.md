@@ -201,6 +201,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `flock` retries only `EAGAIN`/`EACCES`.
 - DB exposure and history appends run `to_sql` on a transaction
   connection so a failed final fence rolls the insert back.
+- Experiment state CREATE/ALTER stay in the fenced write transaction
+  so a lost lease does not leave an empty or migrated table.
 
 
 ## [0.8.1] - 2026-09-11

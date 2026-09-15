@@ -368,6 +368,39 @@ def test_write_state_db_honors_fence(tmp_path) -> None:
     with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
         store.write_state(experiment_state("exp", promoted_variant="treatment"))
     assert exc.value.kind == "retrain"
+    assert store.read_state() is None
+    engine = create_engine(url)
+    with engine.connect() as conn:
+        tables = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='experiment_state'")
+        ).fetchall()
+    assert tables == []
+
+
+def test_write_state_db_rolls_back_create_when_fence_lost_after_ddl(tmp_path) -> None:
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    checks = {"n": 0}
+
+    def fence() -> bool:
+        checks["n"] += 1
+        return checks["n"] < 2
+
+    store = ExperimentStore(
+        IOSettings(kind="db", options={"database_url": url}),
+        fence_check=fence,
+        fence_lost="retrain lock lost before write",
+        fence_kind="retrain",
+    )
+    with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
+        store.write_state(experiment_state("exp", promoted_variant="treatment"))
+    assert exc.value.kind == "retrain"
+    assert store.read_state() is None
+    engine = create_engine(url)
+    with engine.connect() as conn:
+        tables = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='experiment_state'")
+        ).fetchall()
+    assert tables == []
 
 
 def test_write_state_db_rechecks_fence_before_replace(tmp_path) -> None:
@@ -461,6 +494,40 @@ def test_write_state_db_legacy_fallback_completes(tmp_path) -> None:
     payload = experiment_state("exp", promoted_variant="treatment")
     store.write_state(payload)
     assert store.read_state()["promoted_variant"] == "treatment"
+
+
+def test_write_state_db_rolls_back_alter_when_fence_lost_after_ddl(tmp_path) -> None:
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE experiment_state ("
+                "experiment_id TEXT PRIMARY KEY, "
+                "promoted_variant TEXT, "
+                "promoted_at TEXT"
+                ")"
+            )
+        )
+    checks = {"n": 0}
+
+    def fence() -> bool:
+        checks["n"] += 1
+        return checks["n"] < 5
+
+    store = ExperimentStore(
+        IOSettings(kind="db", options={"database_url": url}),
+        fence_check=fence,
+        fence_lost="retrain lock lost before write",
+        fence_kind="retrain",
+    )
+    with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
+        store.write_state(experiment_state("exp", promoted_variant="treatment"))
+    assert exc.value.kind == "retrain"
+    assert store.read_state() is None
+    with engine.connect() as conn:
+        columns = [row[1] for row in conn.execute(text("PRAGMA table_info(experiment_state)"))]
+    assert "payload" not in columns
 
 
 def test_append_exposures_rechecks_after_file_lock(tmp_path, monkeypatch) -> None:

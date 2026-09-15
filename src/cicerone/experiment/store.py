@@ -374,74 +374,34 @@ class ExperimentStore:
             f'INSERT INTO "{table}" (experiment_id, promoted_variant, promoted_at, payload) '
             "VALUES (:experiment_id, :promoted_variant, :promoted_at, :payload)"
         )
-        with engine.begin() as conn:
-            conn.execute(create_sql)
-        try:
+
+        def _fence() -> None:
             ensure_writer_owned(
                 self._writer_lock,
                 fence_check=self._fence_check,
                 fence_lost=self._fence_lost,
                 fence_kind=self._fence_kind,
             )
+
+        def _replace_row(conn: Any) -> None:
+            _fence()
+            conn.execute(text(f'DELETE FROM "{table}"'))
+            _fence()
+            conn.execute(insert_sql, params)
+            _fence()
+
+        try:
             with engine.begin() as conn:
-                ensure_writer_owned(
-                    self._writer_lock,
-                    fence_check=self._fence_check,
-                    fence_lost=self._fence_lost,
-                    fence_kind=self._fence_kind,
-                )
-                conn.execute(text(f'DELETE FROM "{table}"'))
-                ensure_writer_owned(
-                    self._writer_lock,
-                    fence_check=self._fence_check,
-                    fence_lost=self._fence_lost,
-                    fence_kind=self._fence_kind,
-                )
-                conn.execute(insert_sql, params)
-                ensure_writer_owned(
-                    self._writer_lock,
-                    fence_check=self._fence_check,
-                    fence_lost=self._fence_lost,
-                    fence_kind=self._fence_kind,
-                )
+                _fence()
+                conn.execute(create_sql)
+                _replace_row(conn)
         except Exception as exc:
             if not is_missing_column_error(exc):
                 raise
-            ensure_writer_owned(
-                self._writer_lock,
-                fence_check=self._fence_check,
-                fence_lost=self._fence_lost,
-                fence_kind=self._fence_kind,
-            )
             with engine.begin() as conn:
+                _fence()
                 conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN payload TEXT'))
-            ensure_writer_owned(
-                self._writer_lock,
-                fence_check=self._fence_check,
-                fence_lost=self._fence_lost,
-                fence_kind=self._fence_kind,
-            )
-            with engine.begin() as conn:
-                ensure_writer_owned(
-                    self._writer_lock,
-                    fence_check=self._fence_check,
-                    fence_lost=self._fence_lost,
-                    fence_kind=self._fence_kind,
-                )
-                conn.execute(text(f'DELETE FROM "{table}"'))
-                ensure_writer_owned(
-                    self._writer_lock,
-                    fence_check=self._fence_check,
-                    fence_lost=self._fence_lost,
-                    fence_kind=self._fence_kind,
-                )
-                conn.execute(insert_sql, params)
-                ensure_writer_owned(
-                    self._writer_lock,
-                    fence_check=self._fence_check,
-                    fence_lost=self._fence_lost,
-                    fence_kind=self._fence_kind,
-                )
+                _replace_row(conn)
 
     def _append_exposures_db(self, rows: Sequence[Mapping[str, Any]]) -> None:
         table = sql_identifier(
