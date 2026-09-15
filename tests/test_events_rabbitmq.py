@@ -195,6 +195,53 @@ def test_pika_io_timeout_does_not_run_unclaimed_job():
         io.stop()
 
 
+def test_pika_io_timeout_does_not_run_claimed_job():
+    from cicerone.events.rabbitmq import _JOB_ABANDONED, _JOB_CLAIMED, _PikaIo
+
+    io = _PikaIo(timeout_seconds=0.05)
+    original_take = io._take_job
+    claimed = threading.Event()
+    release = threading.Event()
+    executed = threading.Event()
+    held: list[Any] = []
+
+    def _hold_after_claim(job: Any) -> bool:
+        taken = original_take(job)
+        if taken:
+            held.append(job)
+            claimed.set()
+            release.wait(timeout=2)
+        return taken
+
+    io._take_job = _hold_after_claim  # type: ignore[method-assign]
+    io.start()
+    err: list[BaseException] = []
+
+    def _caller() -> None:
+        try:
+            io.submit(executed.set)
+        except BaseException as exc:
+            err.append(exc)
+
+    waiter = threading.Thread(target=_caller)
+    waiter.start()
+    try:
+        assert claimed.wait(timeout=2)
+        waiter.join(timeout=2)
+        assert err and isinstance(err[0], TimeoutError)
+        assert held and held[0].state == _JOB_ABANDONED
+        assert held[0].state != _JOB_CLAIMED
+        release.set()
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and io._thread.is_alive():
+            time.sleep(0.01)
+        assert io.failed is True
+        assert executed.is_set() is False
+    finally:
+        release.set()
+        io.stop()
+
+
 def test_pika_io_replies_abandoned_for_job_dequeued_after_fail():
     from cicerone.events.rabbitmq import _IO_STOP, _PikaIo
 

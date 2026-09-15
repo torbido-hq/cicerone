@@ -30,6 +30,7 @@ _EVENTS_PREFIX = "events.options"
 _IO_STOP = object()
 _IO_IDLE_SECONDS = 0.5
 _JOB_QUEUED = "queued"
+_JOB_CLAIMED = "claimed"
 _JOB_RUNNING = "running"
 _JOB_ABANDONED = "abandoned"
 
@@ -130,12 +131,20 @@ class _PikaIo:
     def _abandon_unclaimed(self, job: _IoJob) -> None:
         with self._state_lock:
             self._failed = True
-            if job.state == _JOB_QUEUED:
+            if job.state in {_JOB_QUEUED, _JOB_CLAIMED}:
                 job.state = _JOB_ABANDONED
 
     def _take_job(self, job: _IoJob) -> bool:
         with self._state_lock:
             if self._failed or job.state != _JOB_QUEUED:
+                job.state = _JOB_ABANDONED
+                return False
+            job.state = _JOB_CLAIMED
+            return True
+
+    def _enter_job(self, job: _IoJob) -> bool:
+        with self._state_lock:
+            if self._failed or job.state != _JOB_CLAIMED:
                 job.state = _JOB_ABANDONED
                 return False
             job.state = _JOB_RUNNING
@@ -195,6 +204,11 @@ class _PikaIo:
                     self._exit_failed()
                 return
             if not self._take_job(job):
+                with suppress(queue.Full):
+                    job.reply.put_nowait(("err", RuntimeError("RabbitMQ I/O worker abandoned")))
+                self._exit_failed()
+                return
+            if not self._enter_job(job):
                 with suppress(queue.Full):
                     job.reply.put_nowait(("err", RuntimeError("RabbitMQ I/O worker abandoned")))
                 self._exit_failed()
