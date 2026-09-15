@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
+from hashlib import sha256
 from typing import Any
 from uuid import uuid4
 
@@ -59,15 +60,19 @@ def _parse_quantity(value: Any) -> int:
 
 
 def event_fingerprint(event: NormalizedEvent) -> str:
-    return "|".join(
-        (
-            event.user_id,
-            event.item_id,
-            event.event_type,
-            str(event.quantity),
-            event.occurred_at.isoformat(),
-        )
+    parts = (
+        event.user_id,
+        event.item_id,
+        event.event_type,
+        str(event.quantity),
+        event.occurred_at.isoformat(),
     )
+    payload = bytearray()
+    for part in parts:
+        encoded = part.encode("utf-8")
+        payload.extend(len(encoded).to_bytes(4, "big"))
+        payload.extend(encoded)
+    return sha256(payload).hexdigest()
 
 
 def normalize_event(payload: Any) -> NormalizedEvent:

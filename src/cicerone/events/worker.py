@@ -177,13 +177,17 @@ class EventWorker:
                 )
                 joined = False
         if joined and was_alive:
-            acquired = self._source_guard.acquire(blocking=True, timeout=join_timeout_seconds)
+            acquired = self._tick_guard.acquire(blocking=True, timeout=join_timeout_seconds)
             if acquired:
                 try:
-                    if self._stop.is_set() and self._thread is thread:
-                        self._drain_and_close()
+                    if self._source_guard.acquire(blocking=False):
+                        try:
+                            if self._stop.is_set() and self._thread is thread:
+                                self._drain_and_close()
+                        finally:
+                            self._source_guard.release()
                 finally:
-                    self._source_guard.release()
+                    self._tick_guard.release()
             else:
                 return False
         elif not joined:
@@ -295,14 +299,19 @@ class EventWorker:
         )
 
     def _ack_unbuffered(self, events: Sequence[NormalizedEvent]) -> None:
-        to_ack: list[str] = []
+        to_ack: list[NormalizedEvent] = []
         for event in events:
             if self._still_unapplied(event):
                 self._deferred_acks.append(event)
             else:
-                to_ack.append(event.event_id)
-        if to_ack:
-            self._source.ack(to_ack)
+                to_ack.append(event)
+        if not to_ack:
+            return
+        try:
+            self._source.ack([event.event_id for event in to_ack])
+        except Exception:
+            self._retry_acks.extend(to_ack)
+            raise
 
     def _ack_deferred_matching(self, applied: Sequence[NormalizedEvent]) -> None:
         if not self._deferred_acks:
@@ -310,16 +319,22 @@ class EventWorker:
         applied_ids = {event.event_id for event in applied}
         applied_fps = {event_fingerprint(event) for event in applied}
         keep: list[NormalizedEvent] = []
-        to_ack: list[str] = []
+        matched: list[NormalizedEvent] = []
         for event in self._deferred_acks:
-            matched = event.event_id in applied_ids or event_fingerprint(event) in applied_fps
-            if matched and not self._still_unapplied(event):
-                to_ack.append(event.event_id)
+            if (
+                event.event_id in applied_ids or event_fingerprint(event) in applied_fps
+            ) and not self._still_unapplied(event):
+                matched.append(event)
             else:
                 keep.append(event)
-        if to_ack:
-            self._source.ack(to_ack)
         self._deferred_acks = keep
+        if not matched:
+            return
+        try:
+            self._source.ack([event.event_id for event in matched])
+        except Exception:
+            self._retry_acks.extend(matched)
+            raise
 
     def _flush_retry_acks(self) -> None:
         if not self._retry_acks:
@@ -328,6 +343,7 @@ class EventWorker:
         self._retry_acks = []
         try:
             self._source.ack([event.event_id for event in batch])
+            self._ack_deferred_matching(batch)
         except Exception:
             self._retry_acks.extend(batch)
             raise

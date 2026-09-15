@@ -849,6 +849,105 @@ def test_event_worker_retries_failed_post_apply_ack(tmp_path, feature_config: Fe
     assert source._pending == []
 
 
+def test_event_worker_retries_failed_unbuffered_ack(tmp_path, feature_config: FeatureConfig):
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    event = normalize_event(event_payload(event_id="already-1", item_id="idone"))
+    acked: list[str] = []
+
+    class _FailUnbuffered:
+        def connect(self) -> None:
+            return None
+
+        def poll(self, max_events: int = 100):  # type: ignore[no-untyped-def]
+            del max_events
+            return [event]
+
+        def ack(self, event_ids):  # type: ignore[no-untyped-def]
+            acked.extend(str(event_id) for event_id in event_ids)
+            if len(acked) == 1:
+                raise RuntimeError("unbuffered ack failed")
+
+        def nack(self, events):  # type: ignore[no-untyped-def]
+            return list(events)
+
+        def health(self) -> EventSourceHealth:
+            return EventSourceHealth(connected=True, lag=1)
+
+    worker = EventWorker(
+        _FailUnbuffered(),  # type: ignore[arg-type]
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    worker._remember_applied([event])
+    with pytest.raises(RuntimeError, match="unbuffered ack failed"):
+        worker._poll_into_buffer()
+    worker._flush_retry_acks()
+    assert acked == ["already-1", "already-1"]
+
+
+def test_event_worker_retry_acks_deferred_duplicates(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    original = normalize_event(event_payload(event_id="retry-fp-1", item_id="ifp"))
+    duplicate = normalize_event(event_payload(event_id="retry-fp-2", item_id="ifp"))
+    acked: list[str] = []
+
+    class _FailApplyAck:
+        def __init__(self) -> None:
+            self._pending = [original, duplicate]
+
+        def connect(self) -> None:
+            return None
+
+        def poll(self, max_events: int = 100):  # type: ignore[no-untyped-def]
+            del max_events
+            batch = list(self._pending)
+            self._pending = []
+            return batch
+
+        def ack(self, event_ids):  # type: ignore[no-untyped-def]
+            acked.extend(str(event_id) for event_id in event_ids)
+            if acked == ["retry-fp-1"]:
+                raise RuntimeError("apply ack failed")
+
+        def nack(self, events):  # type: ignore[no-untyped-def]
+            return list(events)
+
+        def health(self) -> EventSourceHealth:
+            return EventSourceHealth(connected=True, lag=0)
+
+    worker = EventWorker(
+        _FailApplyAck(),  # type: ignore[arg-type]
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0, max_events=10),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    with pytest.raises(RuntimeError, match="apply ack failed"):
+        worker.tick()
+    assert "retry-fp-2" not in acked
+    worker.tick()
+    assert "retry-fp-1" in acked
+    assert "retry-fp-2" in acked
+
+
 def test_event_worker_skips_poll_when_startup_health_disconnected(tmp_path, feature_config: FeatureConfig):
     import time
 

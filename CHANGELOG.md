@@ -86,6 +86,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Event worker does not ack a fingerprint-matching redelivery while the original is still unapplied.
 - Event worker acks a deferred fingerprint duplicate after the original is applied.
 - Event worker retries a failed post-apply ack instead of leaving the source offset stuck.
+- Event fingerprints length-prefix fields so values containing `|` cannot collide.
+- A RabbitMQ `basic_get` failure marks the I/O worker failed so health reconnects.
+- RabbitMQ reconnect keeps nacked local pending events across the new connection.
+- Event worker stop waits for an in-flight tick before closing a joined worker.
+- Event worker retries a failed unbuffered or deferred ack on the next tick.
+- A RabbitMQ I/O timeout abandons a job that has not been dispatched to the broker.
 - Event worker stop does not close a worker started after a leftover dead thread.
 - A RabbitMQ I/O timeout cannot run a job after invoke starts but before the broker call.
 

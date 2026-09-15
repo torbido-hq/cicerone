@@ -1153,6 +1153,25 @@ def test_basic_get_failure_returns_partial(monkeypatch):
     broker.connection.channel_obj.basic_get = _boom  # type: ignore[method-assign]
     again = list(source.poll(10))
     assert [event.event_id for event in again] == ["e1"]
+    assert source._io is not None and source._io.failed is True
+    assert source.health().connected is False
+    source.close()
+
+
+def test_connect_preserves_nacked_pending(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.enqueue("cicerone.events", event_payload(event_id="kept", item_id="i1"))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    first = list(source.poll(1))
+    assert [event.event_id for event in first] == ["kept"]
+    source.nack(first)
+    source.connect()
+    again = list(source.poll(10))
+    assert [event.event_id for event in again] == ["kept"]
+    source.ack([event.event_id for event in again])
+    assert source.health().lag == 0
+    source.close()
 
 
 def test_connect_failure(monkeypatch):

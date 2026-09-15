@@ -5,10 +5,19 @@ from support.events import event_payload
 
 from cicerone.events.normalize import (
     EventNormalizeError,
+    event_fingerprint,
     events_to_dataframe,
     normalize_event,
     normalize_events,
 )
+
+
+def test_event_fingerprint_does_not_collide_on_pipe_in_fields():
+    left = normalize_event(event_payload(event_id="fp-a", user_id="a|b", item_id="c"))
+    right = normalize_event(event_payload(event_id="fp-b", user_id="a", item_id="b|c"))
+    assert event_fingerprint(left) != event_fingerprint(right)
+    again = normalize_event(event_payload(event_id="fp-c", user_id="a|b", item_id="c"))
+    assert event_fingerprint(left) == event_fingerprint(again)
 
 
 def test_normalize_event_and_errors():

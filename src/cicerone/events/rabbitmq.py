@@ -34,6 +34,7 @@ _JOB_CLAIMED = "claimed"
 _JOB_RUNNING = "running"
 _JOB_STARTED = "started"
 _JOB_INVOKING = "invoking"
+_JOB_DISPATCHED = "dispatched"
 _JOB_ABANDONED = "abandoned"
 
 
@@ -119,6 +120,7 @@ class _PikaIo:
                 with self._state_lock:
                     if self._failed or job.state != _JOB_INVOKING:
                         raise RuntimeError("RabbitMQ I/O worker abandoned")
+                    job.state = _JOB_DISPATCHED
                 return fn()
             finally:
                 job.run_lock.release()
@@ -150,16 +152,14 @@ class _PikaIo:
     def _abandon_unclaimed(self, job: _IoJob) -> None:
         with self._state_lock:
             self._failed = True
-            if job.state in {_JOB_QUEUED, _JOB_CLAIMED, _JOB_RUNNING, _JOB_STARTED}:
+            if job.state in {
+                _JOB_QUEUED,
+                _JOB_CLAIMED,
+                _JOB_RUNNING,
+                _JOB_STARTED,
+                _JOB_INVOKING,
+            }:
                 job.state = _JOB_ABANDONED
-                return
-        if job.run_lock.acquire(blocking=False):
-            try:
-                with self._state_lock:
-                    if job.state == _JOB_INVOKING:
-                        job.state = _JOB_ABANDONED
-            finally:
-                job.run_lock.release()
 
     def _take_job(self, job: _IoJob) -> bool:
         with self._state_lock:
@@ -336,6 +336,7 @@ class RabbitMQEventSource(EventSource):
             previous_io = self._io
             previous_channel = self._channel
             previous_connection = self._connection
+            carried = list(self._pending)
             self._io = io
             self._connection = connection
             self._channel = channel
@@ -346,6 +347,9 @@ class RabbitMQEventSource(EventSource):
             self._delivery_tags.clear()
             self._held_tags.clear()
             self._event_io.clear()
+            for event in carried:
+                self._pending.append(event)
+                self._pending_ids.add(event.event_id)
         if previous_io is not None:
             _release_io(previous_io, previous_channel, previous_connection)
 
@@ -372,14 +376,12 @@ class RabbitMQEventSource(EventSource):
         if max_events < 1:
             return []
         io = self._require_io()
-        claimed: list[tuple[NormalizedEvent, int]] = []
+        claimed: list[tuple[NormalizedEvent, int | None]] = []
         with self._lock:
             while self._pending and len(claimed) < max_events:
                 event = self._pending.popleft()
                 self._pending_ids.discard(event.event_id)
                 tag = self._delivery_tags.get(event.event_id)
-                if tag is None:
-                    continue
                 self._in_flight.add(event.event_id)
                 claimed.append((event, tag))
 
@@ -391,6 +393,7 @@ class RabbitMQEventSource(EventSource):
                 method, _properties, body = io.submit(partial(self._basic_get, io))
             except Exception:
                 logger.exception("RabbitMQ basic_get failed")
+                io._mark_failed()
                 break
             if method is None:
                 break
@@ -410,7 +413,7 @@ class RabbitMQEventSource(EventSource):
             out = [
                 event
                 for event, tag in claimed
-                if self._io is io and self._delivery_tags.get(event.event_id) == tag
+                if self._io is io and (tag is None or self._delivery_tags.get(event.event_id) == tag)
             ]
             if out:
                 self._last_event_at = max(event.occurred_at for event in out)
@@ -426,11 +429,17 @@ class RabbitMQEventSource(EventSource):
             if self._io is not io:
                 return
             resolved: list[tuple[str, int]] = []
+            local_only: list[str] = []
             for event_id in event_ids:
                 eid = str(event_id)
                 tag = self._delivery_tags.get(eid)
                 if tag is not None:
                     resolved.append((eid, tag))
+                elif eid in self._in_flight or eid in self._pending_ids:
+                    local_only.append(eid)
+            for eid in local_only:
+                self._in_flight.discard(eid)
+                self._pending_ids.discard(eid)
         if not resolved:
             return
         for eid, tag in resolved:
