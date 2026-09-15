@@ -455,7 +455,7 @@ def test_event_worker_reconnect_nacks_buffer_after_connect(tmp_path, feature_con
         def nack(self, events):  # type: ignore[no-untyped-def,override]
             order.append("nack")
             nacked.extend(event.event_id for event in events)
-            super().nack(events)
+            return super().nack(events)
 
     source = _TrackNack({})
     source.connect()
@@ -474,7 +474,8 @@ def test_event_worker_reconnect_nacks_buffer_after_connect(tmp_path, feature_con
     assert kept.kept_count == 1
     assert worker._reconnect_source() is True
     assert nacked == ["buf-1"]
-    assert [event.event_id for event in worker._buffer.flush()] == ["buf-1"]
+    assert len(worker._buffer) == 0
+    assert [event.event_id for event in source.poll(1)] == ["buf-1"]
     assert order == ["connect", "connect", "nack"]
 
 
@@ -520,7 +521,7 @@ def test_event_worker_reconnect_keeps_buffer_when_nack_is_noop(tmp_path, feature
                 self._in_flight.clear()
 
         def nack(self, events):  # type: ignore[no-untyped-def,override]
-            del events
+            return list(events)
 
     source = _SilentNack({})
     source.connect()
@@ -796,6 +797,64 @@ def test_event_worker_start_does_not_revive_after_completed_stop(tmp_path, featu
     release.set()
     starter.join(timeout=2)
     assert worker._thread is None or worker._thread.is_alive() is False
+    worker.start()
+    assert worker._thread is not None and worker._thread.is_alive()
+    assert worker.stop(join_timeout_seconds=2.0) is True
+
+
+def test_event_worker_start_does_not_reacquire_guard_after_launch(tmp_path, feature_config: FeatureConfig):
+    import threading
+
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    inner = threading.Lock()
+    starter_thread: list[threading.Thread] = []
+    released = threading.Event()
+    block_second = threading.Event()
+
+    class _GateLock:
+        def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+            if starter_thread and threading.current_thread() is starter_thread[0] and released.is_set():
+                block_second.wait(timeout=2)
+            return inner.acquire(blocking, timeout)
+
+        def release(self) -> None:
+            inner.release()
+            if starter_thread and threading.current_thread() is starter_thread[0]:
+                released.set()
+
+        def __enter__(self) -> _GateLock:
+            self.acquire()
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            self.release()
+
+    worker = EventWorker(
+        WebhookEventSource({}),
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+        poll_interval_seconds=0.01,
+    )
+    worker._source_guard = _GateLock()  # type: ignore[assignment]
+
+    def _start() -> None:
+        starter_thread.append(threading.current_thread())
+        worker.start()
+
+    starter = threading.Thread(target=_start)
+    starter.start()
+    assert released.wait(timeout=2)
+    starter.join(timeout=0.4)
+    assert starter.is_alive() is False
+    assert worker._thread is not None and worker._thread.is_alive()
+    assert worker.stop(join_timeout_seconds=2.0) is True
     worker.start()
     assert worker._thread is not None and worker._thread.is_alive()
     assert worker.stop(join_timeout_seconds=2.0) is True

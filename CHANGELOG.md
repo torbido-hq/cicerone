@@ -56,11 +56,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - RabbitMQ ack drops ownership stamps so the poll map does not grow without bound.
 - Event worker stop does not block on the source lock for a leftover dead thread.
 - Event worker start refreshes source health before the first tick.
-- Event worker reconnect requeues buffered events after the new connection is up and keeps them if nack cannot.
+- Event worker reconnect requeues buffered events after the new connection is up and restores only what nack did not keep.
+- Event worker start abort does not close a worker started after a later stop.
 - Event worker skips the first poll when startup health reports disconnected.
 - A timed-out RabbitMQ I/O job is not started after submit fails.
 - RabbitMQ I/O timeout abandons an unclaimed job so it cannot run after submit fails.
 - A RabbitMQ I/O timeout abandons a claimed job before the broker call starts.
+- A RabbitMQ I/O timeout cannot start a job after the waiter has already failed.
 - Event worker stop does not close the source during a never-started in-flight tick.
 - A RabbitMQ heartbeat broker error marks the I/O worker failed and fails closed.
 

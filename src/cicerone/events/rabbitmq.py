@@ -36,12 +36,13 @@ _JOB_ABANDONED = "abandoned"
 
 
 class _IoJob:
-    __slots__ = ("fn", "reply", "state")
+    __slots__ = ("fn", "reply", "state", "run_lock")
 
     def __init__(self, fn: Callable[[], Any], reply: queue.Queue[tuple[str, Any]]) -> None:
         self.fn = fn
         self.reply = reply
         self.state = _JOB_QUEUED
+        self.run_lock = threading.Lock()
 
 
 def validate_rabbitmq_event_options(options: dict[str, Any]) -> None:
@@ -133,6 +134,14 @@ class _PikaIo:
             self._failed = True
             if job.state in {_JOB_QUEUED, _JOB_CLAIMED}:
                 job.state = _JOB_ABANDONED
+                return
+        if job.run_lock.acquire(blocking=False):
+            try:
+                with self._state_lock:
+                    if job.state != _JOB_RUNNING:
+                        job.state = _JOB_ABANDONED
+            finally:
+                job.run_lock.release()
 
     def _take_job(self, job: _IoJob) -> bool:
         with self._state_lock:
@@ -208,24 +217,28 @@ class _PikaIo:
                     job.reply.put_nowait(("err", RuntimeError("RabbitMQ I/O worker abandoned")))
                 self._exit_failed()
                 return
-            if not self._enter_job(job):
-                with suppress(queue.Full):
-                    job.reply.put_nowait(("err", RuntimeError("RabbitMQ I/O worker abandoned")))
-                self._exit_failed()
-                return
+            job.run_lock.acquire()
             try:
-                result = job.fn()
-            except Exception as exc:
-                payload: tuple[str, Any] = ("err", exc)
-            else:
-                payload = ("ok", result)
-            if self._failed:
-                payload = ("err", RuntimeError("RabbitMQ I/O worker abandoned"))
-            with suppress(queue.Full):
-                job.reply.put_nowait(payload)
-            if self._failed:
-                self._exit_failed()
-                return
+                if not self._enter_job(job):
+                    with suppress(queue.Full):
+                        job.reply.put_nowait(("err", RuntimeError("RabbitMQ I/O worker abandoned")))
+                    self._exit_failed()
+                    return
+                try:
+                    result = job.fn()
+                except Exception as exc:
+                    payload: tuple[str, Any] = ("err", exc)
+                else:
+                    payload = ("ok", result)
+                if self._failed:
+                    payload = ("err", RuntimeError("RabbitMQ I/O worker abandoned"))
+                with suppress(queue.Full):
+                    job.reply.put_nowait(payload)
+                if self._failed:
+                    self._exit_failed()
+                    return
+            finally:
+                job.run_lock.release()
 
     def _pump(self) -> None:
         connection = self._connection
@@ -406,9 +419,10 @@ class RabbitMQEventSource(EventSource):
                 for key in stale:
                     self._event_io.pop(key, None)
 
-    def nack(self, events: Sequence[NormalizedEvent]) -> None:
+    def nack(self, events: Sequence[NormalizedEvent]) -> Sequence[NormalizedEvent]:
         if not events:
-            return
+            return ()
+        kept: set[int] = set()
         with self._lock:
             for event in reversed(list(events)):
                 owner = self._event_io.get(id(event))
@@ -417,10 +431,12 @@ class RabbitMQEventSource(EventSource):
                 if event.event_id not in self._delivery_tags:
                     continue
                 self._in_flight.discard(event.event_id)
+                kept.add(id(event))
                 if event.event_id in self._pending_ids:
                     continue
                 self._pending.appendleft(event)
                 self._pending_ids.add(event.event_id)
+        return tuple(event for event in events if id(event) not in kept)
 
     def heartbeat(self, events: Sequence[NormalizedEvent]) -> None:
         del events

@@ -118,8 +118,9 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
         out.extend(self._drain_pending(max_events - len(out)))
         return out
 
-    def nack(self, events: Sequence[NormalizedEvent]) -> None:
+    def nack(self, events: Sequence[NormalizedEvent]) -> Sequence[NormalizedEvent]:
         receipts: list[str] = []
+        kept: set[int] = set()
         with self._lock:
             pending_ids = {item.event_id for item in self._pending}
             seen_batches: set[int] = set()
@@ -129,6 +130,7 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
                 batch = self._event_batch.get(eid)
                 if batch is None:
                     continue
+                kept.add(id(event))
                 if eid not in pending_ids:
                     self._pending.appendleft(event)
                     pending_ids.add(eid)
@@ -143,6 +145,7 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
             queue_url=queue_url,
             timeout_seconds=_SQS_NACK_VISIBILITY_TIMEOUT_SECONDS,
         )
+        return tuple(event for event in events if id(event) not in kept)
 
     def heartbeat(self, events: Sequence[NormalizedEvent]) -> None:
         receipts: list[str] = []

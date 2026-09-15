@@ -188,18 +188,21 @@ class KafkaEventSource(EventSource):
                 self._pending_ids.discard(eid)
         self._commit_watermarks(consumer, watermarks)
 
-    def nack(self, events: Sequence[NormalizedEvent]) -> None:
+    def nack(self, events: Sequence[NormalizedEvent]) -> Sequence[NormalizedEvent]:
         if not events:
-            return
+            return ()
+        kept: set[int] = set()
         with self._lock:
             for event in reversed(list(events)):
                 if event.event_id not in self._messages:
                     continue
                 self._in_flight.discard(event.event_id)
+                kept.add(id(event))
                 if event.event_id in self._pending_ids:
                     continue
                 self._pending.appendleft(event)
                 self._pending_ids.add(event.event_id)
+        return tuple(event for event in events if id(event) not in kept)
 
     def heartbeat(self, events: Sequence[NormalizedEvent]) -> None:
         del events

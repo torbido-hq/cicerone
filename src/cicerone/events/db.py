@@ -140,10 +140,11 @@ class DbEventSource(EventSource):
                 out.append(event)
         return out
 
-    def nack(self, events: Sequence[NormalizedEvent]) -> None:
+    def nack(self, events: Sequence[NormalizedEvent]) -> Sequence[NormalizedEvent]:
         with self._lock:
             for event in events:
                 self._in_flight.pop(event.event_id, None)
+        return ()
 
     def ack(self, event_ids: Sequence[str]) -> None:
         with self._lock:

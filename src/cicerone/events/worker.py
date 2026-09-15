@@ -143,8 +143,7 @@ class EventWorker:
                 return
             self._thread = threading.Thread(target=self._loop, name="cicerone-events", daemon=True)
             self._thread.start()
-        if self._stop.is_set() or self._stop_epoch != epoch:
-            with self._source_guard:
+            if self._stop.is_set() or self._stop_epoch != epoch:
                 self._drain_and_close()
 
     def stop(self, *, join_timeout_seconds: float = 5.0) -> bool:
@@ -236,19 +235,28 @@ class EventWorker:
                 len(result.overflow),
             )
 
+    def _rejected_nacks(
+        self, leftover: list[NormalizedEvent], result: Sequence[NormalizedEvent] | None
+    ) -> list[NormalizedEvent]:
+        if not result:
+            return []
+        rejected_ids = {id(event) for event in result}
+        return [event for event in leftover if id(event) in rejected_ids]
+
     def _requeue_buffer_after_reconnect(self, leftover: list[NormalizedEvent]) -> None:
         if not leftover:
             return
         try:
-            self._source.nack(leftover)
+            rejected = self._rejected_nacks(leftover, self._source.nack(leftover))
         except Exception:
             logger.exception(
                 "Event worker failed to return %d buffered event(s) after reconnect",
                 len(leftover),
             )
-        # Keep the batch even when nack is a no-op (RabbitMQ/Kafka maps were
-        # cleared by connect) or when nack raised.
-        self._restore_buffer(leftover)
+            self._restore_buffer(leftover)
+            return
+        if rejected:
+            self._restore_buffer(rejected)
 
     def _reconnect_source(self) -> bool:
         with self._source_guard:

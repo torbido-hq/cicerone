@@ -82,7 +82,7 @@ class WebhookEventSource(EventSource):
                 out.append(event)
         return out
 
-    def nack(self, events: Sequence[NormalizedEvent]) -> None:
+    def nack(self, events: Sequence[NormalizedEvent]) -> Sequence[NormalizedEvent]:
         """Return in-flight events to the pending queue (failed processing)."""
         with self._lock:
             for event in reversed(list(events)):
@@ -91,6 +91,7 @@ class WebhookEventSource(EventSource):
                     continue
                 self._pending.appendleft(event)
                 self._pending_ids.add(event.event_id)
+        return ()
 
     def ack(self, event_ids: Sequence[str]) -> None:
         with self._lock:

@@ -653,8 +653,8 @@ def test_nack_allows_repoll(monkeypatch):
     source.connect()
     first = list(source.poll(10))
     assert len(first) == 1
-    source.nack(first)
-    source.nack(first)
+    assert source.nack(first) == ()
+    assert source.nack(first) == ()
     again = list(source.poll(10))
     assert [event.event_id for event in again] == ["e1"]
     source.ack(["missing", again[0].event_id])
@@ -1189,7 +1189,8 @@ def test_nack_ignores_event_after_io_replaced(monkeypatch):
     second = list(source.poll(1))
     assert [event.event_id for event in second] == ["e1"]
     new_tag = source._delivery_tags["e1"]
-    source.nack(first)
+    rejected = source.nack(first)
+    assert [event.event_id for event in rejected] == ["e1"]
     assert first[0].event_id not in source._pending_ids
     assert source._delivery_tags.get("e1") == new_tag
     source.close()
