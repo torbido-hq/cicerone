@@ -2,7 +2,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { defineConfig } from 'astro/config';
+import { defineConfig, passthroughImageService } from 'astro/config';
 import sitemap from '@astrojs/sitemap';
 import starlight from '@astrojs/starlight';
 import starlightBlog from 'starlight-blog';
@@ -58,6 +58,9 @@ const articlesNav = articlesSidebarGroup(articlesDir, { production });
 // https://astro.build/config
 export default defineConfig({
 	site: 'https://cicerone.dev',
+	image: {
+		service: passthroughImageService(),
+	},
 	redirects: articleRedirects,
 	integrations: [
 		// Before Starlight so it does not inject a second @astrojs/sitemap.
