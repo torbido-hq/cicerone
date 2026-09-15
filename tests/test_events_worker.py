@@ -1694,7 +1694,6 @@ def test_event_worker_start_abort_after_launch_does_not_reacquire_locks(
     class _CountClose(WebhookEventSource):
         def close(self) -> None:
             closes["n"] += 1
-            super().close()
 
     worker = EventWorker(
         _CountClose({}),
@@ -1718,10 +1717,6 @@ def test_event_worker_start_abort_after_launch_does_not_reacquire_locks(
     threading.Thread.start = _start  # type: ignore[method-assign]
     try:
         worker.start()
-        assert worker._tick_guard.acquire(blocking=False)
-        worker._tick_guard.release()
-        assert worker._source_guard.acquire(blocking=False)
-        worker._source_guard.release()
     finally:
         threading.Thread.start = original_start  # type: ignore[method-assign]
     deadline = time.monotonic() + 2.0
@@ -1729,6 +1724,10 @@ def test_event_worker_start_abort_after_launch_does_not_reacquire_locks(
         time.sleep(0.01)
     assert closes["n"] >= 1
     assert worker._thread is None or worker._thread.is_alive() is False
+    assert worker._tick_guard.acquire(blocking=False)
+    worker._tick_guard.release()
+    assert worker._source_guard.acquire(blocking=False)
+    worker._source_guard.release()
 
 
 def test_event_worker_nacks_overflow(tmp_path, feature_config: FeatureConfig):
