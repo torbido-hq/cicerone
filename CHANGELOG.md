@@ -103,6 +103,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Event worker reconnect does not nack post-apply ack retries.
 - Event source ack returns only ids bound to a live delivery.
 - A RabbitMQ I/O timeout cannot start a dispatched job.
+- RabbitMQ get, ack, declare, and heartbeat raise after the I/O channel is detached instead of succeeding.
+- RabbitMQ abandoned cleanup closes the timed-out connection and any leftover live handle.
 
 ## [0.8.1] - 2026-09-11
 

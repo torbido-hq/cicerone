@@ -496,6 +496,86 @@ def test_pika_io_timeout_detaches_channel_so_late_ack_cannot_run():
         io.stop()
 
 
+def test_broker_ops_raise_when_channel_is_detached():
+    from types import SimpleNamespace
+
+    from cicerone.events.rabbitmq import RabbitMQEventSource, _PikaIo
+
+    acks: list[int] = []
+    gets: list[str] = []
+    pumps: list[float] = []
+    declares: list[str] = []
+    io = _PikaIo(timeout_seconds=0.05)
+    io._channel = SimpleNamespace(
+        basic_ack=lambda delivery_tag: acks.append(delivery_tag),
+        basic_get=lambda queue, auto_ack=False: gets.append(queue) or (None, None, None),
+        queue_declare=lambda **kwargs: (
+            declares.append(str(kwargs.get("queue")))
+            or SimpleNamespace(method=SimpleNamespace(message_count=0))
+        ),
+    )
+    io._connection = SimpleNamespace(process_data_events=lambda time_limit=0: pumps.append(time_limit))
+    io._mark_failed()
+    source = RabbitMQEventSource(_options())
+    with pytest.raises(RuntimeError, match="abandoned"):
+        source._basic_get(io)
+    with pytest.raises(RuntimeError, match="abandoned"):
+        source._basic_ack(io, 9)
+    with pytest.raises(RuntimeError, match="abandoned"):
+        source._passive_declare(io)
+    with pytest.raises(RuntimeError, match="abandoned"):
+        source._pump_connection(io)
+    assert acks == []
+    assert gets == []
+    assert declares == []
+    assert pumps == []
+
+
+def test_bind_handles_does_not_reborn_abandoned_io():
+    from cicerone.events.rabbitmq import _PikaIo
+
+    io = _PikaIo(timeout_seconds=0.05)
+    io._mark_failed()
+    with pytest.raises(RuntimeError, match="abandoned"):
+        io._bind_handles(connection=object(), channel=object())
+    assert io._connection is None
+    assert io._channel is None
+
+
+def test_cleanup_abandoned_closes_abandon_handles_and_leftover_live():
+    from types import SimpleNamespace
+
+    from cicerone.events.rabbitmq import _PikaIo
+
+    def _handle() -> SimpleNamespace:
+        state = SimpleNamespace(closed=False)
+
+        def _close() -> None:
+            state.closed = True
+
+        state.close = _close
+        return state
+
+    abandon_channel = _handle()
+    abandon_connection = _handle()
+    live_channel = _handle()
+    live_connection = _handle()
+    io = _PikaIo(timeout_seconds=0.05)
+    io._abandon_channel = abandon_channel
+    io._abandon_connection = abandon_connection
+    io._channel = live_channel
+    io._connection = live_connection
+    io._cleanup_abandoned()
+    assert abandon_channel.closed is True
+    assert abandon_connection.closed is True
+    assert live_channel.closed is True
+    assert live_connection.closed is True
+    assert io._channel is None
+    assert io._connection is None
+    assert io._abandon_channel is None
+    assert io._abandon_connection is None
+
+
 def test_pika_io_timeout_does_not_run_after_enter_when_failed():
     from cicerone.events.rabbitmq import _JOB_ABANDONED, _PikaIo
 

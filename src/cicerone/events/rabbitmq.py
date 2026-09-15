@@ -39,13 +39,14 @@ _JOB_ABANDONED = "abandoned"
 
 
 class _IoJob:
-    __slots__ = ("fn", "reply", "state", "run_lock")
+    __slots__ = ("fn", "reply", "state", "run_lock", "permit")
 
     def __init__(self, fn: Callable[[], Any], reply: queue.Queue[tuple[str, Any]]) -> None:
         self.fn = fn
         self.reply = reply
         self.state = _JOB_QUEUED
         self.run_lock = threading.Lock()
+        self.permit = True
 
 
 def validate_rabbitmq_event_options(options: dict[str, Any]) -> None:
@@ -112,22 +113,22 @@ class _PikaIo:
 
         def _guarded() -> Any:
             with self._state_lock:
-                if self._failed or job.state != _JOB_STARTED:
+                if self._failed or not job.permit or job.state != _JOB_STARTED:
                     raise RuntimeError("RabbitMQ I/O worker abandoned")
                 job.state = _JOB_INVOKING
             job.run_lock.acquire()
             try:
                 with self._state_lock:
-                    if self._failed or job.state != _JOB_INVOKING:
+                    if self._failed or not job.permit or job.state != _JOB_INVOKING:
                         raise RuntimeError("RabbitMQ I/O worker abandoned")
                     job.state = _JOB_DISPATCHED
-                    if self._failed:
+                    if self._failed or not job.permit:
                         job.state = _JOB_ABANDONED
                         raise RuntimeError("RabbitMQ I/O worker abandoned")
-                if self._failed:
-                    with self._state_lock:
+                with self._state_lock:
+                    if self._failed or not job.permit:
                         job.state = _JOB_ABANDONED
-                    raise RuntimeError("RabbitMQ I/O worker abandoned")
+                        raise RuntimeError("RabbitMQ I/O worker abandoned")
                 return fn()
             finally:
                 job.run_lock.release()
@@ -166,18 +167,30 @@ class _PikaIo:
         self._connection = None
 
     def broker_channel(self) -> Any:
-        if self._failed:
-            raise RuntimeError("RabbitMQ I/O worker abandoned")
-        return self._channel
+        with self._state_lock:
+            if self._failed or self._channel is None:
+                raise RuntimeError("RabbitMQ I/O worker abandoned")
+            return self._channel
 
     def broker_connection(self) -> Any:
-        if self._failed:
-            raise RuntimeError("RabbitMQ I/O worker abandoned")
-        return self._connection
+        with self._state_lock:
+            if self._failed or self._connection is None:
+                raise RuntimeError("RabbitMQ I/O worker abandoned")
+            return self._connection
+
+    def _bind_handles(self, *, connection: Any | None = None, channel: Any | None = None) -> None:
+        with self._state_lock:
+            if self._failed:
+                raise RuntimeError("RabbitMQ I/O worker abandoned")
+            if connection is not None:
+                self._connection = connection
+            if channel is not None:
+                self._channel = channel
 
     def _abandon_unclaimed(self, job: _IoJob) -> None:
         with self._state_lock:
             self._failed = True
+            job.permit = False
             job.state = _JOB_ABANDONED
             self._detach_handles()
 
@@ -219,18 +232,18 @@ class _PikaIo:
 
     def _cleanup_abandoned(self) -> None:
         channel = self._abandon_channel if self._abandon_channel is not None else self._channel
-        connection = self._connection if self._connection is not None else self._abandon_connection
-        extra_channel = self._channel
-        extra_connection = self._abandon_connection
+        connection = self._abandon_connection if self._abandon_connection is not None else self._connection
+        leftover_channel = self._channel
+        leftover_connection = self._connection
         self._connection = None
         self._channel = None
         self._abandon_channel = None
         self._abandon_connection = None
         _close_handles(channel, connection)
-        if extra_channel is not None and extra_channel is not channel:
-            _close_quietly(extra_channel, "channel")
-        if extra_connection is not None and extra_connection is not connection:
-            _close_quietly(extra_connection, "connection")
+        if leftover_channel is not None and leftover_channel is not channel:
+            _close_quietly(leftover_channel, "channel")
+        if leftover_connection is not None and leftover_connection is not connection:
+            _close_quietly(leftover_connection, "connection")
 
     def _loop(self) -> None:
         while True:
@@ -560,22 +573,13 @@ class RabbitMQEventSource(EventSource):
         )
 
     def _basic_get(self, io: _PikaIo) -> Any:
-        channel = io.broker_channel()
-        if channel is None:
-            return None, None, None
-        return channel.basic_get(self._queue, auto_ack=False)
+        return io.broker_channel().basic_get(self._queue, auto_ack=False)
 
     def _basic_ack(self, io: _PikaIo, tag: int) -> None:
-        channel = io.broker_channel()
-        if channel is None:
-            return
-        channel.basic_ack(delivery_tag=tag)
+        io.broker_channel().basic_ack(delivery_tag=tag)
 
     def _passive_declare(self, io: _PikaIo) -> Any:
-        channel = io.broker_channel()
-        if channel is None:
-            raise RuntimeError("RabbitMQEventSource is not connected")
-        return channel.queue_declare(queue=self._queue, durable=True, passive=True)
+        return io.broker_channel().queue_declare(queue=self._queue, durable=True, passive=True)
 
     def _open(self, pika: Any, io: _PikaIo) -> tuple[Any, Any]:
         if io.failed:
@@ -583,11 +587,11 @@ class RabbitMQEventSource(EventSource):
         connection = pika.BlockingConnection(
             apply_amqp_timeouts(pika.URLParameters(self._amqp_url), self._timeout_seconds)
         )
-        io._connection = connection
         channel = None
         try:
+            io._bind_handles(connection=connection)
             channel = connection.channel()
-            io._channel = channel
+            io._bind_handles(channel=channel)
             channel.basic_qos(prefetch_count=self._prefetch)
             channel.queue_declare(queue=self._queue, durable=True)
         except Exception:
@@ -599,8 +603,6 @@ class RabbitMQEventSource(EventSource):
 
     def _pump_connection(self, io: _PikaIo) -> None:
         connection = io.broker_connection()
-        if connection is None:
-            return
         try:
             connection.process_data_events(time_limit=0)
         except Exception:
@@ -615,7 +617,7 @@ class RabbitMQEventSource(EventSource):
 
     def _owns_io(self, io: _PikaIo) -> bool:
         with self._lock:
-            return self._io is io
+            return self._io is io and not io.failed
 
     def _delivery_to_event(self, io: _PikaIo, method: Any, body: Any) -> NormalizedEvent | None:
         tag = int(method.delivery_tag)
