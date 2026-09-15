@@ -40,6 +40,7 @@ from cicerone.experiment.store import ExperimentStore, merge_experiment_state
 from cicerone.experiment.thompson import ArmCounts, parse_arm_counts
 from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.io.factory import build_manifest_reader
+from cicerone.locks import build_dataset_writer_lock
 from cicerone.track.store import TrackStore
 
 logger = logging.getLogger(__name__)
@@ -333,7 +334,7 @@ def promote_winner(settings: Settings, variant: str) -> str | None:
         return "Experiment is not ready to promote (" + ", ".join(blocked) + ")"
     if settings.experiment.allocation != ALLOCATION_THOMPSON and report.winner and report.winner != variant:
         return f"Winner is {report.winner!r}, not {variant!r}"
-    store = ExperimentStore(settings.output)
+    store = ExperimentStore(settings.output, writer_lock=build_dataset_writer_lock(settings))
     payload = merge_experiment_state(
         _matched_state(settings, store),
         experiment_id=settings.experiment.id,
@@ -347,7 +348,7 @@ def promote_winner(settings: Settings, variant: str) -> str | None:
 def clear_promotion(settings: Settings) -> str | None:
     if not settings.experiment.enabled:
         return "No experiment is enabled"
-    store = ExperimentStore(settings.output)
+    store = ExperimentStore(settings.output, writer_lock=build_dataset_writer_lock(settings))
     payload = merge_experiment_state(
         _matched_state(settings, store),
         experiment_id=settings.experiment.id,

@@ -161,6 +161,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Database recommendation, manifest, and artifact writes honor the
   caller fence. Online persist after ack fences even without a dataset
   writer lock.
+- Job Thompson state and dashboard promote share the dataset writer
+  lock. A late Redis `_mark_lost` cannot stop a newer refresher.
+  Legacy `write_manifest` fallback only applies when the sink lacks
+  `skip_if_newer_than`.
 
 
 ## [0.8.1] - 2026-09-11

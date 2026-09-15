@@ -455,9 +455,12 @@ def test_redis_stale_mark_lost_does_not_clear_new_holder(monkeypatch):
     lock._mark_lost()
     assert lock.acquire() is True
     token = lock._token
+    refresher = lock._refresh_thread
     lock._mark_lost(stale_generation)
     assert lock._held is True
     assert lock._token == token
+    assert refresher is not None and refresher.is_alive()
+    assert lock._refresh_thread is refresher
     lock.release()
 
 

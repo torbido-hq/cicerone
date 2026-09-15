@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import sys
@@ -106,16 +107,22 @@ def _ensure_publication_fence(sink: Any, fence_check: Callable[[], bool] | None)
         ensure()
 
 
+def _write_manifest_accepts_skip(write: Any) -> bool:
+    try:
+        return "skip_if_newer_than" in inspect.signature(write).parameters
+    except (TypeError, ValueError):
+        return False
+
+
 def _write_job_manifest(
     sink: Any, manifest: dict[str, Any], *, skip_if_newer_than: str | None = None
 ) -> bool:
     write = sink.write_manifest
-    try:
+    if _write_manifest_accepts_skip(write):
         result = write(manifest, skip_if_newer_than=skip_if_newer_than)
-    except TypeError:
-        write(manifest)
-        return True
-    return result is not False
+        return result is not False
+    write(manifest)
+    return True
 
 
 class ThompsonSelection(NamedTuple):
@@ -504,9 +511,10 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
     settings = load_settings()
     started_at = datetime.now(UTC).isoformat()
     feature_config = load_feature_config(settings.feature_config_path)
+    writer_lock = build_dataset_writer_lock(settings)
     sink = build_output_sink(
         settings.output,
-        writer_lock=build_dataset_writer_lock(settings),
+        writer_lock=writer_lock,
         fence_check=fence_check,
         fence_lost="retrain lock lost before write",
         fence_kind="retrain",
@@ -744,7 +752,9 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
                     outputs_written = True
                     if pending_thompson is not None:
                         _ensure_publication_fence(sink, fence_check)
-                        ExperimentStore(settings.output).write_state(pending_thompson)
+                        ExperimentStore(settings.output, writer_lock=writer_lock).write_state(
+                            pending_thompson
+                        )
                     if publisher is not None:
                         _ensure_publication_fence(sink, fence_check)
                         publisher.publish(recommendations)

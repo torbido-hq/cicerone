@@ -69,9 +69,16 @@ class RedisLock:
                 return
             self._held = False
             self._token = str(uuid.uuid4())
-        self._stop_refresh.set()
-        # Drop the handle so acquire() can start a new refresher (we may be that thread).
-        self._refresh_thread = None
+            marked = self._hold_generation
+        with self._refresh_lifecycle:
+            with self._mutex:
+                if self._hold_generation != marked or self._held:
+                    return
+            self._stop_refresh.set()
+            if threading.current_thread() is self._refresh_thread:
+                self._refresh_thread = None
+                return
+            self._stop_refresh_thread_unlocked()
 
     def _start_refresh(self, generation: int) -> None:
         with self._refresh_lifecycle:

@@ -286,6 +286,51 @@ def test_append_exposures_rechecks_owned_before_write(tmp_path) -> None:
     assert store.read_exposures() == []
 
 
+def test_write_state_writer_lock_lost(tmp_path) -> None:
+    class _Lost:
+        def acquire(self) -> bool:
+            return True
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            return False
+
+        def is_locked(self) -> bool:
+            return True
+
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    store = ExperimentStore(output, writer_lock=_Lost())
+    with pytest.raises(LockLostError, match="dataset writer lock lost before write"):
+        store.write_state(experiment_state("exp", promoted_variant="treatment"))
+    assert store.read_state() is None
+
+
+def test_write_state_skips_acquire_when_already_owned(tmp_path) -> None:
+    acquires = {"n": 0}
+
+    class _Held:
+        def acquire(self) -> bool:
+            acquires["n"] += 1
+            return False
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            return True
+
+        def is_locked(self) -> bool:
+            return True
+
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    store = ExperimentStore(output, writer_lock=_Held())
+    store.write_state(experiment_state("exp", promoted_variant="treatment"))
+    assert acquires["n"] == 0
+    assert store.read_state() is not None
+
+
 def test_append_exposures_empty_is_noop(tmp_path) -> None:
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     ExperimentStore(output).append_exposures([])

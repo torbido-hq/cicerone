@@ -208,11 +208,21 @@ class ExperimentStore:
 
     def write_state(self, state: Mapping[str, Any]) -> None:
         payload = dict(state)
-        if self._kind == "db":
-            self._write_state_db(payload)
-        else:
-            encoded = json.dumps(payload, indent=2).encode("utf-8")
+        encoded = None if self._kind == "db" else json.dumps(payload, indent=2).encode("utf-8")
+
+        def _persist() -> None:
+            if self._kind == "db":
+                self._write_state_db(payload)
+                return
+            ensure_writer_owned(self._writer_lock)
+            assert encoded is not None
             self._write_bytes(STATE_FILENAME, encoded, "application/json")
+
+        if self._writer_lock is not None and self._writer_lock.owned():
+            _persist()
+        else:
+            with held_writer_lock(self._writer_lock):
+                _persist()
         promoted = payload.get("promoted_variant")
         with self._promote_lock:
             self._promote_loaded = True
