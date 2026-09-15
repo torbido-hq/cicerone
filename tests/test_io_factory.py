@@ -127,6 +127,76 @@ def test_database_write_manifest_rechecks_fence_before_append(tmp_path):
     assert checks["n"] >= 2
 
 
+def test_database_write_recommendations_rechecks_fence_after_clear(tmp_path, monkeypatch):
+    import pandas as pd
+    from sqlalchemy import create_engine, inspect, text
+
+    from cicerone.io import db_store as db_store_mod
+    from cicerone.locks import LockLostError
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'recs.db'}"
+    held = {"ok": True}
+
+    def fence() -> bool:
+        return held["ok"]
+
+    original = db_store_mod._clear_table_for_replace
+
+    def _clear(conn, table):
+        original(conn, table)
+        held["ok"] = False
+
+    monkeypatch.setattr(db_store_mod, "_clear_table_for_replace", _clear)
+    sink = DatabaseOutputSink(
+        {"database_url": url},
+        fence_check=fence,
+        fence_lost="retrain lock lost before write",
+        fence_kind="retrain",
+    )
+    with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
+        sink.write_recommendations(pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1}]))
+    assert exc.value.kind == "retrain"
+    engine = create_engine(url)
+    if inspect(engine).has_table("recommendations"):
+        stored = pd.read_sql(text('SELECT * FROM "recommendations"'), engine)
+        assert stored.empty
+
+
+def test_database_write_items_rechecks_fence_after_clear(tmp_path, monkeypatch):
+    import pandas as pd
+    from sqlalchemy import create_engine, inspect, text
+
+    from cicerone.io import db_store as db_store_mod
+    from cicerone.locks import LockLostError
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'items.db'}"
+    held = {"ok": True}
+
+    def fence() -> bool:
+        return held["ok"]
+
+    original = db_store_mod._clear_table_for_replace
+
+    def _clear(conn, table):
+        original(conn, table)
+        held["ok"] = False
+
+    monkeypatch.setattr(db_store_mod, "_clear_table_for_replace", _clear)
+    sink = DatabaseOutputSink(
+        {"database_url": url},
+        fence_check=fence,
+        fence_lost="retrain lock lost before write",
+        fence_kind="retrain",
+    )
+    with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
+        sink.write_items_snapshot(pd.DataFrame([{"item_id": "i1"}]))
+    assert exc.value.kind == "retrain"
+    engine = create_engine(url)
+    if inspect(engine).has_table("recommendation_items"):
+        stored = pd.read_sql(text('SELECT * FROM "recommendation_items"'), engine)
+        assert stored.empty
+
+
 def test_build_input_source_unknown_kind_raises():
     settings = IOSettings(kind="carrier-pigeon", options={})
     with pytest.raises(ValueError, match="Unknown input kind"):

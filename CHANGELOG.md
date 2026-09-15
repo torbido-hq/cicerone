@@ -188,6 +188,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - DB mutating sink methods and dataset artifact writes take the writer
   lease themselves. A stale Redis `try_acquire` does not replace a
   newer refresher.
+- Dashboard promote maps writer-lock busy and loss to flash errors.
+  DB recommendation, artifact, and item writes recheck the fence after
+  each destructive step. Redis `SET NX` drops a token rotated while
+  the call was in flight. Track JSONL appends honor the caller fence.
 
 
 ## [0.8.1] - 2026-09-11

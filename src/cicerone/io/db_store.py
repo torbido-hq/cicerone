@@ -312,6 +312,7 @@ class DatabaseOutputSink:
             with self._engine.begin() as conn:
                 self._ensure_fence()
                 _clear_table_for_replace(conn, table)
+                self._ensure_fence()
                 df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
 
     def replace_recommendations_for_users(self, df: pd.DataFrame, *, user_ids: Sequence[str]) -> int:
@@ -356,6 +357,7 @@ class DatabaseOutputSink:
                         f"Recommendations schema mismatch for table {table!r}; refusing replace"
                     ) from exc
             if not df.empty:
+                self._ensure_fence()
                 df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
             count_savepoint = conn.begin_nested()
             try:
@@ -401,7 +403,9 @@ class DatabaseOutputSink:
         with self.recommendations_write(), self._engine.begin() as conn:
             self._ensure_fence()
             artifacts.create(conn, checkfirst=True)
+            self._ensure_fence()
             conn.execute(artifacts.delete())
+            self._ensure_fence()
             conn.execute(insert(artifacts).values(payload=payload, written_at=datetime.now(UTC)))
 
     def replace_model_artifact_if(self, payload: bytes, expected_fingerprint: str) -> bool:
@@ -426,9 +430,11 @@ class DatabaseOutputSink:
             stamp = written.isoformat() if hasattr(written, "isoformat") else str(written)
             if f"db:{stamp}" != expected_fingerprint:
                 return False
+            self._ensure_fence()
             deleted = conn.execute(artifacts.delete().where(artifacts.c.written_at == written))
             if deleted.rowcount < 1:
                 return False
+            self._ensure_fence()
             conn.execute(insert(artifacts).values(payload=payload, written_at=datetime.now(UTC)))
         return True
 
@@ -469,4 +475,5 @@ class DatabaseOutputSink:
         with self.recommendations_write(), self._engine.begin() as conn:
             self._ensure_fence()
             _clear_table_for_replace(conn, table)
+            self._ensure_fence()
             df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)

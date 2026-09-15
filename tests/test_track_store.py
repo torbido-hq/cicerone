@@ -487,6 +487,22 @@ def test_track_jsonl_append_rechecks_owned_before_write(tmp_path) -> None:
     assert store.read_rows() == []
 
 
+def test_track_jsonl_append_honors_caller_fence(tmp_path) -> None:
+    from cicerone.locks import LockLostError
+
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    store = TrackStore(
+        output,
+        fence_check=lambda: False,
+        fence_lost="retrain lock lost before write",
+        fence_kind="retrain",
+    )
+    with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
+        store.append_accepted_rows([_row()])
+    assert exc.value.kind == "retrain"
+    assert store.read_rows() == []
+
+
 def test_write_eval_db_honors_fence(tmp_path) -> None:
     from cicerone.locks import LockLostError
 

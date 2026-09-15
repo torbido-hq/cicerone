@@ -447,6 +447,45 @@ def test_redis_stale_release_does_not_drop_new_holder(monkeypatch):
     lock.release()
 
 
+def test_redis_try_acquire_releases_token_rotated_during_set(monkeypatch):
+    client = _mock_redis_module(monkeypatch)
+    lock = RedisLock(
+        "redis://localhost:6379/0",
+        ttl_ms=200,
+        refresh_interval_ms=10_000,
+    )
+    token = lock._token
+
+    def _set(*_args, **_kwargs):
+        lock._mark_lost()
+        return True
+
+    client.set.side_effect = _set
+    assert lock.try_acquire() is None
+    assert lock._held is False
+    client.release_script.assert_called_once_with(keys=[lock._key], args=[token])
+
+
+def test_redis_stale_token_release_failure_is_logged(monkeypatch, caplog):
+    client = _mock_redis_module(monkeypatch)
+    lock = RedisLock(
+        "redis://localhost:6379/0",
+        ttl_ms=200,
+        refresh_interval_ms=10_000,
+    )
+
+    def _set(*_args, **_kwargs):
+        lock._mark_lost()
+        return True
+
+    client.set.side_effect = _set
+    client.release_script.side_effect = RuntimeError("boom")
+    with caplog.at_level("ERROR"):
+        assert lock.try_acquire() is None
+    assert lock._held is False
+    assert "Failed to release stale Redis lock token" in caplog.text
+
+
 def test_redis_stale_start_refresh_does_not_stop_new_holder(monkeypatch):
     client = _mock_redis_module(monkeypatch)
     client.set.return_value = True

@@ -94,7 +94,15 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
         if self._kind == "db":
             return self._append_rows_db(payload)
         require_appendable_track_log(self._output)
-        with self._dataset_append_lock(), held_writer_lock(self._writer_lock):
+        with (
+            self._dataset_append_lock(),
+            held_writer_lock(
+                self._writer_lock,
+                fence_check=self._fence_check,
+                fence_lost=self._fence_lost,
+                fence_kind=self._fence_kind,
+            ),
+        ):
             known = self._refresh_known_ids()
             fresh: list[dict[str, Any]] = []
             seen: set[str] = set()
@@ -108,7 +116,12 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
             if not fresh:
                 return []
             encoded = "".join(json.dumps(row, separators=(",", ":")) + "\n" for row in fresh).encode("utf-8")
-            ensure_writer_owned(self._writer_lock)
+            ensure_writer_owned(
+                self._writer_lock,
+                fence_check=self._fence_check,
+                fence_lost=self._fence_lost,
+                fence_kind=self._fence_kind,
+            )
             self._append_bytes(TRACK_FILENAME, encoded)
             known.update(seen)
             self._track_size = (self._track_size or 0) + len(encoded)

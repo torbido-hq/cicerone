@@ -40,7 +40,12 @@ from cicerone.experiment.store import ExperimentStore, merge_experiment_state
 from cicerone.experiment.thompson import ArmCounts, parse_arm_counts
 from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.io.factory import build_manifest_reader
-from cicerone.locks import build_output_writer_lock, held_writer_lock
+from cicerone.locks import (
+    LockLostError,
+    WriterLockBusyError,
+    build_output_writer_lock,
+    held_writer_lock,
+)
 from cicerone.track.store import TrackStore
 
 logger = logging.getLogger(__name__)
@@ -318,6 +323,23 @@ def _lift_label(metric: str) -> str:
     return "Mean lift"
 
 
+def _publish_experiment_state(
+    settings: Settings, payload_for: Callable[[ExperimentStore], dict[str, Any]]
+) -> str | None:
+    writer_lock = build_output_writer_lock(settings)
+    store = ExperimentStore(settings.output, writer_lock=writer_lock)
+    try:
+        with held_writer_lock(writer_lock):
+            payload = payload_for(store)
+            store.write_state(payload)
+    except WriterLockBusyError:
+        return "Writer lock is busy"
+    except LockLostError:
+        return "Writer lock was lost"
+    _PROMOTE_STATE[settings.experiment.id] = dict(payload)
+    return None
+
+
 def promote_winner(settings: Settings, variant: str) -> str | None:
     context = experiment_context(settings)
     report = context.get("report")
@@ -334,33 +356,27 @@ def promote_winner(settings: Settings, variant: str) -> str | None:
         return "Experiment is not ready to promote (" + ", ".join(blocked) + ")"
     if settings.experiment.allocation != ALLOCATION_THOMPSON and report.winner and report.winner != variant:
         return f"Winner is {report.winner!r}, not {variant!r}"
-    writer_lock = build_output_writer_lock(settings)
-    store = ExperimentStore(settings.output, writer_lock=writer_lock)
-    with held_writer_lock(writer_lock):
-        payload = merge_experiment_state(
+    return _publish_experiment_state(
+        settings,
+        lambda store: merge_experiment_state(
             _matched_state(settings, store),
             experiment_id=settings.experiment.id,
             promoted_variant=variant,
-        )
-        store.write_state(payload)
-    _PROMOTE_STATE[settings.experiment.id] = dict(payload)
-    return None
+        ),
+    )
 
 
 def clear_promotion(settings: Settings) -> str | None:
     if not settings.experiment.enabled:
         return "No experiment is enabled"
-    writer_lock = build_output_writer_lock(settings)
-    store = ExperimentStore(settings.output, writer_lock=writer_lock)
-    with held_writer_lock(writer_lock):
-        payload = merge_experiment_state(
+    return _publish_experiment_state(
+        settings,
+        lambda store: merge_experiment_state(
             _matched_state(settings, store),
             experiment_id=settings.experiment.id,
             promoted_variant=None,
-        )
-        store.write_state(payload)
-    _PROMOTE_STATE[settings.experiment.id] = dict(payload)
-    return None
+        ),
+    )
 
 
 def _try_load(label: str, fn: Callable[[], _T], default: _T) -> _T:

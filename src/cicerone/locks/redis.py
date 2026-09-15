@@ -140,10 +140,18 @@ class RedisLock:
         ok = bool(self._client.set(self._key, token, nx=True, px=self._ttl_ms))
         if not ok:
             return None
+        generation: int | None = None
         with self._mutex:
-            self._held = True
-            self._hold_generation += 1
-            generation = self._hold_generation
+            if not self._held and self._token == token:
+                self._held = True
+                self._hold_generation += 1
+                generation = self._hold_generation
+        if generation is None:
+            try:
+                self._release_script(keys=[self._key], args=[token])
+            except Exception:
+                logger.exception("Failed to release stale Redis lock token")
+            return None
         self._start_refresh(generation)
         return generation
 
