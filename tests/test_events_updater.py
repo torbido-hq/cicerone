@@ -13,6 +13,7 @@ from cicerone.events.updater import INCREMENTAL_SOURCE, IncrementalUpdater
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.factory import build_output_sink
 from cicerone.io.recommendation_reader import RECOMMENDATION_COLUMNS
+from cicerone.locks import LockLostError
 from cicerone.reasons import dump_source_reasons, parse_reasons
 
 
@@ -471,6 +472,43 @@ def test_persist_online_holds_dataset_writer_lock(tmp_path, feature_config: Feat
     )
     updater.persist_online()
     assert depths == [1]
+
+
+def test_persist_online_fences_without_dataset_lock(tmp_path, feature_config: FeatureConfig):
+    commits: list[int] = []
+    owned = {"v": True}
+
+    class _Sink:
+        pass
+
+    class _FakeOnline:
+        def refresh(self, events):  # type: ignore[no-untyped-def]
+            del events
+            return OnlineRefreshResult(rows=empty_online_rows())
+
+        def invalidate(self) -> None:
+            return None
+
+        def commit(self) -> None:
+            commits.append(1)
+
+        def abort(self) -> None:
+            return None
+
+    updater = IncrementalUpdater(
+        sink=_Sink(),  # type: ignore[arg-type]
+        output_settings=IOSettings(kind="db", options={"database_url": "sqlite+pysqlite://"}),
+        feature_config=feature_config,
+        top_k=3,
+        fence_check=lambda: owned["v"],
+        online=_FakeOnline(),
+    )
+    updater.persist_online()
+    assert commits == [1]
+    owned["v"] = False
+    with pytest.raises(LockLostError):
+        updater.persist_online()
+    assert commits == [1]
 
 
 def test_incremental_updater_empty_and_unknown_event_type(tmp_path, feature_config: FeatureConfig):

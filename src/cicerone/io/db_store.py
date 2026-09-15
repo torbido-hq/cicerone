@@ -12,7 +12,7 @@ not add the column. Experiments similarly need ``ALTER TABLE … ADD COLUMN vari
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -256,11 +256,31 @@ class DatabaseInputSource:
 
 
 class DatabaseOutputSink:
-    def __init__(self, options: dict[str, Any]):
+    def __init__(
+        self,
+        options: dict[str, Any],
+        *,
+        fence_check: Callable[[], bool] | None = None,
+        fence_lost: str = "lock lost before write",
+        fence_kind: str = "lock",
+    ):
         self._options = options
         self._engine = create_engine(require_option(options, "database_url", "db"), pool_pre_ping=True)
+        self._fence_check = fence_check
+        self._fence_lost = fence_lost
+        self._fence_kind = fence_kind
+
+    def ensure_writer_held(self) -> None:
+        self._ensure_fence()
+
+    def _ensure_fence(self) -> None:
+        if self._fence_check is not None and not self._fence_check():
+            from cicerone.locks import LockLostError
+
+            raise LockLostError(self._fence_lost, kind=self._fence_kind)
 
     def write_recommendations(self, df: pd.DataFrame) -> None:
+        self._ensure_fence()
         table, _columns, _user_col = recommendations_sql_names(
             self._options, default_table=DEFAULT_RECOMMENDATIONS_TABLE
         )
@@ -271,6 +291,7 @@ class DatabaseOutputSink:
             df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
 
     def replace_recommendations_for_users(self, df: pd.DataFrame, *, user_ids: Sequence[str]) -> int:
+        self._ensure_fence()
         ids = normalize_replace_user_ids(df, user_ids)
         if not ids:
             return 0
@@ -323,6 +344,7 @@ class DatabaseOutputSink:
         return int(value or 0)
 
     def write_manifest(self, manifest: dict, *, skip_if_newer_than: str | None = None) -> bool:
+        self._ensure_fence()
         table = sql_identifier(
             self._options.get("manifest_table", DEFAULT_MANIFEST_TABLE),
             option="manifest_table",
@@ -336,6 +358,7 @@ class DatabaseOutputSink:
 
     def write_model_artifact(self, payload: bytes) -> None:
         """Replace the single-row model_artifacts table with the latest blob."""
+        self._ensure_fence()
         table_name = sql_identifier(
             self._options.get("model_artifact_table", DEFAULT_MODEL_ARTIFACT_TABLE),
             option="model_artifact_table",
@@ -354,6 +377,7 @@ class DatabaseOutputSink:
             conn.execute(insert(artifacts).values(payload=payload, written_at=datetime.now(UTC)))
 
     def replace_model_artifact_if(self, payload: bytes, expected_fingerprint: str) -> bool:
+        self._ensure_fence()
         table_name = sql_identifier(
             self._options.get("model_artifact_table", DEFAULT_MODEL_ARTIFACT_TABLE),
             option="model_artifact_table",
@@ -409,6 +433,7 @@ class DatabaseOutputSink:
         return f"db:{stamp}"
 
     def write_items_snapshot(self, df: pd.DataFrame) -> None:
+        self._ensure_fence()
         table = sql_identifier(
             self._options.get("recommendation_items_table", DEFAULT_RECOMMENDATION_ITEMS_TABLE),
             option="recommendation_items_table",

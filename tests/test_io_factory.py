@@ -65,6 +65,16 @@ def test_build_input_source_db():
 def test_build_output_sink_db():
     settings = IOSettings(kind="db", options={"database_url": "postgresql+psycopg://u:p@h/d"})
     assert isinstance(build_output_sink(settings), DatabaseOutputSink)
+    fenced = build_output_sink(
+        settings,
+        fence_check=lambda: True,
+        fence_lost="events apply lock lost before write",
+        fence_kind="apply",
+    )
+    assert isinstance(fenced, DatabaseOutputSink)
+    assert fenced._fence_check is not None
+    assert fenced._fence_check() is True
+    assert fenced._fence_kind == "apply"
 
 
 def test_build_input_source_unknown_kind_raises():

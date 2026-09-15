@@ -118,6 +118,15 @@ def build_output_sink(
             fence_lost=fence_lost,
             fence_kind=fence_kind,
         )
+    if settings.kind == "db":
+        from cicerone.io.db_store import DatabaseOutputSink
+
+        return DatabaseOutputSink(
+            settings.options,
+            fence_check=fence_check,
+            fence_lost=fence_lost,
+            fence_kind=fence_kind,
+        )
     return _build_from_registry(settings, _OUTPUT_SINKS, role="output")
 
 

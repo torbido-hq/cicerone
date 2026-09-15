@@ -119,6 +119,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
                 self._ensure_fence()
                 self._commit_online()
             return
+        self._ensure_fence()
         self._commit_online()
 
     def abort_online(self) -> None:

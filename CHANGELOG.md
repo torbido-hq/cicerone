@@ -158,6 +158,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The job rechecks the retrain fence immediately before writing a
   success manifest. Track appends fence ownership after JSON encode.
   A late Redis refresh failure cannot `_mark_lost` a newer acquire.
+- Database recommendation, manifest, and artifact writes honor the
+  caller fence. Online persist after ack fences even without a dataset
+  writer lock.
 
 
 ## [0.8.1] - 2026-09-11
