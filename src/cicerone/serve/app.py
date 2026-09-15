@@ -29,7 +29,7 @@ from cicerone.http_security import SecurityHeadersMiddleware, token_equals
 from cicerone.io.base import ManifestReader, RecommendationReader
 from cicerone.io.recommendation_reader import SOURCE_COLUMN
 from cicerone.io.recommendation_schema import has_variant_column
-from cicerone.locks import WriterLockBusyError, build_dataset_writer_lock
+from cicerone.locks import WriterLockBusyError, build_dataset_writer_lock, build_output_writer_lock
 from cicerone.reasons import parse_reasons
 from cicerone.serve.bootstrap_events import start_events_runtime
 from cicerone.serve.code_samples import HEALTH_PATH, RECOMMENDATIONS_PATH, attach_code_samples
@@ -210,7 +210,7 @@ def create_app(
     app.state.generated_at_cache = generated_at_cache
     app.state.events_worker = events_worker
     experiment_store = (
-        ExperimentStore(settings.output, writer_lock=build_dataset_writer_lock(settings))
+        ExperimentStore(settings.output, writer_lock=build_output_writer_lock(settings))
         if settings.experiment.enabled
         else None
     )

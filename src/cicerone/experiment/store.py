@@ -254,15 +254,39 @@ class ExperimentStore:
     def append_exposures(self, rows: Sequence[Mapping[str, Any]]) -> None:
         if not rows:
             return
-        if self._kind == "db":
-            self._append_exposures_db(rows)
+        encoded = None
+        path = None
+        if self._kind != "db":
+            require_appendable_exposure_log(self._output)
+            encoded = "".join(json.dumps(dict(row), separators=(",", ":")) + "\n" for row in rows).encode(
+                "utf-8"
+            )
+            path = Path(require_option(self._options, "path", "local")) / ".exposures.jsonl.lock"
+
+        def _persist() -> None:
+            ensure_writer_owned(
+                self._writer_lock,
+                fence_check=self._fence_check,
+                fence_lost=self._fence_lost,
+                fence_kind=self._fence_kind,
+            )
+            if self._kind == "db":
+                self._append_exposures_db(rows)
+                return
+            assert encoded is not None and path is not None
+            with exclusive_file_lock(path):
+                self._append_bytes(EXPOSURES_FILENAME, encoded)
+
+        if writer_lock_held_here(self._writer_lock):
+            _persist()
             return
-        require_appendable_exposure_log(self._output)
-        payload = "".join(json.dumps(dict(row), separators=(",", ":")) + "\n" for row in rows).encode("utf-8")
-        path = Path(require_option(self._options, "path", "local")) / ".exposures.jsonl.lock"
-        with exclusive_file_lock(path), held_writer_lock(self._writer_lock):
-            ensure_writer_owned(self._writer_lock)
-            self._append_bytes(EXPOSURES_FILENAME, payload)
+        with held_writer_lock(
+            self._writer_lock,
+            fence_check=self._fence_check,
+            fence_lost=self._fence_lost,
+            fence_kind=self._fence_kind,
+        ):
+            _persist()
 
     def read_exposures(self, *, experiment_id: str | None = None) -> list[dict[str, Any]]:
         if self._kind == "db":
@@ -359,8 +383,20 @@ class ExperimentStore:
         except Exception as exc:
             if not is_missing_column_error(exc):
                 raise
+            ensure_writer_owned(
+                self._writer_lock,
+                fence_check=self._fence_check,
+                fence_lost=self._fence_lost,
+                fence_kind=self._fence_kind,
+            )
             with engine.begin() as conn:
                 conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN payload TEXT'))
+            ensure_writer_owned(
+                self._writer_lock,
+                fence_check=self._fence_check,
+                fence_lost=self._fence_lost,
+                fence_kind=self._fence_kind,
+            )
             with engine.begin() as conn:
                 conn.execute(text(f'DELETE FROM "{table}"'))
                 conn.execute(insert_sql, params)

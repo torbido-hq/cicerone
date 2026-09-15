@@ -66,6 +66,7 @@ from cicerone.locks import (
     acquire_blocking,
     build_dataset_writer_lock,
     build_lock_backend,
+    build_output_writer_lock,
     has_distributed_lock,
     held_writer_lock,
 )
@@ -286,13 +287,16 @@ def _persist_track_outputs(
         _run_serial()
         return
     if lock is not None:
-        with held_writer_lock(
-            lock,
-            fence_check=fence_check,
-            fence_lost="retrain lock lost before write",
-            fence_kind="retrain",
-        ):
-            _run_serial()
+        try:
+            with held_writer_lock(
+                lock,
+                fence_check=fence_check,
+                fence_lost="retrain lock lost before write",
+                fence_kind="retrain",
+            ):
+                _run_serial()
+        except (WriterLockBusyError, LockLostError):
+            logger.exception("Failed to persist track outputs")
         return
     with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
         for label, fn in tasks:
@@ -569,10 +573,11 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
 def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bool] | None) -> None:
     started_at = datetime.now(UTC).isoformat()
     feature_config = load_feature_config(settings.feature_config_path)
+    publication_lock = build_output_writer_lock(settings)
     writer_lock = build_dataset_writer_lock(settings)
     sink = build_output_sink(
         settings.output,
-        writer_lock=writer_lock,
+        writer_lock=publication_lock,
         fence_check=fence_check,
         fence_lost="retrain lock lost before write",
         fence_kind="retrain",
@@ -812,7 +817,7 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                         _ensure_publication_fence(sink, fence_check)
                         store = ExperimentStore(
                             settings.output,
-                            writer_lock=writer_lock,
+                            writer_lock=publication_lock,
                             fence_check=fence_check,
                             fence_lost="retrain lock lost before write",
                             fence_kind="retrain",

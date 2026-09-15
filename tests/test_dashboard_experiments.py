@@ -1172,7 +1172,7 @@ def test_promote_winner_reads_state_under_writer_lock(tmp_path, monkeypatch):
             )
         },
     )
-    monkeypatch.setattr("cicerone.dashboard_experiments.build_dataset_writer_lock", lambda _settings: lock)
+    monkeypatch.setattr("cicerone.dashboard_experiments.build_output_writer_lock", lambda _settings: lock)
     monkeypatch.setattr(ExperimentStore, "read_state", _read)
     assert promote_winner(settings, "treatment") is None
     assert seen["held"] is True

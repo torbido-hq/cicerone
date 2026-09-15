@@ -75,6 +75,32 @@ def test_build_output_sink_db():
     assert fenced._fence_check is not None
     assert fenced._fence_check() is True
     assert fenced._fence_kind == "apply"
+    locked = object()
+    with_lock = build_output_sink(settings, writer_lock=locked)
+    assert with_lock._writer_lock is locked
+    assert callable(with_lock.recommendations_write)
+
+
+def test_database_write_manifest_rechecks_fence_before_append(tmp_path):
+    from cicerone.locks import LockLostError
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'manifest.db'}"
+    checks = {"n": 0}
+
+    def fence() -> bool:
+        checks["n"] += 1
+        return checks["n"] < 2
+
+    sink = DatabaseOutputSink(
+        {"database_url": url},
+        fence_check=fence,
+        fence_lost="retrain lock lost before write",
+        fence_kind="retrain",
+    )
+    with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
+        sink.write_manifest({"n_events": 1, "generated_at": "t"})
+    assert exc.value.kind == "retrain"
+    assert checks["n"] >= 2
 
 
 def test_build_input_source_unknown_kind_raises():

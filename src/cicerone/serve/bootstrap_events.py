@@ -26,8 +26,8 @@ from cicerone.io.base import RecommendationReader
 from cicerone.io.factory import build_output_sink
 from cicerone.locks import (
     LockBackend,
-    build_dataset_writer_lock,
     build_lock_backend,
+    build_output_writer_lock,
     events_apply_lock_key,
     has_distributed_lock,
 )
@@ -172,7 +172,7 @@ def start_events_runtime(
 
     sink = build_output_sink(
         settings.output,
-        writer_lock=build_dataset_writer_lock(settings),
+        writer_lock=build_output_writer_lock(settings),
         fence_check=(apply_lock.owned if apply_lock is not None else None),
         fence_lost="events apply lock lost before write",
         fence_kind="apply",

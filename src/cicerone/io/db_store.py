@@ -12,7 +12,8 @@ not add the column. Experiments similarly need ``ALTER TABLE … ADD COLUMN vari
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
 
@@ -260,15 +261,29 @@ class DatabaseOutputSink:
         self,
         options: dict[str, Any],
         *,
+        writer_lock: Any = None,
         fence_check: Callable[[], bool] | None = None,
         fence_lost: str = "lock lost before write",
         fence_kind: str = "lock",
     ):
         self._options = options
         self._engine = create_engine(require_option(options, "database_url", "db"), pool_pre_ping=True)
+        self._writer_lock = writer_lock
         self._fence_check = fence_check
         self._fence_lost = fence_lost
         self._fence_kind = fence_kind
+
+    @contextmanager
+    def recommendations_write(self) -> Iterator[None]:
+        from cicerone.locks import held_writer_lock
+
+        with held_writer_lock(
+            self._writer_lock,
+            fence_check=self._fence_check,
+            fence_lost=self._fence_lost,
+            fence_kind=self._fence_kind,
+        ):
+            yield
 
     def ensure_writer_held(self) -> None:
         self._ensure_fence()
@@ -287,6 +302,7 @@ class DatabaseOutputSink:
         logger.info("Writing %d rows to database table %r", len(df), table)
         _require_optional_recommendation_columns(self._engine, table, df)
         with self._engine.begin() as conn:
+            self._ensure_fence()
             _clear_table_for_replace(conn, table)
             df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
 
@@ -311,6 +327,7 @@ class DatabaseOutputSink:
         )
         count_sql = text(f"SELECT COUNT(DISTINCT {user_col}) FROM {table}")
         with self._engine.begin() as conn:
+            self._ensure_fence()
             savepoint = conn.begin_nested()
             try:
                 conn.execute(delete_sql, {"user_ids": ids})
@@ -353,6 +370,7 @@ class DatabaseOutputSink:
         with self._engine.begin() as conn:
             if skip_if_newer_than is not None and _db_manifest_newer(conn, table, skip_if_newer_than):
                 return False
+            self._ensure_fence()
             pd.DataFrame([manifest]).to_sql(table, conn, if_exists="append", index=False)
         return True
 

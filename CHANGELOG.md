@@ -178,6 +178,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   state. Track eval and history writes honor the retrain fence.
 - Writer-lock acquire binds the Redis generation in the same step as
   SET NX, so a later reacquire cannot fence stale work.
+- Experiment DB state fallback and exposure appends honor the caller
+  fence. DB manifests recheck it before append. Track sidecar lock
+  errors stay best-effort. DB recommendation writes take the same
+  output writer lease as dataset.
 
 
 ## [0.8.1] - 2026-09-11

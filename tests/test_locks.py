@@ -25,6 +25,7 @@ from cicerone.locks import (
     advisory_keys_from_lock_key,
     build_dataset_writer_lock,
     build_lock_backend,
+    build_output_writer_lock,
     dataset_append_lock_key,
     ensure_writer_owned,
     events_apply_lock_key,
@@ -739,6 +740,12 @@ def test_dataset_append_lock_key_and_optional_builder(monkeypatch):
         output=IOSettings(kind="db", options={"database_url": "sqlite://"}),
     )
     assert build_dataset_writer_lock(db_settings) is None
+    client = _mock_redis_module(monkeypatch)
+    client.set.return_value = True
+    output_lock = build_output_writer_lock(db_settings)
+    assert output_lock is not None
+    assert output_lock.acquire() is True
+    output_lock.release()
 
 
 def test_held_writer_lock_owned_after_nested_wait():

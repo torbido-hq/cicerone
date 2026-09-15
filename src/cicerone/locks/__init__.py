@@ -43,6 +43,7 @@ __all__ = [
     "acquire_blocking",
     "advisory_keys_from_lock_key",
     "build_dataset_writer_lock",
+    "build_output_writer_lock",
     "build_lock_backend",
     "dataset_append_lock_key",
     "events_apply_lock_key",
@@ -220,8 +221,8 @@ def held_writer_lock(
             lock.release()
 
 
-def build_dataset_writer_lock(settings: Settings) -> LockBackend | None:
-    if not has_distributed_lock(settings) or settings.output.kind != "dataset":
+def build_output_writer_lock(settings: Settings) -> LockBackend | None:
+    if not has_distributed_lock(settings) or settings.output.kind not in {"dataset", "db"}:
         return None
     return build_lock_backend(
         settings,
@@ -231,6 +232,12 @@ def build_dataset_writer_lock(settings: Settings) -> LockBackend | None:
             DEFAULT_DATASET_APPEND_LOCK_TTL_SECONDS,
         ),
     )
+
+
+def build_dataset_writer_lock(settings: Settings) -> LockBackend | None:
+    if settings.output.kind != "dataset":
+        return None
+    return build_output_writer_lock(settings)
 
 
 def build_lock_backend(

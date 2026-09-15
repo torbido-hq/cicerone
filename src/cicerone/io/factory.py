@@ -123,6 +123,7 @@ def build_output_sink(
 
         return DatabaseOutputSink(
             settings.options,
+            writer_lock=writer_lock,
             fence_check=fence_check,
             fence_lost=fence_lost,
             fence_kind=fence_kind,

@@ -392,7 +392,7 @@ def test_start_events_runtime_wires_apply_lock(tmp_path, feature_config: Feature
     writer_fake = SharedLock()
     monkeypatch.setattr("cicerone.serve.bootstrap_events.build_lock_backend", _build)
     monkeypatch.setattr(
-        "cicerone.serve.bootstrap_events.build_dataset_writer_lock",
+        "cicerone.serve.bootstrap_events.build_output_writer_lock",
         lambda _settings: writer_fake,
     )
 
@@ -444,7 +444,7 @@ def test_start_events_runtime_wires_apply_lock_without_ha(
     writer_fake = SharedLock()
     monkeypatch.setattr("cicerone.serve.bootstrap_events.build_lock_backend", _build)
     monkeypatch.setattr(
-        "cicerone.serve.bootstrap_events.build_dataset_writer_lock",
+        "cicerone.serve.bootstrap_events.build_output_writer_lock",
         lambda _settings: writer_fake,
     )
 

@@ -434,6 +434,25 @@ def test_read_input_swallows_manifest_reader_construction(monkeypatch):
     assert manifest is None
 
 
+def test_persist_track_outputs_lock_errors_are_best_effort(monkeypatch):
+    from cicerone.locks import WriterLockBusyError
+
+    def _busy(*_args, **_kwargs):
+        raise WriterLockBusyError("dataset writer lock busy")
+
+    monkeypatch.setattr("cicerone.job.held_writer_lock", _busy)
+    job._persist_track_outputs(
+        TrackStore(
+            IOSettings(kind="dataset", options={"storage_backend": "local", "path": "/tmp/out"}),
+            writer_lock=object(),
+        ),
+        kind="dataset",
+        eval_report={"generated_at": "t"},
+        recommendations=None,
+        generated_at="t",
+    )
+
+
 def test_refresh_pending_thompson_keeps_live_promotion(tmp_path):
     from cicerone.experiment.store import ExperimentStore, experiment_state
 
@@ -870,6 +889,7 @@ def test_job_run_records_configured_lock_backend(tmp_path, monkeypatch):
     )
     monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
     monkeypatch.setattr("cicerone.job.build_dataset_writer_lock", lambda _settings: None)
+    monkeypatch.setattr("cicerone.job.build_output_writer_lock", lambda _settings: None)
 
     class _Held:
         def acquire(self) -> bool:
