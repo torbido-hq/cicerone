@@ -340,9 +340,7 @@ def test_event_worker_stop_skips_close_during_poll(tmp_path, feature_config: Fea
     assert order.index("poll-start") < order.index("close")
 
 
-def test_event_worker_stop_skips_close_during_never_started_tick(
-    tmp_path, feature_config: FeatureConfig
-):
+def test_event_worker_stop_skips_close_during_never_started_tick(tmp_path, feature_config: FeatureConfig):
     import threading
 
     settings = make_settings(
@@ -480,9 +478,7 @@ def test_event_worker_reconnect_nacks_buffer_after_connect(tmp_path, feature_con
     assert order == ["connect", "connect", "nack"]
 
 
-def test_event_worker_reconnect_restores_buffer_when_nack_fails(
-    tmp_path, feature_config: FeatureConfig
-):
+def test_event_worker_reconnect_restores_buffer_when_nack_fails(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
     )
@@ -510,9 +506,7 @@ def test_event_worker_reconnect_restores_buffer_when_nack_fails(
     assert [event.event_id for event in worker._buffer.flush()] == ["buf-2"]
 
 
-def test_event_worker_reconnect_keeps_buffer_when_nack_is_noop(
-    tmp_path, feature_config: FeatureConfig
-):
+def test_event_worker_reconnect_keeps_buffer_when_nack_is_noop(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
     )
@@ -547,9 +541,7 @@ def test_event_worker_reconnect_keeps_buffer_when_nack_is_noop(
     assert [event.event_id for event in worker._buffer.flush()] == ["buf-4"]
 
 
-def test_event_worker_reconnect_restores_buffer_when_connect_fails(
-    tmp_path, feature_config: FeatureConfig
-):
+def test_event_worker_reconnect_restores_buffer_when_connect_fails(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
     )
