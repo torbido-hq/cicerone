@@ -239,8 +239,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         latest_ranking: pd.DataFrame,
         online_by_user: dict[str, pd.DataFrame],
     ) -> tuple[pd.DataFrame | None, list[str]]:
-        self._evict_users(affected_set)
-        existing = self._load_users(affected_set)
+        existing = self._load_users(affected_set, refresh=True)
         if USER_COLUMN in existing.columns and not existing.empty:
             existing = existing.copy()
             existing[USER_COLUMN] = existing[USER_COLUMN].astype(str)

@@ -291,6 +291,54 @@ def test_incremental_updater_remakes_under_writer_lock_after_retrain(tmp_path, f
     assert list(frame.loc[frame["user_id"] == "u2", "item_id"]) == ["x"]
 
 
+def test_incremental_updater_refresh_ignores_warm_cache_after_retrain(
+    tmp_path, feature_config: FeatureConfig
+):
+    from contextlib import contextmanager
+
+    out = tmp_path / "out"
+    out.mkdir()
+    stale = pd.DataFrame(
+        [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
+    )
+    stale.to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    sink = build_output_sink(settings.output)
+    retrain = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "job", "rank": 1, "score": 1.0, "source": "personalized"},
+            {"user_id": "u2", "item_id": "x", "rank": 1, "score": 0.5, "source": "personalized"},
+        ]
+    )
+    inner = sink.recommendations_write
+
+    @contextmanager
+    def after_retrain():
+        sink.write_recommendations(retrain)
+        with inner():
+            yield
+
+    sink.recommendations_write = after_retrain  # type: ignore[method-assign]
+    updater = IncrementalUpdater(
+        sink=sink,
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+    )
+    updater._cache_put("u1", stale.copy(), protect=())
+    updater._cache_put(COLD_START_USER_ID, stale.iloc[0:0].copy(), protect=())
+    assert updater.apply([normalize_event(event_payload(user_id="u1", item_id="i9"))]) == 1
+    frame = load_recommendations_frame(settings.output)
+    u1 = set(frame.loc[frame["user_id"] == "u1", "item_id"].astype(str))
+    assert "job" in u1
+    assert "old" not in u1
+    assert "i9" in u1
+    assert list(frame.loc[frame["user_id"] == "u2", "item_id"]) == ["x"]
+
+
 def test_incremental_updater_rechecks_busy_after_merge(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()

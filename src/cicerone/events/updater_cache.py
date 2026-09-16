@@ -47,7 +47,9 @@ class UpdaterUserCache:
         for user_id in user_ids:
             self._cached_by_user.pop(user_id, None)
 
-    def _load_users(self, user_ids: set[str]) -> pd.DataFrame:
+    def _load_users(self, user_ids: set[str], *, refresh: bool = False) -> pd.DataFrame:
+        if refresh:
+            self._evict_users(user_ids)
         missing = sorted(user_id for user_id in user_ids if user_id not in self._cached_by_user)
         if missing:
             loaded = load_recommendations_for_users(self._output_settings, missing)
