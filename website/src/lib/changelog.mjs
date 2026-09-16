@@ -75,7 +75,7 @@ export function latestReleaseFromPypi(project, changelogText) {
 }
 
 export async function fetchPypiProject(url = PYPI_JSON_URL, fetchImpl = fetch) {
-	const response = await fetchImpl(url);
+	const response = await fetchImpl(url, { headers: { 'Cache-Control': 'no-cache' } });
 	if (!response.ok) {
 		throw new Error(`PyPI ${url} returned ${response.status}`);
 	}
@@ -85,6 +85,53 @@ export async function fetchPypiProject(url = PYPI_JSON_URL, fetchImpl = fetch) {
 		const detail = error instanceof Error ? error.message : String(error);
 		throw new Error(`PyPI ${url} returned invalid JSON: ${detail}`);
 	}
+}
+
+export function compareSemver(left, right) {
+	const a = String(left).split('.').map(Number);
+	const b = String(right).split('.').map(Number);
+	for (let i = 0; i < 3; i++) {
+		if (a[i] !== b[i]) return a[i] - b[i];
+	}
+	return 0;
+}
+
+export function pypiHasVersion(project, expectVersion) {
+	const current = project?.info?.version;
+	if (
+		typeof current === 'string' &&
+		/^\d+\.\d+\.\d+$/.test(current) &&
+		compareSemver(current, expectVersion) >= 0
+	) {
+		return true;
+	}
+	const files = project?.releases?.[expectVersion];
+	return Array.isArray(files) && files.length > 0;
+}
+
+export async function waitForPypiProject({
+	expectVersion,
+	fetchProject = fetchPypiProject,
+	sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+	attempts = 10,
+	delayMs = 6000,
+} = {}) {
+	if (typeof expectVersion !== 'string' || !/^\d+\.\d+\.\d+$/.test(expectVersion)) {
+		throw new Error(`expectVersion must be x.y.z, got ${String(expectVersion)}`);
+	}
+	let lastError = new Error(`PyPI did not publish ${expectVersion}`);
+	for (let attempt = 0; attempt < attempts; attempt++) {
+		try {
+			const project = await fetchProject();
+			if (pypiHasVersion(project, expectVersion)) return project;
+			const seen = typeof project?.info?.version === 'string' ? project.info.version : 'unknown';
+			lastError = new Error(`PyPI is still ${seen}, waiting for ${expectVersion}`);
+		} catch (error) {
+			lastError = error instanceof Error ? error : new Error(String(error));
+		}
+		if (attempt < attempts - 1) await sleep(delayMs);
+	}
+	throw lastError;
 }
 
 export function isValidRelease(value) {
@@ -106,15 +153,22 @@ function errorMessage(error) {
 
 /**
  * Latest homepage release: PyPI first, then a previously generated file, then CHANGELOG.
+ * When expectVersion is set, poll PyPI for that version and do not fall back.
  * @returns {{ release: {version: string, date: string, url: string}, stale: boolean, source: 'pypi' | 'previous' | 'changelog', reason: string | null }}
  */
 export async function resolveLatestRelease({
 	changelogText = '',
 	previous = null,
 	fetchProject = fetchPypiProject,
+	expectVersion = null,
+	sleep,
+	attempts,
+	delayMs,
 } = {}) {
 	try {
-		const project = await fetchProject();
+		const project = expectVersion
+			? await waitForPypiProject({ expectVersion, fetchProject, sleep, attempts, delayMs })
+			: await fetchProject();
 		return {
 			release: latestReleaseFromPypi(project, changelogText),
 			stale: false,
@@ -123,6 +177,9 @@ export async function resolveLatestRelease({
 		};
 	} catch (error) {
 		const reason = errorMessage(error);
+		if (expectVersion) {
+			throw new Error(`Could not resolve latest release ${expectVersion}: ${reason}`);
+		}
 		if (isValidRelease(previous)) {
 			return { release: previous, stale: true, source: 'previous', reason };
 		}

@@ -146,9 +146,14 @@ if (existsSync(latestReleaseOut)) {
     previousRelease = null;
   }
 }
+const expectVersion = process.env.EXPECT_PYPI_VERSION?.trim() || null;
+if (expectVersion && !/^\d+\.\d+\.\d+$/.test(expectVersion)) {
+  throw new Error(`EXPECT_PYPI_VERSION must be x.y.z, got ${expectVersion}`);
+}
 const { release, stale, source, reason } = await resolveLatestRelease({
   changelogText,
   previous: previousRelease,
+  expectVersion,
 });
 writeFileSync(latestReleaseOut, `${JSON.stringify(release)}\n`);
 if (stale && source === "previous") {
