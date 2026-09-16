@@ -1132,6 +1132,7 @@ def test_thompson_ship_ignores_parked_empty_lists(tmp_path):
     assert {item.variant for item in context["report"].guardrails} == {"control", "treatment"}
     assert context["can_ship"] is True
     assert context["ship_variant"] == "control"
+    assert promote_winner(settings, "blend") == "Winner is 'control', not 'blend'"
 
 
 def test_promote_winner_reads_state_under_writer_lock(tmp_path, monkeypatch):

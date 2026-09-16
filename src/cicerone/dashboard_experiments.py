@@ -354,7 +354,21 @@ def promote_winner(settings: Settings, variant: str) -> str | None:
     blocked = _ship_blocked(report, settings.experiment)
     if blocked:
         return "Experiment is not ready to promote (" + ", ".join(blocked) + ")"
-    if settings.experiment.allocation != ALLOCATION_THOMPSON and report.winner and report.winner != variant:
+    if settings.experiment.allocation == ALLOCATION_THOMPSON:
+        thompson = context.get("thompson") or {}
+        allowed = {
+            str(name)
+            for name in (
+                thompson.get("champion"),
+                thompson.get("challenger"),
+                context.get("ship_variant"),
+            )
+            if name
+        }
+        if variant not in allowed:
+            wanted = context.get("ship_variant") or thompson.get("champion") or "the active pair"
+            return f"Winner is {wanted!r}, not {variant!r}"
+    elif report.winner and report.winner != variant:
         return f"Winner is {report.winner!r}, not {variant!r}"
     return _publish_experiment_state(
         settings,
