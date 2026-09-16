@@ -245,13 +245,21 @@ def _assert_artifact_size(zf: zipfile.ZipFile, max_bytes: int) -> None:
             raise ValueError(f"Artifact uncompressed size exceeds {max_bytes} bytes")
 
 
+def _assert_hmac_member_size(zf: zipfile.ZipFile, names: set[str]) -> None:
+    if _HMAC_NAME not in names:
+        return
+    if zf.getinfo(_HMAC_NAME).file_size != _HMAC_HEX_BYTES:
+        raise ValueError("Artifact HMAC member has invalid size")
+
+
 def _verify_artifact_hmac(zf: zipfile.ZipFile, names: set[str], key: bytes) -> None:
     if _HMAC_NAME not in names:
         raise ValueError("Artifact is missing HMAC member")
-    hmac_info = zf.getinfo(_HMAC_NAME)
-    if hmac_info.file_size != _HMAC_HEX_BYTES:
-        raise ValueError("Artifact HMAC member has invalid size")
-    expected = zf.read(_HMAC_NAME).decode("ascii")
+    _assert_hmac_member_size(zf, names)
+    try:
+        expected = zf.read(_HMAC_NAME).decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise ValueError("Artifact HMAC member is not valid ASCII") from exc
     digest = hmac.new(key, digestmod=hashlib.sha256)
     for name in sorted(name for name in names if name != _HMAC_NAME):
         info = zf.getinfo(name)
@@ -277,6 +285,7 @@ def loads_artifact(
         with zipfile.ZipFile(buffer, mode="r") as zf:
             _assert_artifact_size(zf, max_bytes)
             names = _assert_safe_artifact_zip(zf)
+            _assert_hmac_member_size(zf, names)
             key = _hmac_key_bytes(hmac_key)
             if key is not None:
                 _verify_artifact_hmac(zf, names, key)

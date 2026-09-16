@@ -297,6 +297,21 @@ def test_loads_artifact_rejects_oversize_hmac_member():
         dest.writestr("hmac.sha256", b"x" * 200)
     with pytest.raises(ValueError, match="HMAC member"):
         loads_artifact(out.getvalue(), hmac_key="0123456789abcdef", max_bytes=1024)
+    with pytest.raises(ValueError, match="HMAC member"):
+        loads_artifact(out.getvalue(), max_bytes=1024)
+
+
+def test_loads_artifact_rejects_non_ascii_hmac_member():
+    import io
+    import zipfile
+
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w") as dest:
+        dest.writestr("meta.json", "{}")
+        dest.writestr("bundle.pkl", b"x")
+        dest.writestr("hmac.sha256", b"\xff" * 64)
+    with pytest.raises(ValueError, match="not valid ASCII"):
+        loads_artifact(out.getvalue(), hmac_key="0123456789abcdef", max_bytes=1024)
 
 
 def test_loads_artifact_rejects_oversize_uncompressed_member():
