@@ -230,3 +230,21 @@ def test_exclusive_file_lock_msvcrt_times_out(tmp_path, monkeypatch):
         exclusive_file_lock(tmp_path / "writers.lock", timeout_seconds=0.0),
     ):
         pass
+
+
+def test_exclusive_file_lock_reraises_unsupported_msvcrt(tmp_path, monkeypatch):
+    class _Msvcrt:
+        LK_NBLCK = 1
+        LK_UNLCK = 2
+
+        def locking(self, _fd: int, mode: int, _nbytes: int) -> None:
+            if mode != self.LK_UNLCK:
+                raise OSError(errno.ENOTSUP, "not supported")
+
+    monkeypatch.setattr("cicerone.io.options.fcntl", None)
+    monkeypatch.setattr("cicerone.io.options.msvcrt", _Msvcrt())
+    with (
+        pytest.raises(OSError, match="not supported"),
+        exclusive_file_lock(tmp_path / "writers.lock", timeout_seconds=0.1),
+    ):
+        pass

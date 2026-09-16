@@ -84,7 +84,9 @@ def _host_lock(handle: IO[bytes], timeout_seconds: float) -> None:
         try:
             msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
             return
-        except OSError:
+        except OSError as exc:
+            if getattr(exc, "errno", None) not in {errno.EACCES, errno.EAGAIN}:
+                raise
             if time.monotonic() >= deadline:
                 raise WriterLockBusyError("dataset writer lock busy") from None
             time.sleep(0.05)
