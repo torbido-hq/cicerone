@@ -196,6 +196,7 @@ class ExplainSettings:
 class IOSettings:
     kind: str
     options: dict[str, Any] = field(default_factory=dict)
+    artifact_hmac_key: str | None = None
 
 
 @dataclass(frozen=True)

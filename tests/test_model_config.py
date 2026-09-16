@@ -278,7 +278,7 @@ def test_item_based_knn_backend_and_lightfm_loss_passthrough():
 def test_online_rejects_non_lightfm_collaborative_cls(tmp_path):
     config_path = write_toml(
         tmp_path,
-        f"""
+        """
         [job]
         mode = "serve"
         [serve]
@@ -290,7 +290,17 @@ def test_online_rejects_non_lightfm_collaborative_cls(tmp_path):
         enabled = true
         [model.collaborative]
         cls = "EASEModel"
-        {_minimal_io_toml()}
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+        [output]
+        kind = "dataset"
+        artifact_hmac_key = "0123456789abcdef"
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
         """,
     )
     with pytest.raises(ConfigError, match="events.online.enabled requires"):

@@ -11,12 +11,17 @@ import time
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 try:
     import fcntl
 except ImportError:
     fcntl = None  # type: ignore[assignment]
+
+try:
+    import msvcrt
+except ImportError:
+    msvcrt = None  # type: ignore[assignment]
 
 import pandas as pd
 
@@ -55,6 +60,48 @@ def require_option(options: dict[str, Any], key: str, backend: str) -> Any:
     return value
 
 
+def _host_lock(handle: IO[bytes], timeout_seconds: float) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    if fcntl is not None:
+        while True:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return
+            except OSError as exc:
+                if getattr(exc, "errno", None) not in {errno.EACCES, errno.EAGAIN}:
+                    raise
+                if time.monotonic() >= deadline:
+                    raise WriterLockBusyError("dataset writer lock busy") from None
+                time.sleep(0.05)
+    if msvcrt is None:
+        return
+    handle.seek(0, io.SEEK_END)
+    if handle.tell() < 1:
+        handle.write(b"\0")
+        handle.flush()
+    while True:
+        handle.seek(0)
+        try:
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            return
+        except OSError as exc:
+            if getattr(exc, "errno", None) not in {errno.EACCES, errno.EAGAIN}:
+                raise
+            if time.monotonic() >= deadline:
+                raise WriterLockBusyError("dataset writer lock busy") from None
+            time.sleep(0.05)
+
+
+def _host_unlock(handle: IO[bytes]) -> None:
+    if fcntl is not None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        return
+    if msvcrt is None:
+        return
+    handle.seek(0)
+    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+
+
 @contextmanager
 def exclusive_file_lock(
     path: Path, *, timeout_seconds: float = DEFAULT_LOCK_ACQUIRE_TIMEOUT_SECONDS
@@ -64,24 +111,12 @@ def exclusive_file_lock(
     if not lock.acquire(timeout=timeout_seconds):
         raise WriterLockBusyError("dataset writer lock busy")
     try:
-        with path.open("a") as handle:
-            if fcntl is not None:
-                deadline = time.monotonic() + timeout_seconds
-                while True:
-                    try:
-                        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                        break
-                    except OSError as exc:
-                        if getattr(exc, "errno", None) not in {errno.EACCES, errno.EAGAIN}:
-                            raise
-                        if time.monotonic() >= deadline:
-                            raise WriterLockBusyError("dataset writer lock busy") from None
-                        time.sleep(0.05)
+        with path.open("a+b") as handle:
+            _host_lock(handle, timeout_seconds)
             try:
                 yield
             finally:
-                if fcntl is not None:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                _host_unlock(handle)
     finally:
         lock.release()
 
@@ -113,6 +148,30 @@ def readonly_select(query: str, *, option: str) -> str:
     if _READONLY_SELECT_FORBIDDEN.search(cleaned):
         raise ValueError(f"{option} must be a read-only SELECT")
     return cleaned
+
+
+def close_s3_body(body: Any) -> None:
+    close = getattr(body, "close", None)
+    if callable(close):
+        close()
+
+
+def read_s3_body(response: dict[str, Any], *, max_bytes: int | None = None) -> bytes:
+    body = response["Body"]
+    try:
+        if max_bytes is None:
+            return body.read()
+        if max_bytes < 1:
+            raise ValueError("max_bytes must be >= 1")
+        known = response.get("ContentLength")
+        if isinstance(known, int) and known > max_bytes:
+            raise ValueError(f"Stored object is {known} bytes; max is {max_bytes}")
+        payload = body.read(max_bytes + 1)
+        if len(payload) > max_bytes:
+            raise ValueError(f"Stored object is {len(payload)} bytes; max is {max_bytes}")
+        return payload
+    finally:
+        close_s3_body(body)
 
 
 def is_s3_not_found(exc: BaseException) -> bool:
@@ -196,4 +255,4 @@ def read_parquet(
     logger.info("Reading s3://%s/%s", bucket, key)
     client = s3_client if s3_client is not None else build_s3_client(options)
     obj = client.get_object(Bucket=bucket, Key=key)
-    return pd.read_parquet(io.BytesIO(obj["Body"].read()), **read_kwargs)
+    return pd.read_parquet(io.BytesIO(read_s3_body(obj)), **read_kwargs)

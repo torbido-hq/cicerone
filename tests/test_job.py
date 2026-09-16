@@ -18,7 +18,13 @@ REPO_FEATURES_CONFIG = Path(__file__).resolve().parents[1] / "config" / "feature
 
 
 def _write_config(
-    tmp_path, input_dir, output_dir, top_k: int = 10, extra_job: str = "", extra: str = ""
+    tmp_path,
+    input_dir,
+    output_dir,
+    top_k: int = 10,
+    extra_job: str = "",
+    extra: str = "",
+    extra_output: str = "",
 ) -> str:
     config_path = tmp_path / "cicerone.toml"
     config_path.write_text(
@@ -36,6 +42,7 @@ def _write_config(
 
         [output]
         kind = "dataset"
+        {extra_output}
         [output.options]
         storage_backend = "local"
         path = "{output_dir}"
@@ -595,6 +602,45 @@ def test_job_run_writes_model_artifact_when_enabled(tmp_path, monkeypatch):
         recommendations.sort_values(["user_id", "rank"]).reset_index(drop=True),
         from_artifact.sort_values(["user_id", "rank"]).reset_index(drop=True),
     )
+
+
+def test_job_run_signs_model_artifact_when_hmac_key_set(tmp_path, monkeypatch):
+    import zipfile
+
+    from cicerone.artifact import load_artifact
+
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.now(tz="UTC")
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+            {"user_id": "u2", "item_id": "i1", "event_type": "view", "quantity": 1, "occurred_at": now},
+        ]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    pd.DataFrame(
+        [{"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True}]
+    ).to_parquet(input_dir / "items.parquet", index=False)
+    key = "0123456789abcdef"
+    config_path = _write_config(
+        tmp_path,
+        input_dir,
+        output_dir,
+        top_k=2,
+        extra_job="save_model_artifact = true",
+        extra_output=f'artifact_hmac_key = "{key}"',
+    )
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
+    job.run()
+    artifact_path = output_dir / "model.artifact"
+    with zipfile.ZipFile(artifact_path) as zf:
+        assert "hmac.sha256" in zf.namelist()
+    loaded = load_artifact(artifact_path, hmac_key=key)
+    assert loaded.models
+    with pytest.raises(ValueError, match="HMAC"):
+        load_artifact(artifact_path, hmac_key="fedcba9876543210")
 
 
 def test_job_run_with_automl_enabled_selects_and_records_best_candidate(tmp_path, monkeypatch):
