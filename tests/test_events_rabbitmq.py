@@ -59,7 +59,7 @@ def test_amqp_timeouts_applied_on_connect(monkeypatch):
 
 
 def test_pika_io_skips_job_queued_during_timed_out_pump():
-    from cicerone.events.rabbitmq import _PikaIo
+    from cicerone.events.rabbitmq_io import _PikaIo
 
     entered = threading.Event()
     released = threading.Event()
@@ -91,7 +91,7 @@ def test_pika_io_skips_job_queued_during_timed_out_pump():
 
 
 def test_pika_io_marks_failed_when_pump_raises():
-    from cicerone.events.rabbitmq import _PikaIo
+    from cicerone.events.rabbitmq_io import _PikaIo
 
     class _Conn:
         def process_data_events(self, time_limit: float | int = 0) -> None:
@@ -114,7 +114,7 @@ def test_pika_io_marks_failed_when_pump_raises():
 
 
 def test_abandoned_io_does_not_return_late_ok():
-    from cicerone.events.rabbitmq import _PikaIo
+    from cicerone.events.rabbitmq_io import _PikaIo
 
     started = threading.Event()
     release = threading.Event()
@@ -150,7 +150,7 @@ def test_abandoned_io_does_not_return_late_ok():
 
 
 def test_pika_io_timeout_does_not_run_unclaimed_job():
-    from cicerone.events.rabbitmq import _IO_STOP, _JOB_ABANDONED, _PikaIo
+    from cicerone.events.rabbitmq_io import _IO_STOP, _JOB_ABANDONED, _PikaIo
 
     io = _PikaIo(timeout_seconds=0.05)
     original_get = io._jobs.get
@@ -196,7 +196,7 @@ def test_pika_io_timeout_does_not_run_unclaimed_job():
 
 
 def test_pika_io_timeout_does_not_run_claimed_job():
-    from cicerone.events.rabbitmq import _JOB_ABANDONED, _JOB_CLAIMED, _PikaIo
+    from cicerone.events.rabbitmq_io import _JOB_ABANDONED, _JOB_CLAIMED, _PikaIo
 
     io = _PikaIo(timeout_seconds=0.05)
     original_take = io._take_job
@@ -243,7 +243,7 @@ def test_pika_io_timeout_does_not_run_claimed_job():
 
 
 def test_pika_io_timeout_does_not_run_after_started_when_failed():
-    from cicerone.events.rabbitmq import _JOB_ABANDONED, _PikaIo
+    from cicerone.events.rabbitmq_io import _JOB_ABANDONED, _PikaIo
 
     io = _PikaIo(timeout_seconds=0.05)
     original_should_run = io._should_run
@@ -289,7 +289,7 @@ def test_pika_io_timeout_does_not_run_after_started_when_failed():
 
 
 def test_pika_io_timeout_does_not_run_after_running_when_failed():
-    from cicerone.events.rabbitmq import _JOB_ABANDONED, _PikaIo
+    from cicerone.events.rabbitmq_io import _JOB_ABANDONED, _PikaIo
 
     io = _PikaIo(timeout_seconds=0.05)
     original_should_run = io._should_run
@@ -333,7 +333,7 @@ def test_pika_io_timeout_does_not_run_after_running_when_failed():
 
 
 def test_pika_io_timeout_does_not_run_after_invoking_when_failed():
-    from cicerone.events.rabbitmq import _IO_STOP, _JOB_ABANDONED, _PikaIo
+    from cicerone.events.rabbitmq_io import _IO_STOP, _JOB_ABANDONED, _PikaIo
 
     io = _PikaIo(timeout_seconds=0.05)
     original_put = io._jobs.put
@@ -390,7 +390,7 @@ def test_pika_io_timeout_does_not_run_after_invoking_when_failed():
 
 
 def test_pika_io_timeout_does_not_run_dispatched_job():
-    from cicerone.events.rabbitmq import _IO_STOP, _JOB_DISPATCHED, _PikaIo
+    from cicerone.events.rabbitmq_io import _IO_STOP, _JOB_DISPATCHED, _PikaIo
 
     io = _PikaIo(timeout_seconds=0.05)
     inner = io._state_lock
@@ -453,7 +453,8 @@ def test_pika_io_timeout_does_not_run_dispatched_job():
 def test_pika_io_timeout_detaches_channel_so_late_ack_cannot_run():
     from types import SimpleNamespace
 
-    from cicerone.events.rabbitmq import RabbitMQEventSource, _PikaIo
+    from cicerone.events.rabbitmq import RabbitMQEventSource
+    from cicerone.events.rabbitmq_io import _PikaIo
 
     io = _PikaIo(timeout_seconds=0.05)
     acks: list[int] = []
@@ -499,7 +500,8 @@ def test_pika_io_timeout_detaches_channel_so_late_ack_cannot_run():
 def test_broker_ops_raise_when_channel_is_detached():
     from types import SimpleNamespace
 
-    from cicerone.events.rabbitmq import RabbitMQEventSource, _PikaIo
+    from cicerone.events.rabbitmq import RabbitMQEventSource
+    from cicerone.events.rabbitmq_io import _PikaIo
 
     acks: list[int] = []
     gets: list[str] = []
@@ -532,7 +534,7 @@ def test_broker_ops_raise_when_channel_is_detached():
 
 
 def test_bind_handles_does_not_reborn_abandoned_io():
-    from cicerone.events.rabbitmq import _PikaIo
+    from cicerone.events.rabbitmq_io import _PikaIo
 
     io = _PikaIo(timeout_seconds=0.05)
     io._mark_failed()
@@ -545,7 +547,7 @@ def test_bind_handles_does_not_reborn_abandoned_io():
 def test_cleanup_abandoned_closes_abandon_handles_and_leftover_live():
     from types import SimpleNamespace
 
-    from cicerone.events.rabbitmq import _PikaIo
+    from cicerone.events.rabbitmq_io import _PikaIo
 
     def _handle() -> SimpleNamespace:
         state = SimpleNamespace(closed=False)
@@ -577,7 +579,7 @@ def test_cleanup_abandoned_closes_abandon_handles_and_leftover_live():
 
 
 def test_pika_io_timeout_does_not_run_after_enter_when_failed():
-    from cicerone.events.rabbitmq import _JOB_ABANDONED, _PikaIo
+    from cicerone.events.rabbitmq_io import _JOB_ABANDONED, _PikaIo
 
     io = _PikaIo(timeout_seconds=0.05)
     original_enter = io._enter_job
@@ -623,7 +625,7 @@ def test_pika_io_timeout_does_not_run_after_enter_when_failed():
 
 
 def test_pika_io_replies_abandoned_for_job_dequeued_after_fail():
-    from cicerone.events.rabbitmq import _IO_STOP, _PikaIo
+    from cicerone.events.rabbitmq_io import _IO_STOP, _PikaIo
 
     io = _PikaIo(timeout_seconds=5)
     original_get = io._jobs.get
@@ -646,7 +648,7 @@ def test_pika_io_replies_abandoned_for_job_dequeued_after_fail():
 
 
 def test_pika_io_wakes_queued_submit_when_pump_fails():
-    from cicerone.events.rabbitmq import _PikaIo
+    from cicerone.events.rabbitmq_io import _PikaIo
 
     entered = threading.Event()
 
@@ -671,7 +673,7 @@ def test_pika_io_wakes_queued_submit_when_pump_fails():
 
 
 def test_pika_io_submit_rejected_after_shutdown_reserved():
-    from cicerone.events.rabbitmq import _PikaIo
+    from cicerone.events.rabbitmq_io import _PikaIo
 
     io = _PikaIo(timeout_seconds=1)
     io.start()
@@ -685,7 +687,7 @@ def test_pika_io_submit_rejected_after_shutdown_reserved():
 
 
 def test_pika_io_submit_times_out():
-    from cicerone.events.rabbitmq import _PikaIo
+    from cicerone.events.rabbitmq_io import _PikaIo
 
     io = _PikaIo(timeout_seconds=0.05)
     io.start()
@@ -730,7 +732,7 @@ def test_close_abandons_hung_idle_pump(monkeypatch):
 
 
 def test_pika_io_busy_survives_overlapping_pump():
-    from cicerone.events.rabbitmq import _PikaIo
+    from cicerone.events.rabbitmq_io import _PikaIo
 
     entered = threading.Event()
     released = threading.Event()
@@ -1550,7 +1552,7 @@ def test_reconnect_does_not_ack_late_delivery_on_new_channel(monkeypatch):
 
 
 def test_release_io_closes_handles_if_thread_already_exited(monkeypatch):
-    from cicerone.events.rabbitmq import _PikaIo, _release_io
+    from cicerone.events.rabbitmq_io import _PikaIo, _release_io
 
     class _Handle:
         def __init__(self) -> None:
