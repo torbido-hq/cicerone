@@ -31,6 +31,9 @@ _SECRET_KEYS = frozenset(
         "queue_url",
         "password",
         "webhook",
+        "sasl_username",
+        "bootstrap_servers",
+        "bucket",
     }
 )
 _SECRET_KEY_RE = re.compile(
