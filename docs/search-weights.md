@@ -10,7 +10,7 @@ Personalized search still uses `GET /recommendations/{user_id}`. Do not put per-
 
 ## Output
 
-Every successful job writes `item_scores` next to recommendations:
+A successful job writes `item_scores` next to recommendations when the sink implements `ItemScoresWriter` (dataset and DB do):
 
 | column | definition |
 | --- | --- |

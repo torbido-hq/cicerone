@@ -224,8 +224,13 @@ def _add_missing_manifest_columns(
         _alter(opened)
 
 
-def _missing_item_scores_columns(engine: Engine, table: str) -> list[str]:
-    inspector = inspect(engine)
+def _missing_item_scores_columns(
+    engine: Engine,
+    table: str,
+    *,
+    conn: Connection | None = None,
+) -> list[str]:
+    inspector = inspect(conn) if conn is not None else inspect(engine)
     if not inspector.has_table(table):
         return []
     existing = {column["name"] for column in inspector.get_columns(table)}
@@ -574,9 +579,9 @@ class DatabaseOutputSink:
         )
         df = normalize_item_scores(df)
         logger.info("Writing %d item score rows to database table %r", len(df), table)
-        missing = _missing_item_scores_columns(self._engine, table)
         with self.recommendations_write(), self._engine.begin() as conn:
             self._ensure_fence()
+            missing = _missing_item_scores_columns(self._engine, table, conn=conn)
             if missing:
                 logger.warning(
                     "Replacing legacy item_scores table %r missing column(s) %s",

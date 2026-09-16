@@ -273,6 +273,42 @@ def test_sqlite_write_manifest_alters_under_writer_lock(tmp_path, monkeypatch):
     assert order.index("acquire") < order.index("alter") < order.index("release")
 
 
+def test_sqlite_write_item_scores_inspects_under_writer_lock(tmp_path, monkeypatch):
+    url = _sqlite_url(tmp_path)
+    engine = create_engine(url)
+    pd.DataFrame([{"item_id": "i0", "popular_score": 0.5}]).to_sql("item_scores", engine, index=False)
+    order: list[str] = []
+
+    class _Lock:
+        def acquire(self) -> bool:
+            order.append("acquire")
+            return True
+
+        def release(self) -> None:
+            order.append("release")
+
+        def owned(self) -> bool:
+            return True
+
+        def is_locked(self) -> bool:
+            return True
+
+    import cicerone.io.db_store as db_store
+
+    real = db_store._missing_item_scores_columns
+
+    def _wrapped(*args, **kwargs):
+        order.append("inspect")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(db_store, "_missing_item_scores_columns", _wrapped)
+    sink = DatabaseOutputSink({"database_url": url}, writer_lock=_Lock())
+    sink.write_item_scores(
+        pd.DataFrame([{"item_id": "i1", "popular_score": 2.0, "latest_score": 1.0, "n_users": 3}])
+    )
+    assert order.index("acquire") < order.index("inspect") < order.index("release")
+
+
 def test_sqlite_write_item_scores_replaces_legacy_table(tmp_path):
     url = _sqlite_url(tmp_path)
     engine = create_engine(url)
