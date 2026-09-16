@@ -113,13 +113,14 @@ class TrackDbBackend:
         *,
         kind: str | None,
         experiment_id: str | None,
+        since: str | None = None,
     ) -> list[dict[str, Any]]:
         table = sql_identifier(
             self._options.get("track_table", DEFAULT_TRACK_TABLE),
             option="track_table",
         )
         engine = self._db_engine()
-        clause, params = _track_row_sql_filter(kind=kind, experiment_id=experiment_id)
+        clause, params = _track_row_sql_filter(kind=kind, experiment_id=experiment_id, since=since)
         try:
             frame = pd.read_sql(text(f'SELECT * FROM "{table}"{clause}'), engine, params=params)
         except MISSING_TABLE_ERRORS:

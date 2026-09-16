@@ -73,7 +73,7 @@ def _slice_metrics(
     click_conversions: pd.DataFrame,
 ) -> SliceMetrics:
     n_impressions = int(len(impressions))
-    n_clicks = int(len(matched_clicks))
+    n_clicks = min(int(len(matched_clicks)), n_impressions)
     n_view = min(int(len(view_conversions)), n_impressions)
     n_click = min(int(len(click_conversions)), n_impressions)
     users = set()

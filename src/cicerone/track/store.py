@@ -151,7 +151,7 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
     ) -> list[dict[str, Any]]:
         since = _iso_utc(since)
         if self._kind == "db":
-            rows = self._read_rows_db(kind=kind, experiment_id=experiment_id)
+            rows = self._read_rows_db(kind=kind, experiment_id=experiment_id, since=since)
         else:
             rows = self._read_rows_dataset()
         seen: set[str] = set()

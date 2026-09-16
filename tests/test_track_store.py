@@ -12,6 +12,14 @@ from cicerone.track.normalize import TrackNormalizeError, normalize_track
 from cicerone.track.store import TrackStore, require_appendable_track_log
 
 
+def test_lookback_since_uses_floor() -> None:
+    from cicerone.track.store_common import lookback_since
+
+    stamp = pd.to_datetime(lookback_since(window_hours=1.0, floor_hours=24.0), utc=True)
+    now = pd.Timestamp.now(tz="UTC")
+    assert 23.0 <= (now - stamp).total_seconds() / 3600.0 <= 25.0
+
+
 def test_store_reexports_prior_constants() -> None:
     from cicerone.track.store import (
         DEFAULT_EVAL_TABLE,
@@ -814,9 +822,31 @@ def test_track_read_rows_filters_experiment_and_since(tmp_path) -> None:
         ]
     )
     matched = store.read_rows(experiment_id="exp-a")
-    assert {row["event_id"] for row in matched} == {"a", "untagged"}
+    assert {row["event_id"] for row in matched} == {"a"}
     recent = store.read_rows(since="2026-08-28T12:00:00Z")
     assert {row["event_id"] for row in recent} == {"b", "untagged"}
+
+
+def test_track_read_rows_since_drops_untimed(tmp_path) -> None:
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    store = TrackStore(output)
+    store.append_rows([_row(event_id="timed", occurred_at="2026-08-28T13:00:00Z")])
+    path = tmp_path / "track.jsonl"
+    path.write_text(
+        path.read_text()
+        + json.dumps(
+            {
+                "kind": "impression",
+                "user_id": "alice",
+                "item_id": "ipa-001",
+                "rank": 1,
+                "occurred_at": "",
+                "event_id": "untimed",
+            }
+        )
+        + "\n"
+    )
+    assert {row["event_id"] for row in store.read_rows(since="2026-08-28T12:00:00Z")} == {"timed"}
 
 
 def test_track_read_rows_filters_sqlite(tmp_path) -> None:
@@ -831,7 +861,7 @@ def test_track_read_rows_filters_sqlite(tmp_path) -> None:
         ]
     )
     matched = store.read_rows(experiment_id="exp-a")
-    assert {row["event_id"] for row in matched} == {"a", "untagged"}
+    assert {row["event_id"] for row in matched} == {"a"}
     recent = store.read_rows(since="2026-08-28T12:00:00Z")
     assert {row["event_id"] for row in recent} == {"b", "untagged"}
 

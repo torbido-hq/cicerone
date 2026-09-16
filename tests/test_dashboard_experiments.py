@@ -793,7 +793,7 @@ def test_experiment_context_skips_other_experiment_track_rows(tmp_path, monkeypa
     context = experiment_context(settings)
     ids = {str(row.get("experiment_id") or "") for row in captured["rows"]}
     assert "exp-old" not in ids
-    assert ids == {"", "exp-1"}
+    assert ids == {"exp-1"}
     assert context["report"] is not None
     assert "volume" in context["report"].promote_blocked_by
 

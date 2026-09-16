@@ -131,10 +131,47 @@ def _refresh_pending_thompson(store: ExperimentStore, pending: dict[str, Any]) -
     )
 
 
+def _load_shared_eval_inputs(
+    settings: Settings,
+) -> tuple[list[dict[str, Any]] | None, pd.DataFrame | None]:
+    need_track = settings.track.enabled or (
+        settings.experiment.enabled and settings.experiment.allocation == ALLOCATION_THOMPSON
+    )
+    if not need_track:
+        return None, None
+    since: str | None = None
+    if settings.experiment.enabled and settings.experiment.allocation == ALLOCATION_THOMPSON:
+        raw_state = _try_load("read experiment state", ExperimentStore(settings.output).read_state, None)
+        previous = raw_state if isinstance(raw_state, dict) else None
+        if previous and str(previous.get("experiment_id") or "") != settings.experiment.id:
+            previous = None
+        has_pair = bool(previous and previous.get("champion") and previous.get("challenger"))
+        window_started = str(previous.get("window_started_at") or "").strip() if previous and has_pair else ""
+        if has_pair and window_started:
+            since = window_started
+    raw_track = _try_load(
+        "read track rows",
+        lambda: TrackStore(settings.output).read_rows(since=since),
+        None,
+    )
+    track_rows = raw_track if isinstance(raw_track, list) else None
+    recs = _try_load(
+        "load recommendations for eval",
+        lambda: load_recommendations_frame(settings.output),
+        None,
+    )
+    if recs is not None and getattr(recs, "empty", False):
+        recs = None
+    return track_rows, recs
+
+
 def _select_thompson_recipes(
     settings: Settings,
     recipes: tuple[ResolvedRecipe, ...],
     events: pd.DataFrame,
+    *,
+    preloaded_track: list[dict[str, Any]] | None = None,
+    preloaded_recs: pd.DataFrame | None = None,
 ) -> ThompsonSelection:
     if len(recipes) < 2:
         return ThompsonSelection(recipes)
@@ -142,11 +179,14 @@ def _select_thompson_recipes(
     store = ExperimentStore(settings.output)
     failed = object()
     raw_state = _try_load("read experiment state", store.read_state, failed)
-    raw_track = _try_load(
-        "read track rows",
-        lambda: TrackStore(settings.output).read_rows(experiment_id=experiment.id),
-        failed,
-    )
+    if preloaded_track is None:
+        raw_track = _try_load(
+            "read track rows",
+            lambda: TrackStore(settings.output).read_rows(experiment_id=experiment.id),
+            failed,
+        )
+    else:
+        raw_track = [row for row in preloaded_track if str(row.get("experiment_id") or "") == experiment.id]
     if raw_state is failed or not (raw_state is None or isinstance(raw_state, dict)):
         return ThompsonSelection(recipes)
     previous: dict[str, Any] | None = raw_state
@@ -162,20 +202,31 @@ def _select_thompson_recipes(
         return ThompsonSelection(recipes)
     window_started = ""
     if previous is not None and has_pair:
-        window_started = str(previous.get("window_started_at") or "")
-    window_rows = track_rows_since(track_rows, window_started or None)
+        window_started = str(previous.get("window_started_at") or "").strip()
+    if has_pair and not window_started:
+        window_rows = []
+    else:
+        window_rows = track_rows_since(track_rows, window_started or None)
     names = [recipe.name for recipe in recipes]
     try:
         conversions = conversion_events_for_settings(events, settings)
-        recs, catalog_size = _try_load_pair(
-            "load recommendations for Thompson guardrails",
-            lambda: load_recommendations_frame(settings.output),
-            None,
-            "load catalog size for Thompson guardrails",
-            lambda: load_items_catalog_size(settings.output),
-            None,
-            parallel=settings.output.kind != "db",
-        )
+        if preloaded_recs is not None:
+            recs = preloaded_recs
+            catalog_size = _try_load(
+                "load catalog size for Thompson guardrails",
+                lambda: load_items_catalog_size(settings.output),
+                None,
+            )
+        else:
+            recs, catalog_size = _try_load_pair(
+                "load recommendations for Thompson guardrails",
+                lambda: load_recommendations_frame(settings.output),
+                None,
+                "load catalog size for Thompson guardrails",
+                lambda: load_items_catalog_size(settings.output),
+                None,
+                parallel=settings.output.kind != "db",
+            )
         report = evaluate_tracking(
             track_rows=window_rows,
             conversions=conversions,
@@ -306,7 +357,15 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
 
         if last_manifest and last_manifest.get("generated_at"):
             eval_generated_at = str(last_manifest["generated_at"])
-        track_eval_payload, served_eval_payload = _score_previous_run(settings, events, last_manifest, items)
+        preloaded_track, preloaded_recs = _load_shared_eval_inputs(settings)
+        track_eval_payload, served_eval_payload = _score_previous_run(
+            settings,
+            events,
+            last_manifest,
+            items,
+            preloaded_track=preloaded_track,
+            preloaded_recs=preloaded_recs,
+        )
 
         built = build_dataset(events, users, items, feature_config, half_life_days=settings.half_life_days)
 
@@ -370,7 +429,13 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                 ",".join(recipe.name for recipe in recipes),
             )
             if settings.experiment.allocation == ALLOCATION_THOMPSON:
-                selected = _select_thompson_recipes(settings, recipes, events)
+                selected = _select_thompson_recipes(
+                    settings,
+                    recipes,
+                    events,
+                    preloaded_track=preloaded_track,
+                    preloaded_recs=preloaded_recs,
+                )
                 recipes = selected.recipes
                 pending_thompson = selected.state
                 logger.info(

@@ -804,7 +804,7 @@ def test_evaluation_remaining_branches(monkeypatch) -> None:
     later_imp = pd.DataFrame([{"user_id": "alice", "item_id": "ipa", "generated_at": "2026-08-28T00:00:00Z"}])
     by_snap = _annotate_source(later_imp, snapshots)
     assert by_snap.iloc[0]["source"] == "personalized"
-    assert by_snap.iloc[0]["variant"] == "treatment"
+    assert "variant" not in by_snap.columns or pd.isna(by_snap.iloc[0].get("variant"))
     missing_time = evaluate_tracking(
         track_rows=[{"kind": "impression", "user_id": "a", "item_id": "i"}],
         conversions=pd.DataFrame(),
@@ -979,7 +979,7 @@ def test_annotate_source_latest_uses_newest_generated_at() -> None:
     impressions = pd.DataFrame([{"user_id": "alice", "item_id": "ipa"}])
     annotated = _annotate_source(impressions, snapshots)
     assert annotated.iloc[0]["source"] == "personalized"
-    assert annotated.iloc[0]["variant"] == "treatment"
+    assert "variant" not in annotated.columns or pd.isna(annotated.iloc[0].get("variant"))
 
 
 def test_evaluate_served_uses_assigned_variant_only() -> None:
@@ -1144,3 +1144,68 @@ def test_annotate_source_unmatched_generated_at_does_not_take_later_snap() -> No
     )
     annotated = _annotate_source(impressions, snapshots)
     assert pd.isna(annotated.iloc[0].get("source")) or annotated.iloc[0]["source"] != "personalized"
+
+
+def test_evaluate_tracking_caps_ctr_at_one() -> None:
+    rows = _track(
+        {
+            "kind": "impression",
+            "user_id": "alice",
+            "item_id": "ipa",
+            "rank": 1,
+            "occurred_at": "2026-08-28T12:00:00Z",
+            "event_id": "imp-1",
+        },
+        {
+            "kind": "click",
+            "user_id": "alice",
+            "item_id": "ipa",
+            "occurred_at": "2026-08-28T12:01:00Z",
+            "event_id": "clk-1",
+        },
+        {
+            "kind": "click",
+            "user_id": "alice",
+            "item_id": "ipa",
+            "occurred_at": "2026-08-28T12:02:00Z",
+            "event_id": "clk-2",
+        },
+    )
+    report = evaluate_tracking(track_rows=rows, conversions=pd.DataFrame(), window_hours=24.0)
+    assert report.overall.n_impressions == 1
+    assert report.overall.n_clicks == 1
+    assert report.overall.ctr == pytest.approx(1.0)
+    outcomes = user_track_outcomes(
+        track_rows=rows,
+        conversions=pd.DataFrame(),
+        primary_metric="ctr",
+        attribution="click",
+        window_hours=24.0,
+    )
+    assert outcomes["alice"] == pytest.approx(1.0)
+
+
+def test_annotate_source_does_not_invent_variant_from_later_snap() -> None:
+    from cicerone.evaluation import _annotate_source
+
+    snapshots = pd.DataFrame(
+        [
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "source": "popular_fallback",
+                "variant": "control",
+                "generated_at": "2026-08-20T00:00:00Z",
+            },
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "source": "personalized",
+                "variant": "treatment",
+                "generated_at": "2026-08-28T00:00:00Z",
+            },
+        ]
+    )
+    impressions = pd.DataFrame([{"user_id": "alice", "item_id": "ipa"}])
+    annotated = _annotate_source(impressions, snapshots)
+    assert "variant" not in annotated.columns or pd.isna(annotated.iloc[0].get("variant"))

@@ -84,15 +84,12 @@ def _annotate_source(impressions: pd.DataFrame, recommendations: pd.DataFrame | 
     recs[USER_COLUMN] = recs[USER_COLUMN].astype(str)
     recs[ITEM_COLUMN] = recs[ITEM_COLUMN].astype(str)
     keep = [USER_COLUMN, ITEM_COLUMN, SOURCE_COLUMN]
-    if VARIANT_COLUMN in recs.columns:
-        keep.append(VARIANT_COLUMN)
     if "generated_at" in recs.columns:
         keep.append("generated_at")
         recs["generated_at"] = pd.to_datetime(recs["generated_at"], utc=True, errors="coerce")
     recs = recs.loc[:, [column for column in keep if column in recs.columns]]
     if "generated_at" in recs.columns:
         recs = recs.sort_values("generated_at", kind="mergesort", na_position="first")
-    latest = recs.drop_duplicates(subset=[USER_COLUMN, ITEM_COLUMN], keep="last")
     if "generated_at" in recs.columns and "generated_at" in frame.columns:
         frame["generated_at"] = pd.to_datetime(frame["generated_at"], utc=True, errors="coerce")
         snap = recs.dropna(subset=["generated_at"]).drop_duplicates(
@@ -102,25 +99,10 @@ def _annotate_source(impressions: pd.DataFrame, recommendations: pd.DataFrame | 
             snap, on=[USER_COLUMN, ITEM_COLUMN, "generated_at"], how="left", suffixes=("", "_rec")
         )
         _coalesce_column(merged, SOURCE_COLUMN)
-        if VARIANT_COLUMN in recs.columns:
-            _coalesce_column(merged, VARIANT_COLUMN)
-        need_fill = merged["generated_at"].isna()
-        if need_fill.any():
-            fill = latest.drop(columns=["generated_at"], errors="ignore")
-            filled = merged.loc[need_fill].merge(
-                fill, on=[USER_COLUMN, ITEM_COLUMN], how="left", suffixes=("", "_latest")
-            )
-            _coalesce_column(filled, SOURCE_COLUMN)
-            if VARIANT_COLUMN in recs.columns:
-                _coalesce_column(filled, VARIANT_COLUMN)
-            for column in (SOURCE_COLUMN, VARIANT_COLUMN):
-                if column in filled.columns:
-                    merged.loc[need_fill, column] = filled[column].to_numpy()
         return merged
+    latest = recs.drop_duplicates(subset=[USER_COLUMN, ITEM_COLUMN], keep="last")
     merged = frame.merge(latest, on=[USER_COLUMN, ITEM_COLUMN], how="left", suffixes=("", "_rec"))
     _coalesce_column(merged, SOURCE_COLUMN)
-    if VARIANT_COLUMN in recs.columns:
-        _coalesce_column(merged, VARIANT_COLUMN)
     return merged
 
 
@@ -248,7 +230,8 @@ def user_track_outcomes(
         n_clicks = float(click_counts.get(user, 0)) if not click_counts.empty else 0.0
         n_conv = float(conversion_counts.get(user, 0)) if not conversion_counts.empty else 0.0
         if primary_metric == "ctr":
-            report_users[user] = n_clicks / float(n_imp) if n_imp else 0.0
+            capped_clicks = min(n_clicks, float(n_imp))
+            report_users[user] = capped_clicks / float(n_imp) if n_imp else 0.0
         else:
             capped = min(n_conv, float(n_imp))
             report_users[user] = capped / float(n_imp) if n_imp else 0.0

@@ -60,7 +60,19 @@ def conversion_events_for_settings(events: pd.DataFrame, settings: Settings) -> 
     )
 
 
-def load_metric_events(settings: Settings, *, event_types: Sequence[str] | None = None) -> pd.DataFrame:
+def _filter_events_since(frame: pd.DataFrame, since: str | None) -> pd.DataFrame:
+    if not since or frame.empty or "occurred_at" not in frame.columns:
+        return frame
+    start = pd.to_datetime(since, utc=True, errors="coerce")
+    if pd.isna(start):
+        return frame.iloc[0:0]
+    stamps = pd.to_datetime(frame["occurred_at"], utc=True, errors="coerce")
+    return frame.loc[stamps.notna() & (stamps >= start)].copy()
+
+
+def load_metric_events(
+    settings: Settings, *, event_types: Sequence[str] | None = None, since: str | None = None
+) -> pd.DataFrame:
     inp = settings.input
     types = tuple(event_types) if event_types else None
     if inp.kind == "dataset":
@@ -80,7 +92,7 @@ def load_metric_events(settings: Settings, *, event_types: Sequence[str] | None 
                 frame = build_input_source(inp).read_events()
         keep = [column for column in EVENT_METRIC_COLUMNS if column in frame.columns]
         frame = frame.loc[:, keep] if keep else frame
-        return filter_events_by_types(frame, types)
+        return _filter_events_since(filter_events_by_types(frame, types), since)
     if inp.kind == "db" and not inp.options.get("events_query"):
         table = sql_identifier(
             inp.options.get("events_table", DEFAULT_EVENTS_TABLE),
@@ -93,16 +105,18 @@ def load_metric_events(settings: Settings, *, event_types: Sequence[str] | None 
                 stmt = text(f'SELECT {quoted} FROM "{table}" WHERE "event_type" IN :types').bindparams(
                     bindparam("types", expanding=True)
                 )
-                return pd.read_sql(stmt, engine, params={"types": list(types)})
-            return pd.read_sql(text(f'SELECT {quoted} FROM "{table}"'), engine)
+                frame = pd.read_sql(stmt, engine, params={"types": list(types)})
+            else:
+                frame = pd.read_sql(text(f'SELECT {quoted} FROM "{table}"'), engine)
+            return _filter_events_since(frame, since)
         except Exception:
             frame = build_input_source(inp).read_events()
             keep = [column for column in EVENT_METRIC_COLUMNS if column in frame.columns]
             frame = frame.loc[:, keep] if keep else frame
-            return filter_events_by_types(frame, types)
+            return _filter_events_since(filter_events_by_types(frame, types), since)
         finally:
             engine.dispose()
     frame = build_input_source(inp).read_events()
     keep = [column for column in EVENT_METRIC_COLUMNS if column in frame.columns]
     frame = frame.loc[:, keep] if keep else frame
-    return filter_events_by_types(frame, types)
+    return _filter_events_since(filter_events_by_types(frame, types), since)

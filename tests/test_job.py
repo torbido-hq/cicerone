@@ -2068,3 +2068,117 @@ def test_select_thompson_recipes_fail_closed_without_variant(tmp_path, monkeypat
     selected = _select_thompson_recipes(settings, recipes, pd.DataFrame())
     assert selected.recipes == recipes
     assert selected.state is None
+
+
+def test_select_thompson_recipes_skips_trials_when_window_started_missing(tmp_path, monkeypatch):
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+    from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
+    from cicerone.experiment.recipes import ResolvedRecipe
+    from cicerone.experiment.thompson import ArmCounts
+    from cicerone.feature_config import BlendingConfig
+    from cicerone.job import _select_thompson_recipes
+
+    blending = BlendingConfig(enabled=False)
+    recipes = (
+        ResolvedRecipe("control", 0.5, ("popular",), None, None, "priority", blending, True, True),
+        ResolvedRecipe("treatment", 0.5, ("popular",), None, None, "priority", blending, True, True),
+    )
+    settings = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="ranking-cvr",
+            allocation="thompson",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        track=TrackSettings(enabled=True),
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    monkeypatch.setattr(
+        "cicerone.job.ExperimentStore.read_state",
+        lambda self: {
+            "experiment_id": "ranking-cvr",
+            "champion": "control",
+            "challenger": "treatment",
+            "arms": {
+                "control": {"successes": 4, "failures": 6},
+                "treatment": {"successes": 1, "failures": 2},
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "cicerone.job.TrackStore.read_rows",
+        lambda *args, **kwargs: [
+            {
+                "user_id": "u-1",
+                "item_id": "i-1",
+                "kind": "impression",
+                "variant": "control",
+                "experiment_id": "ranking-cvr",
+                "occurred_at": "2026-09-01T00:00:00Z",
+            }
+        ],
+    )
+    seen: dict[str, object] = {}
+
+    def _capture(**kwargs):
+        from cicerone.experiment.thompson import allocate_thompson as _real
+
+        seen["window_trials"] = kwargs.get("window_trials")
+        return _real(**kwargs)
+
+    monkeypatch.setattr("cicerone.job.allocate_thompson", _capture)
+    selected = _select_thompson_recipes(settings, recipes, pd.DataFrame())
+    trials = seen.get("window_trials")
+    assert isinstance(trials, dict)
+    assert trials["control"] == ArmCounts(0, 0)
+    assert selected.state is not None
+
+
+def test_select_thompson_recipes_uses_preloaded_track(tmp_path, monkeypatch):
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+    from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
+    from cicerone.experiment.recipes import ResolvedRecipe
+    from cicerone.feature_config import BlendingConfig
+    from cicerone.job import _select_thompson_recipes
+
+    blending = BlendingConfig(enabled=False)
+    recipes = (
+        ResolvedRecipe("control", 0.5, ("popular",), None, None, "priority", blending, True, True),
+        ResolvedRecipe("treatment", 0.5, ("popular",), None, None, "priority", blending, True, True),
+    )
+    settings = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="ranking-cvr",
+            allocation="thompson",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        track=TrackSettings(enabled=True),
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    calls = {"n": 0}
+
+    def _boom(*_args, **_kwargs):
+        calls["n"] += 1
+        raise AssertionError("read_rows should not run when preloaded")
+
+    monkeypatch.setattr("cicerone.job.TrackStore.read_rows", _boom)
+    selected = _select_thompson_recipes(
+        settings,
+        recipes,
+        pd.DataFrame(),
+        preloaded_track=[],
+        preloaded_recs=pd.DataFrame(),
+    )
+    assert calls["n"] == 0
+    assert selected.recipes == recipes

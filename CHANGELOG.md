@@ -31,6 +31,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Fingerprint ingest acks apply only to generated event ids. Switching a live
   buffer to generated-only rebuilds the fingerprint set.
 - Writer-lock busy nacks restore events the same way as other apply failures.
+- Thompson skips window trials when a pair exists but `window_started_at` is empty.
+- Track `since` drops untimed rows; `experiment_id=` excludes blank ids.
+- CTR is capped at one click per impression, matching CVR.
+- Track source annotation does not invent a variant from a later snapshot.
+- The job loads track and recommendations once for eval and Thompson.
+- Quality live and Experiments track reads use an attribution lookback.
 - Event worker stop closes the source after a tick that never started a loop
   thread.
 - A dispatched RabbitMQ job is not started after its I/O timeout.

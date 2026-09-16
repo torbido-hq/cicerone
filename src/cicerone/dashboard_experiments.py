@@ -47,6 +47,7 @@ from cicerone.locks import (
     held_writer_lock,
 )
 from cicerone.track.store import TrackStore
+from cicerone.track.store_common import DASHBOARD_TRACK_FLOOR_HOURS, lookback_since
 
 logger = logging.getLogger(__name__)
 
@@ -256,6 +257,10 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
             "ship_blocked": (),
         }
     event_types = _metric_event_types(settings, experiment)
+    since = lookback_since(
+        window_hours=settings.track.attribution_window_hours,
+        floor_hours=DASHBOARD_TRACK_FLOOR_HOURS,
+    )
     with ThreadPoolExecutor(max_workers=5) as pool:
         events_f = pool.submit(
             _try_load,
@@ -286,7 +291,7 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
             track_f = pool.submit(
                 _try_load,
                 "read track rows for experiment metrics",
-                lambda: TrackStore(settings.output).read_rows(experiment_id=experiment.id),
+                lambda: TrackStore(settings.output).read_rows(experiment_id=experiment.id, since=since),
                 [],
             )
         events = events_f.result()
