@@ -191,3 +191,42 @@ def test_exclusive_file_lock_reraises_unsupported_flock(tmp_path, monkeypatch):
         exclusive_file_lock(tmp_path / "writers.lock", timeout_seconds=0.1),
     ):
         pass
+
+
+def test_exclusive_file_lock_uses_msvcrt_when_fcntl_missing(tmp_path, monkeypatch):
+    locked: list[int] = []
+
+    class _Msvcrt:
+        LK_NBLCK = 1
+        LK_UNLCK = 2
+
+        def locking(self, _fd: int, mode: int, _nbytes: int) -> None:
+            locked.append(mode)
+
+    monkeypatch.setattr("cicerone.io.options.fcntl", None)
+    monkeypatch.setattr("cicerone.io.options.msvcrt", _Msvcrt())
+    path = tmp_path / "writers.lock"
+    with exclusive_file_lock(path):
+        assert locked == [_Msvcrt.LK_NBLCK]
+        assert path.read_bytes()[:1] == b"\0"
+    assert locked == [_Msvcrt.LK_NBLCK, _Msvcrt.LK_UNLCK]
+
+
+def test_exclusive_file_lock_msvcrt_times_out(tmp_path, monkeypatch):
+    from cicerone.locks import WriterLockBusyError
+
+    class _Msvcrt:
+        LK_NBLCK = 1
+        LK_UNLCK = 2
+
+        def locking(self, _fd: int, mode: int, _nbytes: int) -> None:
+            if mode != self.LK_UNLCK:
+                raise OSError(errno.EACCES, "busy")
+
+    monkeypatch.setattr("cicerone.io.options.fcntl", None)
+    monkeypatch.setattr("cicerone.io.options.msvcrt", _Msvcrt())
+    with (
+        pytest.raises(WriterLockBusyError, match="dataset writer lock busy"),
+        exclusive_file_lock(tmp_path / "writers.lock", timeout_seconds=0.0),
+    ):
+        pass
