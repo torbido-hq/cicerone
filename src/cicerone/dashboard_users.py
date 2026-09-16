@@ -25,3 +25,4 @@ def save_users(path: str | Path, users: dict[str, str]) -> None:
     for username in sorted(users):
         lines.append(f'{username} = "{users[username]}"')
     file_path.write_text("\n".join(lines) + "\n")
+    file_path.chmod(0o600)
