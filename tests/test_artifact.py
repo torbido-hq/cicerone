@@ -204,6 +204,46 @@ def test_loads_artifact_rejects_both_formats_for_declared_model(
         loads_artifact(out.getvalue())
 
 
+def test_artifact_hmac_round_trip_and_reject_wrong_key(
+    feature_config, sample_events, sample_users, sample_items
+):
+    built = build_dataset(sample_events, sample_users, sample_items, feature_config, half_life_days=90)
+    _, fitted = fit_strategies(built, ["u1"], enabled_models=["popular"])
+    artifact = build_artifact(
+        fitted=fitted,
+        built=built,
+        feature_config=feature_config,
+        models=["popular"],
+        model_weights=None,
+        rrf_k=None,
+    )
+    key = "0123456789abcdef"
+    payload = dumps_artifact(artifact, hmac_key=key)
+    loaded = loads_artifact(payload, hmac_key=key)
+    assert list(loaded.models) == ["popular"]
+    with pytest.raises(ValueError, match="HMAC"):
+        loads_artifact(payload, hmac_key="fedcba9876543210")
+    with pytest.raises(ValueError, match="missing HMAC"):
+        loads_artifact(dumps_artifact(artifact), hmac_key=key)
+
+
+def test_loads_artifact_rejects_oversize_payload():
+    with pytest.raises(ValueError, match="exceeds"):
+        loads_artifact(b"PK\x03\x04" + b"x" * 20, max_bytes=8)
+
+
+def test_loads_artifact_rejects_oversize_member():
+    import io
+    import zipfile
+
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w") as dest:
+        dest.writestr("meta.json", "{}")
+        dest.writestr("bundle.pkl", b"x" * 50)
+    with pytest.raises(ValueError, match="exceeds"):
+        loads_artifact(out.getvalue(), max_bytes=20)
+
+
 def test_fit_strategies_populates_cache(feature_config, sample_events, sample_users, sample_items):
     built = build_dataset(sample_events, sample_users, sample_items, feature_config, half_life_days=90)
     cache: dict = {}
