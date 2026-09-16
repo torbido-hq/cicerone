@@ -36,7 +36,7 @@ from cicerone.experiment.recipes import (
     resolve_eligibility_policy,
     resolve_recipes,
 )
-from cicerone.experiment.store import ExperimentStore, merge_experiment_state
+from cicerone.experiment.store import ExperimentStore, active_pair_from_state, merge_experiment_state
 from cicerone.experiment.thompson import ArmCounts, parse_arm_counts
 from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.io.factory import build_manifest_reader
@@ -53,6 +53,12 @@ logger = logging.getLogger(__name__)
 _PROMOTE_STATE: dict[str, dict[str, Any]] = {}
 _T = TypeVar("_T")
 _THOMPSON_SHIP_IGNORE = frozenset({"undecided", "split_winners"})
+
+
+class _PromoteRejected(Exception):
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
 
 
 def _matched_state(settings: Settings, store: ExperimentStore) -> dict[str, Any] | None:
@@ -297,7 +303,8 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
     ship_variant = None
     if not promoted and not blocked:
         if experiment.allocation == ALLOCATION_THOMPSON:
-            ship_variant = str((state or {}).get("champion") or "") or report.winner
+            pair = active_pair_from_state(state)
+            ship_variant = pair[0] if pair else None
         else:
             ship_variant = report.winner
     return {
@@ -323,6 +330,14 @@ def _lift_label(metric: str) -> str:
     return "Mean lift"
 
 
+def _thompson_promote_error(variant: str, state: Mapping[str, Any] | None) -> str | None:
+    pair = active_pair_from_state(state)
+    if pair and variant in pair:
+        return None
+    wanted = pair[0] if pair else "the active pair"
+    return f"Winner is {wanted!r}, not {variant!r}"
+
+
 def _publish_experiment_state(
     settings: Settings, payload_for: Callable[[ExperimentStore], dict[str, Any]]
 ) -> str | None:
@@ -332,6 +347,8 @@ def _publish_experiment_state(
         with held_writer_lock(writer_lock):
             payload = payload_for(store)
             store.write_state(payload)
+    except _PromoteRejected as exc:
+        return exc.message
     except WriterLockBusyError:
         return "Writer lock is busy"
     except LockLostError:
@@ -355,29 +372,25 @@ def promote_winner(settings: Settings, variant: str) -> str | None:
     if blocked:
         return "Experiment is not ready to promote (" + ", ".join(blocked) + ")"
     if settings.experiment.allocation == ALLOCATION_THOMPSON:
-        thompson = context.get("thompson") or {}
-        allowed = {
-            str(name)
-            for name in (
-                thompson.get("champion"),
-                thompson.get("challenger"),
-                context.get("ship_variant"),
-            )
-            if name
-        }
-        if variant not in allowed:
-            wanted = context.get("ship_variant") or thompson.get("champion") or "the active pair"
-            return f"Winner is {wanted!r}, not {variant!r}"
+        error = _thompson_promote_error(variant, context.get("thompson"))
+        if error:
+            return error
     elif report.winner and report.winner != variant:
         return f"Winner is {report.winner!r}, not {variant!r}"
-    return _publish_experiment_state(
-        settings,
-        lambda store: merge_experiment_state(
-            _matched_state(settings, store),
+
+    def _payload(store: ExperimentStore) -> dict[str, Any]:
+        state = _matched_state(settings, store)
+        if settings.experiment.allocation == ALLOCATION_THOMPSON:
+            error = _thompson_promote_error(variant, state)
+            if error:
+                raise _PromoteRejected(error)
+        return merge_experiment_state(
+            state,
             experiment_id=settings.experiment.id,
             promoted_variant=variant,
-        ),
-    )
+        )
+
+    return _publish_experiment_state(settings, _payload)
 
 
 def clear_promotion(settings: Settings) -> str | None:

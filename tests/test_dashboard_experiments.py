@@ -1135,6 +1135,101 @@ def test_thompson_ship_ignores_parked_empty_lists(tmp_path):
     assert promote_winner(settings, "blend") == "Winner is 'control', not 'blend'"
 
 
+def _thompson_three_variants(tmp_path):
+    from cicerone.config.constants import ALLOCATION_THOMPSON
+
+    settings = _settings(tmp_path, log_exposures=False)
+    return replace(
+        settings,
+        experiment=replace(
+            settings.experiment,
+            allocation=ALLOCATION_THOMPSON,
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+                VariantSettings(name="blend", traffic=0.0),
+            ),
+        ),
+    )
+
+
+def test_thompson_context_without_pair_does_not_ship(tmp_path):
+    settings = _thompson_three_variants(tmp_path)
+    recs = [
+        {
+            "user_id": f"u{i}",
+            "item_id": f"i{i % 10}",
+            "rank": 1,
+            "score": 1.0,
+            "source": "personalized",
+            VARIANT_COLUMN: "control" if i < 6 else "treatment",
+        }
+        for i in range(12)
+    ]
+    events = [
+        {"user_id": f"u{i}", "item_id": f"i{i % 10}", "event_type": "view", "quantity": 1} for i in range(12)
+    ]
+    ExperimentStore(settings.output).write_state(experiment_state("exp-1", promoted_variant=None))
+    _write_frames(settings, events=events, recs=recs)
+    context = experiment_context(settings)
+    assert context["ship_variant"] is None
+    assert context["can_ship"] is False
+    assert promote_winner(settings, "blend") == "Winner is 'the active pair', not 'blend'"
+    state = ExperimentStore(settings.output).read_state()
+    assert state is not None
+    assert state["promoted_variant"] is None
+
+
+def test_thompson_promote_rejects_parked_report_winner_without_pair(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    settings = _thompson_three_variants(tmp_path)
+    ExperimentStore(settings.output).write_state(experiment_state("exp-1", promoted_variant=None))
+    monkeypatch.setattr(
+        "cicerone.dashboard_experiments.experiment_context",
+        lambda _settings: {
+            "report": SimpleNamespace(
+                comparisons=(),
+                winner="blend",
+                promote_blocked_by=(),
+            ),
+            "thompson": {"champion": "", "challenger": ""},
+            "ship_variant": "blend",
+        },
+    )
+    assert promote_winner(settings, "blend") == "Winner is 'the active pair', not 'blend'"
+    state = ExperimentStore(settings.output).read_state()
+    assert state is not None
+    assert state["promoted_variant"] is None
+
+
+def test_thompson_promote_rechecks_pair_under_writer_lock(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    settings = _thompson_three_variants(tmp_path)
+    ExperimentStore(settings.output).write_state(
+        experiment_state("exp-1", promoted_variant=None, champion="control", challenger="blend")
+    )
+    monkeypatch.setattr(
+        "cicerone.dashboard_experiments.experiment_context",
+        lambda _settings: {
+            "report": SimpleNamespace(
+                comparisons=(),
+                winner="control",
+                promote_blocked_by=(),
+            ),
+            "thompson": {"champion": "control", "challenger": "treatment"},
+            "ship_variant": "control",
+        },
+    )
+    assert promote_winner(settings, "treatment") == "Winner is 'control', not 'treatment'"
+    state = ExperimentStore(settings.output).read_state()
+    assert state is not None
+    assert state["promoted_variant"] is None
+    assert state["champion"] == "control"
+    assert state["challenger"] == "blend"
+
+
 def test_promote_winner_reads_state_under_writer_lock(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
