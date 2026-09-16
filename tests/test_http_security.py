@@ -25,6 +25,8 @@ def test_token_equals_rejects_none_and_type_mismatch():
 
 def _request(*, headers: list[tuple[bytes, bytes]] | None = None, cookies: str | None = None) -> Request:
     header_list = list(headers or [])
+    if not any(key.lower() == b"host" for key, _ in header_list):
+        header_list.append((b"host", b"testserver"))
     if cookies is not None:
         header_list.append((b"cookie", cookies.encode("latin-1")))
     return Request(
@@ -62,6 +64,29 @@ def test_require_csrf_rejects_cross_site_referer_without_origin():
     with pytest.raises(HTTPException) as exc:
         require_csrf(request, "tok")
     assert exc.value.status_code == 403
+
+
+def test_require_csrf_rejects_missing_origin_and_referer():
+    request = _request(cookies=f"{CSRF_COOKIE}=tok")
+    with pytest.raises(HTTPException) as exc:
+        require_csrf(request, "tok")
+    assert exc.value.status_code == 403
+
+
+def test_require_csrf_accepts_matching_origin():
+    request = _request(
+        cookies=f"{CSRF_COOKIE}=tok",
+        headers=[(b"origin", b"http://testserver")],
+    )
+    require_csrf(request, "tok")
+
+
+def test_require_csrf_accepts_matching_referer_without_origin():
+    request = _request(
+        cookies=f"{CSRF_COOKIE}=tok",
+        headers=[(b"referer", b"http://testserver/dashboard/experiments")],
+    )
+    require_csrf(request, "tok")
 
 
 def test_set_csrf_cookie_skips_when_already_set():

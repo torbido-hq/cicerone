@@ -715,6 +715,10 @@ def _csrf_token(client: TestClient) -> str:
     return str(client.cookies[CSRF_COOKIE])
 
 
+def _same_origin() -> dict[str, str]:
+    return {"origin": "http://testserver"}
+
+
 def test_recommendations_partial_requires_auth():
     response = _recs_client(_FakeRecReader(_recs_df())).get("/partials/recommendations")
 
@@ -1164,6 +1168,7 @@ def test_dashboard_promote_unknown_variant_redirects():
         "/dashboard/experiments/promote",
         data={"variant": "ghost", "csrf_token": token},
         auth=("alice", "s3cret"),
+        headers=_same_origin(),
         follow_redirects=False,
     )
     assert response.status_code == 303
@@ -1188,6 +1193,7 @@ def test_dashboard_promote_hostile_variant_stays_on_experiments():
         "/dashboard/experiments/promote",
         data={"variant": "https://evil.example/phish", "csrf_token": token},
         auth=("alice", "s3cret"),
+        headers=_same_origin(),
         follow_redirects=False,
     )
     assert response.status_code == 303
@@ -1231,6 +1237,7 @@ def test_dashboard_promote_success_redirects(monkeypatch):
         "/dashboard/experiments/promote",
         data={"variant": "control", "csrf_token": token},
         auth=("alice", "s3cret"),
+        headers=_same_origin(),
         follow_redirects=False,
     )
     assert response.status_code == 303
@@ -1263,6 +1270,7 @@ def test_dashboard_unpromote_resumes_split(tmp_path):
         "/dashboard/experiments/unpromote",
         data={"csrf_token": token},
         auth=("alice", "s3cret"),
+        headers=_same_origin(),
         follow_redirects=False,
     )
     assert response.status_code == 303
@@ -1277,6 +1285,7 @@ def test_dashboard_unpromote_disabled_experiment_redirects():
         "/dashboard/experiments/unpromote",
         data={"csrf_token": token},
         auth=("alice", "s3cret"),
+        headers=_same_origin(),
         follow_redirects=False,
     )
     assert response.status_code == 303
@@ -1301,6 +1310,7 @@ def test_dashboard_promote_rejects_missing_csrf():
         "/dashboard/experiments/promote",
         data={"variant": "control"},
         auth=("alice", "s3cret"),
+        headers=_same_origin(),
         follow_redirects=False,
     )
     assert response.status_code == 403
