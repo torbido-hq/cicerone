@@ -490,11 +490,11 @@ def test_score_previous_run_swallows_errors(tmp_path, monkeypatch) -> None:
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     settings = make_settings(track={"enabled": True}, eval={"enabled": True}, output=output)
     monkeypatch.setattr(
-        "cicerone.job.load_recommendations_frame",
+        "cicerone.job_eval.load_recommendations_frame",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("recs")),
     )
     monkeypatch.setattr(
-        "cicerone.job.evaluate_tracking",
+        "cicerone.job_eval.evaluate_tracking",
         lambda **kwargs: (_ for _ in ()).throw(RuntimeError("track")),
     )
     track, served = _score_previous_run(settings, pd.DataFrame(), {"generated_at": "t"})
@@ -731,7 +731,7 @@ def test_score_previous_run_history_and_served_errors(tmp_path, monkeypatch) -> 
     assert track is not None
     assert served is not None
     monkeypatch.setattr(
-        "cicerone.job.evaluate_served",
+        "cicerone.job_eval.evaluate_served",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("served")),
     )
     track, served = _score_previous_run(settings, events, {"generated_at": "2026-08-28T03:00:00+00:00"})
