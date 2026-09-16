@@ -26,6 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Job skips `write_item_scores` when the sink does not implement it and records `n_item_scores` as null.
 - New DB `recommendation_runs` tables get typed columns on first create, not TEXT from a null first write.
 - Job builds `item_scores` before taking the recommendations writer lock.
+- README says incremental write-through updates recommendations, not catalog `item_scores`.
 
 ## [0.8.2] - 2026-09-15
 

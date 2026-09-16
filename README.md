@@ -49,8 +49,9 @@ up to your own data doesn't require touching any code.
 - **Serve mode** — read-only HTTP API over precomputed recommendations
   (`limit` / `category` / `exclude_unavailable`, cold-start fallback;
   OpenAPI at `/docs` + thin `ServeClient`); catalog `GET /item-scores` for search ranking
-- **Incremental events** — write-through of popular/latest between retrains
+- **Incremental events** — write-through of popular/latest recommendations between retrains
   (webhook, DB, S3, Redis Streams, Kafka, or RabbitMQ);
+  catalog `item_scores` are refreshed only by `job.run()`;
   optional `[events.online]` continues LightFM for affected users
   ([docs/incremental-events.md](docs/incremental-events.md))
 - **CLI / PyPI** — `cicerone` console script; `pip install cicerone-recommender`
