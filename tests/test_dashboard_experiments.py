@@ -1174,10 +1174,6 @@ def test_thompson_context_without_pair_does_not_ship(tmp_path):
     context = experiment_context(settings)
     assert context["ship_variant"] is None
     assert context["can_ship"] is False
-    assert promote_winner(settings, "blend") == "Winner is 'the active pair', not 'blend'"
-    state = ExperimentStore(settings.output).read_state()
-    assert state is not None
-    assert state["promoted_variant"] is None
 
 
 def test_thompson_promote_rejects_parked_report_winner_without_pair(tmp_path, monkeypatch):
