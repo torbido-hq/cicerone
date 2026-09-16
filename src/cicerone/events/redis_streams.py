@@ -145,6 +145,7 @@ class RedisStreamsEventSource(QueuedEventSource):
             )
         except Exception:
             logger.exception("Redis Streams heartbeat XCLAIM failed")
+            raise
 
     def health(self) -> EventSourceHealth:
         with self._lock:
