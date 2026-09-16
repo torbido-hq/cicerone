@@ -13,6 +13,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A dispatched RabbitMQ job is not started after its I/O timeout.
 - Local dataset writers take `msvcrt.locking` when `fcntl` is missing.
 - `POST /track` acquires the writer lock off the serve event loop.
+- Concurrent database `/track` writes in one process accept a given
+  `event_id` once.
 
 ### Security
 
