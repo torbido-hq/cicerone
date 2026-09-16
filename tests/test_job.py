@@ -421,7 +421,7 @@ def test_read_input_swallows_manifest_reader_construction(monkeypatch):
             return None
 
     monkeypatch.setattr(
-        "cicerone.job.build_manifest_reader",
+        "cicerone.job_eval.build_manifest_reader",
         lambda _output: (_ for _ in ()).throw(RuntimeError("bad url")),
     )
     events, users, items, manifest = job._read_input(
