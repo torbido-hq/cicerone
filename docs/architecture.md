@@ -19,7 +19,7 @@ search weights, see [search-weights.md](search-weights.md).
 | `feature_config.py` | Load `config/features.toml` (event weights, feature columns, eligibility/boost policy rules; `[[boost]]` / `[[boosts]]`) |
 | `policy/` | Declarative eligibility masks (fail-open/fail-closed matrix), cohort grouping (`eligibility.py`), score boosts (`boosts.py`) |
 | `blending.py` | Per-user weighted mix of personalized/popular/latest (optional) |
-| `io/base.py` | `InputSource` / `OutputSink` / `RecommendationReader` protocols (including `configure_item_filters`, `replace_recommendations_for_users`, `write_item_scores`); `BaseRecommendationReader` with empty defaults for custom readers |
+| `io/base.py` | `InputSource` / `OutputSink` / `RecommendationReader` protocols (including `configure_item_filters`, `replace_recommendations_for_users`); optional `ItemScoresWriter.write_item_scores`; `BaseRecommendationReader` with empty defaults for custom readers |
 | `io/recommendation_schema.py` | Shared recommendation column constants + SQL identifier helper for read/write paths |
 | `io/db_errors.py` | Shared SQLAlchemy missing-table/column classifiers for recommendation I/O |
 | `io/factory.py` | kind→backend registry (`"dataset"` or `"db"`) |
@@ -460,7 +460,7 @@ keys a given backend requires. To add a new backend (e.g. another object store):
 
 Nothing in `config/`, `job.py`, `dataset.py`, or `model/` needs to
 change — they only ever see the `InputSource`/`OutputSink` protocol and the
-generic `IOSettings`.
+generic `IOSettings`. Catalog scores are optional (`ItemScoresWriter`).
 
 ## Incremental events
 

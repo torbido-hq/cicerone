@@ -1181,7 +1181,16 @@ def test_job_skips_item_scores_when_sink_lacks_writer(tmp_path, monkeypatch):
         return sink
 
     monkeypatch.setattr("cicerone.job.build_output_sink", _legacy)
+    built = {"n": 0}
+    original_scores = job.build_item_scores
+
+    def _count(*args, **kwargs):
+        built["n"] += 1
+        return original_scores(*args, **kwargs)
+
+    monkeypatch.setattr("cicerone.job.build_item_scores", _count)
     job.run()
+    assert built["n"] == 0
     assert not (output_dir / "item_scores.parquet").exists()
     assert (output_dir / "recommendations.parquet").exists()
     manifest = json.loads((output_dir / "manifest.json").read_text())

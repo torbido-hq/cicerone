@@ -59,7 +59,7 @@ from cicerone.io.recommendation_schema import (
     filter_variant_rows,
     pick_fallback_variant,
 )
-from cicerone.item_scores import build_item_scores
+from cicerone.item_scores import build_item_scores, empty_item_scores
 from cicerone.locks import (
     LockBackend,
     LockLostError,
@@ -808,13 +808,17 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
         recs_write = getattr(sink, "recommendations_write", None)
         write_item_scores = getattr(sink, "write_item_scores", None)
         _ensure_fence(fence_check)
-        item_scores = build_item_scores(
-            events,
-            items,
-            feature_config,
-            settings.half_life_days,
-            interactions=built.interactions,
-            now=weighting_now,
+        item_scores = (
+            build_item_scores(
+                events,
+                items,
+                feature_config,
+                settings.half_life_days,
+                interactions=built.interactions,
+                now=weighting_now,
+            )
+            if callable(write_item_scores)
+            else empty_item_scores()
         )
         try:
             with recs_write() if callable(recs_write) else nullcontext():

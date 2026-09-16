@@ -12,6 +12,7 @@ from cicerone.item_scores import (
     LATEST_SCORE_COLUMN,
     N_USERS_COLUMN,
     POPULAR_SCORE_COLUMN,
+    _item_id_index,
     build_item_scores,
     empty_item_scores,
     normalize_item_scores,
@@ -239,3 +240,19 @@ def test_page_item_scores_cursor_and_single_id():
     after_empty, done_empty = page_item_scores(with_empty_id, limit=1, cursor=empty_id_cursor)
     assert list(after_empty[ITEM_COLUMN]) == ["a"]
     assert done_empty is None
+
+
+def test_page_item_scores_reuses_provided_id_index():
+    frame = normalize_item_scores(
+        pd.DataFrame(
+            [
+                {"item_id": "a", "popular_score": 1.0, "latest_score": 0.0, "n_users": 1},
+                {"item_id": "b", "popular_score": 2.0, "latest_score": 1.0, "n_users": 2},
+            ]
+        )
+    )
+    cached = frame[ITEM_COLUMN].to_numpy(dtype=str)
+    assert _item_id_index(frame, cached) is cached
+    first, cursor = page_item_scores(frame, limit=1, ids=cached)
+    assert list(first[ITEM_COLUMN]) == ["a"]
+    assert cursor == "a"

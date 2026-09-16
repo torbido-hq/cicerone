@@ -145,24 +145,31 @@ def build_item_scores(
     return normalize_item_scores(frame)
 
 
+def _item_id_index(frame: pd.DataFrame, ids: np.ndarray | None = None) -> np.ndarray:
+    if ids is not None and len(ids) == len(frame):
+        return ids
+    return frame[ITEM_COLUMN].to_numpy(dtype=str)
+
+
 def page_item_scores(
     frame: pd.DataFrame,
     *,
     limit: int,
     cursor: str | None = None,
     item_id: str | None = None,
+    ids: np.ndarray | None = None,
 ) -> tuple[pd.DataFrame, str | None]:
     """Seek pagination on ``item_id``. ``frame`` must already be id-sorted."""
     if frame.empty:
         return empty_item_scores(), None
-    ids = frame[ITEM_COLUMN].astype(str)
+    ids = _item_id_index(frame, ids)
     if item_id is not None:
         key = str(item_id)
-        start = int(ids.searchsorted(key, side="left"))
-        if start < len(ids) and ids.iloc[start] == key:
+        start = int(np.searchsorted(ids, key, side="left"))
+        if start < len(ids) and ids[start] == key:
             return frame.iloc[start : start + 1].reset_index(drop=True), None
         return empty_item_scores(), None
-    start = 0 if cursor is None else int(ids.searchsorted(str(cursor), side="right"))
+    start = 0 if cursor is None else int(np.searchsorted(ids, str(cursor), side="right"))
     end = start + limit
     page = frame.iloc[start:end]
     next_cursor = None

@@ -84,7 +84,7 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             frame = pd.read_sql(text(f'SELECT * FROM "{self._item_scores_table}"'), self._engine)
             scores = normalize_item_scores(frame)
             with self._lock:
-                self._item_scores = scores
+                self._set_item_scores(scores)
         except MISSING_TABLE_ERRORS:
             logger.debug(
                 "item_scores table %r not present; keeping previous data",

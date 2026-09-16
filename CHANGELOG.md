@@ -27,6 +27,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - New DB `recommendation_runs` tables get typed columns on first create, not TEXT from a null first write.
 - Job builds `item_scores` before taking the recommendations writer lock.
 - README says incremental write-through updates recommendations, not catalog `item_scores`.
+- `OutputSink` no longer requires `write_item_scores`; that method lives on optional `ItemScoresWriter`.
+- Job builds catalog `item_scores` only when the sink can write them.
+- Serve reuses a cached sorted `item_id` index for `GET /item-scores` pagination.
 
 ## [0.8.2] - 2026-09-15
 

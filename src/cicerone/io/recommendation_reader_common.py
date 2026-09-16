@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Sequence
 
+import numpy as np
 import pandas as pd
 
 from cicerone.blending import COLD_START_USER_ID, LATEST_SOURCE, POPULAR_SOURCE
@@ -152,6 +153,7 @@ class _ItemFilterMixin:
     _items: pd.DataFrame | None
     _items_version: int
     _item_scores: pd.DataFrame
+    _item_score_ids: np.ndarray
     _category_column: str | None
     _availability_filters: list[str]
     _lock: threading.RLock
@@ -160,6 +162,7 @@ class _ItemFilterMixin:
         self._items = None
         self._items_version = 0
         self._item_scores = pd.DataFrame()
+        self._item_score_ids = np.array([], dtype=str)
         self._category_column = None
         self._availability_filters = []
         self._lock = threading.RLock()
@@ -195,7 +198,19 @@ class _ItemFilterMixin:
         with self._lock:
             return self._items
 
+    def _set_item_scores(self, scores: pd.DataFrame) -> None:
+        self._item_scores = scores
+        if scores.empty or ITEM_COLUMN not in scores.columns:
+            self._item_score_ids = np.array([], dtype=str)
+        else:
+            self._item_score_ids = scores[ITEM_COLUMN].to_numpy(dtype=str)
+
     def get_item_scores(self) -> pd.DataFrame:
         self._ensure_item_filter_state()
         with self._lock:
             return self._item_scores
+
+    def get_item_score_ids(self) -> np.ndarray:
+        self._ensure_item_filter_state()
+        with self._lock:
+            return self._item_score_ids

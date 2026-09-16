@@ -120,7 +120,7 @@ class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
         try:
             scores = self._read_item_scores()
             with self._lock:
-                self._item_scores = scores
+                self._set_item_scores(scores)
         except FileNotFoundError:
             logger.debug("item_scores file not found; keeping previous data")
         except Exception as exc:

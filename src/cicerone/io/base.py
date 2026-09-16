@@ -56,6 +56,8 @@ class OutputSink(Protocol):
         """Persist items for serve-time category/availability filters."""
         ...
 
+
+class ItemScoresWriter(Protocol):
     def write_item_scores(self, df: pd.DataFrame) -> None:
         """Persist catalog-wide popular/latest scores for search indexers."""
         ...
