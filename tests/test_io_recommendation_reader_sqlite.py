@@ -164,6 +164,8 @@ def test_manifest_column_sql_type_uses_series_dtype():
     assert _manifest_column_sql_type(pd.Series([1, 4])) == "BIGINT"
     assert _manifest_column_sql_type(pd.Series([1.5, 60.0])) == "FLOAT"
     assert _manifest_column_sql_type(pd.Series(["success", "failed"])) == "TEXT"
+    assert _manifest_column_sql_type(pd.Series([None], dtype=object, name="n_item_scores")) == "BIGINT"
+    assert _manifest_column_sql_type(pd.Series([None], dtype=object, name="partial_outputs")) == "BOOLEAN"
 
 
 def test_sqlite_write_manifest_adds_missing_columns(tmp_path):
@@ -196,6 +198,61 @@ def test_sqlite_write_manifest_adds_missing_columns(tmp_path):
     sink.write_manifest({"n_events": 3, "status": "success", "n_item_scores": 5})
     stored = pd.read_sql('SELECT * FROM "recommendation_runs"', engine)
     assert list(stored["n_events"]) == [1, 2, 3]
+
+
+def test_sqlite_write_manifest_none_n_item_scores_stays_integer(tmp_path):
+    url = _sqlite_url(tmp_path)
+    engine = create_engine(url)
+    pd.DataFrame([{"n_events": 1, "status": "failed"}]).to_sql(
+        "recommendation_runs", engine, index=False, if_exists="replace"
+    )
+    sink = DatabaseOutputSink({"database_url": url})
+    sink.write_manifest({"n_events": 2, "status": "failed", "n_item_scores": None})
+    with engine.connect() as conn:
+        types = {
+            str(row[1]): str(row[2]).upper()
+            for row in conn.execute(text("PRAGMA table_info(recommendation_runs)"))
+        }
+    assert "INT" in types["n_item_scores"]
+    sink.write_manifest({"n_events": 3, "status": "success", "n_item_scores": 4})
+    stored = pd.read_sql('SELECT * FROM "recommendation_runs"', engine)
+    assert int(stored.iloc[-1]["n_item_scores"]) == 4
+
+
+def test_sqlite_write_manifest_alters_under_writer_lock(tmp_path, monkeypatch):
+    url = _sqlite_url(tmp_path)
+    engine = create_engine(url)
+    pd.DataFrame([{"n_events": 1, "status": "success"}]).to_sql(
+        "recommendation_runs", engine, index=False, if_exists="replace"
+    )
+    order: list[str] = []
+
+    class _Lock:
+        def acquire(self) -> bool:
+            order.append("acquire")
+            return True
+
+        def release(self) -> None:
+            order.append("release")
+
+        def owned(self) -> bool:
+            return True
+
+        def is_locked(self) -> bool:
+            return True
+
+    import cicerone.io.db_store as db_store
+
+    real = db_store._add_missing_manifest_columns
+
+    def _wrapped(*args, **kwargs):
+        order.append("alter")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(db_store, "_add_missing_manifest_columns", _wrapped)
+    sink = DatabaseOutputSink({"database_url": url}, writer_lock=_Lock())
+    sink.write_manifest({"n_events": 2, "status": "success", "n_item_scores": 1})
+    assert order.index("acquire") < order.index("alter") < order.index("release")
 
 
 def test_sqlite_write_item_scores_replaces_legacy_table(tmp_path):

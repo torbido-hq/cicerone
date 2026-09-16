@@ -241,3 +241,19 @@ def test_build_dataset_without_users_or_items(sample_events, feature_config):
 
     assert built.items is None
     assert not built.interactions.empty
+
+
+def test_build_dataset_forwards_now(sample_events, feature_config, monkeypatch):
+    from datetime import UTC, datetime
+
+    seen: list[object] = []
+    real = build_interactions
+
+    def _capture(events, config, half_life_days, *, now=None):
+        seen.append(now)
+        return real(events, config, half_life_days, now=now)
+
+    monkeypatch.setattr("cicerone.dataset.build_interactions", _capture)
+    stamp = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+    build_dataset(sample_events, None, None, feature_config, half_life_days=90, now=stamp)
+    assert seen == [stamp]

@@ -68,19 +68,28 @@ def normalize_item_scores(frame: pd.DataFrame) -> pd.DataFrame:
     return out.sort_values(ITEM_COLUMN, kind="mergesort").reset_index(drop=True)
 
 
-def _item_weight_sum(interactions: pd.DataFrame) -> pd.Series:
+def _canonical_interactions(interactions: pd.DataFrame) -> pd.DataFrame:
     if interactions.empty or Columns.Item not in interactions.columns:
+        return interactions
+    item_ids = interactions[Columns.Item].map(lambda value: "" if is_missing(value) else str(value).strip())
+    return interactions.assign(**{Columns.Item: item_ids}).loc[lambda frame: frame[Columns.Item] != ""]
+
+
+def _item_weight_sum(interactions: pd.DataFrame) -> pd.Series:
+    cleaned = _canonical_interactions(interactions)
+    if cleaned.empty or Columns.Item not in cleaned.columns:
         return pd.Series(dtype="float64")
-    weights = interactions[Columns.Weight] if Columns.Weight in interactions.columns else 0.0
-    return interactions.assign(_w=weights).groupby(Columns.Item, sort=False)["_w"].sum()
+    weights = cleaned[Columns.Weight] if Columns.Weight in cleaned.columns else 0.0
+    return cleaned.assign(_w=weights).groupby(Columns.Item, sort=False)["_w"].sum()
 
 
 def _item_n_users(interactions: pd.DataFrame) -> pd.Series:
-    if interactions.empty or Columns.Item not in interactions.columns:
+    cleaned = _canonical_interactions(interactions)
+    if cleaned.empty or Columns.Item not in cleaned.columns:
         return pd.Series(dtype="int64")
-    if Columns.User not in interactions.columns:
-        return pd.Series(0, index=_item_weight_sum(interactions).index, dtype="int64")
-    return interactions.groupby(Columns.Item, sort=False)[Columns.User].nunique()
+    if Columns.User not in cleaned.columns:
+        return pd.Series(0, index=_item_weight_sum(cleaned).index, dtype="int64")
+    return cleaned.groupby(Columns.Item, sort=False)[Columns.User].nunique()
 
 
 def build_item_scores(
@@ -117,9 +126,6 @@ def build_item_scores(
     popular_sum = _item_weight_sum(popular)
     latest_sum = _item_weight_sum(latest)
     n_users = _item_n_users(popular)
-    popular_sum.index = popular_sum.index.astype(str).str.strip()
-    latest_sum.index = latest_sum.index.astype(str).str.strip()
-    n_users.index = n_users.index.astype(str).str.strip()
 
     catalog: set[str] = set()
     if items is not None and not items.empty and ITEM_COLUMN in items.columns:

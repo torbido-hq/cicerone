@@ -101,6 +101,38 @@ def test_job_run_end_to_end_with_local_dataset_backend(tmp_path, monkeypatch):
     assert manifest["n_item_scores"] == 3
 
 
+def test_job_uses_one_weighting_timestamp(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.now(tz="UTC")
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    pd.DataFrame(
+        [{"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True}]
+    ).to_parquet(input_dir / "items.parquet", index=False)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=1))
+    seen: dict[str, object] = {}
+    real_dataset = job.build_dataset
+    real_scores = job.build_item_scores
+
+    def _dataset(*args, **kwargs):
+        seen["dataset"] = kwargs.get("now")
+        return real_dataset(*args, **kwargs)
+
+    def _scores(*args, **kwargs):
+        seen["scores"] = kwargs.get("now")
+        return real_scores(*args, **kwargs)
+
+    monkeypatch.setattr("cicerone.job.build_dataset", _dataset)
+    monkeypatch.setattr("cicerone.job.build_item_scores", _scores)
+    job.run()
+    assert seen["dataset"] is not None
+    assert seen["scores"] == seen["dataset"]
+
+
 def test_target_user_ids_skip_missing_values():
     events = pd.DataFrame({"user_id": ["u1", float("nan"), pd.NA, "u2"]})
     users = pd.DataFrame({"user_id": ["u3", float("nan"), None]})

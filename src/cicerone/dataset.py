@@ -178,8 +178,10 @@ def build_dataset(
     items: pd.DataFrame | None,
     config: FeatureConfig,
     half_life_days: float,
+    *,
+    now: datetime | pd.Timestamp | None = None,
 ) -> BuiltDataset:
-    interactions = build_interactions(events, config, half_life_days)
+    interactions = build_interactions(events, config, half_life_days, now=now)
 
     user_features = _normalize_feature_df(
         _explode_features(users, "user_id", Columns.User, config.user_features) if users is not None else None

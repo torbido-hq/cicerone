@@ -614,7 +614,15 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
             eval_generated_at = str(last_manifest["generated_at"])
         track_eval_payload, served_eval_payload = _score_previous_run(settings, events, last_manifest, items)
 
-        built = build_dataset(events, users, items, feature_config, half_life_days=settings.half_life_days)
+        weighting_now = datetime.now(UTC)
+        built = build_dataset(
+            events,
+            users,
+            items,
+            feature_config,
+            half_life_days=settings.half_life_days,
+            now=weighting_now,
+        )
 
         target_users = _target_user_ids(events, users)
 
@@ -819,6 +827,7 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                         feature_config,
                         settings.half_life_days,
                         interactions=built.interactions,
+                        now=weighting_now,
                     )
                     _ensure_publication_fence(sink, fence_check)
                     sink.write_item_scores(item_scores)

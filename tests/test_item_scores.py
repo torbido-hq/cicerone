@@ -134,6 +134,27 @@ def test_item_weight_helpers_missing_columns():
     assert int(_item_n_users(no_user)["i1"]) == 0
 
 
+def test_build_item_scores_collapses_padded_item_ids(feature_config):
+    interactions = pd.DataFrame(
+        {
+            Columns.User: ["u1", "u2"],
+            Columns.Item: ["i1", " i1 "],
+            Columns.Weight: [1.0, 2.0],
+        }
+    )
+    scores = build_item_scores(
+        pd.DataFrame(),
+        None,
+        feature_config,
+        90.0,
+        interactions=interactions,
+        now=datetime(2026, 9, 1, 12, 0, tzinfo=UTC),
+    )
+    assert list(scores[ITEM_COLUMN]) == ["i1"]
+    assert float(scores.iloc[0][POPULAR_SCORE_COLUMN]) == 3.0
+    assert int(scores.iloc[0][N_USERS_COLUMN]) == 2
+
+
 def test_normalize_item_scores_validates_and_sorts():
     frame = pd.DataFrame(
         [

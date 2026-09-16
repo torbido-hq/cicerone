@@ -20,6 +20,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Job writes `item_scores` before recommendations so a score-write failure does not leave a new recs file without scores.
 - DB manifest append adds missing columns (including `n_item_scores`) on pre-0.9.0 `recommendation_runs`.
 - Dataset `item_scores` writes use the same validation as the DB sink.
+- DB manifest ALTER uses a fixed type map so a failed first post-upgrade run cannot create `n_item_scores` as TEXT.
+- Job uses one weighting timestamp for training interactions and `latest_score`.
+- Item-score build strips item IDs before grouping so padded IDs do not crash the catalog write.
 
 ## [0.8.2] - 2026-09-15
 
