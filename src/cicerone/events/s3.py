@@ -34,7 +34,7 @@ from cicerone.events.s3_parse import (
     validate_s3_event_options,
 )
 from cicerone.events.s3_sqs import S3SqsPoll
-from cicerone.io.options import build_s3_client, require_option
+from cicerone.io.options import build_s3_client, read_s3_body, require_option
 
 logger = logging.getLogger(__name__)
 
@@ -248,7 +248,7 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
         obj = s3.get_object(Bucket=bucket, Key=key)
         resolved_etag = etag or str(obj.get("ETag") or "")
         return _events_from_body(
-            obj["Body"].read(),
+            read_s3_body(obj),
             bucket=bucket,
             key=key,
             etag=resolved_etag,

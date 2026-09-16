@@ -46,6 +46,16 @@ def _s3_notification(key: str, bucket: str = "events-bucket") -> str:
     )
 
 
+def test_load_object_events_closes_body(mocker):
+    body = mocker.Mock()
+    body.read.return_value = b"[]"
+    s3 = mocker.Mock()
+    s3.get_object.return_value = {"Body": body, "ETag": '"abc"'}
+    source = S3EventSource(_creds(mode="list"))
+    assert source._load_object_events(s3, "events-bucket", "events/e.json") == []
+    body.close.assert_called_once()
+
+
 @mock_aws
 def test_s3_registered_and_build_list_mode():
     assert "s3" in registered_event_source_kinds()
