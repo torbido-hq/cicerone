@@ -40,6 +40,7 @@ class ResolvedRecipe:
     blending: BlendingConfig
     boosts: tuple[BoostRule, ...]
     eligibility: tuple[EligibilityRule, ...]
+    merge_item_availability: bool = True
 
     def manifest_dict(self) -> dict[str, Any]:
         return {
@@ -72,6 +73,7 @@ def apply_recipe(feature_config: FeatureConfig, recipe: ResolvedRecipe) -> Featu
         blending=recipe.blending,
         boosts=list(recipe.boosts),
         eligibility=list(recipe.eligibility),
+        merge_item_availability=recipe.merge_item_availability,
     )
 
 
@@ -315,6 +317,7 @@ def _resolve_one(
             feature_config.eligibility,
             label=f"experiment.variants[{variant.name}].eligibility",
         ),
+        merge_item_availability=variant.eligibility is True,
     )
 
 

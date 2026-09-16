@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pytest
 from conftest import make_settings
@@ -250,6 +251,30 @@ def test_resolve_recipes_named_and_replacement_policy() -> None:
     assert [rule.name for rule in treatment.boosts] == ["new-arrivals"]
     assert treatment.boosts[0].factor == 1.4
     assert [rule.name for rule in treatment.eligibility] == ["published"]
+    from cicerone.policy import resolve_eligibility
+
+    assert resolve_eligibility(control) == []
+    assert [rule.name for rule in resolve_eligibility(treatment)] == ["published"]
+    features = replace(_features(), item_availability_filters=["published", "in_stock"])
+    inherited = apply_recipe(
+        features,
+        resolve_recipes(
+            make_settings(
+                experiment=ExperimentSettings(
+                    enabled=True,
+                    id="exp",
+                    variants=(
+                        VariantSettings(name="control", traffic=0.5),
+                        VariantSettings(name="treatment", traffic=0.5),
+                    ),
+                )
+            ),
+            features,
+        )[0],
+    )
+    names = [rule.name for rule in resolve_eligibility(inherited)]
+    assert "availability:published" in names
+    assert "in_stock" in names
     payload = json.loads(recipes_manifest_json(recipes))
     assert payload[0]["boosts"][0]["name"] == "featured"
     assert payload[1]["eligibility"][0]["item_column"] == "published"

@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Recipe `eligibility = false` / subset / replace skips
+  `item_availability_filters` sugar.
 - Event worker stop closes the source after a tick that never started a loop
   thread.
 - A dispatched RabbitMQ job is not started after its I/O timeout.
