@@ -35,7 +35,7 @@ from cicerone.http_security import SecurityHeadersMiddleware, token_equals
 from cicerone.io.base import ManifestReader, RecommendationReader
 from cicerone.io.recommendation_reader import SOURCE_COLUMN
 from cicerone.io.recommendation_schema import has_variant_column
-from cicerone.item_scores import page_item_scores
+from cicerone.item_scores import empty_item_scores, normalize_item_scores, page_item_scores
 from cicerone.locks import WriterLockBusyError, build_dataset_writer_lock, build_output_writer_lock
 from cicerone.reasons import parse_reasons
 from cicerone.serve.bootstrap_events import start_events_runtime
@@ -453,6 +453,7 @@ def create_app(
             scores, ids = snapshot()
         else:
             scores = reader.get_item_scores()
+            scores = empty_item_scores() if scores is None or scores.empty else normalize_item_scores(scores)
             ids = None
         page, next_cursor = page_item_scores(
             scores,

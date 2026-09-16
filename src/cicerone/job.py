@@ -832,13 +832,15 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                     if items is not None and not items.empty:
                         _ensure_publication_fence(sink, fence_check)
                         sink.write_items_snapshot(items)
+                        outputs_written = True
 
                     if callable(write_item_scores):
                         _ensure_publication_fence(sink, fence_check)
                         write_item_scores(item_scores)
-                    outputs_written = True
+                        outputs_written = True
                     _ensure_publication_fence(sink, fence_check)
                     sink.write_recommendations(recommendations)
+                    outputs_written = True
                     if pending_thompson is not None:
                         _ensure_publication_fence(sink, fence_check)
                         store = ExperimentStore(
