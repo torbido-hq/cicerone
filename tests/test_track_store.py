@@ -751,6 +751,34 @@ def test_track_history_non_s3_error_reraises(tmp_path, monkeypatch) -> None:
         TrackStore(output).read_history()
 
 
+def test_s3_parquet_frame_closes_body(monkeypatch) -> None:
+    from cicerone.track.store_dataset import _s3_parquet_frame
+
+    class _Body:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def read(self) -> bytes:
+            return b"parquet"
+
+        def close(self) -> None:
+            self.closed = True
+
+    body = _Body()
+
+    class _Client:
+        def get_object(self, **_kwargs):
+            return {"Body": body}
+
+    monkeypatch.setattr(
+        "cicerone.track.store_dataset.pd.read_parquet",
+        lambda _buf: pd.DataFrame({"x": [1]}),
+    )
+    frame = _s3_parquet_frame(_Client(), "recs", "history/part.parquet")
+    assert frame is not None
+    assert body.closed is True
+
+
 def test_track_read_bytes_s3_generic_error(monkeypatch) -> None:
     import boto3
     from moto import mock_aws

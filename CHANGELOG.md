@@ -16,6 +16,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Concurrent database `/track` writes in one process accept a given
   `event_id` once.
 
+### Security
+
+- `[events.online]` requires `[output].artifact_hmac_key` and verifies it
+  before unpickle. Artifact and storage reads reject payloads over 512 MiB.
+
 ## [0.8.2] - 2026-09-15
 
 ### Changed
