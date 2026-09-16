@@ -252,11 +252,31 @@ def test_loads_artifact_rejects_oversize_payload():
         loads_artifact(b"PK\x03\x04" + b"x" * 20, max_bytes=8)
 
 
-def test_load_artifact_rejects_oversize_file(tmp_path):
+def test_load_artifact_rejects_oversize_file(tmp_path, monkeypatch):
+    from pathlib import Path
+
     path = tmp_path / "model.artifact"
     path.write_bytes(b"PK\x03\x04" + b"x" * 20)
+    reads: list[int | None] = []
+    original_open = Path.open
+
+    def _open(self: Path, *args: object, **kwargs: object):
+        handle = original_open(self, *args, **kwargs)
+        if self.resolve() != path.resolve():
+            return handle
+        original_read = handle.read
+
+        def _read(size: int = -1) -> bytes:
+            reads.append(size)
+            return original_read(size)
+
+        handle.read = _read  # type: ignore[method-assign]
+        return handle
+
+    monkeypatch.setattr(Path, "open", _open)
     with pytest.raises(ValueError, match="exceeds"):
         load_artifact(path, max_bytes=8)
+    assert reads == [9]
 
 
 def test_load_artifact_rejects_nonpositive_max_bytes(tmp_path):
@@ -264,6 +284,19 @@ def test_load_artifact_rejects_nonpositive_max_bytes(tmp_path):
     path.write_bytes(b"x")
     with pytest.raises(ValueError, match="max_bytes"):
         load_artifact(path, max_bytes=0)
+
+
+def test_loads_artifact_rejects_oversize_hmac_member():
+    import io
+    import zipfile
+
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w") as dest:
+        dest.writestr("meta.json", "{}")
+        dest.writestr("bundle.pkl", b"x")
+        dest.writestr("hmac.sha256", b"x" * 200)
+    with pytest.raises(ValueError, match="HMAC member"):
+        loads_artifact(out.getvalue(), hmac_key="0123456789abcdef", max_bytes=1024)
 
 
 def test_loads_artifact_rejects_oversize_uncompressed_member():

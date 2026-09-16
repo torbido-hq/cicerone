@@ -568,6 +568,26 @@ def test_s3_list_loads_marker_and_ignores_corrupt(tmp_path):
 
 
 @mock_aws
+@mock_aws
+def test_s3_sqs_deletes_oversize_object_message(monkeypatch):
+    monkeypatch.setattr("cicerone.events.s3.DEFAULT_MAX_STORAGE_READ_BYTES", 200)
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-oversize")["QueueUrl"]
+    s3.put_object(Bucket="events-bucket", Key="events/big.json", Body=b"x" * 1000)
+    _put_event(s3, "events/ok.json", event_payload(event_id="ok-size"))
+    sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification("events/big.json"))
+    sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification("events/ok.json"))
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url, prefix="events/"))
+    source.connect()
+    events = list(source.poll(10))
+    assert [event.event_id for event in events] == ["ok-size"]
+    source.ack([events[0].event_id])
+    assert list(source.poll(10)) == []
+
+
+@mock_aws
 def test_s3_sqs_poison_and_missing_object_and_health():
     s3 = boto3.client("s3", region_name="us-east-1")
     sqs = boto3.client("sqs", region_name="us-east-1")

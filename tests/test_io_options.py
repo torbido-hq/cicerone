@@ -26,8 +26,10 @@ class _FakeS3Body:
         self._payload = payload
         self._fail = fail
         self.closed = False
+        self.reads: list[int | None] = []
 
     def read(self, size: int | None = None) -> bytes:
+        self.reads.append(size)
         if self._fail:
             raise RuntimeError("read failed")
         if size is None:
@@ -103,6 +105,7 @@ def test_read_s3_body_rejects_oversize_read_and_closes():
     body = _FakeS3Body(b"123456789")
     with pytest.raises(ValueError, match="max is 4"):
         read_s3_body({"Body": body}, max_bytes=4)
+    assert body.reads == [5]
     assert body.closed is True
 
 

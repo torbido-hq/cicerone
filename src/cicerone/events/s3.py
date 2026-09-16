@@ -252,12 +252,13 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
         key: str,
         etag: str = "",
         *,
-        max_bytes: int = DEFAULT_MAX_STORAGE_READ_BYTES,
+        max_bytes: int | None = None,
     ) -> list[NormalizedEvent]:
+        limit = DEFAULT_MAX_STORAGE_READ_BYTES if max_bytes is None else max_bytes
         obj = s3.get_object(Bucket=bucket, Key=key)
         resolved_etag = etag or str(obj.get("ETag") or "")
         return _events_from_body(
-            read_s3_body(obj, max_bytes=max_bytes),
+            read_s3_body(obj, max_bytes=limit),
             bucket=bucket,
             key=key,
             etag=resolved_etag,

@@ -53,6 +53,7 @@ def _write_artifact(
     *,
     models: list[str] | None = None,
     extra_fitted: dict | None = None,
+    hmac_key: str | None = None,
 ) -> tuple[object, list[str]]:
     out = tmp_path / "out"
     out.mkdir(exist_ok=True)
@@ -80,7 +81,7 @@ def _write_artifact(
     sink = build_output_sink(
         IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)})
     )
-    sink.write_model_artifact(dumps_artifact(artifact))
+    sink.write_model_artifact(dumps_artifact(artifact, hmac_key=hmac_key))
     pd.DataFrame(
         [
             {"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"},
@@ -721,7 +722,10 @@ def test_start_events_runtime_challenger_variant_names(tmp_path, feature_config:
 def test_start_events_runtime_online_loads_artifact(
     tmp_path, feature_config, sample_events, sample_users, sample_items
 ):
-    sink, _enabled = _write_artifact(tmp_path, feature_config, sample_events, sample_users, sample_items)
+    key = "0123456789abcdef"
+    sink, _enabled = _write_artifact(
+        tmp_path, feature_config, sample_events, sample_users, sample_items, hmac_key=key
+    )
     del sink
 
     class _Reader:
@@ -731,7 +735,9 @@ def test_start_events_runtime_online_loads_artifact(
     runtime = start_events_runtime(
         make_settings(
             output=IOSettings(
-                kind="dataset", options={"storage_backend": "local", "path": str(tmp_path / "out")}
+                kind="dataset",
+                options={"storage_backend": "local", "path": str(tmp_path / "out")},
+                artifact_hmac_key=key,
             ),
             events=EventsSettings(
                 enabled=True,
@@ -746,7 +752,46 @@ def test_start_events_runtime_online_loads_artifact(
         reader=_Reader(),  # type: ignore[arg-type]
     )
     assert runtime.worker is not None
+    assert runtime.worker._updater._online is not None
     runtime.stop()
+
+
+def test_start_events_runtime_online_rejects_wrong_hmac(
+    tmp_path, feature_config, sample_events, sample_users, sample_items
+):
+    _write_artifact(
+        tmp_path,
+        feature_config,
+        sample_events,
+        sample_users,
+        sample_items,
+        hmac_key="0123456789abcdef",
+    )
+
+    class _Reader:
+        def refresh(self) -> None:
+            return None
+
+    with pytest.raises(ValueError, match="HMAC"):
+        start_events_runtime(
+            make_settings(
+                output=IOSettings(
+                    kind="dataset",
+                    options={"storage_backend": "local", "path": str(tmp_path / "out")},
+                    artifact_hmac_key="fedcba9876543210",
+                ),
+                events=EventsSettings(
+                    enabled=True,
+                    kind="webhook",
+                    incremental=EventsIncrementalSettings(
+                        batch_size=1, batch_window_seconds=60.0, poll_interval_seconds=0.05
+                    ),
+                    online=EventsOnlineSettings(enabled=True, fit_min_events=1),
+                ),
+            ),
+            feature_config=feature_config,
+            reader=_Reader(),  # type: ignore[arg-type]
+        )
 
 
 def test_online_trainer_lock_lost(tmp_path, feature_config, sample_events, sample_users, sample_items):

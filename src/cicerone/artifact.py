@@ -107,6 +107,7 @@ def _hmac_key_bytes(hmac_key: str | None) -> bytes | None:
 
 
 _HMAC_READ_CHUNK = 1024 * 1024
+_HMAC_HEX_BYTES = hashlib.sha256().digest_size * 2
 
 
 def _hmac_update_member(digest: hmac.HMAC, name: str, size: int, chunks: Iterable[bytes]) -> None:
@@ -131,14 +132,6 @@ def _iter_zip_chunks(handle: Any) -> Iterable[bytes]:
         yield chunk
 
 
-def _member_hmac(members: dict[str, bytes], key: bytes) -> str:
-    digest = hmac.new(key, digestmod=hashlib.sha256)
-    for name in sorted(members):
-        payload = members[name]
-        _hmac_update_member(digest, name, len(payload), (payload,))
-    return digest.hexdigest()
-
-
 def dumps_artifact(artifact: ModelArtifact, *, hmac_key: str | None = None) -> bytes:
     """Serialize artifact (zip: meta + pickle envelope + model blobs)."""
     meta = {
@@ -158,27 +151,32 @@ def dumps_artifact(artifact: ModelArtifact, *, hmac_key: str | None = None) -> b
         "users": artifact.users,
         "feature_config": artifact.feature_config,
     }
-    members: dict[str, bytes] = {
-        _META_NAME: json.dumps(meta, sort_keys=True).encode("utf-8"),
-        _BUNDLE_NAME: pickle.dumps(bundle, protocol=pickle.HIGHEST_PROTOCOL),
-    }
-    for name, model in artifact.fitted.items():
-        if _is_rectools_model(model):
-            members[f"{_MODELS_DIR}{name}{_RECTOOLS_SUFFIX}"] = _dump_rectools_model(model)  # type: ignore[arg-type]
-        else:
-            members[f"{_MODELS_DIR}{name}{_PICKLE_SUFFIX}"] = pickle.dumps(
-                model, protocol=pickle.HIGHEST_PROTOCOL
-            )
     key = _hmac_key_bytes(hmac_key)
-    if key is not None:
-        members[_HMAC_NAME] = _member_hmac(
-            {name: payload for name, payload in members.items() if name != _HMAC_NAME},
-            key,
-        ).encode("ascii")
+    names: list[str] = []
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for name, payload in members.items():
+
+        def _write(name: str, payload: bytes) -> None:
             zf.writestr(name, payload)
+            names.append(name)
+
+        _write(_META_NAME, json.dumps(meta, sort_keys=True).encode("utf-8"))
+        _write(_BUNDLE_NAME, pickle.dumps(bundle, protocol=pickle.HIGHEST_PROTOCOL))
+        for name, model in artifact.fitted.items():
+            if _is_rectools_model(model):
+                _write(f"{_MODELS_DIR}{name}{_RECTOOLS_SUFFIX}", _dump_rectools_model(model))  # type: ignore[arg-type]
+            else:
+                _write(
+                    f"{_MODELS_DIR}{name}{_PICKLE_SUFFIX}",
+                    pickle.dumps(model, protocol=pickle.HIGHEST_PROTOCOL),
+                )
+        if key is not None:
+            digest = hmac.new(key, digestmod=hashlib.sha256)
+            for name in sorted(names):
+                info = zf.getinfo(name)
+                with zf.open(name) as handle:
+                    _hmac_update_member(digest, name, info.file_size, _iter_zip_chunks(handle))
+            zf.writestr(_HMAC_NAME, digest.hexdigest().encode("ascii"))
     return buffer.getvalue()
 
 
@@ -250,6 +248,9 @@ def _assert_artifact_size(zf: zipfile.ZipFile, max_bytes: int) -> None:
 def _verify_artifact_hmac(zf: zipfile.ZipFile, names: set[str], key: bytes) -> None:
     if _HMAC_NAME not in names:
         raise ValueError("Artifact is missing HMAC member")
+    hmac_info = zf.getinfo(_HMAC_NAME)
+    if hmac_info.file_size != _HMAC_HEX_BYTES:
+        raise ValueError("Artifact HMAC member has invalid size")
     expected = zf.read(_HMAC_NAME).decode("ascii")
     digest = hmac.new(key, digestmod=hashlib.sha256)
     for name in sorted(name for name in names if name != _HMAC_NAME):
