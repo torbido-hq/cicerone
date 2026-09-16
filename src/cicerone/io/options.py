@@ -150,6 +150,20 @@ def readonly_select(query: str, *, option: str) -> str:
     return cleaned
 
 
+def close_s3_body(body: Any) -> None:
+    close = getattr(body, "close", None)
+    if callable(close):
+        close()
+
+
+def read_s3_body(response: dict[str, Any]) -> bytes:
+    body = response["Body"]
+    try:
+        return body.read()
+    finally:
+        close_s3_body(body)
+
+
 def is_s3_not_found(exc: BaseException) -> bool:
     from botocore.exceptions import ClientError
 
@@ -231,4 +245,4 @@ def read_parquet(
     logger.info("Reading s3://%s/%s", bucket, key)
     client = s3_client if s3_client is not None else build_s3_client(options)
     obj = client.get_object(Bucket=bucket, Key=key)
-    return pd.read_parquet(io.BytesIO(obj["Body"].read()), **read_kwargs)
+    return pd.read_parquet(io.BytesIO(read_s3_body(obj)), **read_kwargs)

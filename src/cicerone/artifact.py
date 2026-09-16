@@ -296,10 +296,19 @@ def save_artifact(path: Path | str, artifact: ModelArtifact, *, hmac_key: str | 
     logger.info("Wrote model artifact to %s (schema_version=%d)", path, artifact.schema_version)
 
 
-def load_artifact(path: Path | str, *, hmac_key: str | None = None) -> ModelArtifact:
+def load_artifact(
+    path: Path | str,
+    *,
+    hmac_key: str | None = None,
+    max_bytes: int = DEFAULT_MAX_ARTIFACT_BYTES,
+) -> ModelArtifact:
     path = Path(path)
     logger.info("Loading model artifact from %s", path)
-    return loads_artifact(path.read_bytes(), hmac_key=hmac_key)
+    if max_bytes < 1:
+        raise ValueError("max_bytes must be >= 1")
+    with path.open("rb") as handle:
+        payload = handle.read(max_bytes + 1)
+    return loads_artifact(payload, hmac_key=hmac_key, max_bytes=max_bytes)
 
 
 def save_rectools_model(path: Path | str, model: ModelBase) -> None:

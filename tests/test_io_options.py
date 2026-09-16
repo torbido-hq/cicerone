@@ -10,13 +10,30 @@ from botocore.exceptions import ClientError
 from cicerone.config import ConfigError
 from cicerone.io.options import (
     S3_NOT_FOUND_CODES,
+    close_s3_body,
     exclusive_file_lock,
     is_s3_not_found,
     object_key,
+    read_s3_body,
     readonly_select,
     storage_backend,
     validate_storage_options,
 )
+
+
+class _FakeS3Body:
+    def __init__(self, payload: bytes, *, fail: bool = False) -> None:
+        self._payload = payload
+        self._fail = fail
+        self.closed = False
+
+    def read(self, *_args: object) -> bytes:
+        if self._fail:
+            raise RuntimeError("read failed")
+        return self._payload
+
+    def close(self) -> None:
+        self.closed = True
 
 
 @pytest.mark.parametrize(
@@ -54,6 +71,46 @@ def test_is_s3_not_found_false_for_other_client_error():
 @pytest.mark.parametrize("exc", [ValueError("boom"), Exception("boom")])
 def test_is_s3_not_found_false_for_non_client_error_exceptions(exc):
     assert is_s3_not_found(exc) is False
+
+
+def test_read_s3_body_closes_after_read():
+    body = _FakeS3Body(b"payload")
+    assert read_s3_body({"Body": body}) == b"payload"
+    assert body.closed is True
+
+
+def test_read_s3_body_closes_when_read_fails():
+    body = _FakeS3Body(b"payload", fail=True)
+    with pytest.raises(RuntimeError, match="read failed"):
+        read_s3_body({"Body": body})
+    assert body.closed is True
+
+
+def test_close_s3_body_ignores_missing_close():
+    close_s3_body(object())
+
+
+def test_read_parquet_s3_closes_body(mocker):
+    import pandas as pd
+
+    from cicerone.io.options import read_parquet
+
+    body = _FakeS3Body(b"parquet-bytes")
+    client = mocker.Mock()
+    client.get_object.return_value = {"Body": body}
+    mocker.patch("cicerone.io.options.pd.read_parquet", return_value=pd.DataFrame({"x": [1]}))
+    frame = read_parquet(
+        {
+            "storage_backend": "s3",
+            "access_key_id": "id",
+            "secret_access_key": "secret",
+            "bucket": "bucket",
+        },
+        "data.parquet",
+        s3_client=client,
+    )
+    assert list(frame.columns) == ["x"]
+    assert body.closed is True
 
 
 def test_validate_storage_options_resolves_from_options():

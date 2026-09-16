@@ -258,7 +258,9 @@ def _load_io_settings(raw: dict[str, Any], section_name: str) -> IOSettings:
         if section_name != "output":
             raise ConfigError("artifact_hmac_key is only valid on [output]")
         hmac_key = _resolve_env_placeholders(section["artifact_hmac_key"], "output.artifact_hmac_key")
-        if isinstance(hmac_key, str):
+        if hmac_key is not None and not isinstance(hmac_key, str):
+            raise ConfigError("output.artifact_hmac_key must be a string")
+        if hmac_key is not None:
             hmac_key = hmac_key.strip() or None
         if hmac_key is not None and len(hmac_key.encode("utf-8")) < ARTIFACT_HMAC_KEY_MIN_BYTES:
             raise ConfigError(

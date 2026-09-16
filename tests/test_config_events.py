@@ -464,6 +464,28 @@ def test_load_online_requires_artifact_hmac_key(tmp_path):
         load_settings(path)
 
 
+def test_load_artifact_hmac_key_rejects_non_string(tmp_path):
+    path = write_toml(
+        tmp_path,
+        """
+        [job]
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+        [output]
+        kind = "dataset"
+        artifact_hmac_key = 123
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+    with pytest.raises(ConfigError, match="must be a string"):
+        load_settings(path)
+
+
 def test_load_artifact_hmac_key_too_short(tmp_path):
     path = write_toml(
         tmp_path,

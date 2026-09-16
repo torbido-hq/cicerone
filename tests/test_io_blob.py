@@ -58,6 +58,7 @@ def test_s3_read_rejects_content_length(mocker) -> None:
     with pytest.raises(ValueError, match="max is 8"):
         read_storage_bytes(options, "file.bin", max_bytes=8)
     body.read.assert_not_called()
+    body.close.assert_called_once()
 
 
 def test_s3_read_missing_returns_none(mocker) -> None:

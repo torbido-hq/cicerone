@@ -252,6 +252,20 @@ def test_loads_artifact_rejects_oversize_payload():
         loads_artifact(b"PK\x03\x04" + b"x" * 20, max_bytes=8)
 
 
+def test_load_artifact_rejects_oversize_file(tmp_path):
+    path = tmp_path / "model.artifact"
+    path.write_bytes(b"PK\x03\x04" + b"x" * 20)
+    with pytest.raises(ValueError, match="exceeds"):
+        load_artifact(path, max_bytes=8)
+
+
+def test_load_artifact_rejects_nonpositive_max_bytes(tmp_path):
+    path = tmp_path / "model.artifact"
+    path.write_bytes(b"x")
+    with pytest.raises(ValueError, match="max_bytes"):
+        load_artifact(path, max_bytes=0)
+
+
 def test_loads_artifact_rejects_oversize_member():
     import io
     import zipfile
