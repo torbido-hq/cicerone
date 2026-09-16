@@ -137,7 +137,7 @@ def sql_identifier(name: str, *, option: str) -> str:
 
 
 def readonly_select(query: str, *, option: str) -> str:
-    """Deploy-time SQL: a single SELECT with a keyword denylist (not a parser). Use a least-privilege DB role."""
+    """Deploy-time SQL: a single SELECT with a keyword denylist (not a parser)."""
     if not isinstance(query, str):
         raise ValueError(f"{option} must be a string")
     cleaned = query.strip().rstrip(";").strip()
