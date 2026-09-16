@@ -20,6 +20,7 @@ from cicerone.io.options import (
     build_s3_client,
     is_s3_not_found,
     object_key,
+    read_s3_body,
     require_option,
     sql_identifier,
     validate_storage_options,
@@ -49,7 +50,7 @@ class DatasetManifestReader:
             if is_s3_not_found(exc):
                 return None
             raise
-        return json.loads(obj["Body"].read())
+        return json.loads(read_s3_body(obj))
 
     def read_latest(self) -> dict[str, Any] | None:
         return self._read()

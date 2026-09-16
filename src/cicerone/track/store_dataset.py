@@ -19,6 +19,7 @@ from cicerone.io.options import (
     exclusive_file_lock,
     is_s3_not_found,
     object_key,
+    read_s3_body,
     require_option,
     validate_storage_options,
 )
@@ -195,7 +196,7 @@ def _s3_parquet_frame(client: Any, bucket: str, key: str) -> pd.DataFrame | None
         if is_s3_not_found(exc):
             return None
         raise
-    return pd.read_parquet(BytesIO(obj["Body"].read()))
+    return pd.read_parquet(BytesIO(read_s3_body(obj)))
 
 
 def _s3_history_frames(
