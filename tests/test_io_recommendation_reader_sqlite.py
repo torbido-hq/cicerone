@@ -200,6 +200,22 @@ def test_sqlite_write_manifest_adds_missing_columns(tmp_path):
     assert list(stored["n_events"]) == [1, 2, 3]
 
 
+def test_sqlite_write_manifest_creates_integer_n_item_scores(tmp_path):
+    url = _sqlite_url(tmp_path)
+    sink = DatabaseOutputSink({"database_url": url})
+    sink.write_manifest({"n_events": 1, "status": "failed", "n_item_scores": None})
+    engine = create_engine(url)
+    with engine.connect() as conn:
+        types = {
+            str(row[1]): str(row[2]).upper()
+            for row in conn.execute(text("PRAGMA table_info(recommendation_runs)"))
+        }
+    assert "INT" in types["n_item_scores"]
+    sink.write_manifest({"n_events": 2, "status": "success", "n_item_scores": 4})
+    stored = pd.read_sql('SELECT * FROM "recommendation_runs"', engine)
+    assert int(stored.iloc[-1]["n_item_scores"]) == 4
+
+
 def test_sqlite_write_manifest_none_n_item_scores_stays_integer(tmp_path):
     url = _sqlite_url(tmp_path)
     engine = create_engine(url)

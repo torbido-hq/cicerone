@@ -19,10 +19,13 @@ from typing import Any
 
 import pandas as pd
 from sqlalchemy import (
+    BigInteger,
+    Boolean,
     Column,
     Connection,
     DateTime,
     Engine,
+    Float,
     LargeBinary,
     MetaData,
     Table,
@@ -181,6 +184,15 @@ def _manifest_column_sql_type(series: pd.Series) -> str:
     if pd.api.types.is_float_dtype(series.dtype):
         return "FLOAT"
     return "TEXT"
+
+
+def _manifest_to_sql_dtypes(frame: pd.DataFrame) -> dict[str, Any]:
+    mapping = {"BIGINT": BigInteger(), "FLOAT": Float(), "BOOLEAN": Boolean()}
+    return {
+        column: mapping[sql_type]
+        for column, sql_type in _MANIFEST_COLUMN_SQL_TYPES.items()
+        if column in frame.columns
+    }
 
 
 def _add_missing_manifest_columns(
@@ -456,7 +468,7 @@ class DatabaseOutputSink:
             if skip_if_newer_than is not None and _db_manifest_newer(conn, table, skip_if_newer_than):
                 return False
             self._ensure_fence()
-            frame.to_sql(table, conn, if_exists="append", index=False)
+            frame.to_sql(table, conn, if_exists="append", index=False, dtype=_manifest_to_sql_dtypes(frame))
             self._ensure_fence()
         return True
 

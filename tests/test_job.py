@@ -1135,12 +1135,58 @@ def test_job_holds_writer_lock_for_artifact_and_items(tmp_path, monkeypatch):
         depths.append(("items", self._recs_write_depth()))
         return original_items(self, df)
 
+    original_scores = job.build_item_scores
+    original_build = job.build_output_sink
+    sinks: list = []
+
+    def capture_sink(*args, **kwargs):
+        sink = original_build(*args, **kwargs)
+        sinks.append(sink)
+        return sink
+
+    def capture_scores(*args, **kwargs):
+        depths.append(("scores", sinks[-1]._recs_write_depth()))
+        return original_scores(*args, **kwargs)
+
     monkeypatch.setattr(DatasetOutputSink, "write_model_artifact", capture_artifact)
     monkeypatch.setattr(DatasetOutputSink, "write_items_snapshot", capture_items)
+    monkeypatch.setattr("cicerone.job.build_output_sink", capture_sink)
+    monkeypatch.setattr("cicerone.job.build_item_scores", capture_scores)
 
     job.run()
 
-    assert depths == [("artifact", 1), ("items", 1)]
+    assert depths[0] == ("scores", 0)
+    assert ("artifact", 1) in depths
+    assert ("items", 1) in depths
+
+
+def test_job_skips_item_scores_when_sink_lacks_writer(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.now(tz="UTC")
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    pd.DataFrame(
+        [{"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True}]
+    ).to_parquet(input_dir / "items.parquet", index=False)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=1))
+    real = job.build_output_sink
+
+    def _legacy(*args, **kwargs):
+        sink = real(*args, **kwargs)
+        sink.write_item_scores = None
+        return sink
+
+    monkeypatch.setattr("cicerone.job.build_output_sink", _legacy)
+    job.run()
+    assert not (output_dir / "item_scores.parquet").exists()
+    assert (output_dir / "recommendations.parquet").exists()
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    assert manifest["status"] == "success"
+    assert manifest["n_item_scores"] is None
 
 
 def test_job_skips_failure_manifest_when_incremental_is_newer(tmp_path, monkeypatch):

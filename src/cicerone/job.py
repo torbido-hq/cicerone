@@ -59,7 +59,7 @@ from cicerone.io.recommendation_schema import (
     filter_variant_rows,
     pick_fallback_variant,
 )
-from cicerone.item_scores import build_item_scores, empty_item_scores
+from cicerone.item_scores import build_item_scores
 from cicerone.locks import (
     LockBackend,
     LockLostError,
@@ -806,8 +806,16 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
         # Artifact → snapshot → recommendations; success only after all writes.
         outputs_written = False
         recs_write = getattr(sink, "recommendations_write", None)
-        item_scores = empty_item_scores()
+        write_item_scores = getattr(sink, "write_item_scores", None)
         _ensure_fence(fence_check)
+        item_scores = build_item_scores(
+            events,
+            items,
+            feature_config,
+            settings.half_life_days,
+            interactions=built.interactions,
+            now=weighting_now,
+        )
         try:
             with recs_write() if callable(recs_write) else nullcontext():
                 try:
@@ -821,16 +829,9 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                         _ensure_publication_fence(sink, fence_check)
                         sink.write_items_snapshot(items)
 
-                    item_scores = build_item_scores(
-                        events,
-                        items,
-                        feature_config,
-                        settings.half_life_days,
-                        interactions=built.interactions,
-                        now=weighting_now,
-                    )
-                    _ensure_publication_fence(sink, fence_check)
-                    sink.write_item_scores(item_scores)
+                    if callable(write_item_scores):
+                        _ensure_publication_fence(sink, fence_check)
+                        write_item_scores(item_scores)
                     outputs_written = True
                     _ensure_publication_fence(sink, fence_check)
                     sink.write_recommendations(recommendations)
@@ -855,7 +856,7 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                             "n_target_users": len(target_users),
                             "n_users_with_recommendations": _recommendation_user_count(recommendations),
                             "n_items": int(built.dataset.item_id_map.external_ids.shape[0]),
-                            "n_item_scores": int(len(item_scores)),
+                            "n_item_scores": int(len(item_scores)) if callable(write_item_scores) else None,
                             "models": ",".join(run_models),
                             "model_weights": model_weights_str,
                             "rrf_k": rrf_k if rrf_k is not None else RRF_K,

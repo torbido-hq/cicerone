@@ -23,6 +23,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - DB manifest ALTER uses a fixed type map so a failed first post-upgrade run cannot create `n_item_scores` as TEXT.
 - Job uses one weighting timestamp for training interactions and `latest_score`.
 - Item-score build strips item IDs before grouping so padded IDs do not crash the catalog write.
+- Job skips `write_item_scores` when the sink does not implement it and records `n_item_scores` as null.
+- New DB `recommendation_runs` tables get typed columns on first create, not TEXT from a null first write.
+- Job builds `item_scores` before taking the recommendations writer lock.
 
 ## [0.8.2] - 2026-09-15
 
