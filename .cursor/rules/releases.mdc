@@ -21,7 +21,7 @@ Checklist:
 ## Current trains
 
 Concrete mapping (this line only):
-no split; main is **0.8.2**.
+no split; main is **0.8.3**.
 
 Update this line in the same PR that changes the split.
 
