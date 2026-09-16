@@ -118,6 +118,7 @@ class OnlineTrainer:
         fence_check: Callable[[], bool] | None = None,
         explain: ExplainSettings | None = None,
         max_workers: int = 1,
+        hmac_key: str | None = None,
     ):
         if top_k < 1:
             raise ValueError("top_k must be >= 1")
@@ -138,6 +139,7 @@ class OnlineTrainer:
         self._fence_check = fence_check
         self._explain = explain if explain is not None else ExplainSettings()
         self._max_workers = max_workers
+        self._hmac_key = hmac_key
         self._artifact: ModelArtifact | None = None
         self._working: Dataset | None = None
         self._job_raw = _empty_interaction_frame()
@@ -171,7 +173,7 @@ class OnlineTrainer:
         if pending is None:
             return
         self._ensure_fence()
-        payload = dumps_artifact(pending.artifact)
+        payload = dumps_artifact(pending.artifact, hmac_key=self._hmac_key)
         if not self._write_payload_if_current(pending, payload):
             logger.warning("Model artifact changed during online refresh; dropping pending fit")
             self._pending = None
@@ -335,7 +337,7 @@ class OnlineTrainer:
         if digest == self._payload_digest and self._artifact is not None and self._working is not None:
             self._artifact_token = token
             return True
-        artifact = loads_artifact(payload)
+        artifact = loads_artifact(payload, hmac_key=self._hmac_key)
         self._install(artifact, digest, token)
         return True
 

@@ -196,6 +196,7 @@ def start_events_runtime(
                 fence_check=(apply_lock.owned if apply_lock is not None else None),
                 explain=settings.explain,
                 max_workers=settings.max_workers,
+                hmac_key=settings.output.artifact_hmac_key,
             )
             online.ensure_loaded()
             logger.info(

@@ -31,6 +31,7 @@ _SECRET_KEYS = frozenset(
         "queue_url",
         "password",
         "webhook",
+        "artifact_hmac_key",
     }
 )
 _SECRET_KEY_RE = re.compile(
@@ -129,6 +130,9 @@ HINTS: dict[str, dict[str, str]] = {
         "docs": f"{_DOCS}/architecture/",
     },
     "output.kind": {"text": "dataset files or a database."},
+    "output.artifact_hmac_key": {
+        "text": "HMAC key used to sign model.artifact. Required when [events.online] is on.",
+    },
     "serve": {
         "text": "Read-only HTTP API over the precomputed top-K table.",
         "docs": f"{_DOCS}/openapi/",

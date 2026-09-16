@@ -86,6 +86,9 @@ stay isolated (popular/latest still refresh only the assigned variant).
 `GET /recommendations` is still a lookup.
 
 ```toml
+[output]
+artifact_hmac_key = "${OUTPUT_ARTIFACT_HMAC_KEY}"  # 16+ bytes
+
 [events.online]
 enabled = true
 fit_partial_epochs = 1          # 0 = frozen weights + history refresh only
@@ -93,8 +96,9 @@ fit_min_events = 100            # skip SGD until this many known-ID events
 max_extra_interactions = 50000  # online-only rows on top of the last job artifact
 ```
 
-Startup fails if the `[output]` store has no artifact — the batch job must
-set `[job].save_model_artifact = true`. An event is trained only when both
+Startup fails if `[output].artifact_hmac_key` is missing, or if the
+`[output]` store has no artifact — the batch job must set
+`[job].save_model_artifact = true`. An event is trained only when both
 its `user_id` and `item_id` already exist in that artifact (including a new
 interaction between two known IDs). Unknown IDs still get popular / latest /
 `incremental` boosts and wait for the next `job.run()`. After
