@@ -256,7 +256,7 @@ def test_score_previous_run_reads_history_when_track_disabled(tmp_path, monkeypa
     history["generated_at"] = "2026-08-28T03:00:00+00:00"
     calls: list[set[str] | None] = []
 
-    monkeypatch.setattr("cicerone.job.load_recommendations_frame", lambda _output: recs)
+    monkeypatch.setattr("cicerone.job_eval.load_recommendations_frame", lambda _output: recs)
 
     def _read_history(self, *, generated_ats=None, since=None):
         calls.append(generated_ats)
@@ -440,7 +440,7 @@ def test_persist_track_outputs_lock_errors_are_best_effort(monkeypatch):
     def _busy(*_args, **_kwargs):
         raise WriterLockBusyError("dataset writer lock busy")
 
-    monkeypatch.setattr("cicerone.job.held_writer_lock", _busy)
+    monkeypatch.setattr("cicerone.job_eval.held_writer_lock", _busy)
     job._persist_track_outputs(
         TrackStore(
             IOSettings(kind="dataset", options={"storage_backend": "local", "path": "/tmp/out"}),
