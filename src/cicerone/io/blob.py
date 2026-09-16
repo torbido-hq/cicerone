@@ -8,9 +8,9 @@ from typing import Any
 from cicerone.config.constants import DEFAULT_MAX_STORAGE_READ_BYTES
 from cicerone.io.options import (
     build_s3_client,
-    close_s3_body,
     is_s3_not_found,
     object_key,
+    read_s3_body,
     require_option,
     validate_storage_options,
 )
@@ -52,14 +52,7 @@ def read_storage_bytes(
         if is_s3_not_found(exc):
             return None
         raise
-    body = response["Body"]
-    try:
-        known = response.get("ContentLength")
-        if isinstance(known, int):
-            _reject_oversize(known, max_bytes)
-        return _read_capped(body.read, max_bytes)
-    finally:
-        close_s3_body(body)
+    return read_s3_body(response, max_bytes=max_bytes)
 
 
 def write_storage_bytes(options: dict[str, Any], filename: str, payload: bytes, content_type: str) -> None:

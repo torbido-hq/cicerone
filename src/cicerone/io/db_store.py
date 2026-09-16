@@ -453,21 +453,23 @@ class DatabaseOutputSink:
         )
         if not inspect(self._engine).has_table(table_name):
             return None
-        size_fn = "length" if self._engine.dialect.name == "sqlite" else "octet_length"
+        if self._engine.dialect.name == "sqlite":
+            sql = f'SELECT substr(payload, 1, :cap), length(payload) FROM "{table_name}" LIMIT 1'
+        else:
+            sql = (
+                f"SELECT substring(payload from 1 for :cap), octet_length(payload) "
+                f'FROM "{table_name}" LIMIT 1'
+            )
         with self._engine.connect() as conn:
-            size_row = conn.execute(text(f'SELECT {size_fn}(payload) FROM "{table_name}" LIMIT 1')).first()
-            if size_row is None or size_row[0] is None:
-                return None
-            size = int(size_row[0])
-            if size > max_bytes:
-                raise ValueError(f"Stored object is {size} bytes; max is {max_bytes}")
-            row = conn.execute(text(f'SELECT payload FROM "{table_name}" LIMIT 1')).first()
-        if row is None or row[0] is None:
+            row = conn.execute(text(sql), {"cap": max_bytes + 1}).first()
+        if row is None or row[1] is None:
             return None
-        payload = bytes(row[0])
-        if len(payload) > max_bytes:
-            raise ValueError(f"Stored object is {len(payload)} bytes; max is {max_bytes}")
-        return payload
+        size = int(row[1])
+        if size > max_bytes:
+            raise ValueError(f"Stored object is {size} bytes; max is {max_bytes}")
+        if row[0] is None:
+            return None
+        return bytes(row[0])
 
     def model_artifact_fingerprint(self) -> str | None:
         table_name = sql_identifier(

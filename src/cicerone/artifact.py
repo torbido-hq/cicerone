@@ -14,6 +14,7 @@ import json
 import logging
 import pickle
 import zipfile
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -105,14 +106,36 @@ def _hmac_key_bytes(hmac_key: str | None) -> bytes | None:
     return raw
 
 
+_HMAC_READ_CHUNK = 1024 * 1024
+
+
+def _hmac_update_member(digest: hmac.HMAC, name: str, size: int, chunks: Iterable[bytes]) -> None:
+    digest.update(name.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(size.to_bytes(8, "big"))
+    remaining = size
+    for chunk in chunks:
+        digest.update(chunk)
+        remaining -= len(chunk)
+        if remaining < 0:
+            raise ValueError("Artifact HMAC member size does not match")
+    if remaining != 0:
+        raise ValueError("Artifact HMAC member size does not match")
+
+
+def _iter_zip_chunks(handle: Any) -> Iterable[bytes]:
+    while True:
+        chunk = handle.read(_HMAC_READ_CHUNK)
+        if not chunk:
+            return
+        yield chunk
+
+
 def _member_hmac(members: dict[str, bytes], key: bytes) -> str:
     digest = hmac.new(key, digestmod=hashlib.sha256)
     for name in sorted(members):
         payload = members[name]
-        digest.update(name.encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(len(payload).to_bytes(8, "big"))
-        digest.update(payload)
+        _hmac_update_member(digest, name, len(payload), (payload,))
     return digest.hexdigest()
 
 
@@ -228,9 +251,12 @@ def _verify_artifact_hmac(zf: zipfile.ZipFile, names: set[str], key: bytes) -> N
     if _HMAC_NAME not in names:
         raise ValueError("Artifact is missing HMAC member")
     expected = zf.read(_HMAC_NAME).decode("ascii")
-    members = {name: zf.read(name) for name in names if name != _HMAC_NAME}
-    actual = _member_hmac(members, key)
-    if not hmac.compare_digest(actual, expected):
+    digest = hmac.new(key, digestmod=hashlib.sha256)
+    for name in sorted(name for name in names if name != _HMAC_NAME):
+        info = zf.getinfo(name)
+        with zf.open(name) as handle:
+            _hmac_update_member(digest, name, info.file_size, _iter_zip_chunks(handle))
+    if not hmac.compare_digest(digest.hexdigest(), expected):
         raise ValueError("Artifact HMAC does not match")
 
 

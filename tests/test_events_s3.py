@@ -56,6 +56,17 @@ def test_load_object_events_closes_body(mocker):
     body.close.assert_called_once()
 
 
+def test_load_object_events_rejects_oversize_and_closes(mocker):
+    body = mocker.Mock()
+    s3 = mocker.Mock()
+    s3.get_object.return_value = {"Body": body, "ContentLength": 99, "ETag": '"abc"'}
+    source = S3EventSource(_creds(mode="list"))
+    with pytest.raises(ValueError, match="max is 8"):
+        source._load_object_events(s3, "events-bucket", "events/e.json", max_bytes=8)
+    body.read.assert_not_called()
+    body.close.assert_called_once()
+
+
 @mock_aws
 def test_s3_registered_and_build_list_mode():
     assert "s3" in registered_event_source_kinds()

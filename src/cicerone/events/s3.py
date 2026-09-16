@@ -14,6 +14,7 @@ from typing import Any
 import boto3
 from botocore.config import Config
 
+from cicerone.config.constants import DEFAULT_MAX_STORAGE_READ_BYTES
 from cicerone.events.base import EventSource, EventSourceHealth, NormalizedEvent
 from cicerone.events.s3_list import S3ListPoll
 from cicerone.events.s3_parse import (
@@ -244,11 +245,19 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
                 out.append(event)
         return out
 
-    def _load_object_events(self, s3, bucket: str, key: str, etag: str = "") -> list[NormalizedEvent]:
+    def _load_object_events(
+        self,
+        s3,
+        bucket: str,
+        key: str,
+        etag: str = "",
+        *,
+        max_bytes: int = DEFAULT_MAX_STORAGE_READ_BYTES,
+    ) -> list[NormalizedEvent]:
         obj = s3.get_object(Bucket=bucket, Key=key)
         resolved_etag = etag or str(obj.get("ETag") or "")
         return _events_from_body(
-            read_s3_body(obj),
+            read_s3_body(obj, max_bytes=max_bytes),
             bucket=bucket,
             key=key,
             etag=resolved_etag,

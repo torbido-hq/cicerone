@@ -156,10 +156,20 @@ def close_s3_body(body: Any) -> None:
         close()
 
 
-def read_s3_body(response: dict[str, Any]) -> bytes:
+def read_s3_body(response: dict[str, Any], *, max_bytes: int | None = None) -> bytes:
     body = response["Body"]
     try:
-        return body.read()
+        if max_bytes is None:
+            return body.read()
+        if max_bytes < 1:
+            raise ValueError("max_bytes must be >= 1")
+        known = response.get("ContentLength")
+        if isinstance(known, int) and known > max_bytes:
+            raise ValueError(f"Stored object is {known} bytes; max is {max_bytes}")
+        payload = body.read(max_bytes + 1)
+        if len(payload) > max_bytes:
+            raise ValueError(f"Stored object is {len(payload)} bytes; max is {max_bytes}")
+        return payload
     finally:
         close_s3_body(body)
 

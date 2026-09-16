@@ -27,10 +27,12 @@ class _FakeS3Body:
         self._fail = fail
         self.closed = False
 
-    def read(self, *_args: object) -> bytes:
+    def read(self, size: int | None = None) -> bytes:
         if self._fail:
             raise RuntimeError("read failed")
-        return self._payload
+        if size is None:
+            return self._payload
+        return self._payload[:size]
 
     def close(self) -> None:
         self.closed = True
@@ -88,6 +90,27 @@ def test_read_s3_body_closes_when_read_fails():
 
 def test_close_s3_body_ignores_missing_close():
     close_s3_body(object())
+
+
+def test_read_s3_body_rejects_content_length_and_closes():
+    body = _FakeS3Body(b"123456789")
+    with pytest.raises(ValueError, match="max is 4"):
+        read_s3_body({"Body": body, "ContentLength": 9}, max_bytes=4)
+    assert body.closed is True
+
+
+def test_read_s3_body_rejects_oversize_read_and_closes():
+    body = _FakeS3Body(b"123456789")
+    with pytest.raises(ValueError, match="max is 4"):
+        read_s3_body({"Body": body}, max_bytes=4)
+    assert body.closed is True
+
+
+def test_read_s3_body_rejects_nonpositive_max_bytes():
+    body = _FakeS3Body(b"x")
+    with pytest.raises(ValueError, match="max_bytes"):
+        read_s3_body({"Body": body}, max_bytes=0)
+    assert body.closed is True
 
 
 def test_read_parquet_s3_closes_body(mocker):

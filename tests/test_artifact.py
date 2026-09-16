@@ -266,16 +266,18 @@ def test_load_artifact_rejects_nonpositive_max_bytes(tmp_path):
         load_artifact(path, max_bytes=0)
 
 
-def test_loads_artifact_rejects_oversize_member():
+def test_loads_artifact_rejects_oversize_uncompressed_member():
     import io
     import zipfile
 
     out = io.BytesIO()
-    with zipfile.ZipFile(out, "w") as dest:
+    with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as dest:
         dest.writestr("meta.json", "{}")
-        dest.writestr("bundle.pkl", b"x" * 50)
+        dest.writestr("bundle.pkl", b"x" * 50_000)
+    payload = out.getvalue()
+    assert len(payload) < 500
     with pytest.raises(ValueError, match="exceeds"):
-        loads_artifact(out.getvalue(), max_bytes=20)
+        loads_artifact(payload, max_bytes=500)
 
 
 def test_fit_strategies_populates_cache(feature_config, sample_events, sample_users, sample_items):
