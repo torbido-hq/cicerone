@@ -80,3 +80,26 @@ def test_buffer_caps_events_and_clears_dedupe_on_flush():
 def test_buffer_rejects_max_events_below_batch_size():
     with pytest.raises(ValueError, match="max_events"):
         MicroBatchBuffer(batch_size=5, batch_window_seconds=1.0, max_events=2)
+
+
+def test_buffer_fingerprint_dedupe_can_be_disabled():
+    buffer = MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0)
+    buffer.configure_fingerprint_dedupe(False, generated_only=True)
+    first = normalize_event(event_payload(event_id="a", item_id="same"))
+    second = normalize_event(event_payload(event_id="b", item_id="same"))
+    result = buffer.extend([first, second])
+    assert result.kept_count == 2
+    assert result.duplicates == ()
+
+
+def test_buffer_fingerprint_dedupe_generated_only():
+    buffer = MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0)
+    buffer.configure_fingerprint_dedupe(True, generated_only=True)
+    payload = event_payload(item_id="same")
+    payload.pop("event_id")
+    generated = normalize_event(payload)
+    explicit = normalize_event(event_payload(event_id="explicit", item_id="same"))
+    generated_dup = normalize_event(payload)
+    result = buffer.extend([generated, explicit, generated_dup])
+    assert [event.event_id for event in result.kept] == [generated.event_id, "explicit"]
+    assert [event.event_id for event in result.duplicates] == [generated_dup.event_id]

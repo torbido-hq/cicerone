@@ -1139,7 +1139,7 @@ def test_incremental_updater_collapses_leftover_variants_when_experiment_off(
     assert "cold-treatment" not in set(cold["item_id"].astype(str))
 
 
-def test_incremental_updater_publish_failure_raises(tmp_path, feature_config: FeatureConfig):
+def test_incremental_updater_publish_failure_does_not_unsucceed(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()
     pd.DataFrame(
@@ -1170,8 +1170,7 @@ def test_incremental_updater_publish_failure_raises(tmp_path, feature_config: Fe
         publisher=_Boom(),
     )
     events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
-    with pytest.raises(RuntimeError, match="broker down"):
-        updater.apply(events)
-    assert called["n"] == 0
+    assert updater.apply(events) == 1
+    assert called["n"] == 1
     frame = load_recommendations_frame(settings.output)
     assert "i9" in set(frame[frame["user_id"] == "u1"]["item_id"].astype(str))

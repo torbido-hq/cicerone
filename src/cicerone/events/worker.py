@@ -71,6 +71,7 @@ class EventWorker:
         self._applied_fingerprints: set[str] = set()
         self._applied_fingerprint_order: deque[str] = deque()
         self._ephemeral_event_ids = bool(getattr(source, "ephemeral_event_ids", False))
+        self._buffer.configure_fingerprint_dedupe(self._ephemeral_event_ids, generated_only=True)
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -259,12 +260,15 @@ class EventWorker:
     def _still_unapplied(self, event: NormalizedEvent) -> bool:
         if self._buffer.contains_event_id(event.event_id):
             return True
-        fingerprint = event_fingerprint(event)
-        if self._buffer.contains_fingerprint(fingerprint):
-            return True
-        return any(
-            held.event_id == event.event_id or event_fingerprint(held) == fingerprint for held in self._held
-        )
+        if self._fingerprint_dedupe(event):
+            fingerprint = event_fingerprint(event)
+            if self._buffer.contains_fingerprint(fingerprint):
+                return True
+            return any(
+                held.event_id == event.event_id or event_fingerprint(held) == fingerprint
+                for held in self._held
+            )
+        return any(held.event_id == event.event_id for held in self._held)
 
     def _ack_unbuffered(self, events: Sequence[NormalizedEvent]) -> None:
         to_ack: list[NormalizedEvent] = []
@@ -289,13 +293,13 @@ class EventWorker:
         if not self._deferred_acks:
             return
         applied_ids = {event.event_id for event in applied}
-        applied_fps = {event_fingerprint(event) for event in applied}
+        applied_fps = {event_fingerprint(event) for event in applied if self._fingerprint_dedupe(event)}
         keep: list[NormalizedEvent] = []
         matched: list[NormalizedEvent] = []
         for event in self._deferred_acks:
-            if (
-                event.event_id in applied_ids or event_fingerprint(event) in applied_fps
-            ) and not self._still_unapplied(event):
+            matched_id = event.event_id in applied_ids
+            matched_fp = self._fingerprint_dedupe(event) and event_fingerprint(event) in applied_fps
+            if (matched_id or matched_fp) and not self._still_unapplied(event):
                 matched.append(event)
             else:
                 keep.append(event)
@@ -533,7 +537,7 @@ class EventWorker:
             record_events_apply_busy(reason="lock")
             logger.info("%s; nacking %d event(s)", exc, len(ready))
             self._updater.abort_online()
-            self._source.nack(ready)
+            self._return_events(ready)
             return 0
         except Exception:
             record_events_flush(status="error")

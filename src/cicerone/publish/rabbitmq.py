@@ -76,9 +76,24 @@ class RabbitMQPublisher:
         self._channel = channel
 
     def publish(self, df: pd.DataFrame) -> None:
+        if self._channel is None:
+            self._publish_all(df)
+            return
+        try:
+            self._publish_all(df)
+        except Exception:
+            logger.exception("RabbitMQ publish failed; recovering publisher")
+            self._recover()
+            self._publish_all(df)
+
+    def _publish_all(self, df: pd.DataFrame) -> None:
         channel = self._require()
         for _, body in user_recommendation_messages(df):
             channel.basic_publish(exchange=self._exchange, routing_key=self._routing_key, body=body)
+
+    def _recover(self) -> None:
+        self.close()
+        self.connect()
 
     def close(self) -> None:
         channel = self._channel

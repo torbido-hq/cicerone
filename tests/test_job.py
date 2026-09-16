@@ -144,7 +144,7 @@ def test_job_publishes_recommendations_after_write(tmp_path, monkeypatch):
     assert closed["n"] == 1
 
 
-def test_job_marks_partial_outputs_when_publish_fails_after_write(tmp_path, monkeypatch):
+def test_job_succeeds_when_publish_fails_after_write(tmp_path, monkeypatch):
     input_dir = tmp_path / "in"
     output_dir = tmp_path / "out"
     input_dir.mkdir()
@@ -166,11 +166,9 @@ def test_job_marks_partial_outputs_when_publish_fails_after_write(tmp_path, monk
             return None
 
     monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
-    with pytest.raises(RuntimeError, match="broker down"):
-        job.run()
+    job.run()
     manifest = json.loads((output_dir / "manifest.json").read_text())
-    assert manifest["status"] == "failed"
-    assert manifest["partial_outputs"] is True
+    assert manifest["status"] == "success"
     assert (output_dir / "recommendations.parquet").exists()
 
 

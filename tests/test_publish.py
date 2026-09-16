@@ -388,7 +388,7 @@ def test_publish_empty_frame_is_noop(monkeypatch):
     publisher.close()
 
 
-def test_updater_publish_failure_raises(tmp_path, feature_config: FeatureConfig):
+def test_updater_publish_failure_does_not_unsucceed(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()
     pd.DataFrame(
@@ -411,6 +411,36 @@ def test_updater_publish_failure_raises(tmp_path, feature_config: FeatureConfig)
         publisher=_Boom(),
     )
     events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
-    with pytest.raises(RuntimeError, match="broker down"):
-        updater.apply(events)
-    assert updater.events_applied == 0
+    assert updater.apply(events) == 1
+    assert updater.events_applied == 1
+
+
+def test_kafka_publisher_fails_on_delivery_error(monkeypatch):
+    broker = install_fake_kafka(monkeypatch)
+    broker.delivery_error = "broker reject"
+    publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "cicerone.recs"})
+    publisher.connect()
+    with pytest.raises(RuntimeError, match="delivery failed"):
+        publisher.publish(_recs_frame())
+    publisher.close()
+
+
+def test_rabbitmq_publisher_recovers_after_channel_error(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "recs"})
+    publisher.connect()
+    channel = publisher._channel
+    assert channel is not None
+    calls = {"n": 0}
+    original = channel.basic_publish
+
+    def boom(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("channel closed")
+        return original(*args, **kwargs)
+
+    channel.basic_publish = boom  # type: ignore[method-assign]
+    publisher.publish(_recs_frame())
+    assert [key for _exchange, key, _body in broker.published] == ["recs", "recs"]
+    publisher.close()

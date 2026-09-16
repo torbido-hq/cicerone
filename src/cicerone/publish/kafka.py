@@ -54,11 +54,19 @@ class KafkaPublisher:
 
     def publish(self, df: pd.DataFrame) -> None:
         producer = self._require()
+        errors: list[str] = []
+
+        def on_delivery(err: object, _msg: object) -> None:
+            if err is not None:
+                errors.append(str(err))
+
         for user_id, body in user_recommendation_messages(df):
-            producer.produce(self._topic, value=body, key=user_id.encode("utf-8"))
+            producer.produce(self._topic, value=body, key=user_id.encode("utf-8"), on_delivery=on_delivery)
         remaining = producer.flush(self._timeout_seconds)
         if remaining:
             raise RuntimeError(f"Kafka publish timed out with {remaining} message(s) in queue")
+        if errors:
+            raise RuntimeError(f"Kafka publish delivery failed: {errors[0]}")
 
     def close(self) -> None:
         producer = self._producer

@@ -518,9 +518,6 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                             fence_kind="retrain",
                         )
                         store.write_state(_refresh_pending_thompson(store, pending_thompson))
-                    if publisher is not None:
-                        ensure_publication_fence(sink, fence_check)
-                        publisher.publish(recommendations)
                     ensure_publication_fence(sink, fence_check)
                     manifest.update(
                         {
@@ -548,6 +545,12 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                     ensure_publication_fence(sink, fence_check)
                     if write_job_manifest(sink, manifest):
                         manifest_written = True
+                    if publisher is not None:
+                        try:
+                            ensure_publication_fence(sink, fence_check)
+                            publisher.publish(recommendations)
+                        except Exception:
+                            logger.exception("Publish failed after successful write")
                 except Exception as exc:
                     if outputs_written or manifest.get("artifact_written"):
                         manifest["partial_outputs"] = True

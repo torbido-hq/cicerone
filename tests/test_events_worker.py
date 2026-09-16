@@ -1786,11 +1786,17 @@ def test_event_worker_does_not_ack_fingerprint_redelivery_while_buffered(
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
     )
-    original = normalize_event(event_payload(event_id="pending-fp-1", item_id="ipend"))
-    redelivery = normalize_event(event_payload(event_id="pending-fp-2", item_id="ipend"))
+    payload = event_payload(item_id="ipend")
+    payload.pop("event_id")
+    original = normalize_event(payload)
+    redelivery = normalize_event(payload)
+    assert original.generated_event_id is True
+    assert redelivery.generated_event_id is True
     acked: list[str] = []
 
     class _Replay:
+        ephemeral_event_ids = True
+
         def connect(self) -> None:
             return None
 
@@ -1820,7 +1826,7 @@ def test_event_worker_does_not_ack_fingerprint_redelivery_while_buffered(
     worker._buffer.extend([original])
     worker._poll_into_buffer()
     assert acked == []
-    assert [item.event_id for item in worker._buffer.flush()] == ["pending-fp-1"]
+    assert [item.event_id for item in worker._buffer.flush()] == [original.event_id]
 
 
 def test_event_worker_acks_fingerprint_redelivery_after_apply(tmp_path, feature_config: FeatureConfig):
@@ -2033,7 +2039,7 @@ def test_event_worker_acks_buffer_duplicates(tmp_path, feature_config: FeatureCo
         ),
     )
     assert worker.tick() == 0  # window fills buffer; not ready until size/window
-    assert source.health().lag == 2  # fingerprint duplicate stays unacked while original is buffered
+    assert source.health().lag == 2  # explicit-id siblings stay unacked while buffered
 
 
 def test_event_worker_acks_deferred_fingerprint_duplicate_after_apply(
@@ -2061,8 +2067,109 @@ def test_event_worker_acks_deferred_fingerprint_duplicate_after_apply(
             top_k=3,
         ),
     )
-    assert worker.tick() == 1
+    assert worker.tick() == 2
     assert source.health().lag == 0
+
+
+def test_event_worker_acks_deferred_generated_fingerprint_after_apply(
+    tmp_path, feature_config: FeatureConfig
+):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    payload = event_payload(item_id="i1")
+    payload.pop("event_id")
+    original = normalize_event(payload)
+    duplicate = normalize_event(payload)
+    assert original.generated_event_id is True
+    assert duplicate.generated_event_id is True
+    assert original.event_id != duplicate.event_id
+
+    class _Ephemeral:
+        ephemeral_event_ids = True
+
+        def __init__(self) -> None:
+            self._pending = [original, duplicate]
+            self.acked: list[str] = []
+
+        def connect(self) -> None:
+            return None
+
+        def poll(self, max_events: int = 100):  # type: ignore[no-untyped-def]
+            del max_events
+            return list(self._pending)
+
+        def ack(self, event_ids):  # type: ignore[no-untyped-def]
+            self.acked.extend(str(event_id) for event_id in event_ids)
+            acked = {str(event_id) for event_id in event_ids}
+            self._pending = [event for event in self._pending if event.event_id not in acked]
+
+        def nack(self, events):  # type: ignore[no-untyped-def]
+            return list(events)
+
+        def health(self) -> EventSourceHealth:
+            return EventSourceHealth(connected=True, lag=len(self._pending))
+
+    source = _Ephemeral()
+    worker = EventWorker(
+        source,  # type: ignore[arg-type]
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0, max_events=10),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    assert worker.tick() == 1
+    assert original.event_id in source.acked
+    assert duplicate.event_id in source.acked
+    assert source.health().lag == 0
+
+
+def test_event_worker_writer_lock_busy_restores_rejected_nacks(tmp_path, feature_config: FeatureConfig):
+    from cicerone.locks import WriterLockBusyError
+
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+
+    class _RejectNack(WebhookEventSource):
+        def nack(self, events):  # type: ignore[no-untyped-def,override]
+            return list(events)
+
+    class _Busy(IncrementalUpdater):
+        def apply(self, events, *, persist_online: bool = True):  # type: ignore[no-untyped-def]
+            del persist_online
+            raise WriterLockBusyError("dataset writer lock busy")
+
+    source = _RejectNack({})
+    source.connect()
+    source.ingest(event_payload(event_id="busy-rej", item_id="ib"))
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        _Busy(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    assert worker.tick() == 0
+    assert [event.event_id for event in worker._buffer.flush()] == ["busy-rej"]
 
 
 def test_event_worker_restores_rejected_overflow(tmp_path, feature_config: FeatureConfig):
