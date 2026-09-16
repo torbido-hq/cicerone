@@ -77,6 +77,19 @@ def _matched_state(settings: Settings, store: ExperimentStore) -> dict[str, Any]
     return None
 
 
+def _fresh_matched_state(settings: Settings, store: ExperimentStore) -> dict[str, Any] | None:
+    try:
+        state = store.read_state()
+    except Exception as exc:
+        logger.exception("Failed to read experiment state")
+        raise _PromoteRejected("Experiment state could not be read") from exc
+    if state and str(state.get("experiment_id") or "") == str(settings.experiment.id):
+        _PROMOTE_STATE[settings.experiment.id] = dict(state)
+        return dict(state)
+    _PROMOTE_STATE.pop(settings.experiment.id, None)
+    return None
+
+
 def _eval_recipes(
     recipes: tuple[ResolvedRecipe, ...],
     experiment: ExperimentSettings,
@@ -334,8 +347,9 @@ def _thompson_promote_error(variant: str, state: Mapping[str, Any] | None) -> st
     pair = active_pair_from_state(state)
     if pair and variant in pair:
         return None
-    wanted = pair[0] if pair else "the active pair"
-    return f"Winner is {wanted!r}, not {variant!r}"
+    if not pair:
+        return "No active champion/challenger pair is available"
+    return f"Winner is {pair[0]!r}, not {variant!r}"
 
 
 def _publish_experiment_state(
@@ -379,7 +393,11 @@ def promote_winner(settings: Settings, variant: str) -> str | None:
         return f"Winner is {report.winner!r}, not {variant!r}"
 
     def _payload(store: ExperimentStore) -> dict[str, Any]:
-        state = _matched_state(settings, store)
+        state = (
+            _fresh_matched_state(settings, store)
+            if settings.experiment.allocation == ALLOCATION_THOMPSON
+            else _matched_state(settings, store)
+        )
         if settings.experiment.allocation == ALLOCATION_THOMPSON:
             error = _thompson_promote_error(variant, state)
             if error:

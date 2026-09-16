@@ -1193,7 +1193,7 @@ def test_thompson_promote_rejects_parked_report_winner_without_pair(tmp_path, mo
             "ship_variant": "blend",
         },
     )
-    assert promote_winner(settings, "blend") == "Winner is 'the active pair', not 'blend'"
+    assert promote_winner(settings, "blend") == "No active champion/challenger pair is available"
     state = ExperimentStore(settings.output).read_state()
     assert state is not None
     assert state["promoted_variant"] is None
@@ -1224,6 +1224,43 @@ def test_thompson_promote_rechecks_pair_under_writer_lock(tmp_path, monkeypatch)
     assert state["promoted_variant"] is None
     assert state["champion"] == "control"
     assert state["challenger"] == "blend"
+
+
+def test_thompson_promote_fails_closed_when_state_read_fails(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    settings = _thompson_three_variants(tmp_path)
+    store = ExperimentStore(settings.output)
+    store.write_state(
+        experiment_state("exp-1", promoted_variant=None, champion="control", challenger="treatment")
+    )
+    assert store.read_state() is not None
+    assert store.last_state("exp-1") is not None
+    monkeypatch.setattr(
+        "cicerone.dashboard_experiments.experiment_context",
+        lambda _settings: {
+            "report": SimpleNamespace(
+                comparisons=(),
+                winner="control",
+                promote_blocked_by=(),
+            ),
+            "thompson": {"champion": "control", "challenger": "treatment"},
+            "ship_variant": "control",
+        },
+    )
+    original = ExperimentStore.read_state
+
+    def _boom(self):
+        raise RuntimeError("store down")
+
+    monkeypatch.setattr(ExperimentStore, "read_state", _boom)
+    assert promote_winner(settings, "treatment") == "Experiment state could not be read"
+    monkeypatch.setattr(ExperimentStore, "read_state", original)
+    state = ExperimentStore(settings.output).read_state()
+    assert state is not None
+    assert state["promoted_variant"] is None
+    assert state["champion"] == "control"
+    assert state["challenger"] == "treatment"
 
 
 def test_promote_winner_reads_state_under_writer_lock(tmp_path, monkeypatch):
