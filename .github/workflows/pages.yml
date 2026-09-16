@@ -17,19 +17,29 @@ on:
       - "docs/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
+  # Homepage bakes the PyPI version at build; rebuild after a successful publish.
+  workflow_run:
+    workflows: ["Publish to PyPI"]
+    types: [completed]
 
 permissions:
   contents: read
 
 concurrency:
-  group: pages-${{ github.ref }}
+  group: pages-${{ github.event_name == 'pull_request' && github.ref || 'main' }}
   cancel-in-progress: false
 
 jobs:
   build:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - if: github.event_name != 'workflow_run'
+        uses: actions/checkout@v7
+      - if: github.event_name == 'workflow_run'
+        uses: actions/checkout@v7
+        with:
+          ref: main
 
       - uses: actions/setup-node@v7
         with:
@@ -46,13 +56,13 @@ jobs:
           npm test
           npm run build
 
-      - if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+      - if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.event_name == 'workflow_run')
         uses: actions/upload-pages-artifact@v5
         with:
           path: website/dist
 
   deploy:
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.event_name == 'workflow_run')
     needs: build
     runs-on: ubuntu-latest
     permissions:
