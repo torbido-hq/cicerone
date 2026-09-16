@@ -448,14 +448,18 @@ def create_app(
         cursor: str | None = Query(default=None, description="Seek after this item_id"),
         item_id: str | None = Query(default=None, description="Single catalog id"),
     ) -> ItemScoresResponse:
-        scores = reader.get_item_scores()
-        ids = getattr(reader, "get_item_score_ids", None)
+        snapshot = getattr(reader, "get_item_scores_snapshot", None)
+        if callable(snapshot):
+            scores, ids = snapshot()
+        else:
+            scores = reader.get_item_scores()
+            ids = None
         page, next_cursor = page_item_scores(
             scores,
             limit=min(limit, DEFAULT_SERVE_ITEM_SCORES_MAX),
             cursor=cursor,
             item_id=item_id,
-            ids=ids() if callable(ids) else None,
+            ids=ids,
         )
         return ItemScoresResponse(
             items=[

@@ -100,9 +100,10 @@ def test_sqlite_db_reader_item_scores_write_replace_and_missing(tmp_path):
         pd.DataFrame([{"item_id": "i2", "popular_score": 4.0, "latest_score": 2.0, "n_users": 5}])
     )
     reader.refresh()
-    scores = reader.get_item_scores()
-    assert list(reader.get_item_score_ids()) == ["i2"]
+    scores, ids = reader.get_item_scores_snapshot()
+    assert list(ids) == ["i2"]
     assert list(scores["item_id"]) == ["i2"]
+    assert list(reader.get_item_score_ids()) == ["i2"]
     assert float(scores.iloc[0]["popular_score"]) == 4.0
     assert int(scores.iloc[0]["n_users"]) == 5
 

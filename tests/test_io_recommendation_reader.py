@@ -296,6 +296,47 @@ def test_dataset_reader_item_scores_missing_and_refresh(tmp_path):
     assert float(reader.get_item_scores().iloc[0]["popular_score"]) == 2.5
 
 
+def test_item_scores_snapshot_does_not_mix_generations():
+    import threading
+
+    from cicerone.io.recommendation_reader_common import _ItemFilterMixin
+    from cicerone.item_scores import normalize_item_scores
+
+    class _Reader(_ItemFilterMixin):
+        pass
+
+    first = normalize_item_scores(
+        pd.DataFrame([{"item_id": "a", "popular_score": 1.0, "latest_score": 0.0, "n_users": 1}])
+    )
+    second = normalize_item_scores(
+        pd.DataFrame([{"item_id": "b", "popular_score": 2.0, "latest_score": 1.0, "n_users": 2}])
+    )
+    reader = _Reader()
+    reader._init_item_filter_state()
+    with reader._lock:
+        reader._set_item_scores(first)
+    errors: list[str] = []
+
+    def _read() -> None:
+        for _ in range(200):
+            scores, ids = reader.get_item_scores_snapshot()
+            if list(ids) != list(scores["item_id"]):
+                errors.append("mismatched snapshot")
+                return
+
+    def _write() -> None:
+        for frame in (second, first) * 50:
+            with reader._lock:
+                reader._set_item_scores(frame)
+
+    workers = [threading.Thread(target=_read), threading.Thread(target=_write)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join()
+    assert errors == []
+
+
 def test_dataset_reader_cold_start_fallback_and_items(tmp_path):
     _write_recommendations(
         tmp_path,

@@ -214,3 +214,8 @@ class _ItemFilterMixin:
         self._ensure_item_filter_state()
         with self._lock:
             return self._item_score_ids
+
+    def get_item_scores_snapshot(self) -> tuple[pd.DataFrame, np.ndarray]:
+        self._ensure_item_filter_state()
+        with self._lock:
+            return self._item_scores, self._item_score_ids

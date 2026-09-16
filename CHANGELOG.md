@@ -30,6 +30,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `OutputSink` no longer requires `write_item_scores`; that method lives on optional `ItemScoresWriter`.
 - Job builds catalog `item_scores` only when the sink can write them.
 - Serve reuses a cached sorted `item_id` index for `GET /item-scores` pagination.
+- Serve snapshots the `item_scores` frame and id index under one lock so a refresh cannot pair a new index with an old page.
 
 ## [0.8.2] - 2026-09-15
 
