@@ -195,47 +195,28 @@ class EventWorker:
                     join_timeout_seconds,
                 )
                 joined = False
-        if joined and was_alive:
-            acquired = self._tick_guard.acquire(blocking=True, timeout=join_timeout_seconds)
-            if acquired:
-                try:
-                    if self._source_guard.acquire(blocking=False):
-                        try:
-                            if self._stop.is_set() and self._thread is thread:
-                                self._drain_and_close()
-                        finally:
-                            self._source_guard.release()
-                finally:
-                    self._tick_guard.release()
-            else:
-                return False
-        elif not joined:
-            acquired = self._tick_guard.acquire(blocking=True, timeout=join_timeout_seconds)
-            if acquired:
-                try:
-                    if self._source_guard.acquire(blocking=False):
-                        try:
-                            if self._stop.is_set() and self._thread is thread:
-                                self._drain_and_close()
-                        finally:
-                            self._source_guard.release()
-                finally:
-                    self._tick_guard.release()
-        elif self._tick_guard.acquire(blocking=False):
-            try:
-                if self._source_guard.acquire(blocking=False):
-                    try:
-                        if self._stop.is_set() and self._thread is thread:
-                            self._drain_and_close()
-                    finally:
-                        self._source_guard.release()
-                else:
-                    return False
-            finally:
-                self._tick_guard.release()
-        else:
+        if not self._try_finalize(thread, timeout=join_timeout_seconds):
             return False
         return joined
+
+    def _try_finalize(self, thread: threading.Thread | None, *, timeout: float) -> bool:
+        if not self._tick_guard.acquire(blocking=True, timeout=timeout):
+            return False
+        try:
+            if not self._source_guard.acquire(blocking=False):
+                return False
+            try:
+                if self._stop.is_set() and self._thread is thread:
+                    self._drain_and_close()
+                return True
+            finally:
+                self._source_guard.release()
+        finally:
+            self._tick_guard.release()
+
+    def _holder_should_finalize(self) -> bool:
+        thread = self._thread
+        return thread is None or thread is threading.current_thread() or not thread.is_alive()
 
     def refresh_source_health_metrics(self) -> bool:
         try:
@@ -482,12 +463,16 @@ class EventWorker:
     def tick(self) -> int:
         """One poll/flush cycle; returns events successfully applied."""
         with self._tick_guard:
-            if self._stop.is_set():
-                return 0
             try:
+                if self._stop.is_set():
+                    return 0
                 return self._tick_locked()
             finally:
-                self._source_unhealthy = not self.refresh_source_health_metrics()
+                if self._stop.is_set() and self._holder_should_finalize():
+                    with self._source_guard:
+                        self._drain_and_close()
+                elif not self._stop.is_set():
+                    self._source_unhealthy = not self.refresh_source_health_metrics()
 
     def _tick_locked(self) -> int:
         self._flush_retry_acks()

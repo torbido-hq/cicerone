@@ -216,7 +216,8 @@ def test_event_worker_stop_returns_false_when_join_times_out(tmp_path, feature_c
         assert closed["n"] == 0
     finally:
         worker._source_guard.release()
-    worker._stop.set()
+    assert worker.stop(join_timeout_seconds=0.01) is False
+    assert closed["n"] == 1
 
 
 def test_event_worker_stop_closes_on_join_timeout_when_idle(tmp_path, feature_config, caplog):
@@ -292,7 +293,8 @@ def test_event_worker_stop_skips_close_during_apply_ack(tmp_path, feature_config
     finally:
         worker._tick_guard.release()
         worker._source_guard.release()
-    worker._stop.set()
+    assert worker.stop(join_timeout_seconds=0.01) is False
+    assert closed["n"] == 1
 
 
 def test_event_worker_stop_skips_close_during_poll(tmp_path, feature_config: FeatureConfig):
@@ -384,6 +386,7 @@ def test_event_worker_stop_skips_close_during_never_started_tick(tmp_path, featu
     finally:
         poll_release.set()
         ticker.join(timeout=2)
+    assert "close" in order
 
 
 def test_event_worker_stop_does_not_close_before_in_flight_ack(tmp_path, feature_config: FeatureConfig):
