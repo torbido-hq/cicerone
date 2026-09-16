@@ -14,6 +14,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Local dataset writers take `msvcrt.locking` when `fcntl` is missing.
 - `POST /track` acquires the writer lock off the serve event loop.
 
+### Security
+
+- Redis Streams heartbeat XCLAIM failure fails closed so apply nacks before
+  writing.
+
 ## [0.8.2] - 2026-09-15
 
 ### Changed
