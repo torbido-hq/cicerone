@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import inspect
 import json
 import logging
 import sys
-from collections.abc import Callable, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable
 from contextlib import nullcontext
 from datetime import UTC, datetime
 from typing import Any, NamedTuple
@@ -17,22 +15,10 @@ import pandas as pd
 from cicerone.artifact import ARTIFACT_SCHEMA_VERSION, build_artifact, dumps_artifact
 from cicerone.automl import evaluate_candidates, select_best_candidate
 from cicerone.blending import COLD_START_USER_ID
-from cicerone.config import IOSettings, Settings, load_settings
-from cicerone.config.constants import (
-    ALLOCATION_THOMPSON,
-    DEFAULT_LOG_FORMAT,
-    TRACK_KIND_IMPRESSION,
-)
+from cicerone.config import Settings, load_settings
+from cicerone.config.constants import ALLOCATION_THOMPSON, DEFAULT_LOG_FORMAT
 from cicerone.dataset import build_dataset
-from cicerone.evaluation import (
-    conversion_event_types,
-    conversion_events_for_settings,
-    evaluate_served,
-    evaluate_tracking,
-    generated_ats_from_track,
-    replay_ks,
-)
-from cicerone.evaluation.context import concat_history, stamp_recommendations
+from cicerone.evaluation import conversion_events_for_settings, evaluate_tracking
 from cicerone.events.store import load_items_catalog_size, load_recommendations_frame
 from cicerone.experiment import (
     ResolvedRecipe,
@@ -41,7 +27,6 @@ from cicerone.experiment import (
     resolve_recipes,
     union_models,
 )
-from cicerone.experiment.assignment import resolve_assignment
 from cicerone.experiment.guardrails import evaluate_guardrails
 from cicerone.experiment.store import ExperimentStore, merge_experiment_state
 from cicerone.experiment.thompson import (
@@ -51,24 +36,29 @@ from cicerone.experiment.thompson import (
     window_trials_from_slices,
 )
 from cicerone.feature_config import load_feature_config
-from cicerone.io.base import InputSource
 from cicerone.io.factory import build_input_source, build_manifest_reader, build_output_sink
-from cicerone.io.recommendation_schema import (
-    USER_COLUMN,
-    VARIANT_COLUMN,
-    filter_variant_rows,
-    pick_fallback_variant,
+from cicerone.io.recommendation_schema import USER_COLUMN, VARIANT_COLUMN, filter_variant_rows
+from cicerone.job_eval import persist_track_outputs as _persist_track_outputs
+from cicerone.job_eval import read_input as _read_input
+from cicerone.job_eval import replay_assignments as _replay_assignments  # noqa: F401
+from cicerone.job_eval import score_previous_run as _score_previous_run
+from cicerone.job_eval import try_load as _try_load
+from cicerone.job_eval import try_load_pair as _try_load_pair
+from cicerone.job_output import (
+    ensure_fence,
+    ensure_publication_fence,
+    skip_stale_job_manifest,
+    truncate_job_error,
+    write_job_manifest,
 )
 from cicerone.locks import (
     LockBackend,
-    LockLostError,
     WriterLockBusyError,
     acquire_blocking,
     build_dataset_writer_lock,
     build_lock_backend,
     build_output_writer_lock,
     has_distributed_lock,
-    held_writer_lock,
 )
 from cicerone.model import (
     DEFAULT_MODELS,
@@ -82,106 +72,13 @@ from cicerone.model import (
 from cicerone.model.recommend import RecommendCache
 from cicerone.publish import build_publisher
 from cicerone.track.store import TrackStore
-from cicerone.track.store_common import _utc_stamp
 
 logger = logging.getLogger(__name__)
-
-_MAX_ERROR_LENGTH = 500
-
-
-def _truncate_job_error(exc: BaseException) -> str:
-    error_message = str(exc)
-    if len(error_message) > _MAX_ERROR_LENGTH:
-        return error_message[:_MAX_ERROR_LENGTH] + "... (truncated)"
-    return error_message
-
-
-def _skip_stale_job_manifest(
-    *,
-    fence_check: Callable[[], bool] | None = None,
-    exc: BaseException | None = None,
-) -> bool:
-    if isinstance(exc, LockLostError):
-        logger.error("Skipping job manifest: %s", exc)
-        return True
-    if fence_check is not None and not fence_check():
-        logger.error("Skipping job manifest: retrain lock lost before write")
-        return True
-    return False
-
-
-def _ensure_publication_fence(sink: Any, fence_check: Callable[[], bool] | None) -> None:
-    _ensure_fence(fence_check)
-    ensure = getattr(sink, "ensure_writer_held", None)
-    if callable(ensure):
-        ensure()
-
-
-def _write_manifest_accepts_skip(write: Any) -> bool:
-    try:
-        return "skip_if_newer_than" in inspect.signature(write).parameters
-    except (TypeError, ValueError):
-        return False
-
-
-def _write_job_manifest(
-    sink: Any, manifest: dict[str, Any], *, skip_if_newer_than: str | None = None
-) -> bool:
-    write = sink.write_manifest
-    if _write_manifest_accepts_skip(write):
-        result = write(manifest, skip_if_newer_than=skip_if_newer_than)
-        return result is not False
-    write(manifest)
-    return True
 
 
 class ThompsonSelection(NamedTuple):
     recipes: tuple[ResolvedRecipe, ...]
     state: dict[str, Any] | None = None
-
-
-def _replay_assignments(
-    settings: Settings,
-    recs: pd.DataFrame,
-    track_rows: Sequence[Mapping[str, Any]],
-) -> dict[str, str] | None:
-    if recs.empty or VARIANT_COLUMN not in recs.columns:
-        return None
-    names = {str(value) for value in recs[VARIANT_COLUMN].dropna().astype(str) if str(value)}
-    if len(names) <= 1:
-        return None
-    assigned: dict[str, str] = {}
-    timed: list[tuple[tuple[int, str], str, str]] = []
-    for row in track_rows:
-        if str(row.get("kind") or "") != TRACK_KIND_IMPRESSION:
-            continue
-        user_id = str(row.get("user_id") or "")
-        variant = str(row.get("variant") or "")
-        if not user_id or variant not in names:
-            continue
-        stamp = _utc_stamp(row.get("occurred_at"))
-        if stamp is None:
-            continue
-        timed.append(((int(stamp.value), str(row.get("event_id") or "")), user_id, variant))
-    for _key, user_id, variant in sorted(timed, key=lambda item: item[0]):
-        assigned.setdefault(user_id, variant)
-    if settings.experiment.enabled:
-        promoted, pair = ExperimentStore(settings.output).assignment_overlay(settings.experiment.id)
-        for raw_user in recs[USER_COLUMN].astype(str).unique():
-            user_id = str(raw_user)
-            if user_id in assigned or user_id == COLD_START_USER_ID:
-                continue
-            _experiment_id, assigned_variant = resolve_assignment(
-                settings, user_id, promoted_variant=promoted, active_pair=pair
-            )
-            if assigned_variant:
-                assigned[user_id] = assigned_variant
-    else:
-        pick = pick_fallback_variant(list(names))
-        if pick:
-            for user_id in recs[USER_COLUMN].astype(str).unique():
-                assigned.setdefault(str(user_id), pick)
-    return assigned or None
 
 
 def _target_user_ids(events: pd.DataFrame, users: pd.DataFrame | None) -> list[str]:
@@ -220,32 +117,6 @@ _MANIFEST_DEFAULTS: dict[str, Any] = {
 }
 
 
-def _try_load(label: str, fn: Callable[[], Any], default: Any) -> Any:
-    try:
-        return fn()
-    except Exception:
-        logger.exception("Failed to %s", label)
-        return default
-
-
-def _try_load_pair(
-    left_label: str,
-    left: Callable[[], Any],
-    left_default: Any,
-    right_label: str,
-    right: Callable[[], Any],
-    right_default: Any,
-    *,
-    parallel: bool,
-) -> tuple[Any, Any]:
-    if not parallel:
-        return _try_load(left_label, left, left_default), _try_load(right_label, right, right_default)
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        left_f = pool.submit(_try_load, left_label, left, left_default)
-        right_f = pool.submit(_try_load, right_label, right, right_default)
-        return left_f.result(), right_f.result()
-
-
 def _refresh_pending_thompson(store: ExperimentStore, pending: dict[str, Any]) -> dict[str, Any]:
     latest = store.read_state()
     if not latest or str(latest.get("experiment_id") or "") != str(pending.get("experiment_id") or ""):
@@ -256,183 +127,6 @@ def _refresh_pending_thompson(store: ExperimentStore, pending: dict[str, Any]) -
         promoted_variant=(str(latest["promoted_variant"]) if latest.get("promoted_variant") else None),
         promoted_at=(str(latest["promoted_at"]) if latest.get("promoted_at") else None),
     )
-
-
-def _persist_track_outputs(
-    store: TrackStore,
-    *,
-    kind: str,
-    eval_report: Mapping[str, Any],
-    recommendations: pd.DataFrame | None,
-    generated_at: str,
-    fence_check: Callable[[], bool] | None = None,
-) -> None:
-    tasks: list[tuple[str, Callable[[], Any]]] = [
-        ("write track eval", lambda: store.write_eval(eval_report)),
-    ]
-    if recommendations is not None:
-        tasks.append(
-            (
-                "append recommendation history",
-                lambda: store.append_history(recommendations, generated_at=generated_at),
-            )
-        )
-    lock = getattr(store, "_writer_lock", None)
-
-    def _run_serial() -> None:
-        for label, fn in tasks:
-            _try_load(label, fn, None)
-
-    if lock is not None:
-        try:
-            with held_writer_lock(
-                lock,
-                fence_check=fence_check,
-                fence_lost="retrain lock lost before write",
-                fence_kind="retrain",
-            ):
-                _run_serial()
-        except (WriterLockBusyError, LockLostError):
-            logger.exception("Failed to persist track outputs")
-        return
-    if kind == "db":
-        _run_serial()
-        return
-    with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
-        for label, fn in tasks:
-            pool.submit(_try_load, label, fn, None)
-
-
-def _score_previous_run(
-    settings: Settings,
-    events: pd.DataFrame,
-    last_manifest: dict[str, Any] | None,
-    items: pd.DataFrame | None = None,
-) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    if not settings.track.enabled and not settings.eval.enabled:
-        return None, None
-    previous_generated_at = None
-    if last_manifest:
-        previous_generated_at = last_manifest.get("generated_at")
-        previous_generated_at = str(previous_generated_at) if previous_generated_at else None
-    store = TrackStore(settings.output)
-
-    def _load_recs() -> pd.DataFrame | None:
-        recs = load_recommendations_frame(settings.output)
-        if recs is not None and recs.empty:
-            return None
-        return recs
-
-    def _load_track() -> list[dict[str, Any]]:
-        if not settings.track.enabled:
-            return []
-        return store.read_rows()
-
-    previous_recs, track_rows = _try_load_pair(
-        "load previous recommendations for eval",
-        _load_recs,
-        None,
-        "read track rows",
-        _load_track,
-        [],
-        parallel=settings.output.kind != "db",
-    )
-    wanted = generated_ats_from_track(track_rows, previous_generated_at)
-    history = None
-    if wanted:
-        try:
-            history = store.read_history(generated_ats=wanted)
-            if history is not None and history.empty:
-                history = None
-        except Exception:
-            logger.exception("Failed to read recommendation history")
-            history = None
-    recs_for_track = concat_history(history, stamp_recommendations(previous_recs, previous_generated_at))
-    assigned: dict[str, str] | None = None
-    replay_failed = False
-    if settings.eval.enabled and previous_recs is not None and previous_generated_at:
-        try:
-            assigned = _replay_assignments(settings, previous_recs, track_rows)
-        except Exception:
-            logger.exception("Failed to compute served eval")
-            replay_failed = True
-
-    def _compute_track() -> dict[str, Any] | None:
-        if not settings.track.enabled:
-            return None
-        try:
-            conversions = conversion_events_for_settings(events, settings)
-            return evaluate_tracking(
-                track_rows=track_rows,
-                conversions=conversions,
-                recommendations=recs_for_track,
-                window_hours=settings.track.attribution_window_hours,
-            ).as_dict()
-        except Exception:
-            logger.exception("Failed to compute track eval")
-            return None
-
-    def _compute_served() -> dict[str, Any] | None:
-        if replay_failed or not settings.eval.enabled or previous_recs is None or not previous_generated_at:
-            return None
-        try:
-            types = settings.eval.event_types or conversion_event_types(
-                settings.track.conversion_event_types,
-                primary_metric=settings.experiment.primary_metric,
-            )
-            report = evaluate_served(
-                previous_recs,
-                events,
-                generated_at=previous_generated_at,
-                ks=replay_ks(settings.eval.ks, top_k=settings.top_k),
-                event_types=types,
-                history=history,
-                catalog=items,
-                assigned=assigned,
-            )
-            return report.as_dict() if report is not None else None
-        except Exception:
-            logger.exception("Failed to compute served eval")
-            return None
-
-    run_both = bool(
-        settings.track.enabled
-        and settings.eval.enabled
-        and previous_recs is not None
-        and previous_generated_at
-    )
-    if run_both:
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            track_f = pool.submit(_compute_track)
-            served_f = pool.submit(_compute_served)
-            return track_f.result(), served_f.result()
-    return _compute_track(), _compute_served()
-
-
-def _read_input(
-    source: InputSource, output: IOSettings
-) -> tuple[pd.DataFrame, pd.DataFrame | None, pd.DataFrame | None, dict[str, Any] | None]:
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        events_future = executor.submit(source.read_events)
-        users_future = executor.submit(source.read_users)
-        items_future = executor.submit(source.read_items)
-        manifest_future = executor.submit(
-            _try_load,
-            "read last manifest",
-            lambda: build_manifest_reader(output).read_latest(),
-            None,
-        )
-        return (
-            events_future.result(),
-            users_future.result(),
-            items_future.result(),
-            manifest_future.result(),
-        )
-
-
-def _ensure_fence(fence_check: Callable[[], bool] | None) -> None:
-    if fence_check is not None and not fence_check():
-        raise LockLostError("retrain lock lost before write", kind="retrain")
 
 
 def _select_thompson_recipes(
@@ -796,25 +490,25 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
         # Artifact → snapshot → recommendations; success only after all writes.
         outputs_written = False
         recs_write = getattr(sink, "recommendations_write", None)
-        _ensure_fence(fence_check)
+        ensure_fence(fence_check)
         try:
             with recs_write() if callable(recs_write) else nullcontext():
                 try:
                     if artifact_bytes is not None:
-                        _ensure_publication_fence(sink, fence_check)
+                        ensure_publication_fence(sink, fence_check)
                         sink.write_model_artifact(artifact_bytes)
                         manifest["artifact_written"] = True
                         manifest["artifact_schema_version"] = ARTIFACT_SCHEMA_VERSION
 
                     if items is not None and not items.empty:
-                        _ensure_publication_fence(sink, fence_check)
+                        ensure_publication_fence(sink, fence_check)
                         sink.write_items_snapshot(items)
 
-                    _ensure_publication_fence(sink, fence_check)
+                    ensure_publication_fence(sink, fence_check)
                     sink.write_recommendations(recommendations)
                     outputs_written = True
                     if pending_thompson is not None:
-                        _ensure_publication_fence(sink, fence_check)
+                        ensure_publication_fence(sink, fence_check)
                         store = ExperimentStore(
                             settings.output,
                             writer_lock=publication_lock,
@@ -824,9 +518,9 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                         )
                         store.write_state(_refresh_pending_thompson(store, pending_thompson))
                     if publisher is not None:
-                        _ensure_publication_fence(sink, fence_check)
+                        ensure_publication_fence(sink, fence_check)
                         publisher.publish(recommendations)
-                    _ensure_publication_fence(sink, fence_check)
+                    ensure_publication_fence(sink, fence_check)
                     manifest.update(
                         {
                             "status": "success",
@@ -850,8 +544,8 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                         }
                     )
                     manifest["generated_at"] = datetime.now(UTC).isoformat()
-                    _ensure_publication_fence(sink, fence_check)
-                    if _write_job_manifest(sink, manifest):
+                    ensure_publication_fence(sink, fence_check)
+                    if write_job_manifest(sink, manifest):
                         manifest_written = True
                 except Exception as exc:
                     if outputs_written or manifest.get("artifact_written"):
@@ -859,15 +553,15 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                     if (
                         not manifest_written
                         and manifest.get("status") != "success"
-                        and not _skip_stale_job_manifest(
+                        and not skip_stale_job_manifest(
                             fence_check=fence_check,
                             exc=exc,
                         )
                     ):
-                        manifest["error"] = _truncate_job_error(exc)
+                        manifest["error"] = truncate_job_error(exc)
                         manifest["generated_at"] = datetime.now(UTC).isoformat()
                         try:
-                            if _write_job_manifest(sink, manifest, skip_if_newer_than=started_at):
+                            if write_job_manifest(sink, manifest, skip_if_newer_than=started_at):
                                 manifest_written = True
                         except Exception:
                             logger.exception(
@@ -879,7 +573,7 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                 manifest["partial_outputs"] = True
             raise
     except Exception as exc:
-        manifest["error"] = _truncate_job_error(exc)
+        manifest["error"] = truncate_job_error(exc)
         raise
     finally:
         if publisher is not None:
@@ -887,7 +581,7 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                 publisher.close()
             except Exception:
                 logger.exception("Failed to close recommendation publisher")
-        if not manifest_written and not _skip_stale_job_manifest(
+        if not manifest_written and not skip_stale_job_manifest(
             fence_check=fence_check,
             exc=sys.exc_info()[1],
         ):
@@ -896,9 +590,9 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                 holder = getattr(sink, "recommendations_write", None)
                 if callable(holder):
                     with holder():
-                        _write_job_manifest(sink, manifest, skip_if_newer_than=started_at)
+                        write_job_manifest(sink, manifest, skip_if_newer_than=started_at)
                 else:
-                    _write_job_manifest(sink, manifest, skip_if_newer_than=started_at)
+                    write_job_manifest(sink, manifest, skip_if_newer_than=started_at)
             except Exception:
                 logger.exception("Failed to write manifest; original job error (if any) is preserved")
                 if manifest.get("status") == "success":

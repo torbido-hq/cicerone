@@ -256,7 +256,7 @@ def test_score_previous_run_reads_history_when_track_disabled(tmp_path, monkeypa
     history["generated_at"] = "2026-08-28T03:00:00+00:00"
     calls: list[set[str] | None] = []
 
-    monkeypatch.setattr("cicerone.job.load_recommendations_frame", lambda _output: recs)
+    monkeypatch.setattr("cicerone.job_eval.load_recommendations_frame", lambda _output: recs)
 
     def _read_history(self, *, generated_ats=None, since=None):
         calls.append(generated_ats)
@@ -421,7 +421,7 @@ def test_read_input_swallows_manifest_reader_construction(monkeypatch):
             return None
 
     monkeypatch.setattr(
-        "cicerone.job.build_manifest_reader",
+        "cicerone.job_eval.build_manifest_reader",
         lambda _output: (_ for _ in ()).throw(RuntimeError("bad url")),
     )
     events, users, items, manifest = job._read_input(
@@ -440,7 +440,7 @@ def test_persist_track_outputs_lock_errors_are_best_effort(monkeypatch):
     def _busy(*_args, **_kwargs):
         raise WriterLockBusyError("dataset writer lock busy")
 
-    monkeypatch.setattr("cicerone.job.held_writer_lock", _busy)
+    monkeypatch.setattr("cicerone.job_eval.held_writer_lock", _busy)
     job._persist_track_outputs(
         TrackStore(
             IOSettings(kind="dataset", options={"storage_backend": "local", "path": "/tmp/out"}),
@@ -990,7 +990,7 @@ def test_write_job_manifest_accepts_legacy_signature():
         def write_manifest(self, manifest):
             written["manifest"] = manifest
 
-    assert job._write_job_manifest(_LegacySink(), {"status": "failed"}, skip_if_newer_than="x") is True
+    assert job.write_job_manifest(_LegacySink(), {"status": "failed"}, skip_if_newer_than="x") is True
     assert written["manifest"] == {"status": "failed"}
 
 
@@ -1064,7 +1064,7 @@ def test_write_job_manifest_reraises_implementation_type_error():
             raise TypeError("bad payload")
 
     with pytest.raises(TypeError, match="bad payload"):
-        job._write_job_manifest(_Sink(), {"status": "failed"}, skip_if_newer_than="x")
+        job.write_job_manifest(_Sink(), {"status": "failed"}, skip_if_newer_than="x")
 
 
 def test_job_holds_writer_lock_for_artifact_and_items(tmp_path, monkeypatch):
