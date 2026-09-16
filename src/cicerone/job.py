@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 import json
 import logging
 import sys
@@ -59,6 +58,13 @@ from cicerone.io.recommendation_schema import (
     filter_variant_rows,
     pick_fallback_variant,
 )
+from cicerone.job_output import (
+    ensure_fence,
+    ensure_publication_fence,
+    skip_stale_job_manifest,
+    truncate_job_error,
+    write_job_manifest,
+)
 from cicerone.locks import (
     LockBackend,
     LockLostError,
@@ -85,54 +91,6 @@ from cicerone.track.store import TrackStore
 from cicerone.track.store_common import _utc_stamp
 
 logger = logging.getLogger(__name__)
-
-_MAX_ERROR_LENGTH = 500
-
-
-def _truncate_job_error(exc: BaseException) -> str:
-    error_message = str(exc)
-    if len(error_message) > _MAX_ERROR_LENGTH:
-        return error_message[:_MAX_ERROR_LENGTH] + "... (truncated)"
-    return error_message
-
-
-def _skip_stale_job_manifest(
-    *,
-    fence_check: Callable[[], bool] | None = None,
-    exc: BaseException | None = None,
-) -> bool:
-    if isinstance(exc, LockLostError):
-        logger.error("Skipping job manifest: %s", exc)
-        return True
-    if fence_check is not None and not fence_check():
-        logger.error("Skipping job manifest: retrain lock lost before write")
-        return True
-    return False
-
-
-def _ensure_publication_fence(sink: Any, fence_check: Callable[[], bool] | None) -> None:
-    _ensure_fence(fence_check)
-    ensure = getattr(sink, "ensure_writer_held", None)
-    if callable(ensure):
-        ensure()
-
-
-def _write_manifest_accepts_skip(write: Any) -> bool:
-    try:
-        return "skip_if_newer_than" in inspect.signature(write).parameters
-    except (TypeError, ValueError):
-        return False
-
-
-def _write_job_manifest(
-    sink: Any, manifest: dict[str, Any], *, skip_if_newer_than: str | None = None
-) -> bool:
-    write = sink.write_manifest
-    if _write_manifest_accepts_skip(write):
-        result = write(manifest, skip_if_newer_than=skip_if_newer_than)
-        return result is not False
-    write(manifest)
-    return True
 
 
 class ThompsonSelection(NamedTuple):
@@ -428,11 +386,6 @@ def _read_input(
             items_future.result(),
             manifest_future.result(),
         )
-
-
-def _ensure_fence(fence_check: Callable[[], bool] | None) -> None:
-    if fence_check is not None and not fence_check():
-        raise LockLostError("retrain lock lost before write", kind="retrain")
 
 
 def _select_thompson_recipes(
@@ -796,25 +749,25 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
         # Artifact → snapshot → recommendations; success only after all writes.
         outputs_written = False
         recs_write = getattr(sink, "recommendations_write", None)
-        _ensure_fence(fence_check)
+        ensure_fence(fence_check)
         try:
             with recs_write() if callable(recs_write) else nullcontext():
                 try:
                     if artifact_bytes is not None:
-                        _ensure_publication_fence(sink, fence_check)
+                        ensure_publication_fence(sink, fence_check)
                         sink.write_model_artifact(artifact_bytes)
                         manifest["artifact_written"] = True
                         manifest["artifact_schema_version"] = ARTIFACT_SCHEMA_VERSION
 
                     if items is not None and not items.empty:
-                        _ensure_publication_fence(sink, fence_check)
+                        ensure_publication_fence(sink, fence_check)
                         sink.write_items_snapshot(items)
 
-                    _ensure_publication_fence(sink, fence_check)
+                    ensure_publication_fence(sink, fence_check)
                     sink.write_recommendations(recommendations)
                     outputs_written = True
                     if pending_thompson is not None:
-                        _ensure_publication_fence(sink, fence_check)
+                        ensure_publication_fence(sink, fence_check)
                         store = ExperimentStore(
                             settings.output,
                             writer_lock=publication_lock,
@@ -824,9 +777,9 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                         )
                         store.write_state(_refresh_pending_thompson(store, pending_thompson))
                     if publisher is not None:
-                        _ensure_publication_fence(sink, fence_check)
+                        ensure_publication_fence(sink, fence_check)
                         publisher.publish(recommendations)
-                    _ensure_publication_fence(sink, fence_check)
+                    ensure_publication_fence(sink, fence_check)
                     manifest.update(
                         {
                             "status": "success",
@@ -850,8 +803,8 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                         }
                     )
                     manifest["generated_at"] = datetime.now(UTC).isoformat()
-                    _ensure_publication_fence(sink, fence_check)
-                    if _write_job_manifest(sink, manifest):
+                    ensure_publication_fence(sink, fence_check)
+                    if write_job_manifest(sink, manifest):
                         manifest_written = True
                 except Exception as exc:
                     if outputs_written or manifest.get("artifact_written"):
@@ -859,15 +812,15 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                     if (
                         not manifest_written
                         and manifest.get("status") != "success"
-                        and not _skip_stale_job_manifest(
+                        and not skip_stale_job_manifest(
                             fence_check=fence_check,
                             exc=exc,
                         )
                     ):
-                        manifest["error"] = _truncate_job_error(exc)
+                        manifest["error"] = truncate_job_error(exc)
                         manifest["generated_at"] = datetime.now(UTC).isoformat()
                         try:
-                            if _write_job_manifest(sink, manifest, skip_if_newer_than=started_at):
+                            if write_job_manifest(sink, manifest, skip_if_newer_than=started_at):
                                 manifest_written = True
                         except Exception:
                             logger.exception(
@@ -879,7 +832,7 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                 manifest["partial_outputs"] = True
             raise
     except Exception as exc:
-        manifest["error"] = _truncate_job_error(exc)
+        manifest["error"] = truncate_job_error(exc)
         raise
     finally:
         if publisher is not None:
@@ -887,7 +840,7 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                 publisher.close()
             except Exception:
                 logger.exception("Failed to close recommendation publisher")
-        if not manifest_written and not _skip_stale_job_manifest(
+        if not manifest_written and not skip_stale_job_manifest(
             fence_check=fence_check,
             exc=sys.exc_info()[1],
         ):
@@ -896,9 +849,9 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                 holder = getattr(sink, "recommendations_write", None)
                 if callable(holder):
                     with holder():
-                        _write_job_manifest(sink, manifest, skip_if_newer_than=started_at)
+                        write_job_manifest(sink, manifest, skip_if_newer_than=started_at)
                 else:
-                    _write_job_manifest(sink, manifest, skip_if_newer_than=started_at)
+                    write_job_manifest(sink, manifest, skip_if_newer_than=started_at)
             except Exception:
                 logger.exception("Failed to write manifest; original job error (if any) is preserved")
                 if manifest.get("status") == "success":
