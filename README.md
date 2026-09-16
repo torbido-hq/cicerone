@@ -747,6 +747,8 @@ code is structured. See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 - Credentials (S3/DB) should be scoped to the bare minimum (read on the
   input side, write on the output side, no delete/admin permissions).
+- `[events.online]` requires `[output].artifact_hmac_key` (16+ bytes). The
+  job signs `model.artifact`; the events worker verifies before unpickle.
 - No personal data other than `user_id` (an opaque identifier) is ever read
   or written.
 - The batch job itself accepts no inbound connections. The optional serve

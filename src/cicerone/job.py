@@ -484,7 +484,8 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                     models=artifact_models,
                     model_weights=artifact_weights,
                     rrf_k=rrf_k if rrf_k is not None else RRF_K,
-                )
+                ),
+                hmac_key=settings.output.artifact_hmac_key,
             )
 
         # Artifact → snapshot → recommendations; success only after all writes.
