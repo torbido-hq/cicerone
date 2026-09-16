@@ -31,6 +31,12 @@ def test_s3_read_closes_body(mocker) -> None:
     body.close.assert_called_once()
 
 
+def test_read_rejects_nonpositive_max_bytes(tmp_path) -> None:
+    options = {"storage_backend": "local", "path": str(tmp_path)}
+    with pytest.raises(ValueError, match="max_bytes"):
+        read_storage_bytes(options, "note.txt", max_bytes=0)
+
+
 def test_local_read_rejects_oversize(tmp_path) -> None:
     options = {"storage_backend": "local", "path": str(tmp_path)}
     write_storage_bytes(options, "big.bin", b"123456", "application/octet-stream")

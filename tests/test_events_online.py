@@ -376,9 +376,9 @@ def test_online_trainer_commit_does_not_clobber_during_serialize(
     artifact_path = tmp_path / "out" / ARTIFACT_FILENAME
     original = online_mod.dumps_artifact
 
-    def _swap_then_dump(artifact):  # type: ignore[no-untyped-def]
+    def _swap_then_dump(artifact, **kwargs):  # type: ignore[no-untyped-def]
         artifact_path.write_bytes(b"batch-replaced")
-        return original(artifact)
+        return original(artifact, **kwargs)
 
     monkeypatch.setattr(online_mod, "dumps_artifact", _swap_then_dump)
     trainer.commit()
