@@ -32,6 +32,7 @@ def _clean_tables():
             "items",
             "recommendations",
             "recommendation_items",
+            "item_scores",
             "recommendation_runs",
             "model_artifacts",
             "custom_events",
@@ -205,6 +206,21 @@ def test_database_output_writes_and_replaces_items_snapshot():
     engine = create_engine(TEST_DATABASE_URL)
     stored = pd.read_sql('SELECT * FROM "recommendation_items"', engine)
     assert list(stored["item_id"]) == ["i2"]
+
+
+def test_database_output_writes_and_replaces_item_scores():
+    sink = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})
+    sink.write_item_scores(
+        pd.DataFrame([{"item_id": "i1", "popular_score": 1.0, "latest_score": 0.0, "n_users": 1}])
+    )
+    sink.write_item_scores(
+        pd.DataFrame([{"item_id": "i2", "popular_score": 2.0, "latest_score": 1.0, "n_users": 3}])
+    )
+
+    engine = create_engine(TEST_DATABASE_URL)
+    stored = pd.read_sql('SELECT * FROM "item_scores"', engine)
+    assert list(stored["item_id"]) == ["i2"]
+    assert float(stored.iloc[0]["popular_score"]) == 2.0
 
 
 def test_database_output_writes_manifest_appends():

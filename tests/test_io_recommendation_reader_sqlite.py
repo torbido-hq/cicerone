@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
 
-from cicerone.io.db_store import DatabaseOutputSink
+from cicerone.io.db_store import DatabaseOutputSink, _manifest_column_sql_type
 from cicerone.io.recommendation_reader import DbRecommendationReader
 from cicerone.io.replace_users import RecommendationSchemaError
 from cicerone.locks import LockLostError
@@ -82,6 +82,248 @@ def test_sqlite_db_reader_get_recommendations_and_items(tmp_path):
     items = reader.get_items()
     assert items is not None
     assert list(items["item_id"]) == ["i1"]
+
+
+def test_sqlite_db_reader_item_scores_write_replace_and_missing(tmp_path):
+    url = _sqlite_url(tmp_path)
+    reader = DbRecommendationReader({"database_url": url})
+    assert reader.get_item_scores().empty
+
+    sink = DatabaseOutputSink({"database_url": url})
+    sink.write_recommendations(
+        pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"}])
+    )
+    sink.write_item_scores(
+        pd.DataFrame([{"item_id": "i1", "popular_score": 1.0, "latest_score": 0.0, "n_users": 1}])
+    )
+    sink.write_item_scores(
+        pd.DataFrame([{"item_id": "i2", "popular_score": 4.0, "latest_score": 2.0, "n_users": 5}])
+    )
+    reader.refresh()
+    scores, ids = reader.get_item_scores_snapshot()
+    assert list(ids) == ["i2"]
+    assert list(scores["item_id"]) == ["i2"]
+    assert list(reader.get_item_score_ids()) == ["i2"]
+    assert float(scores.iloc[0]["popular_score"]) == 4.0
+    assert int(scores.iloc[0]["n_users"]) == 5
+
+
+def test_sqlite_db_reader_item_scores_missing_columns(tmp_path):
+    url = _sqlite_url(tmp_path)
+    engine = create_engine(url)
+    pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9}]).to_sql(
+        "recommendations", engine, index=False, if_exists="replace"
+    )
+    pd.DataFrame([{"item_id": "i1", "popular_score": 1.0}]).to_sql(
+        "item_scores", engine, index=False, if_exists="replace"
+    )
+    reader = DbRecommendationReader({"database_url": url})
+    assert reader.get_item_scores().empty
+
+
+def test_sqlite_db_reader_item_scores_keeps_cache_on_bad_schema(tmp_path):
+    url = _sqlite_url(tmp_path)
+    sink = DatabaseOutputSink({"database_url": url})
+    sink.write_recommendations(
+        pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"}])
+    )
+    sink.write_item_scores(
+        pd.DataFrame([{"item_id": "i1", "popular_score": 2.5, "latest_score": 1.0, "n_users": 4}])
+    )
+    reader = DbRecommendationReader({"database_url": url})
+    assert list(reader.get_item_scores()["item_id"]) == ["i1"]
+
+    engine = create_engine(url)
+    pd.DataFrame([{"item_id": "i1", "popular_score": 1.0}]).to_sql(
+        "item_scores", engine, index=False, if_exists="replace"
+    )
+    reader.refresh()
+    kept = reader.get_item_scores()
+    assert list(kept["item_id"]) == ["i1"]
+    assert float(kept.iloc[0]["popular_score"]) == 2.5
+
+    engine = create_engine(url)
+    pd.DataFrame([{"item_id": "i1", "popular_score": "x", "latest_score": 0.0, "n_users": 1}]).to_sql(
+        "item_scores", engine, index=False, if_exists="replace"
+    )
+    reader.refresh()
+    assert float(reader.get_item_scores().iloc[0]["popular_score"]) == 2.5
+
+    pd.DataFrame([{"item_id": "i1", "popular_score": 1.0, "latest_score": 0.0, "n_users": -1}]).to_sql(
+        "item_scores", engine, index=False, if_exists="replace"
+    )
+    reader.refresh()
+    assert float(reader.get_item_scores().iloc[0]["popular_score"]) == 2.5
+
+    with engine.begin() as conn:
+        conn.execute(text('DROP TABLE IF EXISTS "item_scores"'))
+    reader.refresh()
+    assert float(reader.get_item_scores().iloc[0]["popular_score"]) == 2.5
+
+
+def test_manifest_column_sql_type_uses_series_dtype():
+    assert _manifest_column_sql_type(pd.Series([True, False])) == "BOOLEAN"
+    assert _manifest_column_sql_type(pd.Series([1, 4])) == "BIGINT"
+    assert _manifest_column_sql_type(pd.Series([1.5, 60.0])) == "FLOAT"
+    assert _manifest_column_sql_type(pd.Series(["success", "failed"])) == "TEXT"
+    assert _manifest_column_sql_type(pd.Series([None], dtype=object, name="n_item_scores")) == "BIGINT"
+    assert _manifest_column_sql_type(pd.Series([None], dtype=object, name="partial_outputs")) == "BOOLEAN"
+
+
+def test_sqlite_write_manifest_adds_missing_columns(tmp_path):
+    url = _sqlite_url(tmp_path)
+    engine = create_engine(url)
+    pd.DataFrame([{"n_events": 1, "status": "success"}]).to_sql(
+        "recommendation_runs", engine, index=False, if_exists="replace"
+    )
+    sink = DatabaseOutputSink({"database_url": url})
+    sink.write_manifest(
+        {
+            "n_events": 2,
+            "status": "success",
+            "n_item_scores": 4,
+            "partial_outputs": False,
+            "rrf_k": 60.0,
+        }
+    )
+    stored = pd.read_sql('SELECT * FROM "recommendation_runs"', engine)
+    assert list(stored["n_events"]) == [1, 2]
+    assert int(stored.iloc[1]["n_item_scores"]) == 4
+    with engine.connect() as conn:
+        types = {
+            str(row[1]): str(row[2]).upper()
+            for row in conn.execute(text("PRAGMA table_info(recommendation_runs)"))
+        }
+    assert "INT" in types["n_item_scores"]
+    assert types["partial_outputs"] in {"BOOLEAN", "BOOL"}
+    assert types["rrf_k"] in {"FLOAT", "REAL"}
+    sink.write_manifest({"n_events": 3, "status": "success", "n_item_scores": 5})
+    stored = pd.read_sql('SELECT * FROM "recommendation_runs"', engine)
+    assert list(stored["n_events"]) == [1, 2, 3]
+
+
+def test_sqlite_write_manifest_creates_integer_n_item_scores(tmp_path):
+    url = _sqlite_url(tmp_path)
+    sink = DatabaseOutputSink({"database_url": url})
+    sink.write_manifest({"n_events": 1, "status": "failed", "n_item_scores": None})
+    engine = create_engine(url)
+    with engine.connect() as conn:
+        types = {
+            str(row[1]): str(row[2]).upper()
+            for row in conn.execute(text("PRAGMA table_info(recommendation_runs)"))
+        }
+    assert "INT" in types["n_item_scores"]
+    sink.write_manifest({"n_events": 2, "status": "success", "n_item_scores": 4})
+    stored = pd.read_sql('SELECT * FROM "recommendation_runs"', engine)
+    assert int(stored.iloc[-1]["n_item_scores"]) == 4
+
+
+def test_sqlite_write_manifest_none_n_item_scores_stays_integer(tmp_path):
+    url = _sqlite_url(tmp_path)
+    engine = create_engine(url)
+    pd.DataFrame([{"n_events": 1, "status": "failed"}]).to_sql(
+        "recommendation_runs", engine, index=False, if_exists="replace"
+    )
+    sink = DatabaseOutputSink({"database_url": url})
+    sink.write_manifest({"n_events": 2, "status": "failed", "n_item_scores": None})
+    with engine.connect() as conn:
+        types = {
+            str(row[1]): str(row[2]).upper()
+            for row in conn.execute(text("PRAGMA table_info(recommendation_runs)"))
+        }
+    assert "INT" in types["n_item_scores"]
+    sink.write_manifest({"n_events": 3, "status": "success", "n_item_scores": 4})
+    stored = pd.read_sql('SELECT * FROM "recommendation_runs"', engine)
+    assert int(stored.iloc[-1]["n_item_scores"]) == 4
+
+
+def test_sqlite_write_manifest_alters_under_writer_lock(tmp_path, monkeypatch):
+    url = _sqlite_url(tmp_path)
+    engine = create_engine(url)
+    pd.DataFrame([{"n_events": 1, "status": "success"}]).to_sql(
+        "recommendation_runs", engine, index=False, if_exists="replace"
+    )
+    order: list[str] = []
+
+    class _Lock:
+        def acquire(self) -> bool:
+            order.append("acquire")
+            return True
+
+        def release(self) -> None:
+            order.append("release")
+
+        def owned(self) -> bool:
+            return True
+
+        def is_locked(self) -> bool:
+            return True
+
+    import cicerone.io.db_store as db_store
+
+    real = db_store._add_missing_manifest_columns
+
+    def _wrapped(*args, **kwargs):
+        order.append("alter")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(db_store, "_add_missing_manifest_columns", _wrapped)
+    sink = DatabaseOutputSink({"database_url": url}, writer_lock=_Lock())
+    sink.write_manifest({"n_events": 2, "status": "success", "n_item_scores": 1})
+    assert order.index("acquire") < order.index("alter") < order.index("release")
+
+
+def test_sqlite_write_item_scores_inspects_under_writer_lock(tmp_path, monkeypatch):
+    url = _sqlite_url(tmp_path)
+    engine = create_engine(url)
+    pd.DataFrame([{"item_id": "i0", "popular_score": 0.5}]).to_sql("item_scores", engine, index=False)
+    order: list[str] = []
+
+    class _Lock:
+        def acquire(self) -> bool:
+            order.append("acquire")
+            return True
+
+        def release(self) -> None:
+            order.append("release")
+
+        def owned(self) -> bool:
+            return True
+
+        def is_locked(self) -> bool:
+            return True
+
+    import cicerone.io.db_store as db_store
+
+    real = db_store._missing_item_scores_columns
+
+    def _wrapped(*args, **kwargs):
+        order.append("inspect")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(db_store, "_missing_item_scores_columns", _wrapped)
+    sink = DatabaseOutputSink({"database_url": url}, writer_lock=_Lock())
+    sink.write_item_scores(
+        pd.DataFrame([{"item_id": "i1", "popular_score": 2.0, "latest_score": 1.0, "n_users": 3}])
+    )
+    assert order.index("acquire") < order.index("inspect") < order.index("release")
+
+
+def test_sqlite_write_item_scores_replaces_legacy_table(tmp_path):
+    url = _sqlite_url(tmp_path)
+    engine = create_engine(url)
+    pd.DataFrame([{"item_id": "i0", "popular_score": 0.5}]).to_sql("item_scores", engine, index=False)
+
+    sink = DatabaseOutputSink({"database_url": url})
+    sink.write_item_scores(
+        pd.DataFrame([{"item_id": "i1", "popular_score": 2.0, "latest_score": 1.0, "n_users": 3}])
+    )
+
+    stored = pd.read_sql('SELECT * FROM "item_scores"', engine)
+    assert list(stored.columns) == ["item_id", "popular_score", "latest_score", "n_users"]
+    assert stored.to_dict(orient="records") == [
+        {"item_id": "i1", "popular_score": 2.0, "latest_score": 1.0, "n_users": 3}
+    ]
 
 
 def test_sqlite_clear_table_for_replace_falls_back_to_delete(tmp_path):

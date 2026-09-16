@@ -57,6 +57,12 @@ class OutputSink(Protocol):
         ...
 
 
+class ItemScoresWriter(Protocol):
+    def write_item_scores(self, df: pd.DataFrame) -> None:
+        """Persist catalog-wide popular/latest scores for search indexers."""
+        ...
+
+
 class RecommendationReader(Protocol):
     def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame: ...
 
@@ -70,6 +76,10 @@ class RecommendationReader(Protocol):
 
     def items_version(self) -> int:
         """Monotonic token bumped when the items snapshot changes."""
+        ...
+
+    def get_item_scores(self) -> pd.DataFrame:
+        """Catalog ``item_scores`` rows, or empty when none written."""
         ...
 
     def get_cold_start_fallback(self, k: int, *, variant: str | None = None) -> pd.DataFrame:
@@ -102,6 +112,9 @@ class BaseRecommendationReader(ABC):
 
     def items_version(self) -> int:
         return 0
+
+    def get_item_scores(self) -> pd.DataFrame:
+        return pd.DataFrame()
 
     def get_cold_start_fallback(self, k: int, *, variant: str | None = None) -> pd.DataFrame:
         del k, variant

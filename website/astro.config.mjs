@@ -123,6 +123,7 @@ export default defineConfig({
 						{ label: 'Incremental events', slug: 'incremental-events' },
 						{ label: 'Experiments', slug: 'experiments' },
 						{ label: 'Evaluation', slug: 'evaluation' },
+						{ label: 'Search weights', slug: 'search-weights' },
 					],
 				},
 				...(articlesNav ? [articlesNav] : []),

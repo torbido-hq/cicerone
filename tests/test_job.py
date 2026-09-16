@@ -96,6 +96,41 @@ def test_job_run_end_to_end_with_local_dataset_backend(tmp_path, monkeypatch):
     assert manifest["artifact_written"] is False
     assert manifest["artifact_schema_version"] is None
     assert not (output_dir / "model.artifact").exists()
+    scores = pd.read_parquet(output_dir / "item_scores.parquet")
+    assert set(scores["item_id"]) == {"i1", "i2", "i3"}
+    assert manifest["n_item_scores"] == 3
+
+
+def test_job_uses_one_weighting_timestamp(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.now(tz="UTC")
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    pd.DataFrame(
+        [{"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True}]
+    ).to_parquet(input_dir / "items.parquet", index=False)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=1))
+    seen: dict[str, object] = {}
+    real_dataset = job.build_dataset
+    real_scores = job.build_item_scores
+
+    def _dataset(*args, **kwargs):
+        seen["dataset"] = kwargs.get("now")
+        return real_dataset(*args, **kwargs)
+
+    def _scores(*args, **kwargs):
+        seen["scores"] = kwargs.get("now")
+        return real_scores(*args, **kwargs)
+
+    monkeypatch.setattr("cicerone.job.build_dataset", _dataset)
+    monkeypatch.setattr("cicerone.job.build_item_scores", _scores)
+    job.run()
+    assert seen["dataset"] is not None
+    assert seen["scores"] == seen["dataset"]
 
 
 def test_target_user_ids_skip_missing_values():
@@ -1100,12 +1135,67 @@ def test_job_holds_writer_lock_for_artifact_and_items(tmp_path, monkeypatch):
         depths.append(("items", self._recs_write_depth()))
         return original_items(self, df)
 
+    original_scores = job.build_item_scores
+    original_build = job.build_output_sink
+    sinks: list = []
+
+    def capture_sink(*args, **kwargs):
+        sink = original_build(*args, **kwargs)
+        sinks.append(sink)
+        return sink
+
+    def capture_scores(*args, **kwargs):
+        depths.append(("scores", sinks[-1]._recs_write_depth()))
+        return original_scores(*args, **kwargs)
+
     monkeypatch.setattr(DatasetOutputSink, "write_model_artifact", capture_artifact)
     monkeypatch.setattr(DatasetOutputSink, "write_items_snapshot", capture_items)
+    monkeypatch.setattr("cicerone.job.build_output_sink", capture_sink)
+    monkeypatch.setattr("cicerone.job.build_item_scores", capture_scores)
 
     job.run()
 
-    assert depths == [("artifact", 1), ("items", 1)]
+    assert depths[0] == ("scores", 0)
+    assert ("artifact", 1) in depths
+    assert ("items", 1) in depths
+
+
+def test_job_skips_item_scores_when_sink_lacks_writer(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.now(tz="UTC")
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    pd.DataFrame(
+        [{"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True}]
+    ).to_parquet(input_dir / "items.parquet", index=False)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=1))
+    real = job.build_output_sink
+
+    def _legacy(*args, **kwargs):
+        sink = real(*args, **kwargs)
+        sink.write_item_scores = None
+        return sink
+
+    monkeypatch.setattr("cicerone.job.build_output_sink", _legacy)
+    built = {"n": 0}
+    original_scores = job.build_item_scores
+
+    def _count(*args, **kwargs):
+        built["n"] += 1
+        return original_scores(*args, **kwargs)
+
+    monkeypatch.setattr("cicerone.job.build_item_scores", _count)
+    job.run()
+    assert built["n"] == 0
+    assert not (output_dir / "item_scores.parquet").exists()
+    assert (output_dir / "recommendations.parquet").exists()
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    assert manifest["status"] == "success"
+    assert manifest["n_item_scores"] is None
 
 
 def test_job_skips_failure_manifest_when_incremental_is_newer(tmp_path, monkeypatch):
@@ -1146,6 +1236,74 @@ def test_job_skips_failure_manifest_when_incremental_is_newer(tmp_path, monkeypa
         job.run()
 
     assert json.loads((output_dir / "manifest.json").read_text()) == incremental
+
+
+def test_job_keeps_prior_recommendations_when_item_scores_write_fails(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+
+    now = pd.Timestamp.now(tz="UTC")
+    events = pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    )
+    items = pd.DataFrame(
+        [{"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True}]
+    )
+    events.to_parquet(input_dir / "events.parquet", index=False)
+    items.to_parquet(input_dir / "items.parquet", index=False)
+
+    config_path = _write_config(tmp_path, input_dir, output_dir)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
+    job.run()
+    first = pd.read_parquet(output_dir / "recommendations.parquet")
+
+    from cicerone.io.dataset_store import DatasetOutputSink
+
+    def boom(self, df):
+        raise RuntimeError("scores unavailable")
+
+    monkeypatch.setattr(DatasetOutputSink, "write_item_scores", boom)
+    with pytest.raises(RuntimeError, match="scores unavailable"):
+        job.run()
+
+    kept = pd.read_parquet(output_dir / "recommendations.parquet")
+    pd.testing.assert_frame_equal(first, kept)
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    assert manifest["status"] == "failed"
+    assert manifest["partial_outputs"] is True
+
+
+def test_job_recs_fail_without_published_outputs_is_not_partial(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.now(tz="UTC")
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=1))
+    real = job.build_output_sink
+
+    def _legacy(*args, **kwargs):
+        sink = real(*args, **kwargs)
+        sink.write_item_scores = None
+        return sink
+
+    from cicerone.io.dataset_store import DatasetOutputSink
+
+    def boom(self, df):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr("cicerone.job.build_output_sink", _legacy)
+    monkeypatch.setattr(DatasetOutputSink, "write_recommendations", boom)
+    with pytest.raises(RuntimeError, match="disk full"):
+        job.run()
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    assert manifest["status"] == "failed"
+    assert manifest["partial_outputs"] is False
 
 
 def test_job_preserves_success_when_manifest_write_fails(tmp_path, monkeypatch):

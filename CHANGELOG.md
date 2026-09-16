@@ -4,6 +4,38 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.0] - 2026-09-11
+
+### Added
+
+- Job writes catalog `item_scores` (`popular_score`, `latest_score`, `n_users`) next to recommendations. Dataset: `item_scores.parquet`. DB: `item_scores` table (`item_scores_table` option). First 0.9.0 job creates the table.
+- Serve `GET /item-scores` (bearer, cursor pagination, optional `item_id`) for search-index pull. See [docs/search-weights.md](docs/search-weights.md).
+
+### Fixed
+
+- Serve keeps the last `item_scores` catalog when a refresh cannot read scores (I/O error, missing file or table after a load, or invalid values). Before the first successful load, missing data still serves empty.
+- Serve rejects `item_scores` catalogs with blank or duplicate `item_id`s or non-integral `n_users` and keeps the last valid cache.
+- `GET /item-scores` treats an empty-string `cursor` as a seek point instead of restarting the first page.
+- Job replaces a legacy `item_scores` table that is missing score columns instead of appending into the old schema.
+- Job writes `item_scores` before recommendations so a score-write failure does not leave a new recs file without scores.
+- DB manifest append adds missing columns (including `n_item_scores`) on pre-0.9.0 `recommendation_runs`.
+- Dataset `item_scores` writes use the same validation as the DB sink.
+- DB manifest ALTER uses a fixed type map so a failed first post-upgrade run cannot create `n_item_scores` as TEXT.
+- Job uses one weighting timestamp for training interactions and `latest_score`.
+- Item-score build strips item IDs before grouping so padded IDs do not crash the catalog write.
+- Job skips `write_item_scores` when the sink does not implement it and records `n_item_scores` as null.
+- New DB `recommendation_runs` tables get typed columns on first create, not TEXT from a null first write.
+- Job builds `item_scores` before taking the recommendations writer lock.
+- README says incremental write-through updates recommendations, not catalog `item_scores`.
+- `OutputSink` no longer requires `write_item_scores`; that method lives on optional `ItemScoresWriter`.
+- Job builds catalog `item_scores` only when the sink can write them.
+- Serve reuses a cached sorted `item_id` index for `GET /item-scores` pagination.
+- Serve snapshots the `item_scores` frame and id index under one lock so a refresh cannot pair a new index with an old page.
+- DB `item_scores` schema inspect and legacy-table replace run under the writer lock.
+- Search-weights docs say catalog writes apply to sinks that implement `ItemScoresWriter`.
+- Job sets `partial_outputs` only after a snapshot, score, or recommendation write succeeds.
+- Serve sorts and validates `item_scores` from readers that do not snapshot a cached id index.
+
 ## [0.8.2] - 2026-09-15
 
 ### Changed

@@ -19,9 +19,13 @@ from typing import Any
 
 import pandas as pd
 from sqlalchemy import (
+    BigInteger,
+    Boolean,
     Column,
+    Connection,
     DateTime,
     Engine,
+    Float,
     LargeBinary,
     MetaData,
     Table,
@@ -43,6 +47,7 @@ from cicerone.io.recommendation_schema import (
 )
 from cicerone.io.replace_users import RecommendationSchemaError, normalize_replace_user_ids
 from cicerone.io.user_lookup import OCCURRED_AT_COLUMN, filter_rows_for_user, newest_events
+from cicerone.item_scores import ITEM_SCORES_COLUMNS, normalize_item_scores
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +71,7 @@ DEFAULT_EXPERIMENT_STATE_TABLE = "experiment_state"
 DEFAULT_TRACK_TABLE = "recommendation_track"
 DEFAULT_EVAL_TABLE = "recommendation_eval"
 DEFAULT_HISTORY_TABLE = "recommendation_history"
+DEFAULT_ITEM_SCORES_TABLE = "item_scores"
 
 DEFAULT_DB_TABLES = frozenset(
     {
@@ -81,6 +87,7 @@ DEFAULT_DB_TABLES = frozenset(
         DEFAULT_TRACK_TABLE,
         DEFAULT_EVAL_TABLE,
         DEFAULT_HISTORY_TABLE,
+        DEFAULT_ITEM_SCORES_TABLE,
     }
 )
 
@@ -149,6 +156,85 @@ def _require_optional_recommendation_columns(engine: Engine, table: str, frame: 
     raise RecommendationSchemaError(
         f"Recommendations table {table!r} is missing column(s) {missing}; {alters}"
     )
+
+
+_MANIFEST_COLUMN_SQL_TYPES: dict[str, str] = {
+    "n_events": "BIGINT",
+    "n_target_users": "BIGINT",
+    "n_users_with_recommendations": "BIGINT",
+    "n_items": "BIGINT",
+    "n_item_scores": "BIGINT",
+    "top_k": "BIGINT",
+    "rrf_k": "FLOAT",
+    "artifact_written": "BOOLEAN",
+    "artifact_schema_version": "BIGINT",
+    "partial_outputs": "BOOLEAN",
+    "automl_enabled": "BOOLEAN",
+}
+
+
+def _manifest_column_sql_type(series: pd.Series) -> str:
+    known = _MANIFEST_COLUMN_SQL_TYPES.get(str(series.name) if series.name is not None else "")
+    if known is not None:
+        return known
+    if pd.api.types.is_bool_dtype(series.dtype):
+        return "BOOLEAN"
+    if pd.api.types.is_integer_dtype(series.dtype):
+        return "BIGINT"
+    if pd.api.types.is_float_dtype(series.dtype):
+        return "FLOAT"
+    return "TEXT"
+
+
+def _manifest_to_sql_dtypes(frame: pd.DataFrame) -> dict[str, Any]:
+    mapping = {"BIGINT": BigInteger(), "FLOAT": Float(), "BOOLEAN": Boolean()}
+    return {
+        column: mapping[sql_type]
+        for column, sql_type in _MANIFEST_COLUMN_SQL_TYPES.items()
+        if column in frame.columns
+    }
+
+
+def _add_missing_manifest_columns(
+    engine: Engine,
+    table: str,
+    frame: pd.DataFrame,
+    *,
+    conn: Connection | None = None,
+) -> None:
+    inspector = inspect(conn) if conn is not None else inspect(engine)
+    if not inspector.has_table(table):
+        return
+    existing = {column["name"] for column in inspector.get_columns(table)}
+    missing = [column for column in frame.columns if column not in existing]
+    if not missing:
+        return
+
+    def _alter(target: Connection) -> None:
+        for column in missing:
+            ident = sql_identifier(str(column), option="manifest_table column")
+            target.execute(
+                text(f'ALTER TABLE "{table}" ADD COLUMN "{ident}" {_manifest_column_sql_type(frame[column])}')
+            )
+
+    if conn is not None:
+        _alter(conn)
+        return
+    with engine.begin() as opened:
+        _alter(opened)
+
+
+def _missing_item_scores_columns(
+    engine: Engine,
+    table: str,
+    *,
+    conn: Connection | None = None,
+) -> list[str]:
+    inspector = inspect(conn) if conn is not None else inspect(engine)
+    if not inspector.has_table(table):
+        return []
+    existing = {column["name"] for column in inspector.get_columns(table)}
+    return [column for column in ITEM_SCORES_COLUMNS if column not in existing]
 
 
 def _sql_user_source(query: str | None, table: str) -> str:
@@ -380,12 +466,14 @@ class DatabaseOutputSink:
             self._options.get("manifest_table", DEFAULT_MANIFEST_TABLE),
             option="manifest_table",
         )
+        frame = pd.DataFrame([manifest])
         logger.info("Appending run manifest to database table %r", table)
         with self.recommendations_write(), self._engine.begin() as conn:
+            _add_missing_manifest_columns(self._engine, table, frame, conn=conn)
             if skip_if_newer_than is not None and _db_manifest_newer(conn, table, skip_if_newer_than):
                 return False
             self._ensure_fence()
-            pd.DataFrame([manifest]).to_sql(table, conn, if_exists="append", index=False)
+            frame.to_sql(table, conn, if_exists="append", index=False, dtype=_manifest_to_sql_dtypes(frame))
             self._ensure_fence()
         return True
 
@@ -480,6 +568,29 @@ class DatabaseOutputSink:
         with self.recommendations_write(), self._engine.begin() as conn:
             self._ensure_fence()
             _clear_table_for_replace(conn, table)
+            self._ensure_fence()
+            df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
+            self._ensure_fence()
+
+    def write_item_scores(self, df: pd.DataFrame) -> None:
+        table = sql_identifier(
+            self._options.get("item_scores_table", DEFAULT_ITEM_SCORES_TABLE),
+            option="item_scores_table",
+        )
+        df = normalize_item_scores(df)
+        logger.info("Writing %d item score rows to database table %r", len(df), table)
+        with self.recommendations_write(), self._engine.begin() as conn:
+            self._ensure_fence()
+            missing = _missing_item_scores_columns(self._engine, table, conn=conn)
+            if missing:
+                logger.warning(
+                    "Replacing legacy item_scores table %r missing column(s) %s",
+                    table,
+                    missing,
+                )
+                conn.execute(text(f'DROP TABLE "{table}"'))
+            else:
+                _clear_table_for_replace(conn, table)
             self._ensure_fence()
             df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
             self._ensure_fence()
