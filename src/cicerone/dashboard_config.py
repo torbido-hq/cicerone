@@ -32,6 +32,9 @@ _SECRET_KEYS = frozenset(
         "password",
         "webhook",
         "artifact_hmac_key",
+        "sasl_username",
+        "bootstrap_servers",
+        "bucket",
     }
 )
 _SECRET_KEY_RE = re.compile(
