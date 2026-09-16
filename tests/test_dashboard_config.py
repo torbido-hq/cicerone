@@ -44,6 +44,8 @@ def _secret_settings(**overrides):
                 "bucket": "recs",
                 "endpoint_url": "https://minio.example:9000",
                 "webhook": "https://hooks.slack.com/services/T/B/xxx",
+                "bootstrap_servers": "kafka.internal:9092",
+                "sasl_username": "broker-user",
             },
         ),
         output=IOSettings(
@@ -87,7 +89,9 @@ def test_config_display_redacts_secrets_and_keeps_safe_values():
     assert trigger["fields"]["auth_token"] == REDACTED
     assert trigger["fields"]["postgres_url"] == REDACTED
     assert incoming["fields"]["kind"] == "dataset"
-    assert incoming["fields"]["options"]["bucket"] == "recs"
+    assert incoming["fields"]["options"]["bucket"] == REDACTED
+    assert incoming["fields"]["options"]["bootstrap_servers"] == REDACTED
+    assert incoming["fields"]["options"]["sasl_username"] == REDACTED
     assert incoming["fields"]["options"]["access_key_id"] == REDACTED
     assert incoming["fields"]["options"]["secret_access_key"] == REDACTED
     assert incoming["fields"]["options"]["api_key"] == REDACTED
@@ -186,7 +190,9 @@ def test_config_page_renders_redacted_html(tmp_path):
     assert "cron_schedule" in html
     assert "dataset" in html
     assert "AKIATEST" not in html
-    assert "recs" in html
+    assert "recs" not in html
+    assert "kafka.internal" not in html
+    assert "broker-user" not in html
     assert "[redacted]" in html
     assert "0123456789abcdef" not in html
     assert "super-secret-serve" not in html
