@@ -61,6 +61,7 @@ def resolve_assignment(
     *,
     promoted_variant: str | None = None,
     active_pair: tuple[str, str] | None = None,
+    snapshot_names: Sequence[str] | None = None,
 ) -> tuple[str | None, str | None]:
     """Return ``(experiment_id, variant)`` or ``(None, None)`` when experiments are off."""
     experiment = settings.experiment
@@ -72,16 +73,18 @@ def resolve_assignment(
     if not variants:
         return None, None
     names = {name for name, _traffic in variants}
-    if (
-        active_pair is not None
-        and experiment.allocation == ALLOCATION_THOMPSON
-        and active_pair[0] in names
-        and active_pair[1] in names
-        and promoted_variant is None
-    ):
-        variants = _active_pair_traffic(
-            active_pair[0], active_pair[1], explore_traffic=experiment.explore_traffic
-        )
+    if experiment.allocation == ALLOCATION_THOMPSON and promoted_variant is None:
+        if active_pair is not None and active_pair[0] in names and active_pair[1] in names:
+            variants = _active_pair_traffic(
+                active_pair[0], active_pair[1], explore_traffic=experiment.explore_traffic
+            )
+        elif snapshot_names is not None:
+            present = {str(name) for name in snapshot_names if name}
+            variants = [(name, traffic) for name, traffic in variants if name in present]
+            if not variants:
+                return None, None
+        else:
+            return None, None
     variant = assign_variant(
         experiment.id,
         str(user_id),

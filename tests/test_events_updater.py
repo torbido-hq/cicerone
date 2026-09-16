@@ -1030,6 +1030,51 @@ def test_incremental_updater_preserves_variants(tmp_path, feature_config: Featur
     assert set(cold["variant"].astype(str)) == {"control", "treatment"}
 
 
+def test_incremental_updater_keeps_parked_popular_variant(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    existing = pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "old-control",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                "variant": "control",
+            },
+            {
+                "user_id": "u1",
+                "item_id": "parked-popular",
+                "rank": 1,
+                "score": 0.2,
+                "source": "popular_fallback",
+                "variant": "treatment",
+            },
+        ]
+    )
+    existing.to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        variant_names=("control", "treatment"),
+        assign_variant=lambda _user_id: "control",
+    )
+    events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
+    assert updater.apply(events) == 1
+    frame = load_recommendations_frame(settings.output)
+    u1 = frame[frame["user_id"] == "u1"]
+    assert set(u1["variant"].astype(str)) == {"control", "treatment"}
+    parked = u1[u1["variant"] == "treatment"]
+    assert list(parked["item_id"].astype(str)) == ["parked-popular"]
+
+
 def test_incremental_updater_collapses_leftover_variants_when_experiment_off(
     tmp_path, feature_config: FeatureConfig
 ):

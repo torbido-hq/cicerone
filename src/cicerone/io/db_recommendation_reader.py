@@ -76,7 +76,7 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             logger.exception("Failed to refresh recommendation items snapshot; keeping previous data")
         observe_cache_refresh(duration_seconds=time.perf_counter() - started, success=items_ok)
 
-    def _supports_variant_column(self) -> bool:
+    def _supports_variant_column(self) -> bool | None:
         cached = self._variant_supported
         if cached is not None:
             return cached
@@ -84,25 +84,10 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             columns = {col["name"] for col in inspect(self._engine).get_columns(self._table)}
         except Exception:
             logger.exception("Failed to inspect recommendations table %r for variant column", self._table)
-            return False
+            return None
         supported = VARIANT_COLUMN in columns
         self._variant_supported = supported
         return supported
-
-    def _fallback_variant(self, user_id: str) -> str | None:
-        sql = text(
-            f'SELECT DISTINCT "{VARIANT_COLUMN}" FROM "{self._table}" WHERE "{USER_COLUMN}" = :user_id'
-        )
-        try:
-            frame = pd.read_sql(sql, self._engine, params={"user_id": user_id})
-        except Exception as exc:
-            if self._remember_missing_variant_column(exc):
-                return None
-            logger.exception("Failed to list recommendation variants for user_id=%r", user_id)
-            return None
-        if frame.empty:
-            return None
-        return _rec.pick_fallback_variant(frame.iloc[:, 0].tolist())
 
     def _remember_missing_variant_column(self, exc: BaseException) -> bool:
         message = db_error_message(exc)
@@ -113,11 +98,13 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
         self._variant_supported = False
         return True
 
+    def _assigned_variant(self, variant: str | None) -> str | None:
+        if variant is not None and self._supports_variant_column() is False:
+            return None
+        return variant
+
     def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame:
-        if variant is not None and not self._supports_variant_column():
-            variant = None
-        elif variant is None and self._supports_variant_column():
-            variant = self._fallback_variant(user_id)
+        variant = self._assigned_variant(variant)
         if variant is None:
             sql = text(
                 f'SELECT * FROM "{self._table}" WHERE "{USER_COLUMN}" = :user_id '
@@ -139,6 +126,10 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             if not self._remember_missing_variant_column(exc):
                 raise
             return self.get_recommendations(user_id, k)
+        if variant is None:
+            rows = _rec.collapse_mixed_variants(rows)
+            if not rows.empty:
+                rows = rows.head(k).reset_index(drop=True)
         if rows.empty:
             record_cache_miss()
         else:
@@ -146,16 +137,11 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
         return rows
 
     def get_cold_start_fallback(self, k: int, *, variant: str | None = None) -> pd.DataFrame:
-        if variant is not None and not self._supports_variant_column():
-            variant = None
-        elif variant is None and self._supports_variant_column():
-            variant = self._fallback_variant(COLD_START_USER_ID)
+        variant = self._assigned_variant(variant)
         sentinel = self.get_recommendations(COLD_START_USER_ID, k, variant=variant)
         if not sentinel.empty:
             return sentinel
-        if variant is not None and not self._supports_variant_column():
-            variant = None
-        # Same popular→latest→user_id priority as the in-memory path; full top-k fetch.
+        variant = self._assigned_variant(variant)
         variant_clause = f'AND "{VARIANT_COLUMN}" = :variant ' if variant is not None else ""
         pick_sql = text(
             f'SELECT "{USER_COLUMN}", "{SOURCE_COLUMN}" FROM "{self._table}" '

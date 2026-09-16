@@ -14,7 +14,10 @@ from cicerone.io.recommendation_reader import select_cold_start_fallback
 from cicerone.io.recommendation_schema import filter_variant_rows
 from cicerone.serve import create_app, main
 from cicerone.serve.app import (
+    _assignment_overlay,
+    _AssignmentOverlayCache,
     _GeneratedAtCache,
+    _snapshot_variant_names,
     _start_refresh_loop,
 )
 from cicerone.serve.item_filters import ItemsFilterCache, available_item_ids
@@ -579,11 +582,14 @@ def test_generated_at_cache_reads_and_refreshes_manifest():
 def test_start_refresh_loop_calls_refresh_periodically(monkeypatch):
     reader = _FakeReader(_recs_df())
     calls = {"sleep": 0}
-    cache_refreshes = {"n": 0}
+    cache_refreshes = {"generated": 0, "overlay": 0}
 
     class FakeCache:
+        def __init__(self, key: str) -> None:
+            self._key = key
+
         def refresh(self) -> None:
-            cache_refreshes["n"] += 1
+            cache_refreshes[self._key] += 1
 
     def fake_sleep(_seconds):
         calls["sleep"] += 1
@@ -594,10 +600,69 @@ def test_start_refresh_loop_calls_refresh_periodically(monkeypatch):
     monkeypatch.setattr(threading.Thread, "start", lambda self: self.run())
 
     with pytest.raises(SystemExit):
-        _start_refresh_loop(reader, interval_seconds=0.01, generated_at_cache=FakeCache())
+        _start_refresh_loop(
+            reader,
+            interval_seconds=0.01,
+            generated_at_cache=FakeCache("generated"),
+            overlay_cache=FakeCache("overlay"),
+        )
 
     assert reader.refresh_calls >= 2
-    assert cache_refreshes["n"] >= 2
+    assert cache_refreshes["generated"] >= 2
+    assert cache_refreshes["overlay"] >= 2
+
+
+def test_assignment_overlay_cache_keeps_last_on_refresh_error():
+    from cicerone.config.settings import ExperimentSettings, VariantSettings
+
+    settings = _settings()
+    cache = _AssignmentOverlayCache(settings, None)
+    assert cache.get() == (None, None)
+    assert _assignment_overlay(settings, None) == (None, None)
+
+    enabled = _settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="exp",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        )
+    )
+    assert _assignment_overlay(enabled, None) == (None, None)
+
+    class _Store:
+        n = 0
+
+        def assignment_overlay(self, experiment_id):
+            del experiment_id
+            self.n += 1
+            if self.n > 1:
+                raise RuntimeError("later")
+            return "treatment", ("control", "treatment")
+
+    store = _Store()
+    cache = _AssignmentOverlayCache(enabled, store)
+    assert cache.get() == ("treatment", ("control", "treatment"))
+    cache.refresh()
+    assert cache.get() == ("treatment", ("control", "treatment"))
+
+
+def test_snapshot_variant_names_from_reader():
+    assert _snapshot_variant_names(_FakeReader(_recs_df())) is None
+
+    class _Named(_FakeReader):
+        def present_variant_names(self):
+            return None
+
+    assert _snapshot_variant_names(_Named(_recs_df())) is None
+
+    class _Present(_FakeReader):
+        def present_variant_names(self):
+            return ("control", "blend")
+
+    assert _snapshot_variant_names(_Present(_recs_df())) == ("control", "blend")
 
 
 def test_main_requires_serve_mode(tmp_path, monkeypatch):

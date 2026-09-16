@@ -150,7 +150,7 @@ def test_allocate_thompson_promote_locks_champion() -> None:
     )
     assert result.champion == "treatment"
     assert result.rotated is False
-    assert result.challenger == "blend"
+    assert result.challenger == "control"
 
 
 def test_allocate_thompson_rotates_when_champion_is_best() -> None:

@@ -210,6 +210,85 @@ def test_sqlite_db_reader_filters_variant(tmp_path):
     )
     reader = DbRecommendationReader({"database_url": url})
     assert list(reader.get_recommendations("u1", k=10, variant="treatment")["item_id"]) == ["treatment-item"]
+    collapsed = reader.get_recommendations("u1", k=10)
+    assert list(collapsed["item_id"]) == ["control-item"]
+
+
+def test_sqlite_db_reader_keeps_variant_filter_when_inspect_fails(tmp_path, monkeypatch):
+    url = _sqlite_url(tmp_path)
+    sink = DatabaseOutputSink({"database_url": url})
+    sink.write_recommendations(
+        pd.DataFrame(
+            [
+                {
+                    "user_id": "u1",
+                    "item_id": "control-item",
+                    "rank": 1,
+                    "score": 0.9,
+                    "source": "personalized",
+                    "variant": "control",
+                },
+                {
+                    "user_id": "u1",
+                    "item_id": "treatment-item",
+                    "rank": 1,
+                    "score": 0.8,
+                    "source": "personalized",
+                    "variant": "treatment",
+                },
+            ]
+        )
+    )
+    reader = DbRecommendationReader({"database_url": url})
+    reader._variant_supported = None
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("inspect down")
+
+    monkeypatch.setattr("cicerone.io.db_recommendation_reader.inspect", boom)
+    rows = reader.get_recommendations("u1", k=10, variant="treatment")
+    assert list(rows["item_id"]) == ["treatment-item"]
+    assert list(rows["variant"]) == ["treatment"]
+    assert reader._variant_supported is None
+
+
+def test_sqlite_db_reader_skips_distinct_when_unassigned(tmp_path, monkeypatch):
+    url = _sqlite_url(tmp_path)
+    sink = DatabaseOutputSink({"database_url": url})
+    sink.write_recommendations(
+        pd.DataFrame(
+            [
+                {
+                    "user_id": "u1",
+                    "item_id": "control-item",
+                    "rank": 1,
+                    "score": 0.9,
+                    "source": "personalized",
+                    "variant": "control",
+                },
+                {
+                    "user_id": "u1",
+                    "item_id": "treatment-item",
+                    "rank": 1,
+                    "score": 0.8,
+                    "source": "personalized",
+                    "variant": "treatment",
+                },
+            ]
+        )
+    )
+    reader = DbRecommendationReader({"database_url": url})
+    seen: list[str] = []
+    original = pd.read_sql
+
+    def tracking(sql, *args, **kwargs):
+        seen.append(str(sql))
+        return original(sql, *args, **kwargs)
+
+    monkeypatch.setattr("cicerone.io.db_recommendation_reader.pd.read_sql", tracking)
+    rows = reader.get_recommendations("u1", k=10)
+    assert list(rows["item_id"]) == ["control-item"]
+    assert not any("DISTINCT" in sql.upper() for sql in seen)
 
 
 def test_sqlite_db_reader_missing_variant_column_falls_back(tmp_path):

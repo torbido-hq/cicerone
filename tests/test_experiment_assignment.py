@@ -138,6 +138,12 @@ def test_resolve_assignment_hashes_active_pair_not_toml_traffic() -> None:
     same = resolve_assignment(settings, "u1", active_pair=("control", "control"))
     assert same[1] == "control"
     ignored = resolve_assignment(settings, "u1", active_pair=("missing", "gone"))
-    assert ignored[1] in {"control", "treatment", "blend"}
+    assert ignored == (None, None)
     half = resolve_assignment(settings, "u1", active_pair=("control", "missing-arm"))
-    assert half[1] in {"control", "treatment", "blend"}
+    assert half == (None, None)
+    snapshot = {
+        resolve_assignment(settings, f"u{i}", snapshot_names=("control", "blend"))[1] for i in range(40)
+    }
+    assert snapshot <= {"control", "blend"}
+    assert resolve_assignment(settings, "u1", snapshot_names=("gone",)) == (None, None)
+    assert resolve_assignment(settings, "u1") == (None, None)

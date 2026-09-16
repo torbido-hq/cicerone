@@ -37,7 +37,7 @@ from cicerone.experiment.recipes import (
     resolve_recipes,
 )
 from cicerone.experiment.store import ExperimentStore, active_pair_from_state, merge_experiment_state
-from cicerone.experiment.thompson import ArmCounts, parse_arm_counts
+from cicerone.experiment.thompson import ArmCounts, parse_arm_counts, select_active_recipes
 from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.io.factory import build_manifest_reader
 from cicerone.locks import (
@@ -115,11 +115,14 @@ def _eval_recipes(
         return recipes
     champion = str(state.get("champion") or "")
     challenger = str(state.get("challenger") or "")
-    wanted = {name for name in (champion, challenger) if name}
-    if not wanted:
+    if not champion:
         return recipes
-    filtered = tuple(recipe for recipe in recipes if recipe.name in wanted)
-    return filtered or recipes
+    return select_active_recipes(
+        recipes,
+        champion=champion,
+        challenger=challenger or champion,
+        explore_traffic=experiment.explore_traffic,
+    )
 
 
 def _ship_blocked(report: Any, experiment: ExperimentSettings) -> tuple[str, ...]:
@@ -327,6 +330,7 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
         track_variants=track_variants,
         n_impressions=n_impressions,
         min_impressions=settings.track.min_impressions if settings.track.enabled else 0,
+        active_pair=active_pair_from_state(state),
     )
     blocked = _ship_blocked(report, experiment)
     ship_variant = None
