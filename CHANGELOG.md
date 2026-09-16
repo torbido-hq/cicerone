@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.3] - 2026-09-16
+
+### Fixed
+
+- Event worker stop closes the source after a tick that never started a loop
+  thread.
+- A dispatched RabbitMQ job is not started after its I/O timeout.
+- Local dataset writers take `msvcrt.locking` when `fcntl` is missing.
+- `POST /track` acquires the writer lock off the serve event loop.
+
 ## [0.8.2] - 2026-09-15
 
 ### Changed
