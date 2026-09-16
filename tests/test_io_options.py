@@ -86,6 +86,10 @@ def test_readonly_select_accepts_simple_select():
         "SELECT 1; DROP TABLE events",
         "SELECT * FROM events INTO dump",
         "SELECT pg_read_file('/etc/passwd')",
+        "SELECT pg_ls_dir('/')",
+        "SELECT dblink('host=x', 'SELECT 1')",
+        "SELECT lo_get(1)",
+        "SELECT pg_write_file('/tmp/x', 'x')",
         "",
     ],
 )

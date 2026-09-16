@@ -747,6 +747,8 @@ code is structured. See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 - Credentials (S3/DB) should be scoped to the bare minimum (read on the
   input side, write on the output side, no delete/admin permissions).
+  Custom `input.options.*_query` and `events.options.events_query` values
+  must be a single `SELECT`; give that role only the tables it should read.
 - No personal data other than `user_id` (an opaque identifier) is ever read
   or written.
 - The batch job itself accepts no inbound connections. The optional serve
