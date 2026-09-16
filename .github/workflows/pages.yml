@@ -47,10 +47,24 @@ jobs:
           cache: npm
           cache-dependency-path: website/package-lock.json
 
+      - name: Published package version
+        if: github.event_name == 'workflow_run'
+        id: published
+        env:
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          version="${HEAD_BRANCH#v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Could not parse published version from head_branch='$HEAD_BRANCH'" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
       - name: Install and build
         working-directory: website
         env:
           PUBLIC_GA_MEASUREMENT_ID: ${{ vars.PUBLIC_GA_MEASUREMENT_ID }}
+          EXPECT_PYPI_VERSION: ${{ steps.published.outputs.version }}
         run: |
           npm ci
           npm test
