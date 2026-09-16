@@ -13,7 +13,9 @@ import {
 	latestReleaseFromRepo,
 	parseLatestRelease,
 	parseReleaseForVersion,
+	pypiHasVersion,
 	resolveLatestRelease,
+	waitForPypiProject,
 } from './changelog.mjs';
 
 test('githubHeadingSlug matches Keep a Changelog GitHub anchors', () => {
@@ -200,6 +202,93 @@ test('resolveLatestRelease falls back to CHANGELOG when PyPI fails and no previo
 		source: 'changelog',
 		reason: 'network down',
 	});
+});
+
+test('pypiHasVersion accepts the expected release or a newer info.version', () => {
+	assert.equal(pypiHasVersion({ info: { version: '0.8.3' } }, '0.8.3'), true);
+	assert.equal(pypiHasVersion({ info: { version: '0.8.4' } }, '0.8.3'), true);
+	assert.equal(pypiHasVersion({ info: { version: '0.8.2' } }, '0.8.3'), false);
+	assert.equal(
+		pypiHasVersion(
+			{ info: { version: '0.8.2' }, releases: { '0.8.3': [{ upload_time_iso_8601: '2026-09-16T00:00:00Z' }] } },
+			'0.8.3',
+		),
+		true,
+	);
+});
+
+test('waitForPypiProject retries until the published version appears', async () => {
+	let calls = 0;
+	const project = await waitForPypiProject({
+		expectVersion: '0.8.3',
+		attempts: 4,
+		delayMs: 0,
+		sleep: async () => {},
+		fetchProject: async () => {
+			calls += 1;
+			if (calls < 3) {
+				return { info: { version: '0.8.2' }, releases: { '0.8.2': [{ upload_time_iso_8601: '2026-09-08T12:00:00.000000Z' }] } };
+			}
+			return {
+				info: { version: '0.8.3' },
+				releases: { '0.8.3': [{ upload_time_iso_8601: '2026-09-16T12:00:00.000000Z' }] },
+			};
+		},
+	});
+	assert.equal(project.info.version, '0.8.3');
+	assert.equal(calls, 3);
+});
+
+test('resolveLatestRelease polls for expectVersion and does not use a stale previous file', async () => {
+	let calls = 0;
+	const resolved = await resolveLatestRelease({
+		changelogText: CHANGELOG_TEXT,
+		previous: PREVIOUS_RELEASE,
+		expectVersion: '0.8.3',
+		attempts: 3,
+		delayMs: 0,
+		sleep: async () => {},
+		fetchProject: async () => {
+			calls += 1;
+			if (calls === 1) {
+				return { info: { version: '0.8.2' }, releases: { '0.8.2': [{ upload_time_iso_8601: '2026-09-08T12:00:00.000000Z' }] } };
+			}
+			return {
+				info: { version: '0.8.3' },
+				releases: { '0.8.3': [{ upload_time_iso_8601: '2026-09-16T12:00:00.000000Z' }] },
+			};
+		},
+	});
+	assert.equal(calls, 2);
+	assert.deepEqual(resolved, {
+		release: {
+			version: '0.8.3',
+			date: '2026-09-16',
+			url: `https://pypi.org/project/${PYPI_PROJECT}/0.8.3/`,
+		},
+		stale: false,
+		source: 'pypi',
+		reason: null,
+	});
+});
+
+test('resolveLatestRelease throws when expectVersion never appears', async () => {
+	await assert.rejects(
+		() =>
+			resolveLatestRelease({
+				changelogText: CHANGELOG_TEXT,
+				previous: PREVIOUS_RELEASE,
+				expectVersion: '0.8.3',
+				attempts: 2,
+				delayMs: 0,
+				sleep: async () => {},
+				fetchProject: async () => PYPI_PROJECT_JSON,
+			}),
+		{
+			name: 'Error',
+			message: 'Could not resolve latest release 0.8.3: PyPI is still 0.8.0, waiting for 0.8.3',
+		},
+	);
 });
 
 test('resolveLatestRelease throws when PyPI fails and nothing else is available', async () => {
