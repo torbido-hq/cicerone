@@ -943,11 +943,15 @@ def test_event_worker_retry_acks_deferred_duplicates(tmp_path, feature_config: F
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
         top_k=3,
     )
-    original = normalize_event(event_payload(event_id="retry-fp-1", item_id="ifp"))
-    duplicate = normalize_event(event_payload(event_id="retry-fp-2", item_id="ifp"))
+    payload = event_payload(item_id="ifp")
+    payload.pop("event_id")
+    original = normalize_event(payload)
+    duplicate = normalize_event(payload)
     acked: list[str] = []
 
     class _FailApplyAck:
+        ephemeral_event_ids = True
+
         def __init__(self) -> None:
             self._pending = [original, duplicate]
 
@@ -962,7 +966,7 @@ def test_event_worker_retry_acks_deferred_duplicates(tmp_path, feature_config: F
 
         def ack(self, event_ids):  # type: ignore[no-untyped-def]
             acked.extend(str(event_id) for event_id in event_ids)
-            if acked == ["retry-fp-1"]:
+            if acked == [original.event_id]:
                 raise RuntimeError("apply ack failed")
 
         def nack(self, events):  # type: ignore[no-untyped-def]
@@ -983,10 +987,10 @@ def test_event_worker_retry_acks_deferred_duplicates(tmp_path, feature_config: F
     )
     with pytest.raises(RuntimeError, match="apply ack failed"):
         worker.tick()
-    assert "retry-fp-2" not in acked
+    assert duplicate.event_id not in acked
     worker.tick()
-    assert "retry-fp-1" in acked
-    assert "retry-fp-2" in acked
+    assert original.event_id in acked
+    assert duplicate.event_id in acked
 
 
 def test_event_worker_skips_poll_when_startup_health_disconnected(tmp_path, feature_config: FeatureConfig):
