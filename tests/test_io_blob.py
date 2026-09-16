@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from botocore.exceptions import ClientError
 
 from cicerone.io.blob import append_storage_bytes, read_storage_bytes, write_storage_bytes
