@@ -741,7 +741,7 @@ def test_main_starts_serve_app_in_serve_mode(tmp_path, monkeypatch):
     main()
 
     assert len(refresh_calls) == 1
-    assert uvicorn_calls == {"host": "0.0.0.0", "port": 8000}
+    assert uvicorn_calls == {"host": "127.0.0.1", "port": 8000}
     assert served_app is not None
     assert refresh_kwargs[0]["generated_at_cache"] is served_app.state.generated_at_cache
 
@@ -823,4 +823,4 @@ def test_main_allows_missing_feature_config(tmp_path, monkeypatch):
     ).to_parquet(tmp_path / "recommendations.parquet", index=False)
 
     main()
-    assert uvicorn_calls == {"host": "0.0.0.0", "port": 8000}
+    assert uvicorn_calls == {"host": "127.0.0.1", "port": 8000}
