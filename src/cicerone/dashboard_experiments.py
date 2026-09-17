@@ -292,14 +292,14 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
                 _try_load,
                 "read track rows for experiment metrics",
                 lambda: TrackStore(settings.output).read_rows(experiment_id=experiment.id, since=since),
-                [],
+                None,
             )
         events = events_f.result()
         recs = recs_f.result()
         exposures = exposures_f.result()
         catalog_size = catalog_f.result()
         track_rows = track_f.result() if track_f is not None else []
-    if settings.track.enabled:
+    if settings.track.enabled and track_rows is not None:
         exposures = _exposures_for_track_users(exposures, track_rows)
     if events is None:
         events = pd.DataFrame()
@@ -307,7 +307,7 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
     track_outcomes = None
     track_variants = None
     n_impressions = 0
-    if settings.track.enabled:
+    if settings.track.enabled and track_rows is not None:
         n_impressions = sum(1 for row in track_rows if str(row.get("kind") or "") == TRACK_KIND_IMPRESSION)
         if experiment.attribution in {ATTRIBUTION_CLICK, ATTRIBUTION_IMPRESSION}:
             conversions = conversion_events_for_settings(events, settings)

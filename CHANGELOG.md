@@ -43,6 +43,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Thompson windows the shared rows in memory so eval keeps full history.
 - Quality live and Experiments track reads use an attribution lookback.
   Experiments keep only exposures for users in that track window.
+  A failed Experiments track read does not drop healthy exposures.
+- The job preloads track and recommendations in parallel on local/S3.
 - Untimestamped impressions keep latest-snapshot source attribution.
 - Shared job preload keeps an empty recommendations frame instead of reloading.
 - Invalid track `since` is an empty DB query.

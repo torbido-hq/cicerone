@@ -139,17 +139,16 @@ def _load_shared_eval_inputs(
     )
     if not need_track:
         return None, None
-    raw_track = _try_load(
+    raw_track, recs = _try_load_pair(
         "read track rows",
         lambda: TrackStore(settings.output).read_rows(),
         None,
-    )
-    track_rows = raw_track if isinstance(raw_track, list) else None
-    recs = _try_load(
         "load recommendations for eval",
         lambda: load_recommendations_frame(settings.output),
         None,
+        parallel=settings.output.kind != "db",
     )
+    track_rows = raw_track if isinstance(raw_track, list) else None
     if track_rows is None or recs is None:
         return None, None
     return track_rows, recs

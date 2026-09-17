@@ -2242,6 +2242,71 @@ def test_load_shared_eval_inputs_keeps_empty_recs(tmp_path, monkeypatch):
     assert recs is empty
 
 
+def test_load_shared_eval_inputs_loads_dataset_in_parallel(tmp_path, monkeypatch):
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+    from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
+    from cicerone.job import _load_shared_eval_inputs
+
+    settings = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="ranking-cvr",
+            allocation="thompson",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        track=TrackSettings(enabled=True),
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    seen: dict[str, object] = {}
+    empty = pd.DataFrame()
+
+    def _pair(*_args, **kwargs):
+        seen["parallel"] = kwargs.get("parallel")
+        return [{"event_id": "a"}], empty
+
+    monkeypatch.setattr("cicerone.job._try_load_pair", _pair)
+    track, recs = _load_shared_eval_inputs(settings)
+    assert seen["parallel"] is True
+    assert track == [{"event_id": "a"}]
+    assert recs is empty
+
+
+def test_load_shared_eval_inputs_loads_db_serially(tmp_path, monkeypatch):
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+    from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
+    from cicerone.job import _load_shared_eval_inputs
+
+    settings = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="ranking-cvr",
+            allocation="thompson",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        track=TrackSettings(enabled=True),
+        output=IOSettings(kind="db", options={"database_url": f"sqlite+pysqlite:///{tmp_path / 'job.db'}"}),
+    )
+    seen: dict[str, object] = {}
+
+    def _pair(*_args, **kwargs):
+        seen["parallel"] = kwargs.get("parallel")
+        return [{"event_id": "a"}], pd.DataFrame()
+
+    monkeypatch.setattr("cicerone.job._try_load_pair", _pair)
+    _load_shared_eval_inputs(settings)
+    assert seen["parallel"] is False
+
+
 def test_load_shared_eval_inputs_does_not_bound_to_thompson_window(tmp_path, monkeypatch):
     from conftest import make_settings
 

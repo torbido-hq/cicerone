@@ -896,7 +896,7 @@ def test_experiment_context_skips_other_experiment_track_rows(tmp_path, monkeypa
 
 
 def test_experiment_context_track_read_error(tmp_path, monkeypatch):
-    base = _settings(tmp_path, log_exposures=False)
+    base = _settings(tmp_path)
     _write_frames(
         base,
         events=[{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1}],
@@ -909,6 +909,15 @@ def test_experiment_context_track_read_error(tmp_path, monkeypatch):
                 "source": "personalized",
                 VARIANT_COLUMN: "control",
             }
+        ],
+        exposures=[
+            exposure_row(
+                user_id="u1",
+                experiment_id="exp-1",
+                variant="control",
+                generated_at=None,
+                exposed_at=pd.Timestamp("2026-01-01T00:00:00Z"),
+            )
         ],
     )
     settings = make_settings(
@@ -924,7 +933,7 @@ def test_experiment_context_track_read_error(tmp_path, monkeypatch):
     )
     context = experiment_context(settings)
     assert context["report"] is not None
-    assert context["report"].n_assigned >= 0
+    assert context["report"].n_assigned == 1
 
 
 def test_experiment_context_user_attribution_skips_track_outcomes(tmp_path, monkeypatch):
