@@ -19,6 +19,10 @@ from cicerone.io.recommendation_schema import VARIANT_COLUMN
 REPO_FEATURES = Path(__file__).resolve().parents[1] / "config" / "features.toml"
 
 
+def _recent_occurred_at() -> str:
+    return (pd.Timestamp.now(tz="UTC") - pd.Timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _settings(tmp_path, **experiment_overrides):
     out = tmp_path / "out"
     inp = tmp_path / "in"
@@ -92,6 +96,7 @@ def test_promote_winner_when_undecided(tmp_path):
 
 def test_promote_winner_when_treatment_wins(tmp_path):
     settings = _settings(tmp_path)
+    occurred_at = _recent_occurred_at()
     events = []
     recs = []
     exposures = []
@@ -102,7 +107,7 @@ def test_promote_winner_when_treatment_wins(tmp_path):
                 "item_id": f"i{i % 10}",
                 "event_type": "view",
                 "quantity": 1,
-                "occurred_at": "2026-01-02T00:00:00Z",
+                "occurred_at": occurred_at,
             }
         )
         events.append(
@@ -111,7 +116,7 @@ def test_promote_winner_when_treatment_wins(tmp_path):
                 "item_id": f"i{i % 10}",
                 "event_type": "purchase",
                 "quantity": 1,
-                "occurred_at": "2026-01-02T00:00:00Z",
+                "occurred_at": occurred_at,
             }
         )
         recs.append(
@@ -613,6 +618,32 @@ def test_experiment_context_manifest_read_and_resolve_errors(tmp_path, monkeypat
     )
     context = experiment_context(settings)
     assert context["error"] == "No experiment variants to evaluate."
+
+
+def test_experiment_context_passes_since_to_metric_events(tmp_path, monkeypatch):
+    settings = _settings(tmp_path, log_exposures=False)
+    pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                VARIANT_COLUMN: "control",
+            }
+        ]
+    ).to_parquet(Path(settings.output.options["path"]) / "recommendations.parquet", index=False)
+    seen: dict[str, object] = {}
+
+    def _load(_settings, *, event_types=None, since=None):
+        seen["since"] = since
+        return pd.DataFrame()
+
+    monkeypatch.setattr("cicerone.dashboard_experiments._load_metric_events", _load)
+    context = experiment_context(settings)
+    assert context["report"] is not None
+    assert isinstance(seen.get("since"), str) and seen["since"]
 
 
 def test_experiment_context_events_query_falls_back(tmp_path, monkeypatch):
@@ -1118,6 +1149,7 @@ def test_thompson_view_volume_max_when_floor_is_zero() -> None:
 
 def test_promote_and_resume_keep_thompson_fields(tmp_path):
     settings = _settings(tmp_path)
+    occurred_at = _recent_occurred_at()
     events = []
     recs = []
     exposures = []
@@ -1128,7 +1160,7 @@ def test_promote_and_resume_keep_thompson_fields(tmp_path):
                 "item_id": f"i{i % 10}",
                 "event_type": "view",
                 "quantity": 1,
-                "occurred_at": "2026-01-02T00:00:00Z",
+                "occurred_at": occurred_at,
             }
         )
         events.append(
@@ -1137,7 +1169,7 @@ def test_promote_and_resume_keep_thompson_fields(tmp_path):
                 "item_id": f"i{i % 10}",
                 "event_type": "purchase",
                 "quantity": 1,
-                "occurred_at": "2026-01-02T00:00:00Z",
+                "occurred_at": occurred_at,
             }
         )
         recs.append(

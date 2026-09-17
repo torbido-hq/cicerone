@@ -53,6 +53,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Shared job preload keeps an empty recommendations frame instead of reloading.
 - Invalid track `since` is an empty DB query.
 - Quality/eval event `since` is pushed into SQL and parquet filters.
+  Experiments pass the same lookback. Custom `events_query` is wrapped
+  so type/time predicates apply before the full SELECT is materialized.
 - Dataset `track.jsonl` drops out-of-window rows while streaming the file.
 - Event worker stop closes the source after a tick that never started a loop
   thread.

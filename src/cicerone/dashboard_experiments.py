@@ -265,7 +265,7 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
         events_f = pool.submit(
             _try_load,
             "read events for experiment metrics",
-            lambda: _load_metric_events(settings, event_types=event_types),
+            lambda: _load_metric_events(settings, event_types=event_types, since=since),
             pd.DataFrame(),
         )
         recs_f = pool.submit(

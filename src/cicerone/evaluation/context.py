@@ -12,7 +12,13 @@ from cicerone.config.settings import Settings
 from cicerone.evaluation.tracking import conversion_events, filter_events_by_types
 from cicerone.io.db_store import DEFAULT_EVENTS_TABLE
 from cicerone.io.factory import build_input_source
-from cicerone.io.options import is_s3_not_found, read_parquet, require_option, sql_identifier
+from cicerone.io.options import (
+    is_s3_not_found,
+    read_parquet,
+    readonly_select,
+    require_option,
+    sql_identifier,
+)
 from cicerone.io.recommendation_schema import USER_COLUMN
 from cicerone.track.store_common import since_date_floor
 
@@ -73,6 +79,28 @@ def _filter_events_since(frame: pd.DataFrame, since: str | None) -> pd.DataFrame
     return frame.loc[stamps.notna() & (stamps >= start)].copy()
 
 
+def _metric_event_sql(
+    source: str,
+    *,
+    types: tuple[str, ...] | None,
+    floor: str | None,
+) -> tuple[Any, dict[str, Any]]:
+    quoted = ", ".join(f'"{column}"' for column in EVENT_METRIC_COLUMNS)
+    clauses: list[str] = []
+    params: dict[str, Any] = {}
+    if types:
+        clauses.append('"event_type" IN :types')
+        params["types"] = list(types)
+    if floor is not None:
+        clauses.append('"occurred_at" >= :since')
+        params["since"] = floor
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    stmt = text(f"SELECT {quoted} FROM {source}{where}")
+    if types:
+        stmt = stmt.bindparams(bindparam("types", expanding=True))
+    return stmt, params
+
+
 def load_metric_events(
     settings: Settings, *, event_types: Sequence[str] | None = None, since: str | None = None
 ) -> pd.DataFrame:
@@ -106,26 +134,20 @@ def load_metric_events(
         keep = [column for column in EVENT_METRIC_COLUMNS if column in frame.columns]
         frame = frame.loc[:, keep] if keep else frame
         return _filter_events_since(filter_events_by_types(frame, types), since)
-    if inp.kind == "db" and not inp.options.get("events_query"):
-        table = sql_identifier(
-            inp.options.get("events_table", DEFAULT_EVENTS_TABLE),
-            option="events_table",
-        )
+    if inp.kind == "db":
         engine = create_engine(require_option(inp.options, "database_url", "db"), pool_pre_ping=True)
-        quoted = ", ".join(f'"{column}"' for column in EVENT_METRIC_COLUMNS)
-        clauses: list[str] = []
-        params: dict[str, Any] = {}
-        if types:
-            clauses.append('"event_type" IN :types')
-            params["types"] = list(types)
-        if floor is not None:
-            clauses.append('"occurred_at" >= :since')
-            params["since"] = floor
-        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        query = inp.options.get("events_query")
         try:
-            stmt = text(f'SELECT {quoted} FROM "{table}"{where}')
-            if types:
-                stmt = stmt.bindparams(bindparam("types", expanding=True))
+            if query:
+                cleaned = readonly_select(str(query), option="input.options.events_query")
+                source = f"({cleaned}) AS _cicerone_metric_events"
+            else:
+                table = sql_identifier(
+                    inp.options.get("events_table", DEFAULT_EVENTS_TABLE),
+                    option="events_table",
+                )
+                source = f'"{table}"'
+            stmt, params = _metric_event_sql(source, types=types, floor=floor)
             frame = pd.read_sql(stmt, engine, params=params)
             return _filter_events_since(frame, since)
         except Exception:
