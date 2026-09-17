@@ -8,6 +8,7 @@ from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantS
 from cicerone.experiment.assignment import (
     assign_variant,
     assignment_bucket,
+    assignment_needs_snapshot,
     experiment_variant_names,
     resolve_assignment,
     snapshot_variant_names,
@@ -165,3 +166,46 @@ def test_snapshot_variant_names_from_reader() -> None:
     assert snapshot_variant_names(_Missing()) is None
     assert snapshot_variant_names(_None()) is None
     assert snapshot_variant_names(_Present()) == ("control", "blend")
+
+
+def test_assignment_needs_snapshot_only_for_thompson_without_pair() -> None:
+    off = make_settings()
+    assert assignment_needs_snapshot(off) is False
+    fixed = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="exp",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        )
+    )
+    assert assignment_needs_snapshot(fixed) is False
+    thompson = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="exp",
+            allocation=ALLOCATION_THOMPSON,
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        track=TrackSettings(enabled=True),
+    )
+    assert assignment_needs_snapshot(thompson) is True
+    assert assignment_needs_snapshot(thompson, promoted_variant="control") is False
+    assert assignment_needs_snapshot(thompson, active_pair=("control", "treatment")) is False
+    assert assignment_needs_snapshot(thompson, active_pair=("control", "missing")) is True
+    automl = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="auto",
+            allocation=ALLOCATION_THOMPSON,
+            automl_challenger=True,
+        ),
+        track=TrackSettings(enabled=True),
+    )
+    assert assignment_needs_snapshot(automl) is True
+    assert assignment_needs_snapshot(automl, active_pair=("control", "treatment")) is False

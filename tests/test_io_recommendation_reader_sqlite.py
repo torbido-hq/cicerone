@@ -288,8 +288,8 @@ def test_sqlite_db_reader_skips_distinct_when_unassigned(tmp_path, monkeypatch):
     monkeypatch.setattr("cicerone.io.db_recommendation_reader.pd.read_sql", tracking)
     rows = reader.get_recommendations("u1", k=10)
     assert list(rows["item_id"]) == ["control-item"]
-    assert any("DISTINCT" in sql.upper() for sql in seen)
-    assert any("variant" in sql and "LIMIT" in sql.upper() for sql in seen)
+    assert not any("DISTINCT" in sql.upper() for sql in seen)
+    assert any(":fallback" in sql and "LIMIT" in sql.upper() for sql in seen)
 
 
 def test_sqlite_db_reader_unassigned_picks_control_before_limit(tmp_path):
@@ -331,6 +331,8 @@ def test_sqlite_db_reader_missing_variant_column_falls_back(tmp_path):
     ).to_sql("recommendations", engine, index=False, if_exists="replace")
     reader = DbRecommendationReader({"database_url": url})
     assert list(reader.get_recommendations("u1", k=10, variant="treatment")["item_id"]) == ["i1"]
+    other = DbRecommendationReader({"database_url": url})
+    assert list(other.get_recommendations("u1", k=10)["item_id"]) == ["i1"]
 
 
 def _raise_on_variant_sql(original, variant_queries: dict[str, int]):
@@ -414,8 +416,8 @@ def test_sqlite_db_reader_unassigned_probe_error_falls_back(tmp_path, monkeypatc
     original = pd.read_sql
 
     def fake_read_sql(sql, *args, **kwargs):
-        if "DISTINCT" in str(sql).upper():
-            raise RuntimeError("probe down")
+        if ":fallback" in str(sql):
+            raise RuntimeError("prefer leftover down")
         return original(sql, *args, **kwargs)
 
     monkeypatch.setattr("cicerone.io.db_recommendation_reader.pd.read_sql", fake_read_sql)

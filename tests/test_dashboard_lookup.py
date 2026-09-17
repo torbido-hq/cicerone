@@ -111,6 +111,34 @@ def test_lookup_recommendations_hides_exception_details():
     assert "secret" not in str(result)
 
 
+def test_lookup_recommendations_skips_snapshot_names_when_not_thompson():
+    from cicerone.config.settings import ExperimentSettings, VariantSettings
+
+    class _CountingReader(_KReader):
+        def __init__(self):
+            self.present_calls = 0
+
+        def present_variant_names(self):
+            self.present_calls += 1
+            return ("control", "treatment")
+
+    settings = make_settings(
+        dashboard_enabled=True,
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="exp",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+    )
+    reader = _CountingReader()
+    result = lookup_recommendations(settings, reader, "u1")
+    assert result["items"]
+    assert reader.present_calls == 0
+
+
 def test_lookup_recommendations_uses_dashboard_lookup_k():
     settings = make_settings(dashboard_enabled=True, top_k=50, dashboard_lookup_k=5)
     result = lookup_recommendations(settings, _KReader(), "u1")

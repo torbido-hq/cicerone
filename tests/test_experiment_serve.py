@@ -316,6 +316,61 @@ def test_recommendations_promoted_overrides_thompson_pair(tmp_path):
     assert body["variant"] == "treatment"
 
 
+def test_serve_skips_snapshot_names_when_pair_is_usable(tmp_path):
+    from cicerone.config.constants import ALLOCATION_THOMPSON
+    from cicerone.experiment.store import ExperimentStore, experiment_state
+
+    class _CountingReader(_FakeReader):
+        def __init__(self, recs: pd.DataFrame):
+            super().__init__(recs)
+            self.present_calls = 0
+
+        def present_variant_names(self):
+            self.present_calls += 1
+            return ("control", "treatment")
+
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    ExperimentStore(output).write_state(
+        experiment_state("rrf-vs-blend", promoted_variant=None, champion="control", challenger="treatment")
+    )
+    reader = _CountingReader(_variant_recs())
+    app = create_app(
+        _settings(
+            experiment=_experiment_settings(allocation=ALLOCATION_THOMPSON, explore_traffic=1.0),
+            output=output,
+            track=TrackSettings(enabled=True),
+        ),
+        reader,
+        manifest_reader=_FakeManifest(),
+        feature_config=_feature_config(),
+    )
+    body = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
+    assert body["variant"] in {"control", "treatment"}
+    assert reader.present_calls == 0
+
+
+def test_serve_skips_snapshot_names_when_experiments_are_off():
+    class _CountingReader(_FakeReader):
+        def __init__(self, recs: pd.DataFrame):
+            super().__init__(recs)
+            self.present_calls = 0
+
+        def present_variant_names(self):
+            self.present_calls += 1
+            return ("control", "treatment")
+
+    reader = _CountingReader(_variant_recs())
+    app = create_app(
+        _settings(),
+        reader,
+        manifest_reader=_FakeManifest(),
+        feature_config=_feature_config(),
+    )
+    body = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
+    assert body["experiment_id"] is None
+    assert reader.present_calls == 0
+
+
 def test_serve_hashes_snapshot_names_without_overlay(tmp_path):
     from cicerone.config.constants import ALLOCATION_THOMPSON
 

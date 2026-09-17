@@ -94,6 +94,23 @@ def resolve_assignment(
     return experiment.id, variant
 
 
+def assignment_needs_snapshot(
+    settings: Settings,
+    *,
+    promoted_variant: str | None = None,
+    active_pair: tuple[str, str] | None = None,
+) -> bool:
+    experiment = settings.experiment
+    if not experiment.enabled or experiment.allocation != ALLOCATION_THOMPSON:
+        return False
+    if promoted_variant is not None:
+        return False
+    names = {item.name for item in experiment.variants}
+    if not names and experiment.automl_challenger:
+        names = {CONTROL_NAME, TREATMENT_NAME}
+    return not (active_pair is not None and active_pair[0] in names and active_pair[1] in names)
+
+
 def snapshot_variant_names(reader: object) -> tuple[str, ...] | None:
     present = getattr(reader, "present_variant_names", None)
     if not callable(present):

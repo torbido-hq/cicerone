@@ -20,7 +20,11 @@ from cicerone.config import Settings, load_settings
 from cicerone.config.constants import DEFAULT_LOG_FORMAT, DEFAULT_SERVE_MAX_K, TRACK_KIND_IMPRESSION
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
-from cicerone.experiment.assignment import resolve_assignment, snapshot_variant_names
+from cicerone.experiment.assignment import (
+    assignment_needs_snapshot,
+    resolve_assignment,
+    snapshot_variant_names,
+)
 from cicerone.experiment.evaluate import exposure_row
 from cicerone.experiment.store import ExperimentStore
 from cicerone.feature_config import FeatureConfig, load_feature_config
@@ -357,12 +361,17 @@ def create_app(
         )
         fetch_k = max(top_k * 5, top_k) if can_filter else top_k
         promoted, active_pair = overlay_cache.get()
+        snapshot = (
+            _snapshot_variant_names(reader)
+            if assignment_needs_snapshot(settings, promoted_variant=promoted, active_pair=active_pair)
+            else None
+        )
         experiment_id, variant = resolve_assignment(
             settings,
             user_id,
             promoted_variant=promoted,
             active_pair=active_pair,
-            snapshot_names=_snapshot_variant_names(reader),
+            snapshot_names=snapshot,
         )
         recs = reader.get_recommendations(user_id, fetch_k, variant=variant)
         used_fallback = False

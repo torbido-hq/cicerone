@@ -127,57 +127,55 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
         self._present_variants = names
         return names
 
-    def _fallback_variant_for_user(self, user_id: str) -> str | None:
-        if self._supports_variant_column() is False:
-            return None
-        try:
-            frame = pd.read_sql(
-                text(
-                    f'SELECT DISTINCT "{VARIANT_COLUMN}" FROM "{self._table}" '
-                    f'WHERE "{USER_COLUMN}" = :user_id'
-                ),
-                self._engine,
-                params={"user_id": user_id},
-            )
-        except Exception as exc:
-            if self._remember_missing_variant_column(exc):
-                return None
-            logger.exception(
-                "Failed to list recommendation variants for user %r in %r",
-                user_id,
-                self._table,
-            )
-            return None
-        if frame.empty:
-            return None
-        return _rec.pick_fallback_variant(frame.iloc[:, 0].tolist())
-
     def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame:
-        variant = self._assigned_variant(variant)
-        if variant is None:
-            variant = self._fallback_variant_for_user(user_id)
-        if variant is None:
-            sql = text(
-                f'SELECT * FROM "{self._table}" WHERE "{USER_COLUMN}" = :user_id '
-                f'ORDER BY "{RANK_COLUMN}" ASC LIMIT :k'
-            )
-            params: dict[str, Any] = {"user_id": user_id, "k": k}
-        else:
+        assigned = self._assigned_variant(variant)
+        prefer_fallback = assigned is None and self._supports_variant_column() is not False
+        if assigned is not None:
             sql = text(
                 f'SELECT * FROM "{self._table}" WHERE "{USER_COLUMN}" = :user_id '
                 f'AND "{VARIANT_COLUMN}" = :variant '
                 f'ORDER BY "{RANK_COLUMN}" ASC LIMIT :k'
             )
-            params = {"user_id": user_id, "k": k, "variant": variant}
+            params: dict[str, Any] = {"user_id": user_id, "k": k, "variant": assigned}
+        elif prefer_fallback:
+            sql = text(
+                f'SELECT * FROM "{self._table}" WHERE "{USER_COLUMN}" = :user_id '
+                f'ORDER BY CASE WHEN "{VARIANT_COLUMN}" = :fallback THEN 0 ELSE 1 END, '
+                f'"{VARIANT_COLUMN}" ASC, "{RANK_COLUMN}" ASC LIMIT :k'
+            )
+            params = {"user_id": user_id, "k": k, "fallback": _rec.FALLBACK_VARIANT}
+        else:
+            sql = text(
+                f'SELECT * FROM "{self._table}" WHERE "{USER_COLUMN}" = :user_id '
+                f'ORDER BY "{RANK_COLUMN}" ASC LIMIT :k'
+            )
+            params = {"user_id": user_id, "k": k}
         try:
             rows = pd.read_sql(sql, self._engine, params=params)
         except Exception as exc:
-            if variant is None:
+            if assigned is not None:
+                if not self._remember_missing_variant_column(exc):
+                    raise
+                return self.get_recommendations(user_id, k)
+            if prefer_fallback and self._remember_missing_variant_column(exc):
+                return self.get_recommendations(user_id, k)
+            if prefer_fallback:
+                logger.exception(
+                    "Failed to prefer leftover variant for user %r in %r",
+                    user_id,
+                    self._table,
+                )
+                rows = pd.read_sql(
+                    text(
+                        f'SELECT * FROM "{self._table}" WHERE "{USER_COLUMN}" = :user_id '
+                        f'ORDER BY "{RANK_COLUMN}" ASC LIMIT :k'
+                    ),
+                    self._engine,
+                    params={"user_id": user_id, "k": k},
+                )
+            else:
                 raise
-            if not self._remember_missing_variant_column(exc):
-                raise
-            return self.get_recommendations(user_id, k)
-        if variant is None:
+        if assigned is None:
             rows = _rec.collapse_mixed_variants(rows)
             if not rows.empty:
                 rows = rows.head(k).reset_index(drop=True)
