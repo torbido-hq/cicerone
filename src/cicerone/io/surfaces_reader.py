@@ -13,6 +13,7 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 
 from cicerone.blending import LATEST_SOURCE, POPULAR_SOURCE
+from cicerone.io.db_errors import is_missing_table_error
 from cicerone.io.db_store import (
     DEFAULT_LATEST_TABLE,
     DEFAULT_NEIGHBORS_TABLE,
@@ -207,8 +208,10 @@ class DbSurfacesReader(SurfacesReader):
         sql = text(f'SELECT * FROM "{table}" ORDER BY "{RANK_COLUMN}" ASC LIMIT :k')
         try:
             return pd.read_sql(sql, self._engine, params={"k": k})
-        except MISSING_TABLE_ERRORS:
-            return pd.DataFrame()
+        except MISSING_TABLE_ERRORS as exc:
+            if is_missing_table_error(exc):
+                return pd.DataFrame()
+            raise
 
     def get_popular(self, k: int) -> pd.DataFrame:
         return self._read_ranked(self._popular_table, k)
@@ -223,8 +226,10 @@ class DbSurfacesReader(SurfacesReader):
         )
         try:
             return pd.read_sql(sql, self._engine, params={"item_id": item_id, "k": k})
-        except MISSING_TABLE_ERRORS:
-            return empty_neighbors_frame()
+        except MISSING_TABLE_ERRORS as exc:
+            if is_missing_table_error(exc):
+                return empty_neighbors_frame()
+            raise
 
 
 def similar_as_surface(neighbors: pd.DataFrame) -> pd.DataFrame:

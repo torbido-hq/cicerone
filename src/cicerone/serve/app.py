@@ -160,11 +160,14 @@ def _start_refresh_loop(
     interval_seconds: float,
     *,
     generated_at_cache: _GeneratedAtCache | None = None,
+    surfaces: SurfacesReader | None = None,
 ) -> None:
     def _loop() -> None:
         while True:
             time.sleep(interval_seconds)
             reader.refresh()
+            if surfaces is not None and hasattr(surfaces, "refresh"):
+                surfaces.refresh()
             if generated_at_cache is not None:
                 generated_at_cache.refresh()
 
@@ -661,15 +664,8 @@ def main() -> None:
         reader,
         settings.serve.refresh_interval_seconds,
         generated_at_cache=app.state.generated_at_cache,
+        surfaces=surfaces,
     )
-    if hasattr(surfaces, "refresh"):
-
-        def _refresh_surfaces() -> None:
-            while True:
-                time.sleep(settings.serve.refresh_interval_seconds)
-                surfaces.refresh()
-
-        threading.Thread(target=_refresh_surfaces, daemon=True).start()
     try:
         uvicorn.run(app, host=settings.serve.host, port=settings.serve.port)
     finally:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
+from sqlalchemy.exc import OperationalError
 
 from cicerone.blending import LATEST_SOURCE, POPULAR_SOURCE
 from cicerone.io.dataset_store import DatasetOutputSink
@@ -11,7 +13,7 @@ from cicerone.io.surfaces import (
     popular_from_events,
     surfaces_stamp_payload,
 )
-from cicerone.io.surfaces_reader import DatasetSurfacesReader, similar_as_surface
+from cicerone.io.surfaces_reader import DatasetSurfacesReader, DbSurfacesReader, similar_as_surface
 
 
 def test_popular_from_events_breaks_user_ties_by_event_count():
@@ -83,6 +85,33 @@ def test_neighbors_from_events_scores_shared_users():
     frame = neighbors_from_events(events, 2)
     a_neighbors = frame.loc[frame["item_id"] == "a"].sort_values("rank")
     assert list(a_neighbors["neighbor_id"])[0] == "b"
+
+
+def test_surface_builders_drop_blank_ids():
+    events = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "a"},
+            {"user_id": None, "item_id": "b"},
+            {"user_id": "u2", "item_id": float("nan")},
+            {"user_id": "  ", "item_id": "c"},
+            {"user_id": "u3", "item_id": "  "},
+        ]
+    )
+    popular = popular_from_events(events, 5)
+    assert list(popular["item_id"]) == ["a"]
+    neighbors = neighbors_from_events(events, 3)
+    assert neighbors.empty
+    latest = latest_from_items(
+        pd.DataFrame(
+            [
+                {"item_id": None, "published_at": "2026-09-01T00:00:00Z"},
+                {"item_id": "  ", "published_at": "2026-09-02T00:00:00Z"},
+                {"item_id": "keep", "published_at": "2026-09-03T00:00:00Z"},
+            ]
+        ),
+        5,
+    )
+    assert list(latest["item_id"]) == ["keep"]
 
 
 def test_surface_builders_empty_inputs():
@@ -179,3 +208,27 @@ def test_dataset_surfaces_reader_ignores_partial_legacy_files(tmp_path):
     )
     reader = DatasetSurfacesReader(options)
     assert reader.get_popular(1).empty
+
+
+def test_db_surfaces_reader_keeps_missing_table_empty(monkeypatch):
+    reader = DbSurfacesReader({"database_url": "sqlite://"})
+
+    def missing(*_args, **_kwargs):
+        raise OperationalError("SELECT", {}, Exception("no such table: recommendation_popular"))
+
+    monkeypatch.setattr(pd, "read_sql", missing)
+    assert reader.get_popular(5).empty
+    assert reader.get_similar("i1", 5).empty
+
+
+def test_db_surfaces_reader_reraises_connectivity_errors(monkeypatch):
+    reader = DbSurfacesReader({"database_url": "sqlite://"})
+
+    def refused(*_args, **_kwargs):
+        raise OperationalError("SELECT", {}, Exception("connection refused"))
+
+    monkeypatch.setattr(pd, "read_sql", refused)
+    with pytest.raises(OperationalError):
+        reader.get_popular(5)
+    with pytest.raises(OperationalError):
+        reader.get_similar("i1", 5)

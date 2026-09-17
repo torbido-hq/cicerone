@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pandas as pd
 from fastapi.testclient import TestClient
+from prometheus_client import generate_latest
+from support.prometheus_metrics import metric_value
 from test_serve import _FakeReader, _feature_config, _items_df, _recs_df, _settings
 
 from cicerone.config.constants import DEFAULT_SERVE_MAX_K
@@ -62,6 +64,10 @@ def test_popular_latest_similar_and_session():
     session = client.post("/session/recommendations", json={"items": ["i1"]}, headers=headers).json()
     assert session["fallback"] is False
     assert [row["item_id"] for row in session["items"]] == ["i2"]
+    metrics = generate_latest().decode()
+    assert metric_value(metrics, "cicerone_recommendations_served_total", {"source": "popular"}) >= 1
+    assert metric_value(metrics, "cicerone_recommendations_served_total", {"source": "latest"}) >= 1
+    assert metric_value(metrics, "cicerone_recommendations_served_total", {"source": "item_based"}) >= 1
 
 
 def test_session_falls_back_when_neighbors_are_filtered_out():

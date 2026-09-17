@@ -12,6 +12,7 @@ import pandas as pd
 from cicerone.blending import LATEST_SOURCE, POPULAR_SOURCE, resolve_latest_date_column
 from cicerone.feature_config import DEFAULT_LATEST_DATE_COLUMNS
 from cicerone.io.recommendation_schema import ITEM_COLUMN, RANK_COLUMN, SCORE_COLUMN, SOURCE_COLUMN
+from cicerone.values import is_missing
 
 NEIGHBOR_ITEM_COLUMN = "neighbor_id"
 POPULAR_FILENAME = "popular.parquet"
@@ -51,14 +52,24 @@ def empty_neighbors_frame() -> pd.DataFrame:
     return pd.DataFrame(columns=list(NEIGHBOR_COLUMNS))
 
 
+def _clean_ids(frame: pd.DataFrame, column: str) -> pd.Series:
+    return frame[column].map(lambda value: "" if is_missing(value) else str(value).strip())
+
+
 def popular_from_events(events: pd.DataFrame, k: int) -> pd.DataFrame:
     """Global popularity: distinct users per item, then event count."""
     if k < 1 or events.empty or ITEM_COLUMN not in events.columns:
         return empty_surface_frame(source=POPULAR_SOURCE)
     frame = events[[ITEM_COLUMN]].copy()
-    frame[ITEM_COLUMN] = frame[ITEM_COLUMN].astype(str)
+    frame[ITEM_COLUMN] = _clean_ids(events, ITEM_COLUMN)
+    keep = frame[ITEM_COLUMN] != ""
     if "user_id" in events.columns:
-        frame["user_id"] = events["user_id"].astype(str)
+        frame["user_id"] = _clean_ids(events, "user_id")
+        keep = keep & (frame["user_id"] != "")
+    frame = frame.loc[keep]
+    if frame.empty:
+        return empty_surface_frame(source=POPULAR_SOURCE)
+    if "user_id" in frame.columns:
         users = frame.drop_duplicates().groupby(ITEM_COLUMN, sort=False).size().rename(SCORE_COLUMN)
         event_count = frame.groupby(ITEM_COLUMN, sort=False).size().rename("_n_events")
         scored = pd.concat([users, event_count], axis=1).reset_index()
@@ -87,7 +98,10 @@ def latest_from_items(
     if date_column is None:
         return empty_surface_frame(source=LATEST_SOURCE)
     frame = items[[ITEM_COLUMN, date_column]].copy()
-    frame[ITEM_COLUMN] = frame[ITEM_COLUMN].astype(str)
+    frame[ITEM_COLUMN] = _clean_ids(items, ITEM_COLUMN)
+    frame = frame.loc[frame[ITEM_COLUMN] != ""]
+    if frame.empty:
+        return empty_surface_frame(source=LATEST_SOURCE)
     frame["_date"] = pd.to_datetime(frame[date_column], errors="coerce", utc=True)
     frame = frame.dropna(subset=["_date"])
     if frame.empty:
@@ -112,9 +126,10 @@ def neighbors_from_events(
     columns = ["user_id", ITEM_COLUMN]
     if "occurred_at" in events.columns:
         columns.append("occurred_at")
-    pairs = events[columns].dropna(subset=["user_id", ITEM_COLUMN]).copy()
-    pairs["user_id"] = pairs["user_id"].astype(str)
-    pairs[ITEM_COLUMN] = pairs[ITEM_COLUMN].astype(str)
+    pairs = events[columns].copy()
+    pairs["user_id"] = _clean_ids(pairs, "user_id")
+    pairs[ITEM_COLUMN] = _clean_ids(pairs, ITEM_COLUMN)
+    pairs = pairs.loc[(pairs["user_id"] != "") & (pairs[ITEM_COLUMN] != "")]
     if "occurred_at" in pairs.columns:
         pairs["_at"] = pd.to_datetime(pairs["occurred_at"], errors="coerce", utc=True)
         pairs = pairs.sort_values("_at", ascending=False, kind="mergesort")

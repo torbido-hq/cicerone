@@ -16,6 +16,7 @@ from cicerone.io.recommendation_schema import ITEM_COLUMN, RANK_COLUMN, SCORE_CO
 from cicerone.io.surfaces_reader import SurfacesReader, similar_as_surface
 from cicerone.serve.consumed import consumed_item_ids, drop_consumed
 from cicerone.serve.item_filters import filter_recommendations
+from cicerone.serve.metrics import record_recommendations_served
 from cicerone.serve_schemas import (
     ErrorDetail,
     SessionRecommendRequest,
@@ -101,7 +102,15 @@ def mount_surface_routes(
         )
         return drop_consumed(frame, consumed)
 
+    def _record(frame: pd.DataFrame, source: str) -> None:
+        if SOURCE_COLUMN in frame.columns:
+            stored = {str(value) for value in frame[SOURCE_COLUMN].tolist() if str(value)}
+        else:
+            stored = set()
+        record_recommendations_served(stored or {source})
+
     def _surface(frame: pd.DataFrame, source: str, generated_at: str | None) -> SurfaceResponse:
+        _record(frame, source)
         return SurfaceResponse(generated_at=generated_at, items=frame_to_items(frame, source))
 
     @app.get(
@@ -180,6 +189,7 @@ def mount_surface_routes(
         rows = _maybe_hide(rows, user_id).head(top_k)
         if rows.empty:
             raise HTTPException(status_code=404, detail=f"No similar items for item_id={item_id!r}")
+        _record(rows, "item_based")
         return SimilarResponse(
             generated_at=filter_ctx()["generated_at"](),
             item_id=item_id,
@@ -230,8 +240,10 @@ def mount_surface_routes(
             merged = drop_consumed(merged, set(session_ids)).head(top_k)
         if merged.empty:
             raise HTTPException(status_code=404, detail="No session recommendations")
+        source = "popular_fallback" if used_fallback else "item_based"
+        _record(merged, source)
         return SessionRecommendResponse(
             generated_at=filter_ctx()["generated_at"](),
             fallback=used_fallback,
-            items=frame_to_items(merged, "item_based" if not used_fallback else "popular_fallback"),
+            items=frame_to_items(merged, source),
         )
