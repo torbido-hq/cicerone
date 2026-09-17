@@ -90,6 +90,22 @@ def _fresh_matched_state(settings: Settings, store: ExperimentStore) -> dict[str
     return None
 
 
+def _live_thompson_pair(
+    state: Mapping[str, Any] | None,
+    names: set[str],
+) -> tuple[str, str] | None:
+    pair = active_pair_from_state(state)
+    if pair is None or pair[0] not in names or pair[1] not in names:
+        return None
+    return pair
+
+
+def _thompson_pair_names(settings: Settings, recipes: Sequence[Any] = ()) -> set[str]:
+    names = {item.name for item in settings.experiment.variants}
+    recipe_names = {item.name for item in recipes}
+    return names & recipe_names if recipe_names else names
+
+
 def _eval_recipes(
     recipes: tuple[ResolvedRecipe, ...],
     experiment: ExperimentSettings,
@@ -316,7 +332,7 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
     ship_variant = None
     if not promoted and not blocked:
         if experiment.allocation == ALLOCATION_THOMPSON:
-            pair = active_pair_from_state(state)
+            pair = _live_thompson_pair(state, {recipe.name for recipe in recipes})
             ship_variant = pair[0] if pair else None
         else:
             ship_variant = report.winner
@@ -343,8 +359,12 @@ def _lift_label(metric: str) -> str:
     return "Mean lift"
 
 
-def _thompson_promote_error(variant: str, state: Mapping[str, Any] | None) -> str | None:
-    pair = active_pair_from_state(state)
+def _thompson_promote_error(
+    variant: str,
+    state: Mapping[str, Any] | None,
+    names: set[str],
+) -> str | None:
+    pair = _live_thompson_pair(state, names)
     if pair and variant in pair:
         return None
     if not pair:
@@ -385,8 +405,9 @@ def promote_winner(settings: Settings, variant: str) -> str | None:
     blocked = _ship_blocked(report, settings.experiment)
     if blocked:
         return "Experiment is not ready to promote (" + ", ".join(blocked) + ")"
+    pair_names = _thompson_pair_names(settings, context.get("recipes") or ())
     if settings.experiment.allocation == ALLOCATION_THOMPSON:
-        error = _thompson_promote_error(variant, context.get("thompson"))
+        error = _thompson_promote_error(variant, context.get("thompson"), pair_names)
         if error:
             return error
     elif report.winner and report.winner != variant:
@@ -399,7 +420,7 @@ def promote_winner(settings: Settings, variant: str) -> str | None:
             else _matched_state(settings, store)
         )
         if settings.experiment.allocation == ALLOCATION_THOMPSON:
-            error = _thompson_promote_error(variant, state)
+            error = _thompson_promote_error(variant, state, pair_names)
             if error:
                 raise _PromoteRejected(error)
         return merge_experiment_state(
