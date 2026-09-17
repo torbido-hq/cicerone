@@ -284,8 +284,15 @@ class DatasetOutputSink:
         latest: pd.DataFrame,
         neighbors: pd.DataFrame,
     ) -> None:
-        from cicerone.io.surfaces import LATEST_FILENAME, NEIGHBORS_FILENAME, POPULAR_FILENAME
+        from cicerone.io.surfaces import (
+            LATEST_FILENAME,
+            NEIGHBORS_FILENAME,
+            POPULAR_FILENAME,
+            SURFACES_STAMP_FILENAME,
+            surfaces_stamp_payload,
+        )
 
+        payloads: list[tuple[str, bytes]] = []
         for filename, frame in (
             (POPULAR_FILENAME, popular),
             (LATEST_FILENAME, latest),
@@ -293,9 +300,14 @@ class DatasetOutputSink:
         ):
             buffer = io.BytesIO()
             frame.to_parquet(buffer, index=False)
-            with self._maybe_recommendations_lock():
-                self._ensure_writer_still_held()
-                self._write_bytes(filename, buffer.getvalue(), "application/octet-stream")
+            payloads.append((filename, buffer.getvalue()))
+        stamp = surfaces_stamp_payload(payloads)
+        with self._maybe_recommendations_lock():
+            self._ensure_writer_still_held()
+            for filename, payload in payloads:
+                self._write_bytes(filename, payload, "application/octet-stream")
+            self._ensure_writer_still_held()
+            self._write_bytes(SURFACES_STAMP_FILENAME, stamp, "application/json")
 
     def write_manifest(self, manifest: dict, *, skip_if_newer_than: str | None = None) -> bool:
         payload = json.dumps(manifest, indent=2).encode("utf-8")

@@ -23,6 +23,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Dataset surface refresh applies a new popular/latest/neighbors snapshot only when all three files match the job stamp.
+- Job marks `partial_outputs` before the multi-file surface write so a mid-write failure is not reported as clean.
+- `POST /session/recommendations` accepts only an `items` list of item ids.
 - Serve keeps the last `item_scores` catalog when a refresh cannot read scores (I/O error, missing file or table after a load, or invalid values). Before the first successful load, missing data still serves empty.
 - Serve rejects `item_scores` catalogs with blank or duplicate `item_id`s or non-integral `n_users` and keeps the last valid cache.
 - `GET /item-scores` treats an empty-string `cursor` as a seek point instead of restarting the first page.

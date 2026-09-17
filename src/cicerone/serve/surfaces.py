@@ -185,9 +185,7 @@ def mount_surface_routes(
         },
     )
     def post_session(body: SessionRecommendRequest) -> SessionRecommendResponse:
-        session_ids = [str(item_id) for item_id in body.items if str(item_id).strip()]
-        session_ids.extend(str(event.item_id) for event in body.events if event.item_id)
-        session_ids = list(dict.fromkeys(session_ids))
+        session_ids = list(dict.fromkeys(str(item_id) for item_id in body.items if str(item_id).strip()))
         if not session_ids:
             raise HTTPException(status_code=400, detail="Session must include at least one item_id")
         if len(session_ids) > DEFAULT_SERVE_MAX_K:

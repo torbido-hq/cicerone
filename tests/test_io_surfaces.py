@@ -90,3 +90,24 @@ def test_dataset_surfaces_reader_round_trip(tmp_path):
     assert reader.get_similar("missing", 5).empty
     reader.refresh()
     assert list(reader.get_popular(1)["item_id"]) == ["i1"]
+    assert (tmp_path / "surfaces_stamp.json").is_file()
+
+
+def test_dataset_surfaces_reader_keeps_cache_when_stamp_mismatches(tmp_path):
+    options = {"storage_backend": "local", "path": str(tmp_path)}
+    sink = DatasetOutputSink(options)
+    sink.write_surfaces(
+        popular=pd.DataFrame([{"item_id": "i1", "rank": 1, "score": 3.0, "source": "popular_fallback"}]),
+        latest=pd.DataFrame([{"item_id": "i2", "rank": 1, "score": 2.0, "source": "latest"}]),
+        neighbors=pd.DataFrame([{"item_id": "i1", "neighbor_id": "i2", "rank": 1, "score": 0.9}]),
+    )
+    reader = DatasetSurfacesReader(options)
+    sink.write_surfaces(
+        popular=pd.DataFrame([{"item_id": "i9", "rank": 1, "score": 9.0, "source": "popular_fallback"}]),
+        latest=pd.DataFrame([{"item_id": "i8", "rank": 1, "score": 1.0, "source": "latest"}]),
+        neighbors=pd.DataFrame([{"item_id": "i9", "neighbor_id": "i8", "rank": 1, "score": 0.2}]),
+    )
+    (tmp_path / "popular.parquet").write_bytes((tmp_path / "latest.parquet").read_bytes())
+    reader.refresh()
+    assert list(reader.get_popular(1)["item_id"]) == ["i1"]
+    assert list(reader.get_latest(1)["item_id"]) == ["i2"]

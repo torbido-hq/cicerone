@@ -589,31 +589,8 @@
         "title": "RecommendationsResponse",
         "type": "object"
       },
-      "SessionItem": {
-        "properties": {
-          "item_id": {
-            "description": "Catalog item id observed in this session",
-            "title": "Item Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "item_id"
-        ],
-        "title": "SessionItem",
-        "type": "object"
-      },
       "SessionRecommendRequest": {
         "properties": {
-          "events": {
-            "description": "Optional session events; only item_id is used",
-            "items": {
-              "$ref": "#/components/schemas/SessionItem"
-            },
-            "maxItems": 100,
-            "title": "Events",
-            "type": "array"
-          },
           "items": {
             "description": "Item ids in this anonymous session",
             "items": {

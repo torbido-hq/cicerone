@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import io
+import json
 import logging
 import threading
 from pathlib import Path
@@ -20,6 +22,7 @@ from cicerone.io.db_store import (
 from cicerone.io.options import (
     build_s3_client,
     is_s3_not_found,
+    object_key,
     read_parquet,
     require_option,
     sql_identifier,
@@ -31,8 +34,11 @@ from cicerone.io.surfaces import (
     NEIGHBOR_ITEM_COLUMN,
     NEIGHBORS_FILENAME,
     POPULAR_FILENAME,
+    SURFACE_FILES,
+    SURFACES_STAMP_FILENAME,
     empty_neighbors_frame,
     empty_surface_frame,
+    surfaces_stamp_sha256,
 )
 
 logger = logging.getLogger(__name__)
@@ -82,6 +88,27 @@ class DatasetSurfacesReader(SurfacesReader):
             self._s3_client = build_s3_client(self._options)
         return self._s3_client
 
+    def _read_bytes(self, filename: str) -> bytes | None:
+        try:
+            if self._backend == "local":
+                path = Path(require_option(self._options, "path", "local")) / filename
+                return path.read_bytes()
+            bucket = require_option(self._options, "bucket", "s3")
+            key = object_key(self._options, filename)
+            response = self._get_s3_client().get_object(Bucket=bucket, Key=key)
+            body = response["Body"]
+            try:
+                return body.read()
+            finally:
+                body.close()
+        except FileNotFoundError:
+            return None
+        except Exception as exc:
+            if is_s3_not_found(exc):
+                return None
+            logger.exception("Failed to load surface file %s", filename)
+            return None
+
     def _read(self, filename: str) -> pd.DataFrame | None:
         try:
             if self._backend == "local":
@@ -102,6 +129,28 @@ class DatasetSurfacesReader(SurfacesReader):
             return None
 
     def refresh(self) -> None:
+        stamp_bytes = self._read_bytes(SURFACES_STAMP_FILENAME)
+        if stamp_bytes is not None:
+            files: list[tuple[str, bytes]] = []
+            for filename in SURFACE_FILES:
+                payload = self._read_bytes(filename)
+                if payload is None:
+                    return
+                files.append((filename, payload))
+            try:
+                expected = json.loads(stamp_bytes.decode()).get("sha256")
+            except (UnicodeDecodeError, json.JSONDecodeError, AttributeError):
+                return
+            if expected != surfaces_stamp_sha256(files):
+                return
+            popular = pd.read_parquet(io.BytesIO(files[0][1]))
+            latest = pd.read_parquet(io.BytesIO(files[1][1]))
+            neighbors = pd.read_parquet(io.BytesIO(files[2][1]))
+            with self._lock:
+                self._popular = popular
+                self._latest = latest
+                self._neighbors = neighbors
+            return
         popular = self._read(POPULAR_FILENAME)
         latest = self._read(LATEST_FILENAME)
         neighbors = self._read(NEIGHBORS_FILENAME)

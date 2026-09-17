@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections import defaultdict
 from collections.abc import Sequence
 
@@ -15,7 +17,24 @@ NEIGHBOR_ITEM_COLUMN = "neighbor_id"
 POPULAR_FILENAME = "popular.parquet"
 LATEST_FILENAME = "latest.parquet"
 NEIGHBORS_FILENAME = "item_neighbors.parquet"
+SURFACES_STAMP_FILENAME = "surfaces_stamp.json"
 DEFAULT_NEIGHBOR_HISTORY_CAP = 200
+SURFACE_FILES: tuple[str, str, str] = (POPULAR_FILENAME, LATEST_FILENAME, NEIGHBORS_FILENAME)
+
+
+def surfaces_stamp_sha256(files: Sequence[tuple[str, bytes]]) -> str:
+    digest = hashlib.sha256()
+    for filename, payload in files:
+        digest.update(filename.encode())
+        digest.update(len(payload).to_bytes(8, "big"))
+        digest.update(payload)
+    return digest.hexdigest()
+
+
+def surfaces_stamp_payload(files: Sequence[tuple[str, bytes]]) -> bytes:
+    return json.dumps({"sha256": surfaces_stamp_sha256(files)}).encode()
+
+
 SURFACE_COLUMNS: tuple[str, ...] = (ITEM_COLUMN, RANK_COLUMN, SCORE_COLUMN, SOURCE_COLUMN)
 NEIGHBOR_COLUMNS: tuple[str, ...] = (ITEM_COLUMN, NEIGHBOR_ITEM_COLUMN, RANK_COLUMN, SCORE_COLUMN)
 

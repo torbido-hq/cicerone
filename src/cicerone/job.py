@@ -849,12 +849,12 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                         outputs_written = True
                     if callable(write_surfaces):
                         _ensure_publication_fence(sink, fence_check)
+                        outputs_written = True
                         write_surfaces(
                             popular=popular,
                             latest=latest,
                             neighbors=neighbors,
                         )
-                        outputs_written = True
                     _ensure_publication_fence(sink, fence_check)
                     sink.write_recommendations(recommendations)
                     outputs_written = True

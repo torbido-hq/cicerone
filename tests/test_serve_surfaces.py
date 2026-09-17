@@ -118,6 +118,16 @@ def test_session_requires_an_item():
     assert response.status_code == 400
 
 
+def test_session_ignores_events_and_requires_items():
+    client = TestClient(_app())
+    response = client.post(
+        "/session/recommendations",
+        json={"events": [{"item_id": "i1"}]},
+        headers={"Authorization": "Bearer secret"},
+    )
+    assert response.status_code == 400
+
+
 def test_session_overfetches_neighbors_before_filters():
     class _UnavailableFirst(_Surfaces):
         def __init__(self) -> None:

@@ -205,20 +205,11 @@ class SimilarResponse(SurfaceResponse):
     item_id: str
 
 
-class SessionItem(BaseModel):
-    item_id: str = Field(description="Catalog item id observed in this session")
-
-
 class SessionRecommendRequest(BaseModel):
     items: list[str] = Field(
         default_factory=list,
         max_length=DEFAULT_SERVE_MAX_K,
         description="Item ids in this anonymous session",
-    )
-    events: list[SessionItem] = Field(
-        default_factory=list,
-        max_length=DEFAULT_SERVE_MAX_K,
-        description="Optional session events; only item_id is used",
     )
 
 
