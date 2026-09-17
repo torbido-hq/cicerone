@@ -24,7 +24,7 @@ prefix = "recommendations/latest"
 
 [dashboard]
 enabled = true
-host = "0.0.0.0"
+host = "0.0.0.0"  # compose/container bind; default is 127.0.0.1
 port = 8090
 # HTTP Basic Auth users (username -> bcrypt hash), managed with:
 #   cicerone users --config ./config/cicerone.dashboard.toml add <username>

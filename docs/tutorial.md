@@ -487,7 +487,9 @@ second `[output.options]` or `[serve]` header is a duplicate table and TOML
 parsing fails. Replacing `[output.options]` also drops the `${OUTPUT_S3_*}`
 placeholders, which would otherwise resolve against environment variables you
 have not set. Everything omitted from `[serve]` keeps its default (`host`
-`0.0.0.0`, `port` 8000, `default_k` 10, `refresh_interval_seconds` 60):
+`127.0.0.1`, `port` 8000, `default_k` 10, `refresh_interval_seconds` 60).
+The container publish (`-p 8000:8000`) needs the process listening on all
+container interfaces, so set `host` explicitly:
 
 ```toml
 [output.options]
@@ -496,6 +498,7 @@ path = "/data/output"
 
 [serve]
 auth_token = "tutorial-token"
+host = "0.0.0.0"
 category_column = "category"
 
 [track]
