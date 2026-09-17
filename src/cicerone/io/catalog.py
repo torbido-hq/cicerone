@@ -10,6 +10,7 @@ import pandas as pd
 from cicerone.events.normalize import normalize_event
 from cicerone.io.recommendation_schema import ITEM_COLUMN, USER_COLUMN
 from cicerone.io.user_lookup import OCCURRED_AT_COLUMN, filter_rows_for_user
+from cicerone.values import is_missing
 
 EVENT_TYPE_COLUMN = "event_type"
 EVENT_ID_COLUMN = "event_id"
@@ -113,9 +114,9 @@ def jsonable_row(row: dict[str, Any]) -> dict[str, Any]:
         if hasattr(value, "item") and not isinstance(value, (bytes, bytearray, str)):
             with suppress(ValueError, AttributeError):
                 value = value.item()
-        if hasattr(value, "isoformat") and not isinstance(value, str):
-            value = value.isoformat()
-        if isinstance(value, float) and value != value:  # NaN
+        if is_missing(value):
             value = None
+        elif hasattr(value, "isoformat") and not isinstance(value, str):
+            value = value.isoformat()
         out[str(key)] = value
     return out

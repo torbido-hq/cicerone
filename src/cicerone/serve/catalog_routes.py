@@ -228,7 +228,7 @@ def mount_catalog_routes(
             accepted, discard, add = store.replace_events(rows)
         except ValidationError as exc:
             raise HTTPException(status_code=422, detail=exc.errors()) from exc
-        except (ValueError, EventNormalizeError) as exc:
+        except (OverflowError, ValueError, EventNormalizeError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if overlay is not None:
             overlay.replace_pairs(discard, add)

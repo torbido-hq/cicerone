@@ -97,15 +97,14 @@ class DatasetCatalogStore:
         return user_row_or_none(self._read(_USERS), user_id)
 
     def delete_user(self, user_id: str) -> int:
-        with self._locks[_USERS]:
+        with self._locks[_USERS], self._locks[_EVENTS]:
             users = self._read(_USERS)
             before = 0
             if not users.empty and USER_COLUMN in users.columns:
                 before = int((users[USER_COLUMN].astype(str) == str(user_id)).sum())
                 remaining = users.loc[users[USER_COLUMN].astype(str) != str(user_id)]
                 self._write(_USERS, remaining.reset_index(drop=True))
-        events_deleted = self.delete_events_for_user(user_id)
-        return before + events_deleted
+            return before + self._delete_events_locked(user_id)
 
     def upsert_item(self, row: dict[str, Any]) -> None:
         item_id = require_id(row, ITEM_COLUMN)
@@ -172,14 +171,17 @@ class DatasetCatalogStore:
 
     def delete_events_for_user(self, user_id: str, *, item_id: str | None = None) -> int:
         with self._locks[_EVENTS]:
-            events = self._read(_EVENTS)
-            if events.empty or USER_COLUMN not in events.columns:
+            return self._delete_events_locked(user_id, item_id=item_id)
+
+    def _delete_events_locked(self, user_id: str, *, item_id: str | None = None) -> int:
+        events = self._read(_EVENTS)
+        if events.empty or USER_COLUMN not in events.columns:
+            return 0
+        mask = events[USER_COLUMN].astype(str) == str(user_id)
+        if item_id is not None:
+            if ITEM_COLUMN not in events.columns:
                 return 0
-            mask = events[USER_COLUMN].astype(str) == str(user_id)
-            if item_id is not None:
-                if ITEM_COLUMN not in events.columns:
-                    return 0
-                mask = mask & (events[ITEM_COLUMN].astype(str) == str(item_id))
-            deleted = int(mask.sum())
-            self._write(_EVENTS, events.loc[~mask].reset_index(drop=True))
-            return deleted
+            mask = mask & (events[ITEM_COLUMN].astype(str) == str(item_id))
+        deleted = int(mask.sum())
+        self._write(_EVENTS, events.loc[~mask].reset_index(drop=True))
+        return deleted

@@ -31,7 +31,10 @@ def parse_occurred_at(value: Any) -> datetime:
         dt = value
     elif isinstance(value, (int, float)):
         # Unix epoch seconds are always interpreted as UTC.
-        return datetime.fromtimestamp(float(value), tz=UTC)
+        try:
+            return datetime.fromtimestamp(float(value), tz=UTC)
+        except (OverflowError, OSError, ValueError) as exc:
+            raise EventNormalizeError("occurred_at is invalid") from exc
     elif isinstance(value, str):
         text = value.strip()
         if text.endswith(("Z", "z")):

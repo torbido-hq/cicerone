@@ -81,6 +81,25 @@ def test_catalog_events_reject_blank_ids(tmp_path):
     assert response.status_code == 400
 
 
+def test_catalog_events_reject_overflow_occurred_at(tmp_path):
+    store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
+    response = TestClient(create_app(_settings(), _FakeReader(_recs_df()), catalog=store)).post(
+        "/catalog/events",
+        json={
+            "events": [
+                {
+                    "user_id": "u1",
+                    "item_id": "i1",
+                    "event_type": "purchase",
+                    "occurred_at": 1e308,
+                }
+            ]
+        },
+        headers={"Authorization": "Bearer secret"},
+    )
+    assert response.status_code == 400
+
+
 def test_catalog_events_update_consumed_overlay(tmp_path):
     store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
     overlay = ConsumedOverlay()

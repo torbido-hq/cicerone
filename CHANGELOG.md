@@ -49,6 +49,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Catalog event upserts reconcile the consumed overlay from remaining catalog rows in one write.
 - `POST /catalog/events` uses the shared byte-limited JSON reader and documents 401/413/422.
 - Incremental catalog persist uses `replace_events` so a reused event id updates the consumed overlay.
+- Catalog GET rows map pandas missing timestamps (`NaT`/`NA`) to JSON `null`.
+- Dataset `DELETE /users/{id}` removes the user row and their events under one lock.
+- Catalog and webhook ingest return 400 for out-of-range `occurred_at` epochs.
 
 ## [0.8.2] - 2026-09-15
 

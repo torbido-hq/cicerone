@@ -78,6 +78,11 @@ def test_jsonable_row_isoformat():
     assert payload["occurred_at"].startswith("2026-09-11T12:00:00")
 
 
+def test_jsonable_row_maps_pandas_missing_to_none():
+    payload = jsonable_row({"occurred_at": pd.NaT, "comment": pd.NA, "score": math.nan})
+    assert payload == {"occurred_at": None, "comment": None, "score": None}
+
+
 def test_dataset_catalog_round_trip_and_empty_paths(tmp_path):
     store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
     assert store.get_user("u1") is None
@@ -166,6 +171,47 @@ def test_dataset_catalog_delete_user_without_user_id_column(tmp_path):
     store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
     pd.DataFrame([{"name": "alice"}]).to_parquet(tmp_path / "users.parquet", index=False)
     assert store.delete_user("u1") == 0
+
+
+def test_dataset_catalog_delete_user_blocks_concurrent_event_write(tmp_path):
+    store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
+    store.upsert_user({"user_id": "u1"})
+    store.upsert_events(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "event_type": "view",
+                "occurred_at": "2026-09-11T12:00:00Z",
+                "event_id": "e1",
+            }
+        ]
+    )
+    started = threading.Event()
+    proceed = threading.Event()
+    original_write = store._write
+
+    def gated_write(filename: str, frame: pd.DataFrame) -> None:
+        if filename == "users.parquet" and not started.is_set():
+            started.set()
+            assert proceed.wait(2)
+        original_write(filename, frame)
+
+    store._write = gated_write  # type: ignore[method-assign]
+    deleted: dict[str, int] = {}
+
+    def deleter() -> None:
+        deleted["n"] = store.delete_user("u1")
+
+    worker = threading.Thread(target=deleter)
+    worker.start()
+    assert started.wait(2)
+    assert store._locks["events.parquet"].locked()
+    proceed.set()
+    worker.join(2)
+    assert deleted["n"] >= 1
+    assert store.get_user("u1") is None
+    assert store.get_events_for_user("u1", 10).empty
 
 
 def test_dedupe_event_rows_last_wins():

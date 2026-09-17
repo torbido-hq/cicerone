@@ -59,6 +59,10 @@ def test_normalize_more_edge_cases():
         normalize_event(event_payload(user_id="  "))
     with pytest.raises(EventNormalizeError, match="occurred_at"):
         normalize_event(event_payload(occurred_at="not-a-date"))
+    with pytest.raises(EventNormalizeError, match="occurred_at"):
+        normalize_event(event_payload(occurred_at=float("inf")))
+    with pytest.raises(EventNormalizeError, match="occurred_at"):
+        normalize_event(event_payload(occurred_at=10**20))
     with pytest.raises(EventNormalizeError, match="timezone"):
         normalize_event(event_payload(occurred_at="2026-08-13T12:00:00"))
     with pytest.raises(EventNormalizeError, match="timezone"):

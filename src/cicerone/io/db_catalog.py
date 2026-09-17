@@ -30,6 +30,7 @@ from cicerone.io.db_store import (
 from cicerone.io.options import require_option, sql_identifier
 from cicerone.io.recommendation_schema import ITEM_COLUMN, USER_COLUMN
 from cicerone.io.user_lookup import OCCURRED_AT_COLUMN, newest_events
+from cicerone.values import is_missing
 
 logger = logging.getLogger(__name__)
 _SQL_HISTORY_OVERFETCH = 8
@@ -76,6 +77,8 @@ class DatabaseCatalogStore:
 
     @staticmethod
     def _sql_value(value: Any) -> Any:
+        if is_missing(value):
+            return None
         if isinstance(value, (dict, list)):
             return json.dumps(value)
         if hasattr(value, "isoformat") and not isinstance(value, str):
