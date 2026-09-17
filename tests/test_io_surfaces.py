@@ -146,6 +146,29 @@ def test_dataset_surfaces_reader_round_trip(tmp_path):
     assert many["missing"].empty
 
 
+def test_dataset_surfaces_reader_get_similar_many_avoids_full_frame_copy(tmp_path, monkeypatch):
+    options = {"storage_backend": "local", "path": str(tmp_path)}
+    sink = DatasetOutputSink(options)
+    sink.write_surfaces(
+        popular=pd.DataFrame([{"item_id": "i1", "rank": 1, "score": 3.0, "source": "popular_fallback"}]),
+        latest=pd.DataFrame([{"item_id": "i2", "rank": 1, "score": 2.0, "source": "latest"}]),
+        neighbors=pd.DataFrame(
+            [
+                {"item_id": "i1", "neighbor_id": "i2", "rank": 1, "score": 0.9},
+                {"item_id": "i1", "neighbor_id": "i3", "rank": 2, "score": 0.8},
+            ]
+        ),
+    )
+    reader = DatasetSurfacesReader(options)
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("full neighbors frame copy should not happen")
+
+    monkeypatch.setattr(reader._neighbors, "copy", boom)
+    many = reader.get_similar_many(["i1"], 2)
+    assert list(many["i1"]["neighbor_id"]) == ["i2", "i3"]
+
+
 def test_db_surfaces_reader_loads_session_neighbors_in_one_query(monkeypatch):
     reader = DbSurfacesReader({"database_url": "sqlite://"})
     calls: list[object] = []

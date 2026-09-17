@@ -21,6 +21,7 @@ from cicerone.config import IOSettings, Settings, load_settings
 from cicerone.config.constants import (
     ALLOCATION_THOMPSON,
     DEFAULT_LOG_FORMAT,
+    DEFAULT_SERVE_MAX_K,
     TRACK_KIND_IMPRESSION,
 )
 from cicerone.dataset import build_dataset
@@ -824,7 +825,7 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
         )
         surface_frames = None
         if callable(write_surfaces):
-            surface_k = max(settings.top_k, settings.serve.default_k * 5)
+            surface_k = max(settings.top_k, DEFAULT_SERVE_MAX_K * 5)
             surface_frames = (
                 popular_from_events(events, surface_k),
                 latest_from_items(
@@ -834,7 +835,7 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                 ),
                 neighbors_from_events(
                     events,
-                    max(settings.item_based_k_neighbors, settings.serve.default_k * 5),
+                    max(settings.item_based_k_neighbors, DEFAULT_SERVE_MAX_K * 5),
                 ),
             )
         try:

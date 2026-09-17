@@ -159,7 +159,7 @@ class DatasetSurfacesReader(SurfacesReader):
             with self._lock:
                 self._popular = popular
                 self._latest = latest
-                self._neighbors = neighbors
+                self._neighbors = _normalize_neighbors_frame(neighbors)
                 self._have_stamp = True
             return
         if self._have_stamp:
@@ -172,7 +172,7 @@ class DatasetSurfacesReader(SurfacesReader):
         with self._lock:
             self._popular = popular
             self._latest = latest
-            self._neighbors = neighbors
+            self._neighbors = _normalize_neighbors_frame(neighbors)
             self._have_stamp = True
 
     def get_popular(self, k: int) -> pd.DataFrame:
@@ -188,22 +188,20 @@ class DatasetSurfacesReader(SurfacesReader):
 
     def get_similar_many(self, item_ids: Sequence[str], k: int) -> dict[str, pd.DataFrame]:
         ids = [str(item_id) for item_id in item_ids]
+        empty = {item_id: empty_neighbors_frame() for item_id in ids}
         with self._lock:
             frame = self._neighbors
-            empty = {item_id: empty_neighbors_frame() for item_id in ids}
-            if frame.empty or ITEM_COLUMN not in frame.columns:
-                return empty
-            work = frame.copy()
-            work[ITEM_COLUMN] = work[ITEM_COLUMN].astype(str)
-            rows = work.loc[work[ITEM_COLUMN].isin(ids)]
-            if RANK_COLUMN in rows.columns:
-                rows = rows.sort_values([ITEM_COLUMN, RANK_COLUMN], kind="mergesort")
-            out = dict(empty)
-            for item_id, group in rows.groupby(ITEM_COLUMN, sort=False):
-                key = str(item_id)
-                if key in out:
-                    out[key] = group.head(k).reset_index(drop=True)
-            return out
+        if frame.empty or ITEM_COLUMN not in frame.columns:
+            return empty
+        rows = frame.loc[frame[ITEM_COLUMN].isin(ids)]
+        if RANK_COLUMN in rows.columns:
+            rows = rows.sort_values([ITEM_COLUMN, RANK_COLUMN], kind="mergesort")
+        out = dict(empty)
+        for item_id, group in rows.groupby(ITEM_COLUMN, sort=False):
+            key = str(item_id)
+            if key in out:
+                out[key] = group.head(k).reset_index(drop=True)
+        return out
 
 
 class DbSurfacesReader(SurfacesReader):
@@ -256,7 +254,6 @@ class DbSurfacesReader(SurfacesReader):
         out = dict(empty)
         if frame.empty or ITEM_COLUMN not in frame.columns:
             return out
-        frame = frame.copy()
         frame[ITEM_COLUMN] = frame[ITEM_COLUMN].astype(str)
         if RANK_COLUMN in frame.columns:
             frame = frame.sort_values([ITEM_COLUMN, RANK_COLUMN], kind="mergesort")
@@ -278,3 +275,11 @@ def similar_as_surface(neighbors: pd.DataFrame) -> pd.DataFrame:
     keep = [ITEM_COLUMN, RANK_COLUMN, SCORE_COLUMN, SOURCE_COLUMN]
     present = [column for column in keep if column in out.columns]
     return out[present].reset_index(drop=True)
+
+
+def _normalize_neighbors_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty or ITEM_COLUMN not in frame.columns:
+        return frame
+    out = frame.copy()
+    out[ITEM_COLUMN] = out[ITEM_COLUMN].astype(str)
+    return out

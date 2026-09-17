@@ -10,6 +10,7 @@ import pytest
 from cicerone import job
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import IOSettings
+from cicerone.config.constants import DEFAULT_SERVE_MAX_K
 from cicerone.job import _recommendation_user_count, _target_user_ids
 from cicerone.model import RRF_K
 from cicerone.track.store import TrackStore
@@ -142,9 +143,10 @@ def test_job_materializes_neighbors_for_session_overfetch(tmp_path, monkeypatch)
     monkeypatch.setattr("cicerone.job.popular_from_events", _popular)
     monkeypatch.setattr("cicerone.job.latest_from_items", _latest)
     job.run()
-    assert seen == [50]
-    assert popular_k == [50]
-    assert latest_k == [50]
+    expected = DEFAULT_SERVE_MAX_K * 5
+    assert seen == [expected]
+    assert popular_k == [expected]
+    assert latest_k == [expected]
 
 
 def test_job_uses_one_weighting_timestamp(tmp_path, monkeypatch):
