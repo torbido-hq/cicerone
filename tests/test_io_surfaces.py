@@ -141,6 +141,30 @@ def test_dataset_surfaces_reader_round_trip(tmp_path):
     reader.refresh()
     assert list(reader.get_popular(1)["item_id"]) == ["i1"]
     assert (tmp_path / "surfaces_stamp.json").is_file()
+    many = reader.get_similar_many(["i1", "missing"], 5)
+    assert list(similar_as_surface(many["i1"])["item_id"]) == ["i2"]
+    assert many["missing"].empty
+
+
+def test_db_surfaces_reader_loads_session_neighbors_in_one_query(monkeypatch):
+    reader = DbSurfacesReader({"database_url": "sqlite://"})
+    calls: list[object] = []
+
+    def one_shot(*_args, **_kwargs):
+        calls.append(_kwargs.get("params"))
+        return pd.DataFrame(
+            [
+                {"item_id": "i1", "neighbor_id": "a", "rank": 1, "score": 0.9},
+                {"item_id": "i2", "neighbor_id": "b", "rank": 1, "score": 0.8},
+                {"item_id": "i1", "neighbor_id": "c", "rank": 2, "score": 0.1},
+            ]
+        )
+
+    monkeypatch.setattr(pd, "read_sql", one_shot)
+    many = reader.get_similar_many(["i1", "i2"], 1)
+    assert len(calls) == 1
+    assert list(many["i1"]["neighbor_id"]) == ["a"]
+    assert list(many["i2"]["neighbor_id"]) == ["b"]
 
 
 def test_dataset_surfaces_reader_keeps_cache_when_stamp_mismatches(tmp_path):

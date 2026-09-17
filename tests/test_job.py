@@ -120,15 +120,31 @@ def test_job_materializes_neighbors_for_session_overfetch(tmp_path, monkeypatch)
     ).to_parquet(input_dir / "items.parquet", index=False)
     monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=1))
     seen: list[int] = []
+    popular_k: list[int] = []
+    latest_k: list[int] = []
     real = job.neighbors_from_events
+    real_popular = job.popular_from_events
+    real_latest = job.latest_from_items
 
     def _capture(events, k_neighbors):
         seen.append(k_neighbors)
         return real(events, k_neighbors)
 
+    def _popular(events, k):
+        popular_k.append(k)
+        return real_popular(events, k)
+
+    def _latest(items, k, date_columns=None):
+        latest_k.append(k)
+        return real_latest(items, k, date_columns)
+
     monkeypatch.setattr("cicerone.job.neighbors_from_events", _capture)
+    monkeypatch.setattr("cicerone.job.popular_from_events", _popular)
+    monkeypatch.setattr("cicerone.job.latest_from_items", _latest)
     job.run()
     assert seen == [50]
+    assert popular_k == [50]
+    assert latest_k == [50]
 
 
 def test_job_uses_one_weighting_timestamp(tmp_path, monkeypatch):

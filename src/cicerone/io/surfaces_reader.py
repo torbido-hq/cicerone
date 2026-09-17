@@ -6,11 +6,12 @@ import io
 import json
 import logging
 import threading
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import create_engine, text
+from sqlalchemy import bindparam, create_engine, text
 
 from cicerone.blending import LATEST_SOURCE, POPULAR_SOURCE
 from cicerone.io.db_errors import is_missing_table_error
@@ -54,6 +55,9 @@ class SurfacesReader:
 
     def get_similar(self, item_id: str, k: int) -> pd.DataFrame:
         raise NotImplementedError
+
+    def get_similar_many(self, item_ids: Sequence[str], k: int) -> dict[str, pd.DataFrame]:
+        return {str(item_id): self.get_similar(str(item_id), k) for item_id in item_ids}
 
     def refresh(self) -> None:
         return
@@ -180,14 +184,26 @@ class DatasetSurfacesReader(SurfacesReader):
             return self._latest.head(k).reset_index(drop=True)
 
     def get_similar(self, item_id: str, k: int) -> pd.DataFrame:
+        return self.get_similar_many([item_id], k)[str(item_id)]
+
+    def get_similar_many(self, item_ids: Sequence[str], k: int) -> dict[str, pd.DataFrame]:
+        ids = [str(item_id) for item_id in item_ids]
         with self._lock:
             frame = self._neighbors
+            empty = {item_id: empty_neighbors_frame() for item_id in ids}
             if frame.empty or ITEM_COLUMN not in frame.columns:
-                return empty_neighbors_frame()
-            rows = frame.loc[frame[ITEM_COLUMN].astype(str) == str(item_id)]
+                return empty
+            work = frame.copy()
+            work[ITEM_COLUMN] = work[ITEM_COLUMN].astype(str)
+            rows = work.loc[work[ITEM_COLUMN].isin(ids)]
             if RANK_COLUMN in rows.columns:
-                rows = rows.sort_values(RANK_COLUMN, kind="mergesort")
-            return rows.head(k).reset_index(drop=True)
+                rows = rows.sort_values([ITEM_COLUMN, RANK_COLUMN], kind="mergesort")
+            out = dict(empty)
+            for item_id, group in rows.groupby(ITEM_COLUMN, sort=False):
+                key = str(item_id)
+                if key in out:
+                    out[key] = group.head(k).reset_index(drop=True)
+            return out
 
 
 class DbSurfacesReader(SurfacesReader):
@@ -220,16 +236,35 @@ class DbSurfacesReader(SurfacesReader):
         return self._read_ranked(self._latest_table, k)
 
     def get_similar(self, item_id: str, k: int) -> pd.DataFrame:
+        return self.get_similar_many([item_id], k)[str(item_id)]
+
+    def get_similar_many(self, item_ids: Sequence[str], k: int) -> dict[str, pd.DataFrame]:
+        ids = [str(item_id) for item_id in item_ids]
+        empty = {item_id: empty_neighbors_frame() for item_id in ids}
+        if not ids:
+            return empty
         sql = text(
-            f'SELECT * FROM "{self._neighbors_table}" WHERE "{ITEM_COLUMN}" = :item_id '
-            f'ORDER BY "{RANK_COLUMN}" ASC LIMIT :k'
-        )
+            f'SELECT * FROM "{self._neighbors_table}" WHERE "{ITEM_COLUMN}" IN :ids '
+            f'ORDER BY "{RANK_COLUMN}" ASC'
+        ).bindparams(bindparam("ids", expanding=True))
         try:
-            return pd.read_sql(sql, self._engine, params={"item_id": item_id, "k": k})
+            frame = pd.read_sql(sql, self._engine, params={"ids": ids})
         except MISSING_TABLE_ERRORS as exc:
             if is_missing_table_error(exc):
-                return empty_neighbors_frame()
+                return empty
             raise
+        out = dict(empty)
+        if frame.empty or ITEM_COLUMN not in frame.columns:
+            return out
+        frame = frame.copy()
+        frame[ITEM_COLUMN] = frame[ITEM_COLUMN].astype(str)
+        if RANK_COLUMN in frame.columns:
+            frame = frame.sort_values([ITEM_COLUMN, RANK_COLUMN], kind="mergesort")
+        for item_id, group in frame.groupby(ITEM_COLUMN, sort=False):
+            key = str(item_id)
+            if key in out:
+                out[key] = group.head(k).reset_index(drop=True)
+        return out
 
 
 def similar_as_surface(neighbors: pd.DataFrame) -> pd.DataFrame:

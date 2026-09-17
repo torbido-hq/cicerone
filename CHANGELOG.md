@@ -28,6 +28,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Serve refreshes surface snapshots in the same loop as `generated_at` so the stamp and surfaces stay on one job.
 - `/popular`, `/latest`, `/similar`, and session recommendations increment source-tier serve metrics.
 - Dataset surface refresh treats a complete unstamped trio as the cached baseline, so later unstamped file-by-file writes cannot mix snapshots.
+- Job popular/latest snapshots keep at least `serve.default_k * 5` rows so `/popular`, `/latest`, and session fallback can over-fetch.
+- Session neighbor lookups read every session item from one surface snapshot.
 - Job neighbor snapshots keep at least `serve.default_k * 5` rows per item so session over-fetch still has candidates.
 - Dataset surface refresh applies a new popular/latest/neighbors snapshot only when all three files match the job stamp; a missing stamp or unreadable parquet keeps the last consistent trio.
 - Dataset `write_surfaces` rechecks the writer lease before each surface file.

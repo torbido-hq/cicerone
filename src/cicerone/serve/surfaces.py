@@ -219,9 +219,14 @@ def mount_surface_routes(
             )
         top_k = settings.serve.default_k
         fetch_k = max(top_k * 5, top_k)
+        getter = getattr(surfaces, "get_similar_many", None)
+        if callable(getter):
+            by_item = getter(session_ids, fetch_k)
+        else:
+            by_item = {item_id: surfaces.get_similar(item_id, fetch_k) for item_id in session_ids}
         parts: list[pd.DataFrame] = []
         for item_id in session_ids:
-            neighbors = similar_as_surface(surfaces.get_similar(item_id, fetch_k))
+            neighbors = similar_as_surface(by_item.get(item_id, pd.DataFrame()))
             if not neighbors.empty:
                 parts.append(neighbors)
         used_fallback = False

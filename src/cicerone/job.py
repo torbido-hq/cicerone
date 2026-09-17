@@ -824,11 +824,12 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
         )
         surface_frames = None
         if callable(write_surfaces):
+            surface_k = max(settings.top_k, settings.serve.default_k * 5)
             surface_frames = (
-                popular_from_events(events, settings.top_k),
+                popular_from_events(events, surface_k),
                 latest_from_items(
                     items,
-                    settings.top_k,
+                    surface_k,
                     feature_config.blending.latest_date_columns,
                 ),
                 neighbors_from_events(

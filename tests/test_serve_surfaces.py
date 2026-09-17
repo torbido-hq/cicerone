@@ -171,6 +171,36 @@ def test_session_overfetches_neighbors_before_filters():
     assert surfaces.requested[0] >= 5
 
 
+def test_session_uses_batched_neighbor_lookup():
+    class _Batched(_Surfaces):
+        def __init__(self) -> None:
+            super().__init__()
+            self.batches: list[list[str]] = []
+
+        def get_similar_many(self, item_ids: list[str], k: int) -> dict[str, pd.DataFrame]:
+            self.batches.append(list(item_ids))
+            return {item_id: self.get_similar(item_id, k) for item_id in item_ids}
+
+    surfaces = _Batched()
+    app = create_app(
+        _settings(),
+        _FakeReader(_recs_df(), _items_df()),
+        feature_config=_feature_config(),
+        surfaces=surfaces,
+    )
+    body = (
+        TestClient(app)
+        .post(
+            "/session/recommendations",
+            json={"items": ["i1"]},
+            headers={"Authorization": "Bearer secret"},
+        )
+        .json()
+    )
+    assert [row["item_id"] for row in body["items"]] == ["i2"]
+    assert surfaces.batches == [["i1"]]
+
+
 def test_session_rejects_too_many_items():
     client = TestClient(_app())
     response = client.post(
