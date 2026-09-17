@@ -360,3 +360,72 @@ def test_exclusive_file_lock_reraises_unsupported_msvcrt(tmp_path, monkeypatch):
         exclusive_file_lock(tmp_path / "writers.lock", timeout_seconds=0.1),
     ):
         pass
+
+
+def test_read_parquet_s3_uses_pyarrow_filesystem(mocker):
+    import pandas as pd
+
+    from cicerone.io.options import read_parquet
+
+    expected = pd.DataFrame({"user_id": ["u1"], "item_id": ["i1"]})
+    table = mocker.Mock()
+    table.to_pandas.return_value = expected
+    read_table = mocker.patch("pyarrow.parquet.read_table", return_value=table)
+    mocker.patch("cicerone.io.options._s3_filesystem", return_value="fs")
+    frame = read_parquet(
+        {
+            "storage_backend": "s3",
+            "access_key_id": "id",
+            "secret_access_key": "secret",
+            "bucket": "recs",
+            "prefix": "run",
+        },
+        "recommendations.parquet",
+        columns=["user_id"],
+        filters=[("user_id", "==", "u1")],
+    )
+    assert frame.equals(expected)
+    read_table.assert_called_once_with(
+        "recs/run/recommendations.parquet",
+        filesystem="fs",
+        columns=["user_id"],
+        filters=[("user_id", "==", "u1")],
+    )
+
+
+def test_read_parquet_s3_falls_back_to_get_object(mocker):
+    import pandas as pd
+
+    from cicerone.io.options import read_parquet
+
+    mocker.patch("cicerone.io.options._read_s3_parquet_pyarrow", side_effect=OSError("no sdk"))
+    body = _FakeS3Body(b"parquet-bytes")
+    client = mocker.Mock()
+    client.get_object.return_value = {"Body": body}
+    mocker.patch("cicerone.io.options.pd.read_parquet", return_value=pd.DataFrame({"x": [1]}))
+    frame = read_parquet(
+        {
+            "storage_backend": "s3",
+            "access_key_id": "id",
+            "secret_access_key": "secret",
+            "bucket": "bucket",
+        },
+        "data.parquet",
+        s3_client=client,
+    )
+    assert list(frame.columns) == ["x"]
+    assert body.closed is True
+
+
+def test_s3_filesystem_parses_endpoint_override():
+    from cicerone.io.options import _s3_filesystem
+
+    fs = _s3_filesystem(
+        {
+            "access_key_id": "id",
+            "secret_access_key": "secret",
+            "endpoint_url": "http://127.0.0.1:9000",
+            "region": "auto",
+        }
+    )
+    assert fs.region == "auto"
