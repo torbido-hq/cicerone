@@ -129,7 +129,7 @@ class TrackDbBackend:
             if is_missing_table_error(exc):
                 return []
             logger.exception("Failed to read track table %r", table)
-            return []
+            raise
         if frame.empty:
             return []
         records = frame.to_dict(orient="records")

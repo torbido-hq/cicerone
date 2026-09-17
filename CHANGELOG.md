@@ -44,6 +44,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Quality live and Experiments track reads use an attribution lookback.
   Experiments keep only exposures for users in that track window.
   A failed Experiments track read does not drop healthy exposures.
+  A failed DB track read raises instead of looking like an empty log.
 - The job preloads track and recommendations in parallel on local/S3.
 - Untimestamped impressions keep latest-snapshot source attribution.
 - Shared job preload keeps an empty recommendations frame instead of reloading.

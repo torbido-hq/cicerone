@@ -2214,6 +2214,36 @@ def test_load_shared_eval_inputs_drops_partial_preload(tmp_path, monkeypatch):
     assert _load_shared_eval_inputs(settings) == (None, None)
 
 
+def test_load_shared_eval_inputs_db_error_is_not_empty_preload(tmp_path, monkeypatch):
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+    from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
+    from cicerone.job import _load_shared_eval_inputs
+
+    settings = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="ranking-cvr",
+            allocation="thompson",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        track=TrackSettings(enabled=True),
+        output=IOSettings(kind="db", options={"database_url": f"sqlite+pysqlite:///{tmp_path / 'job.db'}"}),
+    )
+    recs = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}])
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr("cicerone.track.store_db.pd.read_sql", _boom)
+    monkeypatch.setattr("cicerone.job.load_recommendations_frame", lambda _output: recs)
+    assert _load_shared_eval_inputs(settings) == (None, None)
+
+
 def test_load_shared_eval_inputs_keeps_empty_recs(tmp_path, monkeypatch):
     from conftest import make_settings
 
