@@ -63,9 +63,18 @@ class KafkaPublisher:
             if err is not None:
                 errors.append(str(err))
 
-        for user_id, body, _message_id in user_recommendation_messages(df):
-            producer.produce(self._topic, value=body, key=user_id.encode("utf-8"), on_delivery=on_delivery)
-        remaining = producer.flush(self._timeout_seconds)
+        messages = user_recommendation_messages(df)
+        try:
+            for user_id, body, _message_id in messages:
+                producer.produce(
+                    self._topic,
+                    value=body,
+                    key=user_id.encode("utf-8"),
+                    on_delivery=on_delivery,
+                )
+            remaining = producer.flush(self._timeout_seconds)
+        except Exception as exc:
+            raise PublishError(f"Kafka publish failed: {exc}") from exc
         if remaining:
             raise PublishError(f"Kafka publish timed out with {remaining} message(s) in queue")
         if errors:

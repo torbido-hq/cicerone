@@ -6,14 +6,14 @@ import pandas as pd
 import pytest
 from support.events import event_payload
 from support.fake_kafka import install_fake_kafka
-from support.fake_rabbitmq import install_fake_rabbitmq
+from support.fake_rabbitmq import FakeChannel, install_fake_rabbitmq
 
 from cicerone.config import ConfigError, IOSettings, PublishSettings, make_settings
 from cicerone.events.normalize import normalize_event
 from cicerone.events.updater import IncrementalUpdater
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.factory import build_output_sink
-from cicerone.publish import build_publisher, registered_publish_kinds
+from cicerone.publish import PublishError, build_publisher, registered_publish_kinds
 from cicerone.publish.factory import build_publisher_from_kind
 from cicerone.publish.kafka import KafkaPublisher, validate_kafka_publish_options
 from cicerone.publish.payload import user_recommendation_messages
@@ -429,7 +429,35 @@ def test_kafka_publisher_fails_on_delivery_error(monkeypatch):
     broker.delivery_error = "broker reject"
     publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "cicerone.recs"})
     publisher.connect()
-    with pytest.raises(RuntimeError, match="delivery failed"):
+    with pytest.raises(PublishError, match="delivery failed"):
+        publisher.publish(_recs_frame())
+    publisher.close()
+
+
+def test_kafka_publisher_produce_error_is_publish_error(monkeypatch):
+    install_fake_kafka(monkeypatch)
+    publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "cicerone.recs"})
+    publisher.connect()
+
+    def _boom(*_args, **_kwargs):
+        raise BufferError("queue full")
+
+    publisher._producer.produce = _boom  # type: ignore[method-assign]
+    with pytest.raises(PublishError, match="queue full"):
+        publisher.publish(_recs_frame())
+    publisher.close()
+
+
+def test_kafka_publisher_flush_error_is_publish_error(monkeypatch):
+    install_fake_kafka(monkeypatch)
+    publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "cicerone.recs"})
+    publisher.connect()
+
+    def _boom(_timeout=None):
+        raise RuntimeError("flush fail")
+
+    publisher._producer.flush = _boom  # type: ignore[method-assign]
+    with pytest.raises(PublishError, match="flush fail"):
         publisher.publish(_recs_frame())
     publisher.close()
 
@@ -479,6 +507,21 @@ def test_rabbitmq_publisher_retries_unsent_users_only(monkeypatch):
     publisher.close()
 
 
+def test_rabbitmq_publisher_second_failure_is_publish_error(monkeypatch):
+    install_fake_rabbitmq(monkeypatch)
+    publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "recs"})
+    publisher.connect()
+
+    def boom(self, *args, **kwargs):
+        del self, args, kwargs
+        raise RuntimeError("channel closed")
+
+    monkeypatch.setattr(FakeChannel, "basic_publish", boom)
+    with pytest.raises(PublishError, match="channel closed"):
+        publisher.publish(_recs_frame())
+    publisher.close()
+
+
 def test_rabbitmq_publisher_reconnects_after_failed_recover(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "recs"})
@@ -491,7 +534,7 @@ def test_rabbitmq_publisher_reconnects_after_failed_recover(monkeypatch):
         raise RuntimeError("channel closed")
 
     channel.basic_publish = boom  # type: ignore[method-assign]
-    with pytest.raises(ConfigError, match="unreachable or setup failed"):
+    with pytest.raises(PublishError, match="unreachable or setup failed"):
         publisher.publish(_recs_frame())
     assert publisher._channel is None
     broker.connect_error = None

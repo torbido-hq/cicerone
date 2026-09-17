@@ -99,8 +99,11 @@ class RabbitMQPublisher:
             self._publish_from(messages, sent)
         except Exception:
             logger.exception("RabbitMQ publish failed; recovering publisher")
-            self._recover()
-            self._publish_from(messages, sent)
+            try:
+                self._recover()
+                self._publish_from(messages, sent)
+            except Exception as exc:
+                raise PublishError(f"RabbitMQ publish failed: {exc}") from exc
 
     def _publish_from(self, messages: Sequence[tuple[str, bytes, str]], sent: list[int]) -> None:
         channel = self._require()
