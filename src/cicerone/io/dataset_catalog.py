@@ -94,8 +94,9 @@ class DatasetCatalogStore:
     def delete_user(self, user_id: str) -> int:
         with self._locks[_USERS]:
             users = self._read(_USERS)
-            before = 0 if users.empty else int((users[USER_COLUMN].astype(str) == str(user_id)).sum())
+            before = 0
             if not users.empty and USER_COLUMN in users.columns:
+                before = int((users[USER_COLUMN].astype(str) == str(user_id)).sum())
                 remaining = users.loc[users[USER_COLUMN].astype(str) != str(user_id)]
                 self._write(_USERS, remaining.reset_index(drop=True))
         events_deleted = self.delete_events_for_user(user_id)

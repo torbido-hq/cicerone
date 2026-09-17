@@ -125,6 +125,12 @@ def test_dataset_catalog_round_trip_and_empty_paths(tmp_path):
     assert store.get_events_for_user("u1", 10).empty
 
 
+def test_dataset_catalog_delete_user_without_user_id_column(tmp_path):
+    store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
+    pd.DataFrame([{"name": "alice"}]).to_parquet(tmp_path / "users.parquet", index=False)
+    assert store.delete_user("u1") == 0
+
+
 def test_dedupe_event_rows_last_wins():
     rows = [
         normalize_event_row(

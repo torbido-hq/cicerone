@@ -44,6 +44,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Serve sorts and validates `item_scores` from readers that do not snapshot a cached id index.
 - In-memory SQLite `[input]` history is readable from serve worker threads, so default consumed hide still applies.
 - Catalog writes share the in-memory SQLite `[input]` engine, keep a writable `event_id`, and return 400 for blank path IDs. Query-backed db `[input]` stays 501.
+- Dataset `DELETE /users/{id}` ignores a nonempty `users.parquet` that has no `user_id` column instead of raising.
 
 ## [0.8.2] - 2026-09-15
 
