@@ -1,6 +1,6 @@
 ---
 title: A fetch is not an impression
-description: GET /recommendations is a lookup. Quality CTR counts impression rows: host POST /track, or serve.log_impressions on returned GET items. A click matches a prior (user, item) inside the window.
+description: "GET /recommendations is a lookup. Quality CTR counts impression rows: host POST /track, or serve.log_impressions on returned GET items. A click matches a prior (user, item) inside the window."
 date: 2026-09-17
 excerpt: log_impressions counts every returned GET item. The Blade widget POSTs /track when it renders. A tap sent to /events is not a Quality click.
 authors:
