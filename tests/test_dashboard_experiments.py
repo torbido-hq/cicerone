@@ -5,6 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
+import pytest
 from conftest import make_settings
 from sqlalchemy import create_engine
 
@@ -1152,6 +1153,14 @@ def test_thompson_ship_ignores_parked_empty_lists(tmp_path):
         {"champion": "control", "challenger": "treatment"},
     )
     assert [item.name for item in filtered] == ["control", "treatment"]
+    explored = _eval_recipes(
+        recipes,
+        replace(settings.experiment, explore_traffic=0.2),
+        {"champion": "control", "challenger": "treatment"},
+    )
+    assert [item.name for item in explored] == ["control", "treatment"]
+    assert explored[0].traffic == pytest.approx(0.8)
+    assert explored[1].traffic == pytest.approx(0.2)
     recs = [
         {
             "user_id": f"u{i}",

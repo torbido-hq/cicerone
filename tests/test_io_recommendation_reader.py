@@ -272,6 +272,41 @@ def test_dataset_reader_cold_start_fallback_without_sentinel(tmp_path):
     assert list(reader.get_cold_start_fallback(k=2)["item_id"]) == ["i9", "i8"]
 
 
+def test_dataset_reader_cold_start_filters_variant_and_lists_snapshot_names(tmp_path):
+    _write_recommendations(
+        tmp_path,
+        [
+            {
+                "user_id": "__cold_start__",
+                "item_id": "cold-control",
+                "rank": 1,
+                "score": 0.4,
+                "source": "popular_fallback",
+                "variant": "control",
+            },
+            {
+                "user_id": "__cold_start__",
+                "item_id": "cold-treatment",
+                "rank": 1,
+                "score": 0.3,
+                "source": "popular_fallback",
+                "variant": "treatment",
+            },
+            {
+                "user_id": "u2",
+                "item_id": "i9",
+                "rank": 1,
+                "score": 0.4,
+                "source": "popular_fallback",
+                "variant": "control",
+            },
+        ],
+    )
+    reader = DatasetRecommendationReader({"storage_backend": "local", "path": str(tmp_path)})
+    assert reader.present_variant_names() == ("control", "treatment")
+    assert list(reader.get_cold_start_fallback(k=2, variant="treatment")["item_id"]) == ["cold-treatment"]
+
+
 def test_dataset_reader_construction_tolerates_missing_file(tmp_path):
     reader = DatasetRecommendationReader({"storage_backend": "local", "path": str(tmp_path)})
 

@@ -8,8 +8,10 @@ from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantS
 from cicerone.experiment.assignment import (
     assign_variant,
     assignment_bucket,
+    assignment_needs_snapshot,
     experiment_variant_names,
     resolve_assignment,
+    snapshot_variant_names,
 )
 
 
@@ -138,6 +140,72 @@ def test_resolve_assignment_hashes_active_pair_not_toml_traffic() -> None:
     same = resolve_assignment(settings, "u1", active_pair=("control", "control"))
     assert same[1] == "control"
     ignored = resolve_assignment(settings, "u1", active_pair=("missing", "gone"))
-    assert ignored[1] in {"control", "treatment", "blend"}
+    assert ignored == (None, None)
     half = resolve_assignment(settings, "u1", active_pair=("control", "missing-arm"))
-    assert half[1] in {"control", "treatment", "blend"}
+    assert half == (None, None)
+    snapshot = {
+        resolve_assignment(settings, f"u{i}", snapshot_names=("control", "blend"))[1] for i in range(40)
+    }
+    assert snapshot <= {"control", "blend"}
+    assert resolve_assignment(settings, "u1", snapshot_names=("gone",)) == (None, None)
+    assert resolve_assignment(settings, "u1") == (None, None)
+
+
+def test_snapshot_variant_names_from_reader() -> None:
+    class _Missing:
+        pass
+
+    class _None:
+        def present_variant_names(self):
+            return None
+
+    class _Present:
+        def present_variant_names(self):
+            return ("control", "", "blend")
+
+    assert snapshot_variant_names(_Missing()) is None
+    assert snapshot_variant_names(_None()) is None
+    assert snapshot_variant_names(_Present()) == ("control", "blend")
+
+
+def test_assignment_needs_snapshot_only_for_thompson_without_pair() -> None:
+    off = make_settings()
+    assert assignment_needs_snapshot(off) is False
+    fixed = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="exp",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        )
+    )
+    assert assignment_needs_snapshot(fixed) is False
+    thompson = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="exp",
+            allocation=ALLOCATION_THOMPSON,
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        track=TrackSettings(enabled=True),
+    )
+    assert assignment_needs_snapshot(thompson) is True
+    assert assignment_needs_snapshot(thompson, promoted_variant="control") is False
+    assert assignment_needs_snapshot(thompson, active_pair=("control", "treatment")) is False
+    assert assignment_needs_snapshot(thompson, active_pair=("control", "missing")) is True
+    automl = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="auto",
+            allocation=ALLOCATION_THOMPSON,
+            automl_challenger=True,
+        ),
+        track=TrackSettings(enabled=True),
+    )
+    assert assignment_needs_snapshot(automl) is True
+    assert assignment_needs_snapshot(automl, active_pair=("control", "treatment")) is False

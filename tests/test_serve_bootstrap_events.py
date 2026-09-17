@@ -6,8 +6,8 @@ import pandas as pd
 import pytest
 
 from cicerone.config import EventsIncrementalSettings, EventsSettings, IOSettings, make_settings
-from cicerone.config.constants import DEFAULT_EVENTS_RETRAIN_PROBE_TTL_SECONDS
-from cicerone.config.settings import ExperimentSettings, VariantSettings
+from cicerone.config.constants import ALLOCATION_THOMPSON, DEFAULT_EVENTS_RETRAIN_PROBE_TTL_SECONDS
+from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.experiment.store import ExperimentStore, experiment_state
 from cicerone.feature_config import FeatureConfig
@@ -289,6 +289,28 @@ def test_assign_incremental_variant_caches_promote_read_and_follows_live_winner(
     assert assigned("u1") == "control"
     assert assigned("u2") == "control"
     assert reads["n"] == 2
+
+
+def test_assign_incremental_variant_hashes_config_names_without_pair(tmp_path):
+    settings = _experiment_settings(tmp_path)
+    settings = make_settings(
+        output=settings.output,
+        events=settings.events,
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="exp-1",
+            allocation=ALLOCATION_THOMPSON,
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        track=TrackSettings(enabled=True),
+    )
+    assigned = _assign_incremental_variant(settings)
+    assert assigned is not None
+    seen = {assigned(f"u{i}") for i in range(40)}
+    assert seen == {"control", "treatment"}
 
 
 def test_start_events_runtime_assign_variant_caches_winner_within_ttl(tmp_path, feature_config):

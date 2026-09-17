@@ -290,7 +290,7 @@ def test_score_previous_run_reads_history_when_track_disabled(tmp_path, monkeypa
 def test_replay_assignments_prefers_first_impression_then_hash(tmp_path):
     from cicerone.blending import COLD_START_USER_ID
     from cicerone.config import IOSettings, make_settings
-    from cicerone.config.settings import ExperimentSettings, VariantSettings
+    from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.job import _replay_assignments
 
     recs = pd.DataFrame(
@@ -352,6 +352,27 @@ def test_replay_assignments_prefers_first_impression_then_hash(tmp_path):
     assert assigned["alice"] == "control"
     assert assigned["bob"] in {"control", "treatment"}
     assert COLD_START_USER_ID not in assigned
+
+    from cicerone.config.constants import ALLOCATION_THOMPSON
+
+    thompson = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="ranking-cvr",
+            allocation=ALLOCATION_THOMPSON,
+            variants=(
+                VariantSettings(name="control", traffic=0.33),
+                VariantSettings(name="treatment", traffic=0.33),
+                VariantSettings(name="blend", traffic=0.34),
+            ),
+        ),
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        track=TrackSettings(enabled=True),
+    )
+    hashed = _replay_assignments(thompson, recs[recs["user_id"] != COLD_START_USER_ID], [])
+    assert hashed is not None
+    assert set(hashed.values()) <= {"control", "treatment"}
+    assert "blend" not in hashed.values()
 
     fallback = _replay_assignments(
         make_settings(),

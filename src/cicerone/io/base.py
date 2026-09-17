@@ -107,6 +107,9 @@ class BaseRecommendationReader(ABC):
         del k, variant
         return pd.DataFrame()
 
+    def present_variant_names(self) -> tuple[str, ...] | None:
+        return None
+
     def configure_item_filters(
         self,
         *,

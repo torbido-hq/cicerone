@@ -307,9 +307,11 @@ class ExperimentStore:
         try:
             parsed = json.loads(raw.decode("utf-8"))
         except json.JSONDecodeError:
-            logger.warning("Invalid experiment_state.json; ignoring")
-            return None
-        return parsed if isinstance(parsed, dict) else None
+            logger.warning("Invalid experiment_state.json")
+            raise
+        if not isinstance(parsed, dict):
+            raise ValueError("experiment_state.json is not an object")
+        return parsed
 
     def _read_state_db(self) -> dict[str, Any] | None:
         table = sql_identifier(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 
 import pandas as pd
@@ -148,11 +149,25 @@ def test_experiment_store_sqlite_replaces_same_experiment_id(tmp_path) -> None:
     assert state["promoted_variant"] == "treatment"
 
 
-def test_experiment_store_ignores_invalid_dataset_state(tmp_path) -> None:
+def test_experiment_store_raises_on_invalid_dataset_state(tmp_path) -> None:
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     (tmp_path / "experiment_state.json").write_text("not-json", encoding="utf-8")
     store = ExperimentStore(output)
-    assert store.read_state() is None
+    with pytest.raises(json.JSONDecodeError):
+        store.read_state()
+    (tmp_path / "experiment_state.json").write_text("[]", encoding="utf-8")
+    with pytest.raises(ValueError, match="not an object"):
+        store.read_state()
+
+
+def test_assignment_overlay_keeps_last_on_invalid_json(tmp_path) -> None:
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    store = ExperimentStore(output)
+    store.write_state(experiment_state("exp", promoted_variant=None, champion="control", challenger="blend"))
+    (tmp_path / "experiment_state.json").write_text("not-json", encoding="utf-8")
+    promoted, pair = store.assignment_overlay("exp")
+    assert promoted is None
+    assert pair == ("control", "blend")
 
 
 def test_append_exposures_rejects_object_store() -> None:
