@@ -16,7 +16,7 @@ from cicerone.amqp_options import (
     require_queue,
 )
 from cicerone.config.constants import ConfigError
-from cicerone.events.base import EventSource, EventSourceHealth, NormalizedEvent, QueuedEventSource
+from cicerone.events.base import EventSourceHealth, NormalizedEvent, QueuedEventSource
 from cicerone.events.json_payload import decode_json_object
 from cicerone.events.normalize import EventNormalizeError, normalize_event
 from cicerone.events.rabbitmq_io import (
@@ -44,7 +44,7 @@ def _missing_extra() -> ConfigError:
     )
 
 
-class RabbitMQEventSource(QueuedEventSource, EventSource):
+class RabbitMQEventSource(QueuedEventSource):
     """Consume JSON events from one queue; ack with ``basic_ack``."""
 
     ephemeral_event_ids = True

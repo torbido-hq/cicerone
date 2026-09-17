@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from cicerone.config import ConfigError
-from cicerone.events.base import EventSource, EventSourceHealth, NormalizedEvent, QueuedEventSource
+from cicerone.events.base import EventSourceHealth, NormalizedEvent, QueuedEventSource
 from cicerone.events.normalize import EventNormalizeError, normalize_event
 
 logger = logging.getLogger(__name__)
@@ -51,7 +51,7 @@ def _require_str(options: dict[str, Any], key: str) -> str:
     return value
 
 
-class RedisStreamsEventSource(QueuedEventSource, EventSource):
+class RedisStreamsEventSource(QueuedEventSource):
     """Consume flat stream hashes via a consumer group; ack with ``XACK``."""
 
     def __init__(self, options: dict[str, Any]):

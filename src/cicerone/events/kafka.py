@@ -8,7 +8,7 @@ from collections.abc import Sequence, Set
 from typing import Any
 
 from cicerone.config.constants import ConfigError
-from cicerone.events.base import EventSource, EventSourceHealth, NormalizedEvent, QueuedEventSource
+from cicerone.events.base import EventSourceHealth, NormalizedEvent, QueuedEventSource
 from cicerone.events.json_payload import decode_json_object
 from cicerone.events.normalize import EventNormalizeError, normalize_event
 from cicerone.kafka_options import (
@@ -37,7 +37,7 @@ def _missing_extra() -> ConfigError:
     )
 
 
-class KafkaEventSource(QueuedEventSource, EventSource):
+class KafkaEventSource(QueuedEventSource):
     """Consume JSON events from one topic; ack advances the commit watermark."""
 
     def __init__(self, options: dict[str, Any]):
