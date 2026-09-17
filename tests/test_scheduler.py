@@ -282,5 +282,5 @@ def test_main_with_trigger_enabled_starts_cron_thread_and_serves_http(tmp_path, 
 
     assert scheduler._cron_loop in started_threads
     assert poll_input_forever in started_threads
-    assert uvicorn_calls["host"] == "0.0.0.0"
+    assert uvicorn_calls["host"] == "127.0.0.1"
     assert uvicorn_calls["port"] == 8080
