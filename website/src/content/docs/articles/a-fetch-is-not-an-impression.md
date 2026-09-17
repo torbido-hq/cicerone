@@ -7,7 +7,7 @@ authors:
   - nicholas
 ---
 
-You want click-through on the homepage widget. You turn on `serve.log_impressions` and have Laravel `Http::get` the serve API. Horizon warms the same URL for last week's buyers. A health check hits it too. You did not measure what shoppers saw. You turned fetches into impression rows.
+You want click-through on the homepage widget. You turn on `serve.log_impressions` and have Laravel `Http::get` the serve API. Horizon warms the same URL for last week's buyers. A health check hits it too. You did not measure what shoppers saw. With `serve.log_impressions`, you turned fetches into impression rows.
 
 `GET /recommendations/{user_id}` **returns** a list. `SELECT … ORDER BY rank` **returns** a list. Prefetch returns the same list. A health check returns it again. None of those prove a shopper saw a SKU.
 
@@ -47,7 +47,7 @@ Four facts, then stop collapsing them.
 | Host `POST /track` with `kind` `impression` | An impression row. Quality counts it. The host claimed the SKU was shown. |
 | `serve.log_impressions = true` | Serve writes an impression row per **returned** GET item, on a background task. New `uuid4` per item, every GET. Not render-aware. |
 
-`log_impressions` turns returned GET items into impression rows. It is not render-aware. It does not wait for Blade. Prefetch, a GET retry, and items the widget never painted are still rows. The GET can already be **200** before the write runs. Leave the flag off unless you mean that.
+`log_impressions` turns returned GET items into impression rows. It does not wait for Blade. Prefetch, a GET retry, and items the widget never painted are still rows. The GET can already be **200** before the write runs. Leave the flag off unless you mean that.
 
 That is not “the shopper looked at rank 3.” Cicerone never sees the DOM. A host-reported impression is the host saying it showed the SKU.
 
@@ -57,12 +57,12 @@ The [nightly table](/articles/a-nightly-table-next-to-your-orders/) walkthrough 
 
 | Noun | Wire | What it is |
 | --- | --- | --- |
-| **Event** | `POST /events` | Training or incremental row. Not a Quality click. |
-| **Impression** | `kind=impression` (host `/track` or `log_impressions`) | A stored `kind=impression` row (host POST or `log_impressions`). Rank ≥ 1. Quality counts it. |
+| **Event** | `POST /events` | Training or incremental row. `event_type` must be enabled in `[event_weights]` to affect training. Not a Quality click. |
+| **Impression** | `kind=impression` (host `/track` or `log_impressions`) | A stored `kind=impression` row. It comes from a host `/track` POST or `log_impressions`. Rank ≥ 1. Quality counts it. |
 | **Click** | `POST /track` `kind=click` | Host-reported tap. CTR needs a matching impression. |
 | **Conversion** | `[input]` + Quality | An `[input]` row (default type `purchase`) attributed to a prior impression or a matched click. Attribution result. Still an input **event**. |
 
-`POST /events` exists only when `[events]` is on and `kind = "webhook"`. `event_type`s missing from `[event_weights]` are not trained. A purchase on the Stripe path can still be an **event**. That is not an impression and not a Quality click.
+`POST /events` exists only when `[events]` is on and `kind = "webhook"`. A purchase on the Stripe path can still be an **event**. That is not an impression and not a Quality click.
 
 The `/track` JSON field is named `events`. Those objects are track rows.
 
@@ -128,7 +128,7 @@ $occurredAt = now()->utc()->format('Y-m-d\TH:i:s\Z');
 postTrack(impressionRows((string) $user->id, $painted, $occurredAt));
 ```
 
-`$painted` is what Blade echoes, not the full `SELECT`. The same `$occurredAt` sits on every row of this render, and inside every `event_id`. A retry of this array is the same ids. A later page view stamps a new `$occurredAt` and writes new rows. Omit the stamp from that constructed `event_id` and every repeat view of last night's list collapses to one impression. Omit `event_id` entirely and Cicerone hashes `occurred_at` into a uuid5; a new stamp is a new row.
+`$painted` is what Blade echoes, not the full `SELECT`. The same `$occurredAt` sits on every row of this render, and inside every `event_id`. A retry of this array is the same ids. A later page view stamps a new `$occurredAt` and writes new rows. Omit the stamp from that constructed `event_id` and every repeat view of last night's list collapses to one impression. Omit `event_id` entirely and Cicerone derives the id from the normalized event fields, including `occurred_at`. A new stamp is a new row.
 
 `event_id` (or `idempotency_key`) is the idempotency id. Omit it and Cicerone hashes `kind`, `user_id`, `item_id`, `occurred_at`, `rank`, `variant`, `experiment_id`, `generated_at`. Rebuild `now()` on retry and you get a new row. A duplicate `event_id` comes back **202** with `accepted` 0 and `event_ids` `[]`. That is a successful retry, not a failed render. Report every non-2xx. The homepage still renders.
 
@@ -202,7 +202,7 @@ Quality CTR is a matched-click ratio inside a wall-clock window. It is not causa
 
 Horizon still prefetches. Blade still POSTs `/track` when the widget is on the page. A tap still POSTs a **click**. Quality still matches `(user_id, item_id)` inside the window.
 
-A fetch is not proof of an impression. The POST from the widget is the host's report that it rendered one.
+A fetch is not proof that a shopper saw an item. The POST from the widget is the host's report that it rendered one.
 
 <details>
 <summary>Reference</summary>
@@ -211,7 +211,7 @@ The knobs and failure modes if you are wiring this up. The product page is [eval
 
 **Normalize.** Required: `kind`, `user_id`, `item_id`, `occurred_at`. `kind` is `impression` or `click` (case folded). Impression requires `rank` ≥ 1. Click rank is optional. `occurred_at` is ISO-8601 with timezone (`Z` or an offset) or Unix epoch seconds. `event_id` or `idempotency_key` is optional; else a uuid5 of those fields plus `variant` / `experiment_id` / `generated_at`. Impression without `rank` is 400: `impression requires rank >= 1`.
 
-**HTTP.** Bearer only if `[serve].auth_token` is set. Same token as GET. Body is one object, an array, or `{"events":[...]}`. 202 writes new rows (`accepted` is that count). Duplicate `event_id` → `accepted` 0. 400 invalid payload. 401 missing or bad Bearer. 413 body too large (1 MiB default, or `events.options.max_body_bytes`). 503 dataset writer lock (`Writer lock is busy` / `Writer lock was lost`). `[track]` off → 404. The example `postTrack` only reports a non-2xx; the Laravel click action still returns 204.
+**HTTP.** Bearer only if `[serve].auth_token` is set. Same token as GET. Body is one object, an array, or `{"events":[...]}`. 202 writes new rows (`accepted` is that count). Duplicate `event_id` → `accepted` 0. 400 invalid payload. 401 missing or bad Bearer. 413 body too large (1 MiB default, or `events.options.max_body_bytes`). 503 dataset writer lock (`Writer lock is busy` / `Writer lock was lost`). `[track]` off → 404.
 
 **Storage.** Next to `[output]`: local `track.jsonl`, or `recommendation_track` on db. Object-store JSONL append is refused (`track.enabled requires output kind = "db" or a local dataset path; object-store JSONL append is not atomic`). `events.ha = true` requires db (`track.enabled with events.ha requires output kind = "db"`).
 
