@@ -87,8 +87,8 @@ class KafkaPublisher:
             return
         try:
             producer.flush(self._timeout_seconds)
-        except Exception:
-            logger.exception("Kafka publisher flush on close failed")
+        except Exception as exc:
+            raise PublishError(f"Kafka publisher flush on close failed: {exc}") from exc
 
     def _require(self) -> Any:
         if self._producer is None:

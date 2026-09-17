@@ -672,7 +672,7 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
         logger.info("Job finished: %s", json.dumps(manifest))
         if persist_exc is not None:
             raise persist_exc
-        if close_exc is not None:
+        if close_exc is not None and (isinstance(close_exc, LockLostError) or sys.exc_info()[1] is None):
             raise close_exc
 
 

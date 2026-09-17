@@ -201,7 +201,8 @@ def test_rabbitmq_publisher_close_tolerates_failure(monkeypatch):
 
     broker.connection.channel_obj.close = _boom  # type: ignore[method-assign]
     broker.connection.close = _boom  # type: ignore[method-assign]
-    publisher.close()
+    with pytest.raises(PublishError, match="close fail"):
+        publisher.close()
 
 
 def test_build_publisher_disabled():
@@ -382,7 +383,8 @@ def test_kafka_publisher_close_flush_failure(monkeypatch):
         raise RuntimeError("flush fail")
 
     publisher._producer.flush = _boom  # type: ignore[method-assign]
-    publisher.close()
+    with pytest.raises(PublishError, match="flush fail"):
+        publisher.close()
 
 
 def test_publish_empty_frame_is_noop(monkeypatch):
@@ -459,7 +461,8 @@ def test_kafka_publisher_flush_error_is_publish_error(monkeypatch):
     publisher._producer.flush = _boom  # type: ignore[method-assign]
     with pytest.raises(PublishError, match="flush fail"):
         publisher.publish(_recs_frame())
-    publisher.close()
+    with pytest.raises(PublishError, match="flush fail"):
+        publisher.close()
 
 
 def test_rabbitmq_publisher_recovers_after_channel_error(monkeypatch):

@@ -125,7 +125,10 @@ class RabbitMQPublisher:
         return pika.BasicProperties(message_id=message_id, content_type="application/json", delivery_mode=2)
 
     def _recover(self) -> None:
-        self.close()
+        try:
+            self.close()
+        except PublishError:
+            logger.exception("RabbitMQ publisher close failed during recover")
         self.connect()
 
     def close(self) -> None:
@@ -133,6 +136,7 @@ class RabbitMQPublisher:
         connection = self._connection
         self._channel = None
         self._connection = None
+        close_exc: BaseException | None = None
         for handle, label in ((channel, "channel"), (connection, "connection")):
             if handle is None:
                 continue
@@ -141,8 +145,12 @@ class RabbitMQPublisher:
                 continue
             try:
                 closer()
-            except Exception:
+            except Exception as exc:
                 logger.exception("Failed to close RabbitMQ publisher %s", label)
+                if close_exc is None:
+                    close_exc = exc
+        if close_exc is not None:
+            raise PublishError(f"RabbitMQ publisher close failed: {close_exc}") from close_exc
 
     def _require(self) -> Any:
         if self._channel is None:
