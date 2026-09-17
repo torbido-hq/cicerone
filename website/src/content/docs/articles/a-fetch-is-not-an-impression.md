@@ -78,7 +78,7 @@ function trackEvents(array $events): void
         $request = $request->withToken($token);
     }
     $response = $request->post($url, ['events' => $events]);
-    if ($response->status() === 401 || $response->serverError()) {
+    if (!$response->successful()) {
         report(new \RuntimeException('Cicerone /track '.$response->status()));
     }
 }
@@ -105,7 +105,7 @@ function impressionEvents(string $userId, iterable $rows, string $occurredAt): a
 
 Stamp `$occurredAt` once for the render (`now()->utc()->format('Y-m-d\TH:i:s\Z')`). Pass **only** the rows Blade is about to paint. A retry of that same array keeps the same `event_id`s. A later page view gets a new stamp and new rows. An `event_id` that omits the stamp collapses every repeat view of last night's list into one impression.
 
-`event_id` (or `idempotency_key`) is the idempotency id. Omit it and Cicerone hashes `kind`, `user_id`, `item_id`, `occurred_at`, `rank`, `variant`, `experiment_id`, `generated_at`. A retry that rebuilds `now()` is a new row. A duplicate `event_id` comes back **202** with `accepted` 0 and `event_ids` `[]`.
+`event_id` (or `idempotency_key`) is the idempotency id. Omit it and Cicerone hashes `kind`, `user_id`, `item_id`, `occurred_at`, `rank`, `variant`, `experiment_id`, `generated_at`. A retry that rebuilds `now()` is a new row. A duplicate `event_id` comes back **202** with `accepted` 0 and `event_ids` `[]`. That is a successful retry, not a failed render. Report every non-2xx. The homepage still renders.
 
 `[track]` off means the route is not mounted. That is 404, not a silent drop.
 
@@ -119,6 +119,7 @@ public function click(Request $request)
     $data = $request->validate([
         'item_id' => ['required', 'string'],
         'user_id' => ['required', 'string'],
+        'event_id' => ['required', 'string'],
     ]);
     $occurredAt = now()->utc()->format('Y-m-d\TH:i:s\Z');
     trackEvents([[
@@ -126,13 +127,13 @@ public function click(Request $request)
         'user_id' => $data['user_id'],
         'item_id' => $data['item_id'],
         'occurred_at' => $occurredAt,
-        'event_id' => 'clk:'.$data['user_id'].':'.$data['item_id'].':'.$occurredAt,
+        'event_id' => $data['event_id'],
     ]]);
     return response()->noContent();
 }
 ```
 
-Stamp `$occurredAt` once in the handler so a retried HTTP call is one click. A second tap a second later is a second row.
+Mint `event_id` once at tap time (`crypto.randomUUID()` is enough). Send that same id if the browser retries this Laravel route. A second tap mints a second id. Do not build the id in the controller from `now()` — that request is a new row every retry.
 
 Do not `POST /events` with `event_type = "click"` unless you mean a training **event**. Track rows never enter `[event_weights]`. The [checkout](/articles/this-afternoons-checkout-can-move-the-row/) mapper stays on `/events`. This mapper stays on `/track`.
 
