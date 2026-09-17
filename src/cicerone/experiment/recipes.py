@@ -52,6 +52,7 @@ class ResolvedRecipe:
             "combiner": self.combiner,
             "boosts": [asdict(rule) for rule in self.boosts],
             "eligibility": [asdict(rule) for rule in self.eligibility],
+            "merge_item_availability": self.merge_item_availability,
         }
 
 

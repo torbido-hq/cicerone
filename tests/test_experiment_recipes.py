@@ -243,9 +243,10 @@ def test_resolve_recipes_named_and_replacement_policy() -> None:
             ),
         ),
     )
-    recipes = resolve_recipes(settings, _features())
-    control = apply_recipe(_features(), recipes[0])
-    treatment = apply_recipe(_features(), recipes[1])
+    features = replace(_features(), item_availability_filters=["published", "in_stock"])
+    recipes = resolve_recipes(settings, features)
+    control = apply_recipe(features, recipes[0])
+    treatment = apply_recipe(features, recipes[1])
     assert [rule.name for rule in control.boosts] == ["featured"]
     assert control.eligibility == []
     assert [rule.name for rule in treatment.boosts] == ["new-arrivals"]
@@ -255,7 +256,23 @@ def test_resolve_recipes_named_and_replacement_policy() -> None:
 
     assert resolve_eligibility(control) == []
     assert [rule.name for rule in resolve_eligibility(treatment)] == ["published"]
-    features = replace(_features(), item_availability_filters=["published", "in_stock"])
+    subset = apply_recipe(
+        features,
+        resolve_recipes(
+            make_settings(
+                experiment=ExperimentSettings(
+                    enabled=True,
+                    id="exp",
+                    variants=(
+                        VariantSettings(name="control", traffic=0.5, eligibility=("in_stock",)),
+                        VariantSettings(name="treatment", traffic=0.5),
+                    ),
+                )
+            ),
+            features,
+        )[0],
+    )
+    assert [rule.name for rule in resolve_eligibility(subset)] == ["in_stock"]
     inherited = apply_recipe(
         features,
         resolve_recipes(
@@ -278,6 +295,8 @@ def test_resolve_recipes_named_and_replacement_policy() -> None:
     payload = json.loads(recipes_manifest_json(recipes))
     assert payload[0]["boosts"][0]["name"] == "featured"
     assert payload[1]["eligibility"][0]["item_column"] == "published"
+    assert payload[0]["merge_item_availability"] is False
+    assert payload[1]["merge_item_availability"] is False
 
 
 def test_resolve_recipes_unknown_policy_name() -> None:
