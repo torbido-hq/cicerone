@@ -147,7 +147,8 @@ def test_dataset_catalog_put_merges_existing_item_columns(tmp_path):
 
 def test_dataset_catalog_delete_events_without_item_id_column(tmp_path):
     store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
-    pd.DataFrame([{"user_id": "u1", "event_type": "view"}]).to_parquet(tmp_path / "events.parquet", index=False)
+    events = pd.DataFrame([{"user_id": "u1", "event_type": "view"}])
+    events.to_parquet(tmp_path / "events.parquet", index=False)
     assert store.delete_events_for_user("u1", item_id="i1") == 0
     assert store.delete_events_for_user("u1") == 1
 

@@ -220,9 +220,7 @@ def test_catalog_events_keep_hidden_item_when_sibling_event_still_consumes_it(tm
         "event_id": "e2",
     }
     assert (
-        client.post("/catalog/events", json={"events": [first, sibling]}, headers=headers).json()[
-            "accepted"
-        ]
+        client.post("/catalog/events", json={"events": [first, sibling]}, headers=headers).json()["accepted"]
         == 2
     )
     assert overlay.item_ids("u1") == {"i1"}

@@ -146,9 +146,9 @@ class DatabaseCatalogStore:
         columns = self._columns(conn, self._events) or []
         if EVENT_ID_COLUMN not in columns:
             return []
-        sql = text(
-            f'SELECT * FROM "{self._events}" WHERE "{EVENT_ID_COLUMN}" IN :ids'
-        ).bindparams(bindparam("ids", expanding=True))
+        sql = text(f'SELECT * FROM "{self._events}" WHERE "{EVENT_ID_COLUMN}" IN :ids').bindparams(
+            bindparam("ids", expanding=True)
+        )
         frame = pd.read_sql(sql, conn, params={"ids": event_ids})
         if frame.empty:
             return []

@@ -68,18 +68,18 @@ def _path_id(value: str, key: str) -> str:
     return stripped
 
 
-_CATALOG_WRITE = {
+_CATALOG_WRITE: dict[int | str, dict[str, Any]] = {
     400: {"model": ErrorDetail},
     401: {"model": ErrorDetail},
     501: {"model": ErrorDetail},
 }
-_CATALOG_READ = {
+_CATALOG_READ: dict[int | str, dict[str, Any]] = {
     400: {"model": ErrorDetail},
     401: {"model": ErrorDetail},
     404: {"model": ErrorDetail},
     501: {"model": ErrorDetail},
 }
-_CATALOG_EVENTS = {
+_CATALOG_EVENTS: dict[int | str, dict[str, Any]] = {
     **_CATALOG_WRITE,
     413: {"model": ErrorDetail},
 }
