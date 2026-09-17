@@ -26,7 +26,7 @@ prefix = "recommendations/latest"
 
 [serve]
 auth_token = "${SERVE_AUTH_TOKEN}"
-host = "0.0.0.0"  # compose/container bind; default is 127.0.0.1
+host = "0.0.0.0"  # compose port-publish. On the host, omit this (default 127.0.0.1).
 port = 8000
 default_k = 10
 refresh_interval_seconds = 60
