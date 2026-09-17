@@ -148,7 +148,13 @@ class DatasetCatalogStore:
                 matched = existing.loc[existing[EVENT_ID_COLUMN].astype(str).isin(ids)]
                 previous = [jsonable_row(row) for row in matched.to_dict(orient="records")]
                 existing = existing.loc[~existing[EVENT_ID_COLUMN].astype(str).isin(ids)]
-            merged = incoming if existing.empty else pd.concat([existing, incoming], ignore_index=True)
+            if len(existing.columns) == 0:
+                merged = incoming
+            else:
+                incoming = incoming.reindex(
+                    columns=list(dict.fromkeys([*existing.columns, *incoming.columns]))
+                )
+                merged = incoming if existing.empty else pd.concat([existing, incoming], ignore_index=True)
             self._write(_EVENTS, merged)
             remaining = set(event_pairs([jsonable_row(row) for row in merged.to_dict(orient="records")]))
             discard = [pair for pair in event_pairs(previous) if pair not in remaining]

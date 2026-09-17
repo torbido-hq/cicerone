@@ -28,6 +28,10 @@ from cicerone.io.options import read_parquet
 def test_require_id_rejects_blank():
     with pytest.raises(ValueError, match="user_id"):
         require_id({"user_id": "  "}, "user_id")
+    with pytest.raises(ValueError, match="user_id"):
+        require_id({"user_id": None}, "user_id")
+    with pytest.raises(ValueError, match="item_id"):
+        require_id({"item_id": pd.NA}, "item_id")
 
 
 def test_normalize_event_row_defaults_quantity():
@@ -139,6 +143,26 @@ def test_dataset_catalog_put_merges_existing_user_columns(tmp_path):
     assert user is not None
     assert user["comment"] == "updated"
     assert user["labels"] == {"vip": True}
+
+
+def test_dataset_catalog_events_keep_empty_schema_columns(tmp_path):
+    store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
+    pd.DataFrame(columns=["user_id", "item_id", "event_type", "occurred_at", "channel"]).to_parquet(
+        tmp_path / "events.parquet", index=False
+    )
+    store.upsert_events(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "event_type": "view",
+                "occurred_at": "2026-09-11T12:00:00Z",
+                "event_id": "e1",
+            }
+        ]
+    )
+    events = store.get_events_for_user("u1", 10)
+    assert "channel" in events.columns
 
 
 def test_dataset_catalog_put_keeps_empty_schema_columns(tmp_path):

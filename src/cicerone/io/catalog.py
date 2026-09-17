@@ -52,7 +52,10 @@ class CatalogStore(Protocol):
 
 
 def require_id(row: dict[str, Any], key: str) -> str:
-    value = str(row.get(key, "")).strip()
+    raw = row.get(key, "")
+    if is_missing(raw):
+        raise ValueError(f"{key} is required")
+    value = str(raw).strip()
     if not value:
         raise ValueError(f"{key} is required")
     return value
