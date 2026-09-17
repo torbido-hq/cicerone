@@ -208,7 +208,7 @@ feature_config_path = "/app/config/features.toml"
 # enabled = true
 # auth_token = "${TRIGGER_AUTH_TOKEN}" # required when enabled; checked as
 #                                       # "Authorization: Bearer <token>"
-# host = "127.0.0.1"  # default on the host. "0.0.0.0" is LAN-wide (compose needs it).
+# host = "0.0.0.0"  # compose port-publish. On the host, omit this (default 127.0.0.1).
 # port = 8080
 # debounce_seconds = 60
 # # POST /trigger/retrain on this port always works once trigger is enabled.
