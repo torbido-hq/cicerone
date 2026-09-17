@@ -77,9 +77,10 @@ exclude_consumed = false
 # log_impressions = false         # GET lookup is not a view; host should POST /track
 
 # [input] is required by config.load_settings() even in serve mode.
-# For consumed-item hide, use the same events store as the batch job
-# (see config/cicerone.toml [input]). The incremental overlay is
-# process-local until events land in [input].
+# Serve reads it for consumed-item hide and catalog writes (`/users`,
+# `/items`, `/catalog/events`). For hide, use the same events store as
+# the batch job (see config/cicerone.toml [input]). The incremental
+# overlay is process-local until events land in [input].
 [input]
 kind = "dataset"
 

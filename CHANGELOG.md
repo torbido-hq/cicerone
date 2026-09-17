@@ -14,6 +14,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   using `[input]` history plus a process-local incremental overlay capped at
   `consumed_lookback` items per user. Short lists fill from popular/latest
   (`[serve].fallback_fill`) when hide or availability filters drop rows.
+- Catalog writes on `[input]` (`PUT/GET/DELETE /users/{id}`, `/items/{id}`,
+  `/catalog/events`) so a host can upsert users, items, and events without
+  a separate dump.
 
 ### Fixed
 
@@ -40,6 +43,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Job sets `partial_outputs` only after a snapshot, score, or recommendation write succeeds.
 - Serve sorts and validates `item_scores` from readers that do not snapshot a cached id index.
 - In-memory SQLite `[input]` history is readable from serve worker threads, so default consumed hide still applies.
+- Catalog writes share the in-memory SQLite `[input]` engine, keep a writable `event_id`, and return 400 for blank path IDs. Query-backed db `[input]` stays 501.
+- Dataset `DELETE /users/{id}` ignores a nonempty `users.parquet` that has no `user_id` column instead of raising.
+- Dataset catalog PUTs merge into the existing user/item row instead of dropping omitted columns.
+- Catalog event upserts reconcile the consumed overlay from remaining catalog rows in one write.
+- `POST /catalog/events` uses the shared byte-limited JSON reader and documents 401/413/422.
+- Incremental catalog persist uses `replace_events` so a reused event id updates the consumed overlay.
+- Catalog GET rows map pandas missing timestamps (`NaT`/`NA`) to JSON `null`.
+- Dataset `DELETE /users/{id}` removes the user row and their events under one lock.
+- Catalog and webhook ingest return 400 for out-of-range `occurred_at` epochs.
+- Dataset `GET /catalog/events/{user_id}` uses parquet `user_id` predicate pushdown, with a full-file fallback.
+- Dataset catalog event writes keep columns from an empty `events.parquet` schema.
+- Catalog user and item upserts reject a missing id instead of storing `"None"`.
+- Catalog writes and incremental persist update the consumed overlay under the same lock as the store mutation.
+- `DELETE /items/{id}` also removes that item's events so leftover interactions cannot resurrect it.
+- DB catalog PUT→GET keeps extra user/item fields and returns structured values as objects, not JSON strings.
 
 ## [0.8.2] - 2026-09-15
 

@@ -34,12 +34,14 @@ from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.http_security import SecurityHeadersMiddleware, token_equals
 from cicerone.io.base import ManifestReader, RecommendationReader, UserHistoryReader
+from cicerone.io.catalog import CatalogStore
 from cicerone.io.recommendation_reader import SOURCE_COLUMN
 from cicerone.io.recommendation_schema import has_variant_column
 from cicerone.item_scores import empty_item_scores, normalize_item_scores, page_item_scores
 from cicerone.locks import WriterLockBusyError, build_dataset_writer_lock, build_output_writer_lock
 from cicerone.reasons import parse_reasons
 from cicerone.serve.bootstrap_events import start_events_runtime
+from cicerone.serve.catalog_routes import attach_catalog_events_openapi, mount_catalog_routes
 from cicerone.serve.code_samples import (
     HEALTH_PATH,
     ITEM_SCORES_PATH,
@@ -121,7 +123,8 @@ def _append_impressions_safe(store: TrackStore, rows: list[dict[str, Any]], user
 SERVE_API_TITLE = "Cicerone Serve API"
 SERVE_API_VERSION = __version__
 SERVE_API_DESCRIPTION = f"""
-Read-only HTTP API over **precomputed** recommendations written by the batch job.
+HTTP API over **precomputed** recommendations written by the batch job, plus
+catalog writes against a writable `[input]` store.
 
 There is no live inference in the request path: `GET {RECOMMENDATIONS_PATH}`
 looks up rows already stored in the configured output (dataset parquet or DB).
@@ -139,6 +142,7 @@ indexers. See `docs/search-weights.md`.
 `GET /recommendations` can hide items from the user's live `[input]` events
 (`[serve].exclude_consumed`) and fill short lists from popular/latest
 (`[serve].fallback_fill`) when hide or availability filters drop rows.
+Catalog writes live under `/users`, `/items`, and `/catalog/events`.
 
 Interactive docs: `/docs` (Swagger UI) and `/redoc` (includes language
 code samples via ``x-codeSamples``). Machine-readable schema: `/openapi.json`.
@@ -220,6 +224,7 @@ def create_app(
     event_source: WebhookEventSource | None = None,
     events_worker: EventWorker | None = None,
     history_reader: UserHistoryReader | None = None,
+    catalog: CatalogStore | None = None,
     consumed: ConsumedOverlay | None = None,
 ) -> FastAPI:
     app = FastAPI(
@@ -533,6 +538,7 @@ def create_app(
 
     mount_events_routes(app, settings, event_source=event_source)
     mount_track_routes(app, settings, store=track_store)
+    mount_catalog_routes(app, settings, catalog=catalog, overlay=overlay)
 
     def custom_openapi() -> dict:
         if app.openapi_schema is not None:
@@ -557,6 +563,7 @@ def create_app(
             }
         attach_code_samples(schema)
         attach_events_ingest_openapi(schema)
+        attach_catalog_events_openapi(schema)
         attach_track_ingest_openapi(schema)
         app.openapi_schema = schema
         return app.openapi_schema
@@ -568,6 +575,7 @@ def create_app(
 def main() -> None:
     from cicerone.events.consumed import ConsumedOverlay
     from cicerone.io.factory import (
+        build_catalog_store,
         build_manifest_reader,
         build_recommendation_reader,
         build_user_history_reader,
@@ -602,11 +610,17 @@ def main() -> None:
     except Exception:
         logger.exception("Failed to open [input] for consumed-item hide")
         history_reader = None
+    try:
+        catalog = build_catalog_store(settings.input)
+    except Exception:
+        logger.exception("Failed to open [input] catalog store")
+        catalog = None
     events_runtime = start_events_runtime(
         settings,
         feature_config=feature_config,
         reader=reader,
         consumed=overlay,
+        catalog=catalog,
     )
     app = create_app(
         settings,
@@ -616,6 +630,7 @@ def main() -> None:
         event_source=events_runtime.webhook_source,
         events_worker=events_runtime.worker,
         history_reader=history_reader,
+        catalog=catalog,
         consumed=overlay,
     )
     _start_refresh_loop(

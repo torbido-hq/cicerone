@@ -12,6 +12,7 @@ not add the column. Experiments similarly need ``ALTER TABLE … ADD COLUMN vari
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -76,13 +77,40 @@ DEFAULT_HISTORY_TABLE = "recommendation_history"
 DEFAULT_ITEM_SCORES_TABLE = "item_scores"
 
 
-def _create_engine(database_url: str) -> Engine:
-    kwargs: dict[str, Any] = {"pool_pre_ping": True}
+_MEMORY_ENGINES: dict[int, tuple[dict[str, Any], Engine]] = {}
+_MEMORY_ENGINES_LOCK = threading.Lock()
+
+
+def _is_memory_sqlite(database_url: str) -> bool:
     parsed = make_url(database_url)
-    if parsed.get_backend_name() == "sqlite" and parsed.database in (None, "", ":memory:"):
+    return parsed.get_backend_name() == "sqlite" and parsed.database in (None, "", ":memory:")
+
+
+def _new_db_engine(database_url: str) -> Engine:
+    kwargs: dict[str, Any] = {"pool_pre_ping": True}
+    if _is_memory_sqlite(database_url):
         kwargs["poolclass"] = StaticPool
         kwargs["connect_args"] = {"check_same_thread": False}
     return create_engine(database_url, **kwargs)
+
+
+def create_db_engine(database_url: str, *, options: dict[str, Any] | None = None) -> Engine:
+    if options is not None and _is_memory_sqlite(database_url):
+        key = id(options)
+        with _MEMORY_ENGINES_LOCK:
+            cached = _MEMORY_ENGINES.get(key)
+            if cached is not None:
+                cached_options, engine = cached
+                if cached_options is options:
+                    return engine
+            engine = _new_db_engine(database_url)
+            _MEMORY_ENGINES[key] = (options, engine)
+            return engine
+    return _new_db_engine(database_url)
+
+
+def _create_engine(database_url: str) -> Engine:
+    return create_db_engine(database_url)
 
 
 DEFAULT_DB_TABLES = frozenset(
@@ -258,7 +286,7 @@ def _sql_user_source(query: str | None, table: str) -> str:
 class DatabaseInputSource:
     def __init__(self, options: dict[str, Any]):
         self._options = options
-        self._engine = _create_engine(require_option(options, "database_url", "db"))
+        self._engine = create_db_engine(require_option(options, "database_url", "db"), options=options)
 
     def _configured_query(self, key: str) -> str | None:
         query = self._options.get(key)
@@ -365,7 +393,7 @@ class DatabaseOutputSink:
         fence_kind: str = "lock",
     ):
         self._options = options
-        self._engine = _create_engine(require_option(options, "database_url", "db"))
+        self._engine = create_db_engine(require_option(options, "database_url", "db"), options=options)
         self._writer_lock = writer_lock
         self._fence_check = fence_check
         self._fence_lost = fence_lost

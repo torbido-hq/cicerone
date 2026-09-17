@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import threading
 from collections import OrderedDict
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 from cicerone.config.constants import (
     DEFAULT_CONSUMED_OVERLAY_MAX_USERS,
@@ -24,26 +26,63 @@ class ConsumedOverlay:
             raise ValueError("max_items_per_user must be >= 1")
         if max_users < 1:
             raise ValueError("max_users must be >= 1")
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._max_items_per_user = max_items_per_user
         self._max_users = max_users
         self._by_user: OrderedDict[str, OrderedDict[str, None]] = OrderedDict()
+
+    @contextmanager
+    def mutation(self) -> Iterator[None]:
+        with self._lock:
+            yield
 
     def add(self, user_id: str, item_id: str) -> None:
         with self._lock:
             self._remember(str(user_id), str(item_id))
 
     def add_many(self, pairs: list[tuple[str, str]]) -> None:
-        if not pairs:
+        self.replace_pairs([], pairs)
+
+    def replace_pairs(
+        self,
+        discard: list[tuple[str, str]],
+        add: list[tuple[str, str]],
+    ) -> None:
+        if not discard and not add:
             return
         with self._lock:
-            for user_id, item_id in pairs:
+            for user_id, item_id in discard:
+                self._forget(str(user_id), str(item_id))
+            for user_id, item_id in add:
                 self._remember(str(user_id), str(item_id))
 
     def item_ids(self, user_id: str) -> set[str]:
         with self._lock:
             items = self._by_user.get(str(user_id))
             return set(items) if items is not None else set()
+
+    def discard(self, user_id: str, item_id: str | None = None) -> None:
+        with self._lock:
+            self._forget(str(user_id), None if item_id is None else str(item_id))
+
+    def discard_item(self, item_id: str) -> None:
+        target = str(item_id)
+        if not target:
+            return
+        with self._lock:
+            for user_id in list(self._by_user):
+                self._forget(user_id, target)
+
+    def _forget(self, user_id: str, item_id: str | None) -> None:
+        if item_id is None:
+            self._by_user.pop(user_id, None)
+            return
+        items = self._by_user.get(user_id)
+        if items is None:
+            return
+        items.pop(item_id, None)
+        if not items:
+            self._by_user.pop(user_id, None)
 
     def _remember(self, user_id: str, item_id: str) -> None:
         items = self._by_user.get(user_id)
