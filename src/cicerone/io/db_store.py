@@ -77,7 +77,7 @@ DEFAULT_HISTORY_TABLE = "recommendation_history"
 DEFAULT_ITEM_SCORES_TABLE = "item_scores"
 
 
-_SHARED_MEMORY_ENGINE = "_cicerone_shared_engine"
+_MEMORY_ENGINES: dict[int, Engine] = {}
 _MEMORY_ENGINES_LOCK = threading.Lock()
 
 
@@ -96,12 +96,13 @@ def _new_db_engine(database_url: str) -> Engine:
 
 def create_db_engine(database_url: str, *, options: dict[str, Any] | None = None) -> Engine:
     if options is not None and _is_memory_sqlite(database_url):
+        key = id(options)
         with _MEMORY_ENGINES_LOCK:
-            cached = options.get(_SHARED_MEMORY_ENGINE)
-            if isinstance(cached, Engine):
+            cached = _MEMORY_ENGINES.get(key)
+            if cached is not None:
                 return cached
             engine = _new_db_engine(database_url)
-            options[_SHARED_MEMORY_ENGINE] = engine
+            _MEMORY_ENGINES[key] = engine
             return engine
     return _new_db_engine(database_url)
 

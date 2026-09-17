@@ -5,15 +5,20 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
-from pydantic import BaseModel, Field
+from fastapi import FastAPI, HTTPException, Query, Request
+from pydantic import BaseModel, Field, ValidationError
 
 from cicerone.config import Settings
 from cicerone.events.consumed import ConsumedOverlay
 from cicerone.events.normalize import EventNormalizeError
 from cicerone.http_auth import optional_bearer_deps
-from cicerone.io.catalog import EVENT_ID_COLUMN, CatalogStore, jsonable_row, normalize_event_row
+from cicerone.io.catalog import CatalogStore, jsonable_row, normalize_event_row
 from cicerone.io.recommendation_schema import ITEM_COLUMN, USER_COLUMN
+from cicerone.serve.events_routes import (
+    _max_body_bytes,
+    _put_pydantic_schema,
+    _read_limited_json,
+)
 from cicerone.serve_schemas import (
     CatalogEventsResponse,
     CatalogRowResponse,
@@ -63,6 +68,40 @@ def _path_id(value: str, key: str) -> str:
     return stripped
 
 
+_CATALOG_WRITE = {
+    400: {"model": ErrorDetail},
+    401: {"model": ErrorDetail},
+    501: {"model": ErrorDetail},
+}
+_CATALOG_READ = {
+    400: {"model": ErrorDetail},
+    401: {"model": ErrorDetail},
+    404: {"model": ErrorDetail},
+    501: {"model": ErrorDetail},
+}
+_CATALOG_EVENTS = {
+    **_CATALOG_WRITE,
+    413: {"model": ErrorDetail},
+}
+
+
+def attach_catalog_events_openapi(schema: dict[str, Any]) -> None:
+    post = schema.get("paths", {}).get(CATALOG_EVENTS_PATH, {}).get("post")
+    if not isinstance(post, dict):
+        return
+    components = schema.setdefault("components", {}).setdefault("schemas", {})
+    _put_pydantic_schema(components, InteractionEvent)
+    _put_pydantic_schema(components, CatalogEventsBody)
+    post["requestBody"] = {
+        "required": True,
+        "content": {
+            "application/json": {
+                "schema": {"$ref": "#/components/schemas/CatalogEventsBody"},
+            }
+        },
+    }
+
+
 def mount_catalog_routes(
     app: FastAPI,
     settings: Settings,
@@ -91,11 +130,14 @@ def mount_catalog_routes(
         dependencies=dependencies,
         tags=["catalog"],
         summary="Upsert a user",
-        responses={400: {"model": ErrorDetail}, 501: {"model": ErrorDetail}},
+        responses=_CATALOG_WRITE,
     )
     def put_user(user_id: str, body: CatalogUserBody) -> CatalogWriteResponse:
         store = _require()
-        store.upsert_user(_row_payload(_path_id(user_id, USER_COLUMN), USER_COLUMN, body))
+        try:
+            store.upsert_user(_row_payload(_path_id(user_id, USER_COLUMN), USER_COLUMN, body))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return CatalogWriteResponse(accepted=1)
 
     @app.get(
@@ -104,7 +146,7 @@ def mount_catalog_routes(
         dependencies=dependencies,
         tags=["catalog"],
         summary="Get a user",
-        responses={400: {"model": ErrorDetail}, 404: {"model": ErrorDetail}, 501: {"model": ErrorDetail}},
+        responses=_CATALOG_READ,
     )
     def get_user(user_id: str) -> CatalogRowResponse:
         row = _require().get_user(_path_id(user_id, USER_COLUMN))
@@ -118,7 +160,7 @@ def mount_catalog_routes(
         dependencies=dependencies,
         tags=["catalog"],
         summary="Delete a user and their events",
-        responses={400: {"model": ErrorDetail}, 501: {"model": ErrorDetail}},
+        responses=_CATALOG_WRITE,
     )
     def delete_user(user_id: str) -> CatalogWriteResponse:
         user_id = _path_id(user_id, USER_COLUMN)
@@ -132,11 +174,14 @@ def mount_catalog_routes(
         dependencies=dependencies,
         tags=["catalog"],
         summary="Upsert an item",
-        responses={400: {"model": ErrorDetail}, 501: {"model": ErrorDetail}},
+        responses=_CATALOG_WRITE,
     )
     def put_item(item_id: str, body: CatalogItemBody) -> CatalogWriteResponse:
         store = _require()
-        store.upsert_item(_row_payload(_path_id(item_id, ITEM_COLUMN), ITEM_COLUMN, body))
+        try:
+            store.upsert_item(_row_payload(_path_id(item_id, ITEM_COLUMN), ITEM_COLUMN, body))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return CatalogWriteResponse(accepted=1)
 
     @app.get(
@@ -145,7 +190,7 @@ def mount_catalog_routes(
         dependencies=dependencies,
         tags=["catalog"],
         summary="Get an item",
-        responses={400: {"model": ErrorDetail}, 404: {"model": ErrorDetail}, 501: {"model": ErrorDetail}},
+        responses=_CATALOG_READ,
     )
     def get_item(item_id: str) -> CatalogRowResponse:
         row = _require().get_item(_path_id(item_id, ITEM_COLUMN))
@@ -159,7 +204,7 @@ def mount_catalog_routes(
         dependencies=dependencies,
         tags=["catalog"],
         summary="Delete an item",
-        responses={400: {"model": ErrorDetail}, 501: {"model": ErrorDetail}},
+        responses=_CATALOG_WRITE,
     )
     def delete_item(item_id: str) -> CatalogWriteResponse:
         return CatalogWriteResponse(accepted=_require().delete_item(_path_id(item_id, ITEM_COLUMN)))
@@ -170,25 +215,23 @@ def mount_catalog_routes(
         dependencies=dependencies,
         tags=["catalog"],
         summary="Upsert interaction events into the input catalog",
-        responses={400: {"model": ErrorDetail}, 501: {"model": ErrorDetail}},
+        responses=_CATALOG_EVENTS,
     )
-    def post_catalog_events(body: CatalogEventsBody) -> CatalogWriteResponse:
+    async def post_catalog_events(request: Request) -> CatalogWriteResponse:
         store = _require()
+        raw = await _read_limited_json(request, _max_body_bytes(settings))
         try:
+            body = CatalogEventsBody.model_validate(raw)
             rows = [normalize_event_row(event.model_dump()) for event in body.events]
+            accepted, discard, add = store.replace_events(rows)
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail=exc.errors()) from exc
         except (ValueError, EventNormalizeError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        previous: list[tuple[str, str]] = []
         if overlay is not None:
-            for row in rows:
-                existing = store.get_event(str(row[EVENT_ID_COLUMN]))
-                if existing is not None:
-                    previous.append((str(existing[USER_COLUMN]), str(existing[ITEM_COLUMN])))
-        accepted = store.upsert_events(rows)
-        if overlay is not None:
-            for user_id, item_id in previous:
+            for user_id, item_id in discard:
                 overlay.discard(user_id, item_id)
-            overlay.add_many([(str(row[USER_COLUMN]), str(row[ITEM_COLUMN])) for row in rows])
+            overlay.add_many(add)
         return CatalogWriteResponse(accepted=accepted)
 
     @app.get(
@@ -197,7 +240,7 @@ def mount_catalog_routes(
         dependencies=dependencies,
         tags=["catalog"],
         summary="List a user's recent catalog events",
-        responses={400: {"model": ErrorDetail}, 501: {"model": ErrorDetail}},
+        responses=_CATALOG_WRITE,
     )
     def get_catalog_events(
         user_id: str,
@@ -214,7 +257,7 @@ def mount_catalog_routes(
         dependencies=dependencies,
         tags=["catalog"],
         summary="Delete a user's events (optionally one item)",
-        responses={400: {"model": ErrorDetail}, 501: {"model": ErrorDetail}},
+        responses=_CATALOG_WRITE,
     )
     def delete_catalog_events(
         user_id: str,

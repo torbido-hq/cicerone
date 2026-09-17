@@ -8,11 +8,12 @@ import threading
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import inspect, text
+from sqlalchemy import bindparam, inspect, text
 
 from cicerone.io.catalog import (
     EVENT_ID_COLUMN,
     dedupe_event_rows,
+    event_pairs,
     item_row_or_none,
     jsonable_row,
     normalize_event_row,
@@ -31,6 +32,7 @@ from cicerone.io.recommendation_schema import ITEM_COLUMN, USER_COLUMN
 from cicerone.io.user_lookup import OCCURRED_AT_COLUMN, newest_events
 
 logger = logging.getLogger(__name__)
+_SQL_HISTORY_OVERFETCH = 8
 
 
 class DatabaseCatalogStore:
@@ -134,12 +136,46 @@ class DatabaseCatalogStore:
             return False
         return True
 
+    def _validate_columns(self, frame: pd.DataFrame) -> None:
+        for name in frame.columns:
+            sql_identifier(str(name), option="column")
+
+    def _events_by_ids(self, conn, event_ids: list[str]) -> list[dict[str, Any]]:
+        if not event_ids or not inspect(conn).has_table(self._events):
+            return []
+        columns = self._columns(conn, self._events) or []
+        if EVENT_ID_COLUMN not in columns:
+            return []
+        sql = text(
+            f'SELECT * FROM "{self._events}" WHERE "{EVENT_ID_COLUMN}" IN :ids'
+        ).bindparams(bindparam("ids", expanding=True))
+        frame = pd.read_sql(sql, conn, params={"ids": event_ids})
+        if frame.empty:
+            return []
+        return [jsonable_row(row) for row in frame.to_dict(orient="records")]
+
+    def _pairs_present(self, conn, pairs: list[tuple[str, str]]) -> set[tuple[str, str]]:
+        if not pairs or not inspect(conn).has_table(self._events):
+            return set()
+        columns = self._columns(conn, self._events) or []
+        if USER_COLUMN not in columns or ITEM_COLUMN not in columns:
+            return set()
+        found: set[tuple[str, str]] = set()
+        sql = text(
+            f'SELECT 1 FROM "{self._events}" WHERE "{USER_COLUMN}" = :user_id '
+            f'AND "{ITEM_COLUMN}" = :item_id LIMIT 1'
+        )
+        for user_id, item_id in pairs:
+            if conn.execute(sql, {"user_id": user_id, "item_id": item_id}).first():
+                found.add((user_id, item_id))
+        return found
+
     def _upsert_frame(self, conn, table: str, key: str, frame: pd.DataFrame) -> None:
         if frame.empty:
             return
+        self._validate_columns(frame)
         self._ensure_table(conn, table, frame)
-        if table == self._events and key == EVENT_ID_COLUMN:
-            self._ensure_column(conn, table, EVENT_ID_COLUMN)
+        self._ensure_column(conn, table, key)
         aligned = self._align_frame(conn, table, frame)
         if aligned.empty:
             return
@@ -150,9 +186,13 @@ class DatabaseCatalogStore:
             aligned.to_sql(table, conn, if_exists="append", index=False)
             return
         columns = list(aligned.columns)
-        cols = ", ".join(f'"{name}"' for name in columns)
+        cols = ", ".join(f'"{sql_identifier(name, option="column")}"' for name in columns)
         placeholders = ", ".join(f":{name}" for name in columns)
-        updates = ", ".join(f'"{name}" = EXCLUDED."{name}"' for name in columns if name != key)
+        updates = ", ".join(
+            f'"{sql_identifier(name, option="column")}" = EXCLUDED."{sql_identifier(name, option="column")}"'
+            for name in columns
+            if name != key
+        )
         sql = f'INSERT INTO "{table}" ({cols}) VALUES ({placeholders})'
         sql += (
             f' ON CONFLICT ("{key}") DO UPDATE SET {updates}'
@@ -194,13 +234,24 @@ class DatabaseCatalogStore:
             return self._delete_id(conn, self._items, ITEM_COLUMN, item_id)
 
     def upsert_events(self, rows: list[dict[str, Any]]) -> int:
+        accepted, _, _ = self.replace_events(rows)
+        return accepted
+
+    def replace_events(
+        self, rows: list[dict[str, Any]]
+    ) -> tuple[int, list[tuple[str, str]], list[tuple[str, str]]]:
         if not rows:
-            return 0
+            return 0, [], []
         incoming = dedupe_event_rows([normalize_event_row(row) for row in rows])
         frame = pd.DataFrame(incoming)
+        ids = [str(row[EVENT_ID_COLUMN]) for row in incoming]
         with self._write_lock, self._engine.begin() as conn:
+            previous = self._events_by_ids(conn, ids)
             self._upsert_frame(conn, self._events, EVENT_ID_COLUMN, frame)
-        return int(len(incoming))
+            old_pairs = event_pairs(previous)
+            remaining = self._pairs_present(conn, old_pairs)
+            discard = [pair for pair in old_pairs if pair not in remaining]
+            return int(len(incoming)), discard, event_pairs(incoming)
 
     def get_event(self, event_id: str) -> dict[str, Any] | None:
         if not event_id or not self._table_exists(self._events):
@@ -219,14 +270,20 @@ class DatabaseCatalogStore:
     def get_events_for_user(self, user_id: str, limit: int) -> pd.DataFrame:
         if not self._table_exists(self._events):
             return pd.DataFrame()
-        sql = text(
+        sql_limit = max(int(limit) * _SQL_HISTORY_OVERFETCH, int(limit))
+        params = {"user_id": user_id, "limit": sql_limit}
+        ordered = (
             f'SELECT * FROM "{self._events}" WHERE "{USER_COLUMN}" = :user_id '
             f'ORDER BY "{OCCURRED_AT_COLUMN}" DESC LIMIT :limit'
         )
+        fallback = f'SELECT * FROM "{self._events}" WHERE "{USER_COLUMN}" = :user_id LIMIT :limit'
         try:
-            frame = pd.read_sql(sql, self._engine, params={"user_id": user_id, "limit": int(limit)})
+            frame = pd.read_sql(text(ordered), self._engine, params=params)
         except MISSING_TABLE_ERRORS:
-            return pd.DataFrame()
+            try:
+                frame = pd.read_sql(text(fallback), self._engine, params=params)
+            except MISSING_TABLE_ERRORS:
+                return pd.DataFrame()
         return newest_events(frame, limit)
 
     def delete_events_for_user(self, user_id: str, *, item_id: str | None = None) -> int:

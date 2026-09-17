@@ -41,7 +41,7 @@ from cicerone.item_scores import empty_item_scores, normalize_item_scores, page_
 from cicerone.locks import WriterLockBusyError, build_dataset_writer_lock, build_output_writer_lock
 from cicerone.reasons import parse_reasons
 from cicerone.serve.bootstrap_events import start_events_runtime
-from cicerone.serve.catalog_routes import mount_catalog_routes
+from cicerone.serve.catalog_routes import attach_catalog_events_openapi, mount_catalog_routes
 from cicerone.serve.code_samples import (
     HEALTH_PATH,
     ITEM_SCORES_PATH,
@@ -563,6 +563,7 @@ def create_app(
             }
         attach_code_samples(schema)
         attach_events_ingest_openapi(schema)
+        attach_catalog_events_openapi(schema)
         attach_track_ingest_openapi(schema)
         app.openapi_schema = schema
         return app.openapi_schema

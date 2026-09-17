@@ -39,6 +39,10 @@ class CatalogStore(Protocol):
 
     def upsert_events(self, rows: list[dict[str, Any]]) -> int: ...
 
+    def replace_events(
+        self, rows: list[dict[str, Any]]
+    ) -> tuple[int, list[tuple[str, str]], list[tuple[str, str]]]: ...
+
     def get_event(self, event_id: str) -> dict[str, Any] | None: ...
 
     def get_events_for_user(self, user_id: str, limit: int) -> pd.DataFrame: ...
@@ -70,6 +74,16 @@ def dedupe_event_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for row in rows:
         last[str(row[EVENT_ID_COLUMN])] = row
     return list(last.values())
+
+
+def event_pairs(rows: list[dict[str, Any]]) -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
+    for row in rows:
+        user_id = str(row.get(USER_COLUMN, "")).strip()
+        item_id = str(row.get(ITEM_COLUMN, "")).strip()
+        if user_id and item_id:
+            pairs.append((user_id, item_id))
+    return pairs
 
 
 def filter_item_row(frame: pd.DataFrame, item_id: str) -> pd.DataFrame:

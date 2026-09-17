@@ -125,6 +125,33 @@ def test_dataset_catalog_round_trip_and_empty_paths(tmp_path):
     assert store.get_events_for_user("u1", 10).empty
 
 
+def test_dataset_catalog_put_merges_existing_user_columns(tmp_path):
+    store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
+    store.upsert_user({"user_id": "u1", "comment": "alice", "labels": {"vip": True}})
+    store.upsert_user({"user_id": "u1", "comment": "updated"})
+    user = store.get_user("u1")
+    assert user is not None
+    assert user["comment"] == "updated"
+    assert user["labels"] == {"vip": True}
+
+
+def test_dataset_catalog_put_merges_existing_item_columns(tmp_path):
+    store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
+    store.upsert_item({"item_id": "i1", "comment": "sku", "labels": {"color": "red"}})
+    store.upsert_item({"item_id": "i1", "comment": "updated"})
+    item = store.get_item("i1")
+    assert item is not None
+    assert item["comment"] == "updated"
+    assert item["labels"] == {"color": "red"}
+
+
+def test_dataset_catalog_delete_events_without_item_id_column(tmp_path):
+    store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
+    pd.DataFrame([{"user_id": "u1", "event_type": "view"}]).to_parquet(tmp_path / "events.parquet", index=False)
+    assert store.delete_events_for_user("u1", item_id="i1") == 0
+    assert store.delete_events_for_user("u1") == 1
+
+
 def test_dataset_catalog_delete_user_without_user_id_column(tmp_path):
     store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
     pd.DataFrame([{"name": "alice"}]).to_parquet(tmp_path / "users.parquet", index=False)
@@ -191,6 +218,7 @@ def test_database_catalog_shares_memory_engine_with_history():
     user = history.get_user("u1")
     assert user is not None
     assert user["comment"] == "alice"
+    assert "_cicerone_shared_engine" not in settings.options
 
 
 def test_database_catalog_dedupes_and_adds_event_id():
@@ -260,6 +288,52 @@ def test_database_catalog_first_create_is_race_safe():
     with store._engine.begin() as conn:
         count = conn.execute(text("SELECT COUNT(*) FROM users")).scalar_one()
     assert count == 8
+
+
+def test_database_catalog_rejects_invalid_column_names():
+    store = DatabaseCatalogStore({"database_url": "sqlite+pysqlite://"})
+    with pytest.raises(ValueError, match="simple SQL identifier"):
+        store.upsert_user({"user_id": "u1", "bad-name": "x"})
+
+
+def test_dataset_catalog_replace_events_keeps_remaining_pair(tmp_path):
+    store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
+    first = {
+        "user_id": "u1",
+        "item_id": "i1",
+        "event_type": "purchase",
+        "occurred_at": "2026-09-11T12:00:00Z",
+        "event_id": "e1",
+    }
+    sibling = {**first, "event_id": "e2", "event_type": "view"}
+    assert store.replace_events([first, sibling]) == (2, [], [("u1", "i1"), ("u1", "i1")])
+    accepted, discard, add = store.replace_events([{**first, "item_id": "i2"}])
+    assert accepted == 1
+    assert discard == []
+    assert add == [("u1", "i2")]
+    events = store.get_events_for_user("u1", 10)
+    assert set(events["item_id"]) == {"i1", "i2"}
+
+
+def test_database_catalog_replace_events_discards_only_unmatched_pairs():
+    store = DatabaseCatalogStore({"database_url": "sqlite+pysqlite://"})
+    first = {
+        "user_id": "u1",
+        "item_id": "i1",
+        "event_type": "purchase",
+        "occurred_at": "2026-09-11T12:00:00Z",
+        "event_id": "e1",
+    }
+    sibling = {**first, "event_id": "e2", "event_type": "view"}
+    assert store.replace_events([first, sibling])[0] == 2
+    accepted, discard, add = store.replace_events([{**first, "item_id": "i2"}])
+    assert accepted == 1
+    assert discard == []
+    assert add == [("u1", "i2")]
+    only, gone, _ = store.replace_events([{**sibling, "item_id": "i3", "event_id": "e2"}])
+    assert only == 1
+    assert ("u1", "i1") in gone
+    assert store.get_event("e1")["item_id"] == "i2"
 
 
 def test_database_catalog_unique_index_fallback_after_duplicates():

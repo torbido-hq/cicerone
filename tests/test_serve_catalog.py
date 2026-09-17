@@ -3,8 +3,10 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 from test_serve import _FakeReader, _recs_df, _settings
 
+from cicerone.config import EventsSettings
 from cicerone.events.consumed import ConsumedOverlay
 from cicerone.io.dataset_catalog import DatasetCatalogStore
+from cicerone.io.db_catalog import DatabaseCatalogStore
 from cicerone.serve import create_app
 
 
@@ -141,6 +143,16 @@ def test_catalog_events_reject_blank_event_type(tmp_path):
     assert response.status_code == 400
 
 
+def test_catalog_put_rejects_invalid_sql_column():
+    store = DatabaseCatalogStore({"database_url": "sqlite+pysqlite://"})
+    response = TestClient(create_app(_settings(), _FakeReader(_recs_df()), catalog=store)).put(
+        "/users/u1",
+        json={"bad-name": "x"},
+        headers={"Authorization": "Bearer secret"},
+    )
+    assert response.status_code == 400
+
+
 def test_catalog_put_rejects_whitespace_path_ids(tmp_path):
     store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
     response = TestClient(create_app(_settings(), _FakeReader(_recs_df()), catalog=store)).put(
@@ -149,6 +161,21 @@ def test_catalog_put_rejects_whitespace_path_ids(tmp_path):
         headers={"Authorization": "Bearer secret"},
     )
     assert response.status_code == 400
+
+
+def test_catalog_events_reject_oversized_body(tmp_path):
+    store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
+    app = create_app(
+        _settings(events=EventsSettings(options={"max_body_bytes": 64})),
+        _FakeReader(_recs_df()),
+        catalog=store,
+    )
+    response = TestClient(app).post(
+        "/catalog/events",
+        headers={"Authorization": "Bearer secret", "content-type": "application/json"},
+        content=b'{"events":[{"user_id":"' + b"u" * 200 + b'","item_id":"i1","event_type":"view"}]}',
+    )
+    assert response.status_code == 413
 
 
 def test_catalog_events_replace_overlay_item_for_same_event_id(tmp_path):
@@ -170,6 +197,39 @@ def test_catalog_events_replace_overlay_item_for_same_event_id(tmp_path):
     posted = client.post("/catalog/events", json={"events": [replaced]}, headers=headers)
     assert posted.json()["accepted"] == 1
     assert overlay.item_ids("u1") == {"i2"}
+
+
+def test_catalog_events_keep_hidden_item_when_sibling_event_still_consumes_it(tmp_path):
+    store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
+    overlay = ConsumedOverlay()
+    app = create_app(_settings(), _FakeReader(_recs_df()), catalog=store, consumed=overlay)
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer secret"}
+    first = {
+        "user_id": "u1",
+        "item_id": "i1",
+        "event_type": "purchase",
+        "occurred_at": "2026-09-11T12:00:00Z",
+        "event_id": "e1",
+    }
+    sibling = {
+        "user_id": "u1",
+        "item_id": "i1",
+        "event_type": "view",
+        "occurred_at": "2026-09-11T12:30:00Z",
+        "event_id": "e2",
+    }
+    assert (
+        client.post("/catalog/events", json={"events": [first, sibling]}, headers=headers).json()[
+            "accepted"
+        ]
+        == 2
+    )
+    assert overlay.item_ids("u1") == {"i1"}
+    moved = {**first, "item_id": "i2", "occurred_at": "2026-09-11T13:00:00Z"}
+    posted = client.post("/catalog/events", json={"events": [moved]}, headers=headers)
+    assert posted.json()["accepted"] == 1
+    assert overlay.item_ids("u1") == {"i1", "i2"}
 
 
 def test_catalog_delete_clears_consumed_overlay(tmp_path):

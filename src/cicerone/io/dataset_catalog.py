@@ -13,6 +13,7 @@ import pandas as pd
 from cicerone.io.catalog import (
     EVENT_ID_COLUMN,
     dedupe_event_rows,
+    event_pairs,
     item_row_or_none,
     jsonable_row,
     normalize_event_row,
@@ -76,9 +77,13 @@ class DatasetCatalogStore:
     def _replace_row(self, filename: str, key: str, value: str, row: dict[str, Any]) -> None:
         with self._locks[filename]:
             frame = self._read(filename)
+            existing: dict[str, Any] = {}
             if not frame.empty and key in frame.columns:
+                matched = frame.loc[frame[key].astype(str) == str(value)]
+                if not matched.empty:
+                    existing = matched.iloc[0].to_dict()
                 frame = frame.loc[frame[key].astype(str) != str(value)]
-            incoming = pd.DataFrame([row])
+            incoming = pd.DataFrame([{**existing, **row}])
             merged = pd.concat([frame, incoming], ignore_index=True) if not frame.empty else incoming
             self._write(filename, merged)
 
@@ -122,20 +127,33 @@ class DatasetCatalogStore:
             return before
 
     def upsert_events(self, rows: list[dict[str, Any]]) -> int:
+        accepted, _, _ = self.replace_events(rows)
+        return accepted
+
+    def replace_events(
+        self, rows: list[dict[str, Any]]
+    ) -> tuple[int, list[tuple[str, str]], list[tuple[str, str]]]:
         if not rows:
-            return 0
-        incoming = pd.DataFrame(dedupe_event_rows([normalize_event_row(row) for row in rows]))
+            return 0, [], []
+        incoming_rows = dedupe_event_rows([normalize_event_row(row) for row in rows])
+        incoming = pd.DataFrame(incoming_rows)
         with self._locks[_EVENTS]:
             existing = self._read(_EVENTS)
-            if existing.empty:
-                self._write(_EVENTS, incoming)
-                return int(len(incoming))
-            if EVENT_ID_COLUMN in incoming.columns and EVENT_ID_COLUMN in existing.columns:
+            previous: list[dict[str, Any]] = []
+            if (
+                not existing.empty
+                and EVENT_ID_COLUMN in incoming.columns
+                and EVENT_ID_COLUMN in existing.columns
+            ):
                 ids = set(incoming[EVENT_ID_COLUMN].astype(str))
+                matched = existing.loc[existing[EVENT_ID_COLUMN].astype(str).isin(ids)]
+                previous = [jsonable_row(row) for row in matched.to_dict(orient="records")]
                 existing = existing.loc[~existing[EVENT_ID_COLUMN].astype(str).isin(ids)]
-            merged = pd.concat([existing, incoming], ignore_index=True)
+            merged = incoming if existing.empty else pd.concat([existing, incoming], ignore_index=True)
             self._write(_EVENTS, merged)
-            return int(len(incoming))
+            remaining = set(event_pairs([jsonable_row(row) for row in merged.to_dict(orient="records")]))
+            discard = [pair for pair in event_pairs(previous) if pair not in remaining]
+            return int(len(incoming_rows)), discard, event_pairs(incoming_rows)
 
     def get_event(self, event_id: str) -> dict[str, Any] | None:
         if not event_id:
@@ -158,7 +176,9 @@ class DatasetCatalogStore:
             if events.empty or USER_COLUMN not in events.columns:
                 return 0
             mask = events[USER_COLUMN].astype(str) == str(user_id)
-            if item_id is not None and ITEM_COLUMN in events.columns:
+            if item_id is not None:
+                if ITEM_COLUMN not in events.columns:
+                    return 0
                 mask = mask & (events[ITEM_COLUMN].astype(str) == str(item_id))
             deleted = int(mask.sum())
             self._write(_EVENTS, events.loc[~mask].reset_index(drop=True))
