@@ -1290,6 +1290,7 @@ def test_job_recs_fail_without_published_outputs_is_not_partial(tmp_path, monkey
     def _legacy(*args, **kwargs):
         sink = real(*args, **kwargs)
         sink.write_item_scores = None
+        sink.write_surfaces = None
         return sink
 
     from cicerone.io.dataset_store import DatasetOutputSink
