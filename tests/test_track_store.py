@@ -20,6 +20,14 @@ def test_lookback_since_uses_floor() -> None:
     assert 23.0 <= (now - stamp).total_seconds() / 3600.0 <= 25.0
 
 
+def test_track_row_sql_filter_since_uses_date_floor() -> None:
+    from cicerone.track.store_common import _track_row_sql_filter
+
+    clause, params = _track_row_sql_filter(kind=None, experiment_id=None, since="2026-08-29T05:00:00+00:00")
+    assert "occurred_at >= :since" in clause
+    assert params["since"] == "2026-08-28"
+
+
 def test_store_reexports_prior_constants() -> None:
     from cicerone.track.store import (
         DEFAULT_EVAL_TABLE,

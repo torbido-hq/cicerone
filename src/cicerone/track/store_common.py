@@ -183,6 +183,11 @@ def _track_row_sql_filter(
         params["experiment_id"] = experiment_id
     if since:
         clauses.append("occurred_at IS NOT NULL AND occurred_at != ''")
+        start = _since_stamp(since)
+        if start is not None:
+            # Date floor is one day earlier so offset-stored TEXT rows are not dropped.
+            clauses.append("occurred_at >= :since")
+            params["since"] = (start.tz_convert("UTC") - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
     if not clauses:
         return "", {}
     return " WHERE " + " AND ".join(clauses), params

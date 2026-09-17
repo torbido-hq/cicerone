@@ -61,8 +61,10 @@ def conversion_events_for_settings(events: pd.DataFrame, settings: Settings) -> 
 
 
 def _filter_events_since(frame: pd.DataFrame, since: str | None) -> pd.DataFrame:
-    if not since or frame.empty or "occurred_at" not in frame.columns:
+    if not since or frame.empty:
         return frame
+    if "occurred_at" not in frame.columns:
+        return frame.iloc[0:0]
     start = pd.to_datetime(since, utc=True, errors="coerce")
     if pd.isna(start):
         return frame.iloc[0:0]

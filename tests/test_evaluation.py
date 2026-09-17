@@ -17,7 +17,12 @@ from cicerone.evaluation import (
     replay_ks,
     user_track_outcomes,
 )
-from cicerone.evaluation.context import concat_history, prefer_history, stamp_recommendations
+from cicerone.evaluation.context import (
+    _filter_events_since,
+    concat_history,
+    prefer_history,
+    stamp_recommendations,
+)
 
 
 def test_evaluation_package_reexports_prior_constants() -> None:
@@ -1209,3 +1214,9 @@ def test_annotate_source_does_not_invent_variant_from_later_snap() -> None:
     impressions = pd.DataFrame([{"user_id": "alice", "item_id": "ipa"}])
     annotated = _annotate_source(impressions, snapshots)
     assert "variant" not in annotated.columns or pd.isna(annotated.iloc[0].get("variant"))
+
+
+def test_filter_events_since_without_occurred_at_is_empty() -> None:
+    frame = pd.DataFrame([{"user_id": "u1", "event_type": "purchase", "quantity": 1}])
+    filtered = _filter_events_since(frame, "2026-08-28T00:00:00Z")
+    assert filtered.empty

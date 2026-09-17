@@ -139,19 +139,9 @@ def _load_shared_eval_inputs(
     )
     if not need_track:
         return None, None
-    since: str | None = None
-    if settings.experiment.enabled and settings.experiment.allocation == ALLOCATION_THOMPSON:
-        raw_state = _try_load("read experiment state", ExperimentStore(settings.output).read_state, None)
-        previous = raw_state if isinstance(raw_state, dict) else None
-        if previous and str(previous.get("experiment_id") or "") != settings.experiment.id:
-            previous = None
-        has_pair = bool(previous and previous.get("champion") and previous.get("challenger"))
-        window_started = str(previous.get("window_started_at") or "").strip() if previous and has_pair else ""
-        if has_pair and window_started:
-            since = window_started
     raw_track = _try_load(
         "read track rows",
-        lambda: TrackStore(settings.output).read_rows(since=since),
+        lambda: TrackStore(settings.output).read_rows(),
         None,
     )
     track_rows = raw_track if isinstance(raw_track, list) else None

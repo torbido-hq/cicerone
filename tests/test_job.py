@@ -2212,3 +2212,48 @@ def test_load_shared_eval_inputs_drops_partial_preload(tmp_path, monkeypatch):
     monkeypatch.setattr("cicerone.job.TrackStore.read_rows", _boom)
     monkeypatch.setattr("cicerone.job.load_recommendations_frame", lambda _output: recs)
     assert _load_shared_eval_inputs(settings) == (None, None)
+
+
+def test_load_shared_eval_inputs_does_not_bound_to_thompson_window(tmp_path, monkeypatch):
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+    from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
+    from cicerone.experiment.store import ExperimentStore, experiment_state
+    from cicerone.job import _load_shared_eval_inputs
+
+    settings = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="ranking-cvr",
+            allocation="thompson",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        track=TrackSettings(enabled=True),
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    ExperimentStore(settings.output).write_state(
+        experiment_state(
+            "ranking-cvr",
+            promoted_variant=None,
+            champion="control",
+            challenger="treatment",
+            window_started_at="2026-09-04T00:00:00+00:00",
+        )
+    )
+    recs = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}])
+    seen: dict[str, object] = {}
+
+    def _read(self, **kwargs):
+        seen.update(kwargs)
+        return [{"event_id": "old"}]
+
+    monkeypatch.setattr("cicerone.job.TrackStore.read_rows", _read)
+    monkeypatch.setattr("cicerone.job.load_recommendations_frame", lambda _output: recs)
+    track, loaded = _load_shared_eval_inputs(settings)
+    assert seen.get("since") is None
+    assert track == [{"event_id": "old"}]
+    assert loaded is recs
