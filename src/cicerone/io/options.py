@@ -152,6 +152,30 @@ def readonly_select(query: str, *, option: str) -> str:
     return cleaned
 
 
+def close_s3_body(body: Any) -> None:
+    close = getattr(body, "close", None)
+    if callable(close):
+        close()
+
+
+def read_s3_body(response: dict[str, Any], *, max_bytes: int | None = None) -> bytes:
+    body = response["Body"]
+    try:
+        if max_bytes is None:
+            return body.read()
+        if max_bytes < 1:
+            raise ValueError("max_bytes must be >= 1")
+        known = response.get("ContentLength")
+        if isinstance(known, int) and known > max_bytes:
+            raise ValueError(f"Stored object is {known} bytes; max is {max_bytes}")
+        payload = body.read(max_bytes + 1)
+        if len(payload) > max_bytes:
+            raise ValueError(f"Stored object is {len(payload)} bytes; max is {max_bytes}")
+        return payload
+    finally:
+        close_s3_body(body)
+
+
 def is_s3_not_found(exc: BaseException) -> bool:
     from botocore.exceptions import ClientError
 
@@ -233,4 +257,4 @@ def read_parquet(
     logger.info("Reading s3://%s/%s", bucket, key)
     client = s3_client if s3_client is not None else build_s3_client(options)
     obj = client.get_object(Bucket=bucket, Key=key)
-    return pd.read_parquet(io.BytesIO(obj["Body"].read()), **read_kwargs)
+    return pd.read_parquet(io.BytesIO(read_s3_body(obj)), **read_kwargs)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 
 import pandas as pd
@@ -164,6 +165,24 @@ def test_track_store_roundtrip_sqlite(tmp_path) -> None:
     store.append_rows([_row(event_id="imp-2", item_id="ipa-002")])
     assert store._db_engine() is engine
     assert len(store.read_rows()) == 2
+
+
+def test_track_store_sqlite_concurrent_same_event_accepts_once(tmp_path) -> None:
+    url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
+    store = TrackStore(IOSettings(kind="db", options={"database_url": url}))
+    row = _row()
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda _: store.append_accepted_rows([row]), range(8)))
+    assert sum(len(accepted) for accepted in results) == 1
+    assert [row["event_id"] for row in store.read_rows()] == ["imp-1"]
+
+
+def test_track_store_sqlite_concurrent_engine_init_reuses_one(tmp_path) -> None:
+    url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
+    store = TrackStore(IOSettings(kind="db", options={"database_url": url}))
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        engines = list(pool.map(lambda _: store._db_engine(), range(8)))
+    assert len({id(engine) for engine in engines}) == 1
 
 
 def test_track_store_sqlite_unknown_rowcount_does_not_over_accept(tmp_path) -> None:
@@ -730,6 +749,34 @@ def test_track_history_non_s3_error_reraises(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("cicerone.track.store_dataset.is_s3_not_found", lambda _exc: False)
     with pytest.raises(RuntimeError, match="corrupt"):
         TrackStore(output).read_history()
+
+
+def test_s3_parquet_frame_closes_body(monkeypatch) -> None:
+    from cicerone.track.store_dataset import _s3_parquet_frame
+
+    class _Body:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def read(self) -> bytes:
+            return b"parquet"
+
+        def close(self) -> None:
+            self.closed = True
+
+    body = _Body()
+
+    class _Client:
+        def get_object(self, **_kwargs):
+            return {"Body": body}
+
+    monkeypatch.setattr(
+        "cicerone.track.store_dataset.pd.read_parquet",
+        lambda _buf: pd.DataFrame({"x": [1]}),
+    )
+    frame = _s3_parquet_frame(_Client(), "recs", "history/part.parquet")
+    assert frame is not None
+    assert body.closed is True
 
 
 def test_track_read_bytes_s3_generic_error(monkeypatch) -> None:

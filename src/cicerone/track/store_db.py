@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from collections.abc import Sequence
 from typing import Any
 
@@ -28,17 +29,22 @@ logger = logging.getLogger(__name__)
 
 class TrackDbBackend:
     _engine: Engine | None
+    _engine_lock: threading.Lock
     _options: dict[str, Any]
 
     def _ensure_fence(self) -> None:
         return None
 
     def _db_engine(self) -> Engine:
-        if self._engine is None:
-            self._engine = create_engine(
-                require_option(self._options, "database_url", "db"), pool_pre_ping=True
-            )
-        return self._engine
+        engine = self._engine
+        if engine is not None:
+            return engine
+        with self._engine_lock:
+            if self._engine is None:
+                self._engine = create_engine(
+                    require_option(self._options, "database_url", "db"), pool_pre_ping=True
+                )
+            return self._engine
 
     def _ensure_track_table(self, conn: Any, table: str) -> None:
         conn.execute(

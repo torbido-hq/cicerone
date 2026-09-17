@@ -13,9 +13,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A dispatched RabbitMQ job is not started after its I/O timeout.
 - Local dataset writers take `msvcrt.locking` when `fcntl` is missing.
 - `POST /track` acquires the writer lock off the serve event loop.
+- Concurrent database `/track` writes in one process accept a given
+  `event_id` once.
 
 ### Security
 
+- `[events.online]` requires `[output].artifact_hmac_key` and verifies it
+  before unpickle. Artifact and storage reads reject payloads over 512 MiB.
+- Thompson promote accepts only the champion/challenger pair.
 - Custom `input.options.*_query` and `events.options.events_query` reject
   more Postgres file/admin functions (`pg_ls_dir`, `dblink`, large objects).
 

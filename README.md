@@ -749,6 +749,8 @@ code is structured. See [CHANGELOG.md](CHANGELOG.md) for release notes.
   input side, write on the output side, no delete/admin permissions).
   Custom `input.options.*_query` and `events.options.events_query` values
   must be a single `SELECT`; give that role only the tables it should read.
+- `[events.online]` requires `[output].artifact_hmac_key` (16+ bytes). The
+  job signs `model.artifact`; the events worker verifies before unpickle.
 - No personal data other than `user_id` (an opaque identifier) is ever read
   or written.
 - The batch job itself accepts no inbound connections. The optional serve
