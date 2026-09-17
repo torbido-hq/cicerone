@@ -47,7 +47,9 @@ def warn_missing_column(kind: str, rule_name: str, column: str) -> None:
 
 
 def resolve_eligibility(config: FeatureConfig) -> list[EligibilityRule]:
-    """Merge item_availability_filters sugar with explicit [[eligibility]] rules."""
+    """Merge item_availability_filters into [[eligibility]] when merge_item_availability is set."""
+    if not config.merge_item_availability:
+        return list(config.eligibility)
     rules: list[EligibilityRule] = []
     already = {(r.op, r.item_column) for r in config.eligibility if r.op == "item_true"}
     for column in config.item_availability_filters:

@@ -478,6 +478,49 @@ def test_experiment_context_recipes_from_manifest(tmp_path, monkeypatch):
     context = experiment_context(settings)
     assert context["error"] is None
     assert [recipe.name for recipe in context["recipes"]] == ["control", "treatment"]
+    assert context["recipes"][0].merge_item_availability is True
+
+
+def test_experiment_context_manifest_restores_eligibility_merge_flag(tmp_path, monkeypatch):
+    from cicerone.experiment.recipes import apply_recipe
+    from cicerone.feature_config import load_feature_config
+    from cicerone.policy import resolve_eligibility
+
+    settings = _settings(tmp_path, log_exposures=False)
+    monkeypatch.setattr("cicerone.dashboard_experiments.resolve_recipes", lambda *args, **kwargs: ())
+
+    class _Reader:
+        def read_latest(self):
+            return {
+                "experiment_variants": json.dumps(
+                    [
+                        {
+                            "name": "control",
+                            "traffic": 0.5,
+                            "models": ["popular"],
+                            "eligibility": [],
+                            "merge_item_availability": False,
+                        },
+                        {
+                            "name": "treatment",
+                            "traffic": 0.5,
+                            "models": ["collaborative"],
+                            "eligibility": [
+                                {"name": "published", "op": "item_true", "item_column": "published"}
+                            ],
+                            "merge_item_availability": False,
+                        },
+                    ]
+                )
+            }
+
+    monkeypatch.setattr("cicerone.dashboard_experiments.build_manifest_reader", lambda _output: _Reader())
+    context = experiment_context(settings)
+    features = load_feature_config(REPO_FEATURES)
+    control = apply_recipe(features, context["recipes"][0])
+    treatment = apply_recipe(features, context["recipes"][1])
+    assert resolve_eligibility(control) == []
+    assert [rule.name for rule in resolve_eligibility(treatment)] == ["published"]
 
 
 def test_experiment_context_manifest_policy_error_names_variant(tmp_path, monkeypatch):
@@ -1132,6 +1175,209 @@ def test_thompson_ship_ignores_parked_empty_lists(tmp_path):
     assert {item.variant for item in context["report"].guardrails} == {"control", "treatment"}
     assert context["can_ship"] is True
     assert context["ship_variant"] == "control"
+    assert promote_winner(settings, "blend") == "Winner is 'control', not 'blend'"
+
+
+def _thompson_three_variants(tmp_path):
+    from cicerone.config.constants import ALLOCATION_THOMPSON
+
+    settings = _settings(tmp_path, log_exposures=False)
+    return replace(
+        settings,
+        experiment=replace(
+            settings.experiment,
+            allocation=ALLOCATION_THOMPSON,
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+                VariantSettings(name="blend", traffic=0.0),
+            ),
+        ),
+    )
+
+
+def test_thompson_context_without_pair_does_not_ship(tmp_path):
+    settings = _thompson_three_variants(tmp_path)
+    recs = [
+        {
+            "user_id": f"u{i}",
+            "item_id": f"i{i % 10}",
+            "rank": 1,
+            "score": 1.0,
+            "source": "personalized",
+            VARIANT_COLUMN: "control" if i < 6 else "treatment",
+        }
+        for i in range(12)
+    ]
+    events = [
+        {"user_id": f"u{i}", "item_id": f"i{i % 10}", "event_type": "view", "quantity": 1} for i in range(12)
+    ]
+    ExperimentStore(settings.output).write_state(experiment_state("exp-1", promoted_variant=None))
+    _write_frames(settings, events=events, recs=recs)
+    context = experiment_context(settings)
+    assert context["ship_variant"] is None
+    assert context["can_ship"] is False
+
+
+def test_thompson_stale_pair_is_not_shippable(tmp_path):
+    from cicerone.config.constants import ALLOCATION_THOMPSON
+
+    settings = _settings(tmp_path, log_exposures=False)
+    settings = replace(
+        settings,
+        experiment=replace(
+            settings.experiment,
+            allocation=ALLOCATION_THOMPSON,
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="blend", traffic=0.5),
+            ),
+        ),
+    )
+    recs = [
+        {
+            "user_id": f"u{i}",
+            "item_id": f"i{i % 10}",
+            "rank": 1,
+            "score": 1.0,
+            "source": "personalized",
+            VARIANT_COLUMN: "control" if i < 6 else "blend",
+        }
+        for i in range(12)
+    ]
+    events = [
+        {"user_id": f"u{i}", "item_id": f"i{i % 10}", "event_type": "view", "quantity": 1} for i in range(12)
+    ]
+    ExperimentStore(settings.output).write_state(
+        experiment_state("exp-1", promoted_variant=None, champion="control", challenger="treatment")
+    )
+    _write_frames(settings, events=events, recs=recs)
+    context = experiment_context(settings)
+    assert context["ship_variant"] is None
+    assert context["can_ship"] is False
+
+
+def test_thompson_promote_rejects_stale_pair_missing_recipe(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    settings = _thompson_three_variants(tmp_path)
+    settings = replace(
+        settings,
+        experiment=replace(
+            settings.experiment,
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="blend", traffic=0.5),
+            ),
+        ),
+    )
+    ExperimentStore(settings.output).write_state(
+        experiment_state("exp-1", promoted_variant=None, champion="control", challenger="treatment")
+    )
+    monkeypatch.setattr(
+        "cicerone.dashboard_experiments.experiment_context",
+        lambda _settings: {
+            "report": SimpleNamespace(
+                comparisons=(),
+                winner="control",
+                promote_blocked_by=(),
+            ),
+            "recipes": (SimpleNamespace(name="control"), SimpleNamespace(name="blend")),
+            "thompson": {"champion": "control", "challenger": "treatment"},
+            "ship_variant": "control",
+        },
+    )
+    assert promote_winner(settings, "control") == "No active champion/challenger pair is available"
+    state = ExperimentStore(settings.output).read_state()
+    assert state is not None
+    assert state["promoted_variant"] is None
+
+
+def test_thompson_promote_rejects_parked_report_winner_without_pair(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    settings = _thompson_three_variants(tmp_path)
+    ExperimentStore(settings.output).write_state(experiment_state("exp-1", promoted_variant=None))
+    monkeypatch.setattr(
+        "cicerone.dashboard_experiments.experiment_context",
+        lambda _settings: {
+            "report": SimpleNamespace(
+                comparisons=(),
+                winner="blend",
+                promote_blocked_by=(),
+            ),
+            "thompson": {"champion": "", "challenger": ""},
+            "ship_variant": "blend",
+        },
+    )
+    assert promote_winner(settings, "blend") == "No active champion/challenger pair is available"
+    state = ExperimentStore(settings.output).read_state()
+    assert state is not None
+    assert state["promoted_variant"] is None
+
+
+def test_thompson_promote_rechecks_pair_under_writer_lock(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    settings = _thompson_three_variants(tmp_path)
+    ExperimentStore(settings.output).write_state(
+        experiment_state("exp-1", promoted_variant=None, champion="control", challenger="blend")
+    )
+    monkeypatch.setattr(
+        "cicerone.dashboard_experiments.experiment_context",
+        lambda _settings: {
+            "report": SimpleNamespace(
+                comparisons=(),
+                winner="control",
+                promote_blocked_by=(),
+            ),
+            "thompson": {"champion": "control", "challenger": "treatment"},
+            "ship_variant": "control",
+        },
+    )
+    assert promote_winner(settings, "treatment") == "Winner is 'control', not 'treatment'"
+    state = ExperimentStore(settings.output).read_state()
+    assert state is not None
+    assert state["promoted_variant"] is None
+    assert state["champion"] == "control"
+    assert state["challenger"] == "blend"
+
+
+def test_thompson_promote_fails_closed_when_state_read_fails(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    settings = _thompson_three_variants(tmp_path)
+    store = ExperimentStore(settings.output)
+    store.write_state(
+        experiment_state("exp-1", promoted_variant=None, champion="control", challenger="treatment")
+    )
+    assert store.read_state() is not None
+    assert store.last_state("exp-1") is not None
+    monkeypatch.setattr(
+        "cicerone.dashboard_experiments.experiment_context",
+        lambda _settings: {
+            "report": SimpleNamespace(
+                comparisons=(),
+                winner="control",
+                promote_blocked_by=(),
+            ),
+            "thompson": {"champion": "control", "challenger": "treatment"},
+            "ship_variant": "control",
+        },
+    )
+    original = ExperimentStore.read_state
+
+    def _boom(self):
+        raise RuntimeError("store down")
+
+    monkeypatch.setattr(ExperimentStore, "read_state", _boom)
+    assert promote_winner(settings, "treatment") == "Experiment state could not be read"
+    monkeypatch.setattr(ExperimentStore, "read_state", original)
+    state = ExperimentStore(settings.output).read_state()
+    assert state is not None
+    assert state["promoted_variant"] is None
+    assert state["champion"] == "control"
+    assert state["challenger"] == "treatment"
 
 
 def test_promote_winner_reads_state_under_writer_lock(tmp_path, monkeypatch):

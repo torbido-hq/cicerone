@@ -81,6 +81,7 @@ class FeatureConfig:
     boosts: list[BoostRule] = field(default_factory=list)
     boost_overfetch_factor: int = DEFAULT_BOOST_OVERFETCH_FACTOR
     blending: BlendingConfig = field(default_factory=BlendingConfig)
+    merge_item_availability: bool = True
 
 
 def _parse_boost_overfetch_factor(raw: Any) -> int:
