@@ -43,6 +43,7 @@ from sqlalchemy.pool import StaticPool
 
 from cicerone.config.constants import DEFAULT_MAX_ARTIFACT_BYTES
 from cicerone.io.db_errors import is_missing_column_error
+from cicerone.io.engines import engine_for
 from cicerone.io.options import readonly_select, require_option, sql_identifier
 from cicerone.io.recommendation_schema import (
     REASONS_COLUMN,
@@ -96,11 +97,14 @@ def _is_memory_sqlite(database_url: str) -> bool:
 
 
 def _new_db_engine(database_url: str) -> Engine:
-    kwargs: dict[str, Any] = {"pool_pre_ping": True}
-    if _is_memory_sqlite(database_url):
-        kwargs["poolclass"] = StaticPool
-        kwargs["connect_args"] = {"check_same_thread": False}
-    return create_engine(database_url, **kwargs)
+    if not _is_memory_sqlite(database_url):
+        return engine_for(database_url)
+    return create_engine(
+        database_url,
+        pool_pre_ping=True,
+        poolclass=StaticPool,
+        connect_args={"check_same_thread": False},
+    )
 
 
 def create_db_engine(database_url: str, *, options: dict[str, Any] | None = None) -> Engine:

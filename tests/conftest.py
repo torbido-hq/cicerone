@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pandas as pd
 import pytest
 
 from cicerone.config import make_settings
 from cicerone.feature_config import FeatureColumn, FeatureConfig
 from cicerone.io import options as io_options
+from cicerone.io.engines import dispose_engines
 
 # Re-export for existing `from conftest import make_settings` call sites.
 __all__ = ["make_settings"]
@@ -24,6 +27,13 @@ def _disable_native_arrow_s3(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 def enable_native_arrow_s3(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(io_options, "_read_s3_parquet_pyarrow", _READ_S3_PARQUET_PYARROW)
+
+
+@pytest.fixture(autouse=True)
+def _dispose_shared_engines() -> Iterator[None]:
+    dispose_engines()
+    yield
+    dispose_engines()
 
 
 @pytest.fixture

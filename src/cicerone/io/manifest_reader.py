@@ -63,16 +63,15 @@ class DatasetManifestReader:
 
 class DbManifestReader:
     def __init__(self, options: dict[str, Any]):
-        from sqlalchemy import create_engine
-
         from cicerone.io.db_store import DEFAULT_MANIFEST_TABLE
+        from cicerone.io.engines import engine_for
 
         self._options = options
         self._table = sql_identifier(
             options.get("manifest_table", DEFAULT_MANIFEST_TABLE),
             option="manifest_table",
         )
-        self._engine = create_engine(require_option(options, "database_url", "db"), pool_pre_ping=True)
+        self._engine = engine_for(require_option(options, "database_url", "db"))
 
     def read_latest(self) -> dict[str, Any] | None:
         rows = self.read_recent(1)
