@@ -109,6 +109,10 @@ events worker loads the last artifact for write-through only:
 | `PUT`/`GET`/`DELETE` | `/users/{user_id}`, `/items/{item_id}` | Catalog upsert when `[input]` is dataset or table-backed db (not query-backed) |
 | `POST` | `/catalog/events` | Persist events on writable dataset or table-backed db `[input]` |
 | `GET`/`DELETE` | `/catalog/events/{user_id}` | List or delete a user's catalog events |
+| `GET` | `/popular` | Precomputed popular items |
+| `GET` | `/latest` | Precomputed latest items |
+| `GET` | `/similar/{item_id}` | Item-to-item neighbors from the last job |
+| `POST` | `/session/recommendations` | Anonymous session recommend via neighbors |
 | `GET` | `/metrics` | Prometheus text format (no bearer token; optional `X-Metrics-Token`) |
 | `POST` | `/events` | Incremental ingest when `[events]` `kind = "webhook"` |
 | `POST` | `/track` | Impression/click ingest when `[track]` is enabled |

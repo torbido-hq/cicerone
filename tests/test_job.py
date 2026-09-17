@@ -10,6 +10,7 @@ import pytest
 from cicerone import job
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import IOSettings
+from cicerone.config.constants import DEFAULT_SERVE_MAX_K
 from cicerone.job import _recommendation_user_count, _target_user_ids
 from cicerone.model import RRF_K
 from cicerone.track.store import TrackStore
@@ -99,6 +100,53 @@ def test_job_run_end_to_end_with_local_dataset_backend(tmp_path, monkeypatch):
     scores = pd.read_parquet(output_dir / "item_scores.parquet")
     assert set(scores["item_id"]) == {"i1", "i2", "i3"}
     assert manifest["n_item_scores"] == 3
+    popular = pd.read_parquet(output_dir / "popular.parquet")
+    assert not popular.empty
+    assert (output_dir / "latest.parquet").is_file()
+    assert (output_dir / "item_neighbors.parquet").is_file()
+    assert (output_dir / "surfaces_stamp.json").is_file()
+
+
+def test_job_materializes_neighbors_for_session_overfetch(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.now(tz="UTC")
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    pd.DataFrame(
+        [{"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True}]
+    ).to_parquet(input_dir / "items.parquet", index=False)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=1))
+    seen: list[int] = []
+    popular_k: list[int] = []
+    latest_k: list[int] = []
+    real = job.neighbors_from_events
+    real_popular = job.popular_from_events
+    real_latest = job.latest_from_items
+
+    def _capture(events, k_neighbors):
+        seen.append(k_neighbors)
+        return real(events, k_neighbors)
+
+    def _popular(events, k):
+        popular_k.append(k)
+        return real_popular(events, k)
+
+    def _latest(items, k, date_columns=None):
+        latest_k.append(k)
+        return real_latest(items, k, date_columns)
+
+    monkeypatch.setattr("cicerone.job.neighbors_from_events", _capture)
+    monkeypatch.setattr("cicerone.job.popular_from_events", _popular)
+    monkeypatch.setattr("cicerone.job.latest_from_items", _latest)
+    job.run()
+    expected = DEFAULT_SERVE_MAX_K * 5
+    assert seen == [expected]
+    assert popular_k == [expected]
+    assert latest_k == [expected]
 
 
 def test_job_uses_one_weighting_timestamp(tmp_path, monkeypatch):
@@ -1290,6 +1338,7 @@ def test_job_recs_fail_without_published_outputs_is_not_partial(tmp_path, monkey
     def _legacy(*args, **kwargs):
         sink = real(*args, **kwargs)
         sink.write_item_scores = None
+        sink.write_surfaces = None
         return sink
 
     from cicerone.io.dataset_store import DatasetOutputSink

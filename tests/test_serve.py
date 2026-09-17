@@ -612,10 +612,23 @@ def test_start_refresh_loop_calls_refresh_periodically(monkeypatch):
     monkeypatch.setattr("cicerone.serve.app.time.sleep", fake_sleep)
     monkeypatch.setattr(threading.Thread, "start", lambda self: self.run())
 
+    surfaces_refreshes = {"n": 0}
+
+    class FakeSurfaces:
+        def refresh(self) -> None:
+            surfaces_refreshes["n"] += 1
+            assert cache_refreshes["n"] == surfaces_refreshes["n"] - 1
+
     with pytest.raises(SystemExit):
-        _start_refresh_loop(reader, interval_seconds=0.01, generated_at_cache=FakeCache())
+        _start_refresh_loop(
+            reader,
+            interval_seconds=0.01,
+            generated_at_cache=FakeCache(),
+            surfaces=FakeSurfaces(),
+        )
 
     assert reader.refresh_calls >= 2
+    assert surfaces_refreshes["n"] >= 2
     assert cache_refreshes["n"] >= 2
 
 
@@ -698,6 +711,7 @@ def test_main_starts_serve_app_in_serve_mode(tmp_path, monkeypatch):
     assert uvicorn_calls == {"host": "0.0.0.0", "port": 8000}
     assert served_app is not None
     assert refresh_kwargs[0]["generated_at_cache"] is served_app.state.generated_at_cache
+    assert refresh_kwargs[0]["surfaces"] is not None
 
 
 def test_main_fails_closed_on_invalid_feature_config(tmp_path, monkeypatch):

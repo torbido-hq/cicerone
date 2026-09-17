@@ -10,6 +10,7 @@ from cicerone.io.base import InputSource, ManifestReader, OutputSink, Recommenda
 
 if TYPE_CHECKING:
     from cicerone.io.catalog import CatalogStore
+    from cicerone.io.surfaces_reader import SurfacesReader
 
 T = TypeVar("T")
 
@@ -159,3 +160,19 @@ def build_catalog_store(settings: IOSettings) -> CatalogStore | None:
             return DatabaseCatalogStore(settings.options)
         case _:
             return None
+
+
+def build_surfaces_reader(settings: IOSettings) -> SurfacesReader:
+    match settings.kind:
+        case "dataset":
+            from cicerone.io.surfaces_reader import DatasetSurfacesReader
+
+            return DatasetSurfacesReader(settings.options)
+        case "db":
+            from cicerone.io.surfaces_reader import DbSurfacesReader
+
+            return DbSurfacesReader(settings.options)
+        case _:
+            from cicerone.io.surfaces_reader import EmptySurfacesReader
+
+            return EmptySurfacesReader()

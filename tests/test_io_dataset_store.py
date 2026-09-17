@@ -44,6 +44,13 @@ def test_local_backend_round_trip(tmp_path):
     scores = pd.read_parquet(tmp_path / "item_scores.parquet")
     assert list(scores["item_id"]) == ["i1"]
     assert float(scores.iloc[0]["popular_score"]) == 1.5
+    sink.write_surfaces(
+        popular=pd.DataFrame([{"item_id": "i1", "rank": 1, "score": 3.0, "source": "popular_fallback"}]),
+        latest=pd.DataFrame([{"item_id": "i1", "rank": 1, "score": 2.0, "source": "latest"}]),
+        neighbors=pd.DataFrame([{"item_id": "i1", "neighbor_id": "i2", "rank": 1, "score": 0.5}]),
+    )
+    assert list(pd.read_parquet(tmp_path / "popular.parquet")["item_id"]) == ["i1"]
+    assert list(pd.read_parquet(tmp_path / "item_neighbors.parquet")["neighbor_id"]) == ["i2"]
 
 
 def test_local_write_item_scores_rejects_blank_ids(tmp_path):

@@ -75,6 +75,9 @@ DEFAULT_TRACK_TABLE = "recommendation_track"
 DEFAULT_EVAL_TABLE = "recommendation_eval"
 DEFAULT_HISTORY_TABLE = "recommendation_history"
 DEFAULT_ITEM_SCORES_TABLE = "item_scores"
+DEFAULT_POPULAR_TABLE = "recommendation_popular"
+DEFAULT_LATEST_TABLE = "recommendation_latest"
+DEFAULT_NEIGHBORS_TABLE = "item_neighbors"
 
 
 _MEMORY_ENGINES: dict[int, tuple[dict[str, Any], Engine]] = {}
@@ -128,6 +131,9 @@ DEFAULT_DB_TABLES = frozenset(
         DEFAULT_EVAL_TABLE,
         DEFAULT_HISTORY_TABLE,
         DEFAULT_ITEM_SCORES_TABLE,
+        DEFAULT_POPULAR_TABLE,
+        DEFAULT_LATEST_TABLE,
+        DEFAULT_NEIGHBORS_TABLE,
     }
 )
 
@@ -634,3 +640,48 @@ class DatabaseOutputSink:
             self._ensure_fence()
             df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
             self._ensure_fence()
+
+    def write_surfaces(
+        self,
+        *,
+        popular: pd.DataFrame,
+        latest: pd.DataFrame,
+        neighbors: pd.DataFrame,
+    ) -> None:
+        tables = (
+            (
+                sql_identifier(
+                    self._options.get("popular_table", DEFAULT_POPULAR_TABLE), option="popular_table"
+                ),
+                popular,
+            ),
+            (
+                sql_identifier(
+                    self._options.get("latest_table", DEFAULT_LATEST_TABLE), option="latest_table"
+                ),
+                latest,
+            ),
+            (
+                sql_identifier(
+                    self._options.get("neighbors_table", DEFAULT_NEIGHBORS_TABLE), option="neighbors_table"
+                ),
+                neighbors,
+            ),
+        )
+        neighbors_table = tables[2][0]
+        with self.recommendations_write(), self._engine.begin() as conn:
+            for table, frame in tables:
+                logger.info("Writing %d surface rows to database table %r", len(frame), table)
+                self._ensure_fence()
+                _clear_table_for_replace(conn, table)
+                if not frame.empty:
+                    self._ensure_fence()
+                    frame.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
+                    if table == neighbors_table:
+                        conn.execute(
+                            text(
+                                f'CREATE INDEX IF NOT EXISTS "{table}_item_rank_idx" '
+                                f'ON "{table}" ("item_id", "rank")'
+                            )
+                        )
+                self._ensure_fence()

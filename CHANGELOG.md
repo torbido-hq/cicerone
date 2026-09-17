@@ -17,9 +17,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Catalog writes on `[input]` (`PUT/GET/DELETE /users/{id}`, `/items/{id}`,
   `/catalog/events`) so a host can upsert users, items, and events without
   a separate dump.
+- Named surfaces on the serve API: `GET /popular`, `GET /latest`,
+  `GET /similar/{item_id}`, and `POST /session/recommendations`. The job
+  writes popular / latest / item-neighbor snapshots next to recommendations.
 
 ### Fixed
 
+- Popular, latest, and neighbor snapshots drop missing or blank item/user ids instead of casting them to `"nan"`.
+- DB popular/latest/similar reads re-raise SQL connectivity errors instead of treating every `OperationalError` as a missing table.
+- Serve refreshes surface snapshots in the same loop as `generated_at` so the stamp and surfaces stay on one job.
+- `/popular`, `/latest`, `/similar`, and session recommendations increment source-tier serve metrics.
+- Dataset surface refresh treats a complete unstamped trio as the cached baseline, so later unstamped file-by-file writes cannot mix snapshots.
+- Job popular/latest snapshots keep at least `serve.default_k * 5` rows so `/popular`, `/latest`, and session fallback can over-fetch.
+- Session neighbor lookups read every session item from one surface snapshot.
+- Job neighbor snapshots keep at least `serve.default_k * 5` rows per item so session over-fetch still has candidates.
+- Dataset surface refresh applies a new popular/latest/neighbors snapshot only when all three files match the job stamp; a missing stamp or unreadable parquet keeps the last consistent trio.
+- Dataset `write_surfaces` rechecks the writer lease before each surface file.
+- Job builds popular/latest/neighbor frames only when the sink can write surfaces.
+- `ServeClient` popular/latest/similar send `exclude_unavailable` and `user_id`.
+- Popular snapshots break distinct-user ties by event count, then `item_id`.
+- Job marks `partial_outputs` before the multi-file surface write so a mid-write failure is not reported as clean.
+- `POST /session/recommendations` accepts only an `items` list of item ids.
 - Serve keeps the last `item_scores` catalog when a refresh cannot read scores (I/O error, missing file or table after a load, or invalid values). Before the first successful load, missing data still serves empty.
 - Serve rejects `item_scores` catalogs with blank or duplicate `item_id`s or non-integral `n_users` and keeps the last valid cache.
 - `GET /item-scores` treats an empty-string `cursor` as a seek point instead of restarting the first page.

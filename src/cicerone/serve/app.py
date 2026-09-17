@@ -37,6 +37,7 @@ from cicerone.io.base import ManifestReader, RecommendationReader, UserHistoryRe
 from cicerone.io.catalog import CatalogStore
 from cicerone.io.recommendation_reader import SOURCE_COLUMN
 from cicerone.io.recommendation_schema import has_variant_column
+from cicerone.io.surfaces_reader import EmptySurfacesReader, SurfacesReader
 from cicerone.item_scores import empty_item_scores, normalize_item_scores, page_item_scores
 from cicerone.locks import WriterLockBusyError, build_dataset_writer_lock, build_output_writer_lock
 from cicerone.reasons import parse_reasons
@@ -64,6 +65,7 @@ from cicerone.serve.metrics import (
     update_cache_age_gauge,
     update_events_source_health,
 )
+from cicerone.serve.surfaces import mount_surface_routes
 from cicerone.serve_schemas import (
     ErrorDetail,
     HealthResponse,
@@ -143,6 +145,8 @@ indexers. See `docs/search-weights.md`.
 (`[serve].exclude_consumed`) and fill short lists from popular/latest
 (`[serve].fallback_fill`) when hide or availability filters drop rows.
 Catalog writes live under `/users`, `/items`, and `/catalog/events`.
+Named surfaces: `GET /popular`, `GET /latest`, `GET /similar/{{item_id}}`,
+`POST /session/recommendations`.
 
 Interactive docs: `/docs` (Swagger UI) and `/redoc` (includes language
 code samples via ``x-codeSamples``). Machine-readable schema: `/openapi.json`.
@@ -156,11 +160,14 @@ def _start_refresh_loop(
     interval_seconds: float,
     *,
     generated_at_cache: _GeneratedAtCache | None = None,
+    surfaces: SurfacesReader | None = None,
 ) -> None:
     def _loop() -> None:
         while True:
             time.sleep(interval_seconds)
             reader.refresh()
+            if surfaces is not None and hasattr(surfaces, "refresh"):
+                surfaces.refresh()
             if generated_at_cache is not None:
                 generated_at_cache.refresh()
 
@@ -225,6 +232,7 @@ def create_app(
     events_worker: EventWorker | None = None,
     history_reader: UserHistoryReader | None = None,
     catalog: CatalogStore | None = None,
+    surfaces: SurfacesReader | None = None,
     consumed: ConsumedOverlay | None = None,
 ) -> FastAPI:
     app = FastAPI(
@@ -261,6 +269,7 @@ def create_app(
             max_items_per_user=settings.serve.consumed_lookback,
         )
     )
+    surfaces_reader = surfaces if surfaces is not None else EmptySurfacesReader()
     missing_category_warned = False
 
     @app.middleware("http")
@@ -540,6 +549,21 @@ def create_app(
     mount_track_routes(app, settings, store=track_store)
     mount_catalog_routes(app, settings, catalog=catalog, overlay=overlay)
 
+    def _surface_filter_ctx() -> dict:
+        snap_items, snap_available, snap_by_category = items_cache.get()
+        return {
+            "items": snap_items,
+            "available_ids": snap_available,
+            "ids_by_category": snap_by_category,
+            "category_column": category_column,
+            "on_missing_category_column": _warn_missing_category_column,
+            "history": history_reader,
+            "overlay": overlay,
+            "generated_at": generated_at_cache.get,
+        }
+
+    mount_surface_routes(app, settings, surfaces=surfaces_reader, filter_ctx=_surface_filter_ctx)
+
     def custom_openapi() -> dict:
         if app.openapi_schema is not None:
             return app.openapi_schema
@@ -578,6 +602,7 @@ def main() -> None:
         build_catalog_store,
         build_manifest_reader,
         build_recommendation_reader,
+        build_surfaces_reader,
         build_user_history_reader,
     )
 
@@ -615,6 +640,7 @@ def main() -> None:
     except Exception:
         logger.exception("Failed to open [input] catalog store")
         catalog = None
+    surfaces = build_surfaces_reader(settings.output)
     events_runtime = start_events_runtime(
         settings,
         feature_config=feature_config,
@@ -631,12 +657,14 @@ def main() -> None:
         events_worker=events_runtime.worker,
         history_reader=history_reader,
         catalog=catalog,
+        surfaces=surfaces,
         consumed=overlay,
     )
     _start_refresh_loop(
         reader,
         settings.serve.refresh_interval_seconds,
         generated_at_cache=app.state.generated_at_cache,
+        surfaces=surfaces,
     )
     try:
         uvicorn.run(app, host=settings.serve.host, port=settings.serve.port)

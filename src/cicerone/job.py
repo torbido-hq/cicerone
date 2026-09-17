@@ -21,6 +21,7 @@ from cicerone.config import IOSettings, Settings, load_settings
 from cicerone.config.constants import (
     ALLOCATION_THOMPSON,
     DEFAULT_LOG_FORMAT,
+    DEFAULT_SERVE_MAX_K,
     TRACK_KIND_IMPRESSION,
 )
 from cicerone.dataset import build_dataset
@@ -59,6 +60,7 @@ from cicerone.io.recommendation_schema import (
     filter_variant_rows,
     pick_fallback_variant,
 )
+from cicerone.io.surfaces import latest_from_items, neighbors_from_events, popular_from_events
 from cicerone.item_scores import build_item_scores, empty_item_scores
 from cicerone.locks import (
     LockBackend,
@@ -807,6 +809,7 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
         outputs_written = False
         recs_write = getattr(sink, "recommendations_write", None)
         write_item_scores = getattr(sink, "write_item_scores", None)
+        write_surfaces = getattr(sink, "write_surfaces", None)
         _ensure_fence(fence_check)
         item_scores = (
             build_item_scores(
@@ -820,6 +823,21 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
             if callable(write_item_scores)
             else empty_item_scores()
         )
+        surface_frames = None
+        if callable(write_surfaces):
+            surface_k = max(settings.top_k, DEFAULT_SERVE_MAX_K * 5)
+            surface_frames = (
+                popular_from_events(events, surface_k),
+                latest_from_items(
+                    items,
+                    surface_k,
+                    feature_config.blending.latest_date_columns,
+                ),
+                neighbors_from_events(
+                    events,
+                    max(settings.item_based_k_neighbors, DEFAULT_SERVE_MAX_K * 5),
+                ),
+            )
         try:
             with recs_write() if callable(recs_write) else nullcontext():
                 try:
@@ -838,6 +856,14 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                         _ensure_publication_fence(sink, fence_check)
                         write_item_scores(item_scores)
                         outputs_written = True
+                    if callable(write_surfaces) and surface_frames is not None:
+                        _ensure_publication_fence(sink, fence_check)
+                        outputs_written = True
+                        write_surfaces(
+                            popular=surface_frames[0],
+                            latest=surface_frames[1],
+                            neighbors=surface_frames[2],
+                        )
                     _ensure_publication_fence(sink, fence_check)
                     sink.write_recommendations(recommendations)
                     outputs_written = True

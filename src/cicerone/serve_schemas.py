@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from cicerone.config.constants import DEFAULT_SERVE_MAX_K
+
 
 class HealthResponse(BaseModel):
     status: str = Field(examples=["ok"])
@@ -185,3 +187,31 @@ class CatalogWriteResponse(BaseModel):
 class CatalogEventsResponse(BaseModel):
     user_id: str
     events: list[dict[str, object]]
+
+
+class SurfaceItem(BaseModel):
+    item_id: str
+    rank: int = Field(ge=1)
+    score: float
+    source: str
+
+
+class SurfaceResponse(BaseModel):
+    generated_at: str | None = None
+    items: list[SurfaceItem]
+
+
+class SimilarResponse(SurfaceResponse):
+    item_id: str
+
+
+class SessionRecommendRequest(BaseModel):
+    items: list[str] = Field(
+        default_factory=list,
+        max_length=DEFAULT_SERVE_MAX_K,
+        description="Item ids in this anonymous session",
+    )
+
+
+class SessionRecommendResponse(SurfaceResponse):
+    fallback: bool = Field(description="True when no usable neighbor remained and popular was used")

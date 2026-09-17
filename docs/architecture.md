@@ -58,6 +58,8 @@ search weights, see [search-weights.md](search-weights.md).
 | `serve/consumed.py` | Serve-time hide of items in `[input]` / process-local incremental overlay |
 | `serve/catalog_routes.py` | User / item / event writes against `[input]` |
 | `io/catalog.py` | Catalog store protocol for live users / items / events |
+| `serve/surfaces.py` | `GET /popular`, `/latest`, `/similar/{item_id}`, `POST /session/recommendations` |
+| `io/surfaces.py` | Job-time popular / latest / item-neighbor snapshots |
 | `serve/events_routes.py` | Optional `POST /events` webhook mount when `[events]` webhook is enabled |
 | `serve/bootstrap_events.py` | Start/stop the serve-process event worker (micro-batch → write-through) |
 | `serve/metrics.py` | Prometheus metric objects + helpers (default in-process registry) |

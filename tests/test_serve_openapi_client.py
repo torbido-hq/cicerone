@@ -68,6 +68,17 @@ def test_openapi_json_lists_serve_paths_and_schemas():
     assert catalog_events["requestBody"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/CatalogEventsBody"
     }
+    assert "/popular" in schema["paths"]
+    assert "/latest" in schema["paths"]
+    assert "/similar/{item_id}" in schema["paths"]
+    assert "/session/recommendations" in schema["paths"]
+    for path, method in (
+        ("/popular", "get"),
+        ("/latest", "get"),
+        ("/similar/{item_id}", "get"),
+        ("/session/recommendations", "post"),
+    ):
+        assert "401" in schema["paths"][path][method]["responses"]
 
     components = schema["components"]["schemas"]
     assert "ItemScore" in components
@@ -204,6 +215,42 @@ def test_serve_client_health_and_recommendations(live_serve_url):
 
     opt_out = client.recommendations("u1", exclude_consumed=False)
     assert [row.item_id for row in opt_out.items] == ["i1", "i2"]
+
+
+def test_serve_client_surface_methods_serialize(monkeypatch):
+    seen: list[tuple[str, str, dict[str, str] | None, object]] = []
+
+    def fake_request(self, method, path, params=None, json_body=None):
+        del self
+        seen.append((method, path, params, json_body))
+        if path.startswith("/similar/"):
+            return {"item_id": "i1", "items": []}
+        if method == "POST":
+            return {"fallback": False, "items": []}
+        return {"items": []}
+
+    monkeypatch.setattr(ServeClient, "_request", fake_request)
+    client = ServeClient("http://example.test")
+    client.popular(limit=5, category="beer", exclude_unavailable=False, user_id="u1")
+    client.latest(limit=3, category="wine", exclude_unavailable=True, user_id="u2")
+    client.similar("i 1", limit=2, exclude_unavailable=False, user_id="u3")
+    client.session(["i1", "i2"])
+    assert seen[0] == (
+        "GET",
+        "/popular",
+        {"limit": "5", "category": "beer", "exclude_unavailable": "false", "user_id": "u1"},
+        None,
+    )
+    assert seen[1] == (
+        "GET",
+        "/latest",
+        {"limit": "3", "category": "wine", "exclude_unavailable": "true", "user_id": "u2"},
+        None,
+    )
+    assert seen[2][0] == "GET"
+    assert seen[2][1] == "/similar/i%201"
+    assert seen[2][2] == {"limit": "2", "exclude_unavailable": "false", "user_id": "u3"}
+    assert seen[3] == ("POST", "/session/recommendations", None, {"items": ["i1", "i2"]})
 
 
 def test_serve_client_sends_exclude_consumed(monkeypatch):
