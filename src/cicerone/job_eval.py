@@ -32,6 +32,7 @@ from cicerone.io.factory import build_manifest_reader
 from cicerone.io.recommendation_schema import USER_COLUMN, VARIANT_COLUMN, pick_fallback_variant
 from cicerone.io.replace_users import RecommendationSchemaError
 from cicerone.locks import LockLostError, WriterLockBusyError, held_writer_lock
+from cicerone.publish.base import PublishError
 from cicerone.track.store import TrackStore
 from cicerone.track.store_common import _utc_stamp
 
@@ -49,7 +50,7 @@ OPTIONAL_IO_ERRORS: tuple[type[BaseException], ...] = (
     RecommendationSchemaError,
 )
 OPTIONAL_EVAL_ERRORS: tuple[type[BaseException], ...] = (ValueError, TypeError, LookupError)
-PUBLISH_ERRORS: tuple[type[BaseException], ...] = (OSError, ValueError, RuntimeError)
+PUBLISH_ERRORS: tuple[type[BaseException], ...] = (OSError, ValueError, PublishError)
 SINK_WRITE_ERRORS: tuple[type[BaseException], ...] = (*OPTIONAL_IO_ERRORS, RuntimeError)
 
 
@@ -181,8 +182,8 @@ def persist_track_outputs(
             futures = [pool.submit(try_load, label, fn, None) for label, fn in tasks]
             for future in futures:
                 future.result()
-    except _JOB_CONTROL_ERRORS as exc:
-        log_caught("Failed to persist track outputs", exc)
+    except _JOB_CONTROL_ERRORS:
+        raise
 
 
 def score_previous_run(

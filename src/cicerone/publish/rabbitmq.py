@@ -17,6 +17,7 @@ from cicerone.amqp_options import (
     require_queue,
 )
 from cicerone.config.constants import ConfigError
+from cicerone.publish.base import PublishError
 from cicerone.publish.payload import user_recommendation_messages
 
 logger = logging.getLogger(__name__)
@@ -142,5 +143,5 @@ class RabbitMQPublisher:
 
     def _require(self) -> Any:
         if self._channel is None:
-            raise RuntimeError("RabbitMQPublisher is not connected")
+            raise PublishError("RabbitMQPublisher is not connected")
         return self._channel

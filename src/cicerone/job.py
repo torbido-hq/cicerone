@@ -297,6 +297,7 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
     eval_generated_at: str | None = None
     pending_thompson: dict[str, Any] | None = None
     manifest_written = False
+    replace_success_manifest = False
 
     try:
         publisher = build_publisher(settings, connect=False)
@@ -596,27 +597,70 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
             raise
     except Exception as exc:
         manifest["error"] = truncate_job_error(exc)
+        if manifest.get("status") == "success":
+            manifest["status"] = "failed"
+            manifest_written = False
+            replace_success_manifest = True
         raise
     finally:
+        persist_exc: BaseException | None = None
+        close_exc: BaseException | None = None
         if publisher is not None:
             try:
                 publisher.close()
-            except LockLostError:
-                raise
             except _PUBLISH_ERRORS as exc:
                 _log_caught("Failed to close recommendation publisher", exc, log=logger)
+            except Exception as exc:
+                close_exc = exc
+        if manifest.get("status") == "success" and (settings.track.enabled or settings.eval.enabled):
+            try:
+                _persist_track_outputs(
+                    TrackStore(
+                        settings.output,
+                        writer_lock=writer_lock,
+                        fence_check=fence_check,
+                        fence_lost="retrain lock lost before write",
+                        fence_kind="retrain",
+                    ),
+                    kind=settings.output.kind,
+                    eval_report={
+                        "generated_at": eval_generated_at,
+                        "track_eval": track_eval_payload,
+                        "served_eval": served_eval_payload,
+                    },
+                    recommendations=recommendations,
+                    generated_at=str(manifest["generated_at"]),
+                    fence_check=fence_check,
+                )
+            except Exception as exc:
+                manifest["status"] = "failed"
+                manifest["error"] = truncate_job_error(exc)
+                manifest_written = False
+                persist_exc = exc
+                replace_success_manifest = True
+        if (
+            close_exc is not None
+            and manifest.get("status") == "success"
+            and not isinstance(close_exc, LockLostError)
+        ):
+            manifest["status"] = "failed"
+            manifest["error"] = truncate_job_error(close_exc)
+            manifest_written = False
+            replace_success_manifest = True
+        leftover_exc = persist_exc or sys.exc_info()[1]
+        skip_if_newer_than = None if replace_success_manifest else started_at
         if not manifest_written and not skip_stale_job_manifest(
             fence_check=fence_check,
-            exc=sys.exc_info()[1],
+            exc=leftover_exc,
         ):
             manifest["generated_at"] = datetime.now(UTC).isoformat()
             try:
                 holder = getattr(sink, "recommendations_write", None)
                 if callable(holder):
                     with holder():
-                        write_job_manifest(sink, manifest, skip_if_newer_than=started_at)
+                        write_job_manifest(sink, manifest, skip_if_newer_than=skip_if_newer_than)
                 else:
-                    write_job_manifest(sink, manifest, skip_if_newer_than=started_at)
+                    write_job_manifest(sink, manifest, skip_if_newer_than=skip_if_newer_than)
             except _SINK_WRITE_ERRORS as exc:
                 _log_caught(
                     "Failed to write manifest; original job error (if any) is preserved",
@@ -626,25 +670,10 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                 if manifest.get("status") == "success":
                     raise
         logger.info("Job finished: %s", json.dumps(manifest))
-        if manifest.get("status") == "success" and (settings.track.enabled or settings.eval.enabled):
-            _persist_track_outputs(
-                TrackStore(
-                    settings.output,
-                    writer_lock=writer_lock,
-                    fence_check=fence_check,
-                    fence_lost="retrain lock lost before write",
-                    fence_kind="retrain",
-                ),
-                kind=settings.output.kind,
-                eval_report={
-                    "generated_at": eval_generated_at,
-                    "track_eval": track_eval_payload,
-                    "served_eval": served_eval_payload,
-                },
-                recommendations=recommendations,
-                generated_at=str(manifest["generated_at"]),
-                fence_check=fence_check,
-            )
+        if persist_exc is not None:
+            raise persist_exc
+        if close_exc is not None:
+            raise close_exc
 
 
 if __name__ == "__main__":

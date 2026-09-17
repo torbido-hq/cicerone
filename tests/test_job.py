@@ -12,6 +12,7 @@ from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import IOSettings
 from cicerone.job import _recommendation_user_count, _target_user_ids
 from cicerone.model import RRF_K
+from cicerone.publish import PublishError
 from cicerone.track.store import TrackStore
 
 REPO_FEATURES_CONFIG = Path(__file__).resolve().parents[1] / "config" / "features.toml"
@@ -176,6 +177,30 @@ def test_job_reraises_lock_lost_on_publisher_close(tmp_path, monkeypatch):
     monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings, **_kwargs: _Pub())
     with pytest.raises(LockLostError, match="retrain lock lost"):
         job.run()
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    assert manifest["status"] == "success"
+
+
+def test_job_writes_failure_manifest_when_close_loses_lock_after_error(tmp_path, monkeypatch):
+    from cicerone.locks import LockLostError
+
+    class _Pub:
+        def connect(self) -> None:
+            return None
+
+        def publish(self, df: pd.DataFrame) -> None:
+            del df
+
+        def close(self) -> None:
+            raise LockLostError("retrain lock lost before write", kind="retrain")
+
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, tmp_path, tmp_path))
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings, **_kwargs: _Pub())
+    with pytest.raises(LockLostError, match="retrain lock lost"):
+        job.run()
+    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    assert manifest["status"] == "failed"
+    assert "events.parquet" in manifest["error"]
 
 
 def test_job_succeeds_when_publish_fails_after_write(tmp_path, monkeypatch):
@@ -197,7 +222,7 @@ def test_job_succeeds_when_publish_fails_after_write(tmp_path, monkeypatch):
             return None
 
         def publish(self, df: pd.DataFrame) -> None:
-            raise RuntimeError("broker down")
+            raise PublishError("broker down")
 
         def close(self) -> None:
             return None
@@ -206,6 +231,38 @@ def test_job_succeeds_when_publish_fails_after_write(tmp_path, monkeypatch):
     job.run()
     manifest = json.loads((output_dir / "manifest.json").read_text())
     assert manifest["status"] == "success"
+    assert (output_dir / "recommendations.parquet").exists()
+
+
+def test_job_rewrites_manifest_when_publish_raises_unexpected_error(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.utcnow()
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+        ]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
+
+    class _Pub:
+        def connect(self) -> None:
+            return None
+
+        def publish(self, df: pd.DataFrame) -> None:
+            raise RuntimeError("broken sidecar")
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings, **_kwargs: _Pub())
+    with pytest.raises(RuntimeError, match="broken sidecar"):
+        job.run()
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    assert manifest["status"] == "failed"
+    assert "broken sidecar" in manifest["error"]
     assert (output_dir / "recommendations.parquet").exists()
 
 
@@ -581,6 +638,40 @@ def test_job_run_swallows_eval_persistence_errors(tmp_path, monkeypatch, caplog)
     assert any(
         "Failed to append recommendation history (OSError: history)" in message for message in messages
     )
+    assert json.loads((output_dir / "manifest.json").read_text())["status"] == "success"
+
+
+def test_job_rewrites_manifest_when_persist_raises_unexpected_error(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.utcnow()
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 2, "occurred_at": now},
+        ]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    extra = """
+        [track]
+        enabled = true
+        [job.eval]
+        enabled = true
+        """
+    monkeypatch.setenv(
+        "CICERONE_CONFIG_PATH",
+        _write_config(tmp_path, input_dir, output_dir, top_k=2, extra=extra),
+    )
+    monkeypatch.setattr(
+        "cicerone.track.store.TrackStore.write_eval",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("eval store bug")),
+    )
+    with pytest.raises(RuntimeError, match="eval store bug"):
+        job.run()
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    assert manifest["status"] == "failed"
+    assert "eval store bug" in manifest["error"]
+    assert (output_dir / "recommendations.parquet").exists()
 
 
 def test_read_input_swallows_manifest_reader_construction(monkeypatch):
@@ -657,14 +748,14 @@ def test_try_load_reraises_lock_errors():
         )
 
 
-def test_persist_track_outputs_lock_errors_are_best_effort(monkeypatch, caplog):
+def test_persist_track_outputs_reraises_lock_errors(monkeypatch):
     from cicerone.locks import WriterLockBusyError
 
     def _busy(*_args, **_kwargs):
         raise WriterLockBusyError("dataset writer lock busy")
 
     monkeypatch.setattr("cicerone.job_eval.held_writer_lock", _busy)
-    with caplog.at_level("ERROR", logger="cicerone.job_eval"):
+    with pytest.raises(WriterLockBusyError, match="dataset writer lock busy"):
         job._persist_track_outputs(
             TrackStore(
                 IOSettings(kind="dataset", options={"storage_backend": "local", "path": "/tmp/out"}),
@@ -675,14 +766,9 @@ def test_persist_track_outputs_lock_errors_are_best_effort(monkeypatch, caplog):
             recommendations=None,
             generated_at="t",
         )
-    assert any(
-        "Failed to persist track outputs (WriterLockBusyError:" in record.getMessage()
-        and "dataset writer lock busy" in record.getMessage()
-        for record in caplog.records
-    )
 
 
-def test_persist_track_outputs_write_eval_lock_loss_is_best_effort(monkeypatch, caplog):
+def test_persist_track_outputs_reraises_write_eval_lock_loss(monkeypatch):
     from cicerone.locks import LockLostError
 
     def _lost(self, report):
@@ -690,7 +776,7 @@ def test_persist_track_outputs_write_eval_lock_loss_is_best_effort(monkeypatch, 
         raise LockLostError("retrain lock lost before write", kind="retrain")
 
     monkeypatch.setattr(TrackStore, "write_eval", _lost)
-    with caplog.at_level("ERROR", logger="cicerone.job_eval"):
+    with pytest.raises(LockLostError, match="retrain lock lost before write"):
         job._persist_track_outputs(
             TrackStore(IOSettings(kind="dataset", options={"storage_backend": "local", "path": "/tmp/out"})),
             kind="dataset",
@@ -698,11 +784,6 @@ def test_persist_track_outputs_write_eval_lock_loss_is_best_effort(monkeypatch, 
             recommendations=None,
             generated_at="t",
         )
-    assert any(
-        "Failed to persist track outputs (LockLostError:" in record.getMessage()
-        and "retrain lock lost before write" in record.getMessage()
-        for record in caplog.records
-    )
 
 
 def test_refresh_pending_thompson_keeps_live_promotion(tmp_path):
@@ -1140,7 +1221,7 @@ def test_job_succeeds_when_publisher_connect_fails_after_write(tmp_path, monkeyp
 
     class _Pub:
         def connect(self) -> None:
-            raise RuntimeError("broker down")
+            raise PublishError("broker down")
 
         def publish(self, df: pd.DataFrame) -> None:
             raise AssertionError("publish should not run after connect failure")

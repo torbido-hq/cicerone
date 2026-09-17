@@ -9,6 +9,7 @@ import pandas as pd
 
 from cicerone.config.constants import ConfigError
 from cicerone.kafka_options import kafka_client_config, kafka_timeout_seconds, require_nonempty_str
+from cicerone.publish.base import PublishError
 from cicerone.publish.payload import user_recommendation_messages
 
 logger = logging.getLogger(__name__)
@@ -66,9 +67,9 @@ class KafkaPublisher:
             producer.produce(self._topic, value=body, key=user_id.encode("utf-8"), on_delivery=on_delivery)
         remaining = producer.flush(self._timeout_seconds)
         if remaining:
-            raise RuntimeError(f"Kafka publish timed out with {remaining} message(s) in queue")
+            raise PublishError(f"Kafka publish timed out with {remaining} message(s) in queue")
         if errors:
-            raise RuntimeError(f"Kafka publish delivery failed: {errors[0]}")
+            raise PublishError(f"Kafka publish delivery failed: {errors[0]}")
 
     def close(self) -> None:
         producer = self._producer
@@ -82,5 +83,5 @@ class KafkaPublisher:
 
     def _require(self) -> Any:
         if self._producer is None:
-            raise RuntimeError("KafkaPublisher is not connected")
+            raise PublishError("KafkaPublisher is not connected")
         return self._producer
