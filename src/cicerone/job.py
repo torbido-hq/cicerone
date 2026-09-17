@@ -291,7 +291,7 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
     manifest_written = False
 
     try:
-        publisher = build_publisher(settings)
+        publisher = build_publisher(settings, connect=False)
         source = build_input_source(settings.input)
         events, users, items, last_manifest = _read_input(source, settings.output)
 
@@ -548,6 +548,7 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                     if publisher is not None:
                         ensure_publication_fence(sink, fence_check)
                         try:
+                            publisher.connect()
                             publisher.publish(recommendations)
                         except Exception:
                             logger.exception("Publish failed after successful write")

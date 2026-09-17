@@ -23,7 +23,11 @@ class FakeChannel:
         self.acked: list[int] = []
         self.nacked: list[tuple[int, bool]] = []
         self.closed = False
+        self.confirm_delivery_calls = 0
         self._unacked: dict[int, FakeRabbitMessage] = {}
+
+    def confirm_delivery(self) -> None:
+        self.confirm_delivery_calls += 1
 
     def basic_qos(self, prefetch_count: int = 0) -> None:
         self.prefetch = prefetch_count

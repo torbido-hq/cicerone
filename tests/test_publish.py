@@ -431,6 +431,7 @@ def test_rabbitmq_publisher_recovers_after_channel_error(monkeypatch):
     publisher.connect()
     channel = publisher._channel
     assert channel is not None
+    assert channel.confirm_delivery_calls == 1
     calls = {"n": 0}
     original = channel.basic_publish
 
@@ -462,6 +463,28 @@ def test_rabbitmq_publisher_retries_unsent_users_only(monkeypatch):
         return original(*args, **kwargs)
 
     channel.basic_publish = boom  # type: ignore[method-assign]
+    publisher.publish(_recs_frame())
+    users = [json.loads(body)["user_id"] for _exchange, _key, body in broker.published]
+    assert users == ["u1", "u2"]
+    publisher.close()
+
+
+def test_rabbitmq_publisher_reconnects_after_failed_recover(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "recs"})
+    publisher.connect()
+    channel = publisher._channel
+    assert channel is not None
+
+    def boom(*args, **kwargs):
+        broker.connect_error = RuntimeError("down")
+        raise RuntimeError("channel closed")
+
+    channel.basic_publish = boom  # type: ignore[method-assign]
+    with pytest.raises(ConfigError, match="unreachable or setup failed"):
+        publisher.publish(_recs_frame())
+    assert publisher._channel is None
+    broker.connect_error = None
     publisher.publish(_recs_frame())
     users = [json.loads(body)["user_id"] for _exchange, _key, body in broker.published]
     assert users == ["u1", "u2"]

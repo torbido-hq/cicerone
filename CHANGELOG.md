@@ -21,9 +21,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and resets pair volume.
 - Serve caches the assignment overlay on the recommendations refresh loop.
 - Dataset serve filters cold-start fallback outside the cache lock.
-- Publish sidecar failures do not un-succeed a recs write or livelock ingest.
-- RabbitMQ publish recovers the channel after a broker error and retries only
-  users that were not sent.
+- Publish sidecar failures do not un-succeed a recs write or livelock ingest,
+  including a broker that is down at connect.
+- RabbitMQ publish confirms deliveries, recovers the channel after a broker
+  error, and retries only unconfirmed users.
 - Kafka publish fails when a delivery callback reports an error.
 - Fingerprint ingest acks apply only to generated event ids.
 - Writer-lock busy nacks restore events the same way as other apply failures.

@@ -52,6 +52,7 @@ class RabbitMQPublisher:
         self._routing_key = routing if routing is not None else self._queue
         self._connection: Any | None = None
         self._channel: Any | None = None
+        self._connected_once = False
 
     def connect(self) -> None:
         try:
@@ -64,6 +65,9 @@ class RabbitMQPublisher:
                 apply_amqp_timeouts(pika.URLParameters(self._amqp_url), self._timeout_seconds)
             )
             channel = connection.channel()
+            confirm = getattr(channel, "confirm_delivery", None)
+            if callable(confirm):
+                confirm()
             if self._exchange == "":
                 channel.queue_declare(queue=self._queue, durable=True)
         except Exception as exc:
@@ -75,6 +79,7 @@ class RabbitMQPublisher:
             raise ConfigError(f"publish.options.amqp_url is unreachable or setup failed: {exc}") from exc
         self._connection = connection
         self._channel = channel
+        self._connected_once = True
 
     def publish(self, df: pd.DataFrame) -> None:
         messages = [body for _, body in user_recommendation_messages(df)]
@@ -82,8 +87,11 @@ class RabbitMQPublisher:
             return
         sent = [0]
         if self._channel is None:
-            self._publish_from(messages, sent)
-            return
+            if self._connected_once:
+                self.connect()
+            else:
+                self._publish_from(messages, sent)
+                return
         try:
             self._publish_from(messages, sent)
         except Exception:

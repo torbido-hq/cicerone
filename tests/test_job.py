@@ -131,13 +131,16 @@ def test_job_publishes_recommendations_after_write(tmp_path, monkeypatch):
     closed = {"n": 0}
 
     class _Pub:
+        def connect(self) -> None:
+            return None
+
         def publish(self, df: pd.DataFrame) -> None:
             captured.append(df.copy())
 
         def close(self) -> None:
             closed["n"] += 1
 
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings, **_kwargs: _Pub())
     job.run()
     assert len(captured) == 1
     assert {"u1", "u2"}.issubset(set(captured[0]["user_id"].astype(str)))
@@ -159,13 +162,16 @@ def test_job_succeeds_when_publish_fails_after_write(tmp_path, monkeypatch):
     monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
 
     class _Pub:
+        def connect(self) -> None:
+            return None
+
         def publish(self, df: pd.DataFrame) -> None:
             raise RuntimeError("broker down")
 
         def close(self) -> None:
             return None
 
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings, **_kwargs: _Pub())
     job.run()
     manifest = json.loads((output_dir / "manifest.json").read_text())
     assert manifest["status"] == "success"
@@ -188,13 +194,16 @@ def test_job_raises_when_fence_lost_before_publish(tmp_path, monkeypatch):
     published: list[pd.DataFrame] = []
 
     class _Pub:
+        def connect(self) -> None:
+            return None
+
         def publish(self, df: pd.DataFrame) -> None:
             published.append(df.copy())
 
         def close(self) -> None:
             return None
 
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings, **_kwargs: _Pub())
 
     def fence() -> bool:
         return not (output_dir / "manifest.json").exists()
@@ -933,22 +942,35 @@ def test_job_run_raises_on_failure(tmp_path, monkeypatch):
     assert "events.parquet" in manifest["error"]
 
 
-def test_job_run_records_publisher_init_failure(tmp_path, monkeypatch):
-    from cicerone.config import ConfigError
-
-    config_path = _write_config(tmp_path, tmp_path, tmp_path)
+def test_job_succeeds_when_publisher_connect_fails_after_write(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.utcnow()
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+        ]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    config_path = _write_config(tmp_path, input_dir, output_dir, top_k=2)
     monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
-    monkeypatch.setattr(
-        "cicerone.job.build_publisher",
-        lambda _settings: (_ for _ in ()).throw(
-            ConfigError("publish.options.bootstrap_servers is unreachable")
-        ),
-    )
-    with pytest.raises(ConfigError, match="bootstrap_servers"):
-        job.run()
-    manifest = json.loads((tmp_path / "manifest.json").read_text())
-    assert manifest["status"] == "failed"
-    assert "bootstrap_servers" in manifest["error"]
+
+    class _Pub:
+        def connect(self) -> None:
+            raise RuntimeError("broker down")
+
+        def publish(self, df: pd.DataFrame) -> None:
+            raise AssertionError("publish should not run after connect failure")
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings, **_kwargs: _Pub())
+    job.run()
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    assert manifest["status"] == "success"
+    assert (output_dir / "recommendations.parquet").exists()
 
 
 def test_job_run_truncates_an_overly_long_error_message(tmp_path, monkeypatch):
