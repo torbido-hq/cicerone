@@ -14,6 +14,52 @@ from cicerone.feature_config import FeatureConfig
 from cicerone.serve.bootstrap_events import _assign_incremental_variant, start_events_runtime
 
 
+def test_start_events_runtime_defers_publisher_connect(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    seen: dict[str, bool] = {}
+
+    class _Pub:
+        def close(self) -> None:
+            return None
+
+    class _Reader:
+        def refresh(self) -> None:
+            return None
+
+    from cicerone.serve import bootstrap_events as bootstrap
+
+    original = bootstrap.build_publisher
+
+    def tracking(_settings, *, connect=True):
+        seen["connect"] = connect
+        return _Pub()
+
+    bootstrap.build_publisher = tracking  # type: ignore[assignment]
+    try:
+        runtime = start_events_runtime(
+            make_settings(
+                output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+                events=EventsSettings(
+                    enabled=True,
+                    kind="webhook",
+                    incremental=EventsIncrementalSettings(
+                        batch_size=1, batch_window_seconds=60.0, poll_interval_seconds=0.05
+                    ),
+                ),
+            ),
+            feature_config=feature_config,
+            reader=_Reader(),  # type: ignore[arg-type]
+        )
+        runtime.stop()
+    finally:
+        bootstrap.build_publisher = original  # type: ignore[assignment]
+    assert seen["connect"] is False
+
+
 def test_start_events_runtime_disabled_and_webhook(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()
@@ -93,7 +139,7 @@ def test_start_events_runtime_closes_publisher(tmp_path, feature_config: Feature
     from cicerone.serve import bootstrap_events as bootstrap
 
     original = bootstrap.build_publisher
-    bootstrap.build_publisher = lambda _settings: _Pub()  # type: ignore[assignment]
+    bootstrap.build_publisher = lambda _settings, **_kwargs: _Pub()  # type: ignore[assignment]
     try:
         runtime = start_events_runtime(
             make_settings(
@@ -134,7 +180,7 @@ def test_stop_closes_publisher_when_worker_hangs(tmp_path, feature_config: Featu
     from cicerone.serve import bootstrap_events as bootstrap
 
     original = bootstrap.build_publisher
-    bootstrap.build_publisher = lambda _settings: _Pub()  # type: ignore[assignment]
+    bootstrap.build_publisher = lambda _settings, **_kwargs: _Pub()  # type: ignore[assignment]
     try:
         runtime = start_events_runtime(
             make_settings(
@@ -189,7 +235,7 @@ def test_start_events_runtime_closes_publisher_on_startup_error(tmp_path, featur
     def _boom(self) -> None:
         raise RuntimeError("start fail")
 
-    bootstrap.build_publisher = lambda _settings: _Pub()  # type: ignore[assignment]
+    bootstrap.build_publisher = lambda _settings, **_kwargs: _Pub()  # type: ignore[assignment]
     EventWorker.start = _boom  # type: ignore[method-assign]
     try:
         with pytest.raises(RuntimeError, match="start fail"):

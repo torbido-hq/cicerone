@@ -53,6 +53,7 @@ from cicerone.job_output import (
 )
 from cicerone.locks import (
     LockBackend,
+    LockLostError,
     WriterLockBusyError,
     acquire_blocking,
     build_dataset_writer_lock,
@@ -71,6 +72,7 @@ from cicerone.model import (
 )
 from cicerone.model.recommend import RecommendCache
 from cicerone.publish import build_publisher
+from cicerone.publish.sidecar import sidecar_generation_current
 from cicerone.track.store import TrackStore
 
 logger = logging.getLogger(__name__)
@@ -291,7 +293,7 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
     manifest_written = False
 
     try:
-        publisher = build_publisher(settings)
+        publisher = build_publisher(settings, connect=False)
         source = build_input_source(settings.input)
         events, users, items, last_manifest = _read_input(source, settings.output)
 
@@ -518,9 +520,6 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                             fence_kind="retrain",
                         )
                         store.write_state(_refresh_pending_thompson(store, pending_thompson))
-                    if publisher is not None:
-                        ensure_publication_fence(sink, fence_check)
-                        publisher.publish(recommendations)
                     ensure_publication_fence(sink, fence_check)
                     manifest.update(
                         {
@@ -569,6 +568,19 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                                 "Failed to write manifest; original job error (if any) is preserved"
                             )
                     raise
+            if publisher is not None and manifest.get("status") == "success":
+                try:
+                    ensure_fence(fence_check)
+                    publisher.connect()
+                    ensure_fence(fence_check)
+                    if sidecar_generation_current(settings.output, str(manifest.get("generated_at") or "")):
+                        publisher.publish(recommendations)
+                    else:
+                        logger.info("Skipping publish: recommendations were superseded")
+                except LockLostError:
+                    raise
+                except Exception:
+                    logger.exception("Publish failed after successful write")
         except Exception:
             if outputs_written or manifest.get("artifact_written"):
                 manifest["partial_outputs"] = True

@@ -18,6 +18,7 @@ from cicerone.publish.factory import build_publisher_from_kind
 from cicerone.publish.kafka import KafkaPublisher, validate_kafka_publish_options
 from cicerone.publish.payload import user_recommendation_messages
 from cicerone.publish.rabbitmq import RabbitMQPublisher, validate_rabbitmq_publish_options
+from cicerone.publish.sidecar import sidecar_generation_current
 
 
 def _recs_frame() -> pd.DataFrame:
@@ -32,9 +33,11 @@ def _recs_frame() -> pd.DataFrame:
 
 def test_user_recommendation_messages_one_per_user():
     messages = user_recommendation_messages(_recs_frame())
-    assert [user_id for user_id, _body in messages] == ["u1", "u2"]
+    assert [user_id for user_id, _body, _message_id in messages] == ["u1", "u2"]
     first = json.loads(messages[0][1])
     assert first["user_id"] == "u1"
+    assert first["message_id"] == messages[0][2]
+    assert first["message_id"] == user_recommendation_messages(_recs_frame())[0][2]
     assert len(first["recommendations"]) == 2
     assert first["recommendations"][0]["item_id"] == "i1"
 
@@ -78,7 +81,7 @@ def test_user_recommendation_messages_encodes_optional_missing_as_null():
             }
         ]
     )
-    _user_id, body = user_recommendation_messages(frame)[0]
+    _user_id, body, _message_id = user_recommendation_messages(frame)[0]
     rec = json.loads(body)["recommendations"][0]
     assert rec["reasons"] is None
     assert rec["variant"] is None
@@ -98,7 +101,7 @@ def test_user_recommendation_messages_keeps_reasons_and_variant():
             }
         ]
     )
-    _user_id, body = user_recommendation_messages(frame)[0]
+    _user_id, body, _message_id = user_recommendation_messages(frame)[0]
     rec = json.loads(body)["recommendations"][0]
     assert rec["reasons"] == "popular"
     assert rec["variant"] == "control"
@@ -265,6 +268,9 @@ def test_updater_publishes_after_replace(tmp_path, feature_config: FeatureConfig
     captured: list[pd.DataFrame] = []
 
     class _Pub:
+        def connect(self) -> None:
+            return None
+
         def publish(self, df: pd.DataFrame) -> None:
             captured.append(df.copy())
 
@@ -388,7 +394,7 @@ def test_publish_empty_frame_is_noop(monkeypatch):
     publisher.close()
 
 
-def test_updater_publish_failure_raises(tmp_path, feature_config: FeatureConfig):
+def test_updater_publish_failure_does_not_unsucceed(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()
     pd.DataFrame(
@@ -400,6 +406,9 @@ def test_updater_publish_failure_raises(tmp_path, feature_config: FeatureConfig)
     )
 
     class _Boom:
+        def connect(self) -> None:
+            return None
+
         def publish(self, df: pd.DataFrame) -> None:
             raise RuntimeError("broker down")
 
@@ -411,6 +420,101 @@ def test_updater_publish_failure_raises(tmp_path, feature_config: FeatureConfig)
         publisher=_Boom(),
     )
     events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
-    with pytest.raises(RuntimeError, match="broker down"):
-        updater.apply(events)
-    assert updater.events_applied == 0
+    assert updater.apply(events) == 1
+    assert updater.events_applied == 1
+
+
+def test_kafka_publisher_fails_on_delivery_error(monkeypatch):
+    broker = install_fake_kafka(monkeypatch)
+    broker.delivery_error = "broker reject"
+    publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "cicerone.recs"})
+    publisher.connect()
+    with pytest.raises(RuntimeError, match="delivery failed"):
+        publisher.publish(_recs_frame())
+    publisher.close()
+
+
+def test_rabbitmq_publisher_recovers_after_channel_error(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "recs"})
+    publisher.connect()
+    channel = publisher._channel
+    assert channel is not None
+    assert channel.confirm_delivery_calls == 1
+    calls = {"n": 0}
+    original = channel.basic_publish
+
+    def boom(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("channel closed")
+        return original(*args, **kwargs)
+
+    channel.basic_publish = boom  # type: ignore[method-assign]
+    publisher.publish(_recs_frame())
+    assert [key for _exchange, key, _body in broker.published] == ["recs", "recs"]
+    assert all(getattr(item, "message_id", None) for item in broker.publish_properties)
+    publisher.close()
+
+
+def test_rabbitmq_publisher_retries_unsent_users_only(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "recs"})
+    publisher.connect()
+    channel = publisher._channel
+    assert channel is not None
+    calls = {"n": 0}
+    original = channel.basic_publish
+
+    def boom(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("channel closed")
+        return original(*args, **kwargs)
+
+    channel.basic_publish = boom  # type: ignore[method-assign]
+    publisher.publish(_recs_frame())
+    users = [json.loads(body)["user_id"] for _exchange, _key, body in broker.published]
+    assert users == ["u1", "u2"]
+    publisher.close()
+
+
+def test_rabbitmq_publisher_reconnects_after_failed_recover(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "recs"})
+    publisher.connect()
+    channel = publisher._channel
+    assert channel is not None
+
+    def boom(*args, **kwargs):
+        broker.connect_error = RuntimeError("down")
+        raise RuntimeError("channel closed")
+
+    channel.basic_publish = boom  # type: ignore[method-assign]
+    with pytest.raises(ConfigError, match="unreachable or setup failed"):
+        publisher.publish(_recs_frame())
+    assert publisher._channel is None
+    broker.connect_error = None
+    publisher.publish(_recs_frame())
+    users = [json.loads(body)["user_id"] for _exchange, _key, body in broker.published]
+    assert users == ["u1", "u2"]
+    publisher.close()
+
+
+def test_sidecar_generation_current_matches_latest_manifest(tmp_path):
+    generated_at = "2026-09-17T12:00:00+00:00"
+    (tmp_path / "manifest.json").write_text(json.dumps({"generated_at": generated_at}))
+    settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    assert sidecar_generation_current(settings, generated_at) is True
+    assert sidecar_generation_current(settings, "2099-01-01T00:00:00+00:00") is False
+
+
+def test_sidecar_generation_current_false_when_manifest_missing(tmp_path):
+    settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    assert sidecar_generation_current(settings, "2026-09-17T12:00:00+00:00") is False
+
+
+def test_sidecar_generation_current_false_when_manifest_unreadable(tmp_path):
+    (tmp_path / "manifest.json").write_text("not-json")
+    settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    assert sidecar_generation_current(settings, "2026-09-17T12:00:00+00:00") is False
