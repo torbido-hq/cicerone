@@ -4,8 +4,29 @@ import pandas as pd
 
 from cicerone.blending import LATEST_SOURCE, POPULAR_SOURCE
 from cicerone.io.dataset_store import DatasetOutputSink
-from cicerone.io.surfaces import latest_from_items, neighbors_from_events, popular_from_events
+from cicerone.io.surfaces import (
+    SURFACE_FILES,
+    latest_from_items,
+    neighbors_from_events,
+    popular_from_events,
+    surfaces_stamp_payload,
+)
 from cicerone.io.surfaces_reader import DatasetSurfacesReader, similar_as_surface
+
+
+def test_popular_from_events_breaks_user_ties_by_event_count():
+    events = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "a"},
+            {"user_id": "u2", "item_id": "a"},
+            {"user_id": "u1", "item_id": "a"},
+            {"user_id": "u1", "item_id": "b"},
+            {"user_id": "u2", "item_id": "b"},
+        ]
+    )
+    frame = popular_from_events(events, 2)
+    assert list(frame["item_id"]) == ["a", "b"]
+    assert list(frame["score"]) == [2, 2]
 
 
 def test_popular_from_events_ranks_by_distinct_users():
@@ -111,3 +132,29 @@ def test_dataset_surfaces_reader_keeps_cache_when_stamp_mismatches(tmp_path):
     reader.refresh()
     assert list(reader.get_popular(1)["item_id"]) == ["i1"]
     assert list(reader.get_latest(1)["item_id"]) == ["i2"]
+
+
+def test_dataset_surfaces_reader_keeps_cache_when_parquet_is_unreadable(tmp_path):
+    options = {"storage_backend": "local", "path": str(tmp_path)}
+    sink = DatasetOutputSink(options)
+    sink.write_surfaces(
+        popular=pd.DataFrame([{"item_id": "i1", "rank": 1, "score": 3.0, "source": "popular_fallback"}]),
+        latest=pd.DataFrame([{"item_id": "i2", "rank": 1, "score": 2.0, "source": "latest"}]),
+        neighbors=pd.DataFrame([{"item_id": "i1", "neighbor_id": "i2", "rank": 1, "score": 0.9}]),
+    )
+    reader = DatasetSurfacesReader(options)
+    (tmp_path / "popular.parquet").write_bytes(b"not-parquet")
+    files = [(name, (tmp_path / name).read_bytes()) for name in SURFACE_FILES]
+    (tmp_path / "surfaces_stamp.json").write_bytes(surfaces_stamp_payload(files))
+    reader.refresh()
+    assert list(reader.get_popular(1)["item_id"]) == ["i1"]
+    assert list(reader.get_latest(1)["item_id"]) == ["i2"]
+
+
+def test_dataset_surfaces_reader_ignores_partial_legacy_files(tmp_path):
+    options = {"storage_backend": "local", "path": str(tmp_path)}
+    pd.DataFrame([{"item_id": "i1", "rank": 1, "score": 1.0, "source": "popular_fallback"}]).to_parquet(
+        tmp_path / "popular.parquet", index=False
+    )
+    reader = DatasetSurfacesReader(options)
+    assert reader.get_popular(1).empty

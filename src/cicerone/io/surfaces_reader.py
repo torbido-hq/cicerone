@@ -80,6 +80,7 @@ class DatasetSurfacesReader(SurfacesReader):
         self._popular = empty_surface_frame(source=POPULAR_SOURCE)
         self._latest = empty_surface_frame(source=LATEST_SOURCE)
         self._neighbors = empty_neighbors_frame()
+        self._have_stamp = False
         self._s3_client = None
         self.refresh()
 
@@ -143,24 +144,30 @@ class DatasetSurfacesReader(SurfacesReader):
                 return
             if expected != surfaces_stamp_sha256(files):
                 return
-            popular = pd.read_parquet(io.BytesIO(files[0][1]))
-            latest = pd.read_parquet(io.BytesIO(files[1][1]))
-            neighbors = pd.read_parquet(io.BytesIO(files[2][1]))
+            try:
+                popular = pd.read_parquet(io.BytesIO(files[0][1]))
+                latest = pd.read_parquet(io.BytesIO(files[1][1]))
+                neighbors = pd.read_parquet(io.BytesIO(files[2][1]))
+            except Exception:
+                logger.exception("Failed to parse stamped surface snapshots")
+                return
             with self._lock:
                 self._popular = popular
                 self._latest = latest
                 self._neighbors = neighbors
+                self._have_stamp = True
+            return
+        if self._have_stamp:
             return
         popular = self._read(POPULAR_FILENAME)
         latest = self._read(LATEST_FILENAME)
         neighbors = self._read(NEIGHBORS_FILENAME)
+        if popular is None or latest is None or neighbors is None:
+            return
         with self._lock:
-            if popular is not None:
-                self._popular = popular
-            if latest is not None:
-                self._latest = latest
-            if neighbors is not None:
-                self._neighbors = neighbors
+            self._popular = popular
+            self._latest = latest
+            self._neighbors = neighbors
 
     def get_popular(self, k: int) -> pd.DataFrame:
         with self._lock:

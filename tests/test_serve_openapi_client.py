@@ -220,15 +220,25 @@ def test_serve_client_surface_methods_serialize(monkeypatch):
 
     monkeypatch.setattr(ServeClient, "_request", fake_request)
     client = ServeClient("http://example.test")
-    client.popular(limit=5, category="beer")
-    client.latest(limit=3, category="wine")
-    client.similar("i 1", limit=2)
+    client.popular(limit=5, category="beer", exclude_unavailable=False, user_id="u1")
+    client.latest(limit=3, category="wine", exclude_unavailable=True, user_id="u2")
+    client.similar("i 1", limit=2, exclude_unavailable=False, user_id="u3")
     client.session(["i1", "i2"])
-    assert seen[0] == ("GET", "/popular", {"limit": "5", "category": "beer"}, None)
-    assert seen[1] == ("GET", "/latest", {"limit": "3", "category": "wine"}, None)
+    assert seen[0] == (
+        "GET",
+        "/popular",
+        {"limit": "5", "category": "beer", "exclude_unavailable": "false", "user_id": "u1"},
+        None,
+    )
+    assert seen[1] == (
+        "GET",
+        "/latest",
+        {"limit": "3", "category": "wine", "exclude_unavailable": "true", "user_id": "u2"},
+        None,
+    )
     assert seen[2][0] == "GET"
     assert seen[2][1] == "/similar/i%201"
-    assert seen[2][2] == {"limit": "2"}
+    assert seen[2][2] == {"limit": "2", "exclude_unavailable": "false", "user_id": "u3"}
     assert seen[3] == ("POST", "/session/recommendations", None, {"items": ["i1", "i2"]})
 
 

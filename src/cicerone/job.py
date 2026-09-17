@@ -822,13 +822,17 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
             if callable(write_item_scores)
             else empty_item_scores()
         )
-        popular = popular_from_events(events, settings.top_k)
-        latest = latest_from_items(
-            items,
-            settings.top_k,
-            feature_config.blending.latest_date_columns,
-        )
-        neighbors = neighbors_from_events(events, settings.item_based_k_neighbors)
+        surface_frames = None
+        if callable(write_surfaces):
+            surface_frames = (
+                popular_from_events(events, settings.top_k),
+                latest_from_items(
+                    items,
+                    settings.top_k,
+                    feature_config.blending.latest_date_columns,
+                ),
+                neighbors_from_events(events, settings.item_based_k_neighbors),
+            )
         try:
             with recs_write() if callable(recs_write) else nullcontext():
                 try:
@@ -847,13 +851,13 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                         _ensure_publication_fence(sink, fence_check)
                         write_item_scores(item_scores)
                         outputs_written = True
-                    if callable(write_surfaces):
+                    if callable(write_surfaces) and surface_frames is not None:
                         _ensure_publication_fence(sink, fence_check)
                         outputs_written = True
                         write_surfaces(
-                            popular=popular,
-                            latest=latest,
-                            neighbors=neighbors,
+                            popular=surface_frames[0],
+                            latest=surface_frames[1],
+                            neighbors=surface_frames[2],
                         )
                     _ensure_publication_fence(sink, fence_check)
                     sink.write_recommendations(recommendations)

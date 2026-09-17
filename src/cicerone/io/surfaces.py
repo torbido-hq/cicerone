@@ -59,12 +59,17 @@ def popular_from_events(events: pd.DataFrame, k: int) -> pd.DataFrame:
     frame[ITEM_COLUMN] = frame[ITEM_COLUMN].astype(str)
     if "user_id" in events.columns:
         frame["user_id"] = events["user_id"].astype(str)
-        scored = (
-            frame.drop_duplicates().groupby(ITEM_COLUMN, sort=False).size().rename(SCORE_COLUMN).reset_index()
+        users = frame.drop_duplicates().groupby(ITEM_COLUMN, sort=False).size().rename(SCORE_COLUMN)
+        event_count = frame.groupby(ITEM_COLUMN, sort=False).size().rename("_n_events")
+        scored = pd.concat([users, event_count], axis=1).reset_index()
+        scored = scored.sort_values(
+            [SCORE_COLUMN, "_n_events", ITEM_COLUMN],
+            ascending=[False, False, True],
+            kind="mergesort",
         )
     else:
         scored = frame.groupby(ITEM_COLUMN, sort=False).size().rename(SCORE_COLUMN).reset_index()
-    scored = scored.sort_values([SCORE_COLUMN, ITEM_COLUMN], ascending=[False, True], kind="mergesort")
+        scored = scored.sort_values([SCORE_COLUMN, ITEM_COLUMN], ascending=[False, True], kind="mergesort")
     scored = scored.head(k).reset_index(drop=True)
     scored[RANK_COLUMN] = range(1, len(scored) + 1)
     scored[SOURCE_COLUMN] = POPULAR_SOURCE

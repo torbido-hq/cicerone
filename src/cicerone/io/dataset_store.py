@@ -303,8 +303,8 @@ class DatasetOutputSink:
             payloads.append((filename, buffer.getvalue()))
         stamp = surfaces_stamp_payload(payloads)
         with self._maybe_recommendations_lock():
-            self._ensure_writer_still_held()
             for filename, payload in payloads:
+                self._ensure_writer_still_held()
                 self._write_bytes(filename, payload, "application/octet-stream")
             self._ensure_writer_still_held()
             self._write_bytes(SURFACES_STAMP_FILENAME, stamp, "application/json")

@@ -19,6 +19,25 @@ from cicerone.serve_schemas import (
 )
 
 
+def _surface_params(
+    *,
+    limit: int | None,
+    category: str | None,
+    exclude_unavailable: bool | None,
+    user_id: str | None,
+) -> dict[str, str]:
+    params: dict[str, str] = {}
+    if limit is not None:
+        params["limit"] = str(limit)
+    if category is not None:
+        params["category"] = category
+    if exclude_unavailable is not None:
+        params["exclude_unavailable"] = "true" if exclude_unavailable else "false"
+    if user_id is not None:
+        params["user_id"] = user_id
+    return params
+
+
 class ServeClientError(Exception):
     """Raised when the serve API returns a non-success HTTP status."""
 
@@ -86,26 +105,53 @@ class ServeClient:
             params["item_id"] = item_id
         return ItemScoresResponse.model_validate(self._request("GET", "/item-scores", params=params))
 
-    def popular(self, *, limit: int | None = None, category: str | None = None) -> SurfaceResponse:
-        params: dict[str, str] = {}
-        if limit is not None:
-            params["limit"] = str(limit)
-        if category is not None:
-            params["category"] = category
+    def popular(
+        self,
+        *,
+        limit: int | None = None,
+        category: str | None = None,
+        exclude_unavailable: bool | None = None,
+        user_id: str | None = None,
+    ) -> SurfaceResponse:
+        params = _surface_params(
+            limit=limit,
+            category=category,
+            exclude_unavailable=exclude_unavailable,
+            user_id=user_id,
+        )
         return SurfaceResponse.model_validate(self._request("GET", "/popular", params=params))
 
-    def latest(self, *, limit: int | None = None, category: str | None = None) -> SurfaceResponse:
-        params: dict[str, str] = {}
-        if limit is not None:
-            params["limit"] = str(limit)
-        if category is not None:
-            params["category"] = category
+    def latest(
+        self,
+        *,
+        limit: int | None = None,
+        category: str | None = None,
+        exclude_unavailable: bool | None = None,
+        user_id: str | None = None,
+    ) -> SurfaceResponse:
+        params = _surface_params(
+            limit=limit,
+            category=category,
+            exclude_unavailable=exclude_unavailable,
+            user_id=user_id,
+        )
         return SurfaceResponse.model_validate(self._request("GET", "/latest", params=params))
 
-    def similar(self, item_id: str, *, limit: int | None = None) -> SimilarResponse:
-        params: dict[str, str] = {}
-        if limit is not None:
-            params["limit"] = str(limit)
+    def similar(
+        self,
+        item_id: str,
+        *,
+        limit: int | None = None,
+        category: str | None = None,
+        exclude_unavailable: bool | None = None,
+        user_id: str | None = None,
+    ) -> SimilarResponse:
+        params = _surface_params(
+            limit=limit,
+            category=category,
+            exclude_unavailable=exclude_unavailable,
+            user_id=user_id,
+        )
         path = f"/similar/{urllib.parse.quote(str(item_id), safe='')}"
         return SimilarResponse.model_validate(self._request("GET", path, params=params))
 
