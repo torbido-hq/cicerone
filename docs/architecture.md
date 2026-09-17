@@ -56,11 +56,8 @@ search weights, see [search-weights.md](search-weights.md).
 | `serve/app.py` | Routes, middleware, refresh loop (`cicerone serve`) |
 | `serve/item_filters.py` | Category / availability snapshot cache for serve requests |
 | `serve/consumed.py` | Serve-time hide of items in `[input]` / process-local incremental overlay |
-<<<<<<< HEAD
 | `serve/catalog_routes.py` | User / item / event writes against `[input]` |
 | `io/catalog.py` | Catalog store protocol for live users / items / events |
-=======
->>>>>>> 718bfe4 (fix: deepen popular snapshots and batch session neighbor reads)
 | `serve/surfaces.py` | `GET /popular`, `/latest`, `/similar/{item_id}`, `POST /session/recommendations` |
 | `io/surfaces.py` | Job-time popular / latest / item-neighbor snapshots |
 | `serve/events_routes.py` | Optional `POST /events` webhook mount when `[events]` webhook is enabled |
