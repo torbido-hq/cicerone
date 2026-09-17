@@ -36,7 +36,9 @@ from sqlalchemy import (
     select,
     text,
 )
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import OperationalError, ProgrammingError
+from sqlalchemy.pool import StaticPool
 
 from cicerone.io.db_errors import is_missing_column_error
 from cicerone.io.options import readonly_select, require_option, sql_identifier
@@ -72,6 +74,16 @@ DEFAULT_TRACK_TABLE = "recommendation_track"
 DEFAULT_EVAL_TABLE = "recommendation_eval"
 DEFAULT_HISTORY_TABLE = "recommendation_history"
 DEFAULT_ITEM_SCORES_TABLE = "item_scores"
+
+
+def _create_engine(database_url: str) -> Engine:
+    kwargs: dict[str, Any] = {"pool_pre_ping": True}
+    parsed = make_url(database_url)
+    if parsed.get_backend_name() == "sqlite" and parsed.database in (None, "", ":memory:"):
+        kwargs["poolclass"] = StaticPool
+        kwargs["connect_args"] = {"check_same_thread": False}
+    return create_engine(database_url, **kwargs)
+
 
 DEFAULT_DB_TABLES = frozenset(
     {
@@ -246,7 +258,7 @@ def _sql_user_source(query: str | None, table: str) -> str:
 class DatabaseInputSource:
     def __init__(self, options: dict[str, Any]):
         self._options = options
-        self._engine = create_engine(require_option(options, "database_url", "db"), pool_pre_ping=True)
+        self._engine = _create_engine(require_option(options, "database_url", "db"))
 
     def _configured_query(self, key: str) -> str | None:
         query = self._options.get(key)
@@ -353,7 +365,7 @@ class DatabaseOutputSink:
         fence_kind: str = "lock",
     ):
         self._options = options
-        self._engine = create_engine(require_option(options, "database_url", "db"), pool_pre_ping=True)
+        self._engine = _create_engine(require_option(options, "database_url", "db"))
         self._writer_lock = writer_lock
         self._fence_check = fence_check
         self._fence_lost = fence_lost

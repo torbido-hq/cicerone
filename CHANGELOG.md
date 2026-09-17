@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Job writes catalog `item_scores` (`popular_score`, `latest_score`, `n_users`) next to recommendations. Dataset: `item_scores.parquet`. DB: `item_scores` table (`item_scores_table` option). First 0.9.0 job creates the table.
 - Serve `GET /item-scores` (bearer, cursor pagination, optional `item_id`) for search-index pull. See [docs/search-weights.md](docs/search-weights.md).
+- Serve-time hide of consumed items (`[serve].exclude_consumed`, default on)
+  using `[input]` history plus a process-local incremental overlay capped at
+  `consumed_lookback` items per user. Short lists fill from popular/latest
+  (`[serve].fallback_fill`) when hide or availability filters drop rows.
 
 ### Fixed
 
@@ -35,6 +39,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Search-weights docs say catalog writes apply to sinks that implement `ItemScoresWriter`.
 - Job sets `partial_outputs` only after a snapshot, score, or recommendation write succeeds.
 - Serve sorts and validates `item_scores` from readers that do not snapshot a cached id index.
+- In-memory SQLite `[input]` history is readable from serve worker threads, so default consumed hide still applies.
 
 ## [0.8.2] - 2026-09-15
 

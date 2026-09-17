@@ -115,6 +115,7 @@ def test_config_display_redacts_secrets_and_keeps_safe_values():
     assert "split" in display["split_note"]
     assert display["hints"]["job.top_k"]["text"]
     assert display["hints"]["job.top_k"]["docs"].startswith("https://cicerone.dev/")
+    assert "overlay cap" in display["hints"]["serve.consumed_lookback"]["text"]
 
 
 def test_config_display_missing_feature_file(tmp_path):

@@ -24,6 +24,7 @@ from cicerone.config.constants import (
     DEFAULT_SERVE_MAX_K,
     TRACK_KIND_IMPRESSION,
 )
+from cicerone.events.consumed import ConsumedOverlay
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
 from cicerone.experiment.assignment import resolve_assignment
@@ -32,7 +33,7 @@ from cicerone.experiment.store import ExperimentStore
 from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.http_security import SecurityHeadersMiddleware, token_equals
-from cicerone.io.base import ManifestReader, RecommendationReader
+from cicerone.io.base import ManifestReader, RecommendationReader, UserHistoryReader
 from cicerone.io.recommendation_reader import SOURCE_COLUMN
 from cicerone.io.recommendation_schema import has_variant_column
 from cicerone.item_scores import empty_item_scores, normalize_item_scores, page_item_scores
@@ -45,6 +46,7 @@ from cicerone.serve.code_samples import (
     RECOMMENDATIONS_PATH,
     attach_code_samples,
 )
+from cicerone.serve.consumed import consumed_item_ids, drop_consumed, merge_fill
 from cicerone.serve.events_routes import attach_events_ingest_openapi, mount_events_routes
 from cicerone.serve.item_filters import (
     ItemsFilterCache,
@@ -134,6 +136,10 @@ and clicks (not used for training). See `docs/evaluation.md`.
 `GET /item-scores` returns catalog-wide popular/latest weights for search
 indexers. See `docs/search-weights.md`.
 
+`GET /recommendations` can hide items from the user's live `[input]` events
+(`[serve].exclude_consumed`) and fill short lists from popular/latest
+(`[serve].fallback_fill`) when hide or availability filters drop rows.
+
 Interactive docs: `/docs` (Swagger UI) and `/redoc` (includes language
 code samples via ``x-codeSamples``). Machine-readable schema: `/openapi.json`.
 A checked-in copy lives at `docs/openapi/serve.openapi.json` (regenerate with
@@ -213,6 +219,8 @@ def create_app(
     feature_config: FeatureConfig | None = None,
     event_source: WebhookEventSource | None = None,
     events_worker: EventWorker | None = None,
+    history_reader: UserHistoryReader | None = None,
+    consumed: ConsumedOverlay | None = None,
 ) -> FastAPI:
     app = FastAPI(
         title=SERVE_API_TITLE,
@@ -240,6 +248,13 @@ def create_app(
         TrackStore(settings.output, writer_lock=build_dataset_writer_lock(settings))
         if settings.track.enabled
         else None
+    )
+    overlay = (
+        consumed
+        if consumed is not None
+        else ConsumedOverlay(
+            max_items_per_user=settings.serve.consumed_lookback,
+        )
     )
     missing_category_warned = False
 
@@ -322,6 +337,10 @@ def create_app(
             default=True,
             description="Re-apply item_availability_filters against the items snapshot",
         ),
+        exclude_consumed: bool | None = Query(
+            default=None,
+            description="Drop items in the user's live input/incremental events",
+        ),
     ) -> RecommendationsResponse:
         if limit is not None and k is not None and limit != k:
             raise HTTPException(
@@ -335,11 +354,23 @@ def create_app(
         else:
             top_k = settings.serve.default_k
         top_k = min(top_k, DEFAULT_SERVE_MAX_K)
+        hide_consumed = settings.serve.exclude_consumed if exclude_consumed is None else exclude_consumed
         items, available_ids, ids_by_category = items_cache.get()
+        consumed_ids: set[str] = set()
+        if hide_consumed:
+            consumed_ids = consumed_item_ids(
+                user_id,
+                history=history_reader,
+                overlay=overlay,
+                lookback=settings.serve.consumed_lookback,
+            )
         can_filter = bool(
-            items is not None
-            and not items.empty
-            and (category is not None or (exclude_unavailable and availability_filters))
+            (
+                items is not None
+                and not items.empty
+                and (category is not None or (exclude_unavailable and availability_filters))
+            )
+            or consumed_ids
         )
         fetch_k = max(top_k * 5, top_k) if can_filter else top_k
         promoted, active_pair = _assignment_overlay(settings, experiment_store)
@@ -356,16 +387,41 @@ def create_app(
         if not has_variant_column(recs):
             experiment_id, variant = None, None
 
-        filtered = filter_recommendations(
+        after_availability = filter_recommendations(
             recs,
             items=items,
             available_ids=available_ids,
-            category=category,
+            category=None,
             category_column=category_column,
             exclude_unavailable=exclude_unavailable,
             ids_by_category=ids_by_category,
             on_missing_category_column=_warn_missing_category_column,
         )
+        after_hide = drop_consumed(after_availability, consumed_ids)
+        dropped_by_hide_or_availability = len(after_hide) < len(recs)
+        filtered = filter_recommendations(
+            after_hide,
+            items=items,
+            available_ids=available_ids,
+            category=category,
+            category_column=category_column,
+            exclude_unavailable=False,
+            ids_by_category=ids_by_category,
+            on_missing_category_column=_warn_missing_category_column,
+        )
+        if settings.serve.fallback_fill and len(filtered) < top_k and dropped_by_hide_or_availability:
+            filler = reader.get_cold_start_fallback(fetch_k, variant=variant)
+            filler = filter_recommendations(
+                filler,
+                items=items,
+                available_ids=available_ids,
+                category=category,
+                category_column=category_column,
+                exclude_unavailable=exclude_unavailable,
+                ids_by_category=ids_by_category,
+                on_missing_category_column=_warn_missing_category_column,
+            )
+            filtered = merge_fill(filtered, filler, k=top_k, exclude=consumed_ids)
         filtered = filtered.head(top_k).reset_index(drop=True)
         if not filtered.empty:
             filtered = filtered.copy()
@@ -510,7 +566,12 @@ def create_app(
 
 
 def main() -> None:
-    from cicerone.io.factory import build_manifest_reader, build_recommendation_reader
+    from cicerone.events.consumed import ConsumedOverlay
+    from cicerone.io.factory import (
+        build_manifest_reader,
+        build_recommendation_reader,
+        build_user_history_reader,
+    )
 
     settings = load_settings()
     if settings.mode != "serve":
@@ -535,7 +596,18 @@ def main() -> None:
         availability_filters=availability_filters,
     )
 
-    events_runtime = start_events_runtime(settings, feature_config=feature_config, reader=reader)
+    overlay = ConsumedOverlay(max_items_per_user=settings.serve.consumed_lookback)
+    try:
+        history_reader = build_user_history_reader(settings.input)
+    except Exception:
+        logger.exception("Failed to open [input] for consumed-item hide")
+        history_reader = None
+    events_runtime = start_events_runtime(
+        settings,
+        feature_config=feature_config,
+        reader=reader,
+        consumed=overlay,
+    )
     app = create_app(
         settings,
         reader,
@@ -543,6 +615,8 @@ def main() -> None:
         feature_config=feature_config,
         event_source=events_runtime.webhook_source,
         events_worker=events_runtime.worker,
+        history_reader=history_reader,
+        consumed=overlay,
     )
     _start_refresh_loop(
         reader,
