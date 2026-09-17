@@ -245,6 +245,38 @@ def test_post_track_returns_503_when_writer_lock_busy(tmp_path, monkeypatch):
     assert response.json()["detail"] == "Writer lock is busy"
 
 
+def test_post_track_append_does_not_block_event_loop(tmp_path, monkeypatch):
+    import asyncio
+    import time
+
+    import httpx
+
+    def _slow_append(self, rows):
+        time.sleep(0.2)
+        return [dict(row) for row in rows]
+
+    monkeypatch.setattr("cicerone.track.store.TrackStore.append_accepted_rows", _slow_append)
+    app = create_app(_settings(tmp_path), _FakeReader(_recs_df()))
+
+    @app.get("/__probe")
+    async def _probe() -> dict[str, bool]:
+        return {"ok": True}
+
+    async def _run() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            headers = {"Authorization": "Bearer secret"}
+            track = asyncio.create_task(client.post("/track", headers=headers, json=_impression()))
+            await asyncio.sleep(0.05)
+            probe = await client.get("/__probe")
+            assert probe.status_code == 200
+            assert not track.done()
+            track_response = await track
+            assert track_response.status_code == 202
+
+    asyncio.run(_run())
+
+
 def test_post_track_returns_503_when_writer_lock_lost(tmp_path, monkeypatch):
     from cicerone.locks import LockLostError
 

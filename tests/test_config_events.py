@@ -71,6 +71,7 @@ def test_load_events_section(tmp_path):
         path = "/tmp/in"
         [output]
         kind = "dataset"
+        artifact_hmac_key = "0123456789abcdef"
         [output.options]
         storage_backend = "local"
         path = "/tmp/out"
@@ -78,6 +79,7 @@ def test_load_events_section(tmp_path):
     )
     settings = load_settings(path)
     assert settings.events.enabled is True
+    assert settings.output.artifact_hmac_key == "0123456789abcdef"
     assert settings.events.options["auth_token"] == "events-tok"
     assert settings.events.incremental.batch_size == 5
     assert settings.events.incremental.batch_window_seconds == 12.0
@@ -117,6 +119,7 @@ def test_load_online_and_experiment_warns(tmp_path, caplog):
         path = "/tmp/in"
         [output]
         kind = "dataset"
+        artifact_hmac_key = "0123456789abcdef"
         [output.options]
         storage_backend = "local"
         path = "/tmp/out"
@@ -165,6 +168,7 @@ def test_load_online_rejects_s3_output(tmp_path):
         path = "/tmp/in"
         [output]
         kind = "dataset"
+        artifact_hmac_key = "0123456789abcdef"
         [output.options]
         storage_backend = "s3"
         bucket = "recs"
@@ -429,3 +433,120 @@ def test_coerce_pass_through_events_settings():
     assert coerced.online.enabled is False
     ha = coerce_events_settings(EventsSettings(enabled=True, kind="webhook", ha=True))
     assert ha.ha is True
+
+
+def test_load_online_requires_artifact_hmac_key(tmp_path):
+    path = write_toml(
+        tmp_path,
+        """
+        [job]
+        mode = "serve"
+        [serve]
+        auth_token = "tok"
+        [events]
+        enabled = true
+        kind = "webhook"
+        [events.online]
+        enabled = true
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+    with pytest.raises(ConfigError, match="output.artifact_hmac_key"):
+        load_settings(path)
+
+
+def test_load_artifact_hmac_key_rejects_table_before_env_resolve(tmp_path):
+    path = write_toml(
+        tmp_path,
+        """
+        [job]
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+        [output]
+        kind = "dataset"
+        artifact_hmac_key = { x = "${MISSING}" }
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+    with pytest.raises(ConfigError, match="must be a string"):
+        load_settings(path)
+
+
+def test_load_artifact_hmac_key_rejects_non_string(tmp_path):
+    path = write_toml(
+        tmp_path,
+        """
+        [job]
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+        [output]
+        kind = "dataset"
+        artifact_hmac_key = 123
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+    with pytest.raises(ConfigError, match="must be a string"):
+        load_settings(path)
+
+
+def test_load_artifact_hmac_key_too_short(tmp_path):
+    path = write_toml(
+        tmp_path,
+        """
+        [job]
+        [input]
+        kind = "dataset"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+        [output]
+        kind = "dataset"
+        artifact_hmac_key = "short"
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+    with pytest.raises(ConfigError, match="at least 16 bytes"):
+        load_settings(path)
+
+
+def test_input_rejects_artifact_hmac_key(tmp_path):
+    path = write_toml(
+        tmp_path,
+        """
+        [job]
+        [input]
+        kind = "dataset"
+        artifact_hmac_key = "0123456789abcdef"
+        [input.options]
+        storage_backend = "local"
+        path = "/tmp/in"
+        [output]
+        kind = "dataset"
+        [output.options]
+        storage_backend = "local"
+        path = "/tmp/out"
+        """,
+    )
+    with pytest.raises(ConfigError, match="only valid on \\[output\\]"):
+        load_settings(path)

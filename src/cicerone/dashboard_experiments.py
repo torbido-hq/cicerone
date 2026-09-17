@@ -36,7 +36,7 @@ from cicerone.experiment.recipes import (
     resolve_eligibility_policy,
     resolve_recipes,
 )
-from cicerone.experiment.store import ExperimentStore, merge_experiment_state
+from cicerone.experiment.store import ExperimentStore, active_pair_from_state, merge_experiment_state
 from cicerone.experiment.thompson import ArmCounts, parse_arm_counts
 from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.io.factory import build_manifest_reader
@@ -55,6 +55,12 @@ _T = TypeVar("_T")
 _THOMPSON_SHIP_IGNORE = frozenset({"undecided", "split_winners"})
 
 
+class _PromoteRejected(Exception):
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
 def _matched_state(settings: Settings, store: ExperimentStore) -> dict[str, Any] | None:
     try:
         state = store.read_state()
@@ -69,6 +75,35 @@ def _matched_state(settings: Settings, store: ExperimentStore) -> dict[str, Any]
     if state and str(state.get("experiment_id") or "") == str(settings.experiment.id):
         return dict(state)
     return None
+
+
+def _fresh_matched_state(settings: Settings, store: ExperimentStore) -> dict[str, Any] | None:
+    try:
+        state = store.read_state()
+    except Exception as exc:
+        logger.exception("Failed to read experiment state")
+        raise _PromoteRejected("Experiment state could not be read") from exc
+    if state and str(state.get("experiment_id") or "") == str(settings.experiment.id):
+        _PROMOTE_STATE[settings.experiment.id] = dict(state)
+        return dict(state)
+    _PROMOTE_STATE.pop(settings.experiment.id, None)
+    return None
+
+
+def _live_thompson_pair(
+    state: Mapping[str, Any] | None,
+    names: set[str],
+) -> tuple[str, str] | None:
+    pair = active_pair_from_state(state)
+    if pair is None or pair[0] not in names or pair[1] not in names:
+        return None
+    return pair
+
+
+def _thompson_pair_names(settings: Settings, recipes: Sequence[Any] = ()) -> set[str]:
+    names = {item.name for item in settings.experiment.variants}
+    recipe_names = {item.name for item in recipes}
+    return names & recipe_names if recipe_names else names
 
 
 def _eval_recipes(
@@ -297,7 +332,8 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
     ship_variant = None
     if not promoted and not blocked:
         if experiment.allocation == ALLOCATION_THOMPSON:
-            ship_variant = str((state or {}).get("champion") or "") or report.winner
+            pair = _live_thompson_pair(state, {recipe.name for recipe in recipes})
+            ship_variant = pair[0] if pair else None
         else:
             ship_variant = report.winner
     return {
@@ -323,6 +359,19 @@ def _lift_label(metric: str) -> str:
     return "Mean lift"
 
 
+def _thompson_promote_error(
+    variant: str,
+    state: Mapping[str, Any] | None,
+    names: set[str],
+) -> str | None:
+    pair = _live_thompson_pair(state, names)
+    if pair and variant in pair:
+        return None
+    if not pair:
+        return "No active champion/challenger pair is available"
+    return f"Winner is {pair[0]!r}, not {variant!r}"
+
+
 def _publish_experiment_state(
     settings: Settings, payload_for: Callable[[ExperimentStore], dict[str, Any]]
 ) -> str | None:
@@ -332,6 +381,8 @@ def _publish_experiment_state(
         with held_writer_lock(writer_lock):
             payload = payload_for(store)
             store.write_state(payload)
+    except _PromoteRejected as exc:
+        return exc.message
     except WriterLockBusyError:
         return "Writer lock is busy"
     except LockLostError:
@@ -354,16 +405,31 @@ def promote_winner(settings: Settings, variant: str) -> str | None:
     blocked = _ship_blocked(report, settings.experiment)
     if blocked:
         return "Experiment is not ready to promote (" + ", ".join(blocked) + ")"
-    if settings.experiment.allocation != ALLOCATION_THOMPSON and report.winner and report.winner != variant:
+    pair_names = _thompson_pair_names(settings, context.get("recipes") or ())
+    if settings.experiment.allocation == ALLOCATION_THOMPSON:
+        error = _thompson_promote_error(variant, context.get("thompson"), pair_names)
+        if error:
+            return error
+    elif report.winner and report.winner != variant:
         return f"Winner is {report.winner!r}, not {variant!r}"
-    return _publish_experiment_state(
-        settings,
-        lambda store: merge_experiment_state(
-            _matched_state(settings, store),
+
+    def _payload(store: ExperimentStore) -> dict[str, Any]:
+        state = (
+            _fresh_matched_state(settings, store)
+            if settings.experiment.allocation == ALLOCATION_THOMPSON
+            else _matched_state(settings, store)
+        )
+        if settings.experiment.allocation == ALLOCATION_THOMPSON:
+            error = _thompson_promote_error(variant, state, pair_names)
+            if error:
+                raise _PromoteRejected(error)
+        return merge_experiment_state(
+            state,
             experiment_id=settings.experiment.id,
             promoted_variant=variant,
-        ),
-    )
+        )
+
+    return _publish_experiment_state(settings, _payload)
 
 
 def clear_promotion(settings: Settings) -> str | None:

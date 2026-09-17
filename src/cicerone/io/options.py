@@ -34,7 +34,12 @@ _SQL_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _READONLY_SELECT_FORBIDDEN = re.compile(
     r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|"
     r"COPY|CALL|EXEC|EXECUTE|MERGE|REPLACE|ATTACH|DETACH|"
-    r"INTO|LOAD|DO|VACUUM|LOCK|pg_read_file|lo_export|lo_import)\b",
+    r"INTO|LOAD|DO|VACUUM|LOCK|"
+    r"pg_read(?:_binary)?_file|pg_write(?:_binary)?_file|"
+    r"pg_file_[A-Za-z0-9_]+|pg_logdir_ls|pg_rotate_logfile|pg_current_logfile|"
+    r"pg_ls_[A-Za-z0-9_]+|pg_stat_file|pg_reload_conf|"
+    r"pg_execute_server_program|pg_terminate_backend|pg_cancel_backend|"
+    r"set_config|dblink(?:_[A-Za-z0-9_]+)?|lo_[A-Za-z0-9_]+)\b",
     re.IGNORECASE,
 )
 S3_NOT_FOUND_CODES = frozenset({"NoSuchKey", "404", "NotFound"})
@@ -150,6 +155,30 @@ def readonly_select(query: str, *, option: str) -> str:
     return cleaned
 
 
+def close_s3_body(body: Any) -> None:
+    close = getattr(body, "close", None)
+    if callable(close):
+        close()
+
+
+def read_s3_body(response: dict[str, Any], *, max_bytes: int | None = None) -> bytes:
+    body = response["Body"]
+    try:
+        if max_bytes is None:
+            return body.read()
+        if max_bytes < 1:
+            raise ValueError("max_bytes must be >= 1")
+        known = response.get("ContentLength")
+        if isinstance(known, int) and known > max_bytes:
+            raise ValueError(f"Stored object is {known} bytes; max is {max_bytes}")
+        payload = body.read(max_bytes + 1)
+        if len(payload) > max_bytes:
+            raise ValueError(f"Stored object is {len(payload)} bytes; max is {max_bytes}")
+        return payload
+    finally:
+        close_s3_body(body)
+
+
 def is_s3_not_found(exc: BaseException) -> bool:
     from botocore.exceptions import ClientError
 
@@ -231,4 +260,4 @@ def read_parquet(
     logger.info("Reading s3://%s/%s", bucket, key)
     client = s3_client if s3_client is not None else build_s3_client(options)
     obj = client.get_object(Bucket=bucket, Key=key)
-    return pd.read_parquet(io.BytesIO(obj["Body"].read()), **read_kwargs)
+    return pd.read_parquet(io.BytesIO(read_s3_body(obj)), **read_kwargs)

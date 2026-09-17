@@ -34,6 +34,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
+from cicerone.config.constants import DEFAULT_MAX_ARTIFACT_BYTES
 from cicerone.io.db_errors import is_missing_column_error
 from cicerone.io.options import readonly_select, require_option, sql_identifier
 from cicerone.io.recommendation_schema import (
@@ -443,16 +444,30 @@ class DatabaseOutputSink:
             self._ensure_fence()
         return True
 
-    def read_model_artifact(self) -> bytes | None:
+    def read_model_artifact(self, *, max_bytes: int = DEFAULT_MAX_ARTIFACT_BYTES) -> bytes | None:
+        if max_bytes < 1:
+            raise ValueError("max_bytes must be >= 1")
         table_name = sql_identifier(
             self._options.get("model_artifact_table", DEFAULT_MODEL_ARTIFACT_TABLE),
             option="model_artifact_table",
         )
         if not inspect(self._engine).has_table(table_name):
             return None
+        if self._engine.dialect.name == "sqlite":
+            sql = f'SELECT substr(payload, 1, :cap), length(payload) FROM "{table_name}" LIMIT 1'
+        else:
+            sql = (
+                f"SELECT substring(payload from 1 for :cap), octet_length(payload) "
+                f'FROM "{table_name}" LIMIT 1'
+            )
         with self._engine.connect() as conn:
-            row = conn.execute(text(f'SELECT payload FROM "{table_name}" LIMIT 1')).first()
-        if row is None or row[0] is None:
+            row = conn.execute(text(sql), {"cap": max_bytes + 1}).first()
+        if row is None or row[1] is None:
+            return None
+        size = int(row[1])
+        if size > max_bytes:
+            raise ValueError(f"Stored object is {size} bytes; max is {max_bytes}")
+        if row[0] is None:
             return None
         return bytes(row[0])
 

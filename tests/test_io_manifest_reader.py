@@ -85,6 +85,36 @@ def test_dataset_reader_s3_backend_missing_object_returns_none(s3_options):
     assert reader.read_latest() is None
 
 
+def test_dataset_reader_s3_closes_body(monkeypatch):
+    class _Body:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def read(self) -> bytes:
+            return b'{"status":"success"}'
+
+        def close(self) -> None:
+            self.closed = True
+
+    body = _Body()
+
+    class _Client:
+        def get_object(self, **_kwargs):
+            return {"Body": body}
+
+    monkeypatch.setattr("cicerone.io.manifest_reader.build_s3_client", lambda _options: _Client())
+    reader = DatasetManifestReader(
+        {
+            "storage_backend": "s3",
+            "access_key_id": "id",
+            "secret_access_key": "secret",
+            "bucket": "bucket",
+        }
+    )
+    assert reader.read_latest() == {"status": "success"}
+    assert body.closed is True
+
+
 def test_dataset_reader_s3_backend_raises_on_hard_failure(s3_options):
     # Real backend errors must propagate; only not-found returns None.
     from botocore.exceptions import ClientError
