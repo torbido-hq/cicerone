@@ -811,7 +811,7 @@ def test_evaluation_remaining_branches(monkeypatch) -> None:
     later_imp = pd.DataFrame([{"user_id": "alice", "item_id": "ipa", "generated_at": "2026-08-28T00:00:00Z"}])
     by_snap = _annotate_source(later_imp, snapshots)
     assert by_snap.iloc[0]["source"] == "personalized"
-    assert "variant" not in by_snap.columns or pd.isna(by_snap.iloc[0].get("variant"))
+    assert by_snap.iloc[0]["variant"] == "treatment"
     missing_time = evaluate_tracking(
         track_rows=[{"kind": "impression", "user_id": "a", "item_id": "i"}],
         conversions=pd.DataFrame(),
@@ -1290,6 +1290,48 @@ def test_annotate_source_untimestamped_keeps_latest_source() -> None:
     annotated = _annotate_source(impressions, snapshots)
     assert annotated.iloc[0]["source"] == "personalized"
     assert "variant" not in annotated.columns or pd.isna(annotated.iloc[0].get("variant"))
+
+
+def test_annotate_source_untimestamped_keeps_existing_source() -> None:
+    from cicerone.evaluation import _annotate_source
+
+    snapshots = pd.DataFrame(
+        [
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "source": "personalized",
+                "variant": "treatment",
+                "generated_at": "2026-08-28T00:00:00Z",
+            }
+        ]
+    )
+    impressions = pd.DataFrame(
+        [{"user_id": "alice", "item_id": "ipa", "generated_at": None, "source": "logged"}]
+    )
+    annotated = _annotate_source(impressions, snapshots)
+    assert annotated.iloc[0]["source"] == "logged"
+    assert "variant" not in annotated.columns or pd.isna(annotated.iloc[0].get("variant"))
+
+
+def test_annotate_source_untimestamped_does_not_clear_source_without_match() -> None:
+    from cicerone.evaluation import _annotate_source
+
+    snapshots = pd.DataFrame(
+        [
+            {
+                "user_id": "bob",
+                "item_id": "stout",
+                "source": "personalized",
+                "generated_at": "2026-08-28T00:00:00Z",
+            }
+        ]
+    )
+    impressions = pd.DataFrame(
+        [{"user_id": "alice", "item_id": "ipa", "generated_at": None, "source": "logged"}]
+    )
+    annotated = _annotate_source(impressions, snapshots)
+    assert annotated.iloc[0]["source"] == "logged"
 
 
 def test_filter_events_since_without_occurred_at_is_empty() -> None:

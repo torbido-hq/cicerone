@@ -123,8 +123,6 @@ class TrackDbBackend:
         clause, params = _track_row_sql_filter(kind=kind, experiment_id=experiment_id, since=since)
         try:
             frame = pd.read_sql(text(f'SELECT * FROM "{table}"{clause}'), engine, params=params)
-        except MISSING_TABLE_ERRORS:
-            return []
         except Exception as exc:
             if is_missing_table_error(exc):
                 return []

@@ -461,6 +461,22 @@ def test_track_store_sqlite_read_errors(tmp_path, monkeypatch) -> None:
     assert store.read_history().empty
 
 
+def test_track_store_sqlite_operational_error_reraises(tmp_path, monkeypatch) -> None:
+    from sqlalchemy.exc import OperationalError
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
+    output = IOSettings(kind="db", options={"database_url": url})
+    store = TrackStore(output)
+    store.append_rows([_row()])
+
+    def _boom(*_args, **_kwargs):
+        raise OperationalError("SELECT 1", {}, Exception("connection refused"))
+
+    monkeypatch.setattr(pd, "read_sql", _boom)
+    with pytest.raises(OperationalError, match="connection refused"):
+        store.read_rows()
+
+
 def test_track_jsonl_same_batch_duplicate_event_id(tmp_path) -> None:
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     store = TrackStore(output)
