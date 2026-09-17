@@ -29,6 +29,7 @@ from cicerone.io.recommendation_reader import SOURCE_COLUMN, USER_COLUMN
 from cicerone.io.recommendation_schema import recommendation_output_columns
 from cicerone.locks import LockLostError
 from cicerone.publish.base import RecommendationPublisher
+from cicerone.publish.sidecar import sidecar_generation_current
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +148,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         online_result = self._refresh_online(events)
         online_by_user = {} if online_result.sequential_skipped else self._online_rows_by_user(online_result)
 
-        pending_publish: pd.DataFrame | None = None
+        pending_publish: tuple[pd.DataFrame, str] | None = None
 
         def _persist() -> int:
             nonlocal pending_publish
@@ -214,7 +215,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
                 len(replace_ids),
                 len(events),
             )
-            pending_publish = merged
+            pending_publish = (merged, str(manifest["generated_at"]))
             return len(events)
 
         holder = getattr(self._sink, "recommendations_write", None)
@@ -224,17 +225,20 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         else:
             applied = _persist()
         if pending_publish is not None:
-            self._publish_sidecar(pending_publish)
+            self._publish_sidecar(*pending_publish)
         return applied
 
-    def _publish_sidecar(self, merged: pd.DataFrame) -> None:
+    def _publish_sidecar(self, merged: pd.DataFrame, generated_at: str) -> None:
         if self._publisher is None:
             return
         try:
             self._ensure_fence()
             self._publisher.connect()
             self._ensure_fence()
-            self._publisher.publish(merged)
+            if sidecar_generation_current(self._output_settings, generated_at):
+                self._publisher.publish(merged)
+            else:
+                logger.info("Skipping incremental publish: recommendations were superseded")
         except LockLostError:
             raise
         except Exception:

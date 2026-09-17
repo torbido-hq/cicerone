@@ -18,6 +18,7 @@ from cicerone.publish.factory import build_publisher_from_kind
 from cicerone.publish.kafka import KafkaPublisher, validate_kafka_publish_options
 from cicerone.publish.payload import user_recommendation_messages
 from cicerone.publish.rabbitmq import RabbitMQPublisher, validate_rabbitmq_publish_options
+from cicerone.publish.sidecar import sidecar_generation_current
 
 
 def _recs_frame() -> pd.DataFrame:
@@ -498,3 +499,22 @@ def test_rabbitmq_publisher_reconnects_after_failed_recover(monkeypatch):
     users = [json.loads(body)["user_id"] for _exchange, _key, body in broker.published]
     assert users == ["u1", "u2"]
     publisher.close()
+
+
+def test_sidecar_generation_current_matches_latest_manifest(tmp_path):
+    generated_at = "2026-09-17T12:00:00+00:00"
+    (tmp_path / "manifest.json").write_text(json.dumps({"generated_at": generated_at}))
+    settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    assert sidecar_generation_current(settings, generated_at) is True
+    assert sidecar_generation_current(settings, "2099-01-01T00:00:00+00:00") is False
+
+
+def test_sidecar_generation_current_false_when_manifest_missing(tmp_path):
+    settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    assert sidecar_generation_current(settings, "2026-09-17T12:00:00+00:00") is False
+
+
+def test_sidecar_generation_current_false_when_manifest_unreadable(tmp_path):
+    (tmp_path / "manifest.json").write_text("not-json")
+    settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    assert sidecar_generation_current(settings, "2026-09-17T12:00:00+00:00") is False

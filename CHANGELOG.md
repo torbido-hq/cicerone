@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Publish sidecar failures do not un-succeed a recs write or livelock ingest,
   including a broker that is down at connect. Connect and publish run after
   the writer lock is released, and the apply/retrain fence is re-checked
-  before and after connect.
+  before and after connect. A newer manifest generation skips publish.
 - RabbitMQ publish confirms deliveries, stamps a stable `message_id`, recovers
   the channel after a broker error, and retries only unconfirmed users.
 - Kafka publish fails when a delivery callback reports an error.

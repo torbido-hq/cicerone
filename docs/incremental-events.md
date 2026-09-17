@@ -229,7 +229,9 @@ Payload: `{user_id, message_id, recommendations: [{user_id, item_id, rank, score
 source, …}]}`. `message_id` is a stable SHA-256 of `{user_id, recommendations}`
 (also set on RabbitMQ properties). Kafka key is `user_id`. Publish failures
 after a successful write are logged and do not fail the job or incremental
-flush. A lost apply/retrain fence after the write still fails the run.
+flush. A lost apply/retrain fence after the write still fails the run. A
+newer manifest `generated_at` skips publish so a stale snapshot cannot
+land after a later write.
 Requires the matching extra.
 
 ## High availability

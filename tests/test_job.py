@@ -255,6 +255,40 @@ def test_job_raises_when_fence_lost_after_connect(tmp_path, monkeypatch):
     assert json.loads((output_dir / "manifest.json").read_text())["status"] == "success"
 
 
+def test_job_skips_publish_when_manifest_generation_changes(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.utcnow()
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+        ]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    config_path = _write_config(tmp_path, input_dir, output_dir, top_k=2)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
+    published: list[pd.DataFrame] = []
+
+    class _Pub:
+        def connect(self) -> None:
+            path = output_dir / "manifest.json"
+            payload = json.loads(path.read_text())
+            payload["generated_at"] = "2099-01-01T00:00:00+00:00"
+            path.write_text(json.dumps(payload))
+
+        def publish(self, df: pd.DataFrame) -> None:
+            published.append(df.copy())
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings, **_kwargs: _Pub())
+    job.run()
+    assert published == []
+    assert json.loads((output_dir / "manifest.json").read_text())["status"] == "success"
+
+
 def test_job_run_writes_track_and_served_eval(tmp_path, monkeypatch):
     input_dir = tmp_path / "in"
     output_dir = tmp_path / "out"

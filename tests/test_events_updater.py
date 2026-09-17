@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from contextlib import nullcontext
 
 import pandas as pd
@@ -1244,5 +1245,47 @@ def test_incremental_updater_raises_when_fence_lost_before_connect(tmp_path, fea
         publisher=_Pub(),
     )
     with pytest.raises(LockLostError, match="events apply lock lost before write"):
-        updater._publish_sidecar(pd.DataFrame([{"user_id": "u1", "item_id": "i9", "rank": 1, "score": 1.0}]))
+        updater._publish_sidecar(
+            pd.DataFrame([{"user_id": "u1", "item_id": "i9", "rank": 1, "score": 1.0}]),
+            "2026-01-01T00:00:00+00:00",
+        )
     assert connected["n"] == 0
+
+
+def test_incremental_updater_skips_publish_when_manifest_generation_changes(
+    tmp_path, feature_config: FeatureConfig
+):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    published: list[pd.DataFrame] = []
+
+    class _Pub:
+        def connect(self) -> None:
+            path = out / "manifest.json"
+            payload = json.loads(path.read_text())
+            payload["generated_at"] = "2099-01-01T00:00:00+00:00"
+            path.write_text(json.dumps(payload))
+
+        def publish(self, df: pd.DataFrame) -> None:
+            published.append(df.copy())
+
+        def close(self) -> None:
+            return None
+
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        publisher=_Pub(),
+    )
+    events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
+    assert updater.apply(events) == 1
+    assert published == []
