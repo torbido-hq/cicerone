@@ -499,7 +499,7 @@ def test_replay_assignments_prefers_first_impression_then_hash(tmp_path):
     assert set(fallback) == {"alice", "bob"}
 
 
-def test_job_run_swallows_eval_persistence_errors(tmp_path, monkeypatch):
+def test_job_run_swallows_eval_persistence_errors(tmp_path, monkeypatch, caplog):
     input_dir = tmp_path / "in"
     output_dir = tmp_path / "out"
     input_dir.mkdir()
@@ -542,8 +542,14 @@ def test_job_run_swallows_eval_persistence_errors(tmp_path, monkeypatch):
         "cicerone.track.store.TrackStore.append_history",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("history")),
     )
-    job.run()
+    with caplog.at_level("ERROR", logger="cicerone.job_eval"):
+        job.run()
     assert (output_dir / "recommendations.parquet").exists()
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("Failed to write track eval (RuntimeError: eval)" in message for message in messages)
+    assert any(
+        "Failed to append recommendation history (RuntimeError: history)" in message for message in messages
+    )
 
 
 def test_read_input_swallows_manifest_reader_construction(monkeypatch):
@@ -577,22 +583,83 @@ def test_read_input_swallows_manifest_reader_construction(monkeypatch):
     assert manifest is None
 
 
-def test_persist_track_outputs_lock_errors_are_best_effort(monkeypatch):
+def test_try_load_logs_exception_type_and_message(caplog):
+    from cicerone.job_eval import try_load
+
+    def _boom() -> None:
+        raise RuntimeError("recs")
+
+    with caplog.at_level("ERROR", logger="cicerone.job_eval"):
+        assert try_load("load previous recommendations for eval", _boom, None) is None
+    assert any(
+        "Failed to load previous recommendations for eval (RuntimeError: recs)" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_try_load_reraises_lock_errors():
+    from cicerone.job_eval import try_load
+    from cicerone.locks import LockLostError, WriterLockBusyError
+
+    with pytest.raises(LockLostError, match="retrain lock lost"):
+        try_load(
+            "write track eval",
+            lambda: (_ for _ in ()).throw(LockLostError("retrain lock lost", kind="retrain")),
+            None,
+        )
+    with pytest.raises(WriterLockBusyError, match="busy"):
+        try_load(
+            "write track eval",
+            lambda: (_ for _ in ()).throw(WriterLockBusyError("dataset writer lock busy")),
+            None,
+        )
+
+
+def test_persist_track_outputs_lock_errors_are_best_effort(monkeypatch, caplog):
     from cicerone.locks import WriterLockBusyError
 
     def _busy(*_args, **_kwargs):
         raise WriterLockBusyError("dataset writer lock busy")
 
     monkeypatch.setattr("cicerone.job_eval.held_writer_lock", _busy)
-    job._persist_track_outputs(
-        TrackStore(
-            IOSettings(kind="dataset", options={"storage_backend": "local", "path": "/tmp/out"}),
-            writer_lock=object(),
-        ),
-        kind="dataset",
-        eval_report={"generated_at": "t"},
-        recommendations=None,
-        generated_at="t",
+    with caplog.at_level("ERROR", logger="cicerone.job_eval"):
+        job._persist_track_outputs(
+            TrackStore(
+                IOSettings(kind="dataset", options={"storage_backend": "local", "path": "/tmp/out"}),
+                writer_lock=object(),
+            ),
+            kind="dataset",
+            eval_report={"generated_at": "t"},
+            recommendations=None,
+            generated_at="t",
+        )
+    assert any(
+        "Failed to persist track outputs (WriterLockBusyError:" in record.getMessage()
+        and "dataset writer lock busy" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_persist_track_outputs_write_eval_lock_loss_is_best_effort(monkeypatch, caplog):
+    from cicerone.locks import LockLostError
+
+    def _lost(self, report):
+        del report
+        raise LockLostError("retrain lock lost before write", kind="retrain")
+
+    monkeypatch.setattr(TrackStore, "write_eval", _lost)
+    with caplog.at_level("ERROR", logger="cicerone.job_eval"):
+        job._persist_track_outputs(
+            TrackStore(IOSettings(kind="dataset", options={"storage_backend": "local", "path": "/tmp/out"})),
+            kind="dataset",
+            eval_report={"generated_at": "t"},
+            recommendations=None,
+            generated_at="t",
+        )
+    assert any(
+        "Failed to persist track outputs (LockLostError:" in record.getMessage()
+        and "retrain lock lost before write" in record.getMessage()
+        for record in caplog.records
     )
 
 

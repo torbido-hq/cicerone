@@ -490,7 +490,7 @@ def test_score_previous_run_fail_open(tmp_path) -> None:
     assert served is None
 
 
-def test_score_previous_run_swallows_errors(tmp_path, monkeypatch) -> None:
+def test_score_previous_run_swallows_errors(tmp_path, monkeypatch, caplog) -> None:
     from cicerone.config import IOSettings, make_settings
     from cicerone.job import _score_previous_run
 
@@ -504,9 +504,14 @@ def test_score_previous_run_swallows_errors(tmp_path, monkeypatch) -> None:
         "cicerone.job_eval.evaluate_tracking",
         lambda **kwargs: (_ for _ in ()).throw(RuntimeError("track")),
     )
-    track, served = _score_previous_run(settings, pd.DataFrame(), {"generated_at": "t"})
+    with caplog.at_level("ERROR", logger="cicerone.job_eval"):
+        track, served = _score_previous_run(settings, pd.DataFrame(), {"generated_at": "t"})
     assert track is None
     assert served is None
+    assert any(
+        "Failed to load previous recommendations for eval (RuntimeError: recs)" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def test_evaluate_served_empty_and_as_dict() -> None:

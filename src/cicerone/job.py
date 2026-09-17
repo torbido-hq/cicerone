@@ -38,6 +38,7 @@ from cicerone.experiment.thompson import (
 from cicerone.feature_config import load_feature_config
 from cicerone.io.factory import build_input_source, build_manifest_reader, build_output_sink
 from cicerone.io.recommendation_schema import USER_COLUMN, VARIANT_COLUMN, filter_variant_rows
+from cicerone.job_eval import log_caught as _log_caught
 from cicerone.job_eval import persist_track_outputs as _persist_track_outputs
 from cicerone.job_eval import read_input as _read_input
 from cicerone.job_eval import replay_assignments as _replay_assignments  # noqa: F401
@@ -231,8 +232,10 @@ def _select_thompson_recipes(
             allocation.rotated,
         )
         return ThompsonSelection(selected, pending)
-    except Exception:
-        logger.exception("Thompson allocation fail closed")
+    except (LockLostError, WriterLockBusyError):
+        raise
+    except Exception as exc:
+        _log_caught("Thompson allocation fail closed", exc, log=logger)
         return ThompsonSelection(recipes)
 
 
@@ -346,10 +349,11 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
 
         fitted: dict[str, RecommenderModel] = {}
         if settings.experiment.enabled and last_manifest is None:
-            try:
-                last_manifest = build_manifest_reader(settings.output).read_latest()
-            except Exception:
-                logger.exception("Failed to read last manifest for experiment recipes")
+            last_manifest = _try_load(
+                "read last manifest for experiment recipes",
+                lambda: build_manifest_reader(settings.output).read_latest(),
+                None,
+            )
 
         recipes: tuple[ResolvedRecipe, ...] = ()
         if settings.experiment.enabled:
@@ -563,9 +567,11 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                         try:
                             if write_job_manifest(sink, manifest, skip_if_newer_than=started_at):
                                 manifest_written = True
-                        except Exception:
-                            logger.exception(
-                                "Failed to write manifest; original job error (if any) is preserved"
+                        except Exception as manifest_exc:
+                            _log_caught(
+                                "Failed to write manifest; original job error (if any) is preserved",
+                                manifest_exc,
+                                log=logger,
                             )
                     raise
             if publisher is not None and manifest.get("status") == "success":
@@ -579,8 +585,8 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                         logger.info("Skipping publish: recommendations were superseded")
                 except LockLostError:
                     raise
-                except Exception:
-                    logger.exception("Publish failed after successful write")
+                except Exception as exc:
+                    _log_caught("Publish failed after successful write", exc, log=logger)
         except Exception:
             if outputs_written or manifest.get("artifact_written"):
                 manifest["partial_outputs"] = True
@@ -592,8 +598,8 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
         if publisher is not None:
             try:
                 publisher.close()
-            except Exception:
-                logger.exception("Failed to close recommendation publisher")
+            except Exception as exc:
+                _log_caught("Failed to close recommendation publisher", exc, log=logger)
         if not manifest_written and not skip_stale_job_manifest(
             fence_check=fence_check,
             exc=sys.exc_info()[1],
@@ -606,8 +612,12 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                         write_job_manifest(sink, manifest, skip_if_newer_than=started_at)
                 else:
                     write_job_manifest(sink, manifest, skip_if_newer_than=started_at)
-            except Exception:
-                logger.exception("Failed to write manifest; original job error (if any) is preserved")
+            except Exception as exc:
+                _log_caught(
+                    "Failed to write manifest; original job error (if any) is preserved",
+                    exc,
+                    log=logger,
+                )
                 if manifest.get("status") == "success":
                     raise
         logger.info("Job finished: %s", json.dumps(manifest))
@@ -636,6 +646,6 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format=DEFAULT_LOG_FORMAT)
     try:
         run()
-    except Exception:
-        logger.exception("Recommendation job failed")
+    except Exception as exc:
+        _log_caught("Recommendation job failed", exc, log=logger)
         sys.exit(1)
