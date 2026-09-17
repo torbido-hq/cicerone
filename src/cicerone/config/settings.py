@@ -50,7 +50,7 @@ class EpochMetricsSettings:
 
 @dataclass(frozen=True)
 class ServeSettings:
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
     port: int = 8000
     auth_token: str | None = None
     default_k: int = 10
@@ -64,7 +64,7 @@ class ServeSettings:
 @dataclass(frozen=True)
 class TriggerSettings:
     enabled: bool = False
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
     port: int = 8080
     auth_token: str | None = None
     debounce_seconds: float = 60.0
@@ -80,7 +80,7 @@ class TriggerSettings:
 @dataclass(frozen=True)
 class DashboardSettings:
     enabled: bool = False
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
     port: int = 8090
     users_path: str = "/app/config/dashboard_users.toml"
     refresh_interval_seconds: float = 30.0

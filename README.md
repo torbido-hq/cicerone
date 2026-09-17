@@ -676,8 +676,10 @@ pip install 'cicerone-recommender[bandits]'      # experiment.allocation = thomp
 ```
 
 Then, with your own TOML. Example files default to image paths
-(`/app/config/features.toml`, `/app/config/dashboard_users.toml`); on a pip
-host set those to files next to `--config`:
+(`/app/config/features.toml`, `/app/config/dashboard_users.toml`) and set
+serve/dashboard `host = "0.0.0.0"` so compose can publish the port. On a pip
+host, point those paths at files next to `--config` and omit `host` (default
+`127.0.0.1`) unless you mean to listen on every interface:
 
 ```sh
 cicerone start --config ./config/cicerone.toml           # job + scheduler, or serve
