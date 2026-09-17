@@ -731,6 +731,94 @@ def test_experiment_context_ctr_from_track_rows(tmp_path):
     assert context["lift_label"] == "CTR lift"
 
 
+def test_experiment_context_drops_exposures_outside_track_window(tmp_path):
+    from cicerone.track.normalize import normalize_track
+    from cicerone.track.store import TrackStore
+
+    base = _settings(tmp_path)
+    settings = make_settings(
+        feature_config_path=str(REPO_FEATURES),
+        input=base.input,
+        output=base.output,
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="exp-1",
+            primary_metric="ctr",
+            attribution="click",
+            log_exposures=True,
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        track={"enabled": True},
+    )
+    _write_frames(
+        settings,
+        events=[
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": "2026-08-28T12:10:00Z",
+            }
+        ],
+        recs=[
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                VARIANT_COLUMN: "control",
+            },
+            {
+                "user_id": "stale",
+                "item_id": "i2",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                VARIANT_COLUMN: "treatment",
+            },
+        ],
+        exposures=[
+            exposure_row(
+                user_id="u1",
+                experiment_id="exp-1",
+                variant="control",
+                generated_at=None,
+                exposed_at=pd.Timestamp("2026-01-01T00:00:00Z"),
+            ),
+            exposure_row(
+                user_id="stale",
+                experiment_id="exp-1",
+                variant="treatment",
+                generated_at=None,
+                exposed_at=pd.Timestamp("2026-01-01T00:00:00Z"),
+            ),
+        ],
+    )
+    TrackStore(settings.output).append_rows(
+        [
+            normalize_track(
+                {
+                    "kind": "impression",
+                    "user_id": "u1",
+                    "item_id": "i1",
+                    "rank": 1,
+                    "occurred_at": "2026-08-28T12:00:00Z",
+                    "event_id": "imp-u1",
+                    "experiment_id": "exp-1",
+                }
+            ).as_row()
+        ]
+    )
+    context = experiment_context(settings)
+    assert context["report"] is not None
+    assert context["report"].n_assigned == 1
+
+
 def test_experiment_context_skips_other_experiment_track_rows(tmp_path, monkeypatch):
     from cicerone.track.normalize import normalize_track
     from cicerone.track.store import TrackStore

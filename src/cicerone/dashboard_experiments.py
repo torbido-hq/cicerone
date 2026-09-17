@@ -299,6 +299,8 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
         exposures = exposures_f.result()
         catalog_size = catalog_f.result()
         track_rows = track_f.result() if track_f is not None else []
+    if settings.track.enabled:
+        exposures = _exposures_for_track_users(exposures, track_rows)
     if events is None:
         events = pd.DataFrame()
     weights = feature_config.event_weights if feature_config is not None else {}
@@ -358,6 +360,17 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
         "ship_blocked": blocked,
         "lift_label": _lift_label(report.primary_metric),
     }
+
+
+def _exposures_for_track_users(
+    exposures: list[dict[str, Any]] | None,
+    track_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]] | None:
+    if exposures is None:
+        return None
+    recent = {str(row.get("user_id") or "") for row in track_rows}
+    recent.discard("")
+    return [row for row in exposures if str(row.get("user_id") or "") in recent]
 
 
 def _lift_label(metric: str) -> str:

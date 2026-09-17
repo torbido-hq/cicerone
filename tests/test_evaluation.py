@@ -1190,6 +1190,53 @@ def test_evaluate_tracking_caps_ctr_at_one() -> None:
     assert outcomes["alice"] == pytest.approx(1.0)
 
 
+def test_evaluate_tracking_counts_unique_clicked_impressions() -> None:
+    rows = _track(
+        {
+            "kind": "impression",
+            "user_id": "alice",
+            "item_id": "ipa",
+            "rank": 1,
+            "occurred_at": "2026-08-28T12:00:00Z",
+            "event_id": "imp-1",
+        },
+        {
+            "kind": "impression",
+            "user_id": "alice",
+            "item_id": "stout",
+            "rank": 2,
+            "occurred_at": "2026-08-28T12:00:00Z",
+            "event_id": "imp-2",
+        },
+        {
+            "kind": "click",
+            "user_id": "alice",
+            "item_id": "ipa",
+            "occurred_at": "2026-08-28T12:01:00Z",
+            "event_id": "clk-1",
+        },
+        {
+            "kind": "click",
+            "user_id": "alice",
+            "item_id": "ipa",
+            "occurred_at": "2026-08-28T12:02:00Z",
+            "event_id": "clk-2",
+        },
+    )
+    report = evaluate_tracking(track_rows=rows, conversions=pd.DataFrame(), window_hours=24.0)
+    assert report.overall.n_impressions == 2
+    assert report.overall.n_clicks == 1
+    assert report.overall.ctr == pytest.approx(0.5)
+    outcomes = user_track_outcomes(
+        track_rows=rows,
+        conversions=pd.DataFrame(),
+        primary_metric="ctr",
+        attribution="click",
+        window_hours=24.0,
+    )
+    assert outcomes["alice"] == pytest.approx(0.5)
+
+
 def test_annotate_source_does_not_invent_variant_from_later_snap() -> None:
     from cicerone.evaluation import _annotate_source
 

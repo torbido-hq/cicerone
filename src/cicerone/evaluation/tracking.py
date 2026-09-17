@@ -12,6 +12,7 @@ import pandas as pd
 from cicerone.config.constants import TRACK_KIND_CLICK, TRACK_KIND_IMPRESSION
 from cicerone.evaluation.metrics import (
     SliceMetrics,
+    _clicked_impressions_by_user,
     _coalesce_column,
     _frame,
     _merge_asof_events,
@@ -219,9 +220,7 @@ def user_track_outcomes(
             _merge_asof_events(conv, impressions, window=window) if not conv.empty else conv.iloc[0:0]
         )
     impression_counts = impressions.groupby(USER_COLUMN).size()
-    click_counts = (
-        matched_clicks.groupby(USER_COLUMN).size() if not matched_clicks.empty else pd.Series(dtype=int)
-    )
+    click_counts = _clicked_impressions_by_user(matched_clicks)
     conversion_counts = (
         attributed.groupby(USER_COLUMN).size() if not attributed.empty else pd.Series(dtype=int)
     )

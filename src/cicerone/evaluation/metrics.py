@@ -66,6 +66,25 @@ def _ratio(numerator: int, denominator: int) -> float:
     return float(numerator) / float(denominator)
 
 
+def _clicked_impression_count(matched_clicks: pd.DataFrame) -> int:
+    if matched_clicks.empty:
+        return 0
+    if "prior_event_id" in matched_clicks.columns:
+        return int(matched_clicks["prior_event_id"].dropna().astype(str).nunique())
+    return int(len(matched_clicks))
+
+
+def _clicked_impressions_by_user(matched_clicks: pd.DataFrame) -> pd.Series:
+    if matched_clicks.empty or USER_COLUMN not in matched_clicks.columns:
+        return pd.Series(dtype=int)
+    if "prior_event_id" in matched_clicks.columns:
+        keyed = matched_clicks.dropna(subset=["prior_event_id"])
+        if keyed.empty:
+            return pd.Series(dtype=int)
+        return keyed.groupby(USER_COLUMN)["prior_event_id"].nunique()
+    return matched_clicks.groupby(USER_COLUMN).size()
+
+
 def _slice_metrics(
     impressions: pd.DataFrame,
     matched_clicks: pd.DataFrame,
@@ -73,7 +92,7 @@ def _slice_metrics(
     click_conversions: pd.DataFrame,
 ) -> SliceMetrics:
     n_impressions = int(len(impressions))
-    n_clicks = min(int(len(matched_clicks)), n_impressions)
+    n_clicks = min(_clicked_impression_count(matched_clicks), n_impressions)
     n_view = min(int(len(view_conversions)), n_impressions)
     n_click = min(int(len(click_conversions)), n_impressions)
     users = set()

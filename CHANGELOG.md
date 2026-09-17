@@ -35,12 +35,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Track `since` drops untimed rows; `experiment_id=` excludes blank ids.
   DB reads apply a conservative `occurred_at` date bound. Metric events with
   `since` and no `occurred_at` column are empty.
-- CTR is capped at one click per impression, matching CVR.
+- CTR is capped at one click per impression, matching CVR. Duplicate
+  clicks on the same impression count once.
 - Track source annotation does not invent a variant from a later snapshot.
 - The job loads track and recommendations once for eval and Thompson.
   A failed track or recs read is retried independently, not treated as empty.
   Thompson windows the shared rows in memory so eval keeps full history.
 - Quality live and Experiments track reads use an attribution lookback.
+  Experiments keep only exposures for users in that track window.
 - Event worker stop closes the source after a tick that never started a loop
   thread.
 - A dispatched RabbitMQ job is not started after its I/O timeout.
