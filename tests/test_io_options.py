@@ -162,6 +162,13 @@ def test_readonly_select_accepts_simple_select():
     assert readonly_select("SELECT * FROM events;", option="q") == "SELECT * FROM events"
 
 
+def test_readonly_select_accepts_lower_function():
+    assert (
+        readonly_select("SELECT lower(user_id) FROM events", option="q")
+        == "SELECT lower(user_id) FROM events"
+    )
+
+
 @pytest.mark.parametrize(
     "query",
     [
@@ -169,10 +176,24 @@ def test_readonly_select_accepts_simple_select():
         "SELECT 1; DROP TABLE events",
         "SELECT * FROM events INTO dump",
         "SELECT pg_read_file('/etc/passwd')",
-        "SELECT pg_ls_dir('/')",
-        "SELECT dblink('host=x', 'SELECT 1')",
-        "SELECT lo_get(1)",
+        "SELECT pg_read_binary_file('/etc/passwd')",
         "SELECT pg_write_file('/tmp/x', 'x')",
+        "SELECT pg_write_binary_file('/tmp/x', 'x')",
+        "SELECT pg_ls_dir('/')",
+        "SELECT pg_ls_logdir()",
+        "SELECT pg_ls_waldir()",
+        "SELECT pg_stat_file('/etc/passwd')",
+        "SELECT pg_reload_conf()",
+        "SELECT pg_execute_server_program('id')",
+        "SELECT pg_terminate_backend(1)",
+        "SELECT pg_cancel_backend(1)",
+        "SELECT set_config('x', 'y', false)",
+        "SELECT dblink('host=x', 'SELECT 1')",
+        "SELECT dblink_exec('conn', 'DROP TABLE events')",
+        "SELECT lo_get(1)",
+        "SELECT lo_put(1, 0, 'x')",
+        "SELECT lo_from_bytea(0, 'x')",
+        "SELECT lo_unlink(1)",
         "",
     ],
 )

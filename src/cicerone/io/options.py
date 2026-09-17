@@ -34,9 +34,12 @@ _SQL_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _READONLY_SELECT_FORBIDDEN = re.compile(
     r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|"
     r"COPY|CALL|EXEC|EXECUTE|MERGE|REPLACE|ATTACH|DETACH|"
-    r"INTO|LOAD|DO|VACUUM|LOCK|pg_read_file|pg_read_binary_file|pg_write_file|"
-    r"pg_ls_dir|pg_stat_file|pg_reload_conf|pg_execute_server_program|"
-    r"set_config|dblink|lo_export|lo_import|lo_get|lo_put|lo_from_bytea)\b",
+    r"INTO|LOAD|DO|VACUUM|LOCK|"
+    r"pg_read(?:_binary)?_file|pg_write(?:_binary)?_file|"
+    r"pg_file_(?:read|write|rename|unlink)|pg_logdir_ls|"
+    r"pg_ls_[A-Za-z0-9_]+|pg_stat_file|pg_reload_conf|"
+    r"pg_execute_server_program|pg_terminate_backend|pg_cancel_backend|"
+    r"set_config|dblink(?:_[A-Za-z0-9_]+)?|lo_[A-Za-z0-9_]+)\b",
     re.IGNORECASE,
 )
 S3_NOT_FOUND_CODES = frozenset({"NoSuchKey", "404", "NotFound"})
