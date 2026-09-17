@@ -39,7 +39,6 @@ logger = logging.getLogger(__name__)
 
 _JOB_CONTROL_ERRORS = (LockLostError, WriterLockBusyError)
 
-# Store/S3/db/parquet failures. Not RuntimeError — those fail the run.
 OPTIONAL_IO_ERRORS: tuple[type[BaseException], ...] = (
     OSError,
     ValueError,
@@ -49,14 +48,8 @@ OPTIONAL_IO_ERRORS: tuple[type[BaseException], ...] = (
     BotoCoreError,
     RecommendationSchemaError,
 )
-
-# Malformed previous-run frames / allocation inputs.
 OPTIONAL_EVAL_ERRORS: tuple[type[BaseException], ...] = (ValueError, TypeError, LookupError)
-
-# Sidecar publish/close after a successful recs write.
 PUBLISH_ERRORS: tuple[type[BaseException], ...] = (OSError, ValueError, RuntimeError)
-
-# Sink writes used only to annotate then re-raise.
 SINK_WRITE_ERRORS: tuple[type[BaseException], ...] = (*OPTIONAL_IO_ERRORS, RuntimeError)
 
 

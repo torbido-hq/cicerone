@@ -147,6 +147,37 @@ def test_job_publishes_recommendations_after_write(tmp_path, monkeypatch):
     assert closed["n"] == 1
 
 
+def test_job_reraises_lock_lost_on_publisher_close(tmp_path, monkeypatch):
+    from cicerone.locks import LockLostError
+
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.utcnow()
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+            {"user_id": "u2", "item_id": "i2", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+        ]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
+
+    class _Pub:
+        def connect(self) -> None:
+            return None
+
+        def publish(self, df: pd.DataFrame) -> None:
+            del df
+
+        def close(self) -> None:
+            raise LockLostError("retrain lock lost before write", kind="retrain")
+
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings, **_kwargs: _Pub())
+    with pytest.raises(LockLostError, match="retrain lock lost"):
+        job.run()
+
+
 def test_job_succeeds_when_publish_fails_after_write(tmp_path, monkeypatch):
     input_dir = tmp_path / "in"
     output_dir = tmp_path / "out"

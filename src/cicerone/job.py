@@ -601,6 +601,8 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
         if publisher is not None:
             try:
                 publisher.close()
+            except LockLostError:
+                raise
             except _PUBLISH_ERRORS as exc:
                 _log_caught("Failed to close recommendation publisher", exc, log=logger)
         if not manifest_written and not skip_stale_job_manifest(
