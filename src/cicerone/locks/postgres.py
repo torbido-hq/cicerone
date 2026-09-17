@@ -29,10 +29,11 @@ class PostgresAdvisoryLock:
     """``pg_try_advisory_lock`` on a connection held for the run duration."""
 
     def __init__(self, database_url: str, *, lock_key: str = DEFAULT_LOCK_KEY):
-        from sqlalchemy import create_engine
         from sqlalchemy.engine import Connection
 
-        self._engine = create_engine(database_url, pool_pre_ping=True)
+        from cicerone.io.engines import engine_for
+
+        self._engine = engine_for(database_url)
         self._conn: Connection | None = None
         self._key1, self._key2 = advisory_keys_from_lock_key(lock_key)
         self._mutex = threading.Lock()

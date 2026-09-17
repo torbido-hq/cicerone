@@ -7,12 +7,13 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import bindparam, create_engine, text
+from sqlalchemy import bindparam, text
 
 from cicerone.config.settings import Settings
 from cicerone.evaluation.tracking import conversion_events, filter_events_by_types
 from cicerone.io.db_errors import is_missing_column_error
 from cicerone.io.db_store import DEFAULT_EVENTS_TABLE
+from cicerone.io.engines import engine_for
 from cicerone.io.factory import build_input_source
 from cicerone.io.options import (
     is_s3_not_found,
@@ -202,10 +203,9 @@ def load_metric_events(
         frame = frame.loc[:, keep] if keep else frame
         return _filter_events_since(filter_events_by_types(_with_default_quantity(frame), types), since)
     if inp.kind == "db":
-        engine = None
         query = inp.options.get("events_query")
         try:
-            engine = create_engine(require_option(inp.options, "database_url", "db"), pool_pre_ping=True)
+            engine = engine_for(require_option(inp.options, "database_url", "db"))
             if query:
                 cleaned = readonly_select(str(query), option="input.options.events_query")
                 if _sql_has_page(cleaned):
@@ -240,9 +240,6 @@ def load_metric_events(
             keep = [column for column in EVENT_METRIC_COLUMNS if column in frame.columns]
             frame = frame.loc[:, keep] if keep else frame
             return _filter_events_since(filter_events_by_types(_with_default_quantity(frame), types), since)
-        finally:
-            if engine is not None:
-                engine.dispose()
     frame = build_input_source(inp).read_events()
     keep = [column for column in EVENT_METRIC_COLUMNS if column in frame.columns]
     frame = frame.loc[:, keep] if keep else frame
