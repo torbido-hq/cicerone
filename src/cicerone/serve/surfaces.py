@@ -27,6 +27,10 @@ from cicerone.serve_schemas import (
 
 logger = logging.getLogger(__name__)
 
+_SURFACE_AUTH: dict[int | str, dict[str, Any]] = {
+    401: {"model": ErrorDetail, "description": "Missing or invalid bearer token"},
+}
+
 POPULAR_PATH = "/popular"
 LATEST_PATH = "/latest"
 SIMILAR_PATH = "/similar/{item_id}"
@@ -106,7 +110,10 @@ def mount_surface_routes(
         dependencies=dependencies,
         tags=["recommendations"],
         summary="Precomputed popular items",
-        responses={404: {"model": ErrorDetail, "description": "No popular snapshot"}},
+        responses={
+            **_SURFACE_AUTH,
+            404: {"model": ErrorDetail, "description": "No popular snapshot"},
+        },
     )
     def get_popular(
         limit: int | None = Query(default=None, gt=0, le=DEFAULT_SERVE_MAX_K),
@@ -128,7 +135,10 @@ def mount_surface_routes(
         dependencies=dependencies,
         tags=["recommendations"],
         summary="Precomputed latest items",
-        responses={404: {"model": ErrorDetail, "description": "No latest snapshot"}},
+        responses={
+            **_SURFACE_AUTH,
+            404: {"model": ErrorDetail, "description": "No latest snapshot"},
+        },
     )
     def get_latest(
         limit: int | None = Query(default=None, gt=0, le=DEFAULT_SERVE_MAX_K),
@@ -150,7 +160,10 @@ def mount_surface_routes(
         dependencies=dependencies,
         tags=["recommendations"],
         summary="Items similar to a catalog item",
-        responses={404: {"model": ErrorDetail, "description": "No neighbors for this item"}},
+        responses={
+            **_SURFACE_AUTH,
+            404: {"model": ErrorDetail, "description": "No neighbors for this item"},
+        },
     )
     def get_similar(
         item_id: str,
@@ -180,6 +193,7 @@ def mount_surface_routes(
         tags=["recommendations"],
         summary="Recommend from an anonymous session via item neighbors",
         responses={
+            **_SURFACE_AUTH,
             400: {"model": ErrorDetail, "description": "Session has no item ids"},
             404: {"model": ErrorDetail, "description": "No session neighbors or popular fallback"},
         },

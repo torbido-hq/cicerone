@@ -68,6 +68,17 @@ def test_openapi_json_lists_serve_paths_and_schemas():
     assert catalog_events["requestBody"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/CatalogEventsBody"
     }
+    assert "/popular" in schema["paths"]
+    assert "/latest" in schema["paths"]
+    assert "/similar/{item_id}" in schema["paths"]
+    assert "/session/recommendations" in schema["paths"]
+    for path, method in (
+        ("/popular", "get"),
+        ("/latest", "get"),
+        ("/similar/{item_id}", "get"),
+        ("/session/recommendations", "post"),
+    ):
+        assert "401" in schema["paths"][path][method]["responses"]
 
     components = schema["components"]["schemas"]
     assert "ItemScore" in components

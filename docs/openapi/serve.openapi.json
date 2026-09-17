@@ -607,7 +607,7 @@
       "SessionRecommendResponse": {
         "properties": {
           "fallback": {
-            "description": "True when neighbors were empty and popular was used",
+            "description": "True when no usable neighbor remained and popular was used",
             "title": "Fallback",
             "type": "boolean"
           },
@@ -1953,6 +1953,16 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer token"
+          },
           "404": {
             "content": {
               "application/json": {
@@ -2060,6 +2070,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer token"
           },
           "404": {
             "content": {
@@ -2319,6 +2339,16 @@
             },
             "description": "Session has no item ids"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer token"
+          },
           "404": {
             "content": {
               "application/json": {
@@ -2435,6 +2465,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer token"
           },
           "404": {
             "content": {

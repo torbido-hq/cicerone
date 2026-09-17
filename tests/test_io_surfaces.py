@@ -151,6 +151,27 @@ def test_dataset_surfaces_reader_keeps_cache_when_parquet_is_unreadable(tmp_path
     assert list(reader.get_latest(1)["item_id"]) == ["i2"]
 
 
+def test_dataset_surfaces_reader_keeps_legacy_trio_when_later_files_diverge(tmp_path):
+    options = {"storage_backend": "local", "path": str(tmp_path)}
+    pd.DataFrame([{"item_id": "i1", "rank": 1, "score": 1.0, "source": "popular_fallback"}]).to_parquet(
+        tmp_path / "popular.parquet", index=False
+    )
+    pd.DataFrame([{"item_id": "i2", "rank": 1, "score": 2.0, "source": "latest"}]).to_parquet(
+        tmp_path / "latest.parquet", index=False
+    )
+    pd.DataFrame([{"item_id": "i1", "neighbor_id": "i2", "rank": 1, "score": 0.9}]).to_parquet(
+        tmp_path / "item_neighbors.parquet", index=False
+    )
+    reader = DatasetSurfacesReader(options)
+    assert list(reader.get_popular(1)["item_id"]) == ["i1"]
+    pd.DataFrame([{"item_id": "i9", "rank": 1, "score": 9.0, "source": "popular_fallback"}]).to_parquet(
+        tmp_path / "popular.parquet", index=False
+    )
+    reader.refresh()
+    assert list(reader.get_popular(1)["item_id"]) == ["i1"]
+    assert list(reader.get_latest(1)["item_id"]) == ["i2"]
+
+
 def test_dataset_surfaces_reader_ignores_partial_legacy_files(tmp_path):
     options = {"storage_backend": "local", "path": str(tmp_path)}
     pd.DataFrame([{"item_id": "i1", "rank": 1, "score": 1.0, "source": "popular_fallback"}]).to_parquet(

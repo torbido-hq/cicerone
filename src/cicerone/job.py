@@ -831,7 +831,10 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                     settings.top_k,
                     feature_config.blending.latest_date_columns,
                 ),
-                neighbors_from_events(events, settings.item_based_k_neighbors),
+                neighbors_from_events(
+                    events,
+                    max(settings.item_based_k_neighbors, settings.serve.default_k * 5),
+                ),
             )
         try:
             with recs_write() if callable(recs_write) else nullcontext():

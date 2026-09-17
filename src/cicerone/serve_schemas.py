@@ -214,4 +214,4 @@ class SessionRecommendRequest(BaseModel):
 
 
 class SessionRecommendResponse(SurfaceResponse):
-    fallback: bool = Field(description="True when neighbors were empty and popular was used")
+    fallback: bool = Field(description="True when no usable neighbor remained and popular was used")

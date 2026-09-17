@@ -168,6 +168,7 @@ class DatasetSurfacesReader(SurfacesReader):
             self._popular = popular
             self._latest = latest
             self._neighbors = neighbors
+            self._have_stamp = True
 
     def get_popular(self, k: int) -> pd.DataFrame:
         with self._lock:

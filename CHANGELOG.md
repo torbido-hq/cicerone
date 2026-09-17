@@ -23,6 +23,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Dataset surface refresh treats a complete unstamped trio as the cached baseline, so later unstamped file-by-file writes cannot mix snapshots.
+- Job neighbor snapshots keep at least `serve.default_k * 5` rows per item so session over-fetch still has candidates.
 - Dataset surface refresh applies a new popular/latest/neighbors snapshot only when all three files match the job stamp; a missing stamp or unreadable parquet keeps the last consistent trio.
 - Dataset `write_surfaces` rechecks the writer lease before each surface file.
 - Job builds popular/latest/neighbor frames only when the sink can write surfaces.
