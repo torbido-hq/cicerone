@@ -39,6 +39,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Search-weights docs say catalog writes apply to sinks that implement `ItemScoresWriter`.
 - Job sets `partial_outputs` only after a snapshot, score, or recommendation write succeeds.
 - Serve sorts and validates `item_scores` from readers that do not snapshot a cached id index.
+- In-memory SQLite `[input]` history is readable from serve worker threads, so default consumed hide still applies.
 
 ## [0.8.2] - 2026-09-15
 

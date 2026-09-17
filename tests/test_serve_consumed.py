@@ -3,9 +3,11 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 from test_serve import _FakeReader, _feature_config, _items_df, _recs_df, _settings
 
 from cicerone.events.consumed import ConsumedOverlay
+from cicerone.io.db_store import DatabaseInputSource
 from cicerone.serve import create_app
 from cicerone.serve.consumed import consumed_item_ids, drop_consumed, merge_fill
 
@@ -69,6 +71,26 @@ def test_recommendations_hide_consumed_from_history():
         _FakeReader(_recs_df(), _items_df()),
         feature_config=_feature_config(),
         history_reader=history,
+    )
+    body = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
+    assert [row["item_id"] for row in body["items"]] == ["i2"]
+
+
+def test_recommendations_hide_consumed_from_memory_sqlite_history():
+    source = DatabaseInputSource({"database_url": "sqlite+pysqlite://"})
+    with source._engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE events ("
+                "user_id TEXT, item_id TEXT, event_type TEXT, quantity INTEGER, occurred_at TEXT)"
+            )
+        )
+        conn.execute(text("INSERT INTO events VALUES ('u1', 'i1', 'view', 1, '2026-08-21')"))
+    app = create_app(
+        _settings(),
+        _FakeReader(_recs_df(), _items_df()),
+        feature_config=_feature_config(),
+        history_reader=source,
     )
     body = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
     assert [row["item_id"] for row in body["items"]] == ["i2"]
