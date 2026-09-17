@@ -53,6 +53,7 @@ from cicerone.job_output import (
 )
 from cicerone.locks import (
     LockBackend,
+    LockLostError,
     WriterLockBusyError,
     acquire_blocking,
     build_dataset_writer_lock,
@@ -545,13 +546,6 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                     ensure_publication_fence(sink, fence_check)
                     if write_job_manifest(sink, manifest):
                         manifest_written = True
-                    if publisher is not None:
-                        ensure_publication_fence(sink, fence_check)
-                        try:
-                            publisher.connect()
-                            publisher.publish(recommendations)
-                        except Exception:
-                            logger.exception("Publish failed after successful write")
                 except Exception as exc:
                     if outputs_written or manifest.get("artifact_written"):
                         manifest["partial_outputs"] = True
@@ -573,6 +567,15 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                                 "Failed to write manifest; original job error (if any) is preserved"
                             )
                     raise
+            if publisher is not None and manifest.get("status") == "success":
+                try:
+                    ensure_fence(fence_check)
+                    publisher.connect()
+                    publisher.publish(recommendations)
+                except LockLostError:
+                    raise
+                except Exception:
+                    logger.exception("Publish failed after successful write")
         except Exception:
             if outputs_written or manifest.get("artifact_written"):
                 manifest["partial_outputs"] = True

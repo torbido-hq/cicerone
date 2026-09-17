@@ -69,8 +69,8 @@ class FakeChannel:
         body: bytes,
         properties: object | None = None,
     ) -> None:
-        del properties
         self.broker.published.append((exchange, routing_key, body))
+        self.broker.publish_properties.append(properties)
         target = routing_key or next(iter(self.broker.queues), "default")
         self.broker.enqueue(target, body)
 
@@ -102,6 +102,11 @@ class FakeConnection:
         self.closed = True
 
 
+class FakeBasicProperties:
+    def __init__(self, **kwargs: Any) -> None:
+        self.__dict__.update(kwargs)
+
+
 class FakeURLParameters:
     def __init__(self, url: str) -> None:
         self.url = url
@@ -114,6 +119,7 @@ class FakeRabbitBroker:
     def __init__(self) -> None:
         self.queues: dict[str, list[FakeRabbitMessage]] = {}
         self.published: list[tuple[str, str, bytes]] = []
+        self.publish_properties: list[object | None] = []
         self.connect_error: Exception | None = None
         self.queue_declare_error: Exception | None = None
         self.channel_hang_seconds: float = 0.0
@@ -147,5 +153,6 @@ def install_fake_rabbitmq(
 
     module.URLParameters = _params  # type: ignore[attr-defined]
     module.BlockingConnection = _connection  # type: ignore[attr-defined]
+    module.BasicProperties = FakeBasicProperties  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "pika", module)
     return broker

@@ -37,6 +37,8 @@ class KafkaPublisher:
         self._producer: Any | None = None
 
     def connect(self) -> None:
+        if self._producer is not None:
+            return
         try:
             from confluent_kafka import Producer
         except ImportError as exc:
@@ -60,7 +62,7 @@ class KafkaPublisher:
             if err is not None:
                 errors.append(str(err))
 
-        for user_id, body in user_recommendation_messages(df):
+        for user_id, body, _message_id in user_recommendation_messages(df):
             producer.produce(self._topic, value=body, key=user_id.encode("utf-8"), on_delivery=on_delivery)
         remaining = producer.flush(self._timeout_seconds)
         if remaining:

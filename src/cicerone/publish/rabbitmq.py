@@ -55,6 +55,8 @@ class RabbitMQPublisher:
         self._connected_once = False
 
     def connect(self) -> None:
+        if self._channel is not None:
+            return
         try:
             import pika
         except ImportError as exc:
@@ -82,7 +84,7 @@ class RabbitMQPublisher:
         self._connected_once = True
 
     def publish(self, df: pd.DataFrame) -> None:
-        messages = [body for _, body in user_recommendation_messages(df)]
+        messages = user_recommendation_messages(df)
         if not messages:
             return
         sent = [0]
@@ -99,13 +101,24 @@ class RabbitMQPublisher:
             self._recover()
             self._publish_from(messages, sent)
 
-    def _publish_from(self, messages: Sequence[bytes], sent: list[int]) -> None:
+    def _publish_from(self, messages: Sequence[tuple[str, bytes, str]], sent: list[int]) -> None:
         channel = self._require()
         while sent[0] < len(messages):
+            _user_id, body, message_id = messages[sent[0]]
             channel.basic_publish(
-                exchange=self._exchange, routing_key=self._routing_key, body=messages[sent[0]]
+                exchange=self._exchange,
+                routing_key=self._routing_key,
+                body=body,
+                properties=self._properties(message_id),
             )
             sent[0] += 1
+
+    def _properties(self, message_id: str) -> Any:
+        try:
+            import pika
+        except ImportError:
+            return None
+        return pika.BasicProperties(message_id=message_id, content_type="application/json", delivery_mode=2)
 
     def _recover(self) -> None:
         self.close()

@@ -184,7 +184,7 @@ def start_events_runtime(
         fence_lost="events apply lock lost before write",
         fence_kind="apply",
     )
-    publisher = build_publisher(settings)
+    publisher = build_publisher(settings, connect=False)
     worker: EventWorker | None = None
     try:
         online = None

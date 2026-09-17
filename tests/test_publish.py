@@ -32,9 +32,11 @@ def _recs_frame() -> pd.DataFrame:
 
 def test_user_recommendation_messages_one_per_user():
     messages = user_recommendation_messages(_recs_frame())
-    assert [user_id for user_id, _body in messages] == ["u1", "u2"]
+    assert [user_id for user_id, _body, _message_id in messages] == ["u1", "u2"]
     first = json.loads(messages[0][1])
     assert first["user_id"] == "u1"
+    assert first["message_id"] == messages[0][2]
+    assert first["message_id"] == user_recommendation_messages(_recs_frame())[0][2]
     assert len(first["recommendations"]) == 2
     assert first["recommendations"][0]["item_id"] == "i1"
 
@@ -78,7 +80,7 @@ def test_user_recommendation_messages_encodes_optional_missing_as_null():
             }
         ]
     )
-    _user_id, body = user_recommendation_messages(frame)[0]
+    _user_id, body, _message_id = user_recommendation_messages(frame)[0]
     rec = json.loads(body)["recommendations"][0]
     assert rec["reasons"] is None
     assert rec["variant"] is None
@@ -98,7 +100,7 @@ def test_user_recommendation_messages_keeps_reasons_and_variant():
             }
         ]
     )
-    _user_id, body = user_recommendation_messages(frame)[0]
+    _user_id, body, _message_id = user_recommendation_messages(frame)[0]
     rec = json.loads(body)["recommendations"][0]
     assert rec["reasons"] == "popular"
     assert rec["variant"] == "control"
@@ -265,6 +267,9 @@ def test_updater_publishes_after_replace(tmp_path, feature_config: FeatureConfig
     captured: list[pd.DataFrame] = []
 
     class _Pub:
+        def connect(self) -> None:
+            return None
+
         def publish(self, df: pd.DataFrame) -> None:
             captured.append(df.copy())
 
@@ -400,6 +405,9 @@ def test_updater_publish_failure_does_not_unsucceed(tmp_path, feature_config: Fe
     )
 
     class _Boom:
+        def connect(self) -> None:
+            return None
+
         def publish(self, df: pd.DataFrame) -> None:
             raise RuntimeError("broker down")
 
@@ -444,6 +452,7 @@ def test_rabbitmq_publisher_recovers_after_channel_error(monkeypatch):
     channel.basic_publish = boom  # type: ignore[method-assign]
     publisher.publish(_recs_frame())
     assert [key for _exchange, key, _body in broker.published] == ["recs", "recs"]
+    assert all(getattr(item, "message_id", None) for item in broker.publish_properties)
     publisher.close()
 
 
