@@ -24,11 +24,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Publish sidecar failures do not un-succeed a recs write or livelock ingest,
   including a broker that is down at connect. Connect and publish run after
   the writer lock is released, and the apply/retrain fence is re-checked
-  after connect.
+  before and after connect.
 - RabbitMQ publish confirms deliveries, stamps a stable `message_id`, recovers
   the channel after a broker error, and retries only unconfirmed users.
 - Kafka publish fails when a delivery callback reports an error.
-- Fingerprint ingest acks apply only to generated event ids.
+- Fingerprint ingest acks apply only to generated event ids. Switching a live
+  buffer to generated-only rebuilds the fingerprint set.
 - Writer-lock busy nacks restore events the same way as other apply failures.
 - Event worker stop closes the source after a tick that never started a loop
   thread.

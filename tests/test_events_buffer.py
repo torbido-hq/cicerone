@@ -103,3 +103,16 @@ def test_buffer_fingerprint_dedupe_generated_only():
     result = buffer.extend([generated, explicit, generated_dup])
     assert [event.event_id for event in result.kept] == [generated.event_id, "explicit"]
     assert [event.event_id for event in result.duplicates] == [generated_dup.event_id]
+
+
+def test_buffer_rebuilds_fingerprints_when_switching_to_generated_only():
+    buffer = MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0)
+    explicit = normalize_event(event_payload(event_id="explicit", item_id="same"))
+    buffer.extend([explicit])
+    buffer.configure_fingerprint_dedupe(True, generated_only=True)
+    payload = event_payload(item_id="same")
+    payload.pop("event_id")
+    generated = normalize_event(payload)
+    result = buffer.extend([generated])
+    assert [event.event_id for event in result.kept] == [generated.event_id]
+    assert result.duplicates == ()

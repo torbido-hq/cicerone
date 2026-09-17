@@ -231,6 +231,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         if self._publisher is None:
             return
         try:
+            self._ensure_fence()
             self._publisher.connect()
             self._ensure_fence()
             self._publisher.publish(merged)

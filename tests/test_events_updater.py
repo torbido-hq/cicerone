@@ -1213,3 +1213,36 @@ def test_incremental_updater_raises_when_fence_lost_after_connect(tmp_path, feat
     assert published == []
     frame = load_recommendations_frame(settings.output)
     assert "i9" in set(frame[frame["user_id"] == "u1"]["item_id"].astype(str))
+
+
+def test_incremental_updater_raises_when_fence_lost_before_connect(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    connected = {"n": 0}
+
+    class _Pub:
+        def connect(self) -> None:
+            connected["n"] += 1
+            raise RuntimeError("broker down")
+
+        def publish(self, df: pd.DataFrame) -> None:
+            raise AssertionError("publish should not run")
+
+        def close(self) -> None:
+            return None
+
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        fence_check=lambda: False,
+        publisher=_Pub(),
+    )
+    with pytest.raises(LockLostError, match="events apply lock lost before write"):
+        updater._publish_sidecar(pd.DataFrame([{"user_id": "u1", "item_id": "i9", "rank": 1, "score": 1.0}]))
+    assert connected["n"] == 0

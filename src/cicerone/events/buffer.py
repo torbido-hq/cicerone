@@ -56,6 +56,9 @@ class MicroBatchBuffer:
     def configure_fingerprint_dedupe(self, enabled: bool, *, generated_only: bool = False) -> None:
         self._fingerprint_dedupe = enabled
         self._fingerprint_generated_only = generated_only
+        self._fingerprints = {
+            event_fingerprint(event) for event in self._events if self._tracks_fingerprint(event)
+        }
 
     def _tracks_fingerprint(self, event: NormalizedEvent) -> bool:
         if not self._fingerprint_dedupe:
