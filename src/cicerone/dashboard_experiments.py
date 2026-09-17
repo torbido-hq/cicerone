@@ -521,6 +521,7 @@ def _recipes(settings: Settings, feature_config: FeatureConfig | None) -> tuple[
                                 feature_config.eligibility,
                                 label=f"experiment_variants[{item['name']}].eligibility",
                             ),
+                            merge_item_availability=item.get("merge_item_availability", True) is True,
                         )
                     )
                 except ConfigError:

@@ -478,6 +478,49 @@ def test_experiment_context_recipes_from_manifest(tmp_path, monkeypatch):
     context = experiment_context(settings)
     assert context["error"] is None
     assert [recipe.name for recipe in context["recipes"]] == ["control", "treatment"]
+    assert context["recipes"][0].merge_item_availability is True
+
+
+def test_experiment_context_manifest_restores_eligibility_merge_flag(tmp_path, monkeypatch):
+    from cicerone.experiment.recipes import apply_recipe
+    from cicerone.feature_config import load_feature_config
+    from cicerone.policy import resolve_eligibility
+
+    settings = _settings(tmp_path, log_exposures=False)
+    monkeypatch.setattr("cicerone.dashboard_experiments.resolve_recipes", lambda *args, **kwargs: ())
+
+    class _Reader:
+        def read_latest(self):
+            return {
+                "experiment_variants": json.dumps(
+                    [
+                        {
+                            "name": "control",
+                            "traffic": 0.5,
+                            "models": ["popular"],
+                            "eligibility": [],
+                            "merge_item_availability": False,
+                        },
+                        {
+                            "name": "treatment",
+                            "traffic": 0.5,
+                            "models": ["collaborative"],
+                            "eligibility": [
+                                {"name": "published", "op": "item_true", "item_column": "published"}
+                            ],
+                            "merge_item_availability": False,
+                        },
+                    ]
+                )
+            }
+
+    monkeypatch.setattr("cicerone.dashboard_experiments.build_manifest_reader", lambda _output: _Reader())
+    context = experiment_context(settings)
+    features = load_feature_config(REPO_FEATURES)
+    control = apply_recipe(features, context["recipes"][0])
+    treatment = apply_recipe(features, context["recipes"][1])
+    assert resolve_eligibility(control) == []
+    assert [rule.name for rule in resolve_eligibility(treatment)] == ["published"]
 
 
 def test_experiment_context_manifest_policy_error_names_variant(tmp_path, monkeypatch):
