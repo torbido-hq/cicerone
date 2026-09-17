@@ -2182,3 +2182,33 @@ def test_select_thompson_recipes_uses_preloaded_track(tmp_path, monkeypatch):
     )
     assert calls["n"] == 0
     assert selected.recipes == recipes
+
+
+def test_load_shared_eval_inputs_drops_partial_preload(tmp_path, monkeypatch):
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+    from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
+    from cicerone.job import _load_shared_eval_inputs
+
+    settings = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="ranking-cvr",
+            allocation="thompson",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        track=TrackSettings(enabled=True),
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    recs = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}])
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("track down")
+
+    monkeypatch.setattr("cicerone.job.TrackStore.read_rows", _boom)
+    monkeypatch.setattr("cicerone.job.load_recommendations_frame", lambda _output: recs)
+    assert _load_shared_eval_inputs(settings) == (None, None)

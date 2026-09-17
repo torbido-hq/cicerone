@@ -36,6 +36,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - CTR is capped at one click per impression, matching CVR.
 - Track source annotation does not invent a variant from a later snapshot.
 - The job loads track and recommendations once for eval and Thompson.
+  A failed track or recs read is retried independently, not treated as empty.
 - Quality live and Experiments track reads use an attribution lookback.
 - Event worker stop closes the source after a tick that never started a loop
   thread.

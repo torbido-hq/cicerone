@@ -162,6 +162,8 @@ def _load_shared_eval_inputs(
     )
     if recs is not None and getattr(recs, "empty", False):
         recs = None
+    if track_rows is None or recs is None:
+        return None, None
     return track_rows, recs
 
 
