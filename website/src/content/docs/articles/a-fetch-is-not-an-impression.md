@@ -1,23 +1,25 @@
 ---
 title: A fetch is not an impression
-description: Cicerone records CTR from host-reported POST /track rows. GET /recommendations is a lookup. Quality matches a click to a prior (user, item) impression inside the window.
+description: GET /recommendations is a lookup. Quality CTR counts impression rows: host POST /track, or serve.log_impressions on returned GET items. A click matches a prior (user, item) inside the window.
 date: 2026-09-17
 excerpt: log_impressions counts every returned GET item. The Blade widget POSTs /track when it renders. A tap sent to /events is not a Quality click.
 authors:
   - nicholas
 ---
 
-You want click-through on the homepage widget. You turn on `serve.log_impressions` and have Laravel `Http::get` the serve API. Horizon warms the same URL for last week's buyers. A health check hits it too. You did not measure CTR. You measured fetches.
+You want click-through on the homepage widget. You turn on `serve.log_impressions` and have Laravel `Http::get` the serve API. Horizon warms the same URL for last week's buyers. A health check hits it too. You recorded returned GET items as impressions. Those requests do not prove a shopper saw a SKU.
 
 `GET /recommendations/{user_id}` **returns** a list. `SELECT … ORDER BY rank` **returns** a list. Prefetch returns the same list. A health check returns it again. None of those prove a shopper saw a SKU.
 
-Cicerone cannot see Blade. An impression is a `/track` row the host sends after it paints the widget. The host has to report it.
+Cicerone cannot see Blade. A host-reported impression is `POST /track` with `kind=impression` after the widget paints.
 
 ```text
-Blade renders the widget
+SELECT … ORDER BY rank
+  or GET /recommendations/{user_id}
         │
-        ├─ SELECT … ORDER BY rank
-        │     or GET /recommendations/{user_id}
+        ▼
+Blade paints $painted
+        │
         ▼
 POST /track   kind=impression, rank ≥ 1
         │
@@ -37,14 +39,14 @@ Four facts, then stop collapsing them.
 
 | What happened | What Cicerone has |
 | --- | --- |
-| Serve **returned** items on GET (after `limit` / `k` and `category`) | A lookup. Not an impression. |
+| Serve **returned** items on GET (after `limit` / `k` and `category`) | A lookup. Not a host-reported impression. |
 | Blade **rendered** those items on the homepage | Still nothing, until the host POSTs. |
 | Host `POST /track` with `kind` `impression` | An impression row. Quality counts it. The host claimed the SKU was shown. |
-| `serve.log_impressions = true` | Serve writes an impression row per **returned** GET item, on a background task, new `uuid4` every GET. |
+| `serve.log_impressions = true` | Serve writes an impression row per **returned** GET item, on a background task. New `uuid4` per item, every GET. Not render-aware. |
 
-`log_impressions` is a fetch logger. It does not wait for Blade. Prefetch is a row. A GET retry is a new row. Items the widget never painted are rows. The GET can already be **200** before the write runs.
+`log_impressions` does not wait for Blade. Prefetch, a GET retry, and items the widget never painted are still rows. The GET can already be **200** before the write runs. Leave the flag off unless you mean that.
 
-That is not “the shopper looked at rank 3.” Cicerone never sees the DOM. A host-reported impression is the host saying it showed the SKU. Leave the flag off unless you mean every returned GET item to become that row.
+That is not “the shopper looked at rank 3.” Cicerone never sees the DOM. A host-reported impression is the host saying it showed the SKU.
 
 The [nightly table](/articles/a-nightly-table-next-to-your-orders/) walkthrough already said `source` only tells you which list won. The [checkout](/articles/this-afternoons-checkout-can-move-the-row/) post already said impressions and clicks are `POST /track`, not `POST /events`.
 
@@ -52,12 +54,12 @@ The [nightly table](/articles/a-nightly-table-next-to-your-orders/) walkthrough 
 
 | Noun | Wire | What it is |
 | --- | --- | --- |
-| **Event** | `POST /events` | Training or incremental row. Route exists only when `[events]` is on and `kind = "webhook"`. Unknown `event_type`s never enter `[event_weights]`. Not a Quality click. |
-| **Impression** | `POST /track` `kind=impression` | Host-reported “this SKU was shown.” Rank is required and ≥ 1. Quality counts the row. |
-| **Click** | `POST /track` `kind=click` | Host-reported tap. CTR counts it only after a matching impression. |
-| **Conversion** | `[input]` + Quality | An `[input]` row (default type `purchase`) attributed to a prior impression (view-through) or a matched click (click-through). Still an input **event**. Conversion is the attribution result. |
+| **Event** | `POST /events` | Training or incremental row. Not a Quality click. |
+| **Impression** | `kind=impression` (host `/track` or `log_impressions`) | A stored `kind=impression` row (host POST or `log_impressions`). Rank ≥ 1. Quality counts it. |
+| **Click** | `POST /track` `kind=click` | Host-reported tap. CTR needs a matching impression. |
+| **Conversion** | `[input]` + Quality | An `[input]` row (default type `purchase`) attributed to a prior impression or a matched click. Attribution result. Still an input **event**. |
 
-A purchase on the Stripe path can still be an **event**. That is training or write-through. It is not an impression.
+`POST /events` exists only when `[events]` is on and `kind = "webhook"`. `event_type`s missing from `[event_weights]` are not trained. A purchase on the Stripe path can still be an **event**. That's a training event, not an impression.
 
 The `/track` JSON field is named `events`. Those objects are track rows.
 
@@ -73,15 +75,13 @@ enabled = true
 # min_impressions = 100
 ```
 
-The serve process that accepts `POST /track` needs that table. A SQL-join shop can skip GET. It cannot skip serve if it wants `/track`. Put `[track]` on the job if tonight's run should write `track_eval`. Put it on the dashboard config if you want Quality to compute live before any eval file exists.
+The serve process that accepts `POST /track` needs that table. A SQL-join shop can skip GET. It cannot skip serve if it wants `/track`. Put `[track]` on the job if tonight's run should write `track_eval`. Put it on the dashboard config to show Quality. Snapshot versus live is in Reference.
 
-`[track]` off means the route is not mounted. That is 404, not a silent drop. Storage, HA, and lock errors are in Reference.
+`[track]` off means the route is not mounted. That is 404, not a silent drop. HTTP, storage, `events.ha`, and lock errors are in Reference.
 
 ## Report the impression
 
 Laravel is the host here because the earlier posts already used Rails and Node. The [nightly](/articles/a-nightly-table-next-to-your-orders/) `SELECT` does not need to become a GET.
-
-Bearer only if `[serve].auth_token` is set. Same token as GET. One object, an array, or `{"events":[...]}`. Impression without `rank` is 400: `impression requires rank >= 1`. `occurred_at` needs a timezone (`Z` or an offset) or Unix epoch seconds.
 
 Stamp **one** render time. Build the list from the rows Blade will paint. Retry that same POST. Do not stamp again.
 
@@ -125,7 +125,7 @@ $occurredAt = now()->utc()->format('Y-m-d\TH:i:s\Z');
 postTrack(impressionRows((string) $user->id, $painted, $occurredAt));
 ```
 
-`$painted` is what Blade echoes, not the full `SELECT`. The same `$occurredAt` is on every row of this render, and inside every `event_id`. A retry of this array is the same ids. A later page view stamps a new `$occurredAt` and writes new rows. Omit the stamp from `event_id` and every repeat view of last night's list collapses to one impression.
+`$painted` is what Blade echoes, not the full `SELECT`. The same `$occurredAt` sits on every row of this render, and inside every `event_id`. A retry of this array is the same ids. A later page view stamps a new `$occurredAt` and writes new rows. Omit the stamp from that constructed `event_id` and every repeat view of last night's list collapses to one impression. Omit `event_id` entirely and Cicerone hashes `occurred_at` into a uuid5; a new stamp is a new row.
 
 `event_id` (or `idempotency_key`) is the idempotency id. Omit it and Cicerone hashes `kind`, `user_id`, `item_id`, `occurred_at`, `rank`, `variant`, `experiment_id`, `generated_at`. Rebuild `now()` on retry and you get a new row. A duplicate `event_id` comes back **202** with `accepted` 0 and `event_ids` `[]`. That is a successful retry, not a failed render. Report every non-2xx. The homepage still renders.
 
@@ -133,11 +133,22 @@ postTrack(impressionRows((string) $user->id, $painted, $occurredAt));
 
 Same path. Rank is optional. CTR still needs a prior impression of that `(user_id, item_id)`.
 
-Mint the id **once**, in the browser, at tap time. Reuse it if this Laravel route is retried. A second tap mints a second id.
+Mint the id **once**, in the browser, at tap time. POST it to Laravel. Do not POST `/track` from the browser. Mint `eventId` before `fetch`. Reuse it on retry. A second tap mints again.
+
+| What | `event_id` |
+| --- | --- |
+| One tap | One `crypto.randomUUID()` |
+| Retry of that request | The same id |
+| A second tap | A new id |
 
 ```js
 const eventId = crypto.randomUUID();
-// POST { item_id, user_id, event_id: eventId } — send the same eventId on retry
+await fetch('/cicerone/click', {
+  method: 'POST',
+  headers: {'Content-Type': 'application/json'},
+  body: JSON.stringify({ item_id, user_id, event_id: eventId }),
+});
+// retry this request with the same eventId
 ```
 
 ```php
@@ -166,8 +177,6 @@ Do not `POST /events` with `event_type = "click"` unless you mean a training **e
 
 ## How Quality counts
 
-Dashboard Quality reads `track_eval` when the last successful job with `[track]` wrote it, and labels that block "As of" the eval `generated_at`. POSTs after that job wait for the next snapshot. Live Quality does not run once that file exists. Before any eval file exists, a dashboard config with `[track]` computes live from the store ("Live from the track store."). Empty copy is "No impressions yet."
-
 CTR is **matched click rows / impression rows**.
 
 - A click matches the **latest earlier** impression of the same `(user_id, item_id)`.
@@ -176,7 +185,7 @@ CTR is **matched click rows / impression rows**.
 - A click with no such impression is stored. It does not enter the numerator.
 - Two matched clicks on one impression count as two. CTR is not capped at 1.
 
-A **conversion** is an `[input]` row Quality attributes to a prior impression (view-through) or a matched click (click-through). Conversions **are** capped at impressions. **CVR (click)** and **CVR (view)** are those two attribution paths, not a third noun.
+A **conversion** is an `[input]` row Quality attributes to a prior impression (view-through) or a matched click (click-through). Click-through joins the conversion to that matched click, then applies the same window from the click. Conversions **are** capped at impressions. **CVR (click)** and **CVR (view)** are those two attribution paths, not a third noun. Both use impression rows as the denominator.
 
 Quality CTR is a matched-click ratio inside a wall-clock window. It is not causal lift. `[job.eval]` replay is HitRate and friends on last night's lists against later `[input]` events. That is not CTR.
 
@@ -188,7 +197,7 @@ Quality CTR is a matched-click ratio inside a wall-clock window. It is not causa
 
 ## After a week
 
-Horizon still prefetches. Those GETs are still fetches. Blade still POSTs `/track` when the widget is on the page. A tap still POSTs a **click**. Quality still matches `(user_id, item_id)` inside the window.
+Horizon still prefetches. Blade still POSTs `/track` when the widget is on the page. A tap still POSTs a **click**. Quality still matches `(user_id, item_id)` inside the window.
 
 A fetch is not an impression. The POST from the widget is.
 
@@ -197,13 +206,13 @@ A fetch is not an impression. The POST from the widget is.
 
 The knobs and failure modes if you are wiring this up. The product page is [evaluation](/evaluation/).
 
-**Normalize.** Required: `kind`, `user_id`, `item_id`, `occurred_at`. `kind` is `impression` or `click` (case folded). Impression requires `rank` ≥ 1. Click rank is optional. `occurred_at` is ISO-8601 with timezone or Unix epoch seconds. `event_id` or `idempotency_key` is optional; else a uuid5 of those fields plus `variant` / `experiment_id` / `generated_at`.
+**Normalize.** Required: `kind`, `user_id`, `item_id`, `occurred_at`. `kind` is `impression` or `click` (case folded). Impression requires `rank` ≥ 1. Click rank is optional. `occurred_at` is ISO-8601 with timezone (`Z` or an offset) or Unix epoch seconds. `event_id` or `idempotency_key` is optional; else a uuid5 of those fields plus `variant` / `experiment_id` / `generated_at`. Impression without `rank` is 400: `impression requires rank >= 1`.
 
-**HTTP.** 202 writes new rows (`accepted` is that count). Duplicate `event_id` → `accepted` 0. 400 invalid payload. 401 missing or bad Bearer. 413 body too large (1 MiB default, or `events.options.max_body_bytes`). 503 dataset writer lock (`Writer lock is busy` / `Writer lock was lost`). `[track]` off → 404.
+**HTTP.** Bearer only if `[serve].auth_token` is set. Same token as GET. Body is one object, an array, or `{"events":[...]}`. 202 writes new rows (`accepted` is that count). Duplicate `event_id` → `accepted` 0. 400 invalid payload. 401 missing or bad Bearer. 413 body too large (1 MiB default, or `events.options.max_body_bytes`). 503 dataset writer lock (`Writer lock is busy` / `Writer lock was lost`). `[track]` off → 404. The example `postTrack` only reports a non-2xx; the Laravel click action still returns 204.
 
 **Storage.** Next to `[output]`: local `track.jsonl`, or `recommendation_track` on db. Object-store JSONL append is refused (`track.enabled requires output kind = "db" or a local dataset path; object-store JSONL append is not atomic`). `events.ha = true` requires db (`track.enabled with events.ha requires output kind = "db"`).
 
-**Quality.** CTR = matched click rows / impression rows (uncapped). Match is latest prior impression, same `(user_id, item_id)`, 0 ≤ Δt ≤ window. Rank is not in the join. `source` / `variant` breakdowns use columns on the impression, filled from the POST when present or joined from recommendation rows. CVR click / CVR view cap conversions at impressions. `min_impressions` default 100 gates experiment Promote for `ctr` / `conversion`; it does not hide Quality. `[job.eval]` is replay, not CTR. Experiments CIs are a mixture bound; that page is [The same customer keeps the same list](/articles/the-same-customer-keeps-the-same-list/).
+**Quality.** CTR = matched click rows / impression rows (uncapped). Match is latest prior impression, same `(user_id, item_id)`, 0 ≤ Δt ≤ window. Rank is not in the join. `source` / `variant` breakdowns use columns on the impression, filled from the POST when present or joined from recommendation rows. CVR click / CVR view cap conversions at impressions; both denominators are impressions. `min_impressions` default 100 gates experiment Promote for `ctr` / `conversion`; it does not hide Quality. `[job.eval]` is replay, not CTR. Experiments CIs are a mixture bound; that page is [The same customer keeps the same list](/articles/the-same-customer-keeps-the-same-list/). Dashboard `[track]` off hides a track-only snapshot when `served_eval` is missing. Default conversion type is `purchase` when `conversion_event_types` is empty and `primary_metric` is `weighted`, `ctr`, or `conversion`; otherwise it is `primary_metric`.
 
 **Common mistakes.**
 
@@ -212,14 +221,15 @@ The knobs and failure modes if you are wiring this up. The product page is [eval
 | `POST /track` from Blade | 202. New `event_id`s are written. Duplicates are skipped. |
 | `POST /events` with a tap | Only if the webhook is mounted: ingested as an **event**. Quality does not see a **click**. Otherwise 404. |
 | `GET /recommendations` | Lookup. No impression row unless `log_impressions` is on. |
-| `log_impressions = true` | One impression row per returned item, background task, new `uuid4` every GET. 200 does not mean the write landed. |
+| `log_impressions = true` | One impression row per returned item, background task, new `uuid4` per item every GET. 200 does not mean the write landed. |
 | Impression, no `rank` | 400 `impression requires rank >= 1`. |
 | Click, no prior impression | Row stored. That tap is not in the CTR numerator. |
-| Click before the impression | Delta < 0. No match. |
+| Click before that impression | No match to that later row. An older impression in the window can still match. |
 | Click 25h later | Outside the default window. No match. |
-| Job with `[track]` writes `track_eval` | Quality is "As of" that stamp. Later POSTs wait. Live does not run. |
-| No eval file, dashboard `[track]` on | Quality computes live. |
-| `[track]` off | `POST /track` is 404. |
+| Job with `[track]` writes a `track_eval` object | Live does not run. "As of" is the previous recommendations `generated_at`. Later POSTs wait. |
+| No `track_eval` object, dashboard `[track]` on | Quality computes live. |
+| Dashboard `[track]` off, no `served_eval` | "No impressions yet." even if a snapshot file exists. |
+| `[track]` off on serve | `POST /track` is 404. |
 
 **Failures.**
 
@@ -229,8 +239,8 @@ The knobs and failure modes if you are wiring this up. The product page is [eval
 | Track on S3/object store | `ConfigError`: append is not atomic. |
 | `events.ha` + local dataset | `ConfigError`: `track.enabled with events.ha requires output kind = "db"`. |
 | Naive `now()` and no `event_id` | Every retry is a new row. |
-| `event_id` without a render stamp | Repeat views of the same list share one impression. |
-| `log_impressions` GET retry | New `uuid4`. New row. |
-| Stored `track_eval` after a job | Live Quality does not run. Wait for the next job. |
+| Constructed `event_id` without a render stamp | Repeat views of the same list share one impression. |
+| `log_impressions` GET retry | New `uuid4` per returned item. New rows. |
+| Stored `track_eval` object after a job | Live Quality does not run. Wait for the next job. |
 
 </details>
