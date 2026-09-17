@@ -63,6 +63,7 @@ def test_openapi_json_lists_serve_paths_and_schemas():
     assert "400" in catalog_events["responses"]
     assert "401" in catalog_events["responses"]
     assert "413" in catalog_events["responses"]
+    assert "422" in catalog_events["responses"]
     assert "501" in catalog_events["responses"]
     assert catalog_events["requestBody"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/CatalogEventsBody"

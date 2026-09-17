@@ -25,6 +25,7 @@ from cicerone.serve_schemas import (
     CatalogWriteResponse,
     ErrorDetail,
     InteractionEvent,
+    ValidationErrorDetail,
 )
 
 logger = logging.getLogger(__name__)
@@ -82,6 +83,7 @@ _CATALOG_READ: dict[int | str, dict[str, Any]] = {
 _CATALOG_EVENTS: dict[int | str, dict[str, Any]] = {
     **_CATALOG_WRITE,
     413: {"model": ErrorDetail},
+    422: {"model": ValidationErrorDetail},
 }
 
 
@@ -229,9 +231,7 @@ def mount_catalog_routes(
         except (ValueError, EventNormalizeError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if overlay is not None:
-            for user_id, item_id in discard:
-                overlay.discard(user_id, item_id)
-            overlay.add_many(add)
+            overlay.replace_pairs(discard, add)
         return CatalogWriteResponse(accepted=accepted)
 
     @app.get(

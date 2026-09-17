@@ -160,14 +160,19 @@ class DatabaseCatalogStore:
         columns = self._columns(conn, self._events) or []
         if USER_COLUMN not in columns or ITEM_COLUMN not in columns:
             return set()
-        found: set[tuple[str, str]] = set()
+        wanted = set(pairs)
+        users = list({user_id for user_id, _ in wanted})
         sql = text(
-            f'SELECT 1 FROM "{self._events}" WHERE "{USER_COLUMN}" = :user_id '
-            f'AND "{ITEM_COLUMN}" = :item_id LIMIT 1'
-        )
-        for user_id, item_id in pairs:
-            if conn.execute(sql, {"user_id": user_id, "item_id": item_id}).first():
-                found.add((user_id, item_id))
+            f'SELECT "{USER_COLUMN}", "{ITEM_COLUMN}" FROM "{self._events}" WHERE "{USER_COLUMN}" IN :users'
+        ).bindparams(bindparam("users", expanding=True))
+        frame = pd.read_sql(sql, conn, params={"users": users})
+        if frame.empty:
+            return set()
+        found: set[tuple[str, str]] = set()
+        for row in frame.to_dict(orient="records"):
+            pair = (str(row[USER_COLUMN]), str(row[ITEM_COLUMN]))
+            if pair in wanted:
+                found.add(pair)
         return found
 
     def _upsert_frame(self, conn, table: str, key: str, frame: pd.DataFrame) -> None:

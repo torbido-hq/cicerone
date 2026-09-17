@@ -84,7 +84,7 @@ class DatasetCatalogStore:
                     existing = matched.iloc[0].to_dict()
                 frame = frame.loc[frame[key].astype(str) != str(value)]
             incoming = pd.DataFrame([{**existing, **row}])
-            merged = pd.concat([frame, incoming], ignore_index=True) if not frame.empty else incoming
+            merged = incoming if len(frame.columns) == 0 else pd.concat([frame, incoming], ignore_index=True)
             self._write(filename, merged)
 
     def upsert_user(self, row: dict[str, Any]) -> None:

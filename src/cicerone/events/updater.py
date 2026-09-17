@@ -177,7 +177,6 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
                     "Incremental update skipped write: %d event(s) had no ranking signal",
                     len(events),
                 )
-                self._note_consumed(events)
                 self._persist_catalog(events)
                 return len(events)
             if not self._ensure_write_allowed():
@@ -229,7 +228,6 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
                 len(replace_ids),
                 len(events),
             )
-            self._note_consumed(events)
             self._persist_catalog(events)
             return len(events)
 
@@ -296,13 +294,23 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         merged = pd.concat(frames, ignore_index=True)
         return merged[recommendation_output_columns(merged)], replace_ids
 
-    def _note_consumed(self, events: Sequence[NormalizedEvent]) -> None:
+    def _note_consumed(
+        self,
+        events: Sequence[NormalizedEvent],
+        *,
+        discard: list[tuple[str, str]] | None = None,
+        add: list[tuple[str, str]] | None = None,
+    ) -> None:
         if self._consumed is None:
+            return
+        if discard is not None:
+            self._consumed.replace_pairs(discard, add or [])
             return
         self._consumed.add_many([(event.user_id, event.item_id) for event in events])
 
     def _persist_catalog(self, events: Sequence[NormalizedEvent]) -> None:
         if self._catalog is None:
+            self._note_consumed(events)
             return
         rows = [
             {
@@ -316,9 +324,15 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             for event in events
         ]
         try:
+            replace = getattr(self._catalog, "replace_events", None)
+            if callable(replace):
+                _, discard, add = replace(rows)
+                self._note_consumed(events, discard=discard, add=add)
+                return
             self._catalog.upsert_events(rows)
         except Exception:
             logger.exception("Failed to persist incremental events to the catalog")
+        self._note_consumed(events)
 
     def _commit_online(self) -> None:
         if self._online is None:

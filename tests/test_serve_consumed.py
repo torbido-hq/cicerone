@@ -240,3 +240,10 @@ def test_consumed_item_ids_missing_history_is_quiet():
     overlay = ConsumedOverlay()
     overlay.add("u1", "i2")
     assert consumed_item_ids("u1", history=_Missing(), overlay=overlay, lookback=10) == {"i2"}
+
+
+def test_consumed_overlay_replace_pairs_is_atomic():
+    overlay = ConsumedOverlay()
+    overlay.add("u1", "i1")
+    overlay.replace_pairs([("u1", "i1")], [("u1", "i2")])
+    assert overlay.item_ids("u1") == {"i2"}

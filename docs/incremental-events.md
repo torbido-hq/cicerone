@@ -12,9 +12,10 @@ This is not live ranking on `GET /recommendations`. Applied events are
 recorded for serve-time hide (`[serve].exclude_consumed`) in a process-local
 overlay (capped at `[serve].consumed_lookback` items per user). Hide across
 replicas or after restart uses `[input]` history — point that store at the
-live events. When `[input]` is dataset or db, successful applies also attempt
-to persist those events to the catalog on a best-effort basis; catalog-write
-failures are logged and do not fail the apply. LightFM / item-KNN /
+live events. When `[input]` is a writable dataset or table-backed db (not
+query-backed), successful applies also attempt to persist those events to the
+catalog on a best-effort basis; catalog-write failures are logged and do not
+fail the apply. LightFM / item-KNN /
 content-fallback rows wait for the next `job.run()` **unless**
 `[events.online]` is enabled: the serve events worker then continues LightFM
 (`fit_partial`) on IDs already in the last model artifact and rewrites

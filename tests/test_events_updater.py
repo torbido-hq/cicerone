@@ -8,11 +8,13 @@ from support.events import event_payload
 
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import IOSettings, make_settings
+from cicerone.events.consumed import ConsumedOverlay
 from cicerone.events.normalize import normalize_event
 from cicerone.events.online_result import OnlineRefreshResult, empty_online_rows
 from cicerone.events.store import load_recommendations_for_users, load_recommendations_frame
 from cicerone.events.updater import INCREMENTAL_SOURCE, IncrementalUpdater
 from cicerone.feature_config import FeatureConfig
+from cicerone.io.dataset_catalog import DatasetCatalogStore
 from cicerone.io.factory import build_output_sink
 from cicerone.io.recommendation_reader import RECOMMENDATION_COLUMNS
 from cicerone.locks import LockLostError
@@ -1222,12 +1224,20 @@ class _RecordingCatalog:
     def __init__(self) -> None:
         self.rows: list[dict] = []
 
-    def upsert_events(self, rows: list[dict]) -> int:
+    def replace_events(self, rows: list[dict]) -> tuple[int, list[tuple[str, str]], list[tuple[str, str]]]:
         self.rows.extend(rows)
-        return len(rows)
+        add = [(str(row["user_id"]), str(row["item_id"])) for row in rows]
+        return len(rows), [], add
+
+    def upsert_events(self, rows: list[dict]) -> int:
+        accepted, _, _ = self.replace_events(rows)
+        return accepted
 
 
 class _FailingCatalog:
+    def replace_events(self, rows: list[dict]) -> tuple[int, list[tuple[str, str]], list[tuple[str, str]]]:
+        raise RuntimeError("catalog write failed")
+
     def upsert_events(self, rows: list[dict]) -> int:
         raise RuntimeError("catalog write failed")
 
@@ -1335,3 +1345,32 @@ def test_incremental_updater_catalog_failure_does_not_block(tmp_path, feature_co
     assert updater.apply(events) == 1
     frame = load_recommendations_frame(settings.output)
     assert "i9" in set(frame[frame["user_id"] == "u1"]["item_id"].astype(str))
+
+
+def test_incremental_updater_reconciles_overlay_when_event_id_moves(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    catalog_dir = tmp_path / "in"
+    out.mkdir()
+    catalog_dir.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    overlay = ConsumedOverlay()
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        consumed=overlay,
+        catalog=DatasetCatalogStore({"storage_backend": "local", "path": str(catalog_dir)}),
+    )
+    first = [normalize_event(event_payload(user_id="u1", item_id="i1", event_id="e1"))]
+    assert updater.apply(first) == 1
+    assert overlay.item_ids("u1") == {"i1"}
+    moved = [normalize_event(event_payload(user_id="u1", item_id="i2", event_id="e1"))]
+    assert updater.apply(moved) == 1
+    assert overlay.item_ids("u1") == {"i2"}

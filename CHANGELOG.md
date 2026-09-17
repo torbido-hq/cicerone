@@ -47,7 +47,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Dataset `DELETE /users/{id}` ignores a nonempty `users.parquet` that has no `user_id` column instead of raising.
 - Dataset catalog PUTs merge into the existing user/item row instead of dropping omitted columns.
 - Catalog event upserts reconcile the consumed overlay from remaining catalog rows in one write.
-- `POST /catalog/events` uses the shared byte-limited JSON reader and documents 401/413.
+- `POST /catalog/events` uses the shared byte-limited JSON reader and documents 401/413/422.
+- Incremental catalog persist uses `replace_events` so a reused event id updates the consumed overlay.
 
 ## [0.8.2] - 2026-09-15
 

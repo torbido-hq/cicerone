@@ -135,6 +135,15 @@ def test_dataset_catalog_put_merges_existing_user_columns(tmp_path):
     assert user["labels"] == {"vip": True}
 
 
+def test_dataset_catalog_put_keeps_empty_schema_columns(tmp_path):
+    store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
+    pd.DataFrame(columns=["user_id", "comment", "labels"]).to_parquet(tmp_path / "users.parquet", index=False)
+    store.upsert_user({"user_id": "u1", "comment": "alice"})
+    user = store.get_user("u1")
+    assert user is not None
+    assert "labels" in user
+
+
 def test_dataset_catalog_put_merges_existing_item_columns(tmp_path):
     store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
     store.upsert_item({"item_id": "i1", "comment": "sku", "labels": {"color": "red"}})

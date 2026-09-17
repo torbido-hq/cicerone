@@ -34,10 +34,19 @@ class ConsumedOverlay:
             self._remember(str(user_id), str(item_id))
 
     def add_many(self, pairs: list[tuple[str, str]]) -> None:
-        if not pairs:
+        self.replace_pairs([], pairs)
+
+    def replace_pairs(
+        self,
+        discard: list[tuple[str, str]],
+        add: list[tuple[str, str]],
+    ) -> None:
+        if not discard and not add:
             return
         with self._lock:
-            for user_id, item_id in pairs:
+            for user_id, item_id in discard:
+                self._forget(str(user_id), str(item_id))
+            for user_id, item_id in add:
                 self._remember(str(user_id), str(item_id))
 
     def item_ids(self, user_id: str) -> set[str]:
@@ -47,16 +56,18 @@ class ConsumedOverlay:
 
     def discard(self, user_id: str, item_id: str | None = None) -> None:
         with self._lock:
-            key = str(user_id)
-            if item_id is None:
-                self._by_user.pop(key, None)
-                return
-            items = self._by_user.get(key)
-            if items is None:
-                return
-            items.pop(str(item_id), None)
-            if not items:
-                self._by_user.pop(key, None)
+            self._forget(str(user_id), None if item_id is None else str(item_id))
+
+    def _forget(self, user_id: str, item_id: str | None) -> None:
+        if item_id is None:
+            self._by_user.pop(user_id, None)
+            return
+        items = self._by_user.get(user_id)
+        if items is None:
+            return
+        items.pop(item_id, None)
+        if not items:
+            self._by_user.pop(user_id, None)
 
     def _remember(self, user_id: str, item_id: str) -> None:
         items = self._by_user.get(user_id)

@@ -77,7 +77,7 @@ DEFAULT_HISTORY_TABLE = "recommendation_history"
 DEFAULT_ITEM_SCORES_TABLE = "item_scores"
 
 
-_MEMORY_ENGINES: dict[int, Engine] = {}
+_MEMORY_ENGINES: dict[int, tuple[dict[str, Any], Engine]] = {}
 _MEMORY_ENGINES_LOCK = threading.Lock()
 
 
@@ -100,9 +100,11 @@ def create_db_engine(database_url: str, *, options: dict[str, Any] | None = None
         with _MEMORY_ENGINES_LOCK:
             cached = _MEMORY_ENGINES.get(key)
             if cached is not None:
-                return cached
+                cached_options, engine = cached
+                if cached_options is options:
+                    return engine
             engine = _new_db_engine(database_url)
-            _MEMORY_ENGINES[key] = engine
+            _MEMORY_ENGINES[key] = (options, engine)
             return engine
     return _new_db_engine(database_url)
 
