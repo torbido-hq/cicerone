@@ -10,8 +10,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Recipe `eligibility = false` / subset / replace skips
   `item_availability_filters` sugar.
-- Job optional-eval and sidecar catches log exception type and message.
-  Lock-loss errors are not treated as missing previous-run data.
+- Job optional-eval and sidecar catches log exception type and message,
+  and only swallow store/eval I/O errors. Lock-loss and unexpected
+  `RuntimeError`s fail the run.
 - DB serve keeps `AND variant=` when table inspect fails, and prefers the leftover
   fallback arm in the same `LIMIT` query when no arm is assigned.
 - Thompson serve hashes the sticky pair or names on disk, not the full config

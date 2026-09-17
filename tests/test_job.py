@@ -536,19 +536,19 @@ def test_job_run_swallows_eval_persistence_errors(tmp_path, monkeypatch, caplog)
     monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
     monkeypatch.setattr(
         "cicerone.track.store.TrackStore.write_eval",
-        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("eval")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("eval")),
     )
     monkeypatch.setattr(
         "cicerone.track.store.TrackStore.append_history",
-        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("history")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("history")),
     )
     with caplog.at_level("ERROR", logger="cicerone.job_eval"):
         job.run()
     assert (output_dir / "recommendations.parquet").exists()
     messages = [record.getMessage() for record in caplog.records]
-    assert any("Failed to write track eval (RuntimeError: eval)" in message for message in messages)
+    assert any("Failed to write track eval (OSError: eval)" in message for message in messages)
     assert any(
-        "Failed to append recommendation history (RuntimeError: history)" in message for message in messages
+        "Failed to append recommendation history (OSError: history)" in message for message in messages
     )
 
 
@@ -571,7 +571,7 @@ def test_read_input_swallows_manifest_reader_construction(monkeypatch):
 
     monkeypatch.setattr(
         "cicerone.job_eval.build_manifest_reader",
-        lambda _output: (_ for _ in ()).throw(RuntimeError("bad url")),
+        lambda _output: (_ for _ in ()).throw(ValueError("bad url")),
     )
     events, users, items, manifest = job._read_input(
         _Source(),
@@ -587,14 +587,25 @@ def test_try_load_logs_exception_type_and_message(caplog):
     from cicerone.job_eval import try_load
 
     def _boom() -> None:
-        raise RuntimeError("recs")
+        raise OSError("recs")
 
     with caplog.at_level("ERROR", logger="cicerone.job_eval"):
         assert try_load("load previous recommendations for eval", _boom, None) is None
     assert any(
-        "Failed to load previous recommendations for eval (RuntimeError: recs)" in record.getMessage()
+        "Failed to load previous recommendations for eval (OSError: recs)" in record.getMessage()
         for record in caplog.records
     )
+
+
+def test_try_load_does_not_swallow_unexpected_errors():
+    from cicerone.job_eval import try_load
+
+    with pytest.raises(RuntimeError, match="bug"):
+        try_load(
+            "load previous recommendations for eval",
+            lambda: (_ for _ in ()).throw(RuntimeError("bug")),
+            None,
+        )
 
 
 def test_try_load_reraises_lock_errors():
@@ -1807,7 +1818,7 @@ def test_select_thompson_recipes_fail_closed_paths(tmp_path, monkeypatch):
 
     monkeypatch.setattr(
         "cicerone.job.ExperimentStore.read_state",
-        lambda self: (_ for _ in ()).throw(RuntimeError("state")),
+        lambda self: (_ for _ in ()).throw(OSError("state")),
     )
     assert _select_thompson_recipes(settings, recipes, pd.DataFrame()).recipes == recipes
 
@@ -1827,16 +1838,22 @@ def test_select_thompson_recipes_fail_closed_paths(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         "cicerone.job.TrackStore.read_rows",
-        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("track")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("track")),
     )
     assert _select_thompson_recipes(settings, recipes, pd.DataFrame()).recipes == recipes
 
     monkeypatch.setattr("cicerone.job.TrackStore.read_rows", lambda *args, **kwargs: [])
     monkeypatch.setattr(
         "cicerone.job.allocate_thompson",
-        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("mab")),
+        lambda **kwargs: (_ for _ in ()).throw(ValueError("mab")),
     )
     assert _select_thompson_recipes(settings, recipes, pd.DataFrame()).recipes == recipes
+    monkeypatch.setattr(
+        "cicerone.job.allocate_thompson",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("mab bug")),
+    )
+    with pytest.raises(RuntimeError, match="mab bug"):
+        _select_thompson_recipes(settings, recipes, pd.DataFrame())
 
 
 def test_select_thompson_recipes_fail_closed_on_state_read_does_not_clear_promote(tmp_path, monkeypatch):
@@ -1870,7 +1887,7 @@ def test_select_thompson_recipes_fail_closed_on_state_read_does_not_clear_promot
     )
     monkeypatch.setattr(
         "cicerone.job.ExperimentStore.read_state",
-        lambda self: (_ for _ in ()).throw(RuntimeError("state")),
+        lambda self: (_ for _ in ()).throw(OSError("state")),
     )
     monkeypatch.setattr(
         "cicerone.job.TrackStore.read_rows",
@@ -1947,7 +1964,7 @@ def test_select_thompson_recipes_survives_recs_and_catalog_errors(tmp_path, monk
     monkeypatch.setattr("cicerone.job.allocate_thompson", _allocate)
     monkeypatch.setattr(
         "cicerone.job.load_recommendations_frame",
-        lambda output: (_ for _ in ()).throw(RuntimeError("recs gone")),
+        lambda output: (_ for _ in ()).throw(OSError("recs gone")),
     )
     selected = _select_thompson_recipes(settings, recipes, pd.DataFrame())
     assert [recipe.name for recipe in selected.recipes] == ["control", "treatment"]
@@ -1964,7 +1981,7 @@ def test_select_thompson_recipes_survives_recs_and_catalog_errors(tmp_path, monk
     monkeypatch.setattr("cicerone.job.load_recommendations_frame", lambda output: recs)
     monkeypatch.setattr(
         "cicerone.job.load_items_catalog_size",
-        lambda output: (_ for _ in ()).throw(RuntimeError("catalog gone")),
+        lambda output: (_ for _ in ()).throw(OSError("catalog gone")),
     )
     again = _select_thompson_recipes(settings, recipes, pd.DataFrame())
     assert [recipe.name for recipe in again.recipes] == ["control", "treatment"]

@@ -498,18 +498,18 @@ def test_score_previous_run_swallows_errors(tmp_path, monkeypatch, caplog) -> No
     settings = make_settings(track={"enabled": True}, eval={"enabled": True}, output=output)
     monkeypatch.setattr(
         "cicerone.job_eval.load_recommendations_frame",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("recs")),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("recs")),
     )
     monkeypatch.setattr(
         "cicerone.job_eval.evaluate_tracking",
-        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("track")),
+        lambda **kwargs: (_ for _ in ()).throw(ValueError("track")),
     )
     with caplog.at_level("ERROR", logger="cicerone.job_eval"):
         track, served = _score_previous_run(settings, pd.DataFrame(), {"generated_at": "t"})
     assert track is None
     assert served is None
     assert any(
-        "Failed to load previous recommendations for eval (RuntimeError: recs)" in record.getMessage()
+        "Failed to load previous recommendations for eval (OSError: recs)" in record.getMessage()
         for record in caplog.records
     )
 
@@ -737,14 +737,14 @@ def test_score_previous_run_history_and_served_errors(tmp_path, monkeypatch) -> 
     )
     monkeypatch.setattr(
         "cicerone.track.store.TrackStore.read_history",
-        lambda self, **_kwargs: (_ for _ in ()).throw(RuntimeError("history")),
+        lambda self, **_kwargs: (_ for _ in ()).throw(OSError("history")),
     )
     track, served = _score_previous_run(settings, events, {"generated_at": "2026-08-28T03:00:00+00:00"})
     assert track is not None
     assert served is not None
     monkeypatch.setattr(
         "cicerone.job_eval.evaluate_served",
-        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("served")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("served")),
     )
     track, served = _score_previous_run(settings, events, {"generated_at": "2026-08-28T03:00:00+00:00"})
     assert track is not None

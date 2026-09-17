@@ -8,6 +8,9 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import pandas as pd
+from botocore.exceptions import BotoCoreError
+from pyarrow.lib import ArrowInvalid
+from sqlalchemy.exc import SQLAlchemyError
 
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import IOSettings, Settings
@@ -27,6 +30,7 @@ from cicerone.experiment.store import ExperimentStore
 from cicerone.io.base import InputSource
 from cicerone.io.factory import build_manifest_reader
 from cicerone.io.recommendation_schema import USER_COLUMN, VARIANT_COLUMN, pick_fallback_variant
+from cicerone.io.replace_users import RecommendationSchemaError
 from cicerone.locks import LockLostError, WriterLockBusyError, held_writer_lock
 from cicerone.track.store import TrackStore
 from cicerone.track.store_common import _utc_stamp
@@ -35,17 +39,43 @@ logger = logging.getLogger(__name__)
 
 _JOB_CONTROL_ERRORS = (LockLostError, WriterLockBusyError)
 
+# Store/S3/db/parquet failures. Not RuntimeError — those fail the run.
+OPTIONAL_IO_ERRORS: tuple[type[BaseException], ...] = (
+    OSError,
+    ValueError,
+    TypeError,
+    SQLAlchemyError,
+    ArrowInvalid,
+    BotoCoreError,
+    RecommendationSchemaError,
+)
+
+# Malformed previous-run frames / allocation inputs.
+OPTIONAL_EVAL_ERRORS: tuple[type[BaseException], ...] = (ValueError, TypeError, LookupError)
+
+# Sidecar publish/close after a successful recs write.
+PUBLISH_ERRORS: tuple[type[BaseException], ...] = (OSError, ValueError, RuntimeError)
+
+# Sink writes used only to annotate then re-raise.
+SINK_WRITE_ERRORS: tuple[type[BaseException], ...] = (*OPTIONAL_IO_ERRORS, RuntimeError)
+
 
 def log_caught(message: str, exc: BaseException, *, log: logging.Logger | None = None) -> None:
     (log or logger).exception("%s (%s: %s)", message, type(exc).__name__, exc)
 
 
-def try_load(label: str, fn: Callable[[], Any], default: Any) -> Any:
+def try_load(
+    label: str,
+    fn: Callable[[], Any],
+    default: Any,
+    *,
+    errors: tuple[type[BaseException], ...] = OPTIONAL_IO_ERRORS,
+) -> Any:
     try:
         return fn()
     except _JOB_CONTROL_ERRORS:
         raise
-    except Exception as exc:
+    except errors as exc:
         log_caught(f"Failed to {label}", exc)
         return default
 
@@ -216,6 +246,7 @@ def score_previous_run(
             "compute served eval",
             lambda: replay_assignments(settings, previous_recs, track_rows),
             missing,
+            errors=OPTIONAL_EVAL_ERRORS,
         )
         if assigned_or_missing is missing:
             replay_failed = True
@@ -235,7 +266,7 @@ def score_previous_run(
                 window_hours=settings.track.attribution_window_hours,
             ).as_dict()
 
-        return try_load("compute track eval", _track, None)
+        return try_load("compute track eval", _track, None, errors=OPTIONAL_EVAL_ERRORS)
 
     def _compute_served() -> dict[str, Any] | None:
         if replay_failed or not settings.eval.enabled or previous_recs is None or not previous_generated_at:
@@ -258,7 +289,7 @@ def score_previous_run(
             )
             return report.as_dict() if report is not None else None
 
-        return try_load("compute served eval", _served, None)
+        return try_load("compute served eval", _served, None, errors=OPTIONAL_EVAL_ERRORS)
 
     run_both = bool(
         settings.track.enabled
