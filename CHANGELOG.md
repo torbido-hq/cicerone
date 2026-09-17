@@ -16,7 +16,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   set. Unreadable `experiment_state.json` is a read error.
 - Incremental apply keeps parked variant rows when the hashed arm is updated.
 - Experiments evaluate uses the same champion/challenger overlay as serve.
-- Promoting a 3+ arm Thompson winner keeps the previous champion as challenger.
+- Promoting a 3+ arm Thompson winner keeps the previous champion as challenger
+  and resets pair volume.
 - Serve caches the assignment overlay on the recommendations refresh loop.
 - Dataset serve filters cold-start fallback outside the cache lock.
 - Event worker stop closes the source after a tick that never started a loop

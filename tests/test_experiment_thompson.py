@@ -151,6 +151,7 @@ def test_allocate_thompson_promote_locks_champion() -> None:
     assert result.champion == "treatment"
     assert result.rotated is False
     assert result.challenger == "control"
+    assert result.pair_impressions == 0
 
 
 def test_allocate_thompson_rotates_when_champion_is_best() -> None:
@@ -251,3 +252,4 @@ def test_allocate_thompson_other_name_when_promoted_was_challenger() -> None:
     )
     assert result.champion == "treatment"
     assert result.challenger == "control"
+    assert result.pair_impressions == 10

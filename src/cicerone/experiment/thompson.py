@@ -256,6 +256,8 @@ def allocate_thompson(
             challenger = prev_champion
         else:
             challenger = prev_challenger if prev_challenger != champion else _other_name(labels, champion)
+        if {champion, challenger} != {prev_champion, prev_challenger}:
+            pair_impressions = 0
     else:
         for name in labels:
             extra = window.get(name, ArmCounts(0, 0))

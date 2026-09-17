@@ -142,7 +142,12 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
         except Exception as exc:
             if self._remember_missing_variant_column(exc):
                 return None
-            raise
+            logger.exception(
+                "Failed to list recommendation variants for user %r in %r",
+                user_id,
+                self._table,
+            )
+            return None
         if frame.empty:
             return None
         return _rec.pick_fallback_variant(frame.iloc[:, 0].tolist())

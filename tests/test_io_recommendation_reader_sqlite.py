@@ -393,6 +393,36 @@ def test_sqlite_db_reader_cold_start_caches_missing_variant_after_query_error(tm
     assert variant_queries["n"] == 1
 
 
+def test_sqlite_db_reader_unassigned_probe_error_falls_back(tmp_path, monkeypatch):
+    url = _sqlite_url(tmp_path)
+    sink = DatabaseOutputSink({"database_url": url})
+    sink.write_recommendations(
+        pd.DataFrame(
+            [
+                {
+                    "user_id": "u1",
+                    "item_id": "control-item",
+                    "rank": 1,
+                    "score": 0.9,
+                    "source": "personalized",
+                    "variant": "control",
+                }
+            ]
+        )
+    )
+    reader = DbRecommendationReader({"database_url": url})
+    original = pd.read_sql
+
+    def fake_read_sql(sql, *args, **kwargs):
+        if "DISTINCT" in str(sql).upper():
+            raise RuntimeError("probe down")
+        return original(sql, *args, **kwargs)
+
+    monkeypatch.setattr("cicerone.io.db_recommendation_reader.pd.read_sql", fake_read_sql)
+    rows = reader.get_recommendations("u1", k=10)
+    assert list(rows["item_id"]) == ["control-item"]
+
+
 def test_sqlite_db_reader_does_not_cache_unrelated_missing_column(tmp_path, monkeypatch):
     from sqlalchemy.exc import ProgrammingError
 
