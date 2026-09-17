@@ -1565,7 +1565,7 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Delete an item",
+        "summary": "Delete an item and its events",
         "tags": [
           "catalog"
         ]

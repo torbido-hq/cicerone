@@ -216,6 +216,16 @@ def test_consumed_overlay_discard_pair_and_user():
     assert overlay.item_ids("u1") == set()
 
 
+def test_consumed_overlay_discard_item_all_users():
+    overlay = ConsumedOverlay()
+    overlay.add("u1", "i1")
+    overlay.add("u1", "i2")
+    overlay.add("u2", "i1")
+    overlay.discard_item("i1")
+    assert overlay.item_ids("u1") == {"i2"}
+    assert overlay.item_ids("u2") == set()
+
+
 def test_consumed_overlay_evicts_old_items_and_users():
     overlay = ConsumedOverlay(max_items_per_user=2, max_users=2)
     overlay.add("u1", "i1")

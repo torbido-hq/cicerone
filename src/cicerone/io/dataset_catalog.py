@@ -116,14 +116,14 @@ class DatasetCatalogStore:
         return item_row_or_none(self._read(_ITEMS), item_id)
 
     def delete_item(self, item_id: str) -> int:
-        with self._locks[_ITEMS]:
+        with self._locks[_ITEMS], self._locks[_EVENTS]:
             items = self._read(_ITEMS)
-            if items.empty or ITEM_COLUMN not in items.columns:
-                return 0
-            before = int((items[ITEM_COLUMN].astype(str) == str(item_id)).sum())
-            remaining = items.loc[items[ITEM_COLUMN].astype(str) != str(item_id)]
-            self._write(_ITEMS, remaining.reset_index(drop=True))
-            return before
+            before = 0
+            if not items.empty and ITEM_COLUMN in items.columns:
+                before = int((items[ITEM_COLUMN].astype(str) == str(item_id)).sum())
+                remaining = items.loc[items[ITEM_COLUMN].astype(str) != str(item_id)]
+                self._write(_ITEMS, remaining.reset_index(drop=True))
+            return before + self._delete_events_for_item_locked(item_id)
 
     def upsert_events(self, rows: list[dict[str, Any]]) -> int:
         accepted, _, _ = self.replace_events(rows)
@@ -206,6 +206,15 @@ class DatasetCatalogStore:
             if ITEM_COLUMN not in events.columns:
                 return 0
             mask = mask & (events[ITEM_COLUMN].astype(str) == str(item_id))
+        deleted = int(mask.sum())
+        self._write(_EVENTS, events.loc[~mask].reset_index(drop=True))
+        return deleted
+
+    def _delete_events_for_item_locked(self, item_id: str) -> int:
+        events = self._read(_EVENTS)
+        if events.empty or ITEM_COLUMN not in events.columns:
+            return 0
+        mask = events[ITEM_COLUMN].astype(str) == str(item_id)
         deleted = int(mask.sum())
         self._write(_EVENTS, events.loc[~mask].reset_index(drop=True))
         return deleted

@@ -133,7 +133,7 @@ def test_database_catalog_user_projects_and_serializes_labels():
     user = store.get_user("u1")
     assert user is not None
     assert user["comment"] == "alice"
-    assert "labels" not in user
+    assert user["labels"] == {"vip": True}
 
 
 def test_database_catalog_item_serializes_categories():
@@ -141,7 +141,38 @@ def test_database_catalog_item_serializes_categories():
     store.upsert_item({"item_id": "i1", "categories": ["beer", "ipa"]})
     item = store.get_item("i1")
     assert item is not None
-    assert item["categories"] == '["beer", "ipa"]'
+    assert item["categories"] == ["beer", "ipa"]
+
+
+def test_database_catalog_delete_item_removes_events():
+    store = DatabaseCatalogStore({"database_url": TEST_DATABASE_URL})
+    store.upsert_item({"item_id": "i1", "comment": "sku"})
+    store.upsert_user({"user_id": "u1"})
+    assert (
+        store.upsert_events(
+            [
+                {
+                    "user_id": "u1",
+                    "item_id": "i1",
+                    "event_type": "purchase",
+                    "occurred_at": "2026-09-11T12:00:00Z",
+                    "event_id": "e1",
+                },
+                {
+                    "user_id": "u1",
+                    "item_id": "i2",
+                    "event_type": "view",
+                    "occurred_at": "2026-09-11T13:00:00Z",
+                    "event_id": "e2",
+                },
+            ]
+        )
+        == 2
+    )
+    assert store.delete_item("i1") >= 2
+    assert store.get_item("i1") is None
+    events = store.get_events_for_user("u1", 10)
+    assert list(events["item_id"]) == ["i2"]
 
 
 def test_database_catalog_missing_tables_are_empty():

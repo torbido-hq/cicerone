@@ -53,10 +53,9 @@ def test_dataset_catalog_crud_round_trip(tmp_path):
     assert posted.json()["accepted"] == 1
     events = client.get("/catalog/events/u1", headers=headers).json()["events"]
     assert events[0]["item_id"] == "i9"
-    assert client.delete("/catalog/events/u1?item_id=i9", headers=headers).json()["accepted"] == 1
-    assert client.get("/catalog/events/u1", headers=headers).json()["events"] == []
-    assert client.delete("/items/i9", headers=headers).json()["accepted"] == 1
+    assert client.delete("/items/i9", headers=headers).json()["accepted"] >= 1
     assert client.get("/items/i9", headers=headers).status_code == 404
+    assert client.get("/catalog/events/u1", headers=headers).json()["events"] == []
     assert client.delete("/users/u1", headers=headers).status_code == 200
     assert client.get("/users/u1", headers=headers).status_code == 404
 
@@ -259,5 +258,9 @@ def test_catalog_delete_clears_consumed_overlay(tmp_path):
     headers = {"Authorization": "Bearer secret"}
     client.delete("/catalog/events/u1?item_id=i9", headers=headers)
     assert overlay.item_ids("u1") == {"i2"}
+    overlay.add("u2", "i2")
+    client.delete("/items/i2", headers=headers)
+    assert overlay.item_ids("u1") == set()
+    assert overlay.item_ids("u2") == set()
     client.delete("/users/u1", headers=headers)
     assert overlay.item_ids("u1") == set()

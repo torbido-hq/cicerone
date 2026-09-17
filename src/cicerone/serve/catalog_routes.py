@@ -210,11 +210,16 @@ def mount_catalog_routes(
         response_model=CatalogWriteResponse,
         dependencies=dependencies,
         tags=["catalog"],
-        summary="Delete an item",
+        summary="Delete an item and its events",
         responses=_CATALOG_WRITE,
     )
     def delete_item(item_id: str) -> CatalogWriteResponse:
-        return CatalogWriteResponse(accepted=_require().delete_item(_path_id(item_id, ITEM_COLUMN)))
+        item_id = _path_id(item_id, ITEM_COLUMN)
+        with _overlay_mutation():
+            accepted = _require().delete_item(item_id)
+            if overlay is not None:
+                overlay.discard_item(item_id)
+        return CatalogWriteResponse(accepted=accepted)
 
     @app.post(
         CATALOG_EVENTS_PATH,

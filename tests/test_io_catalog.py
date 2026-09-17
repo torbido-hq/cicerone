@@ -174,6 +174,33 @@ def test_dataset_catalog_put_keeps_empty_schema_columns(tmp_path):
     assert "labels" in user
 
 
+def test_dataset_catalog_delete_item_removes_events(tmp_path):
+    store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
+    store.upsert_item({"item_id": "i1", "comment": "sku"})
+    store.upsert_events(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "event_type": "purchase",
+                "occurred_at": "2026-09-11T12:00:00Z",
+                "event_id": "e1",
+            },
+            {
+                "user_id": "u1",
+                "item_id": "i2",
+                "event_type": "view",
+                "occurred_at": "2026-09-11T13:00:00Z",
+                "event_id": "e2",
+            },
+        ]
+    )
+    assert store.delete_item("i1") >= 2
+    assert store.get_item("i1") is None
+    events = store.get_events_for_user("u1", 10)
+    assert list(events["item_id"]) == ["i2"]
+
+
 def test_dataset_catalog_put_merges_existing_item_columns(tmp_path):
     store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
     store.upsert_item({"item_id": "i1", "comment": "sku", "labels": {"color": "red"}})
@@ -335,6 +362,19 @@ def test_dataset_catalog_dedupes_incoming_event_ids(tmp_path):
     assert accepted == 1
     events = store.get_events_for_user("u1", 10)
     assert list(events["item_id"]) == ["i2"]
+
+
+def test_database_catalog_sqlite_keeps_structured_extras():
+    store = DatabaseCatalogStore({"database_url": "sqlite+pysqlite://"})
+    store.upsert_item({"item_id": "i1", "categories": ["beer", "ipa"], "labels": {"color": "red"}})
+    item = store.get_item("i1")
+    assert item is not None
+    assert item["categories"] == ["beer", "ipa"]
+    assert item["labels"] == {"color": "red"}
+    store.upsert_user({"user_id": "u1", "labels": {"vip": True}})
+    user = store.get_user("u1")
+    assert user is not None
+    assert user["labels"] == {"vip": True}
 
 
 def test_database_catalog_shares_memory_engine_with_history():

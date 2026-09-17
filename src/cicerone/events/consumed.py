@@ -65,6 +65,14 @@ class ConsumedOverlay:
         with self._lock:
             self._forget(str(user_id), None if item_id is None else str(item_id))
 
+    def discard_item(self, item_id: str) -> None:
+        target = str(item_id)
+        if not target:
+            return
+        with self._lock:
+            for user_id in list(self._by_user):
+                self._forget(user_id, target)
+
     def _forget(self, user_id: str, item_id: str | None) -> None:
         if item_id is None:
             self._by_user.pop(user_id, None)

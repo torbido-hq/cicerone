@@ -85,6 +85,21 @@ class DatabaseCatalogStore:
             return value.isoformat()
         return value
 
+    @staticmethod
+    def _decode_sql_value(value: Any) -> Any:
+        if not isinstance(value, str) or not value or value[0] not in "{[":
+            return value
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return value
+        return parsed if isinstance(parsed, (dict, list)) else value
+
+    def _decode_row(self, row: dict[str, Any] | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        return {key: self._decode_sql_value(value) for key, value in row.items()}
+
     def _sql_ready(self, row: dict[str, Any]) -> dict[str, Any]:
         return {key: self._sql_value(value) for key, value in row.items()}
 
@@ -155,7 +170,7 @@ class DatabaseCatalogStore:
         frame = pd.read_sql(sql, conn, params={"ids": event_ids})
         if frame.empty:
             return []
-        return [jsonable_row(row) for row in frame.to_dict(orient="records")]
+        return [self._decode_row(jsonable_row(row)) or {} for row in frame.to_dict(orient="records")]
 
     def _pairs_present(self, conn, pairs: list[tuple[str, str]]) -> set[tuple[str, str]]:
         if not pairs or not inspect(conn).has_table(self._events):
@@ -183,7 +198,8 @@ class DatabaseCatalogStore:
             return
         self._validate_columns(frame)
         self._ensure_table(conn, table, frame)
-        self._ensure_column(conn, table, key)
+        for name in frame.columns:
+            self._ensure_column(conn, table, str(name))
         aligned = self._align_frame(conn, table, frame)
         if aligned.empty:
             return
@@ -218,7 +234,7 @@ class DatabaseCatalogStore:
             self._upsert_frame(conn, self._users, USER_COLUMN, frame)
 
     def get_user(self, user_id: str) -> dict[str, Any] | None:
-        return user_row_or_none(self._read_id(self._users, USER_COLUMN, user_id), user_id)
+        return self._decode_row(user_row_or_none(self._read_id(self._users, USER_COLUMN, user_id), user_id))
 
     def delete_user(self, user_id: str) -> int:
         with self._write_lock, self._engine.begin() as conn:
@@ -235,11 +251,13 @@ class DatabaseCatalogStore:
             self._upsert_frame(conn, self._items, ITEM_COLUMN, frame)
 
     def get_item(self, item_id: str) -> dict[str, Any] | None:
-        return item_row_or_none(self._read_id(self._items, ITEM_COLUMN, item_id), item_id)
+        return self._decode_row(item_row_or_none(self._read_id(self._items, ITEM_COLUMN, item_id), item_id))
 
     def delete_item(self, item_id: str) -> int:
         with self._write_lock, self._engine.begin() as conn:
-            return self._delete_id(conn, self._items, ITEM_COLUMN, item_id)
+            items = self._delete_id(conn, self._items, ITEM_COLUMN, item_id)
+            events = self._delete_id(conn, self._events, ITEM_COLUMN, item_id)
+        return items + events
 
     def upsert_events(self, rows: list[dict[str, Any]]) -> int:
         accepted, _, _ = self.replace_events(rows)
@@ -273,7 +291,7 @@ class DatabaseCatalogStore:
         frame = self._read_id(self._events, EVENT_ID_COLUMN, event_id)
         if frame.empty:
             return None
-        return jsonable_row(frame.iloc[0].to_dict())
+        return self._decode_row(jsonable_row(frame.iloc[0].to_dict()))
 
     def get_events_for_user(self, user_id: str, limit: int) -> pd.DataFrame:
         if not self._table_exists(self._events):
