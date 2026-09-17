@@ -3,11 +3,8 @@
 from __future__ import annotations
 
 import logging
-import threading
-from collections import deque
 from collections.abc import Sequence
 from contextlib import suppress
-from datetime import datetime
 from functools import partial
 from typing import Any
 
@@ -19,7 +16,7 @@ from cicerone.amqp_options import (
     require_queue,
 )
 from cicerone.config.constants import ConfigError
-from cicerone.events.base import EventSource, EventSourceHealth, NormalizedEvent
+from cicerone.events.base import EventSource, EventSourceHealth, NormalizedEvent, QueuedEventSource
 from cicerone.events.json_payload import decode_json_object
 from cicerone.events.normalize import EventNormalizeError, normalize_event
 from cicerone.events.rabbitmq_io import (
@@ -47,13 +44,14 @@ def _missing_extra() -> ConfigError:
     )
 
 
-class RabbitMQEventSource(EventSource):
+class RabbitMQEventSource(QueuedEventSource, EventSource):
     """Consume JSON events from one queue; ack with ``basic_ack``."""
 
     ephemeral_event_ids = True
 
     def __init__(self, options: dict[str, Any]):
         validate_rabbitmq_event_options(options)
+        super().__init__()
         self._amqp_url = require_amqp_url(options, prefix=_EVENTS_PREFIX)
         self._queue = require_queue(options, prefix=_EVENTS_PREFIX)
         self._prefetch = prefetch_count(options, prefix=_EVENTS_PREFIX)
@@ -62,15 +60,9 @@ class RabbitMQEventSource(EventSource):
         self._io: _PikaIo | None = None
         self._connection: Any | None = None
         self._channel: Any | None = None
-        self._connected = False
-        self._lock = threading.Lock()
-        self._pending: deque[NormalizedEvent] = deque()
-        self._pending_ids: set[str] = set()
-        self._in_flight: set[str] = set()
         self._delivery_tags: dict[str, int] = {}
         self._held_tags: set[int] = set()
         self._event_io: dict[int, tuple[_PikaIo, str]] = {}
-        self._last_event_at: datetime | None = None
 
     def connect(self) -> None:
         try:
@@ -95,9 +87,7 @@ class RabbitMQEventSource(EventSource):
             self._connection = connection
             self._channel = channel
             self._connected = True
-            self._pending.clear()
-            self._pending_ids.clear()
-            self._in_flight.clear()
+            self._clear_lifecycle()
             self._delivery_tags.clear()
             self._held_tags.clear()
             self._event_io.clear()
@@ -116,9 +106,7 @@ class RabbitMQEventSource(EventSource):
             self._channel = None
             self._connection = None
             self._connected = False
-            self._pending.clear()
-            self._pending_ids.clear()
-            self._in_flight.clear()
+            self._clear_lifecycle()
             self._delivery_tags.clear()
             self._held_tags.clear()
             self._event_io.clear()
@@ -211,8 +199,7 @@ class RabbitMQEventSource(EventSource):
         return tuple(confirmed)
 
     def _forget_event(self, eid: str) -> None:
-        self._in_flight.discard(eid)
-        self._pending_ids.discard(eid)
+        self._forget_ids_unlocked(eid)
         stale = [key for key, (_owner, event_id) in self._event_io.items() if event_id == eid]
         for key in stale:
             self._event_io.pop(key, None)
@@ -268,7 +255,7 @@ class RabbitMQEventSource(EventSource):
             connected = self._connected
             io = self._io
             channel = self._channel
-            local_held = len(self._pending_ids) + len(self._in_flight)
+            local_held = self._local_held_unlocked()
             last_event_at = self._last_event_at
         if not connected or io is None or channel is None or io.failed or io.closing:
             return EventSourceHealth(connected=False, lag=None, last_event_at=last_event_at)
@@ -328,11 +315,11 @@ class RabbitMQEventSource(EventSource):
             io._mark_failed()
             raise
 
+    def _backend(self) -> Any:
+        return self._io
+
     def _require_io(self) -> _PikaIo:
-        with self._lock:
-            if not self._connected or self._io is None:
-                raise RuntimeError("RabbitMQEventSource is not connected")
-            return self._io
+        return self._require_ready()
 
     def _owns_io(self, io: _PikaIo) -> bool:
         with self._lock:
