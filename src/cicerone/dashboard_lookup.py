@@ -12,7 +12,7 @@ from typing import Any
 import pandas as pd
 
 from cicerone.config import Settings
-from cicerone.experiment.assignment import resolve_assignment
+from cicerone.experiment.assignment import resolve_assignment, snapshot_variant_names
 from cicerone.experiment.store import ExperimentStore
 from cicerone.io.base import RecommendationReader, UserHistoryReader
 from cicerone.io.options import is_s3_not_found
@@ -129,7 +129,11 @@ def lookup_recommendations(
     if settings.experiment.enabled:
         promoted, active_pair = ExperimentStore(settings.output).assignment_overlay(settings.experiment.id)
         experiment_id, variant = resolve_assignment(
-            settings, user_id, promoted_variant=promoted, active_pair=active_pair
+            settings,
+            user_id,
+            promoted_variant=promoted,
+            active_pair=active_pair,
+            snapshot_names=snapshot_variant_names(recommendation_reader),
         )
     try:
         recs, used_fallback = _load_rows(recommendation_reader, user_id, k, variant=variant)

@@ -20,7 +20,7 @@ from cicerone.config import Settings, load_settings
 from cicerone.config.constants import DEFAULT_LOG_FORMAT, DEFAULT_SERVE_MAX_K, TRACK_KIND_IMPRESSION
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
-from cicerone.experiment.assignment import resolve_assignment
+from cicerone.experiment.assignment import resolve_assignment, snapshot_variant_names
 from cicerone.experiment.evaluate import exposure_row
 from cicerone.experiment.store import ExperimentStore
 from cicerone.feature_config import FeatureConfig, load_feature_config
@@ -214,14 +214,7 @@ def _assignment_overlay(
     return store.assignment_overlay(settings.experiment.id)
 
 
-def _snapshot_variant_names(reader: RecommendationReader) -> tuple[str, ...] | None:
-    present = getattr(reader, "present_variant_names", None)
-    if not callable(present):
-        return None
-    names = present()
-    if names is None:
-        return None
-    return tuple(str(name) for name in names)
+_snapshot_variant_names = snapshot_variant_names
 
 
 def create_app(

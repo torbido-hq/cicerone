@@ -288,7 +288,39 @@ def test_sqlite_db_reader_skips_distinct_when_unassigned(tmp_path, monkeypatch):
     monkeypatch.setattr("cicerone.io.db_recommendation_reader.pd.read_sql", tracking)
     rows = reader.get_recommendations("u1", k=10)
     assert list(rows["item_id"]) == ["control-item"]
-    assert not any("DISTINCT" in sql.upper() for sql in seen)
+    assert any("DISTINCT" in sql.upper() for sql in seen)
+    assert any("variant" in sql and "LIMIT" in sql.upper() for sql in seen)
+
+
+def test_sqlite_db_reader_unassigned_picks_control_before_limit(tmp_path):
+    url = _sqlite_url(tmp_path)
+    sink = DatabaseOutputSink({"database_url": url})
+    sink.write_recommendations(
+        pd.DataFrame(
+            [
+                {
+                    "user_id": "u1",
+                    "item_id": "treatment-item",
+                    "rank": 1,
+                    "score": 0.9,
+                    "source": "personalized",
+                    "variant": "treatment",
+                },
+                {
+                    "user_id": "u1",
+                    "item_id": "control-item",
+                    "rank": 2,
+                    "score": 0.8,
+                    "source": "personalized",
+                    "variant": "control",
+                },
+            ]
+        )
+    )
+    reader = DbRecommendationReader({"database_url": url})
+    rows = reader.get_recommendations("u1", k=1)
+    assert list(rows["item_id"]) == ["control-item"]
+    assert reader.present_variant_names() == ("control", "treatment")
 
 
 def test_sqlite_db_reader_missing_variant_column_falls_back(tmp_path):

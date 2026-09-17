@@ -10,6 +10,7 @@ from cicerone.experiment.assignment import (
     assignment_bucket,
     experiment_variant_names,
     resolve_assignment,
+    snapshot_variant_names,
 )
 
 
@@ -147,3 +148,20 @@ def test_resolve_assignment_hashes_active_pair_not_toml_traffic() -> None:
     assert snapshot <= {"control", "blend"}
     assert resolve_assignment(settings, "u1", snapshot_names=("gone",)) == (None, None)
     assert resolve_assignment(settings, "u1") == (None, None)
+
+
+def test_snapshot_variant_names_from_reader() -> None:
+    class _Missing:
+        pass
+
+    class _None:
+        def present_variant_names(self):
+            return None
+
+    class _Present:
+        def present_variant_names(self):
+            return ("control", "", "blend")
+
+    assert snapshot_variant_names(_Missing()) is None
+    assert snapshot_variant_names(_None()) is None
+    assert snapshot_variant_names(_Present()) == ("control", "blend")

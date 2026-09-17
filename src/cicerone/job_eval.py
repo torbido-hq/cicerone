@@ -92,7 +92,11 @@ def replay_assignments(
             if user_id in assigned or user_id == COLD_START_USER_ID:
                 continue
             _experiment_id, assigned_variant = resolve_assignment(
-                settings, user_id, promoted_variant=promoted, active_pair=pair
+                settings,
+                user_id,
+                promoted_variant=promoted,
+                active_pair=pair,
+                snapshot_names=tuple(sorted(names)),
             )
             if assigned_variant:
                 assigned[user_id] = assigned_variant

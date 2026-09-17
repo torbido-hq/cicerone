@@ -94,6 +94,16 @@ def resolve_assignment(
     return experiment.id, variant
 
 
+def snapshot_variant_names(reader: object) -> tuple[str, ...] | None:
+    present = getattr(reader, "present_variant_names", None)
+    if not callable(present):
+        return None
+    names = present()
+    if names is None:
+        return None
+    return tuple(str(name) for name in names if name)
+
+
 def experiment_variant_names(settings: Settings) -> tuple[str, ...]:
     """Names incremental apply and serve hash over (challenger defaults if unset)."""
     experiment = settings.experiment

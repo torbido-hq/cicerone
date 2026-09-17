@@ -115,7 +115,14 @@ def _assign_incremental_variant(
 
     def assigned(user_id: str) -> str | None:
         promoted, pair = overlay()
-        return resolve_assignment(settings, str(user_id), promoted_variant=promoted, active_pair=pair)[1]
+        names = experiment_variant_names(settings)
+        return resolve_assignment(
+            settings,
+            str(user_id),
+            promoted_variant=promoted,
+            active_pair=pair,
+            snapshot_names=names or None,
+        )[1]
 
     return assigned
 

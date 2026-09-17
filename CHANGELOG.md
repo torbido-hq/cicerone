@@ -10,8 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Recipe `eligibility = false` / subset / replace skips
   `item_availability_filters` sugar.
-- DB serve keeps `AND variant=` when table inspect fails, and collapses mixed
-  leftover rows in-process when no arm is assigned.
+- DB serve keeps `AND variant=` when table inspect fails, and picks the leftover
+  fallback arm before `LIMIT` when no arm is assigned.
 - Thompson serve hashes the sticky pair or names on disk, not the full config
   set. Unreadable `experiment_state.json` is a read error.
 - Incremental apply keeps parked variant rows when the hashed arm is updated.
