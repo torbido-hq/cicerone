@@ -22,6 +22,7 @@ from cicerone.io.dataset_catalog import DatasetCatalogStore
 from cicerone.io.db_catalog import DatabaseCatalogStore
 from cicerone.io.db_store import DatabaseInputSource
 from cicerone.io.factory import build_catalog_store, build_user_history_reader
+from cicerone.io.options import read_parquet
 
 
 def test_require_id_rejects_blank():
@@ -165,6 +166,55 @@ def test_dataset_catalog_delete_events_without_item_id_column(tmp_path):
     events.to_parquet(tmp_path / "events.parquet", index=False)
     assert store.delete_events_for_user("u1", item_id="i1") == 0
     assert store.delete_events_for_user("u1") == 1
+
+
+def test_dataset_catalog_get_events_uses_user_filter(tmp_path, monkeypatch):
+    store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
+    store.upsert_events(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "event_type": "view",
+                "occurred_at": "2026-09-11T12:00:00Z",
+                "event_id": "e1",
+            }
+        ]
+    )
+    seen: list[object] = []
+
+    def spy(options, filename, **kwargs):
+        seen.append(kwargs.get("filters"))
+        return read_parquet(options, filename, **kwargs)
+
+    monkeypatch.setattr("cicerone.io.dataset_catalog.read_parquet", spy)
+    events = store.get_events_for_user("u1", 10)
+    assert list(events["item_id"]) == ["i1"]
+    assert [("user_id", "==", "u1")] in seen
+
+
+def test_dataset_catalog_get_events_falls_back_when_filter_unsupported(tmp_path, monkeypatch):
+    store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
+    store.upsert_events(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "event_type": "view",
+                "occurred_at": "2026-09-11T12:00:00Z",
+                "event_id": "e1",
+            }
+        ]
+    )
+
+    def boom(options, filename, **kwargs):
+        if kwargs.get("filters"):
+            raise ValueError("No match for FieldRef.Name(user_id)")
+        return read_parquet(options, filename, **kwargs)
+
+    monkeypatch.setattr("cicerone.io.dataset_catalog.read_parquet", boom)
+    events = store.get_events_for_user("u1", 10)
+    assert list(events["item_id"]) == ["i1"]
 
 
 def test_dataset_catalog_delete_user_without_user_id_column(tmp_path):

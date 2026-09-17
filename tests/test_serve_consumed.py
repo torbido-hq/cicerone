@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
@@ -246,4 +248,35 @@ def test_consumed_overlay_replace_pairs_is_atomic():
     overlay = ConsumedOverlay()
     overlay.add("u1", "i1")
     overlay.replace_pairs([("u1", "i1")], [("u1", "i2")])
+    assert overlay.item_ids("u1") == {"i2"}
+
+
+def test_consumed_overlay_mutation_serializes_store_then_reconcile():
+    overlay = ConsumedOverlay()
+    order: list[str] = []
+    started = threading.Event()
+    release = threading.Event()
+
+    def first() -> None:
+        with overlay.mutation():
+            order.append("a-store")
+            started.set()
+            assert release.wait(2)
+            overlay.replace_pairs([], [("u1", "i1")])
+            order.append("a-overlay")
+
+    def second() -> None:
+        assert started.wait(2)
+        with overlay.mutation():
+            order.append("b-store")
+            overlay.replace_pairs([("u1", "i1")], [("u1", "i2")])
+            order.append("b-overlay")
+
+    workers = [threading.Thread(target=first), threading.Thread(target=second)]
+    for worker in workers:
+        worker.start()
+    release.set()
+    for worker in workers:
+        worker.join(2)
+    assert order == ["a-store", "a-overlay", "b-store", "b-overlay"]
     assert overlay.item_ids("u1") == {"i2"}

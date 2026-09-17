@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import AbstractContextManager, nullcontext
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -126,6 +127,9 @@ def mount_catalog_routes(
             return
         overlay.discard(user_id, item_id)
 
+    def _overlay_mutation() -> AbstractContextManager[None]:
+        return overlay.mutation() if overlay is not None else nullcontext()
+
     @app.put(
         USERS_PATH,
         response_model=CatalogWriteResponse,
@@ -166,8 +170,9 @@ def mount_catalog_routes(
     )
     def delete_user(user_id: str) -> CatalogWriteResponse:
         user_id = _path_id(user_id, USER_COLUMN)
-        accepted = _require().delete_user(user_id)
-        _forget_consumed(user_id)
+        with _overlay_mutation():
+            accepted = _require().delete_user(user_id)
+            _forget_consumed(user_id)
         return CatalogWriteResponse(accepted=accepted)
 
     @app.put(
@@ -225,13 +230,14 @@ def mount_catalog_routes(
         try:
             body = CatalogEventsBody.model_validate(raw)
             rows = [normalize_event_row(event.model_dump()) for event in body.events]
-            accepted, discard, add = store.replace_events(rows)
+            with _overlay_mutation():
+                accepted, discard, add = store.replace_events(rows)
+                if overlay is not None:
+                    overlay.replace_pairs(discard, add)
         except ValidationError as exc:
             raise HTTPException(status_code=422, detail=exc.errors()) from exc
         except (OverflowError, ValueError, EventNormalizeError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if overlay is not None:
-            overlay.replace_pairs(discard, add)
         return CatalogWriteResponse(accepted=accepted)
 
     @app.get(
@@ -266,6 +272,7 @@ def mount_catalog_routes(
         user_id = _path_id(user_id, USER_COLUMN)
         if item_id is not None:
             item_id = _path_id(item_id, ITEM_COLUMN)
-        accepted = _require().delete_events_for_user(user_id, item_id=item_id)
-        _forget_consumed(user_id, item_id)
+        with _overlay_mutation():
+            accepted = _require().delete_events_for_user(user_id, item_id=item_id)
+            _forget_consumed(user_id, item_id)
         return CatalogWriteResponse(accepted=accepted)

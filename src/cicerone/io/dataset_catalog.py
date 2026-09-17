@@ -166,8 +166,26 @@ class DatasetCatalogStore:
                 return None
             return jsonable_row(matched.iloc[0].to_dict())
 
+    def _read_for_user(self, filename: str, user_id: str) -> pd.DataFrame:
+        try:
+            frame = read_parquet(self._options, filename, filters=[(USER_COLUMN, "==", user_id)])
+        except FileNotFoundError:
+            return pd.DataFrame()
+        except Exception as exc:
+            if is_s3_not_found(exc):
+                return pd.DataFrame()
+            message = str(exc).lower()
+            if "user_id" in message or "fieldref" in message or "filter" in message:
+                logger.warning("Filtered %s read failed; falling back to full-file load: %s", filename, exc)
+                frame = self._read(filename)
+            else:
+                raise
+        if USER_COLUMN not in frame.columns:
+            frame = self._read(filename)
+        return filter_rows_for_user(frame, user_id)
+
     def get_events_for_user(self, user_id: str, limit: int) -> pd.DataFrame:
-        return newest_events(filter_rows_for_user(self._read(_EVENTS), user_id), limit)
+        return newest_events(self._read_for_user(_EVENTS, user_id), limit)
 
     def delete_events_for_user(self, user_id: str, *, item_id: str | None = None) -> int:
         with self._locks[_EVENTS]:

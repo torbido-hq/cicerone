@@ -52,6 +52,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Catalog GET rows map pandas missing timestamps (`NaT`/`NA`) to JSON `null`.
 - Dataset `DELETE /users/{id}` removes the user row and their events under one lock.
 - Catalog and webhook ingest return 400 for out-of-range `occurred_at` epochs.
+- Dataset `GET /catalog/events/{id}` uses parquet `user_id` predicate pushdown, with a full-file fallback.
+- Catalog writes and incremental persist update the consumed overlay under the same lock as the store mutation.
 
 ## [0.8.2] - 2026-09-15
 

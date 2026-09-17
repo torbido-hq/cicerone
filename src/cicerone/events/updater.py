@@ -309,7 +309,8 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         self._consumed.add_many([(event.user_id, event.item_id) for event in events])
 
     def _persist_catalog(self, events: Sequence[NormalizedEvent]) -> None:
-        if self._catalog is None:
+        catalog = self._catalog
+        if catalog is None:
             self._note_consumed(events)
             return
         rows = [
@@ -323,16 +324,24 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             }
             for event in events
         ]
-        try:
-            replace = getattr(self._catalog, "replace_events", None)
-            if callable(replace):
-                _, discard, add = replace(rows)
-                self._note_consumed(events, discard=discard, add=add)
-                return
-            self._catalog.upsert_events(rows)
-        except Exception:
-            logger.exception("Failed to persist incremental events to the catalog")
-        self._note_consumed(events)
+
+        def persist() -> None:
+            try:
+                replace = getattr(catalog, "replace_events", None)
+                if callable(replace):
+                    _, discard, add = replace(rows)
+                    self._note_consumed(events, discard=discard, add=add)
+                    return
+                catalog.upsert_events(rows)
+            except Exception:
+                logger.exception("Failed to persist incremental events to the catalog")
+            self._note_consumed(events)
+
+        if self._consumed is None:
+            persist()
+            return
+        with self._consumed.mutation():
+            persist()
 
     def _commit_online(self) -> None:
         if self._online is None:

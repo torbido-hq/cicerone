@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import threading
 from collections import OrderedDict
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 from cicerone.config.constants import (
     DEFAULT_CONSUMED_OVERLAY_MAX_USERS,
@@ -24,10 +26,15 @@ class ConsumedOverlay:
             raise ValueError("max_items_per_user must be >= 1")
         if max_users < 1:
             raise ValueError("max_users must be >= 1")
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._max_items_per_user = max_items_per_user
         self._max_users = max_users
         self._by_user: OrderedDict[str, OrderedDict[str, None]] = OrderedDict()
+
+    @contextmanager
+    def mutation(self) -> Iterator[None]:
+        with self._lock:
+            yield
 
     def add(self, user_id: str, item_id: str) -> None:
         with self._lock:
