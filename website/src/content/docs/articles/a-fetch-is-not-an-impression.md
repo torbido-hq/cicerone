@@ -7,30 +7,33 @@ authors:
   - nicholas
 ---
 
-You want click-through on the homepage widget. You turn on `serve.log_impressions` and have Laravel `Http::get` the serve API. Horizon warms the same URL for last week's buyers. A health check hits it too. You recorded returned GET items as impressions. Those requests do not prove a shopper saw a SKU.
+You want click-through on the homepage widget. You turn on `serve.log_impressions` and have Laravel `Http::get` the serve API. Horizon warms the same URL for last week's buyers. A health check hits it too. You did not measure what shoppers saw. You turned fetches into impression rows.
 
 `GET /recommendations/{user_id}` **returns** a list. `SELECT … ORDER BY rank` **returns** a list. Prefetch returns the same list. A health check returns it again. None of those prove a shopper saw a SKU.
 
-Cicerone cannot see Blade. A host-reported impression is `POST /track` with `kind=impression` after the widget paints.
+Cicerone cannot see Blade. A **host-reported impression** is a `/track` row the host sends after it paints the widget. The host has to report it.
 
 ```text
-SELECT … ORDER BY rank
-  or GET /recommendations/{user_id}
+recommendation lookup
+        │
+        ├─ SELECT … ORDER BY rank
+        │     or GET /recommendations/{user_id}
+        ▼
+items the host will render
         │
         ▼
-Blade paints $painted
+Blade renders the widget
         │
         ▼
-POST /track   kind=impression, rank ≥ 1
+POST /track   kind=impression
         │
 user taps a SKU
+        │
         ▼
 POST /track   kind=click
         │
-recommendation_track  /  track.jsonl
-        │
         ▼
-Quality  CTR / CVR
+Quality
 ```
 
 ## Returned is not rendered
@@ -40,11 +43,11 @@ Four facts, then stop collapsing them.
 | What happened | What Cicerone has |
 | --- | --- |
 | Serve **returned** items on GET (after `limit` / `k` and `category`) | A lookup. Not a host-reported impression. |
-| Blade **rendered** those items on the homepage | Still nothing, until the host POSTs. |
+| Blade **rendered** those items on the homepage | Still no host-reported impression. Cicerone did not see the paint. |
 | Host `POST /track` with `kind` `impression` | An impression row. Quality counts it. The host claimed the SKU was shown. |
 | `serve.log_impressions = true` | Serve writes an impression row per **returned** GET item, on a background task. New `uuid4` per item, every GET. Not render-aware. |
 
-`log_impressions` does not wait for Blade. Prefetch, a GET retry, and items the widget never painted are still rows. The GET can already be **200** before the write runs. Leave the flag off unless you mean that.
+`log_impressions` turns returned GET items into impression rows. It is not render-aware. It does not wait for Blade. Prefetch, a GET retry, and items the widget never painted are still rows. The GET can already be **200** before the write runs. Leave the flag off unless you mean that.
 
 That is not “the shopper looked at rank 3.” Cicerone never sees the DOM. A host-reported impression is the host saying it showed the SKU.
 
@@ -59,7 +62,7 @@ The [nightly table](/articles/a-nightly-table-next-to-your-orders/) walkthrough 
 | **Click** | `POST /track` `kind=click` | Host-reported tap. CTR needs a matching impression. |
 | **Conversion** | `[input]` + Quality | An `[input]` row (default type `purchase`) attributed to a prior impression or a matched click. Attribution result. Still an input **event**. |
 
-`POST /events` exists only when `[events]` is on and `kind = "webhook"`. `event_type`s missing from `[event_weights]` are not trained. A purchase on the Stripe path can still be an **event**. That's a training event, not an impression.
+`POST /events` exists only when `[events]` is on and `kind = "webhook"`. `event_type`s missing from `[event_weights]` are not trained. A purchase on the Stripe path can still be an **event**. That is not an impression and not a Quality click.
 
 The `/track` JSON field is named `events`. Those objects are track rows.
 
@@ -133,7 +136,7 @@ postTrack(impressionRows((string) $user->id, $painted, $occurredAt));
 
 Same path. Rank is optional. CTR still needs a prior impression of that `(user_id, item_id)`.
 
-Mint the id **once**, in the browser, at tap time. POST it to Laravel. Do not POST `/track` from the browser. Mint `eventId` before `fetch`. Reuse it on retry. A second tap mints again.
+Mint the id **once**, in the browser, at tap time. POST it to Laravel. Do not POST `/track` from the browser.
 
 | What | `event_id` |
 | --- | --- |
@@ -171,7 +174,7 @@ public function click(Request $request)
 }
 ```
 
-Do not build `event_id` in the controller from `now()`. That request is a new row on every retry.
+This example is best-effort: `postTrack` reports a non-2xx; the click action still returns 204. Do not mint `event_id` from `now()` in the controller. That makes every retry a new row.
 
 Do not `POST /events` with `event_type = "click"` unless you mean a training **event**. Track rows never enter `[event_weights]`. The checkout mapper stays on `/events`. This mapper stays on `/track`.
 
@@ -199,7 +202,7 @@ Quality CTR is a matched-click ratio inside a wall-clock window. It is not causa
 
 Horizon still prefetches. Blade still POSTs `/track` when the widget is on the page. A tap still POSTs a **click**. Quality still matches `(user_id, item_id)` inside the window.
 
-A fetch is not an impression. The POST from the widget is.
+A fetch is not proof of an impression. The POST from the widget is the host's report that it rendered one.
 
 <details>
 <summary>Reference</summary>
