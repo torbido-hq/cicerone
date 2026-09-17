@@ -1,0 +1,38 @@
+---
+alwaysApply: true
+description: Pipeline + adapters; chip debt; no rewrite and no domain OO
+---
+
+# Architecture stance
+
+Cicerone is a batch DataFrame pipeline with Protocol adapters (I/O, events,
+publish, locks), not a domain-object design. Keep that grain.
+
+## Do not
+
+- Do not “add OO” (`User`/`Item` entities, strategy class hierarchies, a
+  `Job` framework, DI).
+- Do not open a cleanup-architecture rewrite.
+- Do not wrap application logic in `except Exception` (allocation,
+  combiners, recipe math). Empty-result / fail-closed is for I/O and
+  optional sides only — use `is_s3_not_found` / `MISSING_TABLE_ERRORS`
+  first.
+- Do not copy `_read_bytes` / `_write_bytes` / `_append_bytes`. Shared
+  blob I/O lives in `io/options.py` (or `io/bytes.py` if extracted).
+
+## Do
+
+- When a PR already touches `job.py`, a dataset store, or a broker: take
+  the adjacent debt item if the PR stays small.
+- Add a type only when it makes a contract visible (`JobManifest`, typed
+  I/O errors) — not a service object that wraps `run()`.
+- `except Exception` is OK for broker poll/close, lock probes, `finally`
+  cleanup, worker nack-on-apply, and S3-not-found after a specific catch.
+
+## Debt (chip, do not boil)
+
+0. Narrow fail-closed Exception nets (Thompson, DB-empty-on-any-error).
+1. One byte store for dataset / track / experiment.
+2. Named `job.run()` phases + typed manifest.
+3. Shared recommendation-frame loader + `engine_for()`.
+4. Broker ingest helper only when next editing Kafka/Rabbit/Redis.
