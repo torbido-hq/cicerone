@@ -39,6 +39,8 @@ class CatalogStore(Protocol):
 
     def upsert_events(self, rows: list[dict[str, Any]]) -> int: ...
 
+    def get_event(self, event_id: str) -> dict[str, Any] | None: ...
+
     def get_events_for_user(self, user_id: str, limit: int) -> pd.DataFrame: ...
 
     def delete_events_for_user(self, user_id: str, *, item_id: str | None = None) -> int: ...
@@ -61,6 +63,13 @@ def normalize_event_row(row: dict[str, Any]) -> dict[str, Any]:
         OCCURRED_AT_COLUMN: event.occurred_at,
         EVENT_ID_COLUMN: event.event_id,
     }
+
+
+def dedupe_event_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    last: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        last[str(row[EVENT_ID_COLUMN])] = row
+    return list(last.values())
 
 
 def filter_item_row(frame: pd.DataFrame, item_id: str) -> pd.DataFrame:

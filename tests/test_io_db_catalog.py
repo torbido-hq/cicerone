@@ -90,7 +90,25 @@ def test_database_catalog_projects_to_existing_event_columns():
     )
     events = store.get_events_for_user("u1", 10)
     assert list(events["item_id"]) == ["i1"]
-    assert "event_id" not in events.columns
+    assert list(events["event_id"]) == ["e1"]
+    assert (
+        store.upsert_events(
+            [
+                {
+                    "user_id": "u1",
+                    "item_id": "i1",
+                    "event_type": "purchase",
+                    "occurred_at": "2026-09-11T12:00:00Z",
+                    "event_id": "e1",
+                    "idempotency_key": "e1",
+                }
+            ]
+        )
+        == 1
+    )
+    replay = store.get_events_for_user("u1", 10)
+    assert len(replay) == 1
+    assert list(replay["event_id"]) == ["e1"]
 
 
 def test_database_catalog_user_upsert_replaces_one_row():

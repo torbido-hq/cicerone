@@ -12,7 +12,9 @@ import pandas as pd
 
 from cicerone.io.catalog import (
     EVENT_ID_COLUMN,
+    dedupe_event_rows,
     item_row_or_none,
+    jsonable_row,
     normalize_event_row,
     require_id,
     user_row_or_none,
@@ -121,7 +123,7 @@ class DatasetCatalogStore:
     def upsert_events(self, rows: list[dict[str, Any]]) -> int:
         if not rows:
             return 0
-        incoming = pd.DataFrame([normalize_event_row(row) for row in rows])
+        incoming = pd.DataFrame(dedupe_event_rows([normalize_event_row(row) for row in rows]))
         with self._locks[_EVENTS]:
             existing = self._read(_EVENTS)
             if existing.empty:
@@ -133,6 +135,18 @@ class DatasetCatalogStore:
             merged = pd.concat([existing, incoming], ignore_index=True)
             self._write(_EVENTS, merged)
             return int(len(incoming))
+
+    def get_event(self, event_id: str) -> dict[str, Any] | None:
+        if not event_id:
+            return None
+        with self._locks[_EVENTS]:
+            events = self._read(_EVENTS)
+            if events.empty or EVENT_ID_COLUMN not in events.columns:
+                return None
+            matched = events.loc[events[EVENT_ID_COLUMN].astype(str) == str(event_id)]
+            if matched.empty:
+                return None
+            return jsonable_row(matched.iloc[0].to_dict())
 
     def get_events_for_user(self, user_id: str, limit: int) -> pd.DataFrame:
         return newest_events(filter_rows_for_user(self._read(_EVENTS), user_id), limit)

@@ -12,7 +12,9 @@ def test_catalog_routes_without_store_are_not_implemented():
     app = create_app(_settings(), _FakeReader(_recs_df()), catalog=None)
     client = TestClient(app)
     headers = {"Authorization": "Bearer secret"}
-    assert client.get("/users/u1", headers=headers).status_code == 501
+    missing = client.get("/users/u1", headers=headers)
+    assert missing.status_code == 501
+    assert missing.json()["detail"] == "Catalog CRUD requires a writable dataset or table-backed db input"
     assert client.get("/items/i1", headers=headers).status_code == 501
 
 
@@ -137,6 +139,37 @@ def test_catalog_events_reject_blank_event_type(tmp_path):
         headers={"Authorization": "Bearer secret"},
     )
     assert response.status_code == 400
+
+
+def test_catalog_put_rejects_whitespace_path_ids(tmp_path):
+    store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
+    response = TestClient(create_app(_settings(), _FakeReader(_recs_df()), catalog=store)).put(
+        "/users/%20",
+        json={"comment": "alice"},
+        headers={"Authorization": "Bearer secret"},
+    )
+    assert response.status_code == 400
+
+
+def test_catalog_events_replace_overlay_item_for_same_event_id(tmp_path):
+    store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
+    overlay = ConsumedOverlay()
+    app = create_app(_settings(), _FakeReader(_recs_df()), catalog=store, consumed=overlay)
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer secret"}
+    first = {
+        "user_id": "u1",
+        "item_id": "i1",
+        "event_type": "purchase",
+        "occurred_at": "2026-09-11T12:00:00Z",
+        "event_id": "e1",
+    }
+    assert client.post("/catalog/events", json={"events": [first]}, headers=headers).json()["accepted"] == 1
+    assert overlay.item_ids("u1") == {"i1"}
+    replaced = {**first, "item_id": "i2", "occurred_at": "2026-09-11T13:00:00Z"}
+    posted = client.post("/catalog/events", json={"events": [replaced]}, headers=headers)
+    assert posted.json()["accepted"] == 1
+    assert overlay.item_ids("u1") == {"i2"}
 
 
 def test_catalog_delete_clears_consumed_overlay(tmp_path):

@@ -94,8 +94,9 @@ at boot, then again on `[job].cron_schedule` in `config/cicerone.toml`
 
 By default (`[job].mode = "batch"`), the container only runs the batch job
 on its cron schedule — no HTTP surface at all. Setting `[job].mode = "serve"`
-switches `cicerone start` / `cicerone serve` to instead run a small FastAPI **read**
-API over the lookup table the batch job already wrote. The request path never
+switches `cicerone start` / `cicerone serve` to instead run a small FastAPI API
+over the lookup table the batch job already wrote, plus catalog writes against
+`[input]`. The request path never
 loads lightfm/implicit/torch and never trains (`rectools` is imported for
 `Columns`, so it stays in a serve-only image). With `[events.online]`, the
 events worker loads the last artifact for write-through only:
@@ -105,8 +106,8 @@ events worker loads the last artifact for write-through only:
 | `GET` | `/health` | Liveness probe (no auth) |
 | `GET` | `/recommendations/{user_id}` | Precomputed top-K for that user (optional `reasons`) |
 | `GET` | `/item-scores` | Catalog popular/latest scores for search ranking |
-| `PUT`/`GET`/`DELETE` | `/users/{user_id}`, `/items/{item_id}` | Catalog upsert when `[input]` is dataset or db |
-| `POST` | `/catalog/events` | Persist interaction events on `[input]` |
+| `PUT`/`GET`/`DELETE` | `/users/{user_id}`, `/items/{item_id}` | Catalog upsert when `[input]` is dataset or table-backed db (not query-backed) |
+| `POST` | `/catalog/events` | Persist events on writable dataset or table-backed db `[input]` |
 | `GET`/`DELETE` | `/catalog/events/{user_id}` | List or delete a user's catalog events |
 | `GET` | `/metrics` | Prometheus text format (no bearer token; optional `X-Metrics-Token`) |
 | `POST` | `/events` | Incremental ingest when `[events]` `kind = "webhook"` |

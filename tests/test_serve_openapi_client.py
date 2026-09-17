@@ -59,6 +59,9 @@ def test_openapi_json_lists_serve_paths_and_schemas():
     assert "/items/{item_id}" in schema["paths"]
     assert "/catalog/events" in schema["paths"]
     assert "/catalog/events/{user_id}" in schema["paths"]
+    catalog_events = schema["paths"]["/catalog/events"]["post"]
+    assert "400" in catalog_events["responses"]
+    assert "501" in catalog_events["responses"]
 
     components = schema["components"]["schemas"]
     assert "ItemScore" in components

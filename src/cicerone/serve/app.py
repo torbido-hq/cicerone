@@ -123,7 +123,8 @@ def _append_impressions_safe(store: TrackStore, rows: list[dict[str, Any]], user
 SERVE_API_TITLE = "Cicerone Serve API"
 SERVE_API_VERSION = __version__
 SERVE_API_DESCRIPTION = f"""
-Read-only HTTP API over **precomputed** recommendations written by the batch job.
+HTTP API over **precomputed** recommendations written by the batch job, plus
+catalog writes against a writable `[input]` store.
 
 There is no live inference in the request path: `GET {RECOMMENDATIONS_PATH}`
 looks up rows already stored in the configured output (dataset parquet or DB).

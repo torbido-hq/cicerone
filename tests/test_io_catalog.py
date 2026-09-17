@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import math
+import threading
 from datetime import UTC, datetime
 
 import pandas as pd
 import pytest
+from sqlalchemy import text
 
+from cicerone.config.settings import IOSettings
 from cicerone.io.catalog import (
+    dedupe_event_rows,
     filter_item_row,
     item_row_or_none,
     jsonable_row,
@@ -15,6 +19,9 @@ from cicerone.io.catalog import (
     user_row_or_none,
 )
 from cicerone.io.dataset_catalog import DatasetCatalogStore
+from cicerone.io.db_catalog import DatabaseCatalogStore
+from cicerone.io.db_store import DatabaseInputSource
+from cicerone.io.factory import build_catalog_store, build_user_history_reader
 
 
 def test_require_id_rejects_blank():
@@ -116,3 +123,147 @@ def test_dataset_catalog_round_trip_and_empty_paths(tmp_path):
     assert store.delete_user("u1") >= 1
     assert store.get_user("u1") is None
     assert store.get_events_for_user("u1", 10).empty
+
+
+def test_dedupe_event_rows_last_wins():
+    rows = [
+        normalize_event_row(
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "event_type": "view",
+                "occurred_at": "2026-09-11T12:00:00Z",
+                "event_id": "e1",
+            }
+        ),
+        normalize_event_row(
+            {
+                "user_id": "u1",
+                "item_id": "i2",
+                "event_type": "purchase",
+                "occurred_at": "2026-09-11T13:00:00Z",
+                "event_id": "e1",
+            }
+        ),
+    ]
+    assert [row["item_id"] for row in dedupe_event_rows(rows)] == ["i2"]
+
+
+def test_dataset_catalog_dedupes_incoming_event_ids(tmp_path):
+    store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
+    accepted = store.upsert_events(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "event_type": "view",
+                "occurred_at": "2026-09-11T12:00:00Z",
+                "event_id": "e1",
+            },
+            {
+                "user_id": "u1",
+                "item_id": "i2",
+                "event_type": "purchase",
+                "occurred_at": "2026-09-11T13:00:00Z",
+                "event_id": "e1",
+            },
+        ]
+    )
+    assert accepted == 1
+    events = store.get_events_for_user("u1", 10)
+    assert list(events["item_id"]) == ["i2"]
+
+
+def test_database_catalog_shares_memory_engine_with_history():
+    settings = IOSettings(kind="db", options={"database_url": "sqlite+pysqlite://"})
+    history = build_user_history_reader(settings)
+    catalog = build_catalog_store(settings)
+    assert isinstance(history, DatabaseInputSource)
+    assert isinstance(catalog, DatabaseCatalogStore)
+    assert history._engine is catalog._engine
+    catalog.upsert_user({"user_id": "u1", "comment": "alice"})
+    user = history.get_user("u1")
+    assert user is not None
+    assert user["comment"] == "alice"
+
+
+def test_database_catalog_dedupes_and_adds_event_id():
+    store = DatabaseCatalogStore({"database_url": "sqlite+pysqlite://"})
+    with store._engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE events ("
+                "user_id TEXT, item_id TEXT, event_type TEXT, occurred_at TEXT, quantity INTEGER)"
+            )
+        )
+    accepted = store.upsert_events(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "event_type": "view",
+                "occurred_at": "2026-09-11T12:00:00Z",
+                "event_id": "e1",
+            },
+            {
+                "user_id": "u1",
+                "item_id": "i2",
+                "event_type": "purchase",
+                "occurred_at": "2026-09-11T13:00:00Z",
+                "event_id": "e1",
+            },
+        ]
+    )
+    assert accepted == 1
+    events = store.get_events_for_user("u1", 10)
+    assert list(events["item_id"]) == ["i2"]
+    assert list(events["event_id"]) == ["e1"]
+    assert (
+        store.upsert_events(
+            [
+                {
+                    "user_id": "u1",
+                    "item_id": "i2",
+                    "event_type": "purchase",
+                    "occurred_at": "2026-09-11T13:00:00Z",
+                    "event_id": "e1",
+                }
+            ]
+        )
+        == 1
+    )
+    assert len(store.get_events_for_user("u1", 10)) == 1
+
+
+def test_database_catalog_first_create_is_race_safe():
+    store = DatabaseCatalogStore({"database_url": "sqlite+pysqlite://"})
+    errors: list[Exception] = []
+
+    def write(index: int) -> None:
+        try:
+            store.upsert_user({"user_id": f"u{index}", "comment": str(index)})
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=write, args=(index,)) for index in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert errors == []
+    with store._engine.begin() as conn:
+        count = conn.execute(text("SELECT COUNT(*) FROM users")).scalar_one()
+    assert count == 8
+
+
+def test_database_catalog_unique_index_fallback_after_duplicates():
+    store = DatabaseCatalogStore({"database_url": "sqlite+pysqlite://"})
+    with store._engine.begin() as conn:
+        conn.execute(text("CREATE TABLE users (user_id TEXT, comment TEXT)"))
+        conn.execute(text("INSERT INTO users VALUES ('u1', 'a')"))
+        conn.execute(text("INSERT INTO users VALUES ('u1', 'b')"))
+    store.upsert_user({"user_id": "u1", "comment": "fixed"})
+    with store._engine.begin() as conn:
+        count = conn.execute(text("SELECT COUNT(*) FROM users")).scalar_one()
+    assert count == 1
+    assert store.get_user("u1")["comment"] == "fixed"
