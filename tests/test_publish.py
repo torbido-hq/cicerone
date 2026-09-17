@@ -444,3 +444,25 @@ def test_rabbitmq_publisher_recovers_after_channel_error(monkeypatch):
     publisher.publish(_recs_frame())
     assert [key for _exchange, key, _body in broker.published] == ["recs", "recs"]
     publisher.close()
+
+
+def test_rabbitmq_publisher_retries_unsent_users_only(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "recs"})
+    publisher.connect()
+    channel = publisher._channel
+    assert channel is not None
+    calls = {"n": 0}
+    original = channel.basic_publish
+
+    def boom(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("channel closed")
+        return original(*args, **kwargs)
+
+    channel.basic_publish = boom  # type: ignore[method-assign]
+    publisher.publish(_recs_frame())
+    users = [json.loads(body)["user_id"] for _exchange, _key, body in broker.published]
+    assert users == ["u1", "u2"]
+    publisher.close()

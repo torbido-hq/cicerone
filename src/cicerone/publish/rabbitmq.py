@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from typing import Any
 
 import pandas as pd
@@ -76,20 +77,27 @@ class RabbitMQPublisher:
         self._channel = channel
 
     def publish(self, df: pd.DataFrame) -> None:
+        messages = [body for _, body in user_recommendation_messages(df)]
+        if not messages:
+            return
+        sent = [0]
         if self._channel is None:
-            self._publish_all(df)
+            self._publish_from(messages, sent)
             return
         try:
-            self._publish_all(df)
+            self._publish_from(messages, sent)
         except Exception:
             logger.exception("RabbitMQ publish failed; recovering publisher")
             self._recover()
-            self._publish_all(df)
+            self._publish_from(messages, sent)
 
-    def _publish_all(self, df: pd.DataFrame) -> None:
+    def _publish_from(self, messages: Sequence[bytes], sent: list[int]) -> None:
         channel = self._require()
-        for _, body in user_recommendation_messages(df):
-            channel.basic_publish(exchange=self._exchange, routing_key=self._routing_key, body=body)
+        while sent[0] < len(messages):
+            channel.basic_publish(
+                exchange=self._exchange, routing_key=self._routing_key, body=messages[sent[0]]
+            )
+            sent[0] += 1
 
     def _recover(self) -> None:
         self.close()

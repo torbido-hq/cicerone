@@ -265,7 +265,8 @@ class EventWorker:
             if self._buffer.contains_fingerprint(fingerprint):
                 return True
             return any(
-                held.event_id == event.event_id or event_fingerprint(held) == fingerprint
+                held.event_id == event.event_id
+                or (self._fingerprint_dedupe(held) and event_fingerprint(held) == fingerprint)
                 for held in self._held
             )
         return any(held.event_id == event.event_id for held in self._held)

@@ -8,7 +8,7 @@ from support.prometheus_metrics import registry_metric_value
 from cicerone.config import EventsSettings, IOSettings, make_settings
 from cicerone.events.base import EventSourceHealth
 from cicerone.events.buffer import MicroBatchBuffer
-from cicerone.events.normalize import normalize_event
+from cicerone.events.normalize import event_fingerprint, normalize_event
 from cicerone.events.updater import IncrementalUpdater
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
@@ -2017,6 +2017,58 @@ def test_event_worker_applies_same_fingerprint_with_explicit_ids_on_ephemeral_so
     source._pending = [second]
     assert worker.tick() == 1
     assert applies == ["explicit-1", "explicit-2"]
+
+
+def test_event_worker_held_explicit_id_does_not_block_generated_fingerprint_ack(
+    tmp_path, feature_config: FeatureConfig
+):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+
+    class _Ephemeral:
+        ephemeral_event_ids = True
+
+        def connect(self) -> None:
+            return None
+
+        def poll(self, max_events: int = 100):  # type: ignore[no-untyped-def]
+            del max_events
+            return []
+
+        def ack(self, event_ids):  # type: ignore[no-untyped-def]
+            return list(event_ids)
+
+        def nack(self, events):  # type: ignore[no-untyped-def]
+            return list(events)
+
+        def health(self) -> EventSourceHealth:
+            return EventSourceHealth(connected=True, lag=0)
+
+    held = normalize_event(event_payload(event_id="explicit-1", item_id="ishape"))
+    payload = event_payload(item_id="ishape")
+    payload.pop("event_id")
+    generated = normalize_event(payload)
+    assert generated.generated_event_id is True
+    assert event_fingerprint(held) == event_fingerprint(generated)
+    worker = EventWorker(
+        _Ephemeral(),  # type: ignore[arg-type]
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    worker._held = [held]
+    assert worker._still_unapplied(generated) is False
 
 
 def test_event_worker_acks_buffer_duplicates(tmp_path, feature_config: FeatureConfig):

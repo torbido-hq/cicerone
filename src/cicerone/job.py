@@ -546,8 +546,8 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                     if write_job_manifest(sink, manifest):
                         manifest_written = True
                     if publisher is not None:
+                        ensure_publication_fence(sink, fence_check)
                         try:
-                            ensure_publication_fence(sink, fence_check)
                             publisher.publish(recommendations)
                         except Exception:
                             logger.exception("Publish failed after successful write")
