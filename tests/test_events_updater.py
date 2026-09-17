@@ -1174,3 +1174,42 @@ def test_incremental_updater_publish_failure_does_not_unsucceed(tmp_path, featur
     assert called["n"] == 1
     frame = load_recommendations_frame(settings.output)
     assert "i9" in set(frame[frame["user_id"] == "u1"]["item_id"].astype(str))
+
+
+def test_incremental_updater_raises_when_fence_lost_after_connect(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    published: list[pd.DataFrame] = []
+    lost_after_connect = {"lost": False}
+
+    class _Pub:
+        def connect(self) -> None:
+            lost_after_connect["lost"] = True
+
+        def publish(self, df: pd.DataFrame) -> None:
+            published.append(df.copy())
+
+        def close(self) -> None:
+            return None
+
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        fence_check=lambda: not lost_after_connect["lost"],
+        publisher=_Pub(),
+    )
+    events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
+    with pytest.raises(LockLostError, match="events apply lock lost before write"):
+        updater.apply(events)
+    assert published == []
+    frame = load_recommendations_frame(settings.output)
+    assert "i9" in set(frame[frame["user_id"] == "u1"]["item_id"].astype(str))

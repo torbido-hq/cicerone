@@ -571,6 +571,7 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                 try:
                     ensure_fence(fence_check)
                     publisher.connect()
+                    ensure_fence(fence_check)
                     publisher.publish(recommendations)
                 except LockLostError:
                     raise

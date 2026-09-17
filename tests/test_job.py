@@ -216,6 +216,45 @@ def test_job_raises_when_fence_lost_before_publish(tmp_path, monkeypatch):
     assert json.loads((output_dir / "manifest.json").read_text())["status"] == "success"
 
 
+def test_job_raises_when_fence_lost_after_connect(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.utcnow()
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+        ]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    config_path = _write_config(tmp_path, input_dir, output_dir, top_k=2)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
+    published: list[pd.DataFrame] = []
+    lost_after_connect = {"lost": False}
+
+    class _Pub:
+        def connect(self) -> None:
+            lost_after_connect["lost"] = True
+
+        def publish(self, df: pd.DataFrame) -> None:
+            published.append(df.copy())
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings, **_kwargs: _Pub())
+
+    def fence() -> bool:
+        return not lost_after_connect["lost"]
+
+    from cicerone.locks import LockLostError
+
+    with pytest.raises(LockLostError, match="retrain lock lost before write"):
+        job.run(fence_check=fence)
+    assert published == []
+    assert json.loads((output_dir / "manifest.json").read_text())["status"] == "success"
+
+
 def test_job_run_writes_track_and_served_eval(tmp_path, monkeypatch):
     input_dir = tmp_path / "in"
     output_dir = tmp_path / "out"

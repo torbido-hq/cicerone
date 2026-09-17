@@ -23,7 +23,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Dataset serve filters cold-start fallback outside the cache lock.
 - Publish sidecar failures do not un-succeed a recs write or livelock ingest,
   including a broker that is down at connect. Connect and publish run after
-  the writer lock is released.
+  the writer lock is released, and the apply/retrain fence is re-checked
+  after connect.
 - RabbitMQ publish confirms deliveries, stamps a stable `message_id`, recovers
   the channel after a broker error, and retries only unconfirmed users.
 - Kafka publish fails when a delivery callback reports an error.

@@ -225,9 +225,12 @@ Optional `timeout_seconds` (default 10; Kafka min 10 ms, max signed 32-bit
 milliseconds) applies to Kafka connect/flush and RabbitMQ socket timeouts. RabbitMQ: `amqp_url` + `queue`, or `exchange` +
 optional `routing_key` (empty is valid, e.g. fanout; omitted queue-mode
 key is the queue name).
-Payload: `{user_id, recommendations: [{user_id, item_id, rank, score, source, …}]}`.
-Kafka key is `user_id`. Publish failures fail the job/flush so events are
-nacked. Requires the matching extra.
+Payload: `{user_id, message_id, recommendations: [{user_id, item_id, rank, score,
+source, …}]}`. `message_id` is a stable SHA-256 of `{user_id, recommendations}`
+(also set on RabbitMQ properties). Kafka key is `user_id`. Publish failures
+after a successful write are logged and do not fail the job or incremental
+flush. A lost apply/retrain fence after the write still fails the run.
+Requires the matching extra.
 
 ## High availability
 

@@ -232,7 +232,10 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             return
         try:
             self._publisher.connect()
+            self._ensure_fence()
             self._publisher.publish(merged)
+        except LockLostError:
+            raise
         except Exception:
             logger.exception("Incremental publish failed after successful write")
 
