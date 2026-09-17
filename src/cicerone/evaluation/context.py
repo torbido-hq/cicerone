@@ -6,11 +6,12 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import bindparam, create_engine, text
+from sqlalchemy import bindparam, text
 
 from cicerone.config.settings import Settings
 from cicerone.evaluation.tracking import conversion_events, filter_events_by_types
 from cicerone.io.db_store import DEFAULT_EVENTS_TABLE
+from cicerone.io.engines import engine_for
 from cicerone.io.factory import build_input_source
 from cicerone.io.options import is_s3_not_found, read_parquet, require_option, sql_identifier
 from cicerone.io.recommendation_schema import USER_COLUMN
@@ -86,7 +87,7 @@ def load_metric_events(settings: Settings, *, event_types: Sequence[str] | None 
             inp.options.get("events_table", DEFAULT_EVENTS_TABLE),
             option="events_table",
         )
-        engine = create_engine(require_option(inp.options, "database_url", "db"), pool_pre_ping=True)
+        engine = engine_for(require_option(inp.options, "database_url", "db"))
         quoted = ", ".join(f'"{column}"' for column in EVENT_METRIC_COLUMNS)
         try:
             if types:
