@@ -122,6 +122,13 @@ def lookback_since(*, window_hours: float, floor_hours: float = 0.0) -> str:
     return (pd.Timestamp.now(tz="UTC") - pd.Timedelta(hours=hours)).isoformat()
 
 
+def since_date_floor(since: str) -> str | None:
+    start = _since_stamp(since)
+    if start is None:
+        return None
+    return (start.tz_convert("UTC") - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+
+
 DASHBOARD_TRACK_FLOOR_HOURS = 24.0 * 90
 
 
@@ -183,11 +190,13 @@ def _track_row_sql_filter(
         params["experiment_id"] = experiment_id
     if since:
         clauses.append("occurred_at IS NOT NULL AND occurred_at != ''")
-        start = _since_stamp(since)
-        if start is not None:
+        floor = since_date_floor(since)
+        if floor is not None:
             # Date floor is one day earlier so offset-stored TEXT rows are not dropped.
             clauses.append("occurred_at >= :since")
-            params["since"] = (start.tz_convert("UTC") - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+            params["since"] = floor
+        else:
+            clauses.append("1 = 0")
     if not clauses:
         return "", {}
     return " WHERE " + " AND ".join(clauses), params

@@ -43,6 +43,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Thompson windows the shared rows in memory so eval keeps full history.
 - Quality live and Experiments track reads use an attribution lookback.
   Experiments keep only exposures for users in that track window.
+- Untimestamped impressions keep latest-snapshot source attribution.
+- Shared job preload keeps an empty recommendations frame instead of reloading.
+- Invalid track `since` is an empty DB query.
+- Quality/eval event `since` is pushed into SQL and parquet filters.
+- Dataset `track.jsonl` drops out-of-window rows while streaming the file.
 - Event worker stop closes the source after a tick that never started a loop
   thread.
 - A dispatched RabbitMQ job is not started after its I/O timeout.

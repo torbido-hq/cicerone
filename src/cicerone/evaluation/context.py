@@ -14,6 +14,7 @@ from cicerone.io.db_store import DEFAULT_EVENTS_TABLE
 from cicerone.io.factory import build_input_source
 from cicerone.io.options import is_s3_not_found, read_parquet, require_option, sql_identifier
 from cicerone.io.recommendation_schema import USER_COLUMN
+from cicerone.track.store_common import since_date_floor
 
 EVENT_METRIC_COLUMNS = (USER_COLUMN, "item_id", "event_type", "quantity", "occurred_at")
 
@@ -77,11 +78,21 @@ def load_metric_events(
 ) -> pd.DataFrame:
     inp = settings.input
     types = tuple(event_types) if event_types else None
+    floor = since_date_floor(since) if since else None
+    if since and floor is None:
+        return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
     if inp.kind == "dataset":
         try:
-            filters = [("event_type", "in", list(types))] if types else None
+            filters: list[Any] = []
+            if types:
+                filters.append(("event_type", "in", list(types)))
+            if floor is not None:
+                filters.append(("occurred_at", ">=", floor))
             frame = read_parquet(
-                inp.options, "events.parquet", columns=list(EVENT_METRIC_COLUMNS), filters=filters
+                inp.options,
+                "events.parquet",
+                columns=list(EVENT_METRIC_COLUMNS),
+                filters=filters or None,
             )
         except FileNotFoundError:
             return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
@@ -102,14 +113,20 @@ def load_metric_events(
         )
         engine = create_engine(require_option(inp.options, "database_url", "db"), pool_pre_ping=True)
         quoted = ", ".join(f'"{column}"' for column in EVENT_METRIC_COLUMNS)
+        clauses: list[str] = []
+        params: dict[str, Any] = {}
+        if types:
+            clauses.append('"event_type" IN :types')
+            params["types"] = list(types)
+        if floor is not None:
+            clauses.append('"occurred_at" >= :since')
+            params["since"] = floor
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         try:
+            stmt = text(f'SELECT {quoted} FROM "{table}"{where}')
             if types:
-                stmt = text(f'SELECT {quoted} FROM "{table}" WHERE "event_type" IN :types').bindparams(
-                    bindparam("types", expanding=True)
-                )
-                frame = pd.read_sql(stmt, engine, params={"types": list(types)})
-            else:
-                frame = pd.read_sql(text(f'SELECT {quoted} FROM "{table}"'), engine)
+                stmt = stmt.bindparams(bindparam("types", expanding=True))
+            frame = pd.read_sql(stmt, engine, params=params)
             return _filter_events_since(frame, since)
         except Exception:
             frame = build_input_source(inp).read_events()

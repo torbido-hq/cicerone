@@ -2214,6 +2214,34 @@ def test_load_shared_eval_inputs_drops_partial_preload(tmp_path, monkeypatch):
     assert _load_shared_eval_inputs(settings) == (None, None)
 
 
+def test_load_shared_eval_inputs_keeps_empty_recs(tmp_path, monkeypatch):
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+    from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
+    from cicerone.job import _load_shared_eval_inputs
+
+    settings = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="ranking-cvr",
+            allocation="thompson",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        track=TrackSettings(enabled=True),
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    empty = pd.DataFrame()
+    monkeypatch.setattr("cicerone.job.TrackStore.read_rows", lambda *_args, **_kwargs: [{"event_id": "a"}])
+    monkeypatch.setattr("cicerone.job.load_recommendations_frame", lambda _output: empty)
+    track, recs = _load_shared_eval_inputs(settings)
+    assert track == [{"event_id": "a"}]
+    assert recs is empty
+
+
 def test_load_shared_eval_inputs_does_not_bound_to_thompson_window(tmp_path, monkeypatch):
     from conftest import make_settings
 

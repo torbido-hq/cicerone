@@ -28,6 +28,15 @@ def test_track_row_sql_filter_since_uses_date_floor() -> None:
     assert params["since"] == "2026-08-28"
 
 
+def test_track_row_sql_filter_invalid_since_is_empty() -> None:
+    from cicerone.track.store_common import _track_row_sql_filter
+
+    clause, params = _track_row_sql_filter(kind=None, experiment_id=None, since="not-a-date")
+    assert "1 = 0" in clause
+    assert "occurred_at >= :since" not in clause
+    assert "since" not in params
+
+
 def test_store_reexports_prior_constants() -> None:
     from cicerone.track.store import (
         DEFAULT_EVAL_TABLE,
@@ -833,6 +842,22 @@ def test_track_read_rows_filters_experiment_and_since(tmp_path) -> None:
     assert {row["event_id"] for row in matched} == {"a"}
     recent = store.read_rows(since="2026-08-28T12:00:00Z")
     assert {row["event_id"] for row in recent} == {"b", "untagged"}
+
+
+def test_track_read_rows_since_indexes_old_event_ids(tmp_path) -> None:
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    store = TrackStore(output)
+    store.append_rows(
+        [
+            _row(event_id="old", occurred_at="2026-08-20T12:00:00Z"),
+            _row(event_id="new", occurred_at="2026-08-28T13:00:00Z"),
+        ]
+    )
+    store._known_ids = None
+    recent = store.read_rows(since="2026-08-28T12:00:00Z")
+    assert {row["event_id"] for row in recent} == {"new"}
+    assert store._known_ids is not None
+    assert {"old", "new"} <= store._known_ids
 
 
 def test_track_read_rows_since_drops_untimed(tmp_path) -> None:

@@ -18,8 +18,10 @@ from cicerone.evaluation import (
     user_track_outcomes,
 )
 from cicerone.evaluation.context import (
+    EVENT_METRIC_COLUMNS,
     _filter_events_since,
     concat_history,
+    load_metric_events,
     prefer_history,
     stamp_recommendations,
 )
@@ -1263,7 +1265,104 @@ def test_annotate_source_does_not_invent_variant_from_later_snap() -> None:
     assert "variant" not in annotated.columns or pd.isna(annotated.iloc[0].get("variant"))
 
 
+def test_annotate_source_untimestamped_keeps_latest_source() -> None:
+    from cicerone.evaluation import _annotate_source
+
+    snapshots = pd.DataFrame(
+        [
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "source": "popular_fallback",
+                "variant": "control",
+                "generated_at": "2026-08-20T00:00:00Z",
+            },
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "source": "personalized",
+                "variant": "treatment",
+                "generated_at": "2026-08-28T00:00:00Z",
+            },
+        ]
+    )
+    impressions = pd.DataFrame([{"user_id": "alice", "item_id": "ipa", "generated_at": None}])
+    annotated = _annotate_source(impressions, snapshots)
+    assert annotated.iloc[0]["source"] == "personalized"
+    assert "variant" not in annotated.columns or pd.isna(annotated.iloc[0].get("variant"))
+
+
 def test_filter_events_since_without_occurred_at_is_empty() -> None:
     frame = pd.DataFrame([{"user_id": "u1", "event_type": "purchase", "quantity": 1}])
     filtered = _filter_events_since(frame, "2026-08-28T00:00:00Z")
     assert filtered.empty
+
+
+def test_load_metric_events_invalid_since_is_empty(tmp_path) -> None:
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+
+    settings = make_settings(
+        input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    frame = load_metric_events(settings, since="not-a-date")
+    assert frame.empty
+    assert list(frame.columns) == list(EVENT_METRIC_COLUMNS)
+
+
+def test_load_metric_events_dataset_pushes_since_filter(tmp_path, monkeypatch) -> None:
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+
+    settings = make_settings(
+        input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    seen: dict[str, object] = {}
+
+    def _read(_options, _filename, **kwargs):
+        seen.update(kwargs)
+        return pd.DataFrame(
+            [
+                {
+                    "user_id": "u1",
+                    "item_id": "i1",
+                    "event_type": "purchase",
+                    "quantity": 1,
+                    "occurred_at": "2026-08-29T06:00:00Z",
+                }
+            ]
+        )
+
+    monkeypatch.setattr("cicerone.evaluation.context.read_parquet", _read)
+    frame = load_metric_events(settings, event_types=("purchase",), since="2026-08-29T05:00:00+00:00")
+    assert ("event_type", "in", ["purchase"]) in list(seen.get("filters") or [])
+    assert ("occurred_at", ">=", "2026-08-28") in list(seen.get("filters") or [])
+    assert len(frame) == 1
+
+
+def test_load_metric_events_db_pushes_since_predicate(monkeypatch) -> None:
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+
+    settings = make_settings(input=IOSettings(kind="db", options={"database_url": "sqlite+pysqlite://"}))
+    captured: dict[str, object] = {}
+
+    class _Engine:
+        def dispose(self) -> None:
+            return None
+
+    def _read_sql(stmt, _engine, params=None):
+        captured["sql"] = str(stmt)
+        captured["params"] = params
+        return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
+
+    monkeypatch.setattr("cicerone.evaluation.context.create_engine", lambda *_args, **_kwargs: _Engine())
+    monkeypatch.setattr("cicerone.evaluation.context.pd.read_sql", _read_sql)
+    frame = load_metric_events(settings, event_types=("purchase",), since="2026-08-29T05:00:00+00:00")
+    assert '"occurred_at" >= :since' in str(captured["sql"])
+    assert captured["params"]["since"] == "2026-08-28"
+    assert captured["params"]["types"] == ["purchase"]
+    assert frame.empty

@@ -655,6 +655,10 @@ def test_experiment_context_ctr_from_track_rows(tmp_path):
     from cicerone.track.normalize import normalize_track
     from cicerone.track.store import TrackStore
 
+    now = pd.Timestamp.now(tz="UTC")
+    impression_at = (now - pd.Timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    click_at = (now - pd.Timedelta(minutes=9)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    purchase_at = (now - pd.Timedelta(minutes=8)).strftime("%Y-%m-%dT%H:%M:%SZ")
     base = _settings(tmp_path, log_exposures=False)
     _write_frames(
         base,
@@ -664,7 +668,7 @@ def test_experiment_context_ctr_from_track_rows(tmp_path):
                 "item_id": "i1",
                 "event_type": "purchase",
                 "quantity": 1,
-                "occurred_at": "2026-08-28T12:10:00Z",
+                "occurred_at": purchase_at,
             }
         ],
         recs=[
@@ -694,7 +698,7 @@ def test_experiment_context_ctr_from_track_rows(tmp_path):
                     "user_id": "u1",
                     "item_id": "i1",
                     "rank": 1,
-                    "occurred_at": "2026-08-28T12:00:00Z",
+                    "occurred_at": impression_at,
                     "event_id": "imp-u1",
                 }
             ).as_row(),
@@ -703,7 +707,7 @@ def test_experiment_context_ctr_from_track_rows(tmp_path):
                     "kind": "click",
                     "user_id": "u1",
                     "item_id": "i1",
-                    "occurred_at": "2026-08-28T12:01:00Z",
+                    "occurred_at": click_at,
                     "event_id": "clk-u1",
                 }
             ).as_row(),
@@ -735,6 +739,9 @@ def test_experiment_context_drops_exposures_outside_track_window(tmp_path):
     from cicerone.track.normalize import normalize_track
     from cicerone.track.store import TrackStore
 
+    now = pd.Timestamp.now(tz="UTC")
+    impression_at = (now - pd.Timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    purchase_at = (now - pd.Timedelta(minutes=8)).strftime("%Y-%m-%dT%H:%M:%SZ")
     base = _settings(tmp_path)
     settings = make_settings(
         feature_config_path=str(REPO_FEATURES),
@@ -761,7 +768,7 @@ def test_experiment_context_drops_exposures_outside_track_window(tmp_path):
                 "item_id": "i1",
                 "event_type": "purchase",
                 "quantity": 1,
-                "occurred_at": "2026-08-28T12:10:00Z",
+                "occurred_at": purchase_at,
             }
         ],
         recs=[
@@ -807,7 +814,7 @@ def test_experiment_context_drops_exposures_outside_track_window(tmp_path):
                     "user_id": "u1",
                     "item_id": "i1",
                     "rank": 1,
-                    "occurred_at": "2026-08-28T12:00:00Z",
+                    "occurred_at": impression_at,
                     "event_id": "imp-u1",
                     "experiment_id": "exp-1",
                 }
@@ -829,7 +836,9 @@ def test_experiment_context_skips_other_experiment_track_rows(tmp_path, monkeypa
             "user_id": user_id,
             "item_id": "i1",
             "rank": 1,
-            "occurred_at": "2026-08-28T12:00:00Z",
+            "occurred_at": (pd.Timestamp.now(tz="UTC") - pd.Timedelta(minutes=10)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            ),
             "event_id": event_id,
         }
         if experiment_id is not None:
