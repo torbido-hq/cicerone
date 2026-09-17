@@ -36,7 +36,7 @@ _READONLY_SELECT_FORBIDDEN = re.compile(
     r"COPY|CALL|EXEC|EXECUTE|MERGE|REPLACE|ATTACH|DETACH|"
     r"INTO|LOAD|DO|VACUUM|LOCK|"
     r"pg_read(?:_binary)?_file|pg_write(?:_binary)?_file|"
-    r"pg_file_[A-Za-z0-9_]+|pg_logdir_ls|pg_rotate_logfile|"
+    r"pg_file_[A-Za-z0-9_]+|pg_logdir_ls|pg_rotate_logfile|pg_current_logfile|"
     r"pg_ls_[A-Za-z0-9_]+|pg_stat_file|pg_reload_conf|"
     r"pg_execute_server_program|pg_terminate_backend|pg_cancel_backend|"
     r"set_config|dblink(?:_[A-Za-z0-9_]+)?|lo_[A-Za-z0-9_]+)\b",
