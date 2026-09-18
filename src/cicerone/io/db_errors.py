@@ -18,8 +18,4 @@ def is_missing_column_error(exc: BaseException) -> bool:
 
 def is_missing_table_error(exc: BaseException) -> bool:
     message = db_error_message(exc)
-    return (
-        "no such table" in message
-        or ("relation" in message and "does not exist" in message)
-        or ("table" in message and "does not exist" in message)
-    )
+    return "no such table" in message or ('relation "' in message and "does not exist" in message)

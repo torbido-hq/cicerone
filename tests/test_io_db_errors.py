@@ -23,6 +23,9 @@ def test_is_missing_table_error():
         ProgrammingError("stmt", {}, Exception("permission denied for table track"))
     )
     assert not is_missing_table_error(OperationalError("stmt", {}, Exception("disk full")))
+    assert not is_missing_table_error(
+        ProgrammingError("stmt", {}, Exception('column "relation" does not exist'))
+    )
 
 
 def test_db_error_message_uses_orig():

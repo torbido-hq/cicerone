@@ -1497,3 +1497,38 @@ def test_load_metric_events_query_pushes_since_predicate(monkeypatch) -> None:
     assert captured["params"]["since"] == "2026-08-28"
     assert captured["params"]["types"] == ["purchase"]
     assert frame.empty
+
+
+def test_load_metric_events_query_keeps_limit(monkeypatch) -> None:
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+
+    settings = make_settings(
+        input=IOSettings(
+            kind="db",
+            options={
+                "database_url": "sqlite+pysqlite://",
+                "events_query": (
+                    "SELECT user_id, item_id, event_type, quantity, occurred_at "
+                    "FROM events ORDER BY occurred_at DESC LIMIT 100"
+                ),
+            },
+        )
+    )
+    captured: dict[str, object] = {}
+
+    class _Engine:
+        def dispose(self) -> None:
+            return None
+
+    def _read_sql(stmt, _engine, params=None):
+        captured["sql"] = str(stmt)
+        captured["params"] = params
+        return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
+
+    monkeypatch.setattr("cicerone.evaluation.context.create_engine", lambda *_args, **_kwargs: _Engine())
+    monkeypatch.setattr("cicerone.evaluation.context.pd.read_sql", _read_sql)
+    load_metric_events(settings, event_types=("purchase",), since="2026-08-29T05:00:00+00:00")
+    assert "_cicerone_metric_events" not in str(captured["sql"])
+    assert "LIMIT 100" in str(captured["sql"])

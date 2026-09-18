@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -174,6 +175,11 @@ def load_metric_events(
         try:
             if query:
                 cleaned = readonly_select(str(query), option="input.options.events_query")
+                if re.search(r"\b(?:limit|offset)\b", cleaned, flags=re.IGNORECASE):
+                    frame = pd.read_sql(text(cleaned), engine)
+                    keep = [column for column in EVENT_METRIC_COLUMNS if column in frame.columns]
+                    frame = frame.loc[:, keep] if keep else frame
+                    return _filter_events_since(filter_events_by_types(frame, types), since)
                 source = f"({cleaned}) AS _cicerone_metric_events"
             else:
                 table = sql_identifier(

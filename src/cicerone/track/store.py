@@ -154,6 +154,7 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
             rows = self._read_rows_db(kind=kind, experiment_id=experiment_id, since=since)
         else:
             rows = self._read_rows_dataset(since=since)
+            since = None
         seen: set[str] = set()
         unique: list[dict[str, Any]] = []
         for row in rows:
