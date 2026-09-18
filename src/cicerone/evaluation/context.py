@@ -11,6 +11,7 @@ from sqlalchemy import bindparam, create_engine, text
 
 from cicerone.config.settings import Settings
 from cicerone.evaluation.tracking import conversion_events, filter_events_by_types
+from cicerone.io.db_errors import is_missing_column_error
 from cicerone.io.db_store import DEFAULT_EVENTS_TABLE
 from cicerone.io.factory import build_input_source
 from cicerone.io.options import (
@@ -81,13 +82,22 @@ def _filter_events_since(frame: pd.DataFrame, since: str | None) -> pd.DataFrame
     return frame.loc[stamps.notna() & (stamps >= start)].copy()
 
 
+def _with_default_quantity(frame: pd.DataFrame) -> pd.DataFrame:
+    if "quantity" in frame.columns:
+        return frame
+    frame = frame.copy()
+    frame["quantity"] = 1
+    return frame
+
+
 def _metric_event_sql(
     source: str,
     *,
     types: tuple[str, ...] | None,
     floor: str | None,
+    columns: tuple[str, ...] = EVENT_METRIC_COLUMNS,
 ) -> tuple[Any, dict[str, Any]]:
-    quoted = ", ".join(f'"{column}"' for column in REQUIRED_EVENT_COLUMNS)
+    quoted = ", ".join(f'"{column}"' for column in columns)
     clauses: list[str] = []
     params: dict[str, Any] = {}
     if types:
@@ -142,20 +152,21 @@ def _read_metric_parquet(
     else:
         attempts.append(base or None)
     last_error: Exception | None = None
-    for filters in attempts:
-        try:
-            return read_parquet(
-                options,
-                "events.parquet",
-                columns=list(REQUIRED_EVENT_COLUMNS),
-                filters=filters,
-            )
-        except FileNotFoundError:
-            raise
-        except Exception as exc:
-            if is_s3_not_found(exc):
+    for columns in (EVENT_METRIC_COLUMNS, REQUIRED_EVENT_COLUMNS):
+        for filters in attempts:
+            try:
+                return read_parquet(
+                    options,
+                    "events.parquet",
+                    columns=list(columns),
+                    filters=filters,
+                )
+            except FileNotFoundError:
                 raise
-            last_error = exc
+            except Exception as exc:
+                if is_s3_not_found(exc):
+                    raise
+                last_error = exc
     if last_error is not None:
         raise last_error
     return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
@@ -185,10 +196,7 @@ def load_metric_events(
                 frame = build_input_source(inp).read_events()
         keep = [column for column in EVENT_METRIC_COLUMNS if column in frame.columns]
         frame = frame.loc[:, keep] if keep else frame
-        if "quantity" not in frame.columns:
-            frame = frame.copy()
-            frame["quantity"] = 1
-        return _filter_events_since(filter_events_by_types(frame, types), since)
+        return _filter_events_since(filter_events_by_types(_with_default_quantity(frame), types), since)
     if inp.kind == "db":
         engine = create_engine(require_option(inp.options, "database_url", "db"), pool_pre_ping=True)
         query = inp.options.get("events_query")
@@ -199,7 +207,9 @@ def load_metric_events(
                     frame = pd.read_sql(text(cleaned), engine)
                     keep = [column for column in EVENT_METRIC_COLUMNS if column in frame.columns]
                     frame = frame.loc[:, keep] if keep else frame
-                    return _filter_events_since(filter_events_by_types(frame, types), since)
+                    return _filter_events_since(
+                        filter_events_by_types(_with_default_quantity(frame), types), since
+                    )
                 source = f"({cleaned}) AS _cicerone_metric_events"
             else:
                 table = sql_identifier(
@@ -207,22 +217,27 @@ def load_metric_events(
                     option="events_table",
                 )
                 source = f'"{table}"'
-            stmt, params = _metric_event_sql(source, types=types, floor=floor)
-            frame = pd.read_sql(stmt, engine, params=params)
-            if "quantity" not in frame.columns:
-                frame = frame.copy()
-                frame["quantity"] = 1
-            return _filter_events_since(frame, since)
+            try:
+                stmt, params = _metric_event_sql(source, types=types, floor=floor)
+                frame = pd.read_sql(stmt, engine, params=params)
+            except Exception as exc:
+                if not is_missing_column_error(exc):
+                    raise
+                stmt, params = _metric_event_sql(
+                    source, types=types, floor=floor, columns=REQUIRED_EVENT_COLUMNS
+                )
+                frame = pd.read_sql(stmt, engine, params=params)
+            return _filter_events_since(_with_default_quantity(frame), since)
         except Exception:
             if floor is not None:
                 return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
             frame = build_input_source(inp).read_events()
             keep = [column for column in EVENT_METRIC_COLUMNS if column in frame.columns]
             frame = frame.loc[:, keep] if keep else frame
-            return _filter_events_since(filter_events_by_types(frame, types), since)
+            return _filter_events_since(filter_events_by_types(_with_default_quantity(frame), types), since)
         finally:
             engine.dispose()
     frame = build_input_source(inp).read_events()
     keep = [column for column in EVENT_METRIC_COLUMNS if column in frame.columns]
     frame = frame.loc[:, keep] if keep else frame
-    return _filter_events_since(filter_events_by_types(frame, types), since)
+    return _filter_events_since(filter_events_by_types(_with_default_quantity(frame), types), since)

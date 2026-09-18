@@ -1500,7 +1500,7 @@ def test_load_metric_events_dataset_filter_failure_is_empty(tmp_path, monkeypatc
 
     monkeypatch.setattr("cicerone.evaluation.context.read_parquet", _read)
     frame = load_metric_events(settings, event_types=("purchase",), since="2026-08-29T05:00:00+00:00")
-    assert calls["n"] == 2
+    assert calls["n"] == 4
     assert frame.empty
 
 
@@ -1551,7 +1551,7 @@ def test_load_metric_events_dataset_unbounded_retries(tmp_path, monkeypatch) -> 
     monkeypatch.setattr("cicerone.evaluation.context.read_parquet", _read)
     frame = load_metric_events(settings, event_types=("purchase",))
     assert calls[0] == [("event_type", "in", ["purchase"])]
-    assert calls[1] is None
+    assert calls[-1] is None
     assert len(frame) == 1
 
 
@@ -1576,7 +1576,7 @@ def test_load_metric_events_db_pushes_since_predicate(monkeypatch) -> None:
     monkeypatch.setattr("cicerone.evaluation.context.pd.read_sql", _read_sql)
     frame = load_metric_events(settings, event_types=("purchase",), since="2026-08-29T05:00:00+00:00")
     assert '"occurred_at" >= :since' in str(captured["sql"])
-    assert '"quantity"' not in str(captured["sql"])
+    assert '"quantity"' in str(captured["sql"])
     assert captured["params"]["since"] == "2026-08-28"
     assert captured["params"]["types"] == ["purchase"]
     assert frame.empty
@@ -1740,3 +1740,108 @@ def test_load_metric_events_db_bound_failure_is_empty(monkeypatch) -> None:
     monkeypatch.setattr("cicerone.evaluation.context.build_input_source", _source)
     frame = load_metric_events(settings, event_types=("purchase",), since="2026-08-29T05:00:00+00:00")
     assert frame.empty
+
+
+def test_load_metric_events_dataset_keeps_quantity(tmp_path, monkeypatch) -> None:
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+
+    settings = make_settings(
+        input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    seen: dict[str, object] = {}
+
+    def _read(_options, _filename, **kwargs):
+        seen["columns"] = kwargs.get("columns")
+        return pd.DataFrame(
+            [
+                {
+                    "user_id": "u1",
+                    "item_id": "i1",
+                    "event_type": "purchase",
+                    "quantity": 3,
+                    "occurred_at": "2026-08-29T06:00:00Z",
+                }
+            ]
+        )
+
+    monkeypatch.setattr("cicerone.evaluation.context.read_parquet", _read)
+    frame = load_metric_events(settings, event_types=("purchase",), since="2026-08-29T05:00:00+00:00")
+    assert seen.get("columns") == list(EVENT_METRIC_COLUMNS)
+    assert frame.iloc[0]["quantity"] == 3
+
+
+def test_load_metric_events_db_retries_without_quantity(monkeypatch) -> None:
+    from conftest import make_settings
+    from sqlalchemy.exc import ProgrammingError
+
+    from cicerone.config import IOSettings
+
+    settings = make_settings(input=IOSettings(kind="db", options={"database_url": "sqlite+pysqlite://"}))
+    calls: list[str] = []
+
+    class _Engine:
+        def dispose(self) -> None:
+            return None
+
+    def _read_sql(stmt, _engine, params=None):
+        sql = str(stmt)
+        calls.append(sql)
+        if '"quantity"' in sql:
+            raise ProgrammingError("SELECT", {}, Exception('column "quantity" does not exist'))
+        return pd.DataFrame(
+            [
+                {
+                    "user_id": "u1",
+                    "item_id": "i1",
+                    "event_type": "purchase",
+                    "occurred_at": "2026-08-29T06:00:00Z",
+                }
+            ]
+        )
+
+    monkeypatch.setattr("cicerone.evaluation.context.create_engine", lambda *_args, **_kwargs: _Engine())
+    monkeypatch.setattr("cicerone.evaluation.context.pd.read_sql", _read_sql)
+    frame = load_metric_events(settings, event_types=("purchase",), since="2026-08-29T05:00:00+00:00")
+    assert len(calls) == 2
+    assert '"quantity"' in calls[0]
+    assert '"quantity"' not in calls[1]
+    assert frame.iloc[0]["quantity"] == 1
+
+
+def test_load_metric_events_query_limit_defaults_quantity(monkeypatch) -> None:
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+
+    settings = make_settings(
+        input=IOSettings(
+            kind="db",
+            options={
+                "database_url": "sqlite+pysqlite://",
+                "events_query": ("SELECT user_id, item_id, event_type, occurred_at FROM events LIMIT 100"),
+            },
+        )
+    )
+
+    class _Engine:
+        def dispose(self) -> None:
+            return None
+
+    def _read_sql(stmt, _engine, params=None):
+        return pd.DataFrame(
+            [
+                {
+                    "user_id": "u1",
+                    "item_id": "i1",
+                    "event_type": "purchase",
+                    "occurred_at": "2026-08-29T06:00:00Z",
+                }
+            ]
+        )
+
+    monkeypatch.setattr("cicerone.evaluation.context.create_engine", lambda *_args, **_kwargs: _Engine())
+    monkeypatch.setattr("cicerone.evaluation.context.pd.read_sql", _read_sql)
+    frame = load_metric_events(settings, since="2026-08-29T05:00:00+00:00")
+    assert frame.iloc[0]["quantity"] == 1
