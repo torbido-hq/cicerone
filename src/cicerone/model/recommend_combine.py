@@ -50,8 +50,9 @@ def _popular_cold_start_frame(
     cohort_plan: _CohortPlan,
     combine_k: int,
     empty_recs: pd.DataFrame,
+    recommend_models: list[str],
 ) -> pd.DataFrame:
-    if "popular" not in models:
+    if "popular" not in recommend_models or "popular" not in models:
         return empty_recs
     global_allowed = _global_allowed_items(built, cohort_plan)
     if not global_allowed:
@@ -85,6 +86,7 @@ def _with_popular_cold_start(
     cohort_plan: _CohortPlan,
     combine_k: int,
     empty_recs: pd.DataFrame,
+    recommend_models: list[str],
 ) -> pd.DataFrame:
     if (
         not combined.empty
@@ -92,7 +94,7 @@ def _with_popular_cold_start(
         and COLD_START_USER_ID in set(combined[Columns.User].astype(str))
     ):
         return combined
-    cold = _popular_cold_start_frame(models, built, cohort_plan, combine_k, empty_recs)
+    cold = _popular_cold_start_frame(models, built, cohort_plan, combine_k, empty_recs, recommend_models)
     if cold.empty:
         return combined
     if combined.empty:
@@ -158,9 +160,11 @@ def _combine_strategy_frames(
             latest_by_user=latest_by_user or None,
         )
 
-        cold_popular = _popular_cold_start_frame(models, built, cohort_plan, combine_k, empty_recs)
+        cold_popular = _popular_cold_start_frame(
+            models, built, cohort_plan, combine_k, empty_recs, recommend_models
+        )
         cold_shared_latest: list[tuple[str, int, float]] | None = None
-        if "popular" in models:
+        if "popular" in recommend_models and "popular" in models:
             global_allowed = _global_allowed_items(built, cohort_plan)
             if (
                 global_allowed
@@ -189,7 +193,9 @@ def _combine_strategy_frames(
         return combined
 
     if not strategy_frames.frames:
-        return _with_popular_cold_start(empty_recs, models, built, cohort_plan, combine_k, empty_recs)
+        return _with_popular_cold_start(
+            empty_recs, models, built, cohort_plan, combine_k, empty_recs, recommend_models
+        )
     if weights is not None:
         label_weights = {STRATEGIES[name].source_label: weights.get(name, 1.0) for name in recommend_models}
         stamped: list[pd.DataFrame] = []
@@ -203,4 +209,6 @@ def _combine_strategy_frames(
         )
     else:
         combined = combine_by_priority(strategy_frames.frames, combine_k)
-    return _with_popular_cold_start(combined, models, built, cohort_plan, combine_k, empty_recs)
+    return _with_popular_cold_start(
+        combined, models, built, cohort_plan, combine_k, empty_recs, recommend_models
+    )

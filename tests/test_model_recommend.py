@@ -171,10 +171,44 @@ def test_popular_cold_start_skips_recommend_when_dataset_has_no_users():
     cohort = SimpleNamespace(eligibility=[], all_item_ids=["i1"])
     empty = pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, "source"])
 
-    out = _popular_cold_start_frame({"popular": popular}, built, cohort, 2, empty)
+    out = _popular_cold_start_frame({"popular": popular}, built, cohort, 2, empty, ["popular"])
 
     popular.recommend.assert_not_called()
     assert out.empty
+
+
+def test_recommend_with_models_does_not_write_sentinel_when_popular_not_in_run(sample_items, feature_config):
+    from cicerone.model.fit import fit_strategies, plan_model_run
+    from cicerone.model.recommend import recommend_with_models
+
+    events = synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+    union_plan = plan_model_run(
+        ["collaborative", "popular"],
+        blending_enabled=False,
+        content_fallback_enabled=None,
+    )
+    _, fitted = fit_strategies(
+        built,
+        ["u1", "u2"],
+        enabled_models=list(union_plan.recommend_models),
+        max_workers=1,
+    )
+    variant_plan = plan_model_run(
+        ["collaborative"],
+        blending_enabled=False,
+        content_fallback_enabled=None,
+    )
+    recs = recommend_with_models(
+        fitted,
+        built,
+        ["u1", "u2"],
+        feature_config,
+        top_k=2,
+        enabled_models=list(variant_plan.enabled_models),
+        run_plan=variant_plan,
+    )
+    assert COLD_START_USER_ID not in set(recs[Columns.User].astype(str))
 
 
 def test_train_and_recommend_ignores_cold_start_in_target_users(sample_items, feature_config):
