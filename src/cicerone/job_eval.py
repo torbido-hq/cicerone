@@ -191,6 +191,9 @@ def score_previous_run(
     events: pd.DataFrame,
     last_manifest: dict[str, Any] | None,
     items: pd.DataFrame | None = None,
+    *,
+    preloaded_track: list[dict[str, Any]] | None = None,
+    preloaded_recs: pd.DataFrame | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     if not settings.track.enabled and not settings.eval.enabled:
         return None, None
@@ -211,15 +214,21 @@ def score_previous_run(
             return []
         return store.read_rows()
 
-    previous_recs, track_rows = try_load_pair(
-        "load previous recommendations for eval",
-        _load_recs,
-        None,
-        "read track rows",
-        _load_track,
-        [],
-        parallel=settings.output.kind != "db",
-    )
+    if preloaded_track is not None or preloaded_recs is not None:
+        previous_recs = preloaded_recs
+        if previous_recs is not None and previous_recs.empty:
+            previous_recs = None
+        track_rows = list(preloaded_track or [])
+    else:
+        previous_recs, track_rows = try_load_pair(
+            "load previous recommendations for eval",
+            _load_recs,
+            None,
+            "read track rows",
+            _load_track,
+            [],
+            parallel=settings.output.kind != "db",
+        )
     wanted = generated_ats_from_track(track_rows, previous_generated_at)
     history = None
     if wanted:
