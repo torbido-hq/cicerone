@@ -11,7 +11,9 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from botocore.exceptions import BotoCoreError
 from sqlalchemy import Engine, create_engine, text
+from sqlalchemy.exc import SQLAlchemyError
 
 from cicerone.config.constants import ConfigError
 from cicerone.config.settings import IOSettings
@@ -28,7 +30,7 @@ from cicerone.locks import LockBackend, ensure_writer_owned, held_writer_lock, w
 
 logger = logging.getLogger(__name__)
 
-_OVERLAY_READ_ERRORS = (OSError, ValueError, TypeError)
+_OVERLAY_READ_ERRORS = (OSError, ValueError, TypeError, SQLAlchemyError, BotoCoreError)
 
 STATE_FILENAME = "experiment_state.json"
 EXPOSURES_FILENAME = "exposures.jsonl"

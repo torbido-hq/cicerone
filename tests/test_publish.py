@@ -350,6 +350,15 @@ def test_kafka_publisher_connect_failure(monkeypatch):
     assert broker.flush_calls == [2.0]
 
 
+def test_kafka_publisher_producer_constructor_failure(monkeypatch):
+    broker = install_fake_kafka(monkeypatch)
+    broker.producer_error = RuntimeError("bad client")
+    publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "t"})
+    with pytest.raises(ConfigError, match="unreachable"):
+        publisher.connect()
+    assert broker.flush_calls == []
+
+
 def test_rabbitmq_publisher_connect_failure(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     broker.connect_error = RuntimeError("down")

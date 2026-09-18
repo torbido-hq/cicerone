@@ -44,14 +44,16 @@ class KafkaPublisher:
             from confluent_kafka import Producer
         except ImportError as exc:
             raise _missing_extra() from exc
-        producer = Producer(self._conf)
+        producer = None
         try:
+            producer = Producer(self._conf)
             producer.list_topics(timeout=self._timeout_seconds)
         except Exception as exc:
-            try:
-                producer.flush(self._timeout_seconds)
-            except Exception:
-                logger.exception("Kafka publisher flush after connect failure")
+            if producer is not None:
+                try:
+                    producer.flush(self._timeout_seconds)
+                except Exception:
+                    logger.exception("Kafka publisher flush after connect failure")
             raise ConfigError(f"publish.options.bootstrap_servers is unreachable: {exc}") from exc
         self._producer = producer
 

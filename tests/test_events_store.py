@@ -526,3 +526,31 @@ def test_load_items_catalog_size_sqlite_generic_error(tmp_path, monkeypatch):
     monkeypatch.setattr("cicerone.events.store.is_missing_column_error", lambda _exc: False)
     with pytest.raises(RuntimeError, match="engine"):
         load_items_catalog_size(output)
+
+
+def test_load_items_catalog_size_backend_io_errors(tmp_path, monkeypatch):
+    from botocore.exceptions import BotoCoreError
+    from sqlalchemy.exc import SQLAlchemyError
+
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    )
+    pd.DataFrame({"item_id": ["a"]}).to_parquet(tmp_path / "items_snapshot.parquet", index=False)
+    monkeypatch.setattr(
+        "cicerone.events.store._read_parquet_columns",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(BotoCoreError()),
+    )
+    monkeypatch.setattr("cicerone.events.store.is_s3_not_found", lambda _exc: False)
+    assert load_items_catalog_size(settings.output) is None
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'items.db'}"
+    output = IOSettings(kind="db", options={"database_url": url})
+
+    class _Engine:
+        def connect(self):
+            raise SQLAlchemyError("engine")
+
+    monkeypatch.setattr("cicerone.events.store._engine_for", lambda _url: _Engine())
+    monkeypatch.setattr("cicerone.events.store.is_missing_table_error", lambda _exc: False)
+    monkeypatch.setattr("cicerone.events.store.is_missing_column_error", lambda _exc: False)
+    assert load_items_catalog_size(output) is None

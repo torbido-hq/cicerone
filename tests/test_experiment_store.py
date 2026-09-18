@@ -707,6 +707,23 @@ def test_promoted_variant_reuses_cache_when_read_fails(tmp_path, monkeypatch) ->
     assert store.promoted_variant("other") is None
 
 
+def test_assignment_overlay_keeps_last_on_backend_io_error(tmp_path, monkeypatch) -> None:
+    from sqlalchemy.exc import SQLAlchemyError
+
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    store = ExperimentStore(output)
+    store.write_state(
+        experiment_state("exp", promoted_variant="treatment", champion="control", challenger="blend")
+    )
+    assert store.assignment_overlay("exp") == ("treatment", ("control", "blend"))
+
+    def boom(self):
+        raise SQLAlchemyError("engine")
+
+    monkeypatch.setattr(ExperimentStore, "read_state", boom)
+    assert store.assignment_overlay("exp") == ("treatment", ("control", "blend"))
+
+
 def test_promoted_variant_reuses_cache_when_db_read_raises(tmp_path, monkeypatch) -> None:
     url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
     output = IOSettings(kind="db", options={"database_url": url})

@@ -8,7 +8,9 @@ from collections import OrderedDict
 from collections.abc import Collection, Sequence
 
 import pandas as pd
+from botocore.exceptions import BotoCoreError
 from sqlalchemy import Engine, bindparam, create_engine, text
+from sqlalchemy.exc import SQLAlchemyError
 
 from cicerone.config import IOSettings
 from cicerone.io.db_errors import is_missing_column_error, is_missing_table_error
@@ -31,7 +33,7 @@ from cicerone.io.recommendation_schema import (
 
 logger = logging.getLogger(__name__)
 
-_CATALOG_READ_ERRORS = (OSError, ValueError, TypeError)
+_CATALOG_READ_ERRORS = (OSError, ValueError, TypeError, SQLAlchemyError, BotoCoreError)
 
 GUARDRAIL_COLUMNS: tuple[str, ...] = (USER_COLUMN, ITEM_COLUMN, SOURCE_COLUMN, VARIANT_COLUMN)
 
