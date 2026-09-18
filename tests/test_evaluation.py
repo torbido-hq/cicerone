@@ -490,7 +490,7 @@ def test_score_previous_run_fail_open(tmp_path) -> None:
     assert served is None
 
 
-def test_score_previous_run_swallows_errors(tmp_path, monkeypatch) -> None:
+def test_score_previous_run_swallows_errors(tmp_path, monkeypatch, caplog) -> None:
     from cicerone.config import IOSettings, make_settings
     from cicerone.job import _score_previous_run
 
@@ -498,15 +498,41 @@ def test_score_previous_run_swallows_errors(tmp_path, monkeypatch) -> None:
     settings = make_settings(track={"enabled": True}, eval={"enabled": True}, output=output)
     monkeypatch.setattr(
         "cicerone.job_eval.load_recommendations_frame",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("recs")),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("recs")),
     )
     monkeypatch.setattr(
         "cicerone.job_eval.evaluate_tracking",
-        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("track")),
+        lambda **kwargs: (_ for _ in ()).throw(ValueError("track")),
     )
-    track, served = _score_previous_run(settings, pd.DataFrame(), {"generated_at": "t"})
+    with caplog.at_level("ERROR", logger="cicerone.job_eval"):
+        track, served = _score_previous_run(settings, pd.DataFrame(), {"generated_at": "t"})
     assert track is None
     assert served is None
+    assert any(
+        "Failed to load previous recommendations for eval (OSError: recs)" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_score_previous_run_swallows_track_eval_errors(tmp_path, monkeypatch, caplog) -> None:
+    from cicerone.config import IOSettings, make_settings
+    from cicerone.job import _score_previous_run
+
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    pd.DataFrame(
+        [{"user_id": "alice", "item_id": "ipa", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(tmp_path / "recommendations.parquet", index=False)
+    settings = make_settings(track={"enabled": True}, eval={"enabled": True}, output=output)
+    monkeypatch.setattr(
+        "cicerone.job_eval.evaluate_tracking",
+        lambda **kwargs: (_ for _ in ()).throw(ValueError("track")),
+    )
+    with caplog.at_level("ERROR", logger="cicerone.job_eval"):
+        track, served = _score_previous_run(settings, pd.DataFrame(), {"generated_at": "t"})
+    assert track is None
+    assert any(
+        "Failed to compute track eval (ValueError: track)" in record.getMessage() for record in caplog.records
+    )
 
 
 def test_evaluate_served_empty_and_as_dict() -> None:
@@ -685,6 +711,83 @@ def test_score_previous_run_assignment_overlay_on_caller_thread(tmp_path, monkey
     assert served is not None
 
 
+def test_score_previous_run_reraises_unexpected_overlay_error(tmp_path, monkeypatch) -> None:
+    from cicerone.config import IOSettings, make_settings
+    from cicerone.config.settings import ExperimentSettings, VariantSettings
+    from cicerone.job import _score_previous_run
+    from cicerone.track.normalize import normalize_track
+    from cicerone.track.store import TrackStore
+
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    recs = pd.DataFrame(
+        [
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                "variant": "control",
+            },
+            {
+                "user_id": "bob",
+                "item_id": "stout",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                "variant": "treatment",
+            },
+        ]
+    )
+    recs.to_parquet(tmp_path / "recommendations.parquet", index=False)
+    store = TrackStore(output)
+    store.append_rows(
+        [
+            normalize_track(
+                {
+                    "kind": "impression",
+                    "user_id": "alice",
+                    "item_id": "ipa",
+                    "rank": 1,
+                    "variant": "control",
+                    "occurred_at": "2026-08-28T04:00:00Z",
+                    "event_id": "imp-a",
+                }
+            ).as_row()
+        ]
+    )
+
+    def _boom(self):
+        raise RuntimeError("state bug")
+
+    monkeypatch.setattr("cicerone.experiment.store.ExperimentStore.read_state", _boom)
+    settings = make_settings(
+        track={"enabled": True},
+        eval={"enabled": True},
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="ranking-cvr",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        output=output,
+    )
+    events = pd.DataFrame(
+        [
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "event_type": "purchase",
+                "occurred_at": "2026-08-28T12:00:00Z",
+            }
+        ]
+    )
+    with pytest.raises(RuntimeError, match="state bug"):
+        _score_previous_run(settings, events, {"generated_at": "2026-08-28T03:00:00+00:00"})
+
+
 def test_score_previous_run_empty_history(tmp_path) -> None:
     from cicerone.config import IOSettings, make_settings
     from cicerone.job import _score_previous_run
@@ -732,14 +835,14 @@ def test_score_previous_run_history_and_served_errors(tmp_path, monkeypatch) -> 
     )
     monkeypatch.setattr(
         "cicerone.track.store.TrackStore.read_history",
-        lambda self, **_kwargs: (_ for _ in ()).throw(RuntimeError("history")),
+        lambda self, **_kwargs: (_ for _ in ()).throw(OSError("history")),
     )
     track, served = _score_previous_run(settings, events, {"generated_at": "2026-08-28T03:00:00+00:00"})
     assert track is not None
     assert served is not None
     monkeypatch.setattr(
         "cicerone.job_eval.evaluate_served",
-        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("served")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("served")),
     )
     track, served = _score_previous_run(settings, events, {"generated_at": "2026-08-28T03:00:00+00:00"})
     assert track is not None

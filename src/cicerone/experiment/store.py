@@ -11,7 +11,9 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from botocore.exceptions import BotoCoreError
 from sqlalchemy import Engine, create_engine, text
+from sqlalchemy.exc import SQLAlchemyError
 
 from cicerone.config.constants import ConfigError
 from cicerone.config.settings import IOSettings
@@ -27,6 +29,8 @@ from cicerone.io.options import (
 from cicerone.locks import LockBackend, ensure_writer_owned, held_writer_lock, writer_lock_held_here
 
 logger = logging.getLogger(__name__)
+
+_OVERLAY_READ_ERRORS = (OSError, ValueError, TypeError, SQLAlchemyError, BotoCoreError)
 
 STATE_FILENAME = "experiment_state.json"
 EXPOSURES_FILENAME = "exposures.jsonl"
@@ -203,7 +207,7 @@ class ExperimentStore:
         wanted = str(experiment_id)
         try:
             state = self.read_state()
-        except Exception:
+        except _OVERLAY_READ_ERRORS:
             logger.exception("Failed to read experiment promote state")
             with self._promote_lock:
                 if self._promote_loaded and self._promote_experiment_id == wanted:
@@ -328,10 +332,12 @@ class ExperimentStore:
             if is_missing_column_error(exc):
                 try:
                     frame = pd.read_sql(text(f'SELECT * FROM "{table}" LIMIT 1'), engine)
-                except Exception:
+                except Exception as retry_exc:
+                    if is_missing_table_error(retry_exc) or is_missing_column_error(retry_exc):
+                        return None
                     logger.exception("Failed to read experiment state table %r", table)
                     raise
-            elif isinstance(exc, MISSING_TABLE_ERRORS) or is_missing_table_error(exc):
+            elif is_missing_table_error(exc):
                 return None
             else:
                 logger.exception("Failed to read experiment state table %r", table)

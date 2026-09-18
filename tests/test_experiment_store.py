@@ -170,6 +170,19 @@ def test_assignment_overlay_keeps_last_on_invalid_json(tmp_path) -> None:
     assert pair == ("control", "blend")
 
 
+def test_assignment_overlay_reraises_unexpected_read_error(tmp_path, monkeypatch) -> None:
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    store = ExperimentStore(output)
+    store.write_state(experiment_state("exp", promoted_variant=None, champion="control", challenger="blend"))
+
+    def _boom(self):
+        raise RuntimeError("state bug")
+
+    monkeypatch.setattr(ExperimentStore, "read_state", _boom)
+    with pytest.raises(RuntimeError, match="state bug"):
+        store.assignment_overlay("exp")
+
+
 def test_append_exposures_rejects_object_store() -> None:
     output = IOSettings(
         kind="dataset",
@@ -687,11 +700,28 @@ def test_promoted_variant_reuses_cache_when_read_fails(tmp_path, monkeypatch) ->
     assert store.promoted_variant("exp") == "treatment"
 
     def boom() -> None:
-        raise RuntimeError("store down")
+        raise OSError("store down")
 
     monkeypatch.setattr(store, "read_state", boom)
     assert store.promoted_variant("exp") == "treatment"
     assert store.promoted_variant("other") is None
+
+
+def test_assignment_overlay_keeps_last_on_backend_io_error(tmp_path, monkeypatch) -> None:
+    from sqlalchemy.exc import SQLAlchemyError
+
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    store = ExperimentStore(output)
+    store.write_state(
+        experiment_state("exp", promoted_variant="treatment", champion="control", challenger="blend")
+    )
+    assert store.assignment_overlay("exp") == ("treatment", ("control", "blend"))
+
+    def boom(self):
+        raise SQLAlchemyError("engine")
+
+    monkeypatch.setattr(ExperimentStore, "read_state", boom)
+    assert store.assignment_overlay("exp") == ("treatment", ("control", "blend"))
 
 
 def test_promoted_variant_reuses_cache_when_db_read_raises(tmp_path, monkeypatch) -> None:
@@ -702,10 +732,43 @@ def test_promoted_variant_reuses_cache_when_db_read_raises(tmp_path, monkeypatch
     assert store.promoted_variant("exp") == "treatment"
 
     def boom() -> None:
-        raise RuntimeError("store down")
+        raise OSError("store down")
 
     monkeypatch.setattr(store, "_read_state_db", boom)
     assert store.promoted_variant("exp") == "treatment"
+
+
+def test_read_state_db_reraises_transient_operational_error(tmp_path, monkeypatch) -> None:
+    from sqlalchemy.exc import OperationalError
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    output = IOSettings(kind="db", options={"database_url": url})
+    store = ExperimentStore(output)
+    store.write_state(experiment_state("exp", promoted_variant="treatment"))
+
+    def boom(*_args, **_kwargs):
+        raise OperationalError("SELECT 1", {}, Exception("connection refused"))
+
+    monkeypatch.setattr("cicerone.experiment.store.pd.read_sql", boom)
+    with pytest.raises(OperationalError, match="connection refused"):
+        store.read_state()
+    assert store.assignment_overlay("exp")[0] == "treatment"
+
+
+def test_read_state_db_reraises_unclassified_programming_error(tmp_path, monkeypatch) -> None:
+    from sqlalchemy.exc import ProgrammingError
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    output = IOSettings(kind="db", options={"database_url": url})
+    store = ExperimentStore(output)
+    store.write_state(experiment_state("exp", promoted_variant="treatment"))
+
+    def boom(*_args, **_kwargs):
+        raise ProgrammingError("SELECT 1", {}, Exception("permission denied"))
+
+    monkeypatch.setattr("cicerone.experiment.store.pd.read_sql", boom)
+    with pytest.raises(ProgrammingError, match="permission denied"):
+        store.read_state()
 
 
 def test_experiment_store_prefers_timestamped_promote_over_null(tmp_path) -> None:

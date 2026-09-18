@@ -10,6 +10,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Recipe `eligibility = false` / subset / replace skips
   `item_availability_filters` sugar.
+- Job optional-eval and sidecar catches log exception type and message,
+  and only swallow store/eval I/O errors. Sidecar failures use
+  `PublishError`, including Kafka produce/flush/close and a failed
+  RabbitMQ retry or handle close. Kafka `Producer()` construction is a
+  connect failure (`ConfigError`), same as `list_topics`. The sidecar
+  generation check only swallows store I/O errors. Lock-loss and
+  unexpected `RuntimeError`s fail the run and rewrite that generation to
+  failed when no newer manifest exists. The failed rewrite keeps the
+  original success generation as the skip cutoff and writes a later
+  `generated_at` so a DB reader does not tie with the success row.
+  Catalog size and experiment overlay swallow expected store I/O,
+  including S3 and SQL errors (a transient `OperationalError` included);
+  catalog size also treats a parquet `ArrowInvalid` as missing;
+  an unexpected `RuntimeError` fails Thompson and eval. Experiment DB
+  state only treats a missing table or column as absent, not a generic
+  `ProgrammingError`. An unexpected
+  `RuntimeError` on Kafka or RabbitMQ close fails the run after both
+  RabbitMQ handles have been closed. A sidecar failure after a complete
+  recs write does not set `partial_outputs`. Incremental publish only
+  swallows expected sidecar I/O. An unexpected `RuntimeError` during
+  RabbitMQ recover is not wrapped as `PublishError`.
 - DB serve keeps `AND variant=` when table inspect fails, and prefers the leftover
   fallback arm in the same `LIMIT` query when no arm is assigned.
 - Thompson serve hashes the sticky pair or names on disk, not the full config
