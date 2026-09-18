@@ -119,6 +119,11 @@ def _annotate_source(impressions: pd.DataFrame, recommendations: pd.DataFrame | 
                 incoming = pd.Series(filled[SOURCE_COLUMN].to_numpy(), index=existing.index)
                 merged.loc[missing, SOURCE_COLUMN] = existing.where(existing.notna(), incoming)
         return merged
+    if "generated_at" not in recs.columns:
+        merged = frame.merge(latest, on=[USER_COLUMN, ITEM_COLUMN], how="left", suffixes=("", "_rec"))
+        _coalesce_column(merged, SOURCE_COLUMN)
+        _coalesce_column(merged, VARIANT_COLUMN)
+        return merged
     merged = frame.merge(latest_source, on=[USER_COLUMN, ITEM_COLUMN], how="left", suffixes=("", "_rec"))
     _coalesce_column(merged, SOURCE_COLUMN)
     return merged

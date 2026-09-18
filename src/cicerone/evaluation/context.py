@@ -101,6 +101,50 @@ def _metric_event_sql(
     return stmt, params
 
 
+def _parquet_since_bounds(floor: str) -> tuple[Any, str]:
+    start = pd.to_datetime(floor, utc=True, errors="coerce")
+    if pd.isna(start):
+        return floor, floor
+    return start.to_pydatetime(), floor
+
+
+def _read_metric_parquet(
+    options: dict[str, Any],
+    *,
+    types: tuple[str, ...] | None,
+    floor: str | None,
+) -> pd.DataFrame:
+    base: list[Any] = []
+    if types:
+        base.append(("event_type", "in", list(types)))
+    attempts: list[list[Any] | None] = []
+    if floor is not None:
+        stamp, text_floor = _parquet_since_bounds(floor)
+        attempts.append([*base, ("occurred_at", ">=", stamp)])
+        if text_floor != stamp:
+            attempts.append([*base, ("occurred_at", ">=", text_floor)])
+    else:
+        attempts.append(base or None)
+    last_error: Exception | None = None
+    for filters in attempts:
+        try:
+            return read_parquet(
+                options,
+                "events.parquet",
+                columns=list(EVENT_METRIC_COLUMNS),
+                filters=filters,
+            )
+        except FileNotFoundError:
+            raise
+        except Exception as exc:
+            if is_s3_not_found(exc):
+                raise
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
+
+
 def load_metric_events(
     settings: Settings, *, event_types: Sequence[str] | None = None, since: str | None = None
 ) -> pd.DataFrame:
@@ -111,17 +155,7 @@ def load_metric_events(
         return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
     if inp.kind == "dataset":
         try:
-            filters: list[Any] = []
-            if types:
-                filters.append(("event_type", "in", list(types)))
-            if floor is not None:
-                filters.append(("occurred_at", ">=", floor))
-            frame = read_parquet(
-                inp.options,
-                "events.parquet",
-                columns=list(EVENT_METRIC_COLUMNS),
-                filters=filters or None,
-            )
+            frame = _read_metric_parquet(inp.options, types=types, floor=floor)
         except FileNotFoundError:
             return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
         except Exception as exc:

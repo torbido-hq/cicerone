@@ -786,6 +786,7 @@ def test_evaluation_remaining_branches(monkeypatch) -> None:
     )
     annotated = _annotate_source(impressions, recs)
     assert annotated.iloc[0]["source"] == "personalized"
+    assert annotated.iloc[0]["variant"] == "control"
     both = impressions.copy()
     both["source"] = None
     filled = _annotate_source(both, recs)
@@ -1334,6 +1335,18 @@ def test_annotate_source_untimestamped_does_not_clear_source_without_match() -> 
     assert annotated.iloc[0]["source"] == "logged"
 
 
+def test_annotate_source_without_generated_at_keeps_variant() -> None:
+    from cicerone.evaluation import _annotate_source
+
+    recs = pd.DataFrame(
+        [{"user_id": "alice", "item_id": "ipa", "source": "personalized", "variant": "control"}]
+    )
+    impressions = pd.DataFrame([{"user_id": "alice", "item_id": "ipa"}])
+    annotated = _annotate_source(impressions, recs)
+    assert annotated.iloc[0]["source"] == "personalized"
+    assert annotated.iloc[0]["variant"] == "control"
+
+
 def test_filter_events_since_without_occurred_at_is_empty() -> None:
     frame = pd.DataFrame([{"user_id": "u1", "event_type": "purchase", "quantity": 1}])
     filtered = _filter_events_since(frame, "2026-08-28T00:00:00Z")
@@ -1379,8 +1392,49 @@ def test_load_metric_events_dataset_pushes_since_filter(tmp_path, monkeypatch) -
 
     monkeypatch.setattr("cicerone.evaluation.context.read_parquet", _read)
     frame = load_metric_events(settings, event_types=("purchase",), since="2026-08-29T05:00:00+00:00")
-    assert ("event_type", "in", ["purchase"]) in list(seen.get("filters") or [])
-    assert ("occurred_at", ">=", "2026-08-28") in list(seen.get("filters") or [])
+    filters = list(seen.get("filters") or [])
+    assert ("event_type", "in", ["purchase"]) in filters
+    since_filters = [item for item in filters if item[0] == "occurred_at" and item[1] == ">="]
+    assert since_filters
+    assert not isinstance(since_filters[0][2], str)
+    assert len(frame) == 1
+
+
+def test_load_metric_events_dataset_retries_string_since_filter(tmp_path, monkeypatch) -> None:
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+
+    settings = make_settings(
+        input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    calls: list[object] = []
+
+    def _read(_options, _filename, **kwargs):
+        bound = next(
+            (item[2] for item in (kwargs.get("filters") or []) if item[0] == "occurred_at"),
+            None,
+        )
+        calls.append(bound)
+        if not isinstance(bound, str):
+            raise TypeError("datetime bound")
+        return pd.DataFrame(
+            [
+                {
+                    "user_id": "u1",
+                    "item_id": "i1",
+                    "event_type": "purchase",
+                    "quantity": 1,
+                    "occurred_at": "2026-08-29T06:00:00Z",
+                }
+            ]
+        )
+
+    monkeypatch.setattr("cicerone.evaluation.context.read_parquet", _read)
+    frame = load_metric_events(settings, event_types=("purchase",), since="2026-08-29T05:00:00+00:00")
+    assert len(calls) == 2
+    assert not isinstance(calls[0], str)
+    assert calls[1] == "2026-08-28"
     assert len(frame) == 1
 
 
