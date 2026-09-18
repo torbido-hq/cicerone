@@ -7,6 +7,7 @@ from typing import Any
 
 import pandas as pd
 
+from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import (
     DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS,
     EpochMetricsSettings,
@@ -36,6 +37,10 @@ from cicerone.policy import apply_boosts
 logger = logging.getLogger(__name__)
 
 
+def _without_cold_start_targets(target_users: list[str]) -> list[str]:
+    return [user_id for user_id in target_users if str(user_id) != COLD_START_USER_ID]
+
+
 def recommend_with_models(
     models: dict[str, RecommenderModel],
     built: BuiltDataset,
@@ -56,6 +61,7 @@ def recommend_with_models(
     filter_viewed, and dataset identity so a shared dict is safe across
     differing recommend() inputs.
     """
+    target_users = _without_cold_start_targets(target_users)
     blending = config.blending
     blending_enabled = blending.enabled
     if run_plan is None:
@@ -150,6 +156,7 @@ def train_and_recommend(
     explain: ExplainSettings | None = None,
 ) -> pd.DataFrame:
     """Fit enabled strategies, then recommend + combine."""
+    target_users = _without_cold_start_targets(target_users)
     if run_plan is None:
         run_plan = plan_model_run(
             enabled_models,
