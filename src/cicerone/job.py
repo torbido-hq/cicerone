@@ -658,8 +658,7 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
             fence_check=fence_check,
             exc=leftover_exc,
         ):
-            if not replace_success_manifest:
-                manifest["generated_at"] = datetime.now(UTC).isoformat()
+            manifest["generated_at"] = datetime.now(UTC).isoformat()
             try:
                 holder = getattr(sink, "recommendations_write", None)
                 if callable(holder):

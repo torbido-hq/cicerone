@@ -291,6 +291,46 @@ def test_job_rewrites_manifest_when_close_raises_unexpected_error(tmp_path, monk
     assert "close bug" in manifest["error"]
 
 
+def test_job_failed_rewrite_uses_fresh_generated_at(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.utcnow()
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+        ]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
+    written: list[tuple[dict, str | None]] = []
+    real = job.write_job_manifest
+
+    def _capture(sink, manifest, *, skip_if_newer_than=None):
+        written.append((dict(manifest), skip_if_newer_than))
+        return real(sink, manifest, skip_if_newer_than=skip_if_newer_than)
+
+    class _Pub:
+        def connect(self) -> None:
+            return None
+
+        def publish(self, df: pd.DataFrame) -> None:
+            del df
+
+        def close(self) -> None:
+            raise RuntimeError("close bug")
+
+    monkeypatch.setattr("cicerone.job.write_job_manifest", _capture)
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings, **_kwargs: _Pub())
+    with pytest.raises(RuntimeError, match="close bug"):
+        job.run()
+    success = next(item for item in written if item[0].get("status") == "success")
+    failed = written[-1]
+    assert failed[0]["status"] == "failed"
+    assert failed[1] == success[0]["generated_at"]
+    assert failed[0]["generated_at"] > success[0]["generated_at"]
+
+
 def test_job_succeeds_when_publish_fails_after_write(tmp_path, monkeypatch):
     input_dir = tmp_path / "in"
     output_dir = tmp_path / "out"
