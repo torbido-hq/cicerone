@@ -36,6 +36,7 @@ for (const row of body.items) {
   console.log(`  #${row.rank} ${row.item_id} score=${row.score} source=${row.source}`);
 }
 
+// Returned GET items, not a browser render. Same contract as serve.log_impressions.
 if (process.env.CICERONE_POST_TRACK === "1" && body.items?.length) {
   const tracked = await fetch(`${baseUrl}/track`, {
     method: "POST",

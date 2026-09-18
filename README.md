@@ -85,9 +85,11 @@ input source (S3-compatible/local dataset, or a database)
                      output destination (S3-compatible/local dataset, or a database)
 ```
 
-Scheduling is handled in-process (`croniter`, no system cron): it runs once
-at boot, then again on `[job].cron_schedule` in `config/cicerone.toml`
-(default: every night at 03:00 UTC).
+Scheduling is handled in-process (`croniter`, no system cron).
+`cicerone start` in batch mode runs once at boot, then again on
+`[job].cron_schedule` in `config/cicerone.toml` (default: every night at
+03:00 UTC). `cicerone job` is one run and exit; `cicerone scheduler`
+waits for the next tick and does not run a job first.
 
 ## Serve mode
 
@@ -104,8 +106,8 @@ events worker loads the last artifact for write-through only:
 | `GET` | `/health` | Liveness probe (no auth) |
 | `GET` | `/recommendations/{user_id}` | Precomputed top-K for that user (optional `reasons`) |
 | `GET` | `/metrics` | Prometheus text format (no bearer token; optional `X-Metrics-Token`) |
-| `POST` | `/events` | Incremental ingest when `[events]` `kind = "webhook"` |
-| `POST` | `/track` | Impression/click ingest when `[track]` is enabled |
+| `POST` | `/events` | Incremental ingest when `[events]` `kind = "webhook"` (`202` = queued, not written) |
+| `POST` | `/track` | Impressions/clicks when `[track]` is on (`202` = row persisted). Not training |
 | `GET` | `/docs` / `/redoc` | Interactive OpenAPI docs (Swagger / ReDoc) |
 | `GET` | `/openapi.json` | Machine-readable OpenAPI schema |
 
@@ -316,6 +318,13 @@ serve). It never loads lightfm/implicit/torch (it does import `rectools`).
   stage that compiles Tailwind ahead of time).
 
 ## Configuration (`config/cicerone.toml`)
+
+User-facing reference (CLI, every TOML section, defaults, storage):
+[docs/configuration.md](docs/configuration.md)
+([cicerone.dev/configuration](https://cicerone.dev/configuration/)).
+Shipped annotated examples: `config/cicerone.toml`,
+`config/cicerone.serve.toml`, `config/cicerone.dashboard.toml`,
+`config/features.toml`.
 
 All structural configuration — which backend to use for input/output,
 bucket/table names, scheduling, tuning — lives in one version-controlled
@@ -694,7 +703,13 @@ Ctrl-C / SIGTERM (`docker compose stop`). Prefer the image for production.
 
 ## Usage
 
+First local walkthrough (clone → sample data → `job` → serve):
+[docs/tutorial.md](docs/tutorial.md)
+([cicerone.dev/tutorial](https://cicerone.dev/tutorial/)).
+
 ```sh
+git clone https://github.com/torbido-hq/cicerone.git
+cd cicerone
 cp .env.example .env   # set the secrets referenced by config/cicerone.toml
 # edit config/cicerone.toml: pick input/output kind & backend for your setup
 docker compose up --build

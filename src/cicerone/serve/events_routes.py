@@ -148,6 +148,10 @@ def mount_events_routes(
         status_code=202,
         tags=["events"],
         summary="Ingest interaction events for incremental updates",
+        description=(
+            "202 means the webhook queue accepted the event. It does not mean "
+            "recommendation output has been updated."
+        ),
         responses={
             400: {
                 "model": ErrorDetail | ValidationErrorDetail,
