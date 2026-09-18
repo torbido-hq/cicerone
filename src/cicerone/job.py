@@ -580,26 +580,24 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                                 log=logger,
                             )
                     raise
-            if publisher is not None and manifest.get("status") == "success":
-                try:
-                    ensure_fence(fence_check)
-                    publisher.connect()
-                    ensure_fence(fence_check)
-                    current = sidecar_generation_current(
-                        settings.output, str(manifest.get("generated_at") or "")
-                    )
-                    if current:
-                        publisher.publish(recommendations)
-                    else:
-                        log_sidecar_generation_skip(current)
-                except LockLostError:
-                    raise
-                except _PUBLISH_ERRORS as exc:
-                    _log_caught("Publish failed after successful write", exc, log=logger)
         except _SINK_WRITE_ERRORS:
             if outputs_written or manifest.get("artifact_written"):
                 manifest["partial_outputs"] = True
             raise
+        if publisher is not None and manifest.get("status") == "success":
+            try:
+                ensure_fence(fence_check)
+                publisher.connect()
+                ensure_fence(fence_check)
+                current = sidecar_generation_current(settings.output, str(manifest.get("generated_at") or ""))
+                if current:
+                    publisher.publish(recommendations)
+                else:
+                    log_sidecar_generation_skip(current)
+            except LockLostError:
+                raise
+            except _PUBLISH_ERRORS as exc:
+                _log_caught("Publish failed after successful write", exc, log=logger)
     except Exception as exc:
         manifest["error"] = truncate_job_error(exc)
         if manifest.get("status") == "success":

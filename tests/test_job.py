@@ -391,6 +391,7 @@ def test_job_rewrites_manifest_when_publish_raises_unexpected_error(tmp_path, mo
     manifest = json.loads((output_dir / "manifest.json").read_text())
     assert manifest["status"] == "failed"
     assert "broken sidecar" in manifest["error"]
+    assert manifest.get("partial_outputs") is False
     assert (output_dir / "recommendations.parquet").exists()
 
 
@@ -427,6 +428,7 @@ def test_job_rewrites_manifest_when_sidecar_generation_raises_unexpected_error(t
     manifest = json.loads((output_dir / "manifest.json").read_text())
     assert manifest["status"] == "failed"
     assert "generation check bug" in manifest["error"]
+    assert manifest.get("partial_outputs") is False
     assert (output_dir / "recommendations.parquet").exists()
 
 
