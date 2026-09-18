@@ -437,6 +437,22 @@ def test_kafka_publisher_close_wraps_os_error(monkeypatch):
         publisher.close()
 
 
+def test_kafka_publisher_close_reraises_runtime_error_subclass(monkeypatch):
+    install_fake_kafka(monkeypatch)
+    publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "t"})
+    publisher.connect()
+
+    class _FlushBug(RuntimeError):
+        pass
+
+    def _boom(_timeout=None):
+        raise _FlushBug("flush fail")
+
+    publisher._producer.flush = _boom  # type: ignore[method-assign]
+    with pytest.raises(_FlushBug, match="flush fail"):
+        publisher.close()
+
+
 def test_publish_empty_frame_is_noop(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
     publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "t"})
@@ -610,10 +626,12 @@ def test_sidecar_generation_current_none_when_manifest_missing(tmp_path):
     assert sidecar_generation_current(settings, "2026-09-17T12:00:00+00:00") is None
 
 
-def test_sidecar_generation_current_none_when_manifest_unreadable(tmp_path):
+def test_sidecar_generation_current_none_when_manifest_unreadable(tmp_path, caplog):
     (tmp_path / "manifest.json").write_text("not-json")
     settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    assert sidecar_generation_current(settings, "2026-09-17T12:00:00+00:00") is None
+    with caplog.at_level("ERROR", logger="cicerone.publish.sidecar"):
+        assert sidecar_generation_current(settings, "2026-09-17T12:00:00+00:00") is None
+    assert any(record.name == "cicerone.publish.sidecar" for record in caplog.records)
 
 
 def test_sidecar_generation_current_reraises_unexpected_error(tmp_path, monkeypatch):

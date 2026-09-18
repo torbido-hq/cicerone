@@ -18,7 +18,7 @@ def sidecar_generation_current(output: IOSettings, generated_at: str) -> bool | 
     except (LockLostError, WriterLockBusyError):
         raise
     except OPTIONAL_IO_ERRORS as exc:
-        log_caught("Failed to read manifest generation before sidecar publish", exc)
+        log_caught("Failed to read manifest generation before sidecar publish", exc, log=logger)
         return None
     if latest is None:
         return None

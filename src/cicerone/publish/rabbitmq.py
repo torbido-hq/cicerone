@@ -148,7 +148,7 @@ class RabbitMQPublisher:
                 closer()
             except Exception as exc:
                 logger.exception("Failed to close RabbitMQ publisher %s", label)
-                if type(exc) is RuntimeError:
+                if isinstance(exc, RuntimeError) and not isinstance(exc, PublishError):
                     if unexpected is None:
                         unexpected = exc
                     continue
