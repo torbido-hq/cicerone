@@ -8,7 +8,7 @@ import pandas as pd
 
 
 class PublishError(RuntimeError):
-    """Sidecar publish or connect failed after recommendations were written."""
+    """Sidecar publish, connect, or close failed."""
 
 
 class RecommendationPublisher(Protocol):

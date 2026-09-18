@@ -24,7 +24,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   including S3 and SQL errors (a transient `OperationalError` included);
   catalog size also treats a parquet `ArrowInvalid` as missing;
   an unexpected `RuntimeError` fails Thompson and eval. Experiment DB
-  state only treats a missing table or column as absent.   An unexpected
+  state only treats a missing table or column as absent, not a generic
+  `ProgrammingError`. An unexpected
   `RuntimeError` on Kafka or RabbitMQ close fails the run after both
   RabbitMQ handles have been closed. A sidecar failure after a complete
   recs write does not set `partial_outputs`. Incremental publish only

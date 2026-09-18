@@ -755,6 +755,22 @@ def test_read_state_db_reraises_transient_operational_error(tmp_path, monkeypatc
     assert store.assignment_overlay("exp")[0] == "treatment"
 
 
+def test_read_state_db_reraises_unclassified_programming_error(tmp_path, monkeypatch) -> None:
+    from sqlalchemy.exc import ProgrammingError
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    output = IOSettings(kind="db", options={"database_url": url})
+    store = ExperimentStore(output)
+    store.write_state(experiment_state("exp", promoted_variant="treatment"))
+
+    def boom(*_args, **_kwargs):
+        raise ProgrammingError("SELECT 1", {}, Exception("permission denied"))
+
+    monkeypatch.setattr("cicerone.experiment.store.pd.read_sql", boom)
+    with pytest.raises(ProgrammingError, match="permission denied"):
+        store.read_state()
+
+
 def test_experiment_store_prefers_timestamped_promote_over_null(tmp_path) -> None:
     url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
     output = IOSettings(kind="db", options={"database_url": url})
