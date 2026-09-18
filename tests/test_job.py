@@ -92,7 +92,7 @@ def test_job_run_end_to_end_with_local_dataset_backend(tmp_path, monkeypatch):
     job.run()
 
     recommendations = pd.read_parquet(output_dir / "recommendations.parquet")
-    assert set(recommendations["user_id"]) == {"u1", "u2"}
+    assert set(recommendations["user_id"]) == {"u1", "u2", COLD_START_USER_ID}
 
     manifest = json.loads((output_dir / "manifest.json").read_text())
     assert manifest["n_events"] == 4
@@ -1352,7 +1352,10 @@ def test_job_run_writes_model_artifact_when_enabled(tmp_path, monkeypatch):
 
     recommendations = pd.read_parquet(output_dir / "recommendations.parquet")
     loaded = load_artifact(artifact_path)
-    from_artifact = recommend_from_artifact(loaded, sorted(recommendations["user_id"].unique()), top_k=2)
+    target_users = sorted(
+        uid for uid in recommendations["user_id"].astype(str).unique() if uid != COLD_START_USER_ID
+    )
+    from_artifact = recommend_from_artifact(loaded, target_users, top_k=2)
     pd.testing.assert_frame_equal(
         recommendations.sort_values(["user_id", "rank"]).reset_index(drop=True),
         from_artifact.sort_values(["user_id", "rank"]).reset_index(drop=True),

@@ -313,8 +313,9 @@ serve-only image.
 - `serve.create_app()` exposes `GET /health` and
   `GET /recommendations/{user_id}` (`limit`/`k`, `category`,
   `exclude_unavailable`) behind `http_auth.require_bearer_token`. Unknown
-  users fall back to the `__cold_start__` list when blending wrote one, else
-  to one `popular_fallback` / `latest` user's top-K; with neither, they 404.
+  users fall back to the `__cold_start__` list when the job wrote one (any
+  combiner, if `popular` ran), else to one `popular_fallback` / `latest`
+  user's top-K; with neither, they 404.
   Responses include `generated_at` from the run manifest, plus
   `experiment_id` and the sticky `variant` (`null` when experiments are off
   or the table has no `variant` column). Each item
