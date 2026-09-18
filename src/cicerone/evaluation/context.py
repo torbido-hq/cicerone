@@ -168,7 +168,12 @@ def load_metric_events(
         except FileNotFoundError:
             return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
         except Exception:
-            return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
+            if floor is not None:
+                return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
+            try:
+                frame = read_parquet(inp.options, "events.parquet")
+            except Exception:
+                frame = build_input_source(inp).read_events()
         keep = [column for column in EVENT_METRIC_COLUMNS if column in frame.columns]
         frame = frame.loc[:, keep] if keep else frame
         return _filter_events_since(filter_events_by_types(frame, types), since)

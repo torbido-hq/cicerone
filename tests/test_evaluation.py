@@ -1458,6 +1458,39 @@ def test_load_metric_events_dataset_filter_failure_is_empty(tmp_path, monkeypatc
     assert frame.empty
 
 
+def test_load_metric_events_dataset_unbounded_retries(tmp_path, monkeypatch) -> None:
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+
+    settings = make_settings(
+        input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    calls: list[object] = []
+
+    def _read(_options, _filename, **kwargs):
+        calls.append(kwargs.get("filters"))
+        if kwargs.get("filters"):
+            raise TypeError("event_type filter")
+        return pd.DataFrame(
+            [
+                {
+                    "user_id": "u1",
+                    "item_id": "i1",
+                    "event_type": "purchase",
+                    "quantity": 1,
+                    "occurred_at": "2026-08-29T06:00:00Z",
+                }
+            ]
+        )
+
+    monkeypatch.setattr("cicerone.evaluation.context.read_parquet", _read)
+    frame = load_metric_events(settings, event_types=("purchase",))
+    assert calls[0] == [("event_type", "in", ["purchase"])]
+    assert calls[1] is None
+    assert len(frame) == 1
+
+
 def test_load_metric_events_db_pushes_since_predicate(monkeypatch) -> None:
     from conftest import make_settings
 

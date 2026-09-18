@@ -189,7 +189,6 @@ def _track_row_sql_filter(
         clauses.append("experiment_id = :experiment_id")
         params["experiment_id"] = experiment_id
     if since:
-        clauses.append("occurred_at IS NOT NULL AND occurred_at != ''")
         floor = since_date_floor(since)
         if floor is not None:
             # Date floor is one day earlier so offset-stored TEXT rows are not dropped.

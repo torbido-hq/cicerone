@@ -25,6 +25,7 @@ def test_track_row_sql_filter_since_uses_date_floor() -> None:
 
     clause, params = _track_row_sql_filter(kind=None, experiment_id=None, since="2026-08-29T05:00:00+00:00")
     assert "occurred_at >= :since" in clause
+    assert "!= ''" not in clause
     assert params["since"] == "2026-08-28"
 
 

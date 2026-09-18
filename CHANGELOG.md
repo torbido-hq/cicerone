@@ -53,10 +53,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Quality/eval parquet `since` tries a UTC timestamp bound before a
   string date, so datetime-typed event files stay bounded.
   An unsupported bound fails closed instead of rereading the file.
+  Unbounded reads still fall back to an unfiltered parquet/input load.
 - The job preloads track and recommendations in parallel on local/S3.
 - Untimestamped impressions keep latest-snapshot source attribution.
 - Shared job preload keeps an empty recommendations frame instead of reloading.
 - Invalid track `since` is an empty DB query.
+  The date bound does not compare `occurred_at` to `''`.
 - Quality/eval event `since` is pushed into SQL and parquet filters.
   Experiments pass the same lookback. Custom `events_query` is wrapped
   so type/time predicates apply before the full SELECT is materialized.
