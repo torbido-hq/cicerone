@@ -177,6 +177,26 @@ def test_popular_cold_start_skips_recommend_when_dataset_has_no_users():
     assert out.empty
 
 
+def test_train_and_recommend_ignores_cold_start_in_target_users(sample_items, feature_config):
+    events = synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    recommendations = train_and_recommend(
+        built,
+        target_users=["u1", COLD_START_USER_ID],
+        config=feature_config,
+        top_k=2,
+        enabled_models=["popular"],
+    )
+
+    users = recommendations[Columns.User].astype(str)
+    assert set(users) == {"u1", COLD_START_USER_ID}
+    assert not recommendations.duplicated(subset=[Columns.User, Columns.Item]).any()
+    cold = recommendations[users == COLD_START_USER_ID]
+    assert not cold.empty
+    assert (cold["source"] == "popular_fallback").all()
+
+
 def test_train_and_recommend_combines_multiple_personalized_strategies(sample_items, feature_config):
     events = synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)

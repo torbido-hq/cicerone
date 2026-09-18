@@ -1352,10 +1352,7 @@ def test_job_run_writes_model_artifact_when_enabled(tmp_path, monkeypatch):
 
     recommendations = pd.read_parquet(output_dir / "recommendations.parquet")
     loaded = load_artifact(artifact_path)
-    target_users = sorted(
-        uid for uid in recommendations["user_id"].astype(str).unique() if uid != COLD_START_USER_ID
-    )
-    from_artifact = recommend_from_artifact(loaded, target_users, top_k=2)
+    from_artifact = recommend_from_artifact(loaded, sorted(recommendations["user_id"].unique()), top_k=2)
     pd.testing.assert_frame_equal(
         recommendations.sort_values(["user_id", "rank"]).reset_index(drop=True),
         from_artifact.sort_values(["user_id", "rank"]).reset_index(drop=True),
