@@ -1,27 +1,22 @@
-"""System-style end-to-end check against a real Postgres (Rails system-spec analogue).
+"""System-style end-to-end check against local parquet (dataset I/O).
 
-Seeds events/users/items, runs the full batch job with db input/output + a
-model artifact, then hits the same serve and dashboard HTTP apps production
-uses — FastAPI TestClient over the SQLAlchemy stores.
+Same journeys as ``test_system_db``: seed events/users/items, run the full
+batch job with dataset input/output + a model artifact, then hit the same
+serve and dashboard HTTP apps production uses.
 
-Requires a test DB URL via ``TEST_DATABASE_URL`` or ``POSTGRES_TEST_HOST``
-(see ``support.postgres_defaults`` / CONTRIBUTING.md). Schema resets are
-gated by ``support.system_db.reset_schema``.
+Dataset ``read_recent`` is latest-only (0–1). Artifact is the output sink
+file, not a Postgres table. No live database required.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.engine import Engine
-from support.postgres_defaults import resolve_test_database_url
-from support.system_db import (
+from support.system_spec import (
     SYSTEM_DASHBOARD_PASSWORD,
     SYSTEM_DASHBOARD_USER,
     SYSTEM_SERVE_TOKEN,
@@ -29,10 +24,9 @@ from support.system_db import (
     dashboard_users,
     mount_dashboard_app,
     mount_serve_app,
-    reset_schema,
     run_system_job,
     sample_system_catalog,
-    seed_catalog,
+    seed_dataset_catalog,
     write_system_config,
 )
 
@@ -42,22 +36,12 @@ from cicerone.feature_config import load_feature_config
 from cicerone.io.base import ManifestReader, RecommendationReader
 from cicerone.io.factory import build_manifest_reader, build_output_sink, build_recommendation_reader
 
-TEST_DATABASE_URL = resolve_test_database_url()
-
-_SKIP_NO_TEST_DB = (
-    "TEST_DATABASE_URL / POSTGRES_TEST_HOST not set — start compose postgres "
-    "(`docker compose --env-file docker/postgres/defaults.env --profile db up -d postgres`) "
-    "and export POSTGRES_TEST_HOST=localhost ALLOW_SCHEMA_RESET_FOR_TESTS=1, "
-    "or run via docker-compose.ci.yml"
-)
-
 _SERVE_HEADERS = {"Authorization": f"Bearer {SYSTEM_SERVE_TOKEN}"}
 _DASHBOARD_AUTH = (SYSTEM_DASHBOARD_USER, SYSTEM_DASHBOARD_PASSWORD)
 
 
 @dataclass(frozen=True)
 class TrainedSystem:
-    engine: Engine
     config_path: Path
     events: pd.DataFrame
     users: pd.DataFrame
@@ -66,42 +50,23 @@ class TrainedSystem:
     manifest_reader: ManifestReader
 
 
-@pytest.fixture(scope="session")
-def db_engine() -> Iterator[Engine]:
-    """One Engine for the whole test session — avoids per-test connect/dispose."""
-    if not TEST_DATABASE_URL:
-        pytest.skip(_SKIP_NO_TEST_DB)
-    engine = create_engine(TEST_DATABASE_URL, pool_pre_ping=True)
-    try:
-        yield engine
-    finally:
-        engine.dispose()
-
-
 @pytest.fixture(scope="module")
-def clean_schema(db_engine: Engine) -> Iterator[None]:
-    """Reset schema once around the system-spec."""
-    reset_schema(db_engine)
-    yield
-    reset_schema(db_engine)
-
-
-@pytest.fixture(scope="module")
-def trained_system(
-    db_engine: Engine,
-    clean_schema: None,
-    tmp_path_factory: pytest.TempPathFactory,
-) -> TrainedSystem:
+def trained_system(tmp_path_factory: pytest.TempPathFactory) -> TrainedSystem:
+    root = tmp_path_factory.mktemp("system-dataset")
+    input_path = root / "in"
+    output_path = root / "out"
+    output_path.mkdir()
     events, users, items = sample_system_catalog()
-    seed_catalog(db_engine, events, users, items)
+    seed_dataset_catalog(input_path, events, users, items)
     config_path = write_system_config(
-        tmp_path_factory.mktemp("system-spec") / "cicerone.toml",
-        database_url=TEST_DATABASE_URL,
+        root / "cicerone.toml",
+        kind="dataset",
+        input_path=input_path,
+        output_path=output_path,
     )
     run_system_job(config_path, triggered_by="system-spec")
     settings = load_settings(str(config_path))
     return TrainedSystem(
-        engine=db_engine,
         config_path=config_path,
         events=events,
         users=users,
@@ -124,9 +89,8 @@ def _dashboard_client(trained: TrainedSystem) -> TestClient:
     return TestClient(app)
 
 
-@pytest.mark.skipif(not TEST_DATABASE_URL, reason=_SKIP_NO_TEST_DB)
-def test_system_job_db_round_trip_with_artifact_and_readers(trained_system: TrainedSystem) -> None:
-    """Postgres catalog → job.run → recommendations/manifest/artifact readers."""
+def test_system_job_dataset_round_trip_with_artifact_and_readers(trained_system: TrainedSystem) -> None:
+    """Local parquet catalog → job.run → recommendations/manifest/artifact readers."""
     expected_users = set(trained_system.events["user_id"]) | set(trained_system.users["user_id"])
     rec_reader = trained_system.rec_reader
     for user_id in sorted(expected_users):
@@ -161,7 +125,6 @@ def test_system_job_db_round_trip_with_artifact_and_readers(trained_system: Trai
     assert set(from_artifact["user_id"]) <= {"u1", "u2"}
 
 
-@pytest.mark.skipif(not TEST_DATABASE_URL, reason=_SKIP_NO_TEST_DB)
 def test_system_serve_http_reads_job_output(trained_system: TrainedSystem) -> None:
     settings = _settings(trained_system)
     feature_config = load_feature_config(settings.feature_config_path)
@@ -214,7 +177,6 @@ def test_system_serve_http_reads_job_output(trained_system: TrainedSystem) -> No
     assert "i4" not in filtered_ids
 
 
-@pytest.mark.skipif(not TEST_DATABASE_URL, reason=_SKIP_NO_TEST_DB)
 def test_system_dashboard_http_matches_serve(trained_system: TrainedSystem) -> None:
     serve = _serve_client(trained_system).get("/recommendations/u1", headers=_SERVE_HEADERS)
     assert serve.status_code == 200

@@ -1,6 +1,6 @@
-"""System-spec follow-up: track ingest → second job → dashboard Quality.
+"""System-spec follow-up (dataset): track ingest → second job → Quality.
 
-Isolated from ``test_system_db`` so the second ``job.run`` cannot change
+Isolated from ``test_system_dataset`` so the second ``job.run`` cannot change
 the first module's trained catalog mid-suite.
 """
 
@@ -14,37 +14,23 @@ from pathlib import Path
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.engine import Engine
-from support.postgres_defaults import resolve_test_database_url
-from support.system_db import (
+from support.system_spec import (
     SYSTEM_DASHBOARD_PASSWORD,
     SYSTEM_DASHBOARD_USER,
     SYSTEM_SERVE_TOKEN,
+    append_dataset_events,
     dashboard_users,
     mount_dashboard_app,
     mount_serve_app,
-    postgres_ready,
-    reset_schema,
     run_system_job,
     sample_system_catalog,
-    seed_catalog,
+    seed_dataset_catalog,
     write_system_config,
 )
 
 from cicerone.config import load_settings
-from cicerone.io.db_store import DEFAULT_EVENTS_TABLE
 from cicerone.io.factory import build_manifest_reader
 from cicerone.track.store import TrackStore
-
-TEST_DATABASE_URL = resolve_test_database_url()
-
-_SKIP_NO_TEST_DB = (
-    "TEST_DATABASE_URL / POSTGRES_TEST_HOST not set — start compose postgres "
-    "(`docker compose --env-file docker/postgres/defaults.env --profile db up -d postgres`) "
-    "and export POSTGRES_TEST_HOST=localhost ALLOW_SCHEMA_RESET_FOR_TESTS=1, "
-    "or run via docker-compose.ci.yml"
-)
 
 _SERVE_HEADERS = {"Authorization": f"Bearer {SYSTEM_SERVE_TOKEN}"}
 _DASHBOARD_AUTH = (SYSTEM_DASHBOARD_USER, SYSTEM_DASHBOARD_PASSWORD)
@@ -52,39 +38,29 @@ _DASHBOARD_AUTH = (SYSTEM_DASHBOARD_USER, SYSTEM_DASHBOARD_PASSWORD)
 
 @dataclass(frozen=True)
 class QualitySystem:
-    engine: Engine
     config_path: Path
+    input_path: Path
     events: pd.DataFrame
 
 
-@pytest.fixture(scope="session")
-def db_engine() -> Iterator[Engine]:
-    if not TEST_DATABASE_URL:
-        pytest.skip(_SKIP_NO_TEST_DB)
-    engine = create_engine(TEST_DATABASE_URL, pool_pre_ping=True)
-    try:
-        yield engine
-    finally:
-        engine.dispose()
-
-
 @pytest.fixture(scope="module")
-def quality_system(db_engine: Engine, tmp_path_factory: pytest.TempPathFactory) -> Iterator[QualitySystem]:
-    reset_schema(db_engine)
+def quality_system(tmp_path_factory: pytest.TempPathFactory) -> Iterator[QualitySystem]:
+    root = tmp_path_factory.mktemp("system-dataset-quality")
+    input_path = root / "in"
+    output_path = root / "out"
+    output_path.mkdir()
     events, users, items = sample_system_catalog()
-    seed_catalog(db_engine, events, users, items)
+    seed_dataset_catalog(input_path, events, users, items)
     config_path = write_system_config(
-        tmp_path_factory.mktemp("system-quality") / "cicerone.toml",
-        database_url=TEST_DATABASE_URL,
+        root / "cicerone.toml",
+        kind="dataset",
+        input_path=input_path,
+        output_path=output_path,
     )
-    try:
-        run_system_job(config_path, triggered_by="system-spec")
-        yield QualitySystem(engine=db_engine, config_path=config_path, events=events)
-    finally:
-        reset_schema(db_engine)
+    run_system_job(config_path, triggered_by="system-spec")
+    yield QualitySystem(config_path=config_path, input_path=input_path, events=events)
 
 
-@pytest.mark.skipif(not TEST_DATABASE_URL, reason=_SKIP_NO_TEST_DB)
 def test_system_track_eval_quality_loop(quality_system: QualitySystem) -> None:
     settings = load_settings(str(quality_system.config_path))
     serve = TestClient(mount_serve_app(settings))
@@ -132,13 +108,7 @@ def test_system_track_eval_quality_loop(quality_system: QualitySystem) -> None:
             }
         ]
     )
-    postgres_ready(conversion).to_sql(
-        DEFAULT_EVENTS_TABLE,
-        quality_system.engine,
-        if_exists="append",
-        index=False,
-    )
-
+    append_dataset_events(quality_system.input_path, conversion)
     run_system_job(quality_system.config_path, triggered_by="system-spec-eval")
 
     store = TrackStore(settings.output)

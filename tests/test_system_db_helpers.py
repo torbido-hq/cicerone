@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 
 import numpy as np
@@ -172,6 +173,58 @@ def test_write_system_config_enables_serve_dashboard_track_eval(tmp_path) -> Non
     assert raw["track"]["enabled"] is True
 
 
+def test_write_system_config_dataset_uses_local_parquet_paths(tmp_path) -> None:
+    import tomllib
+
+    input_path = tmp_path / "in"
+    output_path = tmp_path / "out"
+    path = write_system_config(
+        tmp_path / "cicerone.toml",
+        kind="dataset",
+        input_path=input_path,
+        output_path=output_path,
+    )
+    raw = tomllib.loads(path.read_text())
+    assert raw["input"]["kind"] == "dataset"
+    assert raw["input"]["options"]["storage_backend"] == "local"
+    assert raw["input"]["options"]["path"] == str(input_path)
+    assert raw["output"]["kind"] == "dataset"
+    assert raw["output"]["options"]["path"] == str(output_path)
+    assert raw["job"]["save_model_artifact"] is True
+    assert raw["track"]["enabled"] is True
+
+
+def test_write_system_config_rejects_unknown_kind_and_missing_options(tmp_path) -> None:
+    with pytest.raises(ValueError, match="database_url"):
+        write_system_config(tmp_path / "missing-db.toml")
+    with pytest.raises(ValueError, match="input_path"):
+        write_system_config(tmp_path / "missing-ds.toml", kind="dataset")
+    with pytest.raises(ValueError, match="Unknown system-spec kind"):
+        write_system_config(tmp_path / "bad.toml", kind="s3")
+
+
+def test_seed_and_append_dataset_catalog(tmp_path) -> None:
+    from support.system_spec import append_dataset_events, seed_dataset_catalog
+
+    events, users, items = sample_system_catalog()
+    seed_dataset_catalog(tmp_path, events, users, items)
+    assert len(pd.read_parquet(tmp_path / "events.parquet")) == len(events)
+    assert set(pd.read_parquet(tmp_path / "users.parquet")["user_id"]) == set(users["user_id"])
+    extra = pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": pd.Timestamp("2026-09-01T14:00:00Z"),
+            }
+        ]
+    )
+    append_dataset_events(tmp_path, extra)
+    assert len(pd.read_parquet(tmp_path / "events.parquet")) == len(events) + 1
+
+
 def test_available_recommendation_ids_drops_unavailable_items() -> None:
     recs = pd.DataFrame(
         [
@@ -188,6 +241,26 @@ def test_available_recommendation_ids_drops_unavailable_items() -> None:
         availability_filters=["published", "in_stock"],
         k=3,
     ) == ["i1", "i2"]
+
+
+def test_run_system_job_sets_and_restores_config_env(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from support.system_spec import run_system_job
+
+    called: list[str] = []
+
+    def _fake_run(*, triggered_by: str) -> None:
+        called.append(triggered_by)
+        assert os.environ["CICERONE_CONFIG_PATH"] == str(tmp_path / "cicerone.toml")
+
+    monkeypatch.delenv("CICERONE_CONFIG_PATH", raising=False)
+    monkeypatch.setattr("cicerone.job.run", _fake_run)
+    run_system_job(tmp_path / "cicerone.toml", triggered_by="system-spec")
+    assert called == ["system-spec"]
+    assert "CICERONE_CONFIG_PATH" not in os.environ
+
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", "/previous.toml")
+    run_system_job(tmp_path / "cicerone.toml", triggered_by="again")
+    assert os.environ["CICERONE_CONFIG_PATH"] == "/previous.toml"
 
 
 def test_dashboard_users_hashes_password() -> None:
