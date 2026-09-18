@@ -38,6 +38,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `POST /track` acquires the writer lock off the serve event loop.
 - Concurrent database `/track` writes in one process accept a given
   `event_id` once.
+- CTR is capped at one click per impression, matching CVR. Duplicate
+  clicks on the same impression count once. Blank impression IDs are
+  repaired before matching.
+- Track source annotation does not invent a variant from a later snapshot.
+  Exact snapshot matches can fill variant; the latest-snapshot fallback
+  stays source-only and does not overwrite an existing source.
+  Recs without `generated_at` still merge source and variant.
 
 ### Security
 

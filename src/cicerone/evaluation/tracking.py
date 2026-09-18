@@ -12,7 +12,9 @@ import pandas as pd
 from cicerone.config.constants import TRACK_KIND_CLICK, TRACK_KIND_IMPRESSION
 from cicerone.evaluation.metrics import (
     SliceMetrics,
+    _clicked_impressions_by_user,
     _coalesce_column,
+    _fill_blank_ids,
     _frame,
     _merge_asof_events,
     _metrics_for_impression_slice,
@@ -93,6 +95,8 @@ def _annotate_source(impressions: pd.DataFrame, recommendations: pd.DataFrame | 
     if "generated_at" in recs.columns:
         recs = recs.sort_values("generated_at", kind="mergesort", na_position="first")
     latest = recs.drop_duplicates(subset=[USER_COLUMN, ITEM_COLUMN], keep="last")
+    source_cols = [column for column in (USER_COLUMN, ITEM_COLUMN, SOURCE_COLUMN) if column in latest.columns]
+    latest_source = latest.loc[:, source_cols]
     if "generated_at" in recs.columns and "generated_at" in frame.columns:
         frame["generated_at"] = pd.to_datetime(frame["generated_at"], utc=True, errors="coerce")
         snap = recs.dropna(subset=["generated_at"]).drop_duplicates(
@@ -102,25 +106,27 @@ def _annotate_source(impressions: pd.DataFrame, recommendations: pd.DataFrame | 
             snap, on=[USER_COLUMN, ITEM_COLUMN, "generated_at"], how="left", suffixes=("", "_rec")
         )
         _coalesce_column(merged, SOURCE_COLUMN)
-        if VARIANT_COLUMN in recs.columns:
-            _coalesce_column(merged, VARIANT_COLUMN)
-        need_fill = merged["generated_at"].isna()
-        if need_fill.any():
-            fill = latest.drop(columns=["generated_at"], errors="ignore")
-            filled = merged.loc[need_fill].merge(
-                fill, on=[USER_COLUMN, ITEM_COLUMN], how="left", suffixes=("", "_latest")
+        _coalesce_column(merged, VARIANT_COLUMN)
+        missing = merged["generated_at"].isna()
+        if bool(missing.any()):
+            filled = merged.loc[missing, [USER_COLUMN, ITEM_COLUMN]].merge(
+                latest_source, on=[USER_COLUMN, ITEM_COLUMN], how="left", suffixes=("", "_latest")
             )
             _coalesce_column(filled, SOURCE_COLUMN)
-            if VARIANT_COLUMN in recs.columns:
-                _coalesce_column(filled, VARIANT_COLUMN)
-            for column in (SOURCE_COLUMN, VARIANT_COLUMN):
-                if column in filled.columns:
-                    merged.loc[need_fill, column] = filled[column].to_numpy()
+            if SOURCE_COLUMN not in merged.columns:
+                merged[SOURCE_COLUMN] = None
+            if SOURCE_COLUMN in filled.columns:
+                existing = merged.loc[missing, SOURCE_COLUMN]
+                incoming = pd.Series(filled[SOURCE_COLUMN].to_numpy(), index=existing.index)
+                merged.loc[missing, SOURCE_COLUMN] = existing.where(existing.notna(), incoming)
         return merged
-    merged = frame.merge(latest, on=[USER_COLUMN, ITEM_COLUMN], how="left", suffixes=("", "_rec"))
-    _coalesce_column(merged, SOURCE_COLUMN)
-    if VARIANT_COLUMN in recs.columns:
+    if "generated_at" not in recs.columns:
+        merged = frame.merge(latest, on=[USER_COLUMN, ITEM_COLUMN], how="left", suffixes=("", "_rec"))
+        _coalesce_column(merged, SOURCE_COLUMN)
         _coalesce_column(merged, VARIANT_COLUMN)
+        return merged
+    merged = frame.merge(latest_source, on=[USER_COLUMN, ITEM_COLUMN], how="left", suffixes=("", "_rec"))
+    _coalesce_column(merged, SOURCE_COLUMN)
     return merged
 
 
@@ -152,12 +158,9 @@ def _prepare_click_frames(
     if annotate_source:
         impressions = _annotate_source(impressions, recommendations)
         impressions = impressions.copy()
-    if "event_id" not in impressions.columns:
-        impressions = impressions.copy()
-        impressions["event_id"] = [f"imp-{i}" for i in range(len(impressions))]
-    if not clicks.empty and "event_id" not in clicks.columns:
-        clicks = clicks.copy()
-        clicks["event_id"] = [f"clk-{i}" for i in range(len(clicks))]
+    impressions = _fill_blank_ids(impressions, "imp")
+    if not clicks.empty:
+        clicks = _fill_blank_ids(clicks, "clk")
     matched_clicks = _merge_asof_events(clicks, impressions, window=window) if not clicks.empty else clicks
     return _ClickFrames(impressions, clicks, matched_clicks, window)
 
@@ -237,9 +240,7 @@ def user_track_outcomes(
             _merge_asof_events(conv, impressions, window=window) if not conv.empty else conv.iloc[0:0]
         )
     impression_counts = impressions.groupby(USER_COLUMN).size()
-    click_counts = (
-        matched_clicks.groupby(USER_COLUMN).size() if not matched_clicks.empty else pd.Series(dtype=int)
-    )
+    click_counts = _clicked_impressions_by_user(matched_clicks)
     conversion_counts = (
         attributed.groupby(USER_COLUMN).size() if not attributed.empty else pd.Series(dtype=int)
     )
@@ -248,7 +249,8 @@ def user_track_outcomes(
         n_clicks = float(click_counts.get(user, 0)) if not click_counts.empty else 0.0
         n_conv = float(conversion_counts.get(user, 0)) if not conversion_counts.empty else 0.0
         if primary_metric == "ctr":
-            report_users[user] = n_clicks / float(n_imp) if n_imp else 0.0
+            capped_clicks = min(n_clicks, float(n_imp))
+            report_users[user] = capped_clicks / float(n_imp) if n_imp else 0.0
         else:
             capped = min(n_conv, float(n_imp))
             report_users[user] = capped / float(n_imp) if n_imp else 0.0
