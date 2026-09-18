@@ -245,7 +245,8 @@ mounted one), enable the block above, keep `models` including
 - richer users lean on `personalized`
 - an item is `source = "blended"` only when more than one source contributed it
 - a sentinel `__cold_start__` user is written (global availability allowlist)
-  for serve-mode fallback
+  for serve-mode fallback (priority / RRF write a popular-only sentinel
+  whenever `popular` is in the run, even without blending)
 
 The blend curve uses each user's **distinct (user, item) count** after
 dataset aggregation (not raw event rows). If `items` has no usable date

@@ -24,6 +24,74 @@ from cicerone.model.strategies import STRATEGIES, RecommenderModel
 from cicerone.policy import allowed_items_for_cohort, is_user_scoped
 
 
+def _global_allowed_items(built: BuiltDataset, cohort_plan: _CohortPlan) -> list:
+    global_rules = [rule for rule in cohort_plan.eligibility if not is_user_scoped(rule)]
+    return allowed_items_for_cohort(
+        [],
+        None,
+        built.items,
+        global_rules,
+        cohort_plan.all_item_ids,
+    )
+
+
+def _popular_probe_users(built: BuiltDataset) -> list:
+    external = built.dataset.user_id_map.external_ids
+    if len(external) == 0:
+        return [COLD_START_USER_ID]
+    # RecTools requires recommend() ids to match the dataset user dtype.
+    return [external[0]]
+
+
+def _popular_cold_start_frame(
+    models: dict[str, RecommenderModel],
+    built: BuiltDataset,
+    cohort_plan: _CohortPlan,
+    combine_k: int,
+    empty_recs: pd.DataFrame,
+) -> pd.DataFrame:
+    if "popular" not in models:
+        return empty_recs
+    global_allowed = _global_allowed_items(built, cohort_plan)
+    if not global_allowed:
+        return empty_recs
+    popular_recs = models["popular"].recommend(
+        users=_popular_probe_users(built),
+        dataset=built.dataset,
+        k=combine_k,
+        filter_viewed=False,
+        items_to_recommend=global_allowed,
+    )
+    if popular_recs.empty:
+        return empty_recs
+    popular_recs = popular_recs.copy()
+    popular_recs[Columns.User] = COLD_START_USER_ID
+    popular_recs[SOURCE_COLUMN] = POPULAR_SOURCE
+    return popular_recs
+
+
+def _with_popular_cold_start(
+    combined: pd.DataFrame,
+    models: dict[str, RecommenderModel],
+    built: BuiltDataset,
+    cohort_plan: _CohortPlan,
+    combine_k: int,
+    empty_recs: pd.DataFrame,
+) -> pd.DataFrame:
+    if (
+        not combined.empty
+        and Columns.User in combined.columns
+        and COLD_START_USER_ID in set(combined[Columns.User].astype(str))
+    ):
+        return combined
+    cold = _popular_cold_start_frame(models, built, cohort_plan, combine_k, empty_recs)
+    if cold.empty:
+        return combined
+    if combined.empty:
+        return cold.reset_index(drop=True)
+    return pd.concat([combined, cold], ignore_index=True)
+
+
 def _combine_strategy_frames(
     models: dict[str, RecommenderModel],
     built: BuiltDataset,
@@ -82,37 +150,22 @@ def _combine_strategy_frames(
             latest_by_user=latest_by_user or None,
         )
 
-        cold_popular = empty_recs.copy()
+        cold_popular = _popular_cold_start_frame(models, built, cohort_plan, combine_k, empty_recs)
         cold_shared_latest: list[tuple[str, int, float]] | None = None
         if "popular" in models:
-            global_rules = [rule for rule in cohort_plan.eligibility if not is_user_scoped(rule)]
-            global_allowed = allowed_items_for_cohort(
-                [],
-                None,
-                built.items,
-                global_rules,
-                cohort_plan.all_item_ids,
-            )
-            if global_allowed:
-                cold_popular = models["popular"].recommend(
-                    users=[COLD_START_USER_ID],
-                    dataset=built.dataset,
-                    k=combine_k,
-                    filter_viewed=False,
-                    items_to_recommend=global_allowed,
+            global_allowed = _global_allowed_items(built, cohort_plan)
+            if (
+                global_allowed
+                and strategy_frames.latest_available
+                and strategy_frames.date_column is not None
+                and built.items is not None
+            ):
+                cold_shared_latest = rank_latest_items(
+                    built.items,
+                    strategy_frames.date_column,
+                    global_allowed,
+                    combine_k,
                 )
-                cold_popular[SOURCE_COLUMN] = POPULAR_SOURCE
-                if (
-                    strategy_frames.latest_available
-                    and strategy_frames.date_column is not None
-                    and built.items is not None
-                ):
-                    cold_shared_latest = rank_latest_items(
-                        built.items,
-                        strategy_frames.date_column,
-                        global_allowed,
-                        combine_k,
-                    )
 
         combined = append_cold_start_rows(
             combined,
@@ -128,7 +181,7 @@ def _combine_strategy_frames(
         return combined
 
     if not strategy_frames.frames:
-        return empty_recs
+        return _with_popular_cold_start(empty_recs, models, built, cohort_plan, combine_k, empty_recs)
     if weights is not None:
         label_weights = {STRATEGIES[name].source_label: weights.get(name, 1.0) for name in recommend_models}
         stamped: list[pd.DataFrame] = []
@@ -137,7 +190,9 @@ def _combine_strategy_frames(
             part[WEIGHT_COLUMN] = part[SOURCE_COLUMN].map(label_weights).fillna(1.0)
             stamped.append(part)
         source_label_order = [STRATEGIES[name].source_label for name in recommend_models]
-        return combine_by_weighted_fusion(
+        combined = combine_by_weighted_fusion(
             stamped, combine_k, rrf_k if rrf_k is not None else RRF_K, source_label_order
         )
-    return combine_by_priority(strategy_frames.frames, combine_k)
+    else:
+        combined = combine_by_priority(strategy_frames.frames, combine_k)
+    return _with_popular_cold_start(combined, models, built, cohort_plan, combine_k, empty_recs)

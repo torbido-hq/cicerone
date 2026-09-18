@@ -24,6 +24,7 @@ from support.system_db import postgres_ready, reset_schema
 
 from cicerone import job
 from cicerone.artifact import ARTIFACT_SCHEMA_VERSION, loads_artifact, recommend_from_artifact
+from cicerone.blending import COLD_START_USER_ID
 from cicerone.io.db_store import (
     DEFAULT_EVENTS_TABLE,
     DEFAULT_ITEMS_TABLE,
@@ -154,4 +155,6 @@ def test_system_job_db_round_trip_with_artifact_and_readers(
 
     from_artifact = recommend_from_artifact(loaded, ["u1", "u2"], top_k=3)
     assert not from_artifact.empty
-    assert set(from_artifact["user_id"]) <= {"u1", "u2"}
+    artifact_users = set(from_artifact["user_id"].astype(str))
+    assert {"u1", "u2"} <= artifact_users
+    assert artifact_users <= {"u1", "u2", COLD_START_USER_ID}

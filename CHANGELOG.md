@@ -20,6 +20,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Named surfaces on the serve API: `GET /popular`, `GET /latest`,
   `GET /similar/{item_id}`, and `POST /session/recommendations`. The job
   writes popular / latest / item-neighbor snapshots next to recommendations.
+- Job writes `__cold_start__` under priority and weighted RRF (popular-only)
+  as well as blending, so serve fallback does not depend on the combiner.
 
 ### Fixed
 

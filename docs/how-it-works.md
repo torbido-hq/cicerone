@@ -277,7 +277,8 @@ A user is truly cold only if they are **absent** from the dataset (no
 interactions **and** no features). Feature-only users are warm for LightFM.
 Serve / dashboard answer an unknown `user_id` with `fallback: true` rather
 than a bare 404 — when there is something to fall back to. The job writes the
-`__cold_start__` set **only under blending**; incremental events then keep it
-fresh. Under priority or RRF that sentinel is absent, so the reader
-substitutes one `popular_fallback` / `latest` user's top-K, and 404s if the
-table has neither.
+`__cold_start__` set whenever `popular` is in the run (popular-only under
+priority or RRF; blending may also mix in `latest`). Incremental events then
+keep it fresh. Without a sentinel the reader substitutes one
+`popular_fallback` / `latest` user's top-K, and 404s if the table has
+neither.
