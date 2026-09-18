@@ -87,9 +87,11 @@ so `kind = "db"` input/output can be exercised without an external database.
 Credentials and database names live in `docker/postgres/defaults.env` (see
 CONTRIBUTING.md). CI uses a separate throwaway instance via
 `docker-compose.ci.yml`. The system-style check in `tests/test_system_db.py`
-exercises the full job → recommendations/manifest/artifact →
-serve/dashboard reader path against that real Postgres (resetting only
+exercises job → recommendations/manifest/artifact → serve and dashboard
+HTTP against that real Postgres (resetting only
 `cicerone.io.db_store.DEFAULT_DB_TABLES`).
+`tests/test_system_db_quality.py` continues the same catalog through
+`POST /track`, a second job, and the Quality page.
 
 Public imports stay stable after the package splits:
 `from cicerone.model import …` and `from cicerone.config import …`.
@@ -119,6 +121,7 @@ Test modules mirror the packages (same pattern as `tests/test_io_*.py`):
 | `tests/test_serve_events_routes.py` / `test_serve_bootstrap_events.py` | Serve webhook mount + worker bootstrap |
 | `tests/test_experiment_*.py` | Sticky assignment, per-variant recipes, sequential stats, store, serve lookup |
 | `tests/test_track_*.py` / `test_evaluation.py` / `test_dashboard_quality.py` | Track ingest, CTR/CVR, replay, Quality page |
+| `tests/test_system_db.py` / `test_system_db_quality.py` | Postgres system spec: job → serve/dashboard HTTP; track → second job → Quality |
 | `tests/test_explain.py` / `test_reasons.py` | Batch `reasons` JSON + serve-safe parse |
 
 ## Data flow
