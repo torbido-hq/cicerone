@@ -424,12 +424,14 @@ passes (interval 3s, 20 retries):
 docker compose --env-file docker/postgres/defaults.env --profile db up -d --wait postgres
 ```
 
-If your Compose build has no `--wait`, start it and poll:
+If your Compose build has no `--wait`, start it and poll until ready:
 
 ```sh
 docker compose --env-file docker/postgres/defaults.env --profile db up -d postgres
-docker compose --env-file docker/postgres/defaults.env --profile db exec postgres \
-  pg_isready -U cicerone -d cicerone
+until docker compose --env-file docker/postgres/defaults.env --profile db exec postgres \
+  pg_isready -U cicerone -d cicerone; do
+  sleep 3
+done
 ```
 
 Credentials, DB names, and host port live in
@@ -742,20 +744,21 @@ enabled = true
 auth_token = "tutorial-token"
 host = "0.0.0.0"
 port = 8080
+debounce_seconds = 2
 ```
 
 `host = "0.0.0.0"` is required so `docker run -p 8080:8080` can reach the
 process (code default is `127.0.0.1` inside the container).
+`debounce_seconds = 2` is a tutorial override of the default 60 so you
+do not sit through a minute after the boot job.
 
 `cicerone start` in batch mode runs **one job immediately**, then enters
 the scheduler. That is why this step uses `start` instead of `job`.
 `cicerone scheduler` would only wait for the next cron tick.
 
-The first job is still running (or within
-`[job.trigger].debounce_seconds`, default 60) when the container comes
-up — a trigger in that window is **skipped**, not queued. Wait for
-`Recommendation job` success in `docker logs` and for the debounce
-before calling the webhook:
+A trigger while that first job is in flight, or within
+`debounce_seconds` of it finishing, is **skipped**, not queued. Wait for
+the real log line `entering schedule loop`, then for the debounce:
 
 ```sh
 docker run --rm -d --name cicerone-tutorial-scheduler -p 8080:8080 \
@@ -764,17 +767,19 @@ docker run --rm -d --name cicerone-tutorial-scheduler -p 8080:8080 \
   -v "$PWD/data":/data \
   cicerone-test cicerone --config /app/config/cicerone.toml start
 
-docker logs -f cicerone-tutorial-scheduler
-# Ctrl-C the logs follow after the initial job finishes, then wait out debounce (60s).
+until docker logs cicerone-tutorial-scheduler 2>&1 | grep -q "entering schedule loop"; do
+  sleep 1
+done
+sleep 2
 
 read -s -p "Trigger auth token: " TRIGGER_TOKEN && echo
 curl -X POST -H "Authorization: Bearer $TRIGGER_TOKEN" http://localhost:8080/trigger/retrain
 ```
 
 A trigger fired while a run is already in flight, or within
-`[job.trigger].debounce_seconds` (default 60) of the last one, is skipped
-rather than queued — check `docker logs cicerone-tutorial-scheduler` to see
-it happen if you call the webhook twice in a row. Single-instance locking is
+`debounce_seconds` of the last one, is skipped rather than queued —
+check `docker logs cicerone-tutorial-scheduler` to see it happen if you
+call the webhook twice in a row. Single-instance locking is
 the default; see [configuration.md](configuration.md#job-trigger) for
 optional `postgres` / `redis` backends when running multiple scheduler
 replicas. The
