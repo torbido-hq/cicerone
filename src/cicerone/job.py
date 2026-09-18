@@ -651,6 +651,8 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
             manifest_written = False
             replace_success_manifest = True
         leftover_exc = persist_exc or sys.exc_info()[1]
+        if isinstance(close_exc, LockLostError) and persist_exc is not None:
+            leftover_exc = close_exc
         skip_if_newer_than = (success_generated_at or started_at) if replace_success_manifest else started_at
         if not manifest_written and not skip_stale_job_manifest(
             fence_check=fence_check,
@@ -674,9 +676,11 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                 if manifest.get("status") == "success":
                     raise
         logger.info("Job finished: %s", json.dumps(manifest))
+        if isinstance(close_exc, LockLostError):
+            raise close_exc
         if persist_exc is not None:
             raise persist_exc
-        if close_exc is not None and (isinstance(close_exc, LockLostError) or sys.exc_info()[1] is None):
+        if close_exc is not None and sys.exc_info()[1] is None:
             raise close_exc
 
 

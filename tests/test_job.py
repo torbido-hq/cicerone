@@ -729,6 +729,52 @@ def test_job_run_swallows_eval_persistence_errors(tmp_path, monkeypatch, caplog)
     assert json.loads((output_dir / "manifest.json").read_text())["status"] == "success"
 
 
+def test_job_prefers_close_lock_loss_over_persist_error(tmp_path, monkeypatch):
+    from cicerone.locks import LockLostError
+
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.utcnow()
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 2, "occurred_at": now},
+        ]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    extra = """
+        [track]
+        enabled = true
+        [job.eval]
+        enabled = true
+        """
+    monkeypatch.setenv(
+        "CICERONE_CONFIG_PATH",
+        _write_config(tmp_path, input_dir, output_dir, top_k=2, extra=extra),
+    )
+
+    class _Pub:
+        def connect(self) -> None:
+            return None
+
+        def publish(self, df: pd.DataFrame) -> None:
+            del df
+
+        def close(self) -> None:
+            raise LockLostError("retrain lock lost before write", kind="retrain")
+
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings, **_kwargs: _Pub())
+    monkeypatch.setattr(
+        "cicerone.track.store.TrackStore.write_eval",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("eval store bug")),
+    )
+    with pytest.raises(LockLostError, match="retrain lock lost"):
+        job.run()
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    assert manifest["status"] == "success"
+    assert (output_dir / "recommendations.parquet").exists()
+
+
 def test_job_rewrites_manifest_when_persist_raises_unexpected_error(tmp_path, monkeypatch):
     input_dir = tmp_path / "in"
     output_dir = tmp_path / "out"
