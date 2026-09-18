@@ -56,6 +56,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   or an unsupported bound is empty. `quantity` is optional and kept when
   the source has it. Missing S3 events are empty. Custom `events_query`
   is wrapped unless it already has a top-level `LIMIT`/`OFFSET`.
+  SQL comments do not count as pagination. A failed DB engine on a
+  bounded read is empty.
 
 ### Security
 

@@ -114,11 +114,15 @@ def _metric_event_sql(
 
 
 _QUOTED_SQL = re.compile(r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"")
+_SQL_LINE_COMMENT = re.compile(r"--[^\n]*")
+_SQL_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
 _SQL_PAGE = re.compile(r"\b(?:limit|offset)\b", re.IGNORECASE)
 
 
 def _sql_has_page(sql: str) -> bool:
     stripped = _QUOTED_SQL.sub(" ", sql)
+    stripped = _SQL_LINE_COMMENT.sub(" ", stripped)
+    stripped = _SQL_BLOCK_COMMENT.sub(" ", stripped)
     while True:
         nxt = re.sub(r"\([^()]*\)", " ", stripped)
         if nxt == stripped:
@@ -198,9 +202,10 @@ def load_metric_events(
         frame = frame.loc[:, keep] if keep else frame
         return _filter_events_since(filter_events_by_types(_with_default_quantity(frame), types), since)
     if inp.kind == "db":
-        engine = create_engine(require_option(inp.options, "database_url", "db"), pool_pre_ping=True)
+        engine = None
         query = inp.options.get("events_query")
         try:
+            engine = create_engine(require_option(inp.options, "database_url", "db"), pool_pre_ping=True)
             if query:
                 cleaned = readonly_select(str(query), option="input.options.events_query")
                 if _sql_has_page(cleaned):
@@ -236,7 +241,8 @@ def load_metric_events(
             frame = frame.loc[:, keep] if keep else frame
             return _filter_events_since(filter_events_by_types(_with_default_quantity(frame), types), since)
         finally:
-            engine.dispose()
+            if engine is not None:
+                engine.dispose()
     frame = build_input_source(inp).read_events()
     keep = [column for column in EVENT_METRIC_COLUMNS if column in frame.columns]
     frame = frame.loc[:, keep] if keep else frame
