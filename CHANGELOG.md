@@ -45,6 +45,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Exact snapshot matches can fill variant; the latest-snapshot fallback
   stays source-only and does not overwrite an existing source.
   Recs without `generated_at` still merge source and variant.
+- Track `since` drops untimed rows; `experiment_id=` excludes blank ids.
+  DB reads apply a conservative date bound. Invalid `since` is an empty query.
+  Dataset `track.jsonl` streams local lines and drops out-of-window rows.
+  A failed DB track read raises unless the table is missing.
+- Quality and Experiments use an attribution lookback on track and events.
+  Experiments keep only exposures for users in that window, and a failed
+  track read does not drop healthy exposures.
+- Metric event `since` is pushed into SQL and parquet. Missing `occurred_at`
+  or an unsupported bound is empty. `quantity` is optional and kept when
+  the source has it. Missing S3 events are empty. Custom `events_query`
+  is wrapped unless it already has a top-level `LIMIT`/`OFFSET`.
 
 ### Security
 

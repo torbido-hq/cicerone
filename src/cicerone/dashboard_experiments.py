@@ -47,6 +47,7 @@ from cicerone.locks import (
     held_writer_lock,
 )
 from cicerone.track.store import TrackStore
+from cicerone.track.store_common import DASHBOARD_TRACK_FLOOR_HOURS, lookback_since
 
 logger = logging.getLogger(__name__)
 
@@ -256,11 +257,15 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
             "ship_blocked": (),
         }
     event_types = _metric_event_types(settings, experiment)
+    since = lookback_since(
+        window_hours=settings.track.attribution_window_hours,
+        floor_hours=DASHBOARD_TRACK_FLOOR_HOURS,
+    )
     with ThreadPoolExecutor(max_workers=5) as pool:
         events_f = pool.submit(
             _try_load,
             "read events for experiment metrics",
-            lambda: _load_metric_events(settings, event_types=event_types),
+            lambda: _load_metric_events(settings, event_types=event_types, since=since),
             pd.DataFrame(),
         )
         recs_f = pool.submit(
@@ -286,21 +291,23 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
             track_f = pool.submit(
                 _try_load,
                 "read track rows for experiment metrics",
-                lambda: TrackStore(settings.output).read_rows(experiment_id=experiment.id),
-                [],
+                lambda: TrackStore(settings.output).read_rows(experiment_id=experiment.id, since=since),
+                None,
             )
         events = events_f.result()
         recs = recs_f.result()
         exposures = exposures_f.result()
         catalog_size = catalog_f.result()
         track_rows = track_f.result() if track_f is not None else []
+    if settings.track.enabled and track_rows is not None:
+        exposures = _exposures_for_track_users(exposures, track_rows)
     if events is None:
         events = pd.DataFrame()
     weights = feature_config.event_weights if feature_config is not None else {}
     track_outcomes = None
     track_variants = None
     n_impressions = 0
-    if settings.track.enabled:
+    if settings.track.enabled and track_rows is not None:
         n_impressions = sum(1 for row in track_rows if str(row.get("kind") or "") == TRACK_KIND_IMPRESSION)
         if experiment.attribution in {ATTRIBUTION_CLICK, ATTRIBUTION_IMPRESSION}:
             conversions = conversion_events_for_settings(events, settings)
@@ -353,6 +360,17 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
         "ship_blocked": blocked,
         "lift_label": _lift_label(report.primary_metric),
     }
+
+
+def _exposures_for_track_users(
+    exposures: list[dict[str, Any]] | None,
+    track_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]] | None:
+    if exposures is None:
+        return None
+    recent = {str(row.get("user_id") or "") for row in track_rows}
+    recent.discard("")
+    return [row for row in exposures if str(row.get("user_id") or "") in recent]
 
 
 def _lift_label(metric: str) -> str:
