@@ -130,10 +130,6 @@ def load_items_catalog_size(output: IOSettings) -> int | None:
         try:
             with engine.connect() as conn:
                 value = conn.execute(text(f'SELECT COUNT(DISTINCT "{ITEM_COLUMN}") FROM "{table}"')).scalar()
-        except MISSING_TABLE_ERRORS as exc:
-            if is_missing_table_error(exc) or is_missing_column_error(exc):
-                return None
-            raise
         except Exception as exc:
             if is_missing_table_error(exc) or is_missing_column_error(exc):
                 return None
