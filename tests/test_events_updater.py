@@ -16,7 +16,8 @@ from cicerone.events.updater import INCREMENTAL_SOURCE, IncrementalUpdater
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.factory import build_output_sink
 from cicerone.io.recommendation_reader import RECOMMENDATION_COLUMNS
-from cicerone.locks import LockLostError
+from cicerone.locks import LockLostError, WriterLockBusyError
+from cicerone.publish.base import PublishError
 from cicerone.reasons import dump_source_reasons, parse_reasons
 
 
@@ -1157,7 +1158,7 @@ def test_incremental_updater_publish_failure_does_not_unsucceed(tmp_path, featur
             return None
 
         def publish(self, _df: pd.DataFrame) -> None:
-            raise RuntimeError("broker down")
+            raise PublishError("broker down")
 
         def close(self) -> None:
             return None
@@ -1289,3 +1290,85 @@ def test_incremental_updater_skips_publish_when_manifest_generation_changes(
     events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
     assert updater.apply(events) == 1
     assert published == []
+
+
+def test_incremental_updater_reraises_unexpected_sidecar_generation_error(
+    tmp_path, feature_config: FeatureConfig, monkeypatch
+):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+
+    class _Pub:
+        def connect(self) -> None:
+            return None
+
+        def publish(self, df: pd.DataFrame) -> None:
+            raise AssertionError("publish should not run after generation check failure")
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "cicerone.events.updater.sidecar_generation_current",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("generation check bug")),
+    )
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        publisher=_Pub(),
+    )
+    events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
+    with pytest.raises(RuntimeError, match="generation check bug"):
+        updater.apply(events)
+    frame = load_recommendations_frame(settings.output)
+    assert "i9" in set(frame[frame["user_id"] == "u1"]["item_id"].astype(str))
+
+
+def test_incremental_updater_reraises_writer_lock_busy_from_generation_check(
+    tmp_path, feature_config: FeatureConfig, monkeypatch
+):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+
+    class _Pub:
+        def connect(self) -> None:
+            return None
+
+        def publish(self, df: pd.DataFrame) -> None:
+            raise AssertionError("publish should not run after lock-busy generation check")
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "cicerone.events.updater.sidecar_generation_current",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(WriterLockBusyError("dataset writer lock busy")),
+    )
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        publisher=_Pub(),
+    )
+    events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
+    with pytest.raises(WriterLockBusyError, match="dataset writer lock busy"):
+        updater.apply(events)
+    frame = load_recommendations_frame(settings.output)
+    assert "i9" in set(frame[frame["user_id"] == "u1"]["item_id"].astype(str))

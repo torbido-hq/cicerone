@@ -478,7 +478,7 @@ def test_updater_publish_failure_does_not_unsucceed(tmp_path, feature_config: Fe
             return None
 
         def publish(self, df: pd.DataFrame) -> None:
-            raise RuntimeError("broker down")
+            raise PublishError("broker down")
 
     updater = IncrementalUpdater(
         sink=build_output_sink(settings.output),
@@ -610,6 +610,27 @@ def test_rabbitmq_publisher_reconnects_after_failed_recover(monkeypatch):
     publisher.publish(_recs_frame())
     users = [json.loads(body)["user_id"] for _exchange, _key, body in broker.published]
     assert users == ["u1", "u2"]
+    publisher.close()
+
+
+def test_rabbitmq_publisher_recover_runtime_error_is_not_publish_error(monkeypatch):
+    install_fake_rabbitmq(monkeypatch)
+    publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "recs"})
+    publisher.connect()
+    channel = publisher._channel
+    assert channel is not None
+
+    def boom_publish(*args, **kwargs):
+        del args, kwargs
+        raise RuntimeError("channel closed")
+
+    def boom_close() -> None:
+        raise RuntimeError("close bug")
+
+    channel.basic_publish = boom_publish  # type: ignore[method-assign]
+    channel.close = boom_close  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="close bug"):
+        publisher.publish(_recs_frame())
     publisher.close()
 
 

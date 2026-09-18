@@ -101,6 +101,11 @@ class RabbitMQPublisher:
             logger.exception("RabbitMQ publish failed; recovering publisher")
             try:
                 self._recover()
+            except Exception as exc:
+                if isinstance(exc, RuntimeError) and not isinstance(exc, PublishError):
+                    raise
+                raise PublishError(f"RabbitMQ publish failed: {exc}") from exc
+            try:
                 self._publish_from(messages, sent)
             except Exception as exc:
                 raise PublishError(f"RabbitMQ publish failed: {exc}") from exc
