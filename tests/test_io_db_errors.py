@@ -18,7 +18,10 @@ def test_is_missing_column_error():
 def test_is_missing_table_error():
     exc = OperationalError("stmt", {}, Exception("no such table: recommendations"))
     assert is_missing_table_error(exc)
-    assert is_missing_table_error(ProgrammingError("stmt", {}, Exception("boom")))
+    assert is_missing_table_error(ProgrammingError("stmt", {}, Exception('relation "track" does not exist')))
+    assert not is_missing_table_error(
+        ProgrammingError("stmt", {}, Exception("permission denied for table track"))
+    )
     assert not is_missing_table_error(OperationalError("stmt", {}, Exception("disk full")))
 
 

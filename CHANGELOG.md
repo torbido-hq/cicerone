@@ -45,7 +45,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Experiments keep only exposures for users in that track window.
   A failed Experiments track read does not drop healthy exposures.
   A failed DB track read raises instead of looking like an empty log,
-  including `OperationalError`s that are not a missing table.
+  including `OperationalError`s and `ProgrammingError`s that are not a
+  missing table.
 - Exact snapshot matches can fill variant; the latest-snapshot fallback
   stays source-only and does not overwrite an existing source.
   Recs without `generated_at` still merge source and variant.
