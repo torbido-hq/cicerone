@@ -691,6 +691,67 @@ def test_score_previous_run_reads_history_when_track_disabled(tmp_path, monkeypa
     assert served is not None
 
 
+def test_score_previous_run_ignores_preloaded_track_when_disabled(tmp_path, monkeypatch):
+    from cicerone.config import EvalSettings, IOSettings, TrackSettings, make_settings
+    from cicerone.job import _score_previous_run
+
+    out = tmp_path / "out"
+    out.mkdir()
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        track=TrackSettings(enabled=False),
+        eval=EvalSettings(enabled=True, event_types=("purchase",), ks=(1,)),
+    )
+    recs = pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"}]
+    )
+    history = recs.copy()
+    history["generated_at"] = "2026-08-28T03:00:00+00:00"
+    calls: list[set[str] | None] = []
+
+    monkeypatch.setattr("cicerone.job_eval.load_recommendations_frame", lambda _output: recs)
+
+    def _read_history(self, *, generated_ats=None, since=None):
+        calls.append(generated_ats)
+        return history
+
+    monkeypatch.setattr("cicerone.job.TrackStore.read_history", _read_history)
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("read_rows should not run when track is disabled")
+
+    monkeypatch.setattr("cicerone.job.TrackStore.read_rows", _boom)
+    events = pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": pd.Timestamp("2026-08-28T04:00:00+00:00"),
+            }
+        ]
+    )
+    preloaded = [
+        {
+            "event_id": "extra",
+            "generated_at": "2026-08-27T03:00:00+00:00",
+            "user_id": "u1",
+            "item_id": "i1",
+        }
+    ]
+    _track, served = _score_previous_run(
+        settings,
+        events,
+        {"generated_at": "2026-08-28T03:00:00+00:00"},
+        preloaded_track=preloaded,
+        preloaded_recs=recs,
+    )
+    assert calls == [{"2026-08-28T03:00:00+00:00"}]
+    assert served is not None
+    assert _track is None
+
+
 def test_replay_assignments_prefers_first_impression_then_hash(tmp_path):
     from cicerone.blending import COLD_START_USER_ID
     from cicerone.config import IOSettings, make_settings
@@ -2600,3 +2661,359 @@ def test_select_thompson_recipes_fail_closed_without_variant(tmp_path, monkeypat
     selected = _select_thompson_recipes(settings, recipes, pd.DataFrame())
     assert selected.recipes == recipes
     assert selected.state is None
+
+
+def test_select_thompson_recipes_skips_trials_when_window_started_missing(tmp_path, monkeypatch):
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+    from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
+    from cicerone.experiment.recipes import ResolvedRecipe
+    from cicerone.experiment.thompson import ArmCounts
+    from cicerone.feature_config import BlendingConfig
+    from cicerone.job import _select_thompson_recipes
+
+    blending = BlendingConfig(enabled=False)
+    recipes = (
+        ResolvedRecipe("control", 0.5, ("popular",), None, None, "priority", blending, True, True),
+        ResolvedRecipe("treatment", 0.5, ("popular",), None, None, "priority", blending, True, True),
+    )
+    settings = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="ranking-cvr",
+            allocation="thompson",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        track=TrackSettings(enabled=True),
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    monkeypatch.setattr(
+        "cicerone.job.ExperimentStore.read_state",
+        lambda self: {
+            "experiment_id": "ranking-cvr",
+            "champion": "control",
+            "challenger": "treatment",
+            "arms": {
+                "control": {"successes": 4, "failures": 6},
+                "treatment": {"successes": 1, "failures": 2},
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "cicerone.job.TrackStore.read_rows",
+        lambda *args, **kwargs: [
+            {
+                "user_id": "u-1",
+                "item_id": "i-1",
+                "kind": "impression",
+                "variant": "control",
+                "experiment_id": "ranking-cvr",
+                "occurred_at": "2026-09-01T00:00:00Z",
+            }
+        ],
+    )
+    seen: dict[str, object] = {}
+
+    def _capture(**kwargs):
+        from cicerone.experiment.thompson import allocate_thompson as _real
+
+        seen["window_trials"] = kwargs.get("window_trials")
+        return _real(**kwargs)
+
+    monkeypatch.setattr("cicerone.job.allocate_thompson", _capture)
+    selected = _select_thompson_recipes(settings, recipes, pd.DataFrame())
+    trials = seen.get("window_trials")
+    assert isinstance(trials, dict)
+    assert trials["control"] == ArmCounts(0, 0)
+    assert selected.state is not None
+
+
+def test_select_thompson_recipes_uses_preloaded_track(tmp_path, monkeypatch):
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+    from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
+    from cicerone.experiment.recipes import ResolvedRecipe
+    from cicerone.feature_config import BlendingConfig
+    from cicerone.job import _select_thompson_recipes
+
+    blending = BlendingConfig(enabled=False)
+    recipes = (
+        ResolvedRecipe("control", 0.5, ("popular",), None, None, "priority", blending, True, True),
+        ResolvedRecipe("treatment", 0.5, ("popular",), None, None, "priority", blending, True, True),
+    )
+    settings = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="ranking-cvr",
+            allocation="thompson",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        track=TrackSettings(enabled=True),
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    calls = {"n": 0}
+
+    def _boom(*_args, **_kwargs):
+        calls["n"] += 1
+        raise AssertionError("read_rows should not run when preloaded")
+
+    monkeypatch.setattr("cicerone.job.TrackStore.read_rows", _boom)
+    selected = _select_thompson_recipes(
+        settings,
+        recipes,
+        pd.DataFrame(),
+        preloaded_track=[],
+        preloaded_recs=pd.DataFrame(),
+    )
+    assert calls["n"] == 0
+    assert selected.recipes == recipes
+
+
+def test_load_shared_eval_inputs_drops_partial_preload(tmp_path, monkeypatch):
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+    from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
+    from cicerone.job import _load_shared_eval_inputs
+
+    settings = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="ranking-cvr",
+            allocation="thompson",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        track=TrackSettings(enabled=True),
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    recs = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}])
+
+    def _boom(*_args, **_kwargs):
+        raise OSError("track down")
+
+    monkeypatch.setattr("cicerone.job.TrackStore.read_rows", _boom)
+    monkeypatch.setattr("cicerone.job.load_recommendations_frame", lambda _output: recs)
+    track, loaded = _load_shared_eval_inputs(settings)
+    assert track is None
+    assert loaded is recs
+
+
+def test_load_shared_eval_inputs_keeps_track_when_recs_fail(tmp_path, monkeypatch):
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+    from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
+    from cicerone.job import _load_shared_eval_inputs
+
+    settings = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="ranking-cvr",
+            allocation="thompson",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        track=TrackSettings(enabled=True),
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+
+    def _boom(*_args, **_kwargs):
+        raise OSError("recs down")
+
+    monkeypatch.setattr("cicerone.job.TrackStore.read_rows", lambda *_args, **_kwargs: [{"event_id": "a"}])
+    monkeypatch.setattr("cicerone.job.load_recommendations_frame", _boom)
+    track, loaded = _load_shared_eval_inputs(settings)
+    assert track == [{"event_id": "a"}]
+    assert loaded is None
+
+
+def test_load_shared_eval_inputs_keeps_empty_recs(tmp_path, monkeypatch):
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+    from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
+    from cicerone.job import _load_shared_eval_inputs
+
+    settings = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="ranking-cvr",
+            allocation="thompson",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        track=TrackSettings(enabled=True),
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    empty = pd.DataFrame()
+    monkeypatch.setattr("cicerone.job.TrackStore.read_rows", lambda *_args, **_kwargs: [{"event_id": "a"}])
+    monkeypatch.setattr("cicerone.job.load_recommendations_frame", lambda _output: empty)
+    track, recs = _load_shared_eval_inputs(settings)
+    assert track == [{"event_id": "a"}]
+    assert recs is empty
+
+
+def test_load_shared_eval_inputs_loads_dataset_in_parallel(tmp_path, monkeypatch):
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+    from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
+    from cicerone.job import _load_shared_eval_inputs
+
+    settings = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="ranking-cvr",
+            allocation="thompson",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        track=TrackSettings(enabled=True),
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    seen: dict[str, object] = {}
+    empty = pd.DataFrame()
+
+    def _pair(*_args, **kwargs):
+        seen["parallel"] = kwargs.get("parallel")
+        return [{"event_id": "a"}], empty
+
+    monkeypatch.setattr("cicerone.job._try_load_pair", _pair)
+    track, recs = _load_shared_eval_inputs(settings)
+    assert seen["parallel"] is True
+    assert track == [{"event_id": "a"}]
+    assert recs is empty
+
+
+def test_load_shared_eval_inputs_loads_db_serially(tmp_path, monkeypatch):
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+    from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
+    from cicerone.job import _load_shared_eval_inputs
+
+    settings = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="ranking-cvr",
+            allocation="thompson",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        track=TrackSettings(enabled=True),
+        output=IOSettings(kind="db", options={"database_url": f"sqlite+pysqlite:///{tmp_path / 'job.db'}"}),
+    )
+    seen: dict[str, object] = {}
+
+    def _pair(*_args, **kwargs):
+        seen["parallel"] = kwargs.get("parallel")
+        return [{"event_id": "a"}], pd.DataFrame()
+
+    monkeypatch.setattr("cicerone.job._try_load_pair", _pair)
+    _load_shared_eval_inputs(settings)
+    assert seen["parallel"] is False
+
+
+def test_load_shared_eval_inputs_does_not_bound_to_thompson_window(tmp_path, monkeypatch):
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+    from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
+    from cicerone.experiment.store import ExperimentStore, experiment_state
+    from cicerone.job import _load_shared_eval_inputs
+
+    settings = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="ranking-cvr",
+            allocation="thompson",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        track=TrackSettings(enabled=True),
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    ExperimentStore(settings.output).write_state(
+        experiment_state(
+            "ranking-cvr",
+            promoted_variant=None,
+            champion="control",
+            challenger="treatment",
+            window_started_at="2026-09-04T00:00:00+00:00",
+        )
+    )
+    recs = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}])
+    seen: dict[str, object] = {}
+
+    def _read(self, **kwargs):
+        seen.update(kwargs)
+        return [{"event_id": "old"}]
+
+    monkeypatch.setattr("cicerone.job.TrackStore.read_rows", _read)
+    monkeypatch.setattr("cicerone.job.load_recommendations_frame", lambda _output: recs)
+    track, loaded = _load_shared_eval_inputs(settings)
+    assert seen.get("since") is None
+    assert seen.get("experiment_id") is None
+    assert track == [{"event_id": "old"}]
+    assert loaded is recs
+
+
+def test_load_shared_eval_inputs_scopes_track_when_eval_disabled(tmp_path, monkeypatch):
+    from dataclasses import replace
+
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+    from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
+    from cicerone.job import _load_shared_eval_inputs
+
+    settings = replace(
+        make_settings(
+            experiment=ExperimentSettings(
+                enabled=True,
+                id="ranking-cvr",
+                allocation="thompson",
+                variants=(
+                    VariantSettings(name="control", traffic=0.5),
+                    VariantSettings(name="treatment", traffic=0.5),
+                ),
+            ),
+            track=TrackSettings(enabled=True),
+            output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        ),
+        track=TrackSettings(enabled=False),
+    )
+    recs = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}])
+    seen: dict[str, object] = {}
+
+    def _read(self, **kwargs):
+        seen.update(kwargs)
+        return [{"event_id": "a", "experiment_id": "ranking-cvr"}]
+
+    monkeypatch.setattr("cicerone.job.TrackStore.read_rows", _read)
+    monkeypatch.setattr("cicerone.job.load_recommendations_frame", lambda _output: recs)
+    track, loaded = _load_shared_eval_inputs(settings)
+    assert seen.get("experiment_id") == "ranking-cvr"
+    assert track == [{"event_id": "a", "experiment_id": "ranking-cvr"}]
+    assert loaded is recs

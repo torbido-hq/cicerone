@@ -79,6 +79,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   is wrapped unless it already has a top-level `LIMIT`/`OFFSET`.
   SQL comments do not count as pagination. A failed DB engine on a
   bounded read is empty.
+- Thompson skips window trials when a pair exists but `window_started_at` is empty.
+- The job loads track and recommendations once for eval and Thompson.
+  A failed track or recs read is retried independently, not treated as empty.
+  Thompson windows the shared rows in memory so eval keeps full history.
+  Shared preload keeps an empty recommendations frame instead of reloading,
+  and runs in parallel on local/S3.
+  Eval ignores a preloaded track when track is disabled.
 
 ### Security
 
