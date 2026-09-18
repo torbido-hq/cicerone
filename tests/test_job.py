@@ -762,6 +762,44 @@ def test_job_rewrites_manifest_when_persist_raises_unexpected_error(tmp_path, mo
     assert (output_dir / "recommendations.parquet").exists()
 
 
+def test_job_skips_failed_rewrite_when_newer_manifest_exists(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.utcnow()
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 2, "occurred_at": now},
+        ]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    extra = """
+        [track]
+        enabled = true
+        [job.eval]
+        enabled = true
+        """
+    monkeypatch.setenv(
+        "CICERONE_CONFIG_PATH",
+        _write_config(tmp_path, input_dir, output_dir, top_k=2, extra=extra),
+    )
+    newer = {
+        "triggered_by": "job",
+        "status": "success",
+        "generated_at": "2099-01-01T00:00:00+00:00",
+    }
+
+    def _newer_then_fail(*args, **kwargs):
+        del args, kwargs
+        (output_dir / "manifest.json").write_text(json.dumps(newer))
+        raise RuntimeError("eval store bug")
+
+    monkeypatch.setattr("cicerone.track.store.TrackStore.write_eval", _newer_then_fail)
+    with pytest.raises(RuntimeError, match="eval store bug"):
+        job.run()
+    assert json.loads((output_dir / "manifest.json").read_text()) == newer
+
+
 def test_read_input_swallows_manifest_reader_construction(monkeypatch):
     class _Source:
         def read_events(self) -> pd.DataFrame:

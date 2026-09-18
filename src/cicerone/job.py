@@ -298,6 +298,7 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
     pending_thompson: dict[str, Any] | None = None
     manifest_written = False
     replace_success_manifest = False
+    success_generated_at: str | None = None
 
     try:
         publisher = build_publisher(settings, connect=False)
@@ -555,6 +556,7 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                     ensure_publication_fence(sink, fence_check)
                     if write_job_manifest(sink, manifest):
                         manifest_written = True
+                        success_generated_at = str(manifest.get("generated_at") or "")
                 except _SINK_WRITE_ERRORS as exc:
                     if outputs_written or manifest.get("artifact_written"):
                         manifest["partial_outputs"] = True
@@ -649,12 +651,13 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
             manifest_written = False
             replace_success_manifest = True
         leftover_exc = persist_exc or sys.exc_info()[1]
-        skip_if_newer_than = None if replace_success_manifest else started_at
+        skip_if_newer_than = (success_generated_at or started_at) if replace_success_manifest else started_at
         if not manifest_written and not skip_stale_job_manifest(
             fence_check=fence_check,
             exc=leftover_exc,
         ):
-            manifest["generated_at"] = datetime.now(UTC).isoformat()
+            if not replace_success_manifest:
+                manifest["generated_at"] = datetime.now(UTC).isoformat()
             try:
                 holder = getattr(sink, "recommendations_write", None)
                 if callable(holder):

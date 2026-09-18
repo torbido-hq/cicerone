@@ -14,7 +14,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and only swallow store/eval I/O errors. Sidecar failures use
   `PublishError`, including Kafka produce/flush/close and a failed
   RabbitMQ retry or handle close. Lock-loss and unexpected `RuntimeError`s
-  fail the run and rewrite a success manifest to failed.
+  fail the run and rewrite that generation to failed when no newer
+  manifest exists.
 - DB serve keeps `AND variant=` when table inspect fails, and prefers the leftover
   fallback arm in the same `LIMIT` query when no arm is assigned.
 - Thompson serve hashes the sticky pair or names on disk, not the full config
