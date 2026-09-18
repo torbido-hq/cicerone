@@ -23,6 +23,7 @@ from cicerone.io.options import (
 from cicerone.io.recommendation_schema import USER_COLUMN
 from cicerone.track.store_common import since_date_floor
 
+REQUIRED_EVENT_COLUMNS = (USER_COLUMN, "item_id", "event_type", "occurred_at")
 EVENT_METRIC_COLUMNS = (USER_COLUMN, "item_id", "event_type", "quantity", "occurred_at")
 
 
@@ -86,7 +87,7 @@ def _metric_event_sql(
     types: tuple[str, ...] | None,
     floor: str | None,
 ) -> tuple[Any, dict[str, Any]]:
-    quoted = ", ".join(f'"{column}"' for column in EVENT_METRIC_COLUMNS)
+    quoted = ", ".join(f'"{column}"' for column in REQUIRED_EVENT_COLUMNS)
     clauses: list[str] = []
     params: dict[str, Any] = {}
     if types:
@@ -146,7 +147,7 @@ def _read_metric_parquet(
             return read_parquet(
                 options,
                 "events.parquet",
-                columns=list(EVENT_METRIC_COLUMNS),
+                columns=list(REQUIRED_EVENT_COLUMNS),
                 filters=filters,
             )
         except FileNotFoundError:
@@ -173,7 +174,9 @@ def load_metric_events(
             frame = _read_metric_parquet(inp.options, types=types, floor=floor)
         except FileNotFoundError:
             return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
-        except Exception:
+        except Exception as exc:
+            if is_s3_not_found(exc):
+                return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
             if floor is not None:
                 return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
             try:
@@ -182,6 +185,9 @@ def load_metric_events(
                 frame = build_input_source(inp).read_events()
         keep = [column for column in EVENT_METRIC_COLUMNS if column in frame.columns]
         frame = frame.loc[:, keep] if keep else frame
+        if "quantity" not in frame.columns:
+            frame = frame.copy()
+            frame["quantity"] = 1
         return _filter_events_since(filter_events_by_types(frame, types), since)
     if inp.kind == "db":
         engine = create_engine(require_option(inp.options, "database_url", "db"), pool_pre_ping=True)
@@ -203,6 +209,9 @@ def load_metric_events(
                 source = f'"{table}"'
             stmt, params = _metric_event_sql(source, types=types, floor=floor)
             frame = pd.read_sql(stmt, engine, params=params)
+            if "quantity" not in frame.columns:
+                frame = frame.copy()
+                frame["quantity"] = 1
             return _filter_events_since(frame, since)
         except Exception:
             if floor is not None:

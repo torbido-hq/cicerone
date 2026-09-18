@@ -1240,6 +1240,52 @@ def test_evaluate_tracking_counts_unique_clicked_impressions() -> None:
     assert outcomes["alice"] == pytest.approx(0.5)
 
 
+def test_evaluate_tracking_blank_event_ids_count_separately() -> None:
+    rows = _track(
+        {
+            "kind": "impression",
+            "user_id": "alice",
+            "item_id": "ipa",
+            "rank": 1,
+            "occurred_at": "2026-08-28T12:00:00Z",
+            "event_id": "",
+        },
+        {
+            "kind": "impression",
+            "user_id": "alice",
+            "item_id": "stout",
+            "rank": 2,
+            "occurred_at": "2026-08-28T12:00:00Z",
+            "event_id": "",
+        },
+        {
+            "kind": "click",
+            "user_id": "alice",
+            "item_id": "ipa",
+            "occurred_at": "2026-08-28T12:01:00Z",
+            "event_id": "clk-1",
+        },
+        {
+            "kind": "click",
+            "user_id": "alice",
+            "item_id": "stout",
+            "occurred_at": "2026-08-28T12:02:00Z",
+            "event_id": "clk-2",
+        },
+    )
+    report = evaluate_tracking(track_rows=rows, conversions=pd.DataFrame(), window_hours=24.0)
+    assert report.overall.n_impressions == 2
+    assert report.overall.n_clicks == 2
+    outcomes = user_track_outcomes(
+        track_rows=rows,
+        conversions=pd.DataFrame(),
+        primary_metric="ctr",
+        attribution="click",
+        window_hours=24.0,
+    )
+    assert outcomes["alice"] == pytest.approx(1.0)
+
+
 def test_annotate_source_does_not_invent_variant_from_later_snap() -> None:
     from cicerone.evaluation import _annotate_source
 
@@ -1458,6 +1504,24 @@ def test_load_metric_events_dataset_filter_failure_is_empty(tmp_path, monkeypatc
     assert frame.empty
 
 
+def test_load_metric_events_dataset_s3_missing_is_empty(tmp_path, monkeypatch) -> None:
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+
+    settings = make_settings(
+        input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+
+    def _read(*_args, **_kwargs):
+        raise RuntimeError("NoSuchKey")
+
+    monkeypatch.setattr("cicerone.evaluation.context.read_parquet", _read)
+    monkeypatch.setattr("cicerone.evaluation.context.is_s3_not_found", lambda _exc: True)
+    frame = load_metric_events(settings, since="2026-08-29T05:00:00+00:00")
+    assert frame.empty
+
+
 def test_load_metric_events_dataset_unbounded_retries(tmp_path, monkeypatch) -> None:
     from conftest import make_settings
 
@@ -1506,12 +1570,13 @@ def test_load_metric_events_db_pushes_since_predicate(monkeypatch) -> None:
     def _read_sql(stmt, _engine, params=None):
         captured["sql"] = str(stmt)
         captured["params"] = params
-        return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
+        return pd.DataFrame(columns=["user_id", "item_id", "event_type", "occurred_at"])
 
     monkeypatch.setattr("cicerone.evaluation.context.create_engine", lambda *_args, **_kwargs: _Engine())
     monkeypatch.setattr("cicerone.evaluation.context.pd.read_sql", _read_sql)
     frame = load_metric_events(settings, event_types=("purchase",), since="2026-08-29T05:00:00+00:00")
     assert '"occurred_at" >= :since' in str(captured["sql"])
+    assert '"quantity"' not in str(captured["sql"])
     assert captured["params"]["since"] == "2026-08-28"
     assert captured["params"]["types"] == ["purchase"]
     assert frame.empty

@@ -14,6 +14,7 @@ from cicerone.evaluation.metrics import (
     SliceMetrics,
     _clicked_impressions_by_user,
     _coalesce_column,
+    _fill_blank_ids,
     _frame,
     _merge_asof_events,
     _metrics_for_impression_slice,
@@ -157,12 +158,9 @@ def _prepare_click_frames(
     if annotate_source:
         impressions = _annotate_source(impressions, recommendations)
         impressions = impressions.copy()
-    if "event_id" not in impressions.columns:
-        impressions = impressions.copy()
-        impressions["event_id"] = [f"imp-{i}" for i in range(len(impressions))]
-    if not clicks.empty and "event_id" not in clicks.columns:
-        clicks = clicks.copy()
-        clicks["event_id"] = [f"clk-{i}" for i in range(len(clicks))]
+    impressions = _fill_blank_ids(impressions, "imp")
+    if not clicks.empty:
+        clicks = _fill_blank_ids(clicks, "clk")
     matched_clicks = _merge_asof_events(clicks, impressions, window=window) if not clicks.empty else clicks
     return _ClickFrames(impressions, clicks, matched_clicks, window)
 

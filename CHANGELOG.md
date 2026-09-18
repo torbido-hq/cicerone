@@ -36,7 +36,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   DB reads apply a conservative `occurred_at` date bound. Metric events with
   `since` and no `occurred_at` column are empty.
 - CTR is capped at one click per impression, matching CVR. Duplicate
-  clicks on the same impression count once.
+  clicks on the same impression count once. Blank impression IDs are
+  repaired before matching.
 - Track source annotation does not invent a variant from a later snapshot.
 - The job loads track and recommendations once for eval and Thompson.
   A failed track or recs read is retried independently, not treated as empty.
@@ -53,6 +54,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Quality/eval parquet `since` tries a UTC timestamp bound before a
   string date, so datetime-typed event files stay bounded.
   An unsupported bound fails closed instead of rereading the file.
+  Missing S3 events are empty. `quantity` is optional on bounded reads.
   Unbounded reads still fall back to an unfiltered parquet/input load.
 - The job preloads track and recommendations in parallel on local/S3.
 - Untimestamped impressions keep latest-snapshot source attribution.
