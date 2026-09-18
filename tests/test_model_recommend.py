@@ -157,15 +157,24 @@ def test_train_and_recommend_writes_cold_start_sentinel_under_rrf(sample_items, 
         assert reasons.sources[0].weight == 1.0
 
 
-def test_popular_cold_start_skips_recommend_when_dataset_has_no_users():
+def test_popular_cold_start_uses_dtype_safe_probe_when_dataset_has_no_users():
     from types import SimpleNamespace
     from unittest.mock import MagicMock
 
     from cicerone.model.recommend_combine import _popular_cold_start_frame
 
-    popular = MagicMock()
+    dataset = SimpleNamespace(
+        user_id_map=SimpleNamespace(external_ids=[], external_dtype=pd.Series([0.0]).dtype)
+    )
+    popular = MagicMock(
+        recommend=MagicMock(
+            return_value=pd.DataFrame(
+                [{Columns.User: 0.0, Columns.Item: "i1", Columns.Rank: 1, Columns.Score: 1.0}]
+            )
+        )
+    )
     built = SimpleNamespace(
-        dataset=SimpleNamespace(user_id_map=SimpleNamespace(external_ids=[])),
+        dataset=dataset,
         items=None,
     )
     cohort = SimpleNamespace(eligibility=[], all_item_ids=["i1"])
@@ -173,8 +182,9 @@ def test_popular_cold_start_skips_recommend_when_dataset_has_no_users():
 
     out = _popular_cold_start_frame({"popular": popular}, built, cohort, 2, empty)
 
-    popular.recommend.assert_not_called()
-    assert out.empty
+    popular.recommend.assert_called_once()
+    assert popular.recommend.call_args.kwargs["users"] == [0.0]
+    assert list(out[Columns.User]) == [COLD_START_USER_ID]
 
 
 def test_train_and_recommend_combines_multiple_personalized_strategies(sample_items, feature_config):

@@ -38,10 +38,16 @@ def _global_allowed_items(built: BuiltDataset, cohort_plan: _CohortPlan) -> list
 
 def _popular_probe_users(built: BuiltDataset) -> list:
     external = built.dataset.user_id_map.external_ids
-    if len(external) == 0:
-        return []
-    # RecTools requires recommend() ids to match the dataset user dtype.
-    return [external[0]]
+    if len(external) != 0:
+        # RecTools requires recommend() ids to match the dataset user dtype.
+        return [external[0]]
+    dtype = built.dataset.user_id_map.external_dtype
+    for candidate in (0, "0", False):
+        try:
+            return [pd.Series([candidate]).astype(dtype).iloc[0]]
+        except (TypeError, ValueError):
+            continue
+    return []
 
 
 def _popular_cold_start_frame(
