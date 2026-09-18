@@ -170,6 +170,19 @@ def test_assignment_overlay_keeps_last_on_invalid_json(tmp_path) -> None:
     assert pair == ("control", "blend")
 
 
+def test_assignment_overlay_reraises_unexpected_read_error(tmp_path, monkeypatch) -> None:
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    store = ExperimentStore(output)
+    store.write_state(experiment_state("exp", promoted_variant=None, champion="control", challenger="blend"))
+
+    def _boom(self):
+        raise RuntimeError("state bug")
+
+    monkeypatch.setattr(ExperimentStore, "read_state", _boom)
+    with pytest.raises(RuntimeError, match="state bug"):
+        store.assignment_overlay("exp")
+
+
 def test_append_exposures_rejects_object_store() -> None:
     output = IOSettings(
         kind="dataset",
@@ -687,7 +700,7 @@ def test_promoted_variant_reuses_cache_when_read_fails(tmp_path, monkeypatch) ->
     assert store.promoted_variant("exp") == "treatment"
 
     def boom() -> None:
-        raise RuntimeError("store down")
+        raise OSError("store down")
 
     monkeypatch.setattr(store, "read_state", boom)
     assert store.promoted_variant("exp") == "treatment"
@@ -702,7 +715,7 @@ def test_promoted_variant_reuses_cache_when_db_read_raises(tmp_path, monkeypatch
     assert store.promoted_variant("exp") == "treatment"
 
     def boom() -> None:
-        raise RuntimeError("store down")
+        raise OSError("store down")
 
     monkeypatch.setattr(store, "_read_state_db", boom)
     assert store.promoted_variant("exp") == "treatment"

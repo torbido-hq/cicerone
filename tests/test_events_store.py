@@ -436,10 +436,16 @@ def test_load_items_catalog_size_empty_and_read_errors(tmp_path, monkeypatch):
     assert load_items_catalog_size(settings.output) is None
     monkeypatch.setattr(
         "cicerone.events.store._read_parquet_columns",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("boom")),
     )
     monkeypatch.setattr("cicerone.events.store.is_s3_not_found", lambda _exc: False)
     assert load_items_catalog_size(settings.output) is None
+    monkeypatch.setattr(
+        "cicerone.events.store._read_parquet_columns",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    with pytest.raises(RuntimeError, match="boom"):
+        load_items_catalog_size(settings.output)
 
 
 def test_read_parquet_columns_falls_back_without_projection(tmp_path, monkeypatch):
@@ -518,4 +524,5 @@ def test_load_items_catalog_size_sqlite_generic_error(tmp_path, monkeypatch):
     monkeypatch.setattr("cicerone.events.store._engine_for", lambda _url: _Engine())
     monkeypatch.setattr("cicerone.events.store.is_missing_table_error", lambda _exc: False)
     monkeypatch.setattr("cicerone.events.store.is_missing_column_error", lambda _exc: False)
-    assert load_items_catalog_size(output) is None
+    with pytest.raises(RuntimeError, match="engine"):
+        load_items_catalog_size(output)

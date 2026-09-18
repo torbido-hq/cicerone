@@ -31,6 +31,8 @@ from cicerone.io.recommendation_schema import (
 
 logger = logging.getLogger(__name__)
 
+_CATALOG_READ_ERRORS = (OSError, ValueError, TypeError)
+
 GUARDRAIL_COLUMNS: tuple[str, ...] = (USER_COLUMN, ITEM_COLUMN, SOURCE_COLUMN, VARIANT_COLUMN)
 
 _MAX_CACHED_ENGINES = 8
@@ -110,6 +112,8 @@ def load_items_catalog_size(output: IOSettings) -> int | None:
         except Exception as exc:
             if is_s3_not_found(exc):
                 return None
+            if not isinstance(exc, _CATALOG_READ_ERRORS):
+                raise
             logger.exception("Failed to read items snapshot for experiment catalog size")
             return None
         if frame.empty or ITEM_COLUMN not in frame.columns:
@@ -131,6 +135,8 @@ def load_items_catalog_size(output: IOSettings) -> int | None:
         except Exception as exc:
             if is_missing_table_error(exc) or is_missing_column_error(exc):
                 return None
+            if not isinstance(exc, _CATALOG_READ_ERRORS):
+                raise
             logger.exception("Failed to count items snapshot for experiment catalog size")
             return None
         return int(value or 0)

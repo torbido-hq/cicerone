@@ -2308,6 +2308,57 @@ def test_select_thompson_recipes_survives_recs_and_catalog_errors(tmp_path, monk
     assert again.state is not None
 
 
+def test_select_thompson_recipes_reraises_unexpected_catalog_error(tmp_path, monkeypatch):
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+    from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
+    from cicerone.experiment.recipes import ResolvedRecipe
+    from cicerone.experiment.store import ExperimentStore, experiment_state
+    from cicerone.feature_config import BlendingConfig
+    from cicerone.job import _select_thompson_recipes
+
+    blending = BlendingConfig(enabled=False)
+    recipes = (
+        ResolvedRecipe("control", 0.5, ("popular",), None, None, "priority", blending, True, True),
+        ResolvedRecipe("treatment", 0.5, ("popular",), None, None, "priority", blending, True, True),
+    )
+    settings = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="ranking-cvr",
+            allocation="thompson",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        track=TrackSettings(enabled=True),
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    ExperimentStore(settings.output).write_state(
+        experiment_state(
+            "ranking-cvr",
+            promoted_variant=None,
+            champion="control",
+            challenger="treatment",
+            allocation="thompson",
+            pair_impressions=20,
+        )
+    )
+    monkeypatch.setattr("cicerone.job.TrackStore.read_rows", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        "cicerone.job.load_recommendations_frame",
+        lambda output: pd.DataFrame(),
+    )
+    monkeypatch.setattr(
+        "cicerone.job.load_items_catalog_size",
+        lambda output: (_ for _ in ()).throw(RuntimeError("catalog bug")),
+    )
+    with pytest.raises(RuntimeError, match="catalog bug"):
+        _select_thompson_recipes(settings, recipes, pd.DataFrame())
+
+
 def test_select_thompson_recipes_reads_in_memory_sqlite_on_caller_thread(monkeypatch):
     from conftest import make_settings
 

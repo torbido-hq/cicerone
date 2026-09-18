@@ -28,6 +28,8 @@ from cicerone.locks import LockBackend, ensure_writer_owned, held_writer_lock, w
 
 logger = logging.getLogger(__name__)
 
+_OVERLAY_READ_ERRORS = (OSError, ValueError, TypeError)
+
 STATE_FILENAME = "experiment_state.json"
 EXPOSURES_FILENAME = "exposures.jsonl"
 DEFAULT_EXPOSURES_TABLE = "recommendation_exposures"
@@ -203,7 +205,7 @@ class ExperimentStore:
         wanted = str(experiment_id)
         try:
             state = self.read_state()
-        except Exception:
+        except _OVERLAY_READ_ERRORS:
             logger.exception("Failed to read experiment promote state")
             with self._promote_lock:
                 if self._promote_loaded and self._promote_experiment_id == wanted:
