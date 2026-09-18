@@ -172,6 +172,27 @@ def test_write_system_config_enables_serve_dashboard_track_eval(tmp_path) -> Non
     assert raw["track"]["enabled"] is True
 
 
+def test_write_system_config_dataset_keeps_input_and_output_trees_apart(tmp_path) -> None:
+    import tomllib
+
+    input_path = tmp_path / "in"
+    output_path = tmp_path / "out"
+    path = write_system_config(
+        tmp_path / "cicerone.toml",
+        kind="dataset",
+        input_path=input_path,
+        output_path=output_path,
+    )
+    raw = tomllib.loads(path.read_text())
+    assert raw["input"]["kind"] == "dataset"
+    assert raw["output"]["kind"] == "dataset"
+    assert raw["input"]["options"]["storage_backend"] == "local"
+    assert raw["output"]["options"]["storage_backend"] == "local"
+    assert raw["input"]["options"]["path"] == str(input_path)
+    assert raw["output"]["options"]["path"] == str(output_path)
+    assert raw["input"]["options"]["path"] != raw["output"]["options"]["path"]
+
+
 def test_available_recommendation_ids_drops_unavailable_items() -> None:
     recs = pd.DataFrame(
         [
