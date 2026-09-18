@@ -19,6 +19,10 @@ from cicerone.io.recommendation_schema import VARIANT_COLUMN
 REPO_FEATURES = Path(__file__).resolve().parents[1] / "config" / "features.toml"
 
 
+def _recent_occurred_at() -> str:
+    return (pd.Timestamp.now(tz="UTC") - pd.Timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _settings(tmp_path, **experiment_overrides):
     out = tmp_path / "out"
     inp = tmp_path / "in"
@@ -92,6 +96,7 @@ def test_promote_winner_when_undecided(tmp_path):
 
 def test_promote_winner_when_treatment_wins(tmp_path):
     settings = _settings(tmp_path)
+    occurred_at = _recent_occurred_at()
     events = []
     recs = []
     exposures = []
@@ -102,7 +107,7 @@ def test_promote_winner_when_treatment_wins(tmp_path):
                 "item_id": f"i{i % 10}",
                 "event_type": "view",
                 "quantity": 1,
-                "occurred_at": "2026-01-02T00:00:00Z",
+                "occurred_at": occurred_at,
             }
         )
         events.append(
@@ -111,7 +116,7 @@ def test_promote_winner_when_treatment_wins(tmp_path):
                 "item_id": f"i{i % 10}",
                 "event_type": "purchase",
                 "quantity": 1,
-                "occurred_at": "2026-01-02T00:00:00Z",
+                "occurred_at": occurred_at,
             }
         )
         recs.append(
@@ -615,6 +620,32 @@ def test_experiment_context_manifest_read_and_resolve_errors(tmp_path, monkeypat
     assert context["error"] == "No experiment variants to evaluate."
 
 
+def test_experiment_context_passes_since_to_metric_events(tmp_path, monkeypatch):
+    settings = _settings(tmp_path, log_exposures=False)
+    pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                VARIANT_COLUMN: "control",
+            }
+        ]
+    ).to_parquet(Path(settings.output.options["path"]) / "recommendations.parquet", index=False)
+    seen: dict[str, object] = {}
+
+    def _load(_settings, *, event_types=None, since=None):
+        seen["since"] = since
+        return pd.DataFrame()
+
+    monkeypatch.setattr("cicerone.dashboard_experiments._load_metric_events", _load)
+    context = experiment_context(settings)
+    assert context["report"] is not None
+    assert isinstance(seen.get("since"), str) and seen["since"]
+
+
 def test_experiment_context_events_query_falls_back(tmp_path, monkeypatch):
     settings = _settings(tmp_path, log_exposures=False)
     settings = make_settings(
@@ -655,6 +686,10 @@ def test_experiment_context_ctr_from_track_rows(tmp_path):
     from cicerone.track.normalize import normalize_track
     from cicerone.track.store import TrackStore
 
+    now = pd.Timestamp.now(tz="UTC")
+    impression_at = (now - pd.Timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    click_at = (now - pd.Timedelta(minutes=9)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    purchase_at = (now - pd.Timedelta(minutes=8)).strftime("%Y-%m-%dT%H:%M:%SZ")
     base = _settings(tmp_path, log_exposures=False)
     _write_frames(
         base,
@@ -664,7 +699,7 @@ def test_experiment_context_ctr_from_track_rows(tmp_path):
                 "item_id": "i1",
                 "event_type": "purchase",
                 "quantity": 1,
-                "occurred_at": "2026-08-28T12:10:00Z",
+                "occurred_at": purchase_at,
             }
         ],
         recs=[
@@ -694,7 +729,7 @@ def test_experiment_context_ctr_from_track_rows(tmp_path):
                     "user_id": "u1",
                     "item_id": "i1",
                     "rank": 1,
-                    "occurred_at": "2026-08-28T12:00:00Z",
+                    "occurred_at": impression_at,
                     "event_id": "imp-u1",
                 }
             ).as_row(),
@@ -703,7 +738,7 @@ def test_experiment_context_ctr_from_track_rows(tmp_path):
                     "kind": "click",
                     "user_id": "u1",
                     "item_id": "i1",
-                    "occurred_at": "2026-08-28T12:01:00Z",
+                    "occurred_at": click_at,
                     "event_id": "clk-u1",
                 }
             ).as_row(),
@@ -731,6 +766,97 @@ def test_experiment_context_ctr_from_track_rows(tmp_path):
     assert context["lift_label"] == "CTR lift"
 
 
+def test_experiment_context_drops_exposures_outside_track_window(tmp_path):
+    from cicerone.track.normalize import normalize_track
+    from cicerone.track.store import TrackStore
+
+    now = pd.Timestamp.now(tz="UTC")
+    impression_at = (now - pd.Timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    purchase_at = (now - pd.Timedelta(minutes=8)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    base = _settings(tmp_path)
+    settings = make_settings(
+        feature_config_path=str(REPO_FEATURES),
+        input=base.input,
+        output=base.output,
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="exp-1",
+            primary_metric="ctr",
+            attribution="click",
+            log_exposures=True,
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        track={"enabled": True},
+    )
+    _write_frames(
+        settings,
+        events=[
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": purchase_at,
+            }
+        ],
+        recs=[
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                VARIANT_COLUMN: "control",
+            },
+            {
+                "user_id": "stale",
+                "item_id": "i2",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                VARIANT_COLUMN: "treatment",
+            },
+        ],
+        exposures=[
+            exposure_row(
+                user_id="u1",
+                experiment_id="exp-1",
+                variant="control",
+                generated_at=None,
+                exposed_at=pd.Timestamp("2026-01-01T00:00:00Z"),
+            ),
+            exposure_row(
+                user_id="stale",
+                experiment_id="exp-1",
+                variant="treatment",
+                generated_at=None,
+                exposed_at=pd.Timestamp("2026-01-01T00:00:00Z"),
+            ),
+        ],
+    )
+    TrackStore(settings.output).append_rows(
+        [
+            normalize_track(
+                {
+                    "kind": "impression",
+                    "user_id": "u1",
+                    "item_id": "i1",
+                    "rank": 1,
+                    "occurred_at": impression_at,
+                    "event_id": "imp-u1",
+                    "experiment_id": "exp-1",
+                }
+            ).as_row()
+        ]
+    )
+    context = experiment_context(settings)
+    assert context["report"] is not None
+    assert context["report"].n_assigned == 1
+
+
 def test_experiment_context_skips_other_experiment_track_rows(tmp_path, monkeypatch):
     from cicerone.track.normalize import normalize_track
     from cicerone.track.store import TrackStore
@@ -741,7 +867,9 @@ def test_experiment_context_skips_other_experiment_track_rows(tmp_path, monkeypa
             "user_id": user_id,
             "item_id": "i1",
             "rank": 1,
-            "occurred_at": "2026-08-28T12:00:00Z",
+            "occurred_at": (pd.Timestamp.now(tz="UTC") - pd.Timedelta(minutes=10)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            ),
             "event_id": event_id,
         }
         if experiment_id is not None:
@@ -793,13 +921,13 @@ def test_experiment_context_skips_other_experiment_track_rows(tmp_path, monkeypa
     context = experiment_context(settings)
     ids = {str(row.get("experiment_id") or "") for row in captured["rows"]}
     assert "exp-old" not in ids
-    assert ids == {"", "exp-1"}
+    assert ids == {"exp-1"}
     assert context["report"] is not None
     assert "volume" in context["report"].promote_blocked_by
 
 
 def test_experiment_context_track_read_error(tmp_path, monkeypatch):
-    base = _settings(tmp_path, log_exposures=False)
+    base = _settings(tmp_path)
     _write_frames(
         base,
         events=[{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1}],
@@ -812,6 +940,15 @@ def test_experiment_context_track_read_error(tmp_path, monkeypatch):
                 "source": "personalized",
                 VARIANT_COLUMN: "control",
             }
+        ],
+        exposures=[
+            exposure_row(
+                user_id="u1",
+                experiment_id="exp-1",
+                variant="control",
+                generated_at=None,
+                exposed_at=pd.Timestamp("2026-01-01T00:00:00Z"),
+            )
         ],
     )
     settings = make_settings(
@@ -827,7 +964,7 @@ def test_experiment_context_track_read_error(tmp_path, monkeypatch):
     )
     context = experiment_context(settings)
     assert context["report"] is not None
-    assert context["report"].n_assigned >= 0
+    assert context["report"].n_assigned == 1
 
 
 def test_experiment_context_user_attribution_skips_track_outcomes(tmp_path, monkeypatch):
@@ -1012,6 +1149,7 @@ def test_thompson_view_volume_max_when_floor_is_zero() -> None:
 
 def test_promote_and_resume_keep_thompson_fields(tmp_path):
     settings = _settings(tmp_path)
+    occurred_at = _recent_occurred_at()
     events = []
     recs = []
     exposures = []
@@ -1022,7 +1160,7 @@ def test_promote_and_resume_keep_thompson_fields(tmp_path):
                 "item_id": f"i{i % 10}",
                 "event_type": "view",
                 "quantity": 1,
-                "occurred_at": "2026-01-02T00:00:00Z",
+                "occurred_at": occurred_at,
             }
         )
         events.append(
@@ -1031,7 +1169,7 @@ def test_promote_and_resume_keep_thompson_fields(tmp_path):
                 "item_id": f"i{i % 10}",
                 "event_type": "purchase",
                 "quantity": 1,
-                "occurred_at": "2026-01-02T00:00:00Z",
+                "occurred_at": occurred_at,
             }
         )
         recs.append(

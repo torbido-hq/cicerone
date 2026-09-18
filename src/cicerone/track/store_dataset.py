@@ -29,6 +29,7 @@ from cicerone.track.store_common import (
     TRACK_FILENAME,
     _history_part_matches,
     _history_stem_before,
+    _row_matches,
 )
 
 _HISTORY_READ_WORKERS = 8
@@ -98,26 +99,42 @@ class TrackDatasetBackend:
             keys = [key for key in keys if not _history_stem_before(Path(key).stem, since)]
         return _collect_frames([_bind_s3_frame(client, bucket, key) for key in sorted(keys)])
 
-    def _read_rows_dataset(self) -> list[dict[str, Any]]:
+    def _iter_track_lines(self) -> Iterator[bytes]:
+        backend = validate_storage_options(self._options)
+        if backend == "local":
+            path = Path(require_option(self._options, "path", "local")) / TRACK_FILENAME
+            if not path.exists():
+                return
+            with path.open("rb") as handle:
+                yield from handle
+            return
         raw = self._read_bytes(TRACK_FILENAME)
         if raw is None:
-            if self._known_ids is None:
-                self._known_ids = set()
-            return []
+            return
+        yield from raw.splitlines()
+
+    def _read_rows_dataset(self, *, since: str | None = None) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
-        for line in raw.decode("utf-8").splitlines():
-            line = line.strip()
+        known: set[str] | None = set() if self._known_ids is None else None
+        for raw_line in self._iter_track_lines():
+            line = raw_line.decode("utf-8").strip()
             if not line:
                 continue
             try:
                 parsed = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if isinstance(parsed, dict):
-                rows.append(parsed)
-        if self._known_ids is None:
-            self._known_ids = {str(row.get("event_id") or "") for row in rows}
-            self._known_ids.discard("")
+            if not isinstance(parsed, dict):
+                continue
+            if known is not None:
+                event_id = str(parsed.get("event_id") or "")
+                if event_id:
+                    known.add(event_id)
+            if since and not _row_matches(parsed, kind=None, experiment_id=None, since=since):
+                continue
+            rows.append(parsed)
+        if known is not None:
+            self._known_ids = known
         return rows
 
     def _track_file_size(self) -> int:
