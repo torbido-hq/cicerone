@@ -191,6 +191,7 @@ def test_system_track_eval_quality_loop(quality_system: QualitySystem) -> None:
     assert quality.status_code == 200
     assert "Could not load quality metrics." not in quality.text
     assert "No impressions yet." not in quality.text
+    expected_ctr = f"{(1 / len(impressions)) * 100:.2f}%"
     assert re.search(rf"Impressions</dt><dd[^>]*>{len(impressions)}</dd>", quality.text)
     assert re.search(r"Clicks</dt><dd[^>]*>1</dd>", quality.text)
-    assert re.search(r"CTR</dt><dd[^>]*>[^<]+%</dd>", quality.text)
+    assert re.search(rf"CTR</dt><dd[^>]*>{re.escape(expected_ctr)}</dd>", quality.text)
