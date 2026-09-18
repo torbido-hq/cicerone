@@ -26,6 +26,7 @@ from support.system_db import (
     SYSTEM_DASHBOARD_PASSWORD,
     SYSTEM_DASHBOARD_USER,
     SYSTEM_SERVE_TOKEN,
+    available_recommendation_ids,
     dashboard_users,
     mount_dashboard_app,
     mount_serve_app,
@@ -38,6 +39,7 @@ from support.system_db import (
 from cicerone import job
 from cicerone.artifact import ARTIFACT_SCHEMA_VERSION, loads_artifact, recommend_from_artifact
 from cicerone.config import load_settings
+from cicerone.feature_config import load_feature_config
 from cicerone.io.db_store import DEFAULT_MODEL_ARTIFACT_TABLE
 from cicerone.io.manifest_reader import DbManifestReader
 from cicerone.io.recommendation_reader import DbRecommendationReader
@@ -174,7 +176,16 @@ def test_system_job_db_round_trip_with_artifact_and_readers(trained_system: Trai
 
 @pytest.mark.skipif(not TEST_DATABASE_URL, reason=_SKIP_NO_TEST_DB)
 def test_system_serve_http_reads_job_output(trained_system: TrainedSystem) -> None:
-    reader_ids = list(trained_system.rec_reader.get_recommendations("u1", k=10)["item_id"].astype(str))
+    settings = _settings(trained_system)
+    feature_config = load_feature_config(settings.feature_config_path)
+    raw = trained_system.rec_reader.get_recommendations("u1", k=10)
+    expected_ids = available_recommendation_ids(
+        raw,
+        trained_system.items,
+        availability_filters=feature_config.item_availability_filters,
+        category_column=settings.serve.category_column,
+        k=settings.serve.default_k,
+    )
     latest = trained_system.manifest_reader.read_latest()
     assert latest is not None
     client = _serve_client(trained_system)
@@ -185,7 +196,7 @@ def test_system_serve_http_reads_job_output(trained_system: TrainedSystem) -> No
     assert body["user_id"] == "u1"
     assert body["fallback"] is False
     served_ids = [row["item_id"] for row in body["items"]]
-    assert served_ids == reader_ids[: len(served_ids)]
+    assert served_ids == expected_ids
     generated_at = latest.get("generated_at")
     if generated_at:
         assert response.headers.get("X-Generated-At") == str(generated_at)

@@ -11,6 +11,7 @@ from support.postgres_defaults import postgres_test_db
 from support.system_db import (
     REPO_FEATURES_CONFIG,
     SYSTEM_SERVE_TOKEN,
+    available_recommendation_ids,
     dashboard_users,
     is_dedicated_test_database,
     postgres_ready,
@@ -169,6 +170,24 @@ def test_write_system_config_enables_serve_dashboard_track_eval(tmp_path) -> Non
     assert raw["serve"]["category_column"] == "category"
     assert raw["dashboard"]["enabled"] is True
     assert raw["track"]["enabled"] is True
+
+
+def test_available_recommendation_ids_drops_unavailable_items() -> None:
+    recs = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i3", "rank": 1, "score": 0.9, "source": "popular_fallback"},
+            {"user_id": "u1", "item_id": "i1", "rank": 2, "score": 0.8, "source": "personalized"},
+            {"user_id": "u1", "item_id": "i4", "rank": 3, "score": 0.7, "source": "popular_fallback"},
+            {"user_id": "u1", "item_id": "i2", "rank": 4, "score": 0.6, "source": "personalized"},
+        ]
+    )
+    _events, _users, items = sample_system_catalog()
+    assert available_recommendation_ids(
+        recs,
+        items,
+        availability_filters=["published", "in_stock"],
+        k=3,
+    ) == ["i1", "i2"]
 
 
 def test_dashboard_users_hashes_password() -> None:

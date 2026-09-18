@@ -7,6 +7,7 @@ end-to-end scenario module so they stay reusable and unit-testable.
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -169,6 +170,29 @@ def write_system_config(
         """
     )
     return path
+
+
+def available_recommendation_ids(
+    recs: pd.DataFrame,
+    items: pd.DataFrame | None,
+    *,
+    availability_filters: Sequence[str],
+    category_column: str = "category",
+    k: int | None = None,
+) -> list[str]:
+    """Item ids after the same availability filter serve applies by default."""
+    from cicerone.serve.item_filters import available_item_ids, filter_recommendations
+
+    filtered = filter_recommendations(
+        recs,
+        items=items,
+        available_ids=available_item_ids(items, availability_filters) if items is not None else None,
+        category=None,
+        category_column=category_column,
+        exclude_unavailable=True,
+    )
+    ids = list(filtered["item_id"].astype(str))
+    return ids if k is None else ids[:k]
 
 
 def dashboard_users(
