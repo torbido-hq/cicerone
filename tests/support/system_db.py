@@ -11,6 +11,13 @@ import os
 import pandas as pd
 from sqlalchemy import MetaData
 from sqlalchemy.engine import Engine
+
+from cicerone.io.db_store import (
+    DEFAULT_DB_TABLES,
+    DEFAULT_EVENTS_TABLE,
+    DEFAULT_ITEMS_TABLE,
+    DEFAULT_USERS_TABLE,
+)
 from support.postgres_defaults import canonical_postgres_test_db, looks_like_test_database
 from support.system_spec import (
     REPO_FEATURES_CONFIG,
@@ -25,13 +32,6 @@ from support.system_spec import (
     run_system_job,
     sample_system_catalog,
     write_system_config,
-)
-
-from cicerone.io.db_store import (
-    DEFAULT_DB_TABLES,
-    DEFAULT_EVENTS_TABLE,
-    DEFAULT_ITEMS_TABLE,
-    DEFAULT_USERS_TABLE,
 )
 
 __all__ = [
