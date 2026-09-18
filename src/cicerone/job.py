@@ -611,6 +611,7 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
             except _PUBLISH_ERRORS as exc:
                 _log_caught("Failed to close recommendation publisher", exc, log=logger)
             except Exception as exc:
+                _log_caught("Failed to close recommendation publisher", exc, log=logger)
                 close_exc = exc
         if manifest.get("status") == "success" and (settings.track.enabled or settings.eval.enabled):
             try:

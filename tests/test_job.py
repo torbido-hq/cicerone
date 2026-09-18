@@ -203,7 +203,7 @@ def test_job_writes_failure_manifest_when_close_loses_lock_after_error(tmp_path,
     assert "events.parquet" in manifest["error"]
 
 
-def test_job_keeps_original_error_when_close_raises_after_failure(tmp_path, monkeypatch):
+def test_job_keeps_original_error_when_close_raises_after_failure(tmp_path, monkeypatch, caplog):
     class _Pub:
         def connect(self) -> None:
             return None
@@ -216,12 +216,19 @@ def test_job_keeps_original_error_when_close_raises_after_failure(tmp_path, monk
 
     monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, tmp_path, tmp_path))
     monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings, **_kwargs: _Pub())
-    with pytest.raises(Exception, match="events.parquet"):
+    with (
+        caplog.at_level("ERROR", logger="cicerone.job"),
+        pytest.raises(Exception, match="events.parquet"),
+    ):
         job.run()
     manifest = json.loads((tmp_path / "manifest.json").read_text())
     assert manifest["status"] == "failed"
     assert "events.parquet" in manifest["error"]
     assert "close bug" not in manifest["error"]
+    assert any(
+        "Failed to close recommendation publisher (RuntimeError: close bug)" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def test_job_succeeds_when_publisher_close_raises_publish_error(tmp_path, monkeypatch):
