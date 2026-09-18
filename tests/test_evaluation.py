@@ -1438,6 +1438,26 @@ def test_load_metric_events_dataset_retries_string_since_filter(tmp_path, monkey
     assert len(frame) == 1
 
 
+def test_load_metric_events_dataset_filter_failure_is_empty(tmp_path, monkeypatch) -> None:
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+
+    settings = make_settings(
+        input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    calls = {"n": 0}
+
+    def _read(_options, _filename, **_kwargs):
+        calls["n"] += 1
+        raise TypeError("unsupported occurred_at")
+
+    monkeypatch.setattr("cicerone.evaluation.context.read_parquet", _read)
+    frame = load_metric_events(settings, event_types=("purchase",), since="2026-08-29T05:00:00+00:00")
+    assert calls["n"] == 2
+    assert frame.empty
+
+
 def test_load_metric_events_db_pushes_since_predicate(monkeypatch) -> None:
     from conftest import make_settings
 
@@ -1532,3 +1552,35 @@ def test_load_metric_events_query_keeps_limit(monkeypatch) -> None:
     load_metric_events(settings, event_types=("purchase",), since="2026-08-29T05:00:00+00:00")
     assert "_cicerone_metric_events" not in str(captured["sql"])
     assert "LIMIT 100" in str(captured["sql"])
+
+
+def test_load_metric_events_query_quoted_offset_still_wraps(monkeypatch) -> None:
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+
+    settings = make_settings(
+        input=IOSettings(
+            kind="db",
+            options={
+                "database_url": "sqlite+pysqlite://",
+                "events_query": (
+                    'SELECT user_id, item_id, event_type, quantity, occurred_at AS "offset" FROM events'
+                ),
+            },
+        )
+    )
+    captured: dict[str, object] = {}
+
+    class _Engine:
+        def dispose(self) -> None:
+            return None
+
+    def _read_sql(stmt, _engine, params=None):
+        captured["sql"] = str(stmt)
+        return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
+
+    monkeypatch.setattr("cicerone.evaluation.context.create_engine", lambda *_args, **_kwargs: _Engine())
+    monkeypatch.setattr("cicerone.evaluation.context.pd.read_sql", _read_sql)
+    load_metric_events(settings, since="2026-08-29T05:00:00+00:00")
+    assert "_cicerone_metric_events" in str(captured["sql"])

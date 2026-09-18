@@ -52,6 +52,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Recs without `generated_at` still merge source and variant.
 - Quality/eval parquet `since` tries a UTC timestamp bound before a
   string date, so datetime-typed event files stay bounded.
+  An unsupported bound fails closed instead of rereading the file.
 - The job preloads track and recommendations in parallel on local/S3.
 - Untimestamped impressions keep latest-snapshot source attribution.
 - Shared job preload keeps an empty recommendations frame instead of reloading.

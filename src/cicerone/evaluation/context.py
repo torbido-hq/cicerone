@@ -102,6 +102,14 @@ def _metric_event_sql(
     return stmt, params
 
 
+_QUOTED_SQL = re.compile(r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"")
+_SQL_PAGE = re.compile(r"\b(?:limit|offset)\b", re.IGNORECASE)
+
+
+def _sql_has_page(sql: str) -> bool:
+    return _SQL_PAGE.search(_QUOTED_SQL.sub(" ", sql)) is not None
+
+
 def _parquet_since_bounds(floor: str) -> tuple[Any, str]:
     start = pd.to_datetime(floor, utc=True, errors="coerce")
     if pd.isna(start):
@@ -159,13 +167,8 @@ def load_metric_events(
             frame = _read_metric_parquet(inp.options, types=types, floor=floor)
         except FileNotFoundError:
             return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
-        except Exception as exc:
-            if is_s3_not_found(exc):
-                return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
-            try:
-                frame = read_parquet(inp.options, "events.parquet")
-            except Exception:
-                frame = build_input_source(inp).read_events()
+        except Exception:
+            return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
         keep = [column for column in EVENT_METRIC_COLUMNS if column in frame.columns]
         frame = frame.loc[:, keep] if keep else frame
         return _filter_events_since(filter_events_by_types(frame, types), since)
@@ -175,7 +178,7 @@ def load_metric_events(
         try:
             if query:
                 cleaned = readonly_select(str(query), option="input.options.events_query")
-                if re.search(r"\b(?:limit|offset)\b", cleaned, flags=re.IGNORECASE):
+                if _sql_has_page(cleaned):
                     frame = pd.read_sql(text(cleaned), engine)
                     keep = [column for column in EVENT_METRIC_COLUMNS if column in frame.columns]
                     frame = frame.loc[:, keep] if keep else frame
