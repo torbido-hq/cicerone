@@ -258,6 +258,50 @@ def read_parquet(
     bucket = require_option(options, "bucket", "s3")
     key = object_key(options, filename)
     logger.info("Reading s3://%s/%s", bucket, key)
+    try:
+        return _read_s3_parquet_pyarrow(options, bucket, key, columns=columns, filters=filters)
+    except Exception:
+        logger.debug("pyarrow S3 parquet read failed; falling back to GetObject", exc_info=True)
     client = s3_client if s3_client is not None else build_s3_client(options)
     obj = client.get_object(Bucket=bucket, Key=key)
     return pd.read_parquet(io.BytesIO(read_s3_body(obj)), **read_kwargs)
+
+
+def _s3_filesystem(options: dict[str, Any]):
+    from urllib.parse import urlparse
+
+    import pyarrow.fs as pafs
+
+    endpoint = options.get("endpoint_url")
+    scheme = "https"
+    endpoint_override = None
+    if endpoint:
+        parsed = urlparse(str(endpoint))
+        if parsed.scheme:
+            scheme = parsed.scheme
+        endpoint_override = parsed.netloc or parsed.path or None
+    return pafs.S3FileSystem(
+        access_key=require_option(options, "access_key_id", "s3"),
+        secret_key=require_option(options, "secret_access_key", "s3"),
+        region=str(options.get("region") or "us-east-1"),
+        endpoint_override=endpoint_override,
+        scheme=scheme,
+    )
+
+
+def _read_s3_parquet_pyarrow(
+    options: dict[str, Any],
+    bucket: str,
+    key: str,
+    *,
+    columns: Sequence[str] | None,
+    filters: Sequence[Any] | None,
+) -> pd.DataFrame:
+    import pyarrow.parquet as pq
+
+    read_kwargs: dict[str, Any] = {"filesystem": _s3_filesystem(options)}
+    if columns is not None:
+        read_kwargs["columns"] = list(columns)
+    if filters is not None:
+        read_kwargs["filters"] = list(filters)
+    return pq.read_table(f"{bucket}/{key}", **read_kwargs).to_pandas()
