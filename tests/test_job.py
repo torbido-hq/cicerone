@@ -2800,7 +2800,7 @@ def test_load_shared_eval_inputs_drops_partial_preload(tmp_path, monkeypatch):
     recs = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}])
 
     def _boom(*_args, **_kwargs):
-        raise RuntimeError("track down")
+        raise OSError("track down")
 
     monkeypatch.setattr("cicerone.job.TrackStore.read_rows", _boom)
     monkeypatch.setattr("cicerone.job.load_recommendations_frame", lambda _output: recs)
@@ -2831,7 +2831,7 @@ def test_load_shared_eval_inputs_keeps_track_when_recs_fail(tmp_path, monkeypatc
     )
 
     def _boom(*_args, **_kwargs):
-        raise RuntimeError("recs down")
+        raise OSError("recs down")
 
     monkeypatch.setattr("cicerone.job.TrackStore.read_rows", lambda *_args, **_kwargs: [{"event_id": "a"}])
     monkeypatch.setattr("cicerone.job.load_recommendations_frame", _boom)
