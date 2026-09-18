@@ -7,13 +7,26 @@ end-to-end scenario module so they stay reusable and unit-testable.
 from __future__ import annotations
 
 import os
+from pathlib import Path
+from typing import Any
 
 import pandas as pd
 from sqlalchemy import MetaData
 from sqlalchemy.engine import Engine
 
-from cicerone.io.db_store import DEFAULT_DB_TABLES
+from cicerone.io.db_store import (
+    DEFAULT_DB_TABLES,
+    DEFAULT_EVENTS_TABLE,
+    DEFAULT_ITEMS_TABLE,
+    DEFAULT_USERS_TABLE,
+)
 from support.postgres_defaults import canonical_postgres_test_db, looks_like_test_database
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_FEATURES_CONFIG = REPO_ROOT / "config" / "features.toml"
+SYSTEM_SERVE_TOKEN = "system-spec-secret"
+SYSTEM_DASHBOARD_USER = "alice"
+SYSTEM_DASHBOARD_PASSWORD = "s3cret"
 
 
 def is_dedicated_test_database(db_name: str | None) -> bool:
@@ -68,3 +81,146 @@ def postgres_ready(df: pd.DataFrame) -> pd.DataFrame:
             )
         )
     return out
+
+
+def sample_system_catalog() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Shared events/users/items used by the Postgres system spec."""
+    now = pd.Timestamp("2026-09-01T12:00:00Z")
+    events = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 3, "occurred_at": now},
+            {"user_id": "u1", "item_id": "i2", "event_type": "view", "quantity": 1, "occurred_at": now},
+            {
+                "user_id": "u2",
+                "item_id": "i1",
+                "event_type": "review_positive",
+                "quantity": 1,
+                "occurred_at": now,
+            },
+            {"user_id": "u2", "item_id": "i3", "event_type": "saved", "quantity": 1, "occurred_at": now},
+            {"user_id": "u3", "item_id": "i2", "event_type": "cart_add", "quantity": 1, "occurred_at": now},
+        ]
+    )
+    users = pd.DataFrame(
+        [
+            {"user_id": "u1", "favorite_styles": ["ipa", "stout"], "region_slug": "lazio"},
+            {"user_id": "u2", "favorite_styles": ["lager"], "region_slug": "toscana"},
+            {"user_id": "u3", "favorite_styles": [], "region_slug": None},
+            {"user_id": "u4", "favorite_styles": ["ipa"], "region_slug": "lazio"},
+        ]
+    )
+    items = pd.DataFrame(
+        [
+            {"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True},
+            {"item_id": "i2", "category": "beer", "producer_id": "p2", "published": True, "in_stock": True},
+            {"item_id": "i3", "category": "wine", "producer_id": "p1", "published": True, "in_stock": False},
+            {"item_id": "i4", "category": "wine", "producer_id": "p3", "published": False, "in_stock": True},
+        ]
+    )
+    return events, users, items
+
+
+def seed_catalog(engine: Engine, events: pd.DataFrame, users: pd.DataFrame, items: pd.DataFrame) -> None:
+    """Persist catalog frames via the same table names the db input source reads."""
+    postgres_ready(events).to_sql(DEFAULT_EVENTS_TABLE, engine, if_exists="replace", index=False)
+    postgres_ready(users).to_sql(DEFAULT_USERS_TABLE, engine, if_exists="replace", index=False)
+    postgres_ready(items).to_sql(DEFAULT_ITEMS_TABLE, engine, if_exists="replace", index=False)
+
+
+def write_system_config(
+    path: Path,
+    *,
+    database_url: str,
+    feature_config_path: Path | str = REPO_FEATURES_CONFIG,
+    serve_token: str = SYSTEM_SERVE_TOKEN,
+) -> Path:
+    """Write the shared system-spec TOML (db I/O, artifact, serve, dashboard, track, eval)."""
+    path.write_text(
+        f"""
+        [job]
+        top_k = 3
+        feature_config_path = "{feature_config_path}"
+        models = ["collaborative", "popular"]
+        save_model_artifact = true
+
+        [job.eval]
+        enabled = true
+
+        [input]
+        kind = "db"
+        [input.options]
+        database_url = "{database_url}"
+
+        [output]
+        kind = "db"
+        [output.options]
+        database_url = "{database_url}"
+
+        [serve]
+        auth_token = "{serve_token}"
+        category_column = "category"
+        default_k = 3
+
+        [dashboard]
+        enabled = true
+
+        [track]
+        enabled = true
+        """
+    )
+    return path
+
+
+def dashboard_users(
+    username: str = SYSTEM_DASHBOARD_USER,
+    password: str = SYSTEM_DASHBOARD_PASSWORD,
+) -> dict[str, str]:
+    import bcrypt
+
+    return {username: bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("ascii")}
+
+
+def mount_serve_app(settings: Any):
+    from cicerone.feature_config import load_feature_config
+    from cicerone.io.factory import build_manifest_reader, build_recommendation_reader
+    from cicerone.serve import create_app
+    from cicerone.serve.item_filters import configure_reader_item_filters
+
+    reader = build_recommendation_reader(settings.output)
+    feature_path = Path(settings.feature_config_path)
+    feature_config = load_feature_config(feature_path) if feature_path.is_file() else None
+    availability = list(feature_config.item_availability_filters) if feature_config else []
+    configure_reader_item_filters(
+        reader,
+        category_column=settings.serve.category_column,
+        availability_filters=availability,
+    )
+    return create_app(
+        settings,
+        reader,
+        manifest_reader=build_manifest_reader(settings.output),
+        feature_config=feature_config,
+    )
+
+
+def mount_dashboard_app(
+    settings: Any,
+    users: dict[str, str],
+    *,
+    config_path: str | Path | None = None,
+):
+    from cicerone.dashboard import create_app
+    from cicerone.io.factory import (
+        build_manifest_reader,
+        build_recommendation_reader,
+        build_user_history_reader,
+    )
+
+    return create_app(
+        settings,
+        build_manifest_reader(settings.output),
+        users,
+        build_recommendation_reader(settings.output),
+        build_user_history_reader(settings.input),
+        config_path=None if config_path is None else str(config_path),
+    )

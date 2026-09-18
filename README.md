@@ -721,8 +721,9 @@ docker compose -f docker-compose.ci.yml --env-file docker/postgres/defaults.env 
 ```
 
 Runs the whole pytest suite (with an ephemeral Postgres for the `db`
-backend tests and the system-style end-to-end check in
-`tests/test_system_db.py`) inside Docker — nothing to install on the host.
+backend tests and the system-style end-to-end checks in
+`tests/test_system_db.py` / `tests/test_system_db_quality.py`) inside
+Docker — nothing to install on the host.
 Locally you can also point pytest at the compose `postgres` service's
 pytest database via `POSTGRES_TEST_HOST=localhost` (see
 [CONTRIBUTING.md](CONTRIBUTING.md#local-postgres-defaults)). Use host

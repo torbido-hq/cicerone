@@ -18,8 +18,9 @@ docker compose -f docker-compose.ci.yml --env-file docker/postgres/defaults.env 
 ```
 
 This runs the full pytest suite, including the Postgres-backed `db` I/O
-tests and the system-style end-to-end check in `tests/test_system_db.py`,
-and enforces the 95% coverage gate (`pyproject.toml`,
+tests and the system-style end-to-end checks in `tests/test_system_db.py`
+and `tests/test_system_db_quality.py`, and enforces the 95% coverage gate
+(`pyproject.toml`,
 `[tool.coverage.report].fail_under`). `test-sequential` then runs the
 SASRec/BERT4Rec/HSTU extra tests (`rectools[torch]`) in a separate image —
 the main `test` and runtime images stay torch-free, because RecTools
@@ -63,7 +64,8 @@ interpolation matches that file too.
 
 Schema-reset guardrails for the Postgres system test live in
 `tests/support/system_db.py` (reusable across DB-backed tests; keep
-`tests/test_system_db.py` focused on the end-to-end scenario).
+`tests/test_system_db.py` and `tests/test_system_db_quality.py` focused on
+the end-to-end scenarios).
 
 Host vs container hostname for the same Postgres:
 
