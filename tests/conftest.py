@@ -1,13 +1,23 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pandas as pd
 import pytest
 
 from cicerone.config import make_settings
 from cicerone.feature_config import FeatureColumn, FeatureConfig
+from cicerone.io.engines import dispose_engines
 
 # Re-export for existing `from conftest import make_settings` call sites.
 __all__ = ["make_settings"]
+
+
+@pytest.fixture(autouse=True)
+def _dispose_shared_engines() -> Iterator[None]:
+    dispose_engines()
+    yield
+    dispose_engines()
 
 
 @pytest.fixture

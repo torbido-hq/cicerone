@@ -7,7 +7,7 @@ import time
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import inspect, text
 
 from cicerone.blending import COLD_START_USER_ID, LATEST_SOURCE, POPULAR_SOURCE
 from cicerone.io import recommendation_schema as _rec
@@ -18,6 +18,7 @@ from cicerone.io.db_store import (
     DEFAULT_RECOMMENDATIONS_TABLE,
     MISSING_TABLE_ERRORS,
 )
+from cicerone.io.engines import engine_for
 from cicerone.io.options import require_option, sql_identifier
 from cicerone.io.recommendation_reader_common import (
     RANK_COLUMN,
@@ -43,7 +44,7 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             options.get("recommendation_items_table", DEFAULT_RECOMMENDATION_ITEMS_TABLE),
             option="recommendation_items_table",
         )
-        self._engine = create_engine(require_option(options, "database_url", "db"), pool_pre_ping=True)
+        self._engine = engine_for(require_option(options, "database_url", "db"))
         self._variant_supported: bool | None = None
         self._present_variants: tuple[str, ...] | None = None
         self._init_item_filter_state()

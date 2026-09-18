@@ -3,20 +3,20 @@
 from __future__ import annotations
 
 import logging
-import threading
-from collections import OrderedDict
 from collections.abc import Collection, Sequence
 
 import pandas as pd
-from sqlalchemy import Engine, bindparam, create_engine, text
+from sqlalchemy import Engine, bindparam, text
 
 from cicerone.config import IOSettings
+from cicerone.io import engines as _io_engines
 from cicerone.io.db_errors import is_missing_column_error, is_missing_table_error
 from cicerone.io.db_store import (
     DEFAULT_RECOMMENDATION_ITEMS_TABLE,
     DEFAULT_RECOMMENDATIONS_TABLE,
     MISSING_TABLE_ERRORS,
 )
+from cicerone.io.engines import dispose_engines, engine_for
 from cicerone.io.options import is_s3_not_found, read_parquet, require_option, sql_identifier
 from cicerone.io.recommendation_reader import ITEMS_SNAPSHOT_FILENAME
 from cicerone.io.recommendation_schema import (
@@ -29,13 +29,12 @@ from cicerone.io.recommendation_schema import (
     recommendations_sql_names,
 )
 
+_MAX_CACHED_ENGINES = _io_engines._MAX_CACHED_ENGINES
+_engines = _io_engines._engines
+
 logger = logging.getLogger(__name__)
 
 GUARDRAIL_COLUMNS: tuple[str, ...] = (USER_COLUMN, ITEM_COLUMN, SOURCE_COLUMN, VARIANT_COLUMN)
-
-_MAX_CACHED_ENGINES = 8
-_engines: OrderedDict[str, Engine] = OrderedDict()
-_engines_lock = threading.Lock()
 
 
 def empty_recommendations_frame() -> pd.DataFrame:
@@ -43,26 +42,11 @@ def empty_recommendations_frame() -> pd.DataFrame:
 
 
 def dispose_recommendation_engines() -> None:
-    """Dispose cached SQLAlchemy engines (tests / process shutdown)."""
-    with _engines_lock:
-        engines = list(_engines.values())
-        _engines.clear()
-    for engine in engines:
-        engine.dispose()
+    dispose_engines()
 
 
 def _engine_for(database_url: str) -> Engine:
-    with _engines_lock:
-        engine = _engines.get(database_url)
-        if engine is not None:
-            _engines.move_to_end(database_url)
-            return engine
-        engine = create_engine(database_url, pool_pre_ping=True)
-        _engines[database_url] = engine
-        while len(_engines) > _MAX_CACHED_ENGINES:
-            _url, old = _engines.popitem(last=False)
-            old.dispose()
-        return engine
+    return engine_for(database_url)
 
 
 def _normalize_recommendation_columns(frame: pd.DataFrame) -> pd.DataFrame:

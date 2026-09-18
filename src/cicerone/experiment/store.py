@@ -11,13 +11,14 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import Engine, create_engine, text
+from sqlalchemy import Engine, text
 
 from cicerone.config.constants import ConfigError
 from cicerone.config.settings import IOSettings
 from cicerone.io.blob import append_storage_bytes, read_storage_bytes, write_storage_bytes
 from cicerone.io.db_errors import is_missing_column_error, is_missing_table_error
 from cicerone.io.db_store import MISSING_TABLE_ERRORS
+from cicerone.io.engines import engine_for
 from cicerone.io.options import (
     exclusive_file_lock,
     require_option,
@@ -161,9 +162,7 @@ class ExperimentStore:
 
     def _db_engine(self) -> Engine:
         if self._engine is None:
-            self._engine = create_engine(
-                require_option(self._options, "database_url", "db"), pool_pre_ping=True
-            )
+            self._engine = engine_for(require_option(self._options, "database_url", "db"))
         return self._engine
 
     def read_state(self) -> dict[str, Any] | None:
