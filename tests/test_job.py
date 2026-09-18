@@ -2743,7 +2743,40 @@ def test_load_shared_eval_inputs_drops_partial_preload(tmp_path, monkeypatch):
 
     monkeypatch.setattr("cicerone.job.TrackStore.read_rows", _boom)
     monkeypatch.setattr("cicerone.job.load_recommendations_frame", lambda _output: recs)
-    assert _load_shared_eval_inputs(settings) == (None, None)
+    track, loaded = _load_shared_eval_inputs(settings)
+    assert track is None
+    assert loaded is recs
+
+
+def test_load_shared_eval_inputs_keeps_track_when_recs_fail(tmp_path, monkeypatch):
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+    from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
+    from cicerone.job import _load_shared_eval_inputs
+
+    settings = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="ranking-cvr",
+            allocation="thompson",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        track=TrackSettings(enabled=True),
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("recs down")
+
+    monkeypatch.setattr("cicerone.job.TrackStore.read_rows", lambda *_args, **_kwargs: [{"event_id": "a"}])
+    monkeypatch.setattr("cicerone.job.load_recommendations_frame", _boom)
+    track, loaded = _load_shared_eval_inputs(settings)
+    assert track == [{"event_id": "a"}]
+    assert loaded is None
 
 
 def test_load_shared_eval_inputs_keeps_empty_recs(tmp_path, monkeypatch):

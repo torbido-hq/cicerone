@@ -153,8 +153,6 @@ def _load_shared_eval_inputs(
         parallel=settings.output.kind != "db",
     )
     track_rows = raw_track if isinstance(raw_track, list) else None
-    if track_rows is None or recs is None:
-        return None, None
     return track_rows, recs
 
 
