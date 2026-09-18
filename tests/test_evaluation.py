@@ -779,6 +779,7 @@ def test_evaluation_remaining_branches(monkeypatch) -> None:
     )
     annotated = _annotate_source(impressions, recs)
     assert annotated.iloc[0]["source"] == "personalized"
+    assert annotated.iloc[0]["variant"] == "control"
     both = impressions.copy()
     both["source"] = None
     filled = _annotate_source(both, recs)
@@ -979,7 +980,7 @@ def test_annotate_source_latest_uses_newest_generated_at() -> None:
     impressions = pd.DataFrame([{"user_id": "alice", "item_id": "ipa"}])
     annotated = _annotate_source(impressions, snapshots)
     assert annotated.iloc[0]["source"] == "personalized"
-    assert annotated.iloc[0]["variant"] == "treatment"
+    assert "variant" not in annotated.columns or pd.isna(annotated.iloc[0].get("variant"))
 
 
 def test_evaluate_served_uses_assigned_variant_only() -> None:
@@ -1144,3 +1145,242 @@ def test_annotate_source_unmatched_generated_at_does_not_take_later_snap() -> No
     )
     annotated = _annotate_source(impressions, snapshots)
     assert pd.isna(annotated.iloc[0].get("source")) or annotated.iloc[0]["source"] != "personalized"
+
+
+def test_evaluate_tracking_caps_ctr_at_one() -> None:
+    rows = _track(
+        {
+            "kind": "impression",
+            "user_id": "alice",
+            "item_id": "ipa",
+            "rank": 1,
+            "occurred_at": "2026-08-28T12:00:00Z",
+            "event_id": "imp-1",
+        },
+        {
+            "kind": "click",
+            "user_id": "alice",
+            "item_id": "ipa",
+            "occurred_at": "2026-08-28T12:01:00Z",
+            "event_id": "clk-1",
+        },
+        {
+            "kind": "click",
+            "user_id": "alice",
+            "item_id": "ipa",
+            "occurred_at": "2026-08-28T12:02:00Z",
+            "event_id": "clk-2",
+        },
+    )
+    report = evaluate_tracking(track_rows=rows, conversions=pd.DataFrame(), window_hours=24.0)
+    assert report.overall.n_impressions == 1
+    assert report.overall.n_clicks == 1
+    assert report.overall.ctr == pytest.approx(1.0)
+    outcomes = user_track_outcomes(
+        track_rows=rows,
+        conversions=pd.DataFrame(),
+        primary_metric="ctr",
+        attribution="click",
+        window_hours=24.0,
+    )
+    assert outcomes["alice"] == pytest.approx(1.0)
+
+
+def test_evaluate_tracking_counts_unique_clicked_impressions() -> None:
+    rows = _track(
+        {
+            "kind": "impression",
+            "user_id": "alice",
+            "item_id": "ipa",
+            "rank": 1,
+            "occurred_at": "2026-08-28T12:00:00Z",
+            "event_id": "imp-1",
+        },
+        {
+            "kind": "impression",
+            "user_id": "alice",
+            "item_id": "stout",
+            "rank": 2,
+            "occurred_at": "2026-08-28T12:00:00Z",
+            "event_id": "imp-2",
+        },
+        {
+            "kind": "click",
+            "user_id": "alice",
+            "item_id": "ipa",
+            "occurred_at": "2026-08-28T12:01:00Z",
+            "event_id": "clk-1",
+        },
+        {
+            "kind": "click",
+            "user_id": "alice",
+            "item_id": "ipa",
+            "occurred_at": "2026-08-28T12:02:00Z",
+            "event_id": "clk-2",
+        },
+    )
+    report = evaluate_tracking(track_rows=rows, conversions=pd.DataFrame(), window_hours=24.0)
+    assert report.overall.n_impressions == 2
+    assert report.overall.n_clicks == 1
+    assert report.overall.ctr == pytest.approx(0.5)
+    outcomes = user_track_outcomes(
+        track_rows=rows,
+        conversions=pd.DataFrame(),
+        primary_metric="ctr",
+        attribution="click",
+        window_hours=24.0,
+    )
+    assert outcomes["alice"] == pytest.approx(0.5)
+
+
+def test_evaluate_tracking_blank_event_ids_count_separately() -> None:
+    rows = _track(
+        {
+            "kind": "impression",
+            "user_id": "alice",
+            "item_id": "ipa",
+            "rank": 1,
+            "occurred_at": "2026-08-28T12:00:00Z",
+            "event_id": "",
+        },
+        {
+            "kind": "impression",
+            "user_id": "alice",
+            "item_id": "stout",
+            "rank": 2,
+            "occurred_at": "2026-08-28T12:00:00Z",
+            "event_id": "",
+        },
+        {
+            "kind": "click",
+            "user_id": "alice",
+            "item_id": "ipa",
+            "occurred_at": "2026-08-28T12:01:00Z",
+            "event_id": "clk-1",
+        },
+        {
+            "kind": "click",
+            "user_id": "alice",
+            "item_id": "stout",
+            "occurred_at": "2026-08-28T12:02:00Z",
+            "event_id": "clk-2",
+        },
+    )
+    report = evaluate_tracking(track_rows=rows, conversions=pd.DataFrame(), window_hours=24.0)
+    assert report.overall.n_impressions == 2
+    assert report.overall.n_clicks == 2
+    outcomes = user_track_outcomes(
+        track_rows=rows,
+        conversions=pd.DataFrame(),
+        primary_metric="ctr",
+        attribution="click",
+        window_hours=24.0,
+    )
+    assert outcomes["alice"] == pytest.approx(1.0)
+
+
+def test_annotate_source_does_not_invent_variant_from_later_snap() -> None:
+    from cicerone.evaluation import _annotate_source
+
+    snapshots = pd.DataFrame(
+        [
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "source": "popular_fallback",
+                "variant": "control",
+                "generated_at": "2026-08-20T00:00:00Z",
+            },
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "source": "personalized",
+                "variant": "treatment",
+                "generated_at": "2026-08-28T00:00:00Z",
+            },
+        ]
+    )
+    impressions = pd.DataFrame([{"user_id": "alice", "item_id": "ipa"}])
+    annotated = _annotate_source(impressions, snapshots)
+    assert "variant" not in annotated.columns or pd.isna(annotated.iloc[0].get("variant"))
+
+
+def test_annotate_source_untimestamped_keeps_latest_source() -> None:
+    from cicerone.evaluation import _annotate_source
+
+    snapshots = pd.DataFrame(
+        [
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "source": "popular_fallback",
+                "variant": "control",
+                "generated_at": "2026-08-20T00:00:00Z",
+            },
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "source": "personalized",
+                "variant": "treatment",
+                "generated_at": "2026-08-28T00:00:00Z",
+            },
+        ]
+    )
+    impressions = pd.DataFrame([{"user_id": "alice", "item_id": "ipa", "generated_at": None}])
+    annotated = _annotate_source(impressions, snapshots)
+    assert annotated.iloc[0]["source"] == "personalized"
+    assert "variant" not in annotated.columns or pd.isna(annotated.iloc[0].get("variant"))
+
+
+def test_annotate_source_untimestamped_keeps_existing_source() -> None:
+    from cicerone.evaluation import _annotate_source
+
+    snapshots = pd.DataFrame(
+        [
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "source": "personalized",
+                "variant": "treatment",
+                "generated_at": "2026-08-28T00:00:00Z",
+            }
+        ]
+    )
+    impressions = pd.DataFrame(
+        [{"user_id": "alice", "item_id": "ipa", "generated_at": None, "source": "logged"}]
+    )
+    annotated = _annotate_source(impressions, snapshots)
+    assert annotated.iloc[0]["source"] == "logged"
+    assert "variant" not in annotated.columns or pd.isna(annotated.iloc[0].get("variant"))
+
+
+def test_annotate_source_untimestamped_does_not_clear_source_without_match() -> None:
+    from cicerone.evaluation import _annotate_source
+
+    snapshots = pd.DataFrame(
+        [
+            {
+                "user_id": "bob",
+                "item_id": "stout",
+                "source": "personalized",
+                "generated_at": "2026-08-28T00:00:00Z",
+            }
+        ]
+    )
+    impressions = pd.DataFrame(
+        [{"user_id": "alice", "item_id": "ipa", "generated_at": None, "source": "logged"}]
+    )
+    annotated = _annotate_source(impressions, snapshots)
+    assert annotated.iloc[0]["source"] == "logged"
+
+
+def test_annotate_source_without_generated_at_keeps_variant() -> None:
+    from cicerone.evaluation import _annotate_source
+
+    recs = pd.DataFrame(
+        [{"user_id": "alice", "item_id": "ipa", "source": "personalized", "variant": "control"}]
+    )
+    impressions = pd.DataFrame([{"user_id": "alice", "item_id": "ipa"}])
+    annotated = _annotate_source(impressions, recs)
+    assert annotated.iloc[0]["source"] == "personalized"
+    assert annotated.iloc[0]["variant"] == "control"
