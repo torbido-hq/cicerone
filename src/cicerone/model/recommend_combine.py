@@ -22,6 +22,7 @@ from cicerone.model.recommend_cohort import _CohortPlan
 from cicerone.model.recommend_strategy import _StrategyFrames
 from cicerone.model.strategies import STRATEGIES, RecommenderModel
 from cicerone.policy import allowed_items_for_cohort, is_user_scoped
+from cicerone.reasons import SOURCE_CONTRIBS_COLUMN
 
 
 def _global_allowed_items(built: BuiltDataset, cohort_plan: _CohortPlan) -> list:
@@ -38,7 +39,7 @@ def _global_allowed_items(built: BuiltDataset, cohort_plan: _CohortPlan) -> list
 def _popular_probe_users(built: BuiltDataset) -> list:
     external = built.dataset.user_id_map.external_ids
     if len(external) == 0:
-        return [COLD_START_USER_ID]
+        return []
     # RecTools requires recommend() ids to match the dataset user dtype.
     return [external[0]]
 
@@ -55,8 +56,11 @@ def _popular_cold_start_frame(
     global_allowed = _global_allowed_items(built, cohort_plan)
     if not global_allowed:
         return empty_recs
+    probe_users = _popular_probe_users(built)
+    if not probe_users:
+        return empty_recs
     popular_recs = models["popular"].recommend(
-        users=_popular_probe_users(built),
+        users=probe_users,
         dataset=built.dataset,
         k=combine_k,
         filter_viewed=False,
@@ -67,6 +71,10 @@ def _popular_cold_start_frame(
     popular_recs = popular_recs.copy()
     popular_recs[Columns.User] = COLD_START_USER_ID
     popular_recs[SOURCE_COLUMN] = POPULAR_SOURCE
+    popular_recs[SOURCE_CONTRIBS_COLUMN] = [
+        [{"label": POPULAR_SOURCE, "rank": int(rank), "weight": 1.0, "contribution": None}]
+        for rank in popular_recs[Columns.Rank]
+    ]
     return popular_recs
 
 

@@ -12,6 +12,7 @@ from cicerone.dataset import build_dataset
 from cicerone.model import DEFAULT_MODELS, train_and_recommend
 from cicerone.model.recommend import _dataset_fingerprint, _items_fingerprint, _recommend_cache_key
 from cicerone.policy import allowed_items_for_cohort, resolve_eligibility
+from cicerone.reasons import parse_reasons
 
 
 def _without_cold_start(frame: pd.DataFrame) -> pd.DataFrame:
@@ -123,6 +124,12 @@ def test_train_and_recommend_writes_cold_start_sentinel_under_priority(sample_it
     assert not cold.empty
     assert (cold["source"] == "popular_fallback").all()
     assert len(cold) <= 2
+    for raw in cold["reasons"]:
+        reasons = parse_reasons(raw)
+        assert reasons is not None
+        assert reasons.sources[0].label == "popular_fallback"
+        assert reasons.sources[0].rank is not None
+        assert reasons.sources[0].weight == 1.0
 
 
 def test_train_and_recommend_writes_cold_start_sentinel_under_rrf(sample_items, feature_config):
@@ -142,6 +149,32 @@ def test_train_and_recommend_writes_cold_start_sentinel_under_rrf(sample_items, 
     assert not cold.empty
     assert (cold["source"] == "popular_fallback").all()
     assert len(cold) <= 2
+    for raw in cold["reasons"]:
+        reasons = parse_reasons(raw)
+        assert reasons is not None
+        assert reasons.sources[0].label == "popular_fallback"
+        assert reasons.sources[0].rank is not None
+        assert reasons.sources[0].weight == 1.0
+
+
+def test_popular_cold_start_skips_recommend_when_dataset_has_no_users():
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from cicerone.model.recommend_combine import _popular_cold_start_frame
+
+    popular = MagicMock()
+    built = SimpleNamespace(
+        dataset=SimpleNamespace(user_id_map=SimpleNamespace(external_ids=[])),
+        items=None,
+    )
+    cohort = SimpleNamespace(eligibility=[], all_item_ids=["i1"])
+    empty = pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, "source"])
+
+    out = _popular_cold_start_frame({"popular": popular}, built, cohort, 2, empty)
+
+    popular.recommend.assert_not_called()
+    assert out.empty
 
 
 def test_train_and_recommend_combines_multiple_personalized_strategies(sample_items, feature_config):
