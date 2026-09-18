@@ -564,3 +564,15 @@ def test_sidecar_generation_current_false_when_manifest_unreadable(tmp_path):
     (tmp_path / "manifest.json").write_text("not-json")
     settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     assert sidecar_generation_current(settings, "2026-09-17T12:00:00+00:00") is False
+
+
+def test_sidecar_generation_current_reraises_unexpected_error(tmp_path, monkeypatch):
+    settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+
+    class _Reader:
+        def read_latest(self):
+            raise RuntimeError("reader bug")
+
+    monkeypatch.setattr("cicerone.publish.sidecar.build_manifest_reader", lambda _output: _Reader())
+    with pytest.raises(RuntimeError, match="reader bug"):
+        sidecar_generation_current(settings, "2026-09-17T12:00:00+00:00")

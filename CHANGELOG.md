@@ -13,7 +13,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Job optional-eval and sidecar catches log exception type and message,
   and only swallow store/eval I/O errors. Sidecar failures use
   `PublishError`, including Kafka produce/flush/close and a failed
-  RabbitMQ retry or handle close. Lock-loss and unexpected `RuntimeError`s
+  RabbitMQ retry or handle close. The sidecar generation check only
+  swallows store I/O errors. Lock-loss and unexpected `RuntimeError`s
   fail the run and rewrite that generation to failed when no newer
   manifest exists.
 - DB serve keeps `AND variant=` when table inspect fails, and prefers the leftover

@@ -514,6 +514,27 @@ def test_score_previous_run_swallows_errors(tmp_path, monkeypatch, caplog) -> No
     )
 
 
+def test_score_previous_run_swallows_track_eval_errors(tmp_path, monkeypatch, caplog) -> None:
+    from cicerone.config import IOSettings, make_settings
+    from cicerone.job import _score_previous_run
+
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    pd.DataFrame(
+        [{"user_id": "alice", "item_id": "ipa", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(tmp_path / "recommendations.parquet", index=False)
+    settings = make_settings(track={"enabled": True}, eval={"enabled": True}, output=output)
+    monkeypatch.setattr(
+        "cicerone.job_eval.evaluate_tracking",
+        lambda **kwargs: (_ for _ in ()).throw(ValueError("track")),
+    )
+    with caplog.at_level("ERROR", logger="cicerone.job_eval"):
+        track, served = _score_previous_run(settings, pd.DataFrame(), {"generated_at": "t"})
+    assert track is None
+    assert any(
+        "Failed to compute track eval (ValueError: track)" in record.getMessage() for record in caplog.records
+    )
+
+
 def test_evaluate_served_empty_and_as_dict() -> None:
     from cicerone.evaluation import TrackEvalReport
 
