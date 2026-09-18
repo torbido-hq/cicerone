@@ -107,7 +107,13 @@ _SQL_PAGE = re.compile(r"\b(?:limit|offset)\b", re.IGNORECASE)
 
 
 def _sql_has_page(sql: str) -> bool:
-    return _SQL_PAGE.search(_QUOTED_SQL.sub(" ", sql)) is not None
+    stripped = _QUOTED_SQL.sub(" ", sql)
+    while True:
+        nxt = re.sub(r"\([^()]*\)", " ", stripped)
+        if nxt == stripped:
+            break
+        stripped = nxt
+    return _SQL_PAGE.search(stripped) is not None
 
 
 def _parquet_since_bounds(floor: str) -> tuple[Any, str]:
@@ -199,6 +205,8 @@ def load_metric_events(
             frame = pd.read_sql(stmt, engine, params=params)
             return _filter_events_since(frame, since)
         except Exception:
+            if floor is not None:
+                return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
             frame = build_input_source(inp).read_events()
             keep = [column for column in EVENT_METRIC_COLUMNS if column in frame.columns]
             frame = frame.loc[:, keep] if keep else frame

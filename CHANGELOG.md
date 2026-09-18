@@ -62,8 +62,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Quality/eval event `since` is pushed into SQL and parquet filters.
   Experiments pass the same lookback. Custom `events_query` is wrapped
   so type/time predicates apply before the full SELECT is materialized.
-  A `LIMIT`/`OFFSET` query is left as-is.
-- Dataset `track.jsonl` drops out-of-window rows while streaming the file.
+  A top-level `LIMIT`/`OFFSET` query is left as-is.
+  A failed bounded DB event read fails closed.
+- Dataset `track.jsonl` streams local lines and drops out-of-window rows.
 - Event worker stop closes the source after a tick that never started a loop
   thread.
 - A dispatched RabbitMQ job is not started after its I/O timeout.

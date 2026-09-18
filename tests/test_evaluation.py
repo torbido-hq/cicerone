@@ -1617,3 +1617,61 @@ def test_load_metric_events_query_quoted_offset_still_wraps(monkeypatch) -> None
     monkeypatch.setattr("cicerone.evaluation.context.pd.read_sql", _read_sql)
     load_metric_events(settings, since="2026-08-29T05:00:00+00:00")
     assert "_cicerone_metric_events" in str(captured["sql"])
+
+
+def test_load_metric_events_query_subquery_limit_still_wraps(monkeypatch) -> None:
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+
+    settings = make_settings(
+        input=IOSettings(
+            kind="db",
+            options={
+                "database_url": "sqlite+pysqlite://",
+                "events_query": (
+                    "SELECT user_id, item_id, event_type, quantity, occurred_at "
+                    "FROM (SELECT * FROM events LIMIT 1) AS ev"
+                ),
+            },
+        )
+    )
+    captured: dict[str, object] = {}
+
+    class _Engine:
+        def dispose(self) -> None:
+            return None
+
+    def _read_sql(stmt, _engine, params=None):
+        captured["sql"] = str(stmt)
+        return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
+
+    monkeypatch.setattr("cicerone.evaluation.context.create_engine", lambda *_args, **_kwargs: _Engine())
+    monkeypatch.setattr("cicerone.evaluation.context.pd.read_sql", _read_sql)
+    load_metric_events(settings, since="2026-08-29T05:00:00+00:00")
+    assert "_cicerone_metric_events" in str(captured["sql"])
+
+
+def test_load_metric_events_db_bound_failure_is_empty(monkeypatch) -> None:
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+
+    settings = make_settings(input=IOSettings(kind="db", options={"database_url": "sqlite+pysqlite://"}))
+
+    class _Engine:
+        def dispose(self) -> None:
+            return None
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("sql down")
+
+    monkeypatch.setattr("cicerone.evaluation.context.create_engine", lambda *_args, **_kwargs: _Engine())
+    monkeypatch.setattr("cicerone.evaluation.context.pd.read_sql", _boom)
+
+    def _source(_inp):
+        raise AssertionError("unbounded fallback")
+
+    monkeypatch.setattr("cicerone.evaluation.context.build_input_source", _source)
+    frame = load_metric_events(settings, event_types=("purchase",), since="2026-08-29T05:00:00+00:00")
+    assert frame.empty
