@@ -3,8 +3,8 @@
 # Architecture
 
 This document describes how the code under `src/cicerone/` fits together.
-For configuration and usage, see the main [README](../README.md). For the
-pipeline and how strategies differ, see [how-it-works.md](how-it-works.md).
+For configuration and CLI, see [configuration.md](configuration.md). For
+the pipeline and how strategies differ, see [how-it-works.md](how-it-works.md).
 For `[events]` ingest (webhook, backends, HA), see
 [incremental-events.md](incremental-events.md). For sticky A/B tests of
 ranking recipes, see [experiments.md](experiments.md). For impressions,
@@ -263,6 +263,24 @@ Test modules mirror the packages (same pattern as `tests/test_io_*.py`):
 
 ## Serve mode and the retrain trigger
 
+`GET /recommendations/{user_id}` is a lookup of rows the batch job (and
+optional incremental flush) already wrote:
+
+```
+job.run() / incremental apply
+    → materialized recommendation rows
+    → [output] (parquet or db table)
+    → RecommendationReader
+    → GET /recommendations/{user_id}
+```
+
+That request does not fit, train, or load a model artifact. Dataset
+output is cached in memory and reloaded on a successful incremental
+flush (`reader.refresh`) and on
+`[serve].refresh_interval_seconds` (default 60). DB output queries the
+recommendation table per request; the timer only refreshes the items
+snapshot. `[events.online]` LightFM work stays on the events worker.
+
 Selected via `[job].mode = "serve"`, `cicerone.serve` is a separate entrypoint
 (`cicerone serve`) from the batch scheduler — a serve-only deployment never
 imports `cicerone.model`/`dataset`/`automl` on the **request path**, and
@@ -277,11 +295,13 @@ serve-only image.
   `RecommendationReader` (`io/recommendation_reader.py`) matching the
   configured output `kind` — `DatasetRecommendationReader` caches the whole
   parquet file (and optional `items_snapshot.parquet`) in memory and refreshes
-  it on a background timer (`serve.app`'s `_start_refresh_loop`);
+  it on a successful incremental flush and on a background timer
+  (`serve.app`'s `_start_refresh_loop`);
   `DbRecommendationReader` queries the recommendations table directly per
   request and caches the `recommendation_items` snapshot for filters. Both
   readers record cache hit/miss and refresh success/failure/duration metrics
-  (`cicerone.serve.metrics`).
+  (`cicerone.serve.metrics`). Layers (in-memory webhook queue vs output vs
+  track store): [configuration.md](configuration.md#where-state-lives).
 - `serve.create_app()` exposes `GET /health` and
   `GET /recommendations/{user_id}` (`limit`/`k`, `category`,
   `exclude_unavailable`) behind `http_auth.require_bearer_token`. Unknown
@@ -469,7 +489,9 @@ generic `IOSettings`.
 ## Incremental events
 
 Serve-process ingest lives in `events/` plus `serve/events_routes.py` and
-`serve/bootstrap_events.py`. Optional `[events.online]` loads the model
+`serve/bootstrap_events.py`. Webhook `POST /events` `202` queues
+in-memory pending events (lost on hard restart) until a micro-batch
+flush writes `[output]`. Optional `[events.online]` loads the model
 artifact in the events worker (not on `GET`); skipped while `[experiment]`
 is on. Operator guide: [incremental-events.md](incremental-events.md).
 Optional `[publish]` emits per-user recommendation JSON to Kafka or RabbitMQ

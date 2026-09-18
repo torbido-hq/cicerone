@@ -36,7 +36,7 @@ const PAGES = [
     out: "tutorial.md",
     title: "Tutorial",
     description:
-      "Hands-on Cicerone walkthrough: sample data, batch job, serve API, and dashboard.",
+      "Clone the repo, then sample data, batch job, serve API, and dashboard.",
   },
   {
     source: "architecture.md",
@@ -65,6 +65,13 @@ const PAGES = [
     title: "Evaluation",
     description:
       "Impression and click tracking, CTR/CVR attribution, Quality dashboard, and production replay.",
+  },
+  {
+    source: "configuration.md",
+    out: "configuration.md",
+    title: "Configuration",
+    description:
+      "CLI commands and TOML reference: input, output, job, serve, events, track, experiments, and defaults.",
   },
 ];
 
