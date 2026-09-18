@@ -9,6 +9,7 @@ from collections.abc import Collection, Sequence
 
 import pandas as pd
 from botocore.exceptions import BotoCoreError
+from pyarrow.lib import ArrowInvalid
 from sqlalchemy import Engine, bindparam, create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -33,7 +34,7 @@ from cicerone.io.recommendation_schema import (
 
 logger = logging.getLogger(__name__)
 
-_CATALOG_READ_ERRORS = (OSError, ValueError, TypeError, SQLAlchemyError, BotoCoreError)
+_CATALOG_READ_ERRORS = (OSError, ValueError, TypeError, SQLAlchemyError, BotoCoreError, ArrowInvalid)
 
 GUARDRAIL_COLUMNS: tuple[str, ...] = (USER_COLUMN, ITEM_COLUMN, SOURCE_COLUMN, VARIANT_COLUMN)
 

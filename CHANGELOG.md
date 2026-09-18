@@ -22,6 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `generated_at` so a DB reader does not tie with the success row.
   Catalog size and experiment overlay swallow expected store I/O,
   including S3 and SQL errors (a transient `OperationalError` included);
+  catalog size also treats a parquet `ArrowInvalid` as missing;
   an unexpected `RuntimeError` fails Thompson and eval. Experiment DB
   state only treats a missing table or column as absent.   An unexpected
   `RuntimeError` on Kafka or RabbitMQ close fails the run after both
