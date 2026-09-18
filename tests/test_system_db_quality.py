@@ -7,7 +7,6 @@ the first module's trained catalog mid-suite.
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,15 +26,15 @@ from support.system_db import (
     mount_serve_app,
     postgres_ready,
     reset_schema,
+    run_system_job,
     sample_system_catalog,
     seed_catalog,
     write_system_config,
 )
 
-from cicerone import job
 from cicerone.config import load_settings
 from cicerone.io.db_store import DEFAULT_EVENTS_TABLE
-from cicerone.io.manifest_reader import DbManifestReader
+from cicerone.io.factory import build_manifest_reader
 from cicerone.track.store import TrackStore
 
 TEST_DATABASE_URL = resolve_test_database_url()
@@ -78,17 +77,11 @@ def quality_system(db_engine: Engine, tmp_path_factory: pytest.TempPathFactory) 
         tmp_path_factory.mktemp("system-quality") / "cicerone.toml",
         database_url=TEST_DATABASE_URL,
     )
-    previous = os.environ.get("CICERONE_CONFIG_PATH")
-    os.environ["CICERONE_CONFIG_PATH"] = str(config_path)
     try:
-        job.run(triggered_by="system-spec")
+        run_system_job(config_path, triggered_by="system-spec")
         yield QualitySystem(engine=db_engine, config_path=config_path, events=events)
     finally:
         reset_schema(db_engine)
-        if previous is None:
-            os.environ.pop("CICERONE_CONFIG_PATH", None)
-        else:
-            os.environ["CICERONE_CONFIG_PATH"] = previous
 
 
 @pytest.mark.skipif(not TEST_DATABASE_URL, reason=_SKIP_NO_TEST_DB)
@@ -146,14 +139,13 @@ def test_system_track_eval_quality_loop(quality_system: QualitySystem) -> None:
         index=False,
     )
 
-    os.environ["CICERONE_CONFIG_PATH"] = str(quality_system.config_path)
-    job.run(triggered_by="system-spec-eval")
+    run_system_job(quality_system.config_path, triggered_by="system-spec-eval")
 
     store = TrackStore(settings.output)
     rows = store.read_rows()
     assert {row["event_id"] for row in rows} >= {event["event_id"] for event in impressions} | {"sys-clk-1"}
 
-    latest = DbManifestReader({"database_url": TEST_DATABASE_URL}).read_latest()
+    latest = build_manifest_reader(settings.output).read_latest()
     assert latest is not None
     assert latest["triggered_by"] == "system-spec-eval"
     assert latest["status"] == "success"

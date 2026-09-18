@@ -11,7 +11,6 @@ gated by ``support.system_db.reset_schema``.
 
 from __future__ import annotations
 
-import os
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,7 +18,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from support.postgres_defaults import resolve_test_database_url
 from support.system_db import (
@@ -31,18 +30,17 @@ from support.system_db import (
     mount_dashboard_app,
     mount_serve_app,
     reset_schema,
+    run_system_job,
     sample_system_catalog,
     seed_catalog,
     write_system_config,
 )
 
-from cicerone import job
 from cicerone.artifact import ARTIFACT_SCHEMA_VERSION, loads_artifact, recommend_from_artifact
 from cicerone.config import load_settings
 from cicerone.feature_config import load_feature_config
-from cicerone.io.db_store import DEFAULT_MODEL_ARTIFACT_TABLE
-from cicerone.io.manifest_reader import DbManifestReader
-from cicerone.io.recommendation_reader import DbRecommendationReader
+from cicerone.io.base import ManifestReader, RecommendationReader
+from cicerone.io.factory import build_manifest_reader, build_output_sink, build_recommendation_reader
 
 TEST_DATABASE_URL = resolve_test_database_url()
 
@@ -64,8 +62,8 @@ class TrainedSystem:
     events: pd.DataFrame
     users: pd.DataFrame
     items: pd.DataFrame
-    rec_reader: DbRecommendationReader
-    manifest_reader: DbManifestReader
+    rec_reader: RecommendationReader
+    manifest_reader: ManifestReader
 
 
 @pytest.fixture(scope="session")
@@ -100,23 +98,16 @@ def trained_system(
         tmp_path_factory.mktemp("system-spec") / "cicerone.toml",
         database_url=TEST_DATABASE_URL,
     )
-    previous = os.environ.get("CICERONE_CONFIG_PATH")
-    os.environ["CICERONE_CONFIG_PATH"] = str(config_path)
-    try:
-        job.run(triggered_by="system-spec")
-    finally:
-        if previous is None:
-            os.environ.pop("CICERONE_CONFIG_PATH", None)
-        else:
-            os.environ["CICERONE_CONFIG_PATH"] = previous
+    run_system_job(config_path, triggered_by="system-spec")
+    settings = load_settings(str(config_path))
     return TrainedSystem(
         engine=db_engine,
         config_path=config_path,
         events=events,
         users=users,
         items=items,
-        rec_reader=DbRecommendationReader({"database_url": TEST_DATABASE_URL}),
-        manifest_reader=DbManifestReader({"database_url": TEST_DATABASE_URL}),
+        rec_reader=build_recommendation_reader(settings.output),
+        manifest_reader=build_manifest_reader(settings.output),
     )
 
 
@@ -159,12 +150,8 @@ def test_system_job_db_round_trip_with_artifact_and_readers(trained_system: Trai
     recent = trained_system.manifest_reader.read_recent(limit=5)
     assert len(recent) == 1
 
-    artifacts = pd.read_sql(
-        text(f'SELECT payload FROM "{DEFAULT_MODEL_ARTIFACT_TABLE}"'),
-        trained_system.engine,
-    )
-    assert len(artifacts) == 1
-    payload = bytes(artifacts.iloc[0]["payload"])
+    payload = build_output_sink(_settings(trained_system).output).read_model_artifact()
+    assert payload is not None
     loaded = loads_artifact(payload)
     assert loaded.schema_version == ARTIFACT_SCHEMA_VERSION
     assert "collaborative" in loaded.models or "popular" in loaded.models

@@ -810,5 +810,6 @@ docker compose up --build
 - Run the test suite (`docker compose -f docker-compose.ci.yml up --build
   --abort-on-container-exit --exit-code-from test test`) if you're contributing
   code — see [CONTRIBUTING.md](../CONTRIBUTING.md). That suite includes a
-  system-style Postgres end-to-end checks (`tests/test_system_db.py`,
-  `tests/test_system_db_quality.py`).
+  system-style end-to-end checks for Postgres (`tests/test_system_db.py`,
+  `tests/test_system_db_quality.py`) and local parquet
+  (`tests/test_system_dataset.py`, `tests/test_system_dataset_quality.py`).
