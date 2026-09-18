@@ -127,7 +127,8 @@ def _serve_client(trained: TrainedSystem) -> TestClient:
 
 
 def _dashboard_client(trained: TrainedSystem) -> TestClient:
-    return TestClient(mount_dashboard_app(_settings(trained), dashboard_users(), config_path=trained.config_path))
+    app = mount_dashboard_app(_settings(trained), dashboard_users(), config_path=trained.config_path)
+    return TestClient(app)
 
 
 @pytest.mark.skipif(not TEST_DATABASE_URL, reason=_SKIP_NO_TEST_DB)

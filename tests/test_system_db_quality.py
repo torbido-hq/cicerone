@@ -139,7 +139,12 @@ def test_system_track_eval_quality_loop(quality_system: QualitySystem) -> None:
             }
         ]
     )
-    postgres_ready(conversion).to_sql(DEFAULT_EVENTS_TABLE, quality_system.engine, if_exists="append", index=False)
+    postgres_ready(conversion).to_sql(
+        DEFAULT_EVENTS_TABLE,
+        quality_system.engine,
+        if_exists="append",
+        index=False,
+    )
 
     os.environ["CICERONE_CONFIG_PATH"] = str(quality_system.config_path)
     job.run(triggered_by="system-spec-eval")
