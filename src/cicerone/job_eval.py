@@ -231,7 +231,9 @@ def score_previous_run(
             previous_recs = try_load("load previous recommendations for eval", _load_recs, None)
         else:
             previous_recs = None if preloaded_recs.empty else preloaded_recs
-        if preloaded_track is None:
+        if not settings.track.enabled:
+            track_rows = []
+        elif preloaded_track is None:
             track_rows = try_load("read track rows", _load_track, [])
         else:
             track_rows = list(preloaded_track)

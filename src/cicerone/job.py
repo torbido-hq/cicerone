@@ -143,9 +143,10 @@ def _load_shared_eval_inputs(
     )
     if not need_track:
         return None, None
+    experiment_id = None if settings.track.enabled else settings.experiment.id
     raw_track, recs = _try_load_pair(
         "read track rows",
-        lambda: TrackStore(settings.output).read_rows(),
+        lambda: TrackStore(settings.output).read_rows(experiment_id=experiment_id),
         None,
         "load recommendations for eval",
         lambda: load_recommendations_frame(settings.output),

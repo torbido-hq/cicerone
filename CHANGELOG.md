@@ -85,6 +85,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Thompson windows the shared rows in memory so eval keeps full history.
   Shared preload keeps an empty recommendations frame instead of reloading,
   and runs in parallel on local/S3.
+  Eval ignores a preloaded track when track is disabled.
 
 ### Security
 

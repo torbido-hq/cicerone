@@ -691,6 +691,67 @@ def test_score_previous_run_reads_history_when_track_disabled(tmp_path, monkeypa
     assert served is not None
 
 
+def test_score_previous_run_ignores_preloaded_track_when_disabled(tmp_path, monkeypatch):
+    from cicerone.config import EvalSettings, IOSettings, TrackSettings, make_settings
+    from cicerone.job import _score_previous_run
+
+    out = tmp_path / "out"
+    out.mkdir()
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        track=TrackSettings(enabled=False),
+        eval=EvalSettings(enabled=True, event_types=("purchase",), ks=(1,)),
+    )
+    recs = pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"}]
+    )
+    history = recs.copy()
+    history["generated_at"] = "2026-08-28T03:00:00+00:00"
+    calls: list[set[str] | None] = []
+
+    monkeypatch.setattr("cicerone.job_eval.load_recommendations_frame", lambda _output: recs)
+
+    def _read_history(self, *, generated_ats=None, since=None):
+        calls.append(generated_ats)
+        return history
+
+    monkeypatch.setattr("cicerone.job.TrackStore.read_history", _read_history)
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("read_rows should not run when track is disabled")
+
+    monkeypatch.setattr("cicerone.job.TrackStore.read_rows", _boom)
+    events = pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": pd.Timestamp("2026-08-28T04:00:00+00:00"),
+            }
+        ]
+    )
+    preloaded = [
+        {
+            "event_id": "extra",
+            "generated_at": "2026-08-27T03:00:00+00:00",
+            "user_id": "u1",
+            "item_id": "i1",
+        }
+    ]
+    _track, served = _score_previous_run(
+        settings,
+        events,
+        {"generated_at": "2026-08-28T03:00:00+00:00"},
+        preloaded_track=preloaded,
+        preloaded_recs=recs,
+    )
+    assert calls == [{"2026-08-28T03:00:00+00:00"}]
+    assert served is not None
+    assert _track is None
+
+
 def test_replay_assignments_prefers_first_impression_then_hash(tmp_path):
     from cicerone.blending import COLD_START_USER_ID
     from cicerone.config import IOSettings, make_settings
@@ -2913,5 +2974,46 @@ def test_load_shared_eval_inputs_does_not_bound_to_thompson_window(tmp_path, mon
     monkeypatch.setattr("cicerone.job.load_recommendations_frame", lambda _output: recs)
     track, loaded = _load_shared_eval_inputs(settings)
     assert seen.get("since") is None
+    assert seen.get("experiment_id") is None
     assert track == [{"event_id": "old"}]
+    assert loaded is recs
+
+
+def test_load_shared_eval_inputs_scopes_track_when_eval_disabled(tmp_path, monkeypatch):
+    from dataclasses import replace
+
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+    from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
+    from cicerone.job import _load_shared_eval_inputs
+
+    settings = replace(
+        make_settings(
+            experiment=ExperimentSettings(
+                enabled=True,
+                id="ranking-cvr",
+                allocation="thompson",
+                variants=(
+                    VariantSettings(name="control", traffic=0.5),
+                    VariantSettings(name="treatment", traffic=0.5),
+                ),
+            ),
+            track=TrackSettings(enabled=True),
+            output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        ),
+        track=TrackSettings(enabled=False),
+    )
+    recs = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}])
+    seen: dict[str, object] = {}
+
+    def _read(self, **kwargs):
+        seen.update(kwargs)
+        return [{"event_id": "a", "experiment_id": "ranking-cvr"}]
+
+    monkeypatch.setattr("cicerone.job.TrackStore.read_rows", _read)
+    monkeypatch.setattr("cicerone.job.load_recommendations_frame", lambda _output: recs)
+    track, loaded = _load_shared_eval_inputs(settings)
+    assert seen.get("experiment_id") == "ranking-cvr"
+    assert track == [{"event_id": "a", "experiment_id": "ranking-cvr"}]
     assert loaded is recs
