@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import stat
+
 from cicerone.dashboard_users import load_users, save_users
 
 
@@ -21,6 +24,18 @@ def test_save_users_creates_parent_directories(tmp_path):
 
     save_users(path, {"alice": "hash-a"})
 
+    assert load_users(path) == {"alice": "hash-a"}
+
+
+def test_save_users_sets_owner_only_mode(tmp_path):
+    path = tmp_path / "dashboard_users.toml"
+    path.write_text("stale\n")
+    path.chmod(0o644)
+
+    save_users(path, {"alice": "hash-a"})
+
+    if os.name == "posix":
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert load_users(path) == {"alice": "hash-a"}
 
 
