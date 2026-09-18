@@ -90,6 +90,8 @@ class KafkaPublisher:
         try:
             producer.flush(self._timeout_seconds)
         except Exception as exc:
+            if type(exc) is RuntimeError:
+                raise
             raise PublishError(f"Kafka publisher flush on close failed: {exc}") from exc
 
     def _require(self) -> Any:

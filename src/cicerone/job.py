@@ -76,7 +76,7 @@ from cicerone.model import (
 )
 from cicerone.model.recommend import RecommendCache
 from cicerone.publish import build_publisher
-from cicerone.publish.sidecar import sidecar_generation_current
+from cicerone.publish.sidecar import log_sidecar_generation_skip, sidecar_generation_current
 from cicerone.track.store import TrackStore
 
 logger = logging.getLogger(__name__)
@@ -585,10 +585,13 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                     ensure_fence(fence_check)
                     publisher.connect()
                     ensure_fence(fence_check)
-                    if sidecar_generation_current(settings.output, str(manifest.get("generated_at") or "")):
+                    current = sidecar_generation_current(
+                        settings.output, str(manifest.get("generated_at") or "")
+                    )
+                    if current:
                         publisher.publish(recommendations)
                     else:
-                        logger.info("Skipping publish: recommendations were superseded")
+                        log_sidecar_generation_skip(current)
                 except LockLostError:
                     raise
                 except _PUBLISH_ERRORS as exc:

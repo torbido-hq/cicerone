@@ -738,6 +738,23 @@ def test_promoted_variant_reuses_cache_when_db_read_raises(tmp_path, monkeypatch
     assert store.promoted_variant("exp") == "treatment"
 
 
+def test_read_state_db_reraises_transient_operational_error(tmp_path, monkeypatch) -> None:
+    from sqlalchemy.exc import OperationalError
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    output = IOSettings(kind="db", options={"database_url": url})
+    store = ExperimentStore(output)
+    store.write_state(experiment_state("exp", promoted_variant="treatment"))
+
+    def boom(*_args, **_kwargs):
+        raise OperationalError("SELECT 1", {}, Exception("connection refused"))
+
+    monkeypatch.setattr("cicerone.experiment.store.pd.read_sql", boom)
+    with pytest.raises(OperationalError, match="connection refused"):
+        store.read_state()
+    assert store.assignment_overlay("exp")[0] == "treatment"
+
+
 def test_experiment_store_prefers_timestamped_promote_over_null(tmp_path) -> None:
     url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
     output = IOSettings(kind="db", options={"database_url": url})

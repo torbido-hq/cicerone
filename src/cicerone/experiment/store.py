@@ -332,10 +332,12 @@ class ExperimentStore:
             if is_missing_column_error(exc):
                 try:
                     frame = pd.read_sql(text(f'SELECT * FROM "{table}" LIMIT 1'), engine)
-                except Exception:
+                except Exception as retry_exc:
+                    if is_missing_table_error(retry_exc) or is_missing_column_error(retry_exc):
+                        return None
                     logger.exception("Failed to read experiment state table %r", table)
                     raise
-            elif isinstance(exc, MISSING_TABLE_ERRORS) or is_missing_table_error(exc):
+            elif is_missing_table_error(exc):
                 return None
             else:
                 logger.exception("Failed to read experiment state table %r", table)

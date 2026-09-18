@@ -18,7 +18,7 @@ from cicerone.publish.factory import build_publisher_from_kind
 from cicerone.publish.kafka import KafkaPublisher, validate_kafka_publish_options
 from cicerone.publish.payload import user_recommendation_messages
 from cicerone.publish.rabbitmq import RabbitMQPublisher, validate_rabbitmq_publish_options
-from cicerone.publish.sidecar import sidecar_generation_current
+from cicerone.publish.sidecar import log_sidecar_generation_skip, sidecar_generation_current
 
 
 def _recs_frame() -> pd.DataFrame:
@@ -198,6 +198,20 @@ def test_rabbitmq_publisher_close_tolerates_failure(monkeypatch):
 
     def _boom() -> None:
         raise RuntimeError("close fail")
+
+    broker.connection.channel_obj.close = _boom  # type: ignore[method-assign]
+    broker.connection.close = _boom  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="close fail"):
+        publisher.close()
+
+
+def test_rabbitmq_publisher_close_wraps_os_error(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "q"})
+    publisher.connect()
+
+    def _boom() -> None:
+        raise OSError("close fail")
 
     broker.connection.channel_obj.close = _boom  # type: ignore[method-assign]
     broker.connection.close = _boom  # type: ignore[method-assign]
@@ -392,6 +406,19 @@ def test_kafka_publisher_close_flush_failure(monkeypatch):
         raise RuntimeError("flush fail")
 
     publisher._producer.flush = _boom  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="flush fail"):
+        publisher.close()
+
+
+def test_kafka_publisher_close_wraps_os_error(monkeypatch):
+    install_fake_kafka(monkeypatch)
+    publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "t"})
+    publisher.connect()
+
+    def _boom(_timeout=None):
+        raise OSError("flush fail")
+
+    publisher._producer.flush = _boom  # type: ignore[method-assign]
     with pytest.raises(PublishError, match="flush fail"):
         publisher.close()
 
@@ -470,7 +497,7 @@ def test_kafka_publisher_flush_error_is_publish_error(monkeypatch):
     publisher._producer.flush = _boom  # type: ignore[method-assign]
     with pytest.raises(PublishError, match="flush fail"):
         publisher.publish(_recs_frame())
-    with pytest.raises(PublishError, match="flush fail"):
+    with pytest.raises(RuntimeError, match="flush fail"):
         publisher.close()
 
 
@@ -564,15 +591,15 @@ def test_sidecar_generation_current_matches_latest_manifest(tmp_path):
     assert sidecar_generation_current(settings, "2099-01-01T00:00:00+00:00") is False
 
 
-def test_sidecar_generation_current_false_when_manifest_missing(tmp_path):
+def test_sidecar_generation_current_none_when_manifest_missing(tmp_path):
     settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    assert sidecar_generation_current(settings, "2026-09-17T12:00:00+00:00") is False
+    assert sidecar_generation_current(settings, "2026-09-17T12:00:00+00:00") is None
 
 
-def test_sidecar_generation_current_false_when_manifest_unreadable(tmp_path):
+def test_sidecar_generation_current_none_when_manifest_unreadable(tmp_path):
     (tmp_path / "manifest.json").write_text("not-json")
     settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    assert sidecar_generation_current(settings, "2026-09-17T12:00:00+00:00") is False
+    assert sidecar_generation_current(settings, "2026-09-17T12:00:00+00:00") is None
 
 
 def test_sidecar_generation_current_reraises_unexpected_error(tmp_path, monkeypatch):
@@ -585,3 +612,14 @@ def test_sidecar_generation_current_reraises_unexpected_error(tmp_path, monkeypa
     monkeypatch.setattr("cicerone.publish.sidecar.build_manifest_reader", lambda _output: _Reader())
     with pytest.raises(RuntimeError, match="reader bug"):
         sidecar_generation_current(settings, "2026-09-17T12:00:00+00:00")
+
+
+def test_log_sidecar_generation_skip_distinguishes_unknown_from_superseded(caplog):
+    with caplog.at_level("INFO", logger="cicerone.publish.sidecar"):
+        log_sidecar_generation_skip(False)
+        log_sidecar_generation_skip(None)
+        log_sidecar_generation_skip(None, incremental=True)
+    messages = [record.getMessage() for record in caplog.records]
+    assert "Skipping publish: recommendations were superseded" in messages
+    assert "Skipping publish: could not confirm sidecar generation" in messages
+    assert "Skipping incremental publish: could not confirm sidecar generation" in messages

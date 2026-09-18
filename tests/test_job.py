@@ -430,6 +430,41 @@ def test_job_rewrites_manifest_when_sidecar_generation_raises_unexpected_error(t
     assert (output_dir / "recommendations.parquet").exists()
 
 
+def test_job_skips_publish_when_generation_unconfirmed(tmp_path, monkeypatch, caplog):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.utcnow()
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now},
+        ]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
+    published = {"n": 0}
+
+    class _Pub:
+        def connect(self) -> None:
+            return None
+
+        def publish(self, df: pd.DataFrame) -> None:
+            del df
+            published["n"] += 1
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings, **_kwargs: _Pub())
+    monkeypatch.setattr("cicerone.job.sidecar_generation_current", lambda *_args, **_kwargs: None)
+    with caplog.at_level("INFO"):
+        job.run()
+    assert published["n"] == 0
+    assert json.loads((output_dir / "manifest.json").read_text())["status"] == "success"
+    assert any("could not confirm sidecar generation" in record.getMessage() for record in caplog.records)
+    assert not any("superseded" in record.getMessage() for record in caplog.records)
+
+
 def test_job_raises_when_fence_lost_before_publish(tmp_path, monkeypatch):
     input_dir = tmp_path / "in"
     output_dir = tmp_path / "out"

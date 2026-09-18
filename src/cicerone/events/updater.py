@@ -29,7 +29,7 @@ from cicerone.io.recommendation_reader import SOURCE_COLUMN, USER_COLUMN
 from cicerone.io.recommendation_schema import recommendation_output_columns
 from cicerone.locks import LockLostError
 from cicerone.publish.base import RecommendationPublisher
-from cicerone.publish.sidecar import sidecar_generation_current
+from cicerone.publish.sidecar import log_sidecar_generation_skip, sidecar_generation_current
 
 logger = logging.getLogger(__name__)
 
@@ -235,10 +235,11 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             self._ensure_fence()
             self._publisher.connect()
             self._ensure_fence()
-            if sidecar_generation_current(self._output_settings, generated_at):
+            current = sidecar_generation_current(self._output_settings, generated_at)
+            if current:
                 self._publisher.publish(merged)
             else:
-                logger.info("Skipping incremental publish: recommendations were superseded")
+                log_sidecar_generation_skip(current, incremental=True)
         except LockLostError:
             raise
         except Exception:
