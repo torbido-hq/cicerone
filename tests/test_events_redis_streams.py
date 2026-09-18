@@ -418,6 +418,21 @@ def test_heartbeat_resets_pending_idle(monkeypatch):
     source.ack([events[0].event_id])
 
 
+def test_heartbeat_reraises_when_xclaim_fails(monkeypatch):
+    client = _install_fake_redis(monkeypatch, FakeRedis())
+    source = RedisStreamsEventSource(_options())
+    source.connect()
+    client.xadd("cicerone:events", event_payload(event_id="e1"))
+    events = list(source.poll(10))
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("xclaim down")
+
+    client.xclaim = _boom  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="xclaim down"):
+        source.heartbeat(events)
+
+
 def test_repeated_nack_does_not_duplicate(monkeypatch):
     client = _install_fake_redis(monkeypatch, FakeRedis())
     source = RedisStreamsEventSource(_options())

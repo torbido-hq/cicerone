@@ -97,6 +97,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Custom `input.options.*_query` and `events.options.events_query` reject
   more Postgres file/admin functions (`pg_ls_dir`, `dblink`, large objects).
 
+### Security
+
+- Redis Streams heartbeat XCLAIM failure fails closed so apply nacks before
+  writing.
+
 ## [0.8.2] - 2026-09-15
 
 ### Changed
