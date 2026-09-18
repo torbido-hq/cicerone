@@ -137,6 +137,7 @@ class RabbitMQPublisher:
         self._channel = None
         self._connection = None
         close_exc: BaseException | None = None
+        unexpected: BaseException | None = None
         for handle, label in ((channel, "channel"), (connection, "connection")):
             if handle is None:
                 continue
@@ -148,9 +149,13 @@ class RabbitMQPublisher:
             except Exception as exc:
                 logger.exception("Failed to close RabbitMQ publisher %s", label)
                 if type(exc) is RuntimeError:
-                    raise
+                    if unexpected is None:
+                        unexpected = exc
+                    continue
                 if close_exc is None:
                     close_exc = exc
+        if unexpected is not None:
+            raise unexpected
         if close_exc is not None:
             raise PublishError(f"RabbitMQ publisher close failed: {close_exc}") from close_exc
 

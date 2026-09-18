@@ -23,8 +23,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Catalog size and experiment overlay swallow expected store I/O,
   including S3 and SQL errors (a transient `OperationalError` included);
   an unexpected `RuntimeError` fails Thompson and eval. Experiment DB
-  state only treats a missing table or column as absent. An unexpected
-  `RuntimeError` on Kafka or RabbitMQ close fails the run.
+  state only treats a missing table or column as absent.   An unexpected
+  `RuntimeError` on Kafka or RabbitMQ close fails the run after both
+  RabbitMQ handles have been closed.
 - DB serve keeps `AND variant=` when table inspect fails, and prefers the leftover
   fallback arm in the same `LIMIT` query when no arm is assigned.
 - Thompson serve hashes the sticky pair or names on disk, not the full config

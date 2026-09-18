@@ -205,6 +205,20 @@ def test_rabbitmq_publisher_close_tolerates_failure(monkeypatch):
         publisher.close()
 
 
+def test_rabbitmq_publisher_close_runtime_error_still_closes_connection(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "q"})
+    publisher.connect()
+
+    def _boom() -> None:
+        raise RuntimeError("close fail")
+
+    broker.connection.channel_obj.close = _boom  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="close fail"):
+        publisher.close()
+    assert broker.connection.closed is True
+
+
 def test_rabbitmq_publisher_close_wraps_os_error(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "q"})
