@@ -8,7 +8,10 @@ from collections import OrderedDict
 from collections.abc import Collection, Sequence
 
 import pandas as pd
+from botocore.exceptions import BotoCoreError
+from pyarrow.lib import ArrowInvalid
 from sqlalchemy import Engine, bindparam, create_engine, text
+from sqlalchemy.exc import SQLAlchemyError
 
 from cicerone.config import IOSettings
 from cicerone.io.db_errors import is_missing_column_error, is_missing_table_error
@@ -30,6 +33,8 @@ from cicerone.io.recommendation_schema import (
 )
 
 logger = logging.getLogger(__name__)
+
+_CATALOG_READ_ERRORS = (OSError, ValueError, TypeError, SQLAlchemyError, BotoCoreError, ArrowInvalid)
 
 GUARDRAIL_COLUMNS: tuple[str, ...] = (USER_COLUMN, ITEM_COLUMN, SOURCE_COLUMN, VARIANT_COLUMN)
 
@@ -110,6 +115,8 @@ def load_items_catalog_size(output: IOSettings) -> int | None:
         except Exception as exc:
             if is_s3_not_found(exc):
                 return None
+            if not isinstance(exc, _CATALOG_READ_ERRORS):
+                raise
             logger.exception("Failed to read items snapshot for experiment catalog size")
             return None
         if frame.empty or ITEM_COLUMN not in frame.columns:
@@ -124,13 +131,11 @@ def load_items_catalog_size(output: IOSettings) -> int | None:
         try:
             with engine.connect() as conn:
                 value = conn.execute(text(f'SELECT COUNT(DISTINCT "{ITEM_COLUMN}") FROM "{table}"')).scalar()
-        except MISSING_TABLE_ERRORS as exc:
-            if is_missing_table_error(exc) or is_missing_column_error(exc):
-                return None
-            raise
         except Exception as exc:
             if is_missing_table_error(exc) or is_missing_column_error(exc):
                 return None
+            if not isinstance(exc, _CATALOG_READ_ERRORS):
+                raise
             logger.exception("Failed to count items snapshot for experiment catalog size")
             return None
         return int(value or 0)

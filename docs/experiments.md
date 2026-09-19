@@ -4,9 +4,21 @@
 
 Cicerone tests **whole ranking recipes** (models + combiner + optional blending
 knobs and boost/eligibility policy), not which `source` in a mixed cascade got
-the click. The unit of assignment is a user. Serve stays a lookup: the job
-writes extra recommendation rows tagged with `variant`, and
-`GET /recommendations/{user_id}` hashes the user onto one of those lists.
+the click. Two different things are stored:
+
+1. **Materialized lists** — the job writes per-user top-K rows tagged with
+   `variant` (one copy of the list per recipe).
+2. **User → variant assignment** — serve hashes
+   `blake2s(experiment_id || "\0" || user_id)` onto `[0, 1)` and walks
+   cumulative `traffic`. That pick is sticky for a given config. It is
+   not a per-request coin flip, not a browser cookie, and not
+   request-level randomization.
+
+Serve stays a lookup: `GET /recommendations/{user_id}` selects one of
+those already-written lists. The contents of that list can change after
+the next job. Changing `traffic` (for example `0.5` / `0.5` → `0.8` /
+`0.2`) **moves the hash boundaries**, so existing users can change
+variant.
 
 One experiment at a time. Overlapping layers, request-path bandits, and
 GrowthBook/Statsig as a required dependency are out of scope.
@@ -53,7 +65,12 @@ subset, or replacement `[[experiment.variants.boost]]` /
 
 Sticky, replica-safe **as long as** `experiment_id`, variant **names**,
 **order**, and `traffic` stay fixed: `blake2s(experiment_id || "\0" || user_id)`
-→ `[0, 1)`, then walk cumulative `traffic`. Changing traffic remaps users.
+→ `[0, 1)`, then walk cumulative `traffic`.
+
+**Changing `traffic` remaps users.** The hash of a user does not change;
+the bucket edges do. Do not edit live `traffic` to "nudge" allocation
+unless you accept that some shoppers move arms.
+
 A dashboard **Promote** writes `experiment_state` next to the output store;
 serve then sends 100% traffic to that variant until you **Resume split**
 (or delete promote state / turn the experiment off). Promote survives later jobs. After you disable
@@ -149,9 +166,10 @@ lookups.
 exposures require **db** output (two replicas must not append the same local
 file). Default off: serve stays read-only.
 
-Impression and click tracking (CTR / conversion of shown items) is a separate
-`POST /track` contract. See [evaluation.md](evaluation.md). Do not send
-impressions through `POST /events`.
+Impression and click tracking (CTR / conversion of items the host
+reported) is a separate `POST /track` contract. See
+[evaluation.md](evaluation.md). Do not send impressions through
+`POST /events`. `GET /recommendations` is not an impression.
 
 ## Incremental events
 

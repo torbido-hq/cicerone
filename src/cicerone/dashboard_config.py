@@ -122,12 +122,12 @@ HINTS: dict[str, dict[str, str]] = {
     },
     "input": {
         "text": "Where events, users, and items are read from.",
-        "docs": f"{_DOCS}/architecture/",
+        "docs": f"{_DOCS}/configuration/#input-and-output",
     },
     "input.kind": {"text": "dataset files or a database."},
     "output": {
         "text": "Where recommendations and the run manifest are written.",
-        "docs": f"{_DOCS}/architecture/",
+        "docs": f"{_DOCS}/configuration/#input-and-output",
     },
     "output.kind": {"text": "dataset files or a database."},
     "output.artifact_hmac_key": {
@@ -135,7 +135,11 @@ HINTS: dict[str, dict[str, str]] = {
     },
     "serve": {
         "text": "Read-only HTTP API over the precomputed top-K table.",
-        "docs": f"{_DOCS}/openapi/",
+        "docs": f"{_DOCS}/configuration/#serve",
+    },
+    "serve.log_impressions": {
+        "text": "Write one impression row per returned GET item. Not a browser render.",
+        "docs": f"{_DOCS}/evaluation/#auto-impressions",
     },
     "serve.enabled": {"text": "Whether this config starts the serve API."},
     "serve.auth_token": {"text": "Bearer token for GET /recommendations. Shown redacted."},
@@ -161,7 +165,7 @@ HINTS: dict[str, dict[str, str]] = {
     },
     "trigger": {
         "text": "HTTP webhook (and optional poll) to start a retrain.",
-        "docs": f"{_DOCS}/tutorial/#14-trigger-a-retrain-on-demand",
+        "docs": f"{_DOCS}/configuration/#job-trigger",
     },
     "trigger.enabled": {"text": "Whether this config starts the trigger service."},
     "experiment": {
@@ -190,6 +194,7 @@ HINTS: dict[str, dict[str, str]] = {
             "Accept POST /track. GET /recommendations is not an impression "
             "unless serve.log_impressions is on."
         ),
+        "docs": f"{_DOCS}/evaluation/",
     },
     "eval": {
         "text": "Production replay of the previous lists against later events (HitRate / NDCG / Recall).",

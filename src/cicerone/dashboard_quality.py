@@ -18,6 +18,7 @@ from cicerone.evaluation import (
 )
 from cicerone.evaluation.context import prefer_history
 from cicerone.track.store import TrackStore
+from cicerone.track.store_common import DASHBOARD_TRACK_FLOOR_HOURS, lookback_since
 
 logger = logging.getLogger(__name__)
 _T = TypeVar("_T")
@@ -109,7 +110,11 @@ def _no_impressions(track_eval: dict[str, Any] | None) -> bool:
 
 def _live_track_eval(settings: Settings, store: TrackStore) -> dict[str, Any] | None:
     try:
-        rows = store.read_rows()
+        since = lookback_since(
+            window_hours=settings.track.attribution_window_hours,
+            floor_hours=DASHBOARD_TRACK_FLOOR_HOURS,
+        )
+        rows = store.read_rows(since=since)
     except Exception:
         logger.exception("Failed to read track rows for Quality")
         return None
@@ -128,7 +133,7 @@ def _live_track_eval(settings: Settings, store: TrackStore) -> dict[str, Any] | 
                 primary_metric=settings.experiment.primary_metric,
             )
             return conversion_events_for_settings(
-                load_metric_events(settings, event_types=types),
+                load_metric_events(settings, event_types=types, since=since),
                 settings,
             )
 

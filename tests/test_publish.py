@@ -6,19 +6,19 @@ import pandas as pd
 import pytest
 from support.events import event_payload
 from support.fake_kafka import install_fake_kafka
-from support.fake_rabbitmq import install_fake_rabbitmq
+from support.fake_rabbitmq import FakeChannel, install_fake_rabbitmq
 
 from cicerone.config import ConfigError, IOSettings, PublishSettings, make_settings
 from cicerone.events.normalize import normalize_event
 from cicerone.events.updater import IncrementalUpdater
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.factory import build_output_sink
-from cicerone.publish import build_publisher, registered_publish_kinds
+from cicerone.publish import PublishError, build_publisher, registered_publish_kinds
 from cicerone.publish.factory import build_publisher_from_kind
 from cicerone.publish.kafka import KafkaPublisher, validate_kafka_publish_options
 from cicerone.publish.payload import user_recommendation_messages
 from cicerone.publish.rabbitmq import RabbitMQPublisher, validate_rabbitmq_publish_options
-from cicerone.publish.sidecar import sidecar_generation_current
+from cicerone.publish.sidecar import log_sidecar_generation_skip, sidecar_generation_current
 
 
 def _recs_frame() -> pd.DataFrame:
@@ -201,7 +201,36 @@ def test_rabbitmq_publisher_close_tolerates_failure(monkeypatch):
 
     broker.connection.channel_obj.close = _boom  # type: ignore[method-assign]
     broker.connection.close = _boom  # type: ignore[method-assign]
-    publisher.close()
+    with pytest.raises(RuntimeError, match="close fail"):
+        publisher.close()
+
+
+def test_rabbitmq_publisher_close_runtime_error_still_closes_connection(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "q"})
+    publisher.connect()
+
+    def _boom() -> None:
+        raise RuntimeError("close fail")
+
+    broker.connection.channel_obj.close = _boom  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="close fail"):
+        publisher.close()
+    assert broker.connection.closed is True
+
+
+def test_rabbitmq_publisher_close_wraps_os_error(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "q"})
+    publisher.connect()
+
+    def _boom() -> None:
+        raise OSError("close fail")
+
+    broker.connection.channel_obj.close = _boom  # type: ignore[method-assign]
+    broker.connection.close = _boom  # type: ignore[method-assign]
+    with pytest.raises(PublishError, match="close fail"):
+        publisher.close()
 
 
 def test_build_publisher_disabled():
@@ -349,6 +378,15 @@ def test_kafka_publisher_connect_failure(monkeypatch):
     assert broker.flush_calls == [2.0]
 
 
+def test_kafka_publisher_producer_constructor_failure(monkeypatch):
+    broker = install_fake_kafka(monkeypatch)
+    broker.producer_error = RuntimeError("bad client")
+    publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "t"})
+    with pytest.raises(ConfigError, match="unreachable"):
+        publisher.connect()
+    assert broker.flush_calls == []
+
+
 def test_rabbitmq_publisher_connect_failure(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     broker.connect_error = RuntimeError("down")
@@ -382,7 +420,37 @@ def test_kafka_publisher_close_flush_failure(monkeypatch):
         raise RuntimeError("flush fail")
 
     publisher._producer.flush = _boom  # type: ignore[method-assign]
-    publisher.close()
+    with pytest.raises(RuntimeError, match="flush fail"):
+        publisher.close()
+
+
+def test_kafka_publisher_close_wraps_os_error(monkeypatch):
+    install_fake_kafka(monkeypatch)
+    publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "t"})
+    publisher.connect()
+
+    def _boom(_timeout=None):
+        raise OSError("flush fail")
+
+    publisher._producer.flush = _boom  # type: ignore[method-assign]
+    with pytest.raises(PublishError, match="flush fail"):
+        publisher.close()
+
+
+def test_kafka_publisher_close_reraises_runtime_error_subclass(monkeypatch):
+    install_fake_kafka(monkeypatch)
+    publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "t"})
+    publisher.connect()
+
+    class _FlushBug(RuntimeError):
+        pass
+
+    def _boom(_timeout=None):
+        raise _FlushBug("flush fail")
+
+    publisher._producer.flush = _boom  # type: ignore[method-assign]
+    with pytest.raises(_FlushBug, match="flush fail"):
+        publisher.close()
 
 
 def test_publish_empty_frame_is_noop(monkeypatch):
@@ -410,7 +478,7 @@ def test_updater_publish_failure_does_not_unsucceed(tmp_path, feature_config: Fe
             return None
 
         def publish(self, df: pd.DataFrame) -> None:
-            raise RuntimeError("broker down")
+            raise PublishError("broker down")
 
     updater = IncrementalUpdater(
         sink=build_output_sink(settings.output),
@@ -429,9 +497,38 @@ def test_kafka_publisher_fails_on_delivery_error(monkeypatch):
     broker.delivery_error = "broker reject"
     publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "cicerone.recs"})
     publisher.connect()
-    with pytest.raises(RuntimeError, match="delivery failed"):
+    with pytest.raises(PublishError, match="delivery failed"):
         publisher.publish(_recs_frame())
     publisher.close()
+
+
+def test_kafka_publisher_produce_error_is_publish_error(monkeypatch):
+    install_fake_kafka(monkeypatch)
+    publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "cicerone.recs"})
+    publisher.connect()
+
+    def _boom(*_args, **_kwargs):
+        raise BufferError("queue full")
+
+    publisher._producer.produce = _boom  # type: ignore[method-assign]
+    with pytest.raises(PublishError, match="queue full"):
+        publisher.publish(_recs_frame())
+    publisher.close()
+
+
+def test_kafka_publisher_flush_error_is_publish_error(monkeypatch):
+    install_fake_kafka(monkeypatch)
+    publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "cicerone.recs"})
+    publisher.connect()
+
+    def _boom(_timeout=None):
+        raise RuntimeError("flush fail")
+
+    publisher._producer.flush = _boom  # type: ignore[method-assign]
+    with pytest.raises(PublishError, match="flush fail"):
+        publisher.publish(_recs_frame())
+    with pytest.raises(RuntimeError, match="flush fail"):
+        publisher.close()
 
 
 def test_rabbitmq_publisher_recovers_after_channel_error(monkeypatch):
@@ -479,6 +576,21 @@ def test_rabbitmq_publisher_retries_unsent_users_only(monkeypatch):
     publisher.close()
 
 
+def test_rabbitmq_publisher_second_failure_is_publish_error(monkeypatch):
+    install_fake_rabbitmq(monkeypatch)
+    publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "recs"})
+    publisher.connect()
+
+    def boom(self, *args, **kwargs):
+        del self, args, kwargs
+        raise RuntimeError("channel closed")
+
+    monkeypatch.setattr(FakeChannel, "basic_publish", boom)
+    with pytest.raises(PublishError, match="channel closed"):
+        publisher.publish(_recs_frame())
+    publisher.close()
+
+
 def test_rabbitmq_publisher_reconnects_after_failed_recover(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "recs"})
@@ -491,13 +603,34 @@ def test_rabbitmq_publisher_reconnects_after_failed_recover(monkeypatch):
         raise RuntimeError("channel closed")
 
     channel.basic_publish = boom  # type: ignore[method-assign]
-    with pytest.raises(ConfigError, match="unreachable or setup failed"):
+    with pytest.raises(PublishError, match="unreachable or setup failed"):
         publisher.publish(_recs_frame())
     assert publisher._channel is None
     broker.connect_error = None
     publisher.publish(_recs_frame())
     users = [json.loads(body)["user_id"] for _exchange, _key, body in broker.published]
     assert users == ["u1", "u2"]
+    publisher.close()
+
+
+def test_rabbitmq_publisher_recover_runtime_error_is_not_publish_error(monkeypatch):
+    install_fake_rabbitmq(monkeypatch)
+    publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "recs"})
+    publisher.connect()
+    channel = publisher._channel
+    assert channel is not None
+
+    def boom_publish(*args, **kwargs):
+        del args, kwargs
+        raise RuntimeError("channel closed")
+
+    def boom_close() -> None:
+        raise RuntimeError("close bug")
+
+    channel.basic_publish = boom_publish  # type: ignore[method-assign]
+    channel.close = boom_close  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="close bug"):
+        publisher.publish(_recs_frame())
     publisher.close()
 
 
@@ -509,12 +642,37 @@ def test_sidecar_generation_current_matches_latest_manifest(tmp_path):
     assert sidecar_generation_current(settings, "2099-01-01T00:00:00+00:00") is False
 
 
-def test_sidecar_generation_current_false_when_manifest_missing(tmp_path):
+def test_sidecar_generation_current_none_when_manifest_missing(tmp_path):
     settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    assert sidecar_generation_current(settings, "2026-09-17T12:00:00+00:00") is False
+    assert sidecar_generation_current(settings, "2026-09-17T12:00:00+00:00") is None
 
 
-def test_sidecar_generation_current_false_when_manifest_unreadable(tmp_path):
+def test_sidecar_generation_current_none_when_manifest_unreadable(tmp_path, caplog):
     (tmp_path / "manifest.json").write_text("not-json")
     settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    assert sidecar_generation_current(settings, "2026-09-17T12:00:00+00:00") is False
+    with caplog.at_level("ERROR", logger="cicerone.publish.sidecar"):
+        assert sidecar_generation_current(settings, "2026-09-17T12:00:00+00:00") is None
+    assert any(record.name == "cicerone.publish.sidecar" for record in caplog.records)
+
+
+def test_sidecar_generation_current_reraises_unexpected_error(tmp_path, monkeypatch):
+    settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+
+    class _Reader:
+        def read_latest(self):
+            raise RuntimeError("reader bug")
+
+    monkeypatch.setattr("cicerone.publish.sidecar.build_manifest_reader", lambda _output: _Reader())
+    with pytest.raises(RuntimeError, match="reader bug"):
+        sidecar_generation_current(settings, "2026-09-17T12:00:00+00:00")
+
+
+def test_log_sidecar_generation_skip_distinguishes_unknown_from_superseded(caplog):
+    with caplog.at_level("INFO", logger="cicerone.publish.sidecar"):
+        log_sidecar_generation_skip(False)
+        log_sidecar_generation_skip(None)
+        log_sidecar_generation_skip(None, incremental=True)
+    messages = [record.getMessage() for record in caplog.records]
+    assert "Skipping publish: recommendations were superseded" in messages
+    assert "Skipping publish: could not confirm sidecar generation" in messages
+    assert "Skipping incremental publish: could not confirm sidecar generation" in messages

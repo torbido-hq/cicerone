@@ -59,6 +59,7 @@ class FakeKafkaBroker:
         self.committed: list[tuple[int, int]] = []
         self.produced: list[tuple[str, bytes | None, bytes | str | None]] = []
         self.list_topics_error: Exception | None = None
+        self.producer_error: Exception | None = None
         self.commit_error: Exception | None = None
         self.flush_calls: list[float | None] = []
         self.list_topics_timeouts: list[float | None] = []
@@ -168,6 +169,8 @@ def install_fake_kafka(
         return FakeConsumer(broker, config)
 
     def _producer(config: dict[str, Any]) -> FakeProducer:
+        if broker.producer_error is not None:
+            raise broker.producer_error
         return FakeProducer(broker, config)
 
     module.Consumer = _consumer  # type: ignore[attr-defined]

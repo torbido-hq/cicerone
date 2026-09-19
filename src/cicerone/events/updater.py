@@ -27,9 +27,10 @@ from cicerone.feature_config import FeatureConfig
 from cicerone.io.base import OutputSink
 from cicerone.io.recommendation_reader import SOURCE_COLUMN, USER_COLUMN
 from cicerone.io.recommendation_schema import recommendation_output_columns
-from cicerone.locks import LockLostError
+from cicerone.job_eval import PUBLISH_ERRORS, log_caught
+from cicerone.locks import LockLostError, WriterLockBusyError
 from cicerone.publish.base import RecommendationPublisher
-from cicerone.publish.sidecar import sidecar_generation_current
+from cicerone.publish.sidecar import log_sidecar_generation_skip, sidecar_generation_current
 
 logger = logging.getLogger(__name__)
 
@@ -235,14 +236,15 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             self._ensure_fence()
             self._publisher.connect()
             self._ensure_fence()
-            if sidecar_generation_current(self._output_settings, generated_at):
+            current = sidecar_generation_current(self._output_settings, generated_at)
+            if current:
                 self._publisher.publish(merged)
             else:
-                logger.info("Skipping incremental publish: recommendations were superseded")
-        except LockLostError:
+                log_sidecar_generation_skip(current, incremental=True)
+        except (LockLostError, WriterLockBusyError):
             raise
-        except Exception:
-            logger.exception("Incremental publish failed after successful write")
+        except PUBLISH_ERRORS as exc:
+            log_caught("Incremental publish failed after successful write", exc, log=logger)
 
     def _merge_affected(
         self,

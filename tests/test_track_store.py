@@ -12,6 +12,32 @@ from cicerone.track.normalize import TrackNormalizeError, normalize_track
 from cicerone.track.store import TrackStore, require_appendable_track_log
 
 
+def test_lookback_since_uses_floor() -> None:
+    from cicerone.track.store_common import lookback_since
+
+    stamp = pd.to_datetime(lookback_since(window_hours=1.0, floor_hours=24.0), utc=True)
+    now = pd.Timestamp.now(tz="UTC")
+    assert 23.0 <= (now - stamp).total_seconds() / 3600.0 <= 25.0
+
+
+def test_track_row_sql_filter_since_uses_date_floor() -> None:
+    from cicerone.track.store_common import _track_row_sql_filter
+
+    clause, params = _track_row_sql_filter(kind=None, experiment_id=None, since="2026-08-29T05:00:00+00:00")
+    assert "occurred_at >= :since" in clause
+    assert "!= ''" not in clause
+    assert params["since"] == "2026-08-28"
+
+
+def test_track_row_sql_filter_invalid_since_is_empty() -> None:
+    from cicerone.track.store_common import _track_row_sql_filter
+
+    clause, params = _track_row_sql_filter(kind=None, experiment_id=None, since="not-a-date")
+    assert "1 = 0" in clause
+    assert "occurred_at >= :since" not in clause
+    assert "since" not in params
+
+
 def test_store_reexports_prior_constants() -> None:
     from cicerone.track.store import (
         DEFAULT_EVAL_TABLE,
@@ -430,9 +456,26 @@ def test_track_store_sqlite_read_errors(tmp_path, monkeypatch) -> None:
         raise RuntimeError("db down")
 
     monkeypatch.setattr(pd, "read_sql", _boom)
-    assert store.read_rows() == []
+    with pytest.raises(RuntimeError, match="db down"):
+        store.read_rows()
     assert store.read_eval() is None
     assert store.read_history().empty
+
+
+def test_track_store_sqlite_operational_error_reraises(tmp_path, monkeypatch) -> None:
+    from sqlalchemy.exc import OperationalError
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
+    output = IOSettings(kind="db", options={"database_url": url})
+    store = TrackStore(output)
+    store.append_rows([_row()])
+
+    def _boom(*_args, **_kwargs):
+        raise OperationalError("SELECT 1", {}, Exception("connection refused"))
+
+    monkeypatch.setattr(pd, "read_sql", _boom)
+    with pytest.raises(OperationalError, match="connection refused"):
+        store.read_rows()
 
 
 def test_track_jsonl_same_batch_duplicate_event_id(tmp_path) -> None:
@@ -814,9 +857,47 @@ def test_track_read_rows_filters_experiment_and_since(tmp_path) -> None:
         ]
     )
     matched = store.read_rows(experiment_id="exp-a")
-    assert {row["event_id"] for row in matched} == {"a", "untagged"}
+    assert {row["event_id"] for row in matched} == {"a"}
     recent = store.read_rows(since="2026-08-28T12:00:00Z")
     assert {row["event_id"] for row in recent} == {"b", "untagged"}
+
+
+def test_track_read_rows_since_indexes_old_event_ids(tmp_path) -> None:
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    store = TrackStore(output)
+    store.append_rows(
+        [
+            _row(event_id="old", occurred_at="2026-08-20T12:00:00Z"),
+            _row(event_id="new", occurred_at="2026-08-28T13:00:00Z"),
+        ]
+    )
+    store._known_ids = None
+    recent = store.read_rows(since="2026-08-28T12:00:00Z")
+    assert {row["event_id"] for row in recent} == {"new"}
+    assert store._known_ids is not None
+    assert {"old", "new"} <= store._known_ids
+
+
+def test_track_read_rows_since_drops_untimed(tmp_path) -> None:
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    store = TrackStore(output)
+    store.append_rows([_row(event_id="timed", occurred_at="2026-08-28T13:00:00Z")])
+    path = tmp_path / "track.jsonl"
+    path.write_text(
+        path.read_text()
+        + json.dumps(
+            {
+                "kind": "impression",
+                "user_id": "alice",
+                "item_id": "ipa-001",
+                "rank": 1,
+                "occurred_at": "",
+                "event_id": "untimed",
+            }
+        )
+        + "\n"
+    )
+    assert {row["event_id"] for row in store.read_rows(since="2026-08-28T12:00:00Z")} == {"timed"}
 
 
 def test_track_read_rows_filters_sqlite(tmp_path) -> None:
@@ -831,7 +912,7 @@ def test_track_read_rows_filters_sqlite(tmp_path) -> None:
         ]
     )
     matched = store.read_rows(experiment_id="exp-a")
-    assert {row["event_id"] for row in matched} == {"a", "untagged"}
+    assert {row["event_id"] for row in matched} == {"a"}
     recent = store.read_rows(since="2026-08-28T12:00:00Z")
     assert {row["event_id"] for row in recent} == {"b", "untagged"}
 

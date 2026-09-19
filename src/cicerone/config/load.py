@@ -612,7 +612,7 @@ def load_settings(config_path: str | None = None) -> Settings:
         ),
         mode=cast(Mode, mode),
         serve=ServeSettings(
-            host=serve_raw.get("host", "0.0.0.0"),
+            host=serve_raw.get("host", "127.0.0.1"),
             port=int(serve_raw.get("port", 8000)),
             auth_token=serve_auth_token,
             default_k=_serve_default_k(serve_raw),
@@ -627,7 +627,7 @@ def load_settings(config_path: str | None = None) -> Settings:
         ),
         trigger=TriggerSettings(
             enabled=trigger_enabled,
-            host=trigger_raw.get("host", "0.0.0.0"),
+            host=trigger_raw.get("host", "127.0.0.1"),
             port=int(trigger_raw.get("port", 8080)),
             auth_token=trigger_auth_token,
             debounce_seconds=require_positive_float(
@@ -647,7 +647,7 @@ def load_settings(config_path: str | None = None) -> Settings:
         ),
         dashboard=DashboardSettings(
             enabled=dashboard_enabled,
-            host=dashboard_raw.get("host", "0.0.0.0"),
+            host=dashboard_raw.get("host", "127.0.0.1"),
             port=int(dashboard_raw.get("port", 8090)),
             users_path=dashboard_raw.get("users_path", "/app/config/dashboard_users.toml"),
             refresh_interval_seconds=require_positive_float(
