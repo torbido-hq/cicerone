@@ -458,8 +458,10 @@ def test_track_store_sqlite_read_errors(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(pd, "read_sql", _boom)
     with pytest.raises(RuntimeError, match="db down"):
         store.read_rows()
-    assert store.read_eval() is None
-    assert store.read_history().empty
+    with pytest.raises(RuntimeError, match="db down"):
+        store.read_eval()
+    with pytest.raises(RuntimeError, match="db down"):
+        store.read_history()
 
 
 def test_track_store_sqlite_operational_error_reraises(tmp_path, monkeypatch) -> None:

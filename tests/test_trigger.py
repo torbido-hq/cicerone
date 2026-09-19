@@ -166,6 +166,8 @@ def test_run_guard_recovers_after_run_fn_raises():
         time.sleep(0.05)
 
     assert guard._running is False
+    assert isinstance(guard.last_error, ValueError)
+    assert "boom" in str(guard.last_error)
 
 
 def test_trigger_endpoint_requires_auth():

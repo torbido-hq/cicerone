@@ -452,7 +452,7 @@ class ExperimentStore:
                 logger.warning("Exposures table %r has no experiment_id column; ignoring rows", table)
                 return []
             logger.exception("Failed to read exposures table %r", table)
-            return []
+            raise
         if frame.empty:
             return []
         records = frame.to_dict(orient="records")

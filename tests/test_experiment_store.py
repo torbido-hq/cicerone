@@ -663,6 +663,18 @@ def test_read_exposures_db_generic_missing_table_is_empty(tmp_path, monkeypatch)
     assert store.read_exposures() == []
 
 
+def test_read_exposures_db_unexpected_error_reraises(tmp_path, monkeypatch) -> None:
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    store = ExperimentStore(IOSettings(kind="db", options={"database_url": url}))
+
+    def _read(*_args, **_kwargs):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr("cicerone.experiment.store.pd.read_sql", _read)
+    with pytest.raises(RuntimeError, match="db down"):
+        store.read_exposures()
+
+
 def test_append_exposures_empty_is_noop(tmp_path) -> None:
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     ExperimentStore(output).append_exposures([])

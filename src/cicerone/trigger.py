@@ -41,11 +41,17 @@ class RunGuard:
         self._backend = lock_backend
         self._running = False
         self._last_started_at: float | None = None
+        self._last_error: BaseException | None = None
 
     @property
     def busy(self) -> bool:
         with self._lock:
             return self._running
+
+    @property
+    def last_error(self) -> BaseException | None:
+        with self._lock:
+            return self._last_error
 
     def trigger(self, triggered_by: str) -> bool:
         with self._lock:
@@ -64,6 +70,7 @@ class RunGuard:
                 return False
             self._running = True
             self._last_started_at = now
+            self._last_error = None
 
         record_retrain_trigger(triggered_by, accepted=True)
         threading.Thread(target=self._run, args=(triggered_by,), daemon=True).start()
@@ -75,8 +82,10 @@ class RunGuard:
                 self._run_fn(triggered_by=triggered_by)
             else:
                 self._run_fn(triggered_by=triggered_by, fence_check=self._backend.owned)
-        except Exception:
+        except Exception as exc:
             logger.exception("Triggered run (%s) failed", triggered_by)
+            with self._lock:
+                self._last_error = exc
         finally:
             try:
                 if self._backend is not None:

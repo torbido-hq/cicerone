@@ -168,7 +168,7 @@ class TrackDbBackend:
             if is_missing_table_error(exc):
                 return None
             logger.exception("Failed to read eval table %r", table)
-            return None
+            raise
         if frame.empty:
             return None
         raw = frame.iloc[0]["payload"]
@@ -212,7 +212,7 @@ class TrackDbBackend:
             if is_missing_table_error(exc):
                 return pd.DataFrame(columns=list(HISTORY_COLUMNS))
             logger.exception("Failed to read history table %r", table)
-            return pd.DataFrame(columns=list(HISTORY_COLUMNS))
+            raise
 
 
 def _existing_event_ids(conn: Any, table: str, event_ids: Sequence[str]) -> set[str]:
