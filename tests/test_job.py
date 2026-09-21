@@ -1723,6 +1723,48 @@ def test_write_job_outputs_keeps_failure_manifest_written(tmp_path, monkeypatch)
     assert "disk full" in str(payloads[0]["error"])
 
 
+def test_finalize_job_writes_failed_manifest_and_closes(tmp_path, monkeypatch):
+    from cicerone.config import load_settings
+    from cicerone.job import JobManifest, _finalize_job
+
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir))
+    closed: list[bool] = []
+    payloads: list[dict[str, object]] = []
+
+    class _Pub:
+        def close(self) -> None:
+            closed.append(True)
+
+    class _Sink:
+        def write_manifest(self, payload: dict[str, object], skip_if_newer_than: str | None = None) -> bool:
+            payloads.append(payload)
+            return True
+
+    _finalize_job(
+        load_settings(),
+        sink=_Sink(),
+        publisher=_Pub(),
+        writer_lock=None,
+        manifest=JobManifest(status="failed", error="boom"),
+        fence_check=None,
+        started_at="2026-01-01T00:00:00+00:00",
+        manifest_written=False,
+        replace_success_manifest=False,
+        success_generated_at=None,
+        eval_generated_at=None,
+        track_eval_payload=None,
+        served_eval_payload=None,
+        recommendations=None,
+    )
+    assert closed == [True]
+    assert payloads[0]["status"] == "failed"
+    assert payloads[0]["error"] == "boom"
+
+
 def test_job_run_with_automl_enabled_selects_and_records_best_candidate(tmp_path, monkeypatch):
     input_dir = tmp_path / "in"
     output_dir = tmp_path / "out"
