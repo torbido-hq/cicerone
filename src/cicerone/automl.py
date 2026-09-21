@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import pandas as pd
+from rectools import Columns
 from rectools.metrics import MAP, MRR, NDCG, HitRate, Precision, Recall, calc_metrics
 from rectools.metrics.base import MetricAtK
 from rectools.metrics.debias import DebiasConfig
@@ -243,6 +244,20 @@ def _make_metrics(top_k: int, *, debias: bool = False) -> dict[str, MetricAtK]:
     }
 
 
+def drop_seen_interactions(test: pd.DataFrame, train: pd.DataFrame) -> pd.DataFrame:
+    """Keep test (user, item) pairs that do not appear in train."""
+    if test.empty or train.empty:
+        return test
+    user, item = Columns.User, Columns.Item
+    if user not in test.columns or item not in test.columns:
+        return test
+    if user not in train.columns or item not in train.columns:
+        return test
+    seen = train.loc[:, [user, item]].drop_duplicates()
+    merged = test.merge(seen, on=[user, item], how="left", indicator=True)
+    return merged.loc[merged["_merge"] == "left_only"].drop(columns=["_merge"]).reset_index(drop=True)
+
+
 def _evaluate_fold(
     train_events: pd.DataFrame,
     test_events: pd.DataFrame,
@@ -258,7 +273,12 @@ def _evaluate_fold(
 ) -> list[dict[str, float]]:
     """Score every candidate on one fold (picklable for ProcessPoolExecutor)."""
     built = build_dataset(train_events, users, items, config, half_life_days=half_life_days)
-    test_interactions = build_interactions(test_events, config, half_life_days=half_life_days)
+    test_interactions = drop_seen_interactions(
+        build_interactions(test_events, config, half_life_days=half_life_days),
+        built.interactions,
+    )
+    if test_interactions.empty:
+        return [dict.fromkeys(metrics, 0.0) for _ in candidates]
     test_users = sorted(set(test_events["user_id"]))
     strategy_cache: dict[str, RecommenderModel] = {}
     recommend_cache: dict[tuple[Any, ...], Any] = {}
