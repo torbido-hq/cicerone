@@ -32,7 +32,6 @@ from cicerone.io.recommendation_schema import (
     recommendations_sql_names,
 )
 
-_MAX_CACHED_ENGINES = _io_engines._MAX_CACHED_ENGINES
 _engines = _io_engines._engines
 
 logger = logging.getLogger(__name__)
