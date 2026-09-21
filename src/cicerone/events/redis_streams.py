@@ -83,7 +83,9 @@ class RedisStreamsEventSource(QueuedEventSource):
                 "install with: pip install 'cicerone-recommender[redis]'"
             ) from exc
 
-        client = redis.Redis.from_url(self._redis_url, decode_responses=True)
+        from cicerone.redis_client import redis_from_url
+
+        client = redis_from_url(self._redis_url, decode_responses=True)
         try:
             client.ping()
         except Exception as exc:

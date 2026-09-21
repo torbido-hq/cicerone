@@ -40,13 +40,14 @@ class RedisLock:
         refresh_interval_ms: int | None = None,
     ):
         try:
-            import redis
+            from cicerone.redis_client import redis_from_url
+
+            self._client = redis_from_url(redis_url)
         except ImportError as exc:
             raise ConfigError(
                 'lock_backend = "redis" requires the redis package; '
                 "install with: pip install 'cicerone-recommender[redis]'"
             ) from exc
-        self._client = redis.Redis.from_url(redis_url)
         self._key = key
         self._ttl_ms = ttl_ms
         self._refresh_interval_ms = (
