@@ -34,8 +34,12 @@ def _cron_loop(schedule: str, run: Callable[[], None]) -> None:
 
         try:
             run()
-        except Exception:
-            logger.exception("Scheduled run failed; will retry at the next scheduled time")
+        except Exception as exc:
+            logger.exception(
+                "Scheduled run failed (%s: %s); will retry at the next scheduled time",
+                type(exc).__name__,
+                exc,
+            )
 
 
 def _cron_run_with_lock(backend: LockBackend) -> None:
