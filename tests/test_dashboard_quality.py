@@ -729,6 +729,102 @@ def test_quality_history_single_run_footnote(tmp_path):
     assert "Only the latest run is available" in response.text
 
 
+def test_quality_history_single_ignores_filtered_manifests(tmp_path):
+    from cicerone.dashboard_quality import quality_context
+
+    settings = _settings(tmp_path, track={"enabled": True})
+    TrackStore(settings.output).write_eval(
+        {
+            "track_eval": {
+                "overall": {
+                    "n_impressions": 10,
+                    "n_clicks": 1,
+                    "n_conversions_click": 0,
+                    "n_conversions_view": 0,
+                    "ctr": 0.1,
+                    "cvr_click": 0.0,
+                    "cvr_view": 0.0,
+                    "n_users": 2,
+                }
+            }
+        }
+    )
+    evaluable = {
+        "status": "success",
+        "triggered_by": "cron",
+        "generated_at": "2026-09-08T12:00:00+00:00",
+        "track_eval": {"overall": {"ctr": 0.1, "cvr_click": 0.0}},
+    }
+    incremental = {
+        "status": "success",
+        "triggered_by": "incremental",
+        "generated_at": "2026-09-08T13:00:00+00:00",
+        "track_eval": {"overall": {"ctr": 0.2, "cvr_click": 0.0}},
+    }
+    failed = {
+        "status": "failed",
+        "triggered_by": "cron",
+        "generated_at": "2026-09-07T12:00:00+00:00",
+        "track_eval": {"overall": {"ctr": 0.3, "cvr_click": 0.0}},
+    }
+    empty_eval = {
+        "status": "success",
+        "triggered_by": "cron",
+        "generated_at": "2026-09-06T12:00:00+00:00",
+    }
+    context = quality_context(settings, _FakeReader([evaluable, incremental, failed, empty_eval]))
+    assert context["quality_history_single"] is True
+    assert len(context["quality_history"]) == 1
+    app = create_app(
+        settings, _FakeReader([evaluable, incremental, failed, empty_eval]), _users_with("alice", "s3cret")
+    )
+    response = TestClient(app).get("/dashboard/quality", auth=("alice", "s3cret"))
+    assert "Recent quality" in response.text
+    assert "Only the latest run is available" in response.text
+
+
+def test_quality_history_single_false_when_only_filtered_manifests(tmp_path):
+    from cicerone.dashboard_quality import quality_context
+
+    settings = _settings(tmp_path, track={"enabled": True})
+    TrackStore(settings.output).write_eval(
+        {
+            "track_eval": {
+                "overall": {
+                    "n_impressions": 10,
+                    "n_clicks": 1,
+                    "n_conversions_click": 0,
+                    "n_conversions_view": 0,
+                    "ctr": 0.1,
+                    "cvr_click": 0.0,
+                    "cvr_view": 0.0,
+                    "n_users": 2,
+                }
+            }
+        }
+    )
+    incremental = {
+        "status": "success",
+        "triggered_by": "incremental",
+        "generated_at": "2026-09-08T12:00:00+00:00",
+        "track_eval": {"overall": {"ctr": 0.2, "cvr_click": 0.0}},
+    }
+    failed = {
+        "status": "failed",
+        "triggered_by": "cron",
+        "generated_at": "2026-09-07T12:00:00+00:00",
+        "track_eval": {"overall": {"ctr": 0.3, "cvr_click": 0.0}},
+    }
+    for history in ([incremental], [failed]):
+        context = quality_context(settings, _FakeReader(history))
+        assert context["quality_history_single"] is False
+        assert context["quality_history"] == []
+        app = create_app(settings, _FakeReader(history), _users_with("alice", "s3cret"))
+        response = TestClient(app).get("/dashboard/quality", auth=("alice", "s3cret"))
+        assert "Recent quality" not in response.text
+        assert "Only the latest run is available" not in response.text
+
+
 def test_rank_curve_inverted_note(tmp_path):
     settings = _settings(tmp_path, track={"enabled": True, "min_impressions": 100})
     TrackStore(settings.output).write_eval(
