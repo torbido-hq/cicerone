@@ -7,6 +7,7 @@ from typing import Any
 
 HEALTH_PATH = "/health"
 RECOMMENDATIONS_PATH = "/recommendations/{user_id}"
+RECOMMENDATIONS_BATCH_PATH = "/recommendations/batch"
 ITEM_SCORES_PATH = "/item-scores"
 RECOMMENDATIONS_PATH_PREFIX = RECOMMENDATIONS_PATH.rsplit("/", 1)[0] + "/"
 EVENTS_PATH = "/events"
@@ -340,6 +341,32 @@ curl -fsS -H "Authorization: Bearer ${{{ENV_SERVE_TOKEN}:?set {ENV_SERVE_TOKEN}}
   "${{{ENV_SERVE_URL}:-{DEFAULT_SERVE_URL}}}{ITEM_SCORES_PATH}?limit=100" || exit 1
 """
 
+_RECOMMENDATIONS_BATCH_PYTHON = f"""\
+import os
+from cicerone.serve_client import ServeClient
+
+client = ServeClient(
+    os.environ.get("{ENV_SERVE_URL}", "{DEFAULT_SERVE_URL}"),
+    token=os.environ["{ENV_SERVE_TOKEN}"],
+)
+body = client.recommendations_batch([os.environ.get("{ENV_USER_ID}", "{DEFAULT_USER_ID}")], limit=5)
+for user in body.users:
+    print(user.user_id, user.fallback, [row.item_id for row in user.items])
+"""
+
+_RECOMMENDATIONS_BATCH_SHELL = f"""\
+curl -fsS -H "Authorization: Bearer ${{{ENV_SERVE_TOKEN}:?set {ENV_SERVE_TOKEN}}}" \\
+  -H "Content-Type: application/json" \\
+  -d '{{"user_ids":["${{{ENV_USER_ID}:-{DEFAULT_USER_ID}}}"],"limit":5}}' \\
+  "${{{ENV_SERVE_URL}:-{DEFAULT_SERVE_URL}}}{RECOMMENDATIONS_BATCH_PATH}" || exit 1
+"""
+
+RECOMMENDATIONS_BATCH_CODE_SAMPLES: list[dict[str, str]] = [
+    {"lang": "Python", "label": "ServeClient", "source": _RECOMMENDATIONS_BATCH_PYTHON},
+    {"lang": "Shell", "label": "curl", "source": _RECOMMENDATIONS_BATCH_SHELL},
+]
+
+
 ITEM_SCORES_CODE_SAMPLES: list[dict[str, str]] = [
     {"lang": "Python", "label": "ServeClient", "source": _ITEM_SCORES_PYTHON},
     {"lang": "Shell", "label": "curl", "source": _ITEM_SCORES_SHELL},
@@ -372,6 +399,9 @@ def attach_code_samples(schema: dict[str, Any]) -> None:
     recommendations = paths.get(RECOMMENDATIONS_PATH, {}).get("get")
     if isinstance(recommendations, dict):
         _extend_code_samples(recommendations, RECOMMENDATIONS_CODE_SAMPLES)
+    batch = paths.get(RECOMMENDATIONS_BATCH_PATH, {}).get("post")
+    if isinstance(batch, dict):
+        _extend_code_samples(batch, RECOMMENDATIONS_BATCH_CODE_SAMPLES)
     events = paths.get(EVENTS_PATH, {}).get("post")
     if isinstance(events, dict):
         _extend_code_samples(events, EVENTS_CODE_SAMPLES)

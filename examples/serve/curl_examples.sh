@@ -41,6 +41,19 @@ curl -sS "${auth_header[@]}" \
   "${BASE_URL}/recommendations/${USER_ID}?limit=5" | "$PYTHON" -m json.tool
 
 echo
+echo "## POST /recommendations/batch"
+batch_body="$(
+  USER_ID="$USER_ID" "$PYTHON" -c '
+import json, os
+print(json.dumps({"user_ids": [os.environ["USER_ID"]], "limit": 5}))
+'
+)"
+curl -sS "${auth_header[@]}" -X POST \
+  -H "Content-Type: application/json" \
+  -d "$batch_body" \
+  "${BASE_URL}/recommendations/batch" | "$PYTHON" -m json.tool
+
+echo
 echo "## GET /item-scores?limit=5"
 curl -sS "${auth_header[@]}" \
   "${BASE_URL}/item-scores?limit=5" | "$PYTHON" -m json.tool

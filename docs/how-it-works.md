@@ -66,6 +66,7 @@ batch job (and optional incremental flush)
     → [output]
     → serve
     → GET /recommendations/{user_id}
+    → POST /recommendations/batch
 ```
 
 The handler loads rows (and filters `category` / availability). It does

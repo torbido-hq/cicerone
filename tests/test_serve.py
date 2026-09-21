@@ -529,6 +529,101 @@ def test_recommendations_empty_everywhere_returns_404():
     assert response.status_code == 404
 
 
+def test_recommendations_batch_requires_auth():
+    app = create_app(_settings(), _FakeReader(_recs_df()))
+    response = TestClient(app).post("/recommendations/batch", json={"user_ids": ["u1"]})
+    assert response.status_code == 401
+
+
+def test_recommendations_batch_matches_single_get():
+    recs = pd.concat(
+        [
+            _recs_df(),
+            pd.DataFrame(
+                [{"user_id": "u2", "item_id": "i2", "rank": 1, "score": 0.8, "source": "personalized"}]
+            ),
+        ],
+        ignore_index=True,
+    )
+    app = create_app(
+        _settings(),
+        _FakeReader(recs, _items_df()),
+        manifest_reader=_FakeManifest(),
+        feature_config=_feature_config(),
+    )
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer secret"}
+    batch = client.post(
+        "/recommendations/batch",
+        json={"user_ids": ["u1", "u2", "nobody", "u1"], "limit": 2},
+        headers=headers,
+    )
+    assert batch.status_code == 200
+    assert batch.headers.get("X-Generated-At")
+    users = {row["user_id"]: row for row in batch.json()["users"]}
+    assert list(users) == ["u1", "u2", "nobody"]
+    for user_id in users:
+        single = client.get(f"/recommendations/{user_id}?limit=2", headers=headers)
+        assert single.status_code == 200
+        assert users[user_id] == single.json()
+
+
+def test_recommendations_batch_missing_user_is_empty_not_404():
+    empty = pd.DataFrame(columns=["user_id", "item_id", "rank", "score", "source"])
+    app = create_app(_settings(), _FakeReader(empty), manifest_reader=_FakeManifest())
+    response = TestClient(app).post(
+        "/recommendations/batch",
+        json={"user_ids": ["nobody"]},
+        headers={"Authorization": "Bearer secret"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["users"] == [
+        {
+            "generated_at": "2026-08-04T12:00:00+00:00",
+            "user_id": "nobody",
+            "fallback": False,
+            "items": [],
+            "experiment_id": None,
+            "variant": None,
+        }
+    ]
+
+
+def test_recommendations_batch_rejects_blank_user_id():
+    app = create_app(_settings(), _FakeReader(_recs_df()))
+    response = TestClient(app).post(
+        "/recommendations/batch",
+        json={"user_ids": ["u1", "  "]},
+        headers={"Authorization": "Bearer secret"},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "user_ids must be non-blank"
+
+
+def test_recommendations_batch_rejects_empty_and_oversized_lists():
+    app = create_app(_settings(), _FakeReader(_recs_df()))
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer secret"}
+    assert client.post("/recommendations/batch", json={"user_ids": []}, headers=headers).status_code == 422
+    too_many = {"user_ids": [f"u{i}" for i in range(101)]}
+    assert client.post("/recommendations/batch", json=too_many, headers=headers).status_code == 422
+
+
+def test_recommendations_batch_applies_category():
+    app = create_app(
+        _settings(),
+        _FakeReader(_recs_df(), _items_df()),
+        feature_config=_feature_config(),
+    )
+    response = TestClient(app).post(
+        "/recommendations/batch",
+        json={"user_ids": ["u1"], "category": "wine"},
+        headers={"Authorization": "Bearer secret"},
+    )
+    assert [row["item_id"] for row in response.json()["users"][0]["items"]] == ["i2"]
+
+
 def test_recommendations_manifest_without_generated_at():
     class EmptyManifest:
         def read_latest(self):

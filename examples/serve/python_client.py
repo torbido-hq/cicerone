@@ -25,6 +25,12 @@ def main() -> int:
     for row in body.items:
         print(f"  #{row.rank} {row.item_id} score={row.score:.4f} source={row.source}")
     try:
+        batch = client.recommendations_batch([user_id], limit=5)
+    except ServeClientError as exc:
+        print(f"recommendations_batch failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"batch users={len(batch.users)}")
+    try:
         scores = client.item_scores(limit=5)
     except ServeClientError as exc:
         print(f"item_scores failed: {exc}", file=sys.stderr)

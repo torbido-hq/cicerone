@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from cicerone.config.constants import DEFAULT_SERVE_MAX_K
+from cicerone.config.constants import DEFAULT_SERVE_BATCH_USERS, DEFAULT_SERVE_MAX_K
 
 
 class HealthResponse(BaseModel):
@@ -83,6 +83,43 @@ class RecommendationsResponse(BaseModel):
         default=None,
         description="Sticky assignment for this user_id when an experiment is active; null otherwise",
         examples=["control"],
+    )
+
+
+class RecommendationsBatchRequest(BaseModel):
+    user_ids: list[str] = Field(
+        min_length=1,
+        max_length=DEFAULT_SERVE_BATCH_USERS,
+        description="User ids to look up. Order is preserved; duplicates are dropped.",
+    )
+    limit: int | None = Field(
+        default=None,
+        gt=0,
+        le=DEFAULT_SERVE_MAX_K,
+        description="Top-K rows per user; default is [serve].default_k",
+    )
+    category: str | None = Field(
+        default=None,
+        description="Keep only items whose configured category column matches this value",
+    )
+    exclude_unavailable: bool = Field(
+        default=True,
+        description="Re-apply item_availability_filters against the items snapshot",
+    )
+    exclude_consumed: bool | None = Field(
+        default=None,
+        description="Drop items in each user's live input/incremental events",
+    )
+
+
+class RecommendationsBatchResponse(BaseModel):
+    generated_at: str | None = Field(
+        default=None,
+        description="ISO timestamp from the last job-run manifest (also sent as X-Generated-At)",
+        examples=["2026-08-04T03:00:00+00:00"],
+    )
+    users: list[RecommendationsResponse] = Field(
+        description="One GET /recommendations body per requested user_id, same order",
     )
 
 

@@ -15,6 +15,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the librdkafka default so a short poll or long session cannot pass
   validation and then fail in the client. `session_timeout_ms` is capped at
   3600000 (librdkafka client max).
+- Serve `POST /recommendations/batch` looks up the same precomputed rows as
+  `GET /recommendations/{user_id}` for many users (consumed hide, fallback
+  fill, `__cold_start__`). A user with no rows returns empty `items`, not 404.
 - Job writes catalog `item_scores` (`popular_score`, `latest_score`, `n_users`) next to recommendations. Dataset: `item_scores.parquet`. DB: `item_scores` table (`item_scores_table` option). First 0.9.0 job creates the table.
 - Serve `GET /item-scores` (bearer, cursor pagination, optional `item_id`) for search-index pull. See [docs/search-weights.md](docs/search-weights.md).
 - Serve-time hide of consumed items (`[serve].exclude_consumed`, default on)

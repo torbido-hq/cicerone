@@ -19,6 +19,7 @@ from cicerone import __version__
 from cicerone.config import Settings, load_settings
 from cicerone.config.constants import (
     DEFAULT_LOG_FORMAT,
+    DEFAULT_SERVE_BATCH_USERS,
     DEFAULT_SERVE_ITEM_SCORES_LIMIT,
     DEFAULT_SERVE_ITEM_SCORES_MAX,
     DEFAULT_SERVE_MAX_K,
@@ -50,6 +51,7 @@ from cicerone.serve.catalog_routes import attach_catalog_events_openapi, mount_c
 from cicerone.serve.code_samples import (
     HEALTH_PATH,
     ITEM_SCORES_PATH,
+    RECOMMENDATIONS_BATCH_PATH,
     RECOMMENDATIONS_PATH,
     attach_code_samples,
 )
@@ -76,6 +78,8 @@ from cicerone.serve_schemas import (
     ItemScore,
     ItemScoresResponse,
     RecommendationItem,
+    RecommendationsBatchRequest,
+    RecommendationsBatchResponse,
     RecommendationsResponse,
 )
 from cicerone.track.routes import attach_track_ingest_openapi, mount_track_routes
@@ -148,6 +152,7 @@ indexers. See `docs/search-weights.md`.
 `GET /recommendations` can hide items from the user's live `[input]` events
 (`[serve].exclude_consumed`) and fill short lists from popular/latest
 (`[serve].fallback_fill`) when hide or availability filters drop rows.
+`POST /recommendations/batch` is the same lookup for many users.
 Catalog writes live under `/users`, `/items`, and `/catalog/events`.
 Named surfaces: `GET /popular`, `GET /latest`, `GET /similar/{{item_id}}`,
 `POST /session/recommendations`.
@@ -361,55 +366,18 @@ def create_app(
                 update_events_source_health(connected=False, lag=None)
             return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
-    @app.get(
-        RECOMMENDATIONS_PATH,
-        response_model=RecommendationsResponse,
-        dependencies=dependencies,
-        tags=["recommendations"],
-        summary="Precomputed top-K recommendations for a user",
-        responses={
-            400: {"model": ErrorDetail, "description": "Conflicting limit and k"},
-            401: {"model": ErrorDetail, "description": "Missing or invalid bearer token"},
-            404: {"model": ErrorDetail, "description": "No rows and no cold-start fallback"},
-        },
-    )
-    def get_recommendations(
+    def _recommend_for_user(
         user_id: str,
-        response: Response,
+        *,
+        top_k: int,
+        category: str | None,
+        exclude_unavailable: bool,
+        hide_consumed: bool,
+        items: Any,
+        available_ids: frozenset[str] | None,
+        ids_by_category: dict[str, frozenset[str]],
         background_tasks: BackgroundTasks,
-        limit: int | None = Query(
-            default=None, gt=0, le=DEFAULT_SERVE_MAX_K, description="Top-K rows to return"
-        ),
-        k: int | None = Query(
-            default=None, gt=0, le=DEFAULT_SERVE_MAX_K, description="Alias for limit (back-compat)"
-        ),
-        category: str | None = Query(
-            default=None,
-            description="Keep only items whose configured category column matches this value",
-        ),
-        exclude_unavailable: bool = Query(
-            default=True,
-            description="Re-apply item_availability_filters against the items snapshot",
-        ),
-        exclude_consumed: bool | None = Query(
-            default=None,
-            description="Drop items in the user's live input/incremental events",
-        ),
-    ) -> RecommendationsResponse:
-        if limit is not None and k is not None and limit != k:
-            raise HTTPException(
-                status_code=400,
-                detail="limit and k disagree; pass only one (or the same value)",
-            )
-        if limit is not None:
-            top_k = limit
-        elif k is not None:
-            top_k = k
-        else:
-            top_k = settings.serve.default_k
-        top_k = min(top_k, DEFAULT_SERVE_MAX_K)
-        hide_consumed = settings.serve.exclude_consumed if exclude_consumed is None else exclude_consumed
-        items, available_ids, ids_by_category = items_cache.get()
+    ) -> RecommendationsResponse | None:
         consumed_ids: set[str] = set()
         if hide_consumed:
             consumed_ids = consumed_item_ids(
@@ -446,7 +414,7 @@ def create_app(
             used_fallback = True
             recs = reader.get_cold_start_fallback(fetch_k, variant=variant)
         if recs.empty:
-            raise HTTPException(status_code=404, detail=f"No recommendations for user_id={user_id!r}")
+            return None
         if not has_variant_column(recs):
             experiment_id, variant = None, None
 
@@ -525,8 +493,7 @@ def create_app(
                 for row in filtered.itertuples(index=False)
             ]
             background_tasks.add_task(_append_impressions_safe, track_store, rows, user_id)
-
-        body = RecommendationsResponse(
+        return RecommendationsResponse(
             generated_at=generated_at,
             user_id=user_id,
             fallback=used_fallback,
@@ -543,9 +510,131 @@ def create_app(
                 for row in filtered.itertuples(index=False)
             ],
         )
+
+    @app.get(
+        RECOMMENDATIONS_PATH,
+        response_model=RecommendationsResponse,
+        dependencies=dependencies,
+        tags=["recommendations"],
+        summary="Precomputed top-K recommendations for a user",
+        responses={
+            400: {"model": ErrorDetail, "description": "Conflicting limit and k"},
+            401: {"model": ErrorDetail, "description": "Missing or invalid bearer token"},
+            404: {"model": ErrorDetail, "description": "No rows and no cold-start fallback"},
+        },
+    )
+    def get_recommendations(
+        user_id: str,
+        response: Response,
+        background_tasks: BackgroundTasks,
+        limit: int | None = Query(
+            default=None, gt=0, le=DEFAULT_SERVE_MAX_K, description="Top-K rows to return"
+        ),
+        k: int | None = Query(
+            default=None, gt=0, le=DEFAULT_SERVE_MAX_K, description="Alias for limit (back-compat)"
+        ),
+        category: str | None = Query(
+            default=None,
+            description="Keep only items whose configured category column matches this value",
+        ),
+        exclude_unavailable: bool = Query(
+            default=True,
+            description="Re-apply item_availability_filters against the items snapshot",
+        ),
+        exclude_consumed: bool | None = Query(
+            default=None,
+            description="Drop items in the user's live input/incremental events",
+        ),
+    ) -> RecommendationsResponse:
+        if limit is not None and k is not None and limit != k:
+            raise HTTPException(
+                status_code=400,
+                detail="limit and k disagree; pass only one (or the same value)",
+            )
+        if limit is not None:
+            top_k = limit
+        elif k is not None:
+            top_k = k
+        else:
+            top_k = settings.serve.default_k
+        top_k = min(top_k, DEFAULT_SERVE_MAX_K)
+        hide_consumed = settings.serve.exclude_consumed if exclude_consumed is None else exclude_consumed
+        items, available_ids, ids_by_category = items_cache.get()
+        body = _recommend_for_user(
+            user_id,
+            top_k=top_k,
+            category=category,
+            exclude_unavailable=exclude_unavailable,
+            hide_consumed=hide_consumed,
+            items=items,
+            available_ids=available_ids,
+            ids_by_category=ids_by_category,
+            background_tasks=background_tasks,
+        )
+        if body is None:
+            raise HTTPException(status_code=404, detail=f"No recommendations for user_id={user_id!r}")
+        if body.generated_at is not None:
+            response.headers["X-Generated-At"] = str(body.generated_at)
+        return body
+
+    @app.post(
+        RECOMMENDATIONS_BATCH_PATH,
+        response_model=RecommendationsBatchResponse,
+        dependencies=dependencies,
+        tags=["recommendations"],
+        summary="Precomputed top-K recommendations for many users",
+        responses={
+            400: {"model": ErrorDetail, "description": "Blank user_id"},
+            401: {"model": ErrorDetail, "description": "Missing or invalid bearer token"},
+        },
+    )
+    def post_recommendations_batch(
+        body: RecommendationsBatchRequest,
+        response: Response,
+        background_tasks: BackgroundTasks,
+    ) -> RecommendationsBatchResponse:
+        raw_ids = [str(user_id).strip() for user_id in body.user_ids]
+        if any(not user_id for user_id in raw_ids):
+            raise HTTPException(status_code=400, detail="user_ids must be non-blank")
+        user_ids = list(dict.fromkeys(raw_ids))
+        if len(user_ids) > DEFAULT_SERVE_BATCH_USERS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"user_ids must have at most {DEFAULT_SERVE_BATCH_USERS} distinct values",
+            )
+        top_k = settings.serve.default_k if body.limit is None else min(body.limit, DEFAULT_SERVE_MAX_K)
+        hide_consumed = (
+            settings.serve.exclude_consumed if body.exclude_consumed is None else body.exclude_consumed
+        )
+        items, available_ids, ids_by_category = items_cache.get()
+        generated_at = generated_at_cache.get()
+        users: list[RecommendationsResponse] = []
+        for user_id in user_ids:
+            row = _recommend_for_user(
+                user_id,
+                top_k=top_k,
+                category=body.category,
+                exclude_unavailable=body.exclude_unavailable,
+                hide_consumed=hide_consumed,
+                items=items,
+                available_ids=available_ids,
+                ids_by_category=ids_by_category,
+                background_tasks=background_tasks,
+            )
+            if row is None:
+                users.append(
+                    RecommendationsResponse(
+                        generated_at=generated_at,
+                        user_id=user_id,
+                        fallback=False,
+                        items=[],
+                    )
+                )
+            else:
+                users.append(row)
         if generated_at is not None:
             response.headers["X-Generated-At"] = str(generated_at)
-        return body
+        return RecommendationsBatchResponse(generated_at=generated_at, users=users)
 
     @app.get(
         ITEM_SCORES_PATH,
@@ -626,14 +715,13 @@ def create_app(
             "description": "ISO timestamp from the last job-run manifest (mirrors body.generated_at)",
             "schema": {"type": "string", "example": "2026-08-04T03:00:00+00:00"},
         }
-        rec_responses = (
-            schema.get("paths", {}).get(RECOMMENDATIONS_PATH, {}).get("get", {}).get("responses", {})
-        )
-        ok = rec_responses.get("200")
-        if isinstance(ok, dict):
-            ok.setdefault("headers", {})["X-Generated-At"] = {
-                "$ref": "#/components/headers/X-Generated-At",
-            }
+        for path, method in ((RECOMMENDATIONS_PATH, "get"), (RECOMMENDATIONS_BATCH_PATH, "post")):
+            rec_responses = schema.get("paths", {}).get(path, {}).get(method, {}).get("responses", {})
+            ok = rec_responses.get("200")
+            if isinstance(ok, dict):
+                ok.setdefault("headers", {})["X-Generated-At"] = {
+                    "$ref": "#/components/headers/X-Generated-At",
+                }
         attach_code_samples(schema)
         attach_events_ingest_openapi(schema)
         attach_catalog_events_openapi(schema)

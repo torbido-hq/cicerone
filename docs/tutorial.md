@@ -571,6 +571,10 @@ docker run --rm -d --name cicerone-tutorial-serve -p 8000:8000 \
 read -s -p "Serve auth token: " SERVE_TOKEN && echo
 curl -s -H "Authorization: Bearer $SERVE_TOKEN" \
   "http://localhost:8000/recommendations/alice?limit=5" | python -m json.tool
+curl -s -H "Authorization: Bearer $SERVE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"user_ids":["alice"],"limit":5}' \
+  "http://localhost:8000/recommendations/batch" | python -m json.tool
 ```
 
 The response is an object (not a bare list):
