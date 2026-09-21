@@ -8,6 +8,9 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import pandas as pd
+from botocore.exceptions import BotoCoreError
+from pyarrow.lib import ArrowInvalid
+from sqlalchemy.exc import SQLAlchemyError
 
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import IOSettings, Settings
@@ -27,18 +30,47 @@ from cicerone.experiment.store import ExperimentStore
 from cicerone.io.base import InputSource
 from cicerone.io.factory import build_manifest_reader
 from cicerone.io.recommendation_schema import USER_COLUMN, VARIANT_COLUMN, pick_fallback_variant
+from cicerone.io.replace_users import RecommendationSchemaError
 from cicerone.locks import LockLostError, WriterLockBusyError, held_writer_lock
+from cicerone.publish.base import PublishError
 from cicerone.track.store import TrackStore
 from cicerone.track.store_common import _utc_stamp
 
 logger = logging.getLogger(__name__)
 
+_JOB_CONTROL_ERRORS = (LockLostError, WriterLockBusyError)
 
-def try_load(label: str, fn: Callable[[], Any], default: Any) -> Any:
+OPTIONAL_IO_ERRORS: tuple[type[BaseException], ...] = (
+    OSError,
+    ValueError,
+    TypeError,
+    SQLAlchemyError,
+    ArrowInvalid,
+    BotoCoreError,
+    RecommendationSchemaError,
+)
+OPTIONAL_EVAL_ERRORS: tuple[type[BaseException], ...] = (ValueError, TypeError, LookupError)
+PUBLISH_ERRORS: tuple[type[BaseException], ...] = (OSError, ValueError, PublishError)
+SINK_WRITE_ERRORS: tuple[type[BaseException], ...] = (*OPTIONAL_IO_ERRORS, RuntimeError)
+
+
+def log_caught(message: str, exc: BaseException, *, log: logging.Logger | None = None) -> None:
+    (log or logger).exception("%s (%s: %s)", message, type(exc).__name__, exc)
+
+
+def try_load(
+    label: str,
+    fn: Callable[[], Any],
+    default: Any,
+    *,
+    errors: tuple[type[BaseException], ...] = OPTIONAL_IO_ERRORS,
+) -> Any:
     try:
         return fn()
-    except Exception:
-        logger.exception("Failed to %s", label)
+    except _JOB_CONTROL_ERRORS:
+        raise
+    except errors as exc:
+        log_caught(f"Failed to {label}", exc)
         return default
 
 
@@ -92,7 +124,11 @@ def replay_assignments(
             if user_id in assigned or user_id == COLD_START_USER_ID:
                 continue
             _experiment_id, assigned_variant = resolve_assignment(
-                settings, user_id, promoted_variant=promoted, active_pair=pair
+                settings,
+                user_id,
+                promoted_variant=promoted,
+                active_pair=pair,
+                snapshot_names=tuple(sorted(names)),
             )
             if assigned_variant:
                 assigned[user_id] = assigned_variant
@@ -129,8 +165,8 @@ def persist_track_outputs(
         for label, fn in tasks:
             try_load(label, fn, None)
 
-    if lock is not None:
-        try:
+    try:
+        if lock is not None:
             with held_writer_lock(
                 lock,
                 fence_check=fence_check,
@@ -138,15 +174,16 @@ def persist_track_outputs(
                 fence_kind="retrain",
             ):
                 _run_serial()
-        except (WriterLockBusyError, LockLostError):
-            logger.exception("Failed to persist track outputs")
-        return
-    if kind == "db":
-        _run_serial()
-        return
-    with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
-        for label, fn in tasks:
-            pool.submit(try_load, label, fn, None)
+            return
+        if kind == "db":
+            _run_serial()
+            return
+        with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
+            futures = [pool.submit(try_load, label, fn, None) for label, fn in tasks]
+            for future in futures:
+                future.result()
+    except _JOB_CONTROL_ERRORS:
+        raise
 
 
 def score_previous_run(
@@ -154,6 +191,9 @@ def score_previous_run(
     events: pd.DataFrame,
     last_manifest: dict[str, Any] | None,
     items: pd.DataFrame | None = None,
+    *,
+    preloaded_track: list[dict[str, Any]] | None = None,
+    preloaded_recs: pd.DataFrame | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     if not settings.track.enabled and not settings.eval.enabled:
         return None, None
@@ -174,39 +214,61 @@ def score_previous_run(
             return []
         return store.read_rows()
 
-    previous_recs, track_rows = try_load_pair(
-        "load previous recommendations for eval",
-        _load_recs,
-        None,
-        "read track rows",
-        _load_track,
-        [],
-        parallel=settings.output.kind != "db",
-    )
+    previous_recs: pd.DataFrame | None
+    track_rows: list[dict[str, Any]]
+    if preloaded_recs is None and preloaded_track is None:
+        previous_recs, track_rows = try_load_pair(
+            "load previous recommendations for eval",
+            _load_recs,
+            None,
+            "read track rows",
+            _load_track,
+            [],
+            parallel=settings.output.kind != "db",
+        )
+    else:
+        if preloaded_recs is None:
+            previous_recs = try_load("load previous recommendations for eval", _load_recs, None)
+        else:
+            previous_recs = None if preloaded_recs.empty else preloaded_recs
+        if not settings.track.enabled:
+            track_rows = []
+        elif preloaded_track is None:
+            track_rows = try_load("read track rows", _load_track, [])
+        else:
+            track_rows = list(preloaded_track)
     wanted = generated_ats_from_track(track_rows, previous_generated_at)
     history = None
     if wanted:
-        try:
-            history = store.read_history(generated_ats=wanted)
-            if history is not None and history.empty:
-                history = None
-        except Exception:
-            logger.exception("Failed to read recommendation history")
-            history = None
+
+        def _load_history() -> pd.DataFrame | None:
+            loaded = store.read_history(generated_ats=wanted)
+            if loaded is not None and loaded.empty:
+                return None
+            return loaded
+
+        history = try_load("read recommendation history", _load_history, None)
     recs_for_track = concat_history(history, stamp_recommendations(previous_recs, previous_generated_at))
     assigned: dict[str, str] | None = None
     replay_failed = False
     if settings.eval.enabled and previous_recs is not None and previous_generated_at:
-        try:
-            assigned = replay_assignments(settings, previous_recs, track_rows)
-        except Exception:
-            logger.exception("Failed to compute served eval")
+        missing = object()
+        assigned_or_missing = try_load(
+            "compute served eval",
+            lambda: replay_assignments(settings, previous_recs, track_rows),
+            missing,
+            errors=OPTIONAL_EVAL_ERRORS,
+        )
+        if assigned_or_missing is missing:
             replay_failed = True
+        else:
+            assigned = assigned_or_missing
 
     def _compute_track() -> dict[str, Any] | None:
         if not settings.track.enabled:
             return None
-        try:
+
+        def _track() -> dict[str, Any]:
             conversions = conversion_events_for_settings(events, settings)
             return evaluate_tracking(
                 track_rows=track_rows,
@@ -214,14 +276,14 @@ def score_previous_run(
                 recommendations=recs_for_track,
                 window_hours=settings.track.attribution_window_hours,
             ).as_dict()
-        except Exception:
-            logger.exception("Failed to compute track eval")
-            return None
+
+        return try_load("compute track eval", _track, None, errors=OPTIONAL_EVAL_ERRORS)
 
     def _compute_served() -> dict[str, Any] | None:
         if replay_failed or not settings.eval.enabled or previous_recs is None or not previous_generated_at:
             return None
-        try:
+
+        def _served() -> dict[str, Any] | None:
             types = settings.eval.event_types or conversion_event_types(
                 settings.track.conversion_event_types,
                 primary_metric=settings.experiment.primary_metric,
@@ -237,9 +299,8 @@ def score_previous_run(
                 assigned=assigned,
             )
             return report.as_dict() if report is not None else None
-        except Exception:
-            logger.exception("Failed to compute served eval")
-            return None
+
+        return try_load("compute served eval", _served, None, errors=OPTIONAL_EVAL_ERRORS)
 
     run_both = bool(
         settings.track.enabled

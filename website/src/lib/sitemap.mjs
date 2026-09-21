@@ -13,6 +13,8 @@ export const DOC_SITEMAP_PAGES = Object.freeze([
 	['architecture.md', '/architecture/'],
 	['incremental-events.md', '/incremental-events/'],
 	['experiments.md', '/experiments/'],
+	['evaluation.md', '/evaluation/'],
+	['configuration.md', '/configuration/'],
 ]);
 
 export function frontmatterLastmod(fm) {

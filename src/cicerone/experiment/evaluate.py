@@ -10,6 +10,7 @@ from typing import Any
 import pandas as pd
 
 from cicerone.config.constants import (
+    ALLOCATION_THOMPSON,
     ATTRIBUTION_CLICK,
     ATTRIBUTION_IMPRESSION,
     ATTRIBUTION_RECOMMENDED,
@@ -18,7 +19,7 @@ from cicerone.config.constants import (
     PRIMARY_METRIC_WEIGHTED,
 )
 from cicerone.config.settings import ExperimentSettings
-from cicerone.experiment.assignment import assign_variant
+from cicerone.experiment.assignment import _active_pair_traffic, assign_variant
 from cicerone.experiment.guardrails import GuardrailReport, evaluate_guardrails
 from cicerone.experiment.recipes import ResolvedRecipe
 from cicerone.experiment.stats import ComparisonResult, compare_variants, pick_control_name, variant_metric
@@ -84,9 +85,21 @@ def evaluate_experiment(
     track_variants: dict[str, str] | None = None,
     n_impressions: int = 0,
     min_impressions: int = 0,
+    active_pair: tuple[str, str] | None = None,
 ) -> ExperimentReport:
     variants = [(recipe.name, recipe.traffic) for recipe in recipes]
     names = [recipe.name for recipe in recipes]
+    if (
+        active_pair is not None
+        and experiment.allocation == ALLOCATION_THOMPSON
+        and active_pair[0] in names
+        and active_pair[1] in names
+        and promoted_variant is None
+    ):
+        variants = _active_pair_traffic(
+            active_pair[0], active_pair[1], explore_traffic=experiment.explore_traffic
+        )
+        names = [name for name, _traffic in variants]
     assigned: dict[str, str] = {}
     attribution = experiment.attribution
     rec_metric = experiment.primary_metric in {PRIMARY_METRIC_CTR, PRIMARY_METRIC_CONVERSION}
@@ -102,13 +115,18 @@ def evaluate_experiment(
         for user_id in track_outcomes:
             uid = str(user_id)
             variant = tagged.get(uid)
-            assigned[uid] = variant if variant in names else assign_variant(experiment.id, uid, variants)
+            assigned[uid] = (
+                variant
+                if variant in names
+                else assign_variant(experiment.id, uid, variants, promoted_variant=promoted_variant)
+            )
     elif not events.empty and USER_COLUMN in events.columns:
         for user_id in events[USER_COLUMN].astype(str).unique():
             assigned[str(user_id)] = assign_variant(
                 experiment.id,
                 str(user_id),
                 variants,
+                promoted_variant=promoted_variant,
             )
     until, invalid_until = _parse_cutoff(promoted_at)
     if invalid_until:

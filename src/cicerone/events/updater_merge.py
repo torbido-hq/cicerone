@@ -104,7 +104,9 @@ class UpdaterMerge:
                 online_rows=online_rows if inject else None,
             )
             if merged.empty:
-                continue
+                if prior_slice.empty:
+                    continue
+                merged = prior_slice
             merged = merged.copy()
             merged[VARIANT_COLUMN] = variant
             parts.append(merged)
@@ -260,7 +262,9 @@ class UpdaterMerge:
             )
             merged = self._cold_start_one_list(prior_slice, popular, latest)
             if merged.empty:
-                continue
+                if prior_slice.empty:
+                    continue
+                merged = prior_slice
             merged = merged.copy()
             merged[VARIANT_COLUMN] = variant
             parts.append(merged)

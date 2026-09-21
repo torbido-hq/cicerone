@@ -46,6 +46,27 @@ def _s3_notification(key: str, bucket: str = "events-bucket") -> str:
     )
 
 
+def test_load_object_events_closes_body(mocker):
+    body = mocker.Mock()
+    body.read.return_value = b"[]"
+    s3 = mocker.Mock()
+    s3.get_object.return_value = {"Body": body, "ETag": '"abc"'}
+    source = S3EventSource(_creds(mode="list"))
+    assert source._load_object_events(s3, "events-bucket", "events/e.json") == []
+    body.close.assert_called_once()
+
+
+def test_load_object_events_rejects_oversize_and_closes(mocker):
+    body = mocker.Mock()
+    s3 = mocker.Mock()
+    s3.get_object.return_value = {"Body": body, "ContentLength": 99, "ETag": '"abc"'}
+    source = S3EventSource(_creds(mode="list"))
+    with pytest.raises(ValueError, match="max is 8"):
+        source._load_object_events(s3, "events-bucket", "events/e.json", max_bytes=8)
+    body.read.assert_not_called()
+    body.close.assert_called_once()
+
+
 @mock_aws
 def test_s3_registered_and_build_list_mode():
     assert "s3" in registered_event_source_kinds()
@@ -544,6 +565,26 @@ def test_s3_list_loads_marker_and_ignores_corrupt(tmp_path):
     )
     source2.connect()
     assert list(source2.poll(10))[0].event_id == "b"
+
+
+@mock_aws
+@mock_aws
+def test_s3_sqs_deletes_oversize_object_message(monkeypatch):
+    monkeypatch.setattr("cicerone.events.s3.DEFAULT_MAX_STORAGE_READ_BYTES", 200)
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-oversize")["QueueUrl"]
+    s3.put_object(Bucket="events-bucket", Key="events/big.json", Body=b"x" * 1000)
+    _put_event(s3, "events/ok.json", event_payload(event_id="ok-size"))
+    sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification("events/big.json"))
+    sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification("events/ok.json"))
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url, prefix="events/"))
+    source.connect()
+    events = list(source.poll(10))
+    assert [event.event_id for event in events] == ["ok-size"]
+    source.ack([events[0].event_id])
+    assert list(source.poll(10)) == []
 
 
 @mock_aws

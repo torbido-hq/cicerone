@@ -31,8 +31,10 @@ _SECRET_KEYS = frozenset(
         "queue_url",
         "password",
         "webhook",
+        "artifact_hmac_key",
     }
 )
+_OPTION_SECRET_KEYS = frozenset({"sasl_username", "bootstrap_servers", "bucket"})
 _SECRET_KEY_RE = re.compile(
     r"(secret|password|token|auth|credential|api_key|private_key|url|webhook|hook)",
     re.IGNORECASE,
@@ -121,17 +123,24 @@ HINTS: dict[str, dict[str, str]] = {
     },
     "input": {
         "text": "Where events, users, and items are read from.",
-        "docs": f"{_DOCS}/architecture/",
+        "docs": f"{_DOCS}/configuration/#input-and-output",
     },
     "input.kind": {"text": "dataset files or a database."},
     "output": {
         "text": "Where recommendations and the run manifest are written.",
-        "docs": f"{_DOCS}/architecture/",
+        "docs": f"{_DOCS}/configuration/#input-and-output",
     },
     "output.kind": {"text": "dataset files or a database."},
+    "output.artifact_hmac_key": {
+        "text": "HMAC key used to sign model.artifact. Required when [events.online] is on.",
+    },
     "serve": {
         "text": "Read-only HTTP API over the precomputed top-K table.",
-        "docs": f"{_DOCS}/openapi/",
+        "docs": f"{_DOCS}/configuration/#serve",
+    },
+    "serve.log_impressions": {
+        "text": "Write one impression row per returned GET item. Not a browser render.",
+        "docs": f"{_DOCS}/evaluation/#auto-impressions",
     },
     "serve.enabled": {"text": "Whether this config starts the serve API."},
     "serve.auth_token": {"text": "Bearer token for GET /recommendations. Shown redacted."},
@@ -157,7 +166,7 @@ HINTS: dict[str, dict[str, str]] = {
     },
     "trigger": {
         "text": "HTTP webhook (and optional poll) to start a retrain.",
-        "docs": f"{_DOCS}/tutorial/#14-trigger-a-retrain-on-demand",
+        "docs": f"{_DOCS}/configuration/#job-trigger",
     },
     "trigger.enabled": {"text": "Whether this config starts the trigger service."},
     "experiment": {
@@ -186,6 +195,7 @@ HINTS: dict[str, dict[str, str]] = {
             "Accept POST /track. GET /recommendations is not an impression "
             "unless serve.log_impressions is on."
         ),
+        "docs": f"{_DOCS}/evaluation/",
     },
     "eval": {
         "text": "Production replay of the previous lists against later events (HitRate / NDCG / Recall).",
@@ -300,6 +310,8 @@ def _decorate_section(section: dict[str, Any]) -> dict[str, Any]:
 
 def _is_secret_key(key: str, *, in_options: bool) -> bool:
     if key in _SECRET_KEYS:
+        return True
+    if in_options and key in _OPTION_SECRET_KEYS:
         return True
     return in_options and _SECRET_KEY_RE.search(key) is not None
 

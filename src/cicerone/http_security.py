@@ -23,6 +23,10 @@ _FLASH_ERR_COOKIE = {
     "Experiment is not ready to promote": "err:Experiment%20is%20not%20ready%20to%20promote",
     "That variant is not the winner": "err:That%20variant%20is%20not%20the%20winner",
     "No experiment is enabled": "err:No%20experiment%20is%20enabled",
+    "No active champion/challenger pair is available": (
+        "err:No%20active%20champion%2Fchallenger%20pair%20is%20available"
+    ),
+    "Experiment state could not be read": "err:Experiment%20state%20could%20not%20be%20read",
 }
 FLASH_OK = frozenset(_FLASH_OK_COOKIE)
 FLASH_ERR = frozenset(_FLASH_ERR_COOKIE)

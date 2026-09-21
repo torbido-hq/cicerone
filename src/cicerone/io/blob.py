@@ -5,21 +5,42 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from cicerone.config.constants import DEFAULT_MAX_STORAGE_READ_BYTES
 from cicerone.io.options import (
     build_s3_client,
     is_s3_not_found,
     object_key,
+    read_s3_body,
     require_option,
     validate_storage_options,
 )
 
 
-def read_storage_bytes(options: dict[str, Any], filename: str) -> bytes | None:
+def _reject_oversize(size: int, max_bytes: int) -> None:
+    if size > max_bytes:
+        raise ValueError(f"Stored object is {size} bytes; max is {max_bytes}")
+
+
+def _read_capped(read: Any, max_bytes: int) -> bytes:
+    payload = read(max_bytes + 1)
+    _reject_oversize(len(payload), max_bytes)
+    return payload
+
+
+def read_storage_bytes(
+    options: dict[str, Any],
+    filename: str,
+    *,
+    max_bytes: int = DEFAULT_MAX_STORAGE_READ_BYTES,
+) -> bytes | None:
+    if max_bytes < 1:
+        raise ValueError("max_bytes must be >= 1")
     backend = validate_storage_options(options)
     if backend == "local":
         path = Path(require_option(options, "path", "local")) / filename
         try:
-            return path.read_bytes()
+            with path.open("rb") as handle:
+                return _read_capped(handle.read, max_bytes)
         except FileNotFoundError:
             return None
     bucket = require_option(options, "bucket", "s3")
@@ -31,13 +52,7 @@ def read_storage_bytes(options: dict[str, Any], filename: str) -> bytes | None:
         if is_s3_not_found(exc):
             return None
         raise
-    body = response["Body"]
-    try:
-        return body.read()
-    finally:
-        close = getattr(body, "close", None)
-        if callable(close):
-            close()
+    return read_s3_body(response, max_bytes=max_bytes)
 
 
 def write_storage_bytes(options: dict[str, Any], filename: str, payload: bytes, content_type: str) -> None:

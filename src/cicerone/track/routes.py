@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -113,7 +114,7 @@ def mount_track_routes(
                 for payload in payloads:
                     TrackEvent.model_validate(payload)
             rows = [normalize_track(payload).as_row() for payload in payloads]
-            accepted_rows = track_store.append_accepted_rows(rows)
+            accepted_rows = await asyncio.to_thread(track_store.append_accepted_rows, rows)
         except ValidationError as exc:
             record_track_ingest(kind="other", status="error")
             raise HTTPException(status_code=400, detail=exc.errors()) from exc

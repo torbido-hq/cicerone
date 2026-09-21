@@ -36,8 +36,8 @@ from cicerone.experiment.recipes import (
     resolve_eligibility_policy,
     resolve_recipes,
 )
-from cicerone.experiment.store import ExperimentStore, merge_experiment_state
-from cicerone.experiment.thompson import ArmCounts, parse_arm_counts
+from cicerone.experiment.store import ExperimentStore, active_pair_from_state, merge_experiment_state
+from cicerone.experiment.thompson import ArmCounts, parse_arm_counts, select_active_recipes
 from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.io.factory import build_manifest_reader
 from cicerone.locks import (
@@ -47,12 +47,19 @@ from cicerone.locks import (
     held_writer_lock,
 )
 from cicerone.track.store import TrackStore
+from cicerone.track.store_common import DASHBOARD_TRACK_FLOOR_HOURS, lookback_since
 
 logger = logging.getLogger(__name__)
 
 _PROMOTE_STATE: dict[str, dict[str, Any]] = {}
 _T = TypeVar("_T")
 _THOMPSON_SHIP_IGNORE = frozenset({"undecided", "split_winners"})
+
+
+class _PromoteRejected(Exception):
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
 
 
 def _matched_state(settings: Settings, store: ExperimentStore) -> dict[str, Any] | None:
@@ -71,6 +78,35 @@ def _matched_state(settings: Settings, store: ExperimentStore) -> dict[str, Any]
     return None
 
 
+def _fresh_matched_state(settings: Settings, store: ExperimentStore) -> dict[str, Any] | None:
+    try:
+        state = store.read_state()
+    except Exception as exc:
+        logger.exception("Failed to read experiment state")
+        raise _PromoteRejected("Experiment state could not be read") from exc
+    if state and str(state.get("experiment_id") or "") == str(settings.experiment.id):
+        _PROMOTE_STATE[settings.experiment.id] = dict(state)
+        return dict(state)
+    _PROMOTE_STATE.pop(settings.experiment.id, None)
+    return None
+
+
+def _live_thompson_pair(
+    state: Mapping[str, Any] | None,
+    names: set[str],
+) -> tuple[str, str] | None:
+    pair = active_pair_from_state(state)
+    if pair is None or pair[0] not in names or pair[1] not in names:
+        return None
+    return pair
+
+
+def _thompson_pair_names(settings: Settings, recipes: Sequence[Any] = ()) -> set[str]:
+    names = {item.name for item in settings.experiment.variants}
+    recipe_names = {item.name for item in recipes}
+    return names & recipe_names if recipe_names else names
+
+
 def _eval_recipes(
     recipes: tuple[ResolvedRecipe, ...],
     experiment: ExperimentSettings,
@@ -80,11 +116,14 @@ def _eval_recipes(
         return recipes
     champion = str(state.get("champion") or "")
     challenger = str(state.get("challenger") or "")
-    wanted = {name for name in (champion, challenger) if name}
-    if not wanted:
+    if not champion:
         return recipes
-    filtered = tuple(recipe for recipe in recipes if recipe.name in wanted)
-    return filtered or recipes
+    return select_active_recipes(
+        recipes,
+        champion=champion,
+        challenger=challenger or champion,
+        explore_traffic=experiment.explore_traffic,
+    )
 
 
 def _ship_blocked(report: Any, experiment: ExperimentSettings) -> tuple[str, ...]:
@@ -218,11 +257,15 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
             "ship_blocked": (),
         }
     event_types = _metric_event_types(settings, experiment)
+    since = lookback_since(
+        window_hours=settings.track.attribution_window_hours,
+        floor_hours=DASHBOARD_TRACK_FLOOR_HOURS,
+    )
     with ThreadPoolExecutor(max_workers=5) as pool:
         events_f = pool.submit(
             _try_load,
             "read events for experiment metrics",
-            lambda: _load_metric_events(settings, event_types=event_types),
+            lambda: _load_metric_events(settings, event_types=event_types, since=since),
             pd.DataFrame(),
         )
         recs_f = pool.submit(
@@ -248,21 +291,23 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
             track_f = pool.submit(
                 _try_load,
                 "read track rows for experiment metrics",
-                lambda: TrackStore(settings.output).read_rows(experiment_id=experiment.id),
-                [],
+                lambda: TrackStore(settings.output).read_rows(experiment_id=experiment.id, since=since),
+                None,
             )
         events = events_f.result()
         recs = recs_f.result()
         exposures = exposures_f.result()
         catalog_size = catalog_f.result()
         track_rows = track_f.result() if track_f is not None else []
+    if settings.track.enabled and track_rows is not None:
+        exposures = _exposures_for_track_users(exposures, track_rows)
     if events is None:
         events = pd.DataFrame()
     weights = feature_config.event_weights if feature_config is not None else {}
     track_outcomes = None
     track_variants = None
     n_impressions = 0
-    if settings.track.enabled:
+    if settings.track.enabled and track_rows is not None:
         n_impressions = sum(1 for row in track_rows if str(row.get("kind") or "") == TRACK_KIND_IMPRESSION)
         if experiment.attribution in {ATTRIBUTION_CLICK, ATTRIBUTION_IMPRESSION}:
             conversions = conversion_events_for_settings(events, settings)
@@ -292,12 +337,14 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
         track_variants=track_variants,
         n_impressions=n_impressions,
         min_impressions=settings.track.min_impressions if settings.track.enabled else 0,
+        active_pair=active_pair_from_state(state),
     )
     blocked = _ship_blocked(report, experiment)
     ship_variant = None
     if not promoted and not blocked:
         if experiment.allocation == ALLOCATION_THOMPSON:
-            ship_variant = str((state or {}).get("champion") or "") or report.winner
+            pair = _live_thompson_pair(state, {recipe.name for recipe in recipes})
+            ship_variant = pair[0] if pair else None
         else:
             ship_variant = report.winner
     return {
@@ -315,12 +362,36 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
     }
 
 
+def _exposures_for_track_users(
+    exposures: list[dict[str, Any]] | None,
+    track_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]] | None:
+    if exposures is None:
+        return None
+    recent = {str(row.get("user_id") or "") for row in track_rows}
+    recent.discard("")
+    return [row for row in exposures if str(row.get("user_id") or "") in recent]
+
+
 def _lift_label(metric: str) -> str:
     if metric == PRIMARY_METRIC_CTR:
         return "CTR lift"
     if metric == PRIMARY_METRIC_CONVERSION:
         return "Conversion lift"
     return "Mean lift"
+
+
+def _thompson_promote_error(
+    variant: str,
+    state: Mapping[str, Any] | None,
+    names: set[str],
+) -> str | None:
+    pair = _live_thompson_pair(state, names)
+    if pair and variant in pair:
+        return None
+    if not pair:
+        return "No active champion/challenger pair is available"
+    return f"Winner is {pair[0]!r}, not {variant!r}"
 
 
 def _publish_experiment_state(
@@ -332,6 +403,8 @@ def _publish_experiment_state(
         with held_writer_lock(writer_lock):
             payload = payload_for(store)
             store.write_state(payload)
+    except _PromoteRejected as exc:
+        return exc.message
     except WriterLockBusyError:
         return "Writer lock is busy"
     except LockLostError:
@@ -354,16 +427,31 @@ def promote_winner(settings: Settings, variant: str) -> str | None:
     blocked = _ship_blocked(report, settings.experiment)
     if blocked:
         return "Experiment is not ready to promote (" + ", ".join(blocked) + ")"
-    if settings.experiment.allocation != ALLOCATION_THOMPSON and report.winner and report.winner != variant:
+    pair_names = _thompson_pair_names(settings, context.get("recipes") or ())
+    if settings.experiment.allocation == ALLOCATION_THOMPSON:
+        error = _thompson_promote_error(variant, context.get("thompson"), pair_names)
+        if error:
+            return error
+    elif report.winner and report.winner != variant:
         return f"Winner is {report.winner!r}, not {variant!r}"
-    return _publish_experiment_state(
-        settings,
-        lambda store: merge_experiment_state(
-            _matched_state(settings, store),
+
+    def _payload(store: ExperimentStore) -> dict[str, Any]:
+        state = (
+            _fresh_matched_state(settings, store)
+            if settings.experiment.allocation == ALLOCATION_THOMPSON
+            else _matched_state(settings, store)
+        )
+        if settings.experiment.allocation == ALLOCATION_THOMPSON:
+            error = _thompson_promote_error(variant, state, pair_names)
+            if error:
+                raise _PromoteRejected(error)
+        return merge_experiment_state(
+            state,
             experiment_id=settings.experiment.id,
             promoted_variant=variant,
-        ),
-    )
+        )
+
+    return _publish_experiment_state(settings, _payload)
 
 
 def clear_promotion(settings: Settings) -> str | None:
@@ -455,6 +543,7 @@ def _recipes(settings: Settings, feature_config: FeatureConfig | None) -> tuple[
                                 feature_config.eligibility,
                                 label=f"experiment_variants[{item['name']}].eligibility",
                             ),
+                            merge_item_availability=item.get("merge_item_availability", True) is True,
                         )
                     )
                 except ConfigError:

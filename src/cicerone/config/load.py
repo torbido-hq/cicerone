@@ -12,6 +12,7 @@ from typing import Any, cast
 
 from cicerone.config.constants import (
     ALLOCATION_THOMPSON,
+    ARTIFACT_HMAC_KEY_MIN_BYTES,
     AUTOML_DEFAULT_N_SPLITS,
     AUTOML_DEFAULT_PRIMARY_METRIC,
     AUTOML_DEFAULT_TEST_DAYS,
@@ -252,7 +253,23 @@ def _load_io_settings(raw: dict[str, Any], section_name: str) -> IOSettings:
     if "kind" not in section:
         raise ConfigError(f"Missing required config key: [{section_name}].kind")
     options = _resolve_env_placeholders(section.get("options", {}), f"{section_name}.options")
-    return IOSettings(kind=str(section["kind"]).lower(), options=options)
+    hmac_key = None
+    if "artifact_hmac_key" in section:
+        if section_name != "output":
+            raise ConfigError("artifact_hmac_key is only valid on [output]")
+        raw_key = section["artifact_hmac_key"]
+        if raw_key is not None and not isinstance(raw_key, str):
+            raise ConfigError("output.artifact_hmac_key must be a string")
+        hmac_key = _resolve_env_placeholders(raw_key, "output.artifact_hmac_key")
+        if hmac_key is not None and not isinstance(hmac_key, str):
+            raise ConfigError("output.artifact_hmac_key must be a string")
+        if hmac_key is not None:
+            hmac_key = hmac_key.strip() or None
+        if hmac_key is not None and len(hmac_key.encode("utf-8")) < ARTIFACT_HMAC_KEY_MIN_BYTES:
+            raise ConfigError(
+                f"output.artifact_hmac_key must be at least {ARTIFACT_HMAC_KEY_MIN_BYTES} bytes"
+            )
+    return IOSettings(kind=str(section["kind"]).lower(), options=options, artifact_hmac_key=hmac_key)
 
 
 def _load_lookup_user_attrs(raw: object) -> tuple[str, ...]:
@@ -288,6 +305,12 @@ ONLINE_OUTPUT_ERROR = (
     'events.online.enabled requires output kind = "db" or a local dataset path; '
     "S3 object replace is not compare-and-swap"
 )
+ONLINE_HMAC_ERROR = "events.online.enabled requires output.artifact_hmac_key"
+
+
+def _require_online_artifact_hmac(settings: Settings) -> None:
+    if settings.events.online.enabled and not settings.output.artifact_hmac_key:
+        raise ConfigError(ONLINE_HMAC_ERROR)
 
 
 def _require_online_collaborative_lightfm(settings: Settings) -> None:
@@ -589,7 +612,7 @@ def load_settings(config_path: str | None = None) -> Settings:
         ),
         mode=cast(Mode, mode),
         serve=ServeSettings(
-            host=serve_raw.get("host", "0.0.0.0"),
+            host=serve_raw.get("host", "127.0.0.1"),
             port=int(serve_raw.get("port", 8000)),
             auth_token=serve_auth_token,
             default_k=_serve_default_k(serve_raw),
@@ -604,7 +627,7 @@ def load_settings(config_path: str | None = None) -> Settings:
         ),
         trigger=TriggerSettings(
             enabled=trigger_enabled,
-            host=trigger_raw.get("host", "0.0.0.0"),
+            host=trigger_raw.get("host", "127.0.0.1"),
             port=int(trigger_raw.get("port", 8080)),
             auth_token=trigger_auth_token,
             debounce_seconds=require_positive_float(
@@ -624,7 +647,7 @@ def load_settings(config_path: str | None = None) -> Settings:
         ),
         dashboard=DashboardSettings(
             enabled=dashboard_enabled,
-            host=dashboard_raw.get("host", "0.0.0.0"),
+            host=dashboard_raw.get("host", "127.0.0.1"),
             port=int(dashboard_raw.get("port", 8090)),
             users_path=dashboard_raw.get("users_path", "/app/config/dashboard_users.toml"),
             refresh_interval_seconds=require_positive_float(
@@ -646,4 +669,5 @@ def load_settings(config_path: str | None = None) -> Settings:
         track=load_track_settings(raw.get("track") or {}),
         eval=load_eval_settings(job.get("eval") or {}),
     )
+    _require_online_artifact_hmac(settings)
     return _finalize_settings(settings)
