@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 import logging
 from collections.abc import Callable, Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from typing import Any
 
 from cicerone.locks import LockLostError
@@ -42,23 +42,35 @@ class JobManifest:
         return asdict(self)
 
     def keys(self) -> Any:
-        return self.as_dict().keys()
+        return self.__dataclass_fields__.keys()
 
     def __getitem__(self, key: str) -> Any:
+        _require_manifest_field(key)
         return getattr(self, key)
 
     def __setitem__(self, key: str, value: Any) -> None:
+        _require_manifest_field(key)
         setattr(self, key, value)
 
     def get(self, key: str, default: Any = None) -> Any:
-        try:
-            return getattr(self, key)
-        except AttributeError:
+        if key not in self.__dataclass_fields__:
             return default
+        return getattr(self, key)
 
     def update(self, other: Mapping[str, Any]) -> None:
-        for key, value in other.items():
+        items = tuple(other.items())
+        for key, _ in items:
+            _require_manifest_field(key)
+        for key, value in items:
             setattr(self, key, value)
+
+
+_JOB_MANIFEST_FIELDS = frozenset(item.name for item in fields(JobManifest))
+
+
+def _require_manifest_field(key: str) -> None:
+    if key not in _JOB_MANIFEST_FIELDS:
+        raise KeyError(key)
 
 
 _MAX_ERROR_LENGTH = 500

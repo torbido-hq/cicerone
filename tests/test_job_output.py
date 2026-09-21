@@ -61,3 +61,27 @@ def test_job_manifest_dict_compat() -> None:
     assert write_job_manifest(_Sink(), manifest) is True
     assert written[0]["triggered_by"] == "cron"
     assert written[0]["generated_at"] == "t"
+
+
+def test_job_manifest_unknown_keys_raise_keyerror() -> None:
+    manifest = JobManifest()
+    try:
+        manifest["unknown"]
+    except KeyError as exc:
+        assert exc.args == ("unknown",)
+    else:
+        raise AssertionError("expected KeyError")
+    try:
+        manifest["unknown"] = 1
+    except KeyError as exc:
+        assert exc.args == ("unknown",)
+    else:
+        raise AssertionError("expected KeyError")
+    try:
+        manifest.update({"status": "success", "unknown": 1})
+    except KeyError as exc:
+        assert exc.args == ("unknown",)
+    else:
+        raise AssertionError("expected KeyError")
+    assert manifest.status == "failed"
+    assert manifest.get("unknown") is None
