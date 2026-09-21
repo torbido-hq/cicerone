@@ -101,6 +101,8 @@ CONTRIBUTING.md). CI uses a separate throwaway instance via
 `POST /track`, a second job, and the Quality page.
 `tests/robot/system_dataset.robot` / `system_dataset_quality.robot` run the
 same journeys against local parquet (`kind = "dataset"`).
+`tests/test_system_mixed.py` / `test_system_mixed_quality.py` mix a
+Postgres catalog with dataset output.
 
 Public imports stay stable after the package splits:
 `from cicerone.model import …` and `from cicerone.config import …`.
