@@ -36,6 +36,7 @@ from cicerone.artifact import (
     loads_artifact,
     recommend_from_artifact,
 )
+from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import load_settings
 from cicerone.feature_config import load_feature_config
 from cicerone.io.factory import build_manifest_reader, build_output_sink, build_recommendation_reader
@@ -163,7 +164,9 @@ def test_system_job_dataset_round_trip_with_artifact_and_readers(trained_system:
 
     recs = _output_recs(trained_system)
     expected_users = set(trained_system.events["user_id"]) | set(trained_system.users["user_id"])
-    assert set(recs["user_id"].astype(str)) == expected_users
+    rec_users = set(recs["user_id"].astype(str))
+    assert expected_users <= rec_users
+    assert rec_users <= expected_users | {COLD_START_USER_ID}
     assert set(recs.columns) >= {"user_id", "item_id", "rank", "score", "source"}
 
     snapshot = _output_items(trained_system)
@@ -196,7 +199,9 @@ def test_system_job_dataset_round_trip_with_artifact_and_readers(trained_system:
     assert loaded.schema_version == ARTIFACT_SCHEMA_VERSION
     assert "collaborative" in loaded.models or "popular" in loaded.models
     from_artifact = recommend_from_artifact(loaded, ["u1", "u2"], top_k=3)
-    assert set(from_artifact["user_id"].astype(str)) <= {"u1", "u2"}
+    artifact_users = set(from_artifact["user_id"].astype(str))
+    assert {"u1", "u2"} <= artifact_users
+    assert artifact_users <= {"u1", "u2", COLD_START_USER_ID}
     assert not from_artifact.empty
 
 
