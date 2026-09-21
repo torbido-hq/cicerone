@@ -5,9 +5,25 @@ import pytest
 
 from cicerone.config import make_settings
 from cicerone.feature_config import FeatureColumn, FeatureConfig
+from cicerone.io import options as io_options
 
 # Re-export for existing `from conftest import make_settings` call sites.
 __all__ = ["make_settings"]
+
+_READ_S3_PARQUET_PYARROW = io_options._read_s3_parquet_pyarrow
+
+
+@pytest.fixture(autouse=True)
+def _disable_native_arrow_s3(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _disabled(*_args: object, **_kwargs: object) -> pd.DataFrame:
+        raise OSError("native Arrow S3 is disabled in tests")
+
+    monkeypatch.setattr(io_options, "_read_s3_parquet_pyarrow", _disabled)
+
+
+@pytest.fixture
+def enable_native_arrow_s3(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(io_options, "_read_s3_parquet_pyarrow", _READ_S3_PARQUET_PYARROW)
 
 
 @pytest.fixture
