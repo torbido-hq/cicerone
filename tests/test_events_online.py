@@ -315,10 +315,10 @@ def test_online_trainer_skips_sequential_without_torch(
     result = trainer.refresh([_known_event("seq")])
     trainer.commit()
     assert result.sequential_skipped is True
-    assert result.fit_partial_epochs == 0
-    assert calls["n"] == 0
-    assert result.users_refreshed == 0
-    assert result.rows.empty
+    assert result.fit_partial_epochs == 1
+    assert calls["n"] == 1
+    assert result.users_refreshed >= 1
+    assert not result.rows.empty
 
 
 def test_online_trainer_caps_extra_interactions(

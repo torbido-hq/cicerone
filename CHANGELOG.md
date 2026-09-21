@@ -23,6 +23,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Job writes `__cold_start__` under priority and weighted RRF (popular-only)
   as well as blending, so serve fallback does not depend on the combiner.
 
+### Changed
+
+- Online refresh still rewrites LightFM / popular lists when the sequential extra is missing. Only the sequential model is skipped.
+
 ### Fixed
 
 - Popular, latest, and neighbor snapshots drop missing or blank item/user ids instead of casting them to `"nan"`.
