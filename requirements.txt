@@ -13,7 +13,7 @@ scikit-learn==1.9.1
 # be written to a Postgres table).
 boto3==1.43.92
 pyarrow==25.0.1
-SQLAlchemy==2.0.52
+SQLAlchemy==2.0.54
 psycopg[binary]==3.3.5
 
 # Cron-in-container scheduler (no system cron daemon needed)
