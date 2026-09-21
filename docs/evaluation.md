@@ -6,8 +6,16 @@ Cicerone cannot see the host UI. CTR and conversion of served recommendations
 come from **impressions and clicks you send**, plus the purchase (or other
 valued) events you already store as `[input]`.
 
-`POST /events` stays the training/incremental contract. Track rows never enter
-`[event_weights]` or LightFM.
+These are two different HTTP contracts:
+
+| Route | Contract | `202` means |
+| --- | --- | --- |
+| `POST /events` | Training / incremental interactions (`event_type`) | Queued in the webhook source. Output has **not** been updated. See [incremental-events.md](incremental-events.md) |
+| `POST /track` | Quality (`kind` is `impression` or `click` only) | New rows were written to the track store (duplicates skipped) |
+
+Track rows never enter `[event_weights]` or LightFM. A recommendation
+**fetch** (`GET /recommendations`) is not an impression unless you
+enable `[serve].log_impressions` or you `POST /track` yourself.
 
 ## Impressions and clicks
 
@@ -31,11 +39,13 @@ enabled = true
 }
 ```
 
-`kind` is `impression` or `click`. Send one row per shown item (or a list /
-`{"events":[...]}`). Optional `variant`, `experiment_id`, `generated_at`,
-`event_id` (idempotency). Bodies larger than the configured limit return 413;
-the default is 1 MiB. The endpoint shares the events request-body limit;
-override it, even in a track-only deployment, with:
+`kind` is `impression` or `click` only. Send one row per item the host
+**rendered** (or a list / `{"events":[...]}`) — not one row per GET.
+Impressions require `rank >= 1`. Clicks may omit `rank`. Optional
+`variant`, `experiment_id`, `generated_at`, `event_id` (idempotency).
+Bodies larger than the configured limit return 413; the default is 1 MiB.
+The endpoint shares the events request-body limit; override it, even in a
+track-only deployment, with:
 
 ```toml
 [events.options]
@@ -77,28 +87,48 @@ request.body = { events: body }.to_json
 http.request(request)
 ```
 
-Clicks use the same contract with `kind: "click"`.
+Clicks use the same contract with `kind: "click"`. Invalid body → **400**.
+Missing bearer → **401**. Writer lock busy or lost → **503**.
 
 ## Metrics
 
-- **CTR** — clicks that match a prior impression of the same `(user, item)`
-  inside the window, divided by impressions.
+- **CTR** — `matched unique clicked impressions / impression rows`,
+  capped at 1. Two clicks on the same impression count as one. The join
+  is the latest earlier impression for the same `(user_id, item_id)`
+  whose `occurred_at` is within `[track].attribution_window_hours`
+  (**default 24 hours**, not an example). **`rank` is not the join key**
+  — it only slices the Quality report.
 - **Conversion** — `[input]` events whose type is
   `track.conversion_event_types` (default `purchase`, or
   `[experiment].primary_metric` when that is an event type), attributed to a
-  prior impression (view-through) or click (click-through).
+  prior impression (view-through) or click (click-through) with the same
+  window and `(user_id, item_id)` match.
 - **CVR** — attributed conversions / impressions (capped so conversions cannot
   exceed impressions). Experiment `primary_metric = "conversion"` scores this
   **rate** per user, not a conversion count.
+
+`min_impressions` (default **100**) gates experiment **Promote** /
+Thompson volume when `primary_metric` is `ctr` or `conversion`. It does
+not change the CTR formula and does not hide the Quality page.
 
 The job writes a compact `track_eval` report (overall, by rank, by `source`,
 by variant). The dashboard **Quality** page reads it.
 
 ## Auto-impressions
 
-`[serve].log_impressions = true` (requires `[track]`) writes one impression
-per **returned** item on `GET /recommendations/{user_id}`. That is a fetch,
-not a view. Clicks are always host-reported. Default off.
+`[serve].log_impressions = true` requires `[track].enabled = true`
+(config load fails otherwise). Default **off**.
+
+On each `GET /recommendations/{user_id}` it writes one `kind=impression`
+row per **item in the HTTP response** (after filters / `limit`). That is
+a returned recommendation, not a browser render and not proof a shopper
+saw the item. Each row gets a new `uuid4` `event_id`. Writes run on a
+FastAPI background task: the **200 can return before the track row
+exists**, and store errors are swallowed so GET still succeeds. Clicks
+are always host-reported via `POST /track`.
+
+Storage is the same track store (`track.jsonl` or
+`recommendation_track`).
 
 ## Experiments
 

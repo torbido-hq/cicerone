@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from typing import Any
 
 import pandas as pd
@@ -16,6 +17,7 @@ from cicerone.amqp_options import (
     require_queue,
 )
 from cicerone.config.constants import ConfigError
+from cicerone.publish.base import PublishError
 from cicerone.publish.payload import user_recommendation_messages
 
 logger = logging.getLogger(__name__)
@@ -51,8 +53,11 @@ class RabbitMQPublisher:
         self._routing_key = routing if routing is not None else self._queue
         self._connection: Any | None = None
         self._channel: Any | None = None
+        self._connected_once = False
 
     def connect(self) -> None:
+        if self._channel is not None:
+            return
         try:
             import pika
         except ImportError as exc:
@@ -63,6 +68,9 @@ class RabbitMQPublisher:
                 apply_amqp_timeouts(pika.URLParameters(self._amqp_url), self._timeout_seconds)
             )
             channel = connection.channel()
+            confirm = getattr(channel, "confirm_delivery", None)
+            if callable(confirm):
+                confirm()
             if self._exchange == "":
                 channel.queue_declare(queue=self._queue, durable=True)
         except Exception as exc:
@@ -74,17 +82,67 @@ class RabbitMQPublisher:
             raise ConfigError(f"publish.options.amqp_url is unreachable or setup failed: {exc}") from exc
         self._connection = connection
         self._channel = channel
+        self._connected_once = True
 
     def publish(self, df: pd.DataFrame) -> None:
+        messages = user_recommendation_messages(df)
+        if not messages:
+            return
+        sent = [0]
+        if self._channel is None:
+            if self._connected_once:
+                self.connect()
+            else:
+                self._publish_from(messages, sent)
+                return
+        try:
+            self._publish_from(messages, sent)
+        except Exception:
+            logger.exception("RabbitMQ publish failed; recovering publisher")
+            try:
+                self._recover()
+            except Exception as exc:
+                if isinstance(exc, RuntimeError) and not isinstance(exc, PublishError):
+                    raise
+                raise PublishError(f"RabbitMQ publish failed: {exc}") from exc
+            try:
+                self._publish_from(messages, sent)
+            except Exception as exc:
+                raise PublishError(f"RabbitMQ publish failed: {exc}") from exc
+
+    def _publish_from(self, messages: Sequence[tuple[str, bytes, str]], sent: list[int]) -> None:
         channel = self._require()
-        for _, body in user_recommendation_messages(df):
-            channel.basic_publish(exchange=self._exchange, routing_key=self._routing_key, body=body)
+        while sent[0] < len(messages):
+            _user_id, body, message_id = messages[sent[0]]
+            channel.basic_publish(
+                exchange=self._exchange,
+                routing_key=self._routing_key,
+                body=body,
+                properties=self._properties(message_id),
+            )
+            sent[0] += 1
+
+    def _properties(self, message_id: str) -> Any:
+        try:
+            import pika
+        except ImportError:
+            return None
+        return pika.BasicProperties(message_id=message_id, content_type="application/json", delivery_mode=2)
+
+    def _recover(self) -> None:
+        try:
+            self.close()
+        except PublishError:
+            logger.exception("RabbitMQ publisher close failed during recover")
+        self.connect()
 
     def close(self) -> None:
         channel = self._channel
         connection = self._connection
         self._channel = None
         self._connection = None
+        close_exc: BaseException | None = None
+        unexpected: BaseException | None = None
         for handle, label in ((channel, "channel"), (connection, "connection")):
             if handle is None:
                 continue
@@ -93,10 +151,20 @@ class RabbitMQPublisher:
                 continue
             try:
                 closer()
-            except Exception:
+            except Exception as exc:
                 logger.exception("Failed to close RabbitMQ publisher %s", label)
+                if isinstance(exc, RuntimeError) and not isinstance(exc, PublishError):
+                    if unexpected is None:
+                        unexpected = exc
+                    continue
+                if close_exc is None:
+                    close_exc = exc
+        if unexpected is not None:
+            raise unexpected
+        if close_exc is not None:
+            raise PublishError(f"RabbitMQ publisher close failed: {close_exc}") from close_exc
 
     def _require(self) -> Any:
         if self._channel is None:
-            raise RuntimeError("RabbitMQPublisher is not connected")
+            raise PublishError("RabbitMQPublisher is not connected")
         return self._channel

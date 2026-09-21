@@ -38,6 +38,10 @@ from cicerone.experiment.thompson import (
 from cicerone.feature_config import load_feature_config
 from cicerone.io.factory import build_input_source, build_manifest_reader, build_output_sink
 from cicerone.io.recommendation_schema import USER_COLUMN, VARIANT_COLUMN, filter_variant_rows
+from cicerone.job_eval import OPTIONAL_EVAL_ERRORS as _OPTIONAL_EVAL_ERRORS
+from cicerone.job_eval import PUBLISH_ERRORS as _PUBLISH_ERRORS
+from cicerone.job_eval import SINK_WRITE_ERRORS as _SINK_WRITE_ERRORS
+from cicerone.job_eval import log_caught as _log_caught
 from cicerone.job_eval import persist_track_outputs as _persist_track_outputs
 from cicerone.job_eval import read_input as _read_input
 from cicerone.job_eval import replay_assignments as _replay_assignments  # noqa: F401
@@ -53,6 +57,7 @@ from cicerone.job_output import (
 )
 from cicerone.locks import (
     LockBackend,
+    LockLostError,
     WriterLockBusyError,
     acquire_blocking,
     build_dataset_writer_lock,
@@ -71,6 +76,7 @@ from cicerone.model import (
 )
 from cicerone.model.recommend import RecommendCache
 from cicerone.publish import build_publisher
+from cicerone.publish.sidecar import log_sidecar_generation_skip, sidecar_generation_current
 from cicerone.track.store import TrackStore
 
 logger = logging.getLogger(__name__)
@@ -129,10 +135,35 @@ def _refresh_pending_thompson(store: ExperimentStore, pending: dict[str, Any]) -
     )
 
 
+def _load_shared_eval_inputs(
+    settings: Settings,
+) -> tuple[list[dict[str, Any]] | None, pd.DataFrame | None]:
+    need_track = settings.track.enabled or (
+        settings.experiment.enabled and settings.experiment.allocation == ALLOCATION_THOMPSON
+    )
+    if not need_track:
+        return None, None
+    experiment_id = None if settings.track.enabled else settings.experiment.id
+    raw_track, recs = _try_load_pair(
+        "read track rows",
+        lambda: TrackStore(settings.output).read_rows(experiment_id=experiment_id),
+        None,
+        "load recommendations for eval",
+        lambda: load_recommendations_frame(settings.output),
+        None,
+        parallel=settings.output.kind != "db",
+    )
+    track_rows = raw_track if isinstance(raw_track, list) else None
+    return track_rows, recs
+
+
 def _select_thompson_recipes(
     settings: Settings,
     recipes: tuple[ResolvedRecipe, ...],
     events: pd.DataFrame,
+    *,
+    preloaded_track: list[dict[str, Any]] | None = None,
+    preloaded_recs: pd.DataFrame | None = None,
 ) -> ThompsonSelection:
     if len(recipes) < 2:
         return ThompsonSelection(recipes)
@@ -140,11 +171,14 @@ def _select_thompson_recipes(
     store = ExperimentStore(settings.output)
     failed = object()
     raw_state = _try_load("read experiment state", store.read_state, failed)
-    raw_track = _try_load(
-        "read track rows",
-        lambda: TrackStore(settings.output).read_rows(experiment_id=experiment.id),
-        failed,
-    )
+    if preloaded_track is None:
+        raw_track = _try_load(
+            "read track rows",
+            lambda: TrackStore(settings.output).read_rows(experiment_id=experiment.id),
+            failed,
+        )
+    else:
+        raw_track = [row for row in preloaded_track if str(row.get("experiment_id") or "") == experiment.id]
     if raw_state is failed or not (raw_state is None or isinstance(raw_state, dict)):
         return ThompsonSelection(recipes)
     previous: dict[str, Any] | None = raw_state
@@ -160,20 +194,31 @@ def _select_thompson_recipes(
         return ThompsonSelection(recipes)
     window_started = ""
     if previous is not None and has_pair:
-        window_started = str(previous.get("window_started_at") or "")
-    window_rows = track_rows_since(track_rows, window_started or None)
+        window_started = str(previous.get("window_started_at") or "").strip()
+    if has_pair and not window_started:
+        window_rows = []
+    else:
+        window_rows = track_rows_since(track_rows, window_started or None)
     names = [recipe.name for recipe in recipes]
     try:
         conversions = conversion_events_for_settings(events, settings)
-        recs, catalog_size = _try_load_pair(
-            "load recommendations for Thompson guardrails",
-            lambda: load_recommendations_frame(settings.output),
-            None,
-            "load catalog size for Thompson guardrails",
-            lambda: load_items_catalog_size(settings.output),
-            None,
-            parallel=settings.output.kind != "db",
-        )
+        if preloaded_recs is not None:
+            recs = preloaded_recs
+            catalog_size = _try_load(
+                "load catalog size for Thompson guardrails",
+                lambda: load_items_catalog_size(settings.output),
+                None,
+            )
+        else:
+            recs, catalog_size = _try_load_pair(
+                "load recommendations for Thompson guardrails",
+                lambda: load_recommendations_frame(settings.output),
+                None,
+                "load catalog size for Thompson guardrails",
+                lambda: load_items_catalog_size(settings.output),
+                None,
+                parallel=settings.output.kind != "db",
+            )
         report = evaluate_tracking(
             track_rows=window_rows,
             conversions=conversions,
@@ -229,8 +274,10 @@ def _select_thompson_recipes(
             allocation.rotated,
         )
         return ThompsonSelection(selected, pending)
-    except Exception:
-        logger.exception("Thompson allocation fail closed")
+    except (LockLostError, WriterLockBusyError):
+        raise
+    except _OPTIONAL_EVAL_ERRORS as exc:
+        _log_caught("Thompson allocation fail closed", exc, log=logger)
         return ThompsonSelection(recipes)
 
 
@@ -289,9 +336,11 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
     eval_generated_at: str | None = None
     pending_thompson: dict[str, Any] | None = None
     manifest_written = False
+    replace_success_manifest = False
+    success_generated_at: str | None = None
 
     try:
-        publisher = build_publisher(settings)
+        publisher = build_publisher(settings, connect=False)
         source = build_input_source(settings.input)
         events, users, items, last_manifest = _read_input(source, settings.output)
 
@@ -304,7 +353,15 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
 
         if last_manifest and last_manifest.get("generated_at"):
             eval_generated_at = str(last_manifest["generated_at"])
-        track_eval_payload, served_eval_payload = _score_previous_run(settings, events, last_manifest, items)
+        preloaded_track, preloaded_recs = _load_shared_eval_inputs(settings)
+        track_eval_payload, served_eval_payload = _score_previous_run(
+            settings,
+            events,
+            last_manifest,
+            items,
+            preloaded_track=preloaded_track,
+            preloaded_recs=preloaded_recs,
+        )
 
         built = build_dataset(events, users, items, feature_config, half_life_days=settings.half_life_days)
 
@@ -344,10 +401,11 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
 
         fitted: dict[str, RecommenderModel] = {}
         if settings.experiment.enabled and last_manifest is None:
-            try:
-                last_manifest = build_manifest_reader(settings.output).read_latest()
-            except Exception:
-                logger.exception("Failed to read last manifest for experiment recipes")
+            last_manifest = _try_load(
+                "read last manifest for experiment recipes",
+                lambda: build_manifest_reader(settings.output).read_latest(),
+                None,
+            )
 
         recipes: tuple[ResolvedRecipe, ...] = ()
         if settings.experiment.enabled:
@@ -368,7 +426,13 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                 ",".join(recipe.name for recipe in recipes),
             )
             if settings.experiment.allocation == ALLOCATION_THOMPSON:
-                selected = _select_thompson_recipes(settings, recipes, events)
+                selected = _select_thompson_recipes(
+                    settings,
+                    recipes,
+                    events,
+                    preloaded_track=preloaded_track,
+                    preloaded_recs=preloaded_recs,
+                )
                 recipes = selected.recipes
                 pending_thompson = selected.state
                 logger.info(
@@ -484,7 +548,8 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                     models=artifact_models,
                     model_weights=artifact_weights,
                     rrf_k=rrf_k if rrf_k is not None else RRF_K,
-                )
+                ),
+                hmac_key=settings.output.artifact_hmac_key,
             )
 
         # Artifact → snapshot → recommendations; success only after all writes.
@@ -517,9 +582,6 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                             fence_kind="retrain",
                         )
                         store.write_state(_refresh_pending_thompson(store, pending_thompson))
-                    if publisher is not None:
-                        ensure_publication_fence(sink, fence_check)
-                        publisher.publish(recommendations)
                     ensure_publication_fence(sink, fence_check)
                     manifest.update(
                         {
@@ -547,7 +609,8 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                     ensure_publication_fence(sink, fence_check)
                     if write_job_manifest(sink, manifest):
                         manifest_written = True
-                except Exception as exc:
+                        success_generated_at = str(manifest.get("generated_at") or "")
+                except _SINK_WRITE_ERRORS as exc:
                     if outputs_written or manifest.get("artifact_written"):
                         manifest["partial_outputs"] = True
                     if (
@@ -563,66 +626,121 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                         try:
                             if write_job_manifest(sink, manifest, skip_if_newer_than=started_at):
                                 manifest_written = True
-                        except Exception:
-                            logger.exception(
-                                "Failed to write manifest; original job error (if any) is preserved"
+                        except _SINK_WRITE_ERRORS as manifest_exc:
+                            _log_caught(
+                                "Failed to write manifest; original job error (if any) is preserved",
+                                manifest_exc,
+                                log=logger,
                             )
                     raise
-        except Exception:
+        except _SINK_WRITE_ERRORS:
             if outputs_written or manifest.get("artifact_written"):
                 manifest["partial_outputs"] = True
             raise
+        if publisher is not None and manifest.get("status") == "success":
+            try:
+                ensure_fence(fence_check)
+                publisher.connect()
+                ensure_fence(fence_check)
+                current = sidecar_generation_current(settings.output, str(manifest.get("generated_at") or ""))
+                if current:
+                    publisher.publish(recommendations)
+                else:
+                    log_sidecar_generation_skip(current)
+            except LockLostError:
+                raise
+            except _PUBLISH_ERRORS as exc:
+                _log_caught("Publish failed after successful write", exc, log=logger)
     except Exception as exc:
         manifest["error"] = truncate_job_error(exc)
+        if manifest.get("status") == "success":
+            manifest["status"] = "failed"
+            manifest_written = False
+            replace_success_manifest = True
         raise
     finally:
+        persist_exc: BaseException | None = None
+        close_exc: BaseException | None = None
         if publisher is not None:
             try:
                 publisher.close()
-            except Exception:
-                logger.exception("Failed to close recommendation publisher")
+            except _PUBLISH_ERRORS as exc:
+                _log_caught("Failed to close recommendation publisher", exc, log=logger)
+            except Exception as exc:
+                _log_caught("Failed to close recommendation publisher", exc, log=logger)
+                close_exc = exc
+        if manifest.get("status") == "success" and (settings.track.enabled or settings.eval.enabled):
+            try:
+                _persist_track_outputs(
+                    TrackStore(
+                        settings.output,
+                        writer_lock=writer_lock,
+                        fence_check=fence_check,
+                        fence_lost="retrain lock lost before write",
+                        fence_kind="retrain",
+                    ),
+                    kind=settings.output.kind,
+                    eval_report={
+                        "generated_at": eval_generated_at,
+                        "track_eval": track_eval_payload,
+                        "served_eval": served_eval_payload,
+                    },
+                    recommendations=recommendations,
+                    generated_at=str(manifest["generated_at"]),
+                    fence_check=fence_check,
+                )
+            except Exception as exc:
+                manifest["status"] = "failed"
+                manifest["error"] = truncate_job_error(exc)
+                manifest_written = False
+                persist_exc = exc
+                replace_success_manifest = True
+        if (
+            close_exc is not None
+            and manifest.get("status") == "success"
+            and not isinstance(close_exc, LockLostError)
+        ):
+            manifest["status"] = "failed"
+            manifest["error"] = truncate_job_error(close_exc)
+            manifest_written = False
+            replace_success_manifest = True
+        leftover_exc = persist_exc or sys.exc_info()[1]
+        if isinstance(close_exc, LockLostError) and persist_exc is not None:
+            leftover_exc = close_exc
+        skip_if_newer_than = (success_generated_at or started_at) if replace_success_manifest else started_at
         if not manifest_written and not skip_stale_job_manifest(
             fence_check=fence_check,
-            exc=sys.exc_info()[1],
+            exc=leftover_exc,
         ):
             manifest["generated_at"] = datetime.now(UTC).isoformat()
             try:
                 holder = getattr(sink, "recommendations_write", None)
                 if callable(holder):
                     with holder():
-                        write_job_manifest(sink, manifest, skip_if_newer_than=started_at)
+                        write_job_manifest(sink, manifest, skip_if_newer_than=skip_if_newer_than)
                 else:
-                    write_job_manifest(sink, manifest, skip_if_newer_than=started_at)
-            except Exception:
-                logger.exception("Failed to write manifest; original job error (if any) is preserved")
+                    write_job_manifest(sink, manifest, skip_if_newer_than=skip_if_newer_than)
+            except _SINK_WRITE_ERRORS as exc:
+                _log_caught(
+                    "Failed to write manifest; original job error (if any) is preserved",
+                    exc,
+                    log=logger,
+                )
                 if manifest.get("status") == "success":
                     raise
         logger.info("Job finished: %s", json.dumps(manifest))
-        if manifest.get("status") == "success" and (settings.track.enabled or settings.eval.enabled):
-            _persist_track_outputs(
-                TrackStore(
-                    settings.output,
-                    writer_lock=writer_lock,
-                    fence_check=fence_check,
-                    fence_lost="retrain lock lost before write",
-                    fence_kind="retrain",
-                ),
-                kind=settings.output.kind,
-                eval_report={
-                    "generated_at": eval_generated_at,
-                    "track_eval": track_eval_payload,
-                    "served_eval": served_eval_payload,
-                },
-                recommendations=recommendations,
-                generated_at=str(manifest["generated_at"]),
-                fence_check=fence_check,
-            )
+        if isinstance(close_exc, LockLostError):
+            raise close_exc
+        if persist_exc is not None:
+            raise persist_exc
+        if close_exc is not None and sys.exc_info()[1] is None:
+            raise close_exc
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format=DEFAULT_LOG_FORMAT)
     try:
         run()
-    except Exception:
-        logger.exception("Recommendation job failed")
+    except Exception as exc:
+        _log_caught("Recommendation job failed", exc, log=logger)
         sys.exit(1)

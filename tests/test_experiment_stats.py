@@ -953,3 +953,45 @@ def test_evaluate_experiment_split_winners() -> None:
         min_impressions=100,
     )
     assert "split_winners" in report.promote_blocked_by
+
+
+def test_evaluate_experiment_hashes_active_pair_not_toml_traffic() -> None:
+    from cicerone.config.constants import ALLOCATION_THOMPSON
+
+    experiment = ExperimentSettings(
+        enabled=True,
+        id="exp",
+        allocation=ALLOCATION_THOMPSON,
+        explore_traffic=1.0,
+        primary_metric="purchase",
+        variants=(
+            VariantSettings(name="control", traffic=0.9),
+            VariantSettings(name="treatment", traffic=0.05),
+            VariantSettings(name="blend", traffic=0.05),
+        ),
+    )
+    events = pd.DataFrame([{"user_id": f"u{i}", "event_type": "purchase", "quantity": 1} for i in range(20)])
+    recs = pd.DataFrame(
+        [
+            {
+                "user_id": f"u{i}",
+                "item_id": "i1",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                "variant": "blend",
+            }
+            for i in range(20)
+        ]
+    )
+    report = evaluate_experiment(
+        experiment=experiment,
+        recipes=(_recipe("control", 0.9), _recipe("treatment", 0.05), _recipe("blend", 0.05)),
+        events=events,
+        event_weights={"purchase": 1.0},
+        recommendations=recs,
+        active_pair=("control", "blend"),
+    )
+    assert report.n_assigned == 20
+    assert {item.variant for item in report.guardrails} == {"control", "blend"}
+    assert all(item.control.name in {"control", "blend"} for item in report.comparisons)

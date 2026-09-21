@@ -115,7 +115,14 @@ def _assign_incremental_variant(
 
     def assigned(user_id: str) -> str | None:
         promoted, pair = overlay()
-        return resolve_assignment(settings, str(user_id), promoted_variant=promoted, active_pair=pair)[1]
+        names = experiment_variant_names(settings)
+        return resolve_assignment(
+            settings,
+            str(user_id),
+            promoted_variant=promoted,
+            active_pair=pair,
+            snapshot_names=names or None,
+        )[1]
 
     return assigned
 
@@ -177,7 +184,7 @@ def start_events_runtime(
         fence_lost="events apply lock lost before write",
         fence_kind="apply",
     )
-    publisher = build_publisher(settings)
+    publisher = build_publisher(settings, connect=False)
     worker: EventWorker | None = None
     try:
         online = None
@@ -196,6 +203,7 @@ def start_events_runtime(
                 fence_check=(apply_lock.owned if apply_lock is not None else None),
                 explain=settings.explain,
                 max_workers=settings.max_workers,
+                hmac_key=settings.output.artifact_hmac_key,
             )
             online.ensure_loaded()
             logger.info(

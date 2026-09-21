@@ -117,6 +117,21 @@ def _stamp_before(value: str, since: str) -> bool:
     return bool(stamp < start)
 
 
+def lookback_since(*, window_hours: float, floor_hours: float = 0.0) -> str:
+    hours = max(float(window_hours or 0.0), float(floor_hours or 0.0), 0.0)
+    return (pd.Timestamp.now(tz="UTC") - pd.Timedelta(hours=hours)).isoformat()
+
+
+def since_date_floor(since: str) -> str | None:
+    start = _since_stamp(since)
+    if start is None:
+        return None
+    return (start.tz_convert("UTC") - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+
+
+DASHBOARD_TRACK_FLOOR_HOURS = 24.0 * 90
+
+
 _HISTORY_STEM = re.compile(
     r"^(?P<date>\d{4}-\d{2}-\d{2}T)"
     r"(?P<h>\d{2})-(?P<m>\d{2})-(?P<s>\d{2})"
@@ -149,18 +164,21 @@ def _row_matches(
 ) -> bool:
     if kind is not None and str(row.get("kind") or "") != kind:
         return False
-    if experiment_id:
-        row_id = str(row.get("experiment_id") or "")
-        if row_id and row_id != experiment_id:
-            return False
+    if experiment_id and str(row.get("experiment_id") or "") != experiment_id:
+        return False
+    if not since:
+        return True
     occurred = str(row.get("occurred_at") or "")
-    return not (since and occurred and _stamp_before(occurred, since))
+    start = _since_stamp(since)
+    stamp = pd.to_datetime(occurred, utc=True, errors="coerce") if occurred else None
+    return not (start is None or stamp is None or bool(pd.isna(stamp)) or stamp < start)
 
 
 def _track_row_sql_filter(
     *,
     kind: str | None,
     experiment_id: str | None,
+    since: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     clauses: list[str] = []
     params: dict[str, Any] = {}
@@ -168,8 +186,16 @@ def _track_row_sql_filter(
         clauses.append("kind = :kind")
         params["kind"] = kind
     if experiment_id:
-        clauses.append("(experiment_id IS NULL OR experiment_id = '' OR experiment_id = :experiment_id)")
+        clauses.append("experiment_id = :experiment_id")
         params["experiment_id"] = experiment_id
+    if since:
+        floor = since_date_floor(since)
+        if floor is not None:
+            # Date floor is one day earlier so offset-stored TEXT rows are not dropped.
+            clauses.append("occurred_at >= :since")
+            params["since"] = floor
+        else:
+            clauses.append("1 = 0")
     if not clauses:
         return "", {}
     return " WHERE " + " AND ".join(clauses), params

@@ -316,6 +316,141 @@ def test_recommendations_promoted_overrides_thompson_pair(tmp_path):
     assert body["variant"] == "treatment"
 
 
+def test_serve_skips_snapshot_names_when_pair_is_usable(tmp_path):
+    from cicerone.config.constants import ALLOCATION_THOMPSON
+    from cicerone.experiment.store import ExperimentStore, experiment_state
+
+    class _CountingReader(_FakeReader):
+        def __init__(self, recs: pd.DataFrame):
+            super().__init__(recs)
+            self.present_calls = 0
+
+        def present_variant_names(self):
+            self.present_calls += 1
+            return ("control", "treatment")
+
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    ExperimentStore(output).write_state(
+        experiment_state("rrf-vs-blend", promoted_variant=None, champion="control", challenger="treatment")
+    )
+    reader = _CountingReader(_variant_recs())
+    app = create_app(
+        _settings(
+            experiment=_experiment_settings(allocation=ALLOCATION_THOMPSON, explore_traffic=1.0),
+            output=output,
+            track=TrackSettings(enabled=True),
+        ),
+        reader,
+        manifest_reader=_FakeManifest(),
+        feature_config=_feature_config(),
+    )
+    body = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
+    assert body["variant"] in {"control", "treatment"}
+    assert reader.present_calls == 0
+
+
+def test_serve_skips_snapshot_names_when_experiments_are_off():
+    class _CountingReader(_FakeReader):
+        def __init__(self, recs: pd.DataFrame):
+            super().__init__(recs)
+            self.present_calls = 0
+
+        def present_variant_names(self):
+            self.present_calls += 1
+            return ("control", "treatment")
+
+    reader = _CountingReader(_variant_recs())
+    app = create_app(
+        _settings(),
+        reader,
+        manifest_reader=_FakeManifest(),
+        feature_config=_feature_config(),
+    )
+    body = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
+    assert body["experiment_id"] is None
+    assert reader.present_calls == 0
+
+
+def test_serve_hashes_snapshot_names_without_overlay(tmp_path):
+    from cicerone.config.constants import ALLOCATION_THOMPSON
+
+    recs = pd.concat(
+        [
+            _variant_recs(),
+            pd.DataFrame(
+                [
+                    {
+                        "user_id": "u1",
+                        "item_id": "blend-item",
+                        "rank": 1,
+                        "score": 0.7,
+                        "source": "personalized",
+                        "variant": "blend",
+                    }
+                ]
+            ),
+        ],
+        ignore_index=True,
+    )
+
+    class _SnapshotReader(_FakeReader):
+        def present_variant_names(self):
+            return ("control", "blend")
+
+    app = create_app(
+        _settings(
+            experiment=_experiment_settings(
+                allocation=ALLOCATION_THOMPSON,
+                explore_traffic=1.0,
+                variants=(
+                    VariantSettings(name="control", traffic=0.34),
+                    VariantSettings(name="treatment", traffic=0.33),
+                    VariantSettings(name="blend", traffic=0.33),
+                ),
+            ),
+            output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+            track=TrackSettings(enabled=True),
+        ),
+        _SnapshotReader(recs),
+        manifest_reader=_FakeManifest(),
+        feature_config=_feature_config(),
+    )
+    body = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
+    assert body["variant"] in {"control", "blend"}
+    assert body["variant"] != "treatment"
+
+
+def test_serve_uses_cached_assignment_overlay(tmp_path, monkeypatch):
+    from cicerone.experiment.store import ExperimentStore, experiment_state
+
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    ExperimentStore(output).write_state(
+        experiment_state("rrf-vs-blend", promoted_variant=None, champion="control", challenger="treatment")
+    )
+    calls = {"n": 0}
+    original = ExperimentStore.assignment_overlay
+
+    def counting(self, experiment_id):
+        calls["n"] += 1
+        return original(self, experiment_id)
+
+    monkeypatch.setattr(ExperimentStore, "assignment_overlay", counting)
+    app = create_app(
+        _settings(experiment=_experiment_settings(), output=output),
+        _FakeReader(_variant_recs()),
+        manifest_reader=_FakeManifest(),
+        feature_config=_feature_config(),
+    )
+    after_init = calls["n"]
+    assert after_init >= 1
+    client = TestClient(app)
+    first = client.get("/recommendations/u1", headers={"Authorization": "Bearer secret"})
+    second = client.get("/recommendations/u1", headers={"Authorization": "Bearer secret"})
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert calls["n"] == after_init
+
+
 def test_serve_assignment_does_not_import_mabwiser():
     import sys
 

@@ -20,7 +20,11 @@ from cicerone.config import Settings, load_settings
 from cicerone.config.constants import DEFAULT_LOG_FORMAT, DEFAULT_SERVE_MAX_K, TRACK_KIND_IMPRESSION
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
-from cicerone.experiment.assignment import resolve_assignment
+from cicerone.experiment.assignment import (
+    assignment_needs_snapshot,
+    resolve_assignment,
+    snapshot_variant_names,
+)
 from cicerone.experiment.evaluate import exposure_row
 from cicerone.experiment.store import ExperimentStore
 from cicerone.feature_config import FeatureConfig, load_feature_config
@@ -124,6 +128,7 @@ def _start_refresh_loop(
     interval_seconds: float,
     *,
     generated_at_cache: _GeneratedAtCache | None = None,
+    overlay_cache: _AssignmentOverlayCache | None = None,
 ) -> None:
     def _loop() -> None:
         while True:
@@ -131,6 +136,8 @@ def _start_refresh_loop(
             reader.refresh()
             if generated_at_cache is not None:
                 generated_at_cache.refresh()
+            if overlay_cache is not None:
+                overlay_cache.refresh()
 
     threading.Thread(target=_loop, daemon=True).start()
 
@@ -175,12 +182,43 @@ def _route_endpoint(request: Request) -> str:
     return request.url.path
 
 
+class _AssignmentOverlayCache:
+    """Last successful promote/pair overlay; refresh with the recommendations loop."""
+
+    def __init__(self, settings: Settings, store: ExperimentStore | None) -> None:
+        self._settings = settings
+        self._store = store
+        self._lock = threading.Lock()
+        self._promoted: str | None = None
+        self._pair: tuple[str, str] | None = None
+        self.refresh()
+
+    def refresh(self) -> None:
+        if self._store is None or not self._settings.experiment.enabled:
+            return
+        try:
+            promoted, pair = _assignment_overlay(self._settings, self._store)
+        except Exception:
+            logger.exception("Failed to refresh assignment overlay; keeping previous")
+            return
+        with self._lock:
+            self._promoted = promoted
+            self._pair = pair
+
+    def get(self) -> tuple[str | None, tuple[str, str] | None]:
+        with self._lock:
+            return self._promoted, self._pair
+
+
 def _assignment_overlay(
     settings: Settings, store: ExperimentStore | None
 ) -> tuple[str | None, tuple[str, str] | None]:
     if store is None or not settings.experiment.enabled:
         return None, None
     return store.assignment_overlay(settings.experiment.id)
+
+
+_snapshot_variant_names = snapshot_variant_names
 
 
 def create_app(
@@ -214,6 +252,8 @@ def create_app(
         if settings.experiment.enabled
         else None
     )
+    overlay_cache = _AssignmentOverlayCache(settings, experiment_store)
+    app.state.assignment_overlay_cache = overlay_cache
     track_store = (
         TrackStore(settings.output, writer_lock=build_dataset_writer_lock(settings))
         if settings.track.enabled
@@ -320,9 +360,18 @@ def create_app(
             and (category is not None or (exclude_unavailable and availability_filters))
         )
         fetch_k = max(top_k * 5, top_k) if can_filter else top_k
-        promoted, active_pair = _assignment_overlay(settings, experiment_store)
+        promoted, active_pair = overlay_cache.get()
+        snapshot = (
+            _snapshot_variant_names(reader)
+            if assignment_needs_snapshot(settings, promoted_variant=promoted, active_pair=active_pair)
+            else None
+        )
         experiment_id, variant = resolve_assignment(
-            settings, user_id, promoted_variant=promoted, active_pair=active_pair
+            settings,
+            user_id,
+            promoted_variant=promoted,
+            active_pair=active_pair,
+            snapshot_names=snapshot,
         )
         recs = reader.get_recommendations(user_id, fetch_k, variant=variant)
         used_fallback = False
@@ -479,6 +528,7 @@ def main() -> None:
         reader,
         settings.serve.refresh_interval_seconds,
         generated_at_cache=app.state.generated_at_cache,
+        overlay_cache=app.state.assignment_overlay_cache,
     )
     try:
         uvicorn.run(app, host=settings.serve.host, port=settings.serve.port)
