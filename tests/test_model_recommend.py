@@ -5,12 +5,18 @@ import pytest
 from rectools import Columns
 from support.model_events import synthetic_events
 
+from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import ConfigError
 from cicerone.config.settings import ExplainSettings
 from cicerone.dataset import build_dataset
 from cicerone.model import DEFAULT_MODELS, train_and_recommend
 from cicerone.model.recommend import _dataset_fingerprint, _items_fingerprint, _recommend_cache_key
 from cicerone.policy import allowed_items_for_cohort, resolve_eligibility
+from cicerone.reasons import parse_reasons
+
+
+def _without_cold_start(frame: pd.DataFrame) -> pd.DataFrame:
+    return frame[frame[Columns.User].astype(str) != COLD_START_USER_ID]
 
 
 def test_availability_filters_via_policy_allowlist(sample_items, feature_config):
@@ -27,7 +33,7 @@ def test_train_and_recommend_respects_top_k_and_availability_filter(sample_items
         built, target_users=["u1", "u2", "u3"], config=feature_config, top_k=2
     )
 
-    assert set(recommendations[Columns.User]) == {"u1", "u2", "u3"}
+    assert set(recommendations[Columns.User]) == {"u1", "u2", "u3", COLD_START_USER_ID}
     assert (recommendations.groupby(Columns.User).size() <= 2).all()
     assert not recommendations[Columns.Item].isin(["i3", "i4"]).any()
     assert set(recommendations["source"]) <= {"personalized", "item_based", "popular_fallback"}
@@ -100,6 +106,129 @@ def test_train_and_recommend_latest_strategy(sample_items, feature_config):
 
     assert set(recommendations[Columns.User]) == {"u1", "u2", "u3"}
     assert set(recommendations["source"]) == {"latest"}
+
+
+def test_train_and_recommend_writes_cold_start_sentinel_under_priority(sample_items, feature_config):
+    events = synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    recommendations = train_and_recommend(
+        built,
+        target_users=["u1", "u2"],
+        config=feature_config,
+        top_k=2,
+        enabled_models=["collaborative", "popular"],
+    )
+
+    cold = recommendations[recommendations[Columns.User] == COLD_START_USER_ID]
+    assert not cold.empty
+    assert (cold["source"] == "popular_fallback").all()
+    assert len(cold) <= 2
+    for raw in cold["reasons"]:
+        reasons = parse_reasons(raw)
+        assert reasons is not None
+        assert reasons.sources[0].label == "popular_fallback"
+        assert reasons.sources[0].rank is not None
+        assert reasons.sources[0].weight == 1.0
+
+
+def test_train_and_recommend_writes_cold_start_sentinel_under_rrf(sample_items, feature_config):
+    events = synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    recommendations = train_and_recommend(
+        built,
+        target_users=["u1", "u2"],
+        config=feature_config,
+        top_k=2,
+        enabled_models=["collaborative", "popular"],
+        weights={"collaborative": 1.0, "popular": 1.0},
+    )
+
+    cold = recommendations[recommendations[Columns.User] == COLD_START_USER_ID]
+    assert not cold.empty
+    assert (cold["source"] == "popular_fallback").all()
+    assert len(cold) <= 2
+    for raw in cold["reasons"]:
+        reasons = parse_reasons(raw)
+        assert reasons is not None
+        assert reasons.sources[0].label == "popular_fallback"
+        assert reasons.sources[0].rank is not None
+        assert reasons.sources[0].weight == 1.0
+
+
+def test_popular_cold_start_skips_recommend_when_dataset_has_no_users():
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from cicerone.model.recommend_combine import _popular_cold_start_frame
+
+    popular = MagicMock()
+    built = SimpleNamespace(
+        dataset=SimpleNamespace(user_id_map=SimpleNamespace(external_ids=[])),
+        items=None,
+    )
+    cohort = SimpleNamespace(eligibility=[], all_item_ids=["i1"])
+    empty = pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, "source"])
+
+    out = _popular_cold_start_frame({"popular": popular}, built, cohort, 2, empty, ["popular"])
+
+    popular.recommend.assert_not_called()
+    assert out.empty
+
+
+def test_recommend_with_models_does_not_write_sentinel_when_popular_not_in_run(sample_items, feature_config):
+    from cicerone.model.fit import fit_strategies, plan_model_run
+    from cicerone.model.recommend import recommend_with_models
+
+    events = synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+    union_plan = plan_model_run(
+        ["collaborative", "popular"],
+        blending_enabled=False,
+        content_fallback_enabled=None,
+    )
+    _, fitted = fit_strategies(
+        built,
+        ["u1", "u2"],
+        enabled_models=list(union_plan.recommend_models),
+        max_workers=1,
+    )
+    variant_plan = plan_model_run(
+        ["collaborative"],
+        blending_enabled=False,
+        content_fallback_enabled=None,
+    )
+    recs = recommend_with_models(
+        fitted,
+        built,
+        ["u1", "u2"],
+        feature_config,
+        top_k=2,
+        enabled_models=list(variant_plan.enabled_models),
+        run_plan=variant_plan,
+    )
+    assert COLD_START_USER_ID not in set(recs[Columns.User].astype(str))
+
+
+def test_train_and_recommend_ignores_cold_start_in_target_users(sample_items, feature_config):
+    events = synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    recommendations = train_and_recommend(
+        built,
+        target_users=["u1", COLD_START_USER_ID],
+        config=feature_config,
+        top_k=2,
+        enabled_models=["popular"],
+    )
+
+    users = recommendations[Columns.User].astype(str)
+    assert set(users) == {"u1", COLD_START_USER_ID}
+    assert not recommendations.duplicated(subset=[Columns.User, Columns.Item]).any()
+    cold = recommendations[users == COLD_START_USER_ID]
+    assert not cold.empty
+    assert (cold["source"] == "popular_fallback").all()
 
 
 def test_train_and_recommend_combines_multiple_personalized_strategies(sample_items, feature_config):
@@ -297,7 +426,7 @@ def test_train_and_recommend_weighted_fusion_merges_sources_for_shared_items(sam
         weights={"popular": 1.0, "latest": 1.0},
     )
 
-    assert set(recommendations["source"]) == {"popular_fallback+latest"}
+    assert set(_without_cold_start(recommendations)["source"]) == {"popular_fallback+latest"}
 
 
 def test_train_and_recommend_weighted_fusion_joins_labels_in_enabled_models_order(
@@ -324,8 +453,8 @@ def test_train_and_recommend_weighted_fusion_joins_labels_in_enabled_models_orde
         weights={"popular": 1.0, "latest": 1.0},
     )
 
-    assert set(popular_first["source"]) == {"popular_fallback+latest"}
-    assert set(latest_first["source"]) == {"latest+popular_fallback"}
+    assert set(_without_cold_start(popular_first)["source"]) == {"popular_fallback+latest"}
+    assert set(_without_cold_start(latest_first)["source"]) == {"latest+popular_fallback"}
 
 
 def test_train_and_recommend_empty_weights_dict_enables_fusion(sample_items, feature_config):
@@ -342,7 +471,7 @@ def test_train_and_recommend_empty_weights_dict_enables_fusion(sample_items, fea
         weights={},
     )
 
-    assert set(recommendations["source"]) == {"popular_fallback+latest"}
+    assert set(_without_cold_start(recommendations)["source"]) == {"popular_fallback+latest"}
 
 
 def test_train_and_recommend_weighted_fusion_defaults_missing_weight_to_one(sample_items, feature_config):
@@ -375,16 +504,20 @@ def test_train_and_recommend_weighted_fusion_defaults_missing_weight_to_one(samp
         weights={"popular": 0.3, "latest": 0.5},
     )
 
-    assert set(partial["source"]) == {"popular_fallback+latest"}
+    assert set(_without_cold_start(partial)["source"]) == {"popular_fallback+latest"}
 
-    merged_default = partial.merge(
-        explicit_default, on=[Columns.User, Columns.Item], suffixes=("_partial", "_explicit")
+    merged_default = _without_cold_start(partial).merge(
+        _without_cold_start(explicit_default),
+        on=[Columns.User, Columns.Item],
+        suffixes=("_partial", "_explicit"),
     )
     assert not merged_default.empty
     assert (merged_default[f"{Columns.Score}_partial"] == merged_default[f"{Columns.Score}_explicit"]).all()
 
-    merged_changed = partial.merge(
-        explicit_changed, on=[Columns.User, Columns.Item], suffixes=("_partial", "_changed")
+    merged_changed = _without_cold_start(partial).merge(
+        _without_cold_start(explicit_changed),
+        on=[Columns.User, Columns.Item],
+        suffixes=("_partial", "_changed"),
     )
     assert not merged_changed.empty
     assert (merged_changed[f"{Columns.Score}_partial"] != merged_changed[f"{Columns.Score}_changed"]).any()
@@ -414,7 +547,11 @@ def test_train_and_recommend_custom_rrf_k_changes_fused_scores(sample_items, fea
     )
 
     # Larger rrf_k strictly lowers weight/(rrf_k+rank) for same pairs.
-    merged = small_k.merge(large_k, on=[Columns.User, Columns.Item], suffixes=("_small_k", "_large_k"))
+    merged = _without_cold_start(small_k).merge(
+        _without_cold_start(large_k),
+        on=[Columns.User, Columns.Item],
+        suffixes=("_small_k", "_large_k"),
+    )
     assert not merged.empty
     assert (merged[Columns.Score + "_small_k"] > merged[Columns.Score + "_large_k"]).all()
 
@@ -767,7 +904,9 @@ def test_topk_extraction_preserves_external_ids_no_duplicates_or_seen_items(feat
 
     assert not recommendations.empty
     assert set(recommendations[Columns.Item]).issubset(external_items)
-    assert set(recommendations[Columns.User]).issubset(external_users)
+    users = set(recommendations[Columns.User].astype(str))
+    assert users.issubset({str(user) for user in external_users} | {COLD_START_USER_ID})
+    assert COLD_START_USER_ID in users
     assert set(recommendations[Columns.Item]).isdisjoint(range(len(external_items)))
     assert set(recommendations[Columns.User]).isdisjoint(range(len(external_users)))
     assert not recommendations.duplicated(subset=[Columns.User, Columns.Item]).any()

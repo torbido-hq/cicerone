@@ -92,7 +92,7 @@ def test_job_run_end_to_end_with_local_dataset_backend(tmp_path, monkeypatch):
     job.run()
 
     recommendations = pd.read_parquet(output_dir / "recommendations.parquet")
-    assert set(recommendations["user_id"]) == {"u1", "u2"}
+    assert set(recommendations["user_id"]) == {"u1", "u2", COLD_START_USER_ID}
 
     manifest = json.loads((output_dir / "manifest.json").read_text())
     assert manifest["n_events"] == 4

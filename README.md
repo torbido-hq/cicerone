@@ -162,9 +162,11 @@ Response JSON:
 `X-Generated-At` response header). If `user_id` is missing from the lookup
 table, the API returns the cold-start fallback
 (`popular_fallback` / `latest` / `blended` for `__cold_start__`) with
-`"fallback": true`. That sentinel is written only under blending; with
-priority or RRF the reader substitutes one `popular_fallback` / `latest`
-user's top-K instead, and 404s when the table has neither. When
+`"fallback": true`. The job writes that sentinel whenever `popular` is in
+the run (popular-only under priority or RRF; blend may also include
+`latest`). Without a sentinel the reader still substitutes one
+`popular_fallback` / `latest` user's top-K, and 404s when the table has
+neither. When
 `[experiment]` is enabled, the response also includes `experiment_id` and
 the sticky `variant`; both fields are `null` when experiments are off.
 See [docs/experiments.md](docs/experiments.md). Impression and click

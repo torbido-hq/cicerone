@@ -37,6 +37,7 @@ from support.system_db import (
 )
 
 from cicerone.artifact import ARTIFACT_SCHEMA_VERSION, loads_artifact, recommend_from_artifact
+from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import load_settings
 from cicerone.feature_config import load_feature_config
 from cicerone.io.base import ManifestReader, RecommendationReader
@@ -163,7 +164,9 @@ def test_system_job_db_round_trip_with_artifact_and_readers(trained_system: Trai
 
     from_artifact = recommend_from_artifact(loaded, ["u1", "u2"], top_k=3)
     assert not from_artifact.empty
-    assert set(from_artifact["user_id"]) <= {"u1", "u2"}
+    artifact_users = set(from_artifact["user_id"].astype(str))
+    assert {"u1", "u2"} <= artifact_users
+    assert artifact_users <= {"u1", "u2", COLD_START_USER_ID}
 
 
 @pytest.mark.skipif(not TEST_DATABASE_URL, reason=_SKIP_NO_TEST_DB)
