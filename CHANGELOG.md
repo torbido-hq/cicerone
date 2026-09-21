@@ -25,14 +25,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Dashboard latest-run card shows catalog size, target users, user coverage,
   and AutoML scores when the manifest has them. Incremental panel shows
   unknown-id event drops.
-
-### Changed
-
-- Online refresh still rewrites LightFM / popular lists when the sequential extra is missing. Only the sequential model is skipped.
+- Quality splits production replay into ranking vs catalog metrics, shows
+  run-over-run deltas from job manifests, and warns when rank CTR rises.
 
 ### Changed
 
 - Job-time Thompson samples Beta(1+s, 1+f) in-process instead of writing MABWiser's private `_imp` counts.
+- Online refresh still rewrites LightFM / popular lists when the sequential extra is missing. Only the sequential model is skipped.
 
 ### Fixed
 
