@@ -79,49 +79,54 @@ def append_dataset_events(input_path: Path, extra: pd.DataFrame) -> None:
     pd.concat([existing, extra], ignore_index=True).to_parquet(path, index=False)
 
 
+def _io_toml(role: str, kind: str, *, database_url: str | None, path: Path | str | None) -> str:
+    if kind == "db":
+        if not database_url:
+            raise ValueError(f"database_url is required when {role} kind='db'")
+        return f"""
+        [{role}]
+        kind = "db"
+        [{role}.options]
+        database_url = "{database_url}"
+        """
+    if kind == "dataset":
+        option = "input_path" if role == "input" else "output_path"
+        if path is None:
+            raise ValueError(f"{option} is required when {role} kind='dataset'")
+        return f"""
+        [{role}]
+        kind = "dataset"
+        [{role}.options]
+        storage_backend = "local"
+        path = "{Path(path)}"
+        """
+    raise ValueError(f"Unknown system-spec {role} kind: {kind!r}")
+
+
 def write_system_config(
     path: Path,
     *,
     kind: str = "db",
+    input_kind: str | None = None,
+    output_kind: str | None = None,
     database_url: str | None = None,
     input_path: Path | str | None = None,
     output_path: Path | str | None = None,
     feature_config_path: Path | str = REPO_FEATURES_CONFIG,
     serve_token: str = SYSTEM_SERVE_TOKEN,
 ) -> Path:
-    """Write the shared system-spec TOML (artifact, serve, dashboard, track, eval)."""
-    if kind == "db":
-        if not database_url:
-            raise ValueError("database_url is required when kind='db'")
-        io_blocks = f"""
-        [input]
-        kind = "db"
-        [input.options]
-        database_url = "{database_url}"
-
-        [output]
-        kind = "db"
-        [output.options]
-        database_url = "{database_url}"
-        """
-    elif kind == "dataset":
-        if input_path is None or output_path is None:
-            raise ValueError("input_path and output_path are required when kind='dataset'")
-        io_blocks = f"""
-        [input]
-        kind = "dataset"
-        [input.options]
-        storage_backend = "local"
-        path = "{Path(input_path)}"
-
-        [output]
-        kind = "dataset"
-        [output.options]
-        storage_backend = "local"
-        path = "{Path(output_path)}"
-        """
-    else:
-        raise ValueError(f"Unknown system-spec kind: {kind!r}")
+    """Write the shared system-spec TOML. ``input_kind`` / ``output_kind`` override ``kind``."""
+    io_blocks = _io_toml(
+        "input",
+        input_kind or kind,
+        database_url=database_url,
+        path=input_path,
+    ) + _io_toml(
+        "output",
+        output_kind or kind,
+        database_url=database_url,
+        path=output_path,
+    )
 
     path.write_text(
         f"""
