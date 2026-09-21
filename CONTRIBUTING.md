@@ -18,8 +18,12 @@ docker compose -f docker-compose.ci.yml --env-file docker/postgres/defaults.env 
 ```
 
 This runs the full pytest suite, including the Postgres-backed `db` I/O
-tests and the system-style end-to-end check in `tests/test_system_db.py`,
-and enforces the 95% coverage gate (`pyproject.toml`,
+tests, the local-parquet dataset system spec
+(`tests/test_system_dataset.py`, `tests/test_system_dataset_quality.py`),
+and the Postgres system-style end-to-end checks in
+`tests/test_system_db.py` and `tests/test_system_db_quality.py`, and
+enforces the 95% coverage gate
+(`pyproject.toml`,
 `[tool.coverage.report].fail_under`). `test-sequential` then runs the
 SASRec/BERT4Rec/HSTU extra tests (`rectools[torch]`) in a separate image —
 the main `test` and runtime images stay torch-free, because RecTools
@@ -61,9 +65,11 @@ interpolation matches that file too.
 `localhost` / `127.0.0.1` use `POSTGRES_HOST_PORT`; compose service hosts
 (`postgres`, `db-test`) use container `POSTGRES_PORT`.
 
-Schema-reset guardrails for the Postgres system test live in
-`tests/support/system_db.py` (reusable across DB-backed tests; keep
-`tests/test_system_db.py` focused on the end-to-end scenario).
+Shared catalog / TOML / HTTP mounts for both I/O backends live in
+`tests/support/system_spec.py`. Schema-reset guardrails for the Postgres
+system test live in `tests/support/system_db.py` (reusable across
+DB-backed tests; keep `tests/test_system_db*.py` and
+`tests/test_system_dataset*.py` focused on the end-to-end scenarios).
 
 Host vs container hostname for the same Postgres:
 

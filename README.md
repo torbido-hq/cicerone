@@ -86,9 +86,11 @@ input source (S3-compatible/local dataset, or a database)
                      output destination (S3-compatible/local dataset, or a database)
 ```
 
-Scheduling is handled in-process (`croniter`, no system cron): it runs once
-at boot, then again on `[job].cron_schedule` in `config/cicerone.toml`
-(default: every night at 03:00 UTC).
+Scheduling is handled in-process (`croniter`, no system cron).
+`cicerone start` in batch mode runs once at boot, then again on
+`[job].cron_schedule` in `config/cicerone.toml` (default: every night at
+03:00 UTC). `cicerone job` is one run and exit; `cicerone scheduler`
+waits for the next tick and does not run a job first.
 
 ## Serve mode
 
@@ -114,8 +116,8 @@ events worker loads the last artifact for write-through only:
 | `GET` | `/similar/{item_id}` | Item-to-item neighbors from the last job |
 | `POST` | `/session/recommendations` | Anonymous session recommend via neighbors |
 | `GET` | `/metrics` | Prometheus text format (no bearer token; optional `X-Metrics-Token`) |
-| `POST` | `/events` | Incremental ingest when `[events]` `kind = "webhook"` |
-| `POST` | `/track` | Impression/click ingest when `[track]` is enabled |
+| `POST` | `/events` | Incremental ingest when `[events]` `kind = "webhook"` (`202` = queued, not written) |
+| `POST` | `/track` | Impressions/clicks when `[track]` is on (`202` = row persisted). Not training |
 | `GET` | `/docs` / `/redoc` | Interactive OpenAPI docs (Swagger / ReDoc) |
 | `GET` | `/openapi.json` | Machine-readable OpenAPI schema |
 
@@ -327,6 +329,13 @@ serve). It never loads lightfm/implicit/torch (it does import `rectools`).
   stage that compiles Tailwind ahead of time).
 
 ## Configuration (`config/cicerone.toml`)
+
+User-facing reference (CLI, every TOML section, defaults, storage):
+[docs/configuration.md](docs/configuration.md)
+([cicerone.dev/configuration](https://cicerone.dev/configuration/)).
+Shipped annotated examples: `config/cicerone.toml`,
+`config/cicerone.serve.toml`, `config/cicerone.dashboard.toml`,
+`config/features.toml`.
 
 All structural configuration — which backend to use for input/output,
 bucket/table names, scheduling, tuning — lives in one version-controlled
@@ -694,8 +703,10 @@ pip install 'cicerone-recommender[bandits]'      # experiment.allocation = thomp
 ```
 
 Then, with your own TOML. Example files default to image paths
-(`/app/config/features.toml`, `/app/config/dashboard_users.toml`); on a pip
-host set those to files next to `--config`:
+(`/app/config/features.toml`, `/app/config/dashboard_users.toml`) and set
+serve/dashboard `host = "0.0.0.0"` so compose can publish the port. On a pip
+host, point those paths at files next to `--config` and omit `host` (default
+`127.0.0.1`) unless you mean to listen on every interface:
 
 ```sh
 cicerone start --config ./config/cicerone.toml           # job + scheduler, or serve
@@ -710,7 +721,13 @@ Ctrl-C / SIGTERM (`docker compose stop`). Prefer the image for production.
 
 ## Usage
 
+First local walkthrough (clone → sample data → `job` → serve):
+[docs/tutorial.md](docs/tutorial.md)
+([cicerone.dev/tutorial](https://cicerone.dev/tutorial/)).
+
 ```sh
+git clone https://github.com/torbido-hq/cicerone.git
+cd cicerone
 cp .env.example .env   # set the secrets referenced by config/cicerone.toml
 # edit config/cicerone.toml: pick input/output kind & backend for your setup
 docker compose up --build
@@ -737,8 +754,11 @@ docker compose -f docker-compose.ci.yml --env-file docker/postgres/defaults.env 
 ```
 
 Runs the whole pytest suite (with an ephemeral Postgres for the `db`
-backend tests and the system-style end-to-end check in
-`tests/test_system_db.py`) inside Docker — nothing to install on the host.
+backend tests and the Postgres system-style end-to-end checks in
+`tests/test_system_db.py` / `tests/test_system_db_quality.py`; the
+local-parquet journeys are `tests/test_system_dataset.py` /
+`tests/test_system_dataset_quality.py`) inside
+Docker — nothing to install on the host.
 Locally you can also point pytest at the compose `postgres` service's
 pytest database via `POSTGRES_TEST_HOST=localhost` (see
 [CONTRIBUTING.md](CONTRIBUTING.md#local-postgres-defaults)). Use host
@@ -765,6 +785,10 @@ code is structured. See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 - Credentials (S3/DB) should be scoped to the bare minimum (read on the
   input side, write on the output side, no delete/admin permissions).
+  Custom `input.options.*_query` and `events.options.events_query` values
+  must be a single `SELECT`; give that role only the tables it should read.
+- `[events.online]` requires `[output].artifact_hmac_key` (16+ bytes). The
+  job signs `model.artifact`; the events worker verifies before unpickle.
 - No personal data other than `user_id` (an opaque identifier) is ever read
   or written.
 - The batch job itself accepts no inbound connections. The optional serve

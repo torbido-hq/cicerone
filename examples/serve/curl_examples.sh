@@ -56,7 +56,7 @@ print("paths:", ", ".join(sorted(doc.get("paths", {}))))
 
 if [[ "${CICERONE_POST_EVENTS:-}" == "1" ]]; then
   echo
-  echo "## POST /events (set CICERONE_POST_EVENTS=1; webhook ingest must be enabled)"
+  echo "## POST /events (202 = queued, not written; webhook ingest must be enabled)"
   events_body="$(
     USER_ID="$USER_ID" "$PYTHON" -c '
 import json, os
@@ -77,7 +77,7 @@ fi
 
 if [[ "${CICERONE_POST_TRACK:-}" == "1" ]]; then
   echo
-  echo "## POST /track (set CICERONE_POST_TRACK=1; [track] ingest must be enabled)"
+  echo "## POST /track (202 = row persisted; [track] must be enabled)"
   track_body="$(
     USER_ID="$USER_ID" "$PYTHON" -c '
 import json, os

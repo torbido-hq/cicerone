@@ -49,6 +49,7 @@ def _secret_settings(**overrides):
         output=IOSettings(
             kind="db",
             options={"database_url": "postgresql://user:hunter2@localhost/cicerone"},
+            artifact_hmac_key="0123456789abcdef",
         ),
         events=EventsSettings(
             enabled=True,
@@ -93,6 +94,7 @@ def test_config_display_redacts_secrets_and_keeps_safe_values():
     assert incoming["fields"]["options"]["endpoint_url"] == REDACTED
     assert incoming["fields"]["options"]["webhook"] == REDACTED
     assert outgoing["fields"]["kind"] == "db"
+    assert outgoing["fields"]["artifact_hmac_key"] == REDACTED
     assert outgoing["fields"]["options"]["database_url"] == REDACTED
     assert events["fields"]["options"]["auth_token"] == REDACTED
     assert events["fields"]["options"]["queue_url"] == REDACTED
@@ -187,6 +189,7 @@ def test_config_page_renders_redacted_html(tmp_path):
     assert "AKIATEST" not in html
     assert "recs" in html
     assert "[redacted]" in html
+    assert "0123456789abcdef" not in html
     assert "super-secret-serve" not in html
     assert "super-secret-trigger" not in html
     assert "s3secretVALUE" not in html

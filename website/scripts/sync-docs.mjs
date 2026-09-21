@@ -36,7 +36,7 @@ const PAGES = [
     out: "tutorial.md",
     title: "Tutorial",
     description:
-      "Hands-on Cicerone walkthrough: sample data, batch job, serve API, and dashboard.",
+      "Clone the repo, then sample data, batch job, serve API, and dashboard.",
   },
   {
     source: "architecture.md",
@@ -72,6 +72,13 @@ const PAGES = [
     title: "Search weights",
     description:
       "Catalog item_scores for Meilisearch and OpenSearch ranking. No search-engine client.",
+  },
+  {
+    source: "configuration.md",
+    out: "configuration.md",
+    title: "Configuration",
+    description:
+      "CLI commands and TOML reference: input, output, job, serve, events, track, experiments, and defaults.",
   },
 ];
 
@@ -153,9 +160,14 @@ if (existsSync(latestReleaseOut)) {
     previousRelease = null;
   }
 }
+const expectVersion = process.env.EXPECT_PYPI_VERSION?.trim() || null;
+if (expectVersion && !/^\d+\.\d+\.\d+$/.test(expectVersion)) {
+  throw new Error(`EXPECT_PYPI_VERSION must be x.y.z, got ${expectVersion}`);
+}
 const { release, stale, source, reason } = await resolveLatestRelease({
   changelogText,
   previous: previousRelease,
+  expectVersion,
 });
 writeFileSync(latestReleaseOut, `${JSON.stringify(release)}\n`);
 if (stale && source === "previous") {

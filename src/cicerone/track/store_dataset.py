@@ -13,11 +13,13 @@ from typing import Any
 
 import pandas as pd
 
+from cicerone.io.blob import append_storage_bytes, read_storage_bytes, write_storage_bytes
 from cicerone.io.options import (
     build_s3_client,
     exclusive_file_lock,
     is_s3_not_found,
     object_key,
+    read_s3_body,
     require_option,
     validate_storage_options,
 )
@@ -27,6 +29,7 @@ from cicerone.track.store_common import (
     TRACK_FILENAME,
     _history_part_matches,
     _history_stem_before,
+    _row_matches,
 )
 
 _HISTORY_READ_WORKERS = 8
@@ -96,26 +99,42 @@ class TrackDatasetBackend:
             keys = [key for key in keys if not _history_stem_before(Path(key).stem, since)]
         return _collect_frames([_bind_s3_frame(client, bucket, key) for key in sorted(keys)])
 
-    def _read_rows_dataset(self) -> list[dict[str, Any]]:
+    def _iter_track_lines(self) -> Iterator[bytes]:
+        backend = validate_storage_options(self._options)
+        if backend == "local":
+            path = Path(require_option(self._options, "path", "local")) / TRACK_FILENAME
+            if not path.exists():
+                return
+            with path.open("rb") as handle:
+                yield from handle
+            return
         raw = self._read_bytes(TRACK_FILENAME)
         if raw is None:
-            if self._known_ids is None:
-                self._known_ids = set()
-            return []
+            return
+        yield from raw.splitlines()
+
+    def _read_rows_dataset(self, *, since: str | None = None) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
-        for line in raw.decode("utf-8").splitlines():
-            line = line.strip()
+        known: set[str] | None = set() if self._known_ids is None else None
+        for raw_line in self._iter_track_lines():
+            line = raw_line.decode("utf-8").strip()
             if not line:
                 continue
             try:
                 parsed = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if isinstance(parsed, dict):
-                rows.append(parsed)
-        if self._known_ids is None:
-            self._known_ids = {str(row.get("event_id") or "") for row in rows}
-            self._known_ids.discard("")
+            if not isinstance(parsed, dict):
+                continue
+            if known is not None:
+                event_id = str(parsed.get("event_id") or "")
+                if event_id:
+                    known.add(event_id)
+            if since and not _row_matches(parsed, kind=None, experiment_id=None, since=since):
+                continue
+            rows.append(parsed)
+        if known is not None:
+            self._known_ids = known
         return rows
 
     def _track_file_size(self) -> int:
@@ -141,42 +160,13 @@ class TrackDatasetBackend:
             yield
 
     def _read_bytes(self, filename: str) -> bytes | None:
-        backend = validate_storage_options(self._options)
-        if backend == "local":
-            path = Path(require_option(self._options, "path", "local")) / filename
-            if not path.exists():
-                return None
-            return path.read_bytes()
-        bucket = require_option(self._options, "bucket", "s3")
-        key = object_key(self._options, filename)
-        client = build_s3_client(self._options)
-        try:
-            obj = client.get_object(Bucket=bucket, Key=key)
-        except Exception as exc:
-            if is_s3_not_found(exc):
-                return None
-            raise
-        return obj["Body"].read()
+        return read_storage_bytes(self._options, filename)
 
     def _write_bytes(self, filename: str, payload: bytes, content_type: str) -> None:
-        backend = validate_storage_options(self._options)
-        if backend == "local":
-            path = Path(require_option(self._options, "path", "local")) / filename
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_name(f".{path.name}.tmp")
-            tmp.write_bytes(payload)
-            tmp.replace(path)
-            return
-        bucket = require_option(self._options, "bucket", "s3")
-        key = object_key(self._options, filename)
-        client = build_s3_client(self._options)
-        client.put_object(Bucket=bucket, Key=key, Body=payload, ContentType=content_type)
+        write_storage_bytes(self._options, filename, payload, content_type)
 
     def _append_bytes(self, filename: str, payload: bytes) -> None:
-        path = Path(require_option(self._options, "path", "local")) / filename
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("ab") as handle:
-            handle.write(payload)
+        append_storage_bytes(self._options, filename, payload)
 
 
 def _history_part_name(generated_at: str) -> str:
@@ -223,7 +213,7 @@ def _s3_parquet_frame(client: Any, bucket: str, key: str) -> pd.DataFrame | None
         if is_s3_not_found(exc):
             return None
         raise
-    return pd.read_parquet(BytesIO(obj["Body"].read()))
+    return pd.read_parquet(BytesIO(read_s3_body(obj)))
 
 
 def _s3_history_frames(

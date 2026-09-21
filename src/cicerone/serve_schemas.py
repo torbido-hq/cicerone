@@ -144,15 +144,24 @@ class EventsIngestRequest(BaseModel):
 
 
 class EventsIngestResponse(BaseModel):
-    accepted: int = Field(description="Number of events accepted into the source queue")
+    accepted: int = Field(
+        description=(
+            "Novel events queued in the webhook source. Not flushed, not written, "
+            "and not yet visible on GET /recommendations"
+        )
+    )
     event_ids: list[str] = Field(description="Assigned or provided event ids")
 
 
 class TrackEvent(BaseModel):
     kind: str = Field(description="impression or click")
     user_id: str = Field(description="User identifier")
-    item_id: str = Field(description="Shown or clicked item identifier")
-    rank: int | None = Field(default=None, ge=1, description="1-based slot in the rendered list")
+    item_id: str = Field(description="Item identifier on the recommendation list")
+    rank: int | None = Field(
+        default=None,
+        ge=1,
+        description="1-based list slot; required for impression; not the CTR join key",
+    )
     occurred_at: str | int | float = Field(
         description=(
             "ISO-8601 timestamp with timezone (Z or explicit offset), or Unix epoch "

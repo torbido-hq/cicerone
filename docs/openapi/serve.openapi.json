@@ -224,7 +224,7 @@
       "EventsIngestResponse": {
         "properties": {
           "accepted": {
-            "description": "Number of events accepted into the source queue",
+            "description": "Novel events queued in the webhook source. Not flushed, not written, and not yet visible on GET /recommendations",
             "title": "Accepted",
             "type": "integer"
           },
@@ -854,7 +854,7 @@
             "title": "Idempotency Key"
           },
           "item_id": {
-            "description": "Shown or clicked item identifier",
+            "description": "Item identifier on the recommendation list",
             "title": "Item Id",
             "type": "string"
           },
@@ -893,7 +893,7 @@
               }
             ],
             "default": null,
-            "description": "1-based slot in the rendered list",
+            "description": "1-based list slot; required for impression; not the CTR join key",
             "title": "Rank"
           },
           "user_id": {
@@ -1359,6 +1359,7 @@
     },
     "/events": {
       "post": {
+        "description": "202 means the webhook queue accepted the event. It does not mean recommendation output has been updated.",
         "operationId": "post_events_events_post",
         "requestBody": {
           "content": {

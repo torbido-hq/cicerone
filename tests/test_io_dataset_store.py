@@ -739,7 +739,7 @@ def test_s3_read_model_artifact_closes_streaming_body(s3_options, mocker):
     body.read.return_value = b"payload"
     client = mocker.Mock()
     client.get_object.return_value = {"Body": body}
-    mocker.patch("cicerone.io.dataset_store.build_s3_client", return_value=client)
+    mocker.patch("cicerone.io.blob.build_s3_client", return_value=client)
     assert sink.read_model_artifact() == b"payload"
     body.close.assert_called_once()
 

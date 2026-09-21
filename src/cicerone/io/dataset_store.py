@@ -20,6 +20,7 @@ from typing import Any
 
 import pandas as pd
 
+from cicerone.io.blob import read_storage_bytes, write_storage_bytes
 from cicerone.io.options import (
     build_s3_client,
     exclusive_file_lock,
@@ -193,18 +194,11 @@ class DatasetOutputSink:
     def _write_bytes(self, filename: str, payload: bytes, content_type: str) -> None:
         if self._backend == "local":
             path = Path(require_option(self._options, "path", "local")) / filename
-            path.parent.mkdir(parents=True, exist_ok=True)
             logger.info("Writing %s", path)
-            tmp = path.with_name(f".{path.name}.tmp")
-            tmp.write_bytes(payload)
-            tmp.replace(path)
-            return
-
-        bucket = require_option(self._options, "bucket", "s3")
-        key = object_key(self._options, filename)
-        logger.info("Writing s3://%s/%s", bucket, key)
-        client = build_s3_client(self._options)
-        client.put_object(Bucket=bucket, Key=key, Body=payload, ContentType=content_type)
+        else:
+            bucket = require_option(self._options, "bucket", "s3")
+            logger.info("Writing s3://%s/%s", bucket, object_key(self._options, filename))
+        write_storage_bytes(self._options, filename, payload, content_type)
 
     def ensure_writer_held(self) -> None:
         self._ensure_writer_still_held()
@@ -322,27 +316,7 @@ class DatasetOutputSink:
             return True
 
     def _read_bytes(self, filename: str) -> bytes | None:
-        if self._backend == "local":
-            path = Path(require_option(self._options, "path", "local")) / filename
-            try:
-                return path.read_bytes()
-            except FileNotFoundError:
-                return None
-
-        bucket = require_option(self._options, "bucket", "s3")
-        key = object_key(self._options, filename)
-        client = build_s3_client(self._options)
-        try:
-            response = client.get_object(Bucket=bucket, Key=key)
-        except Exception as exc:
-            if is_s3_not_found(exc):
-                return None
-            raise
-        body = response["Body"]
-        try:
-            return body.read()
-        finally:
-            body.close()
+        return read_storage_bytes(self._options, filename)
 
     def write_model_artifact(self, payload: bytes) -> None:
         from cicerone.artifact import ARTIFACT_FILENAME

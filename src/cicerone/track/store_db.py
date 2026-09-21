@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from collections.abc import Sequence
 from typing import Any
 
@@ -28,17 +29,22 @@ logger = logging.getLogger(__name__)
 
 class TrackDbBackend:
     _engine: Engine | None
+    _engine_lock: threading.Lock
     _options: dict[str, Any]
 
     def _ensure_fence(self) -> None:
         return None
 
     def _db_engine(self) -> Engine:
-        if self._engine is None:
-            self._engine = create_engine(
-                require_option(self._options, "database_url", "db"), pool_pre_ping=True
-            )
-        return self._engine
+        engine = self._engine
+        if engine is not None:
+            return engine
+        with self._engine_lock:
+            if self._engine is None:
+                self._engine = create_engine(
+                    require_option(self._options, "database_url", "db"), pool_pre_ping=True
+                )
+            return self._engine
 
     def _ensure_track_table(self, conn: Any, table: str) -> None:
         conn.execute(
@@ -107,22 +113,21 @@ class TrackDbBackend:
         *,
         kind: str | None,
         experiment_id: str | None,
+        since: str | None = None,
     ) -> list[dict[str, Any]]:
         table = sql_identifier(
             self._options.get("track_table", DEFAULT_TRACK_TABLE),
             option="track_table",
         )
         engine = self._db_engine()
-        clause, params = _track_row_sql_filter(kind=kind, experiment_id=experiment_id)
+        clause, params = _track_row_sql_filter(kind=kind, experiment_id=experiment_id, since=since)
         try:
             frame = pd.read_sql(text(f'SELECT * FROM "{table}"{clause}'), engine, params=params)
-        except MISSING_TABLE_ERRORS:
-            return []
         except Exception as exc:
             if is_missing_table_error(exc):
                 return []
             logger.exception("Failed to read track table %r", table)
-            return []
+            raise
         if frame.empty:
             return []
         records = frame.to_dict(orient="records")

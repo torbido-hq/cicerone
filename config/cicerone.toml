@@ -208,7 +208,7 @@ feature_config_path = "/app/config/features.toml"
 # enabled = true
 # auth_token = "${TRIGGER_AUTH_TOKEN}" # required when enabled; checked as
 #                                       # "Authorization: Bearer <token>"
-# host = "0.0.0.0"
+# host = "0.0.0.0"  # compose port-publish. On the host, omit this (default 127.0.0.1).
 # port = 8080
 # debounce_seconds = 60
 # # POST /trigger/retrain on this port always works once trigger is enabled.
@@ -246,6 +246,7 @@ prefix = "datasets/latest"
 
 [output]
 kind = "dataset"
+# artifact_hmac_key = "${OUTPUT_ARTIFACT_HMAC_KEY}"  # required when [events.online] is on (16+ bytes)
 
 [output.options]
 storage_backend = "s3" # "s3" | "local"
@@ -265,7 +266,7 @@ prefix = "recommendations/latest"
 # Prefer config/cicerone.serve.toml for a standalone serve-only process.
 # [serve]
 # auth_token = "${SERVE_AUTH_TOKEN}" # required; checked as "Authorization: Bearer <token>"
-# host = "0.0.0.0"
+# host = "127.0.0.1"  # default on the host. "0.0.0.0" is LAN-wide (compose needs it).
 # port = 8000
 # default_k = 10 # used when a request doesn't specify ?limit= / ?k=
 # refresh_interval_seconds = 60
@@ -298,6 +299,7 @@ prefix = "recommendations/latest"
 # fit_partial_epochs = 1          # 0 = frozen weights + history refresh only
 # fit_min_events = 100            # skip SGD until this many known-ID events
 # max_extra_interactions = 50000  # online-only rows on top of the last job artifact
+# # also set [output].artifact_hmac_key (16+ bytes)
 
 # DB watermark source (no POST /events). Advances cursor only after a successful flush.
 # [events]
@@ -390,7 +392,7 @@ prefix = "recommendations/latest"
 # meant to be opened directly in a browser.
 # [dashboard]
 # enabled = true
-# host = "0.0.0.0"
+# host = "127.0.0.1"  # default on the host. "0.0.0.0" is LAN-wide (compose needs it).
 # port = 8090
 # users_path = "/app/config/dashboard_users.toml"
 # refresh_interval_seconds = 30 # how often the page polls /partials/status

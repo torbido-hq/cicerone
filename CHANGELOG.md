@@ -77,6 +77,99 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `DELETE /items/{id}` also removes that item's events so leftover interactions cannot resurrect it.
 - DB catalog PUT→GET keeps extra user/item fields and returns structured values as objects, not JSON strings.
 
+## [0.8.3] - 2026-09-18
+
+### Fixed
+
+- Recipe `eligibility = false` / subset / replace skips
+  `item_availability_filters` sugar.
+- Job optional-eval and sidecar catches log exception type and message,
+  and only swallow store/eval I/O errors. Sidecar failures use
+  `PublishError`, including Kafka produce/flush/close and a failed
+  RabbitMQ retry or handle close. Kafka `Producer()` construction is a
+  connect failure (`ConfigError`), same as `list_topics`. The sidecar
+  generation check only swallows store I/O errors. Lock-loss and
+  unexpected `RuntimeError`s fail the run and rewrite that generation to
+  failed when no newer manifest exists. The failed rewrite keeps the
+  original success generation as the skip cutoff and writes a later
+  `generated_at` so a DB reader does not tie with the success row.
+  Catalog size and experiment overlay swallow expected store I/O,
+  including S3 and SQL errors (a transient `OperationalError` included);
+  catalog size also treats a parquet `ArrowInvalid` as missing;
+  an unexpected `RuntimeError` fails Thompson and eval. Experiment DB
+  state only treats a missing table or column as absent, not a generic
+  `ProgrammingError`. An unexpected
+  `RuntimeError` on Kafka or RabbitMQ close fails the run after both
+  RabbitMQ handles have been closed. A sidecar failure after a complete
+  recs write does not set `partial_outputs`. Incremental publish only
+  swallows expected sidecar I/O. An unexpected `RuntimeError` during
+  RabbitMQ recover is not wrapped as `PublishError`.
+- DB serve keeps `AND variant=` when table inspect fails, and prefers the leftover
+  fallback arm in the same `LIMIT` query when no arm is assigned.
+- Thompson serve hashes the sticky pair or names on disk, not the full config
+  set. Snapshot names are read only when the pair is missing. Unreadable
+  `experiment_state.json` is a read error.
+- Incremental apply keeps parked variant rows when the hashed arm is updated.
+- Experiments evaluate uses the same champion/challenger overlay as serve.
+- Promoting a 3+ arm Thompson winner keeps the previous champion as challenger
+  and resets pair volume.
+- Serve caches the assignment overlay on the recommendations refresh loop.
+- Dataset serve filters cold-start fallback outside the cache lock.
+- Publish sidecar failures do not un-succeed a recs write or livelock ingest,
+  including a broker that is down at connect. Connect and publish run after
+  the writer lock is released, and the apply/retrain fence is re-checked
+  before and after connect. A newer manifest generation skips publish.
+- RabbitMQ publish confirms deliveries, stamps a stable `message_id`, recovers
+  the channel after a broker error, and retries only unconfirmed users.
+- Kafka publish fails when a delivery callback reports an error.
+- Fingerprint ingest acks apply only to generated event ids. Switching a live
+  buffer to generated-only rebuilds the fingerprint set.
+- Writer-lock busy nacks restore events the same way as other apply failures.
+- Event worker stop closes the source after a tick that never started a loop
+  thread.
+- A dispatched RabbitMQ job is not started after its I/O timeout.
+- Local dataset writers take `msvcrt.locking` when `fcntl` is missing.
+- `POST /track` acquires the writer lock off the serve event loop.
+- Concurrent database `/track` writes in one process accept a given
+  `event_id` once.
+- CTR is capped at one click per impression, matching CVR. Duplicate
+  clicks on the same impression count once. Blank impression IDs are
+  repaired before matching.
+- Track source annotation does not invent a variant from a later snapshot.
+  Exact snapshot matches can fill variant; the latest-snapshot fallback
+  stays source-only and does not overwrite an existing source.
+  Recs without `generated_at` still merge source and variant.
+- Track `since` drops untimed rows; `experiment_id=` excludes blank ids.
+  DB reads apply a conservative date bound. Invalid `since` is an empty query.
+  Dataset `track.jsonl` streams local lines and drops out-of-window rows.
+  A failed DB track read raises unless the table is missing.
+- Quality and Experiments use an attribution lookback on track and events.
+  Experiments keep only exposures for users in that window, and a failed
+  track read does not drop healthy exposures.
+- Metric event `since` is pushed into SQL and parquet. Missing `occurred_at`
+  or an unsupported bound is empty. `quantity` is optional and kept when
+  the source has it. Missing S3 events are empty. Custom `events_query`
+  is wrapped unless it already has a top-level `LIMIT`/`OFFSET`.
+  SQL comments do not count as pagination. A failed DB engine on a
+  bounded read is empty.
+- Thompson skips window trials when a pair exists but `window_started_at` is empty.
+- The job loads track and recommendations once for eval and Thompson.
+  A failed track or recs read is retried independently, not treated as empty.
+  Thompson windows the shared rows in memory so eval keeps full history.
+  Shared preload keeps an empty recommendations frame instead of reloading,
+  and runs in parallel on local/S3.
+  Eval ignores a preloaded track when track is disabled.
+
+### Security
+
+- Serve, trigger, and dashboard bind `127.0.0.1` by default. `0.0.0.0` is a
+  TOML opt-in.
+- `[events.online]` requires `[output].artifact_hmac_key` and verifies it
+  before unpickle. Artifact and storage reads reject payloads over 512 MiB.
+- Thompson promote accepts only the champion/challenger pair.
+- Custom `input.options.*_query` and `events.options.events_query` reject
+  more Postgres file/admin functions (`pg_ls_dir`, `dblink`, large objects).
+
 ## [0.8.2] - 2026-09-15
 
 ### Changed

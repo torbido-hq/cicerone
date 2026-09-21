@@ -1081,6 +1081,7 @@ def test_load_settings_dashboard_lookup_k_defaults_to_20(tmp_path):
     settings = load_settings(write_toml(tmp_path, _base_io_toml()))
 
     assert settings.dashboard.lookup_k == 20
+    assert settings.dashboard_host == "127.0.0.1"
 
 
 def test_load_settings_rejects_non_positive_dashboard_lookup_k(tmp_path):
@@ -1339,7 +1340,7 @@ def test_load_settings_serve_defaults(tmp_path, monkeypatch):
 
     settings = load_settings(config_path)
 
-    assert settings.serve_host == "0.0.0.0"
+    assert settings.serve_host == "127.0.0.1"
     assert settings.serve_port == 8000
     assert settings.serve_default_k == 10
     assert settings.serve_refresh_interval_seconds == 60.0
@@ -1396,7 +1397,7 @@ def test_load_settings_trigger_defaults_when_disabled(tmp_path):
     settings = load_settings(config_path)
 
     assert settings.trigger_enabled is False
-    assert settings.trigger_host == "0.0.0.0"
+    assert settings.trigger_host == "127.0.0.1"
     assert settings.trigger_port == 8080
     assert settings.trigger_debounce_seconds == 60.0
     assert settings.trigger_poll_input_bucket is False

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from contextlib import nullcontext
 
 import pandas as pd
@@ -17,7 +18,8 @@ from cicerone.feature_config import FeatureConfig
 from cicerone.io.dataset_catalog import DatasetCatalogStore
 from cicerone.io.factory import build_output_sink
 from cicerone.io.recommendation_reader import RECOMMENDATION_COLUMNS
-from cicerone.locks import LockLostError
+from cicerone.locks import LockLostError, WriterLockBusyError
+from cicerone.publish.base import PublishError
 from cicerone.reasons import dump_source_reasons, parse_reasons
 
 
@@ -1032,6 +1034,51 @@ def test_incremental_updater_preserves_variants(tmp_path, feature_config: Featur
     assert set(cold["variant"].astype(str)) == {"control", "treatment"}
 
 
+def test_incremental_updater_keeps_parked_popular_variant(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    existing = pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "old-control",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                "variant": "control",
+            },
+            {
+                "user_id": "u1",
+                "item_id": "parked-popular",
+                "rank": 1,
+                "score": 0.2,
+                "source": "popular_fallback",
+                "variant": "treatment",
+            },
+        ]
+    )
+    existing.to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        variant_names=("control", "treatment"),
+        assign_variant=lambda _user_id: "control",
+    )
+    events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
+    assert updater.apply(events) == 1
+    frame = load_recommendations_frame(settings.output)
+    u1 = frame[frame["user_id"] == "u1"]
+    assert set(u1["variant"].astype(str)) == {"control", "treatment"}
+    parked = u1[u1["variant"] == "treatment"]
+    assert list(parked["item_id"].astype(str)) == ["parked-popular"]
+
+
 def test_incremental_updater_collapses_leftover_variants_when_experiment_off(
     tmp_path, feature_config: FeatureConfig
 ):
@@ -1096,7 +1143,7 @@ def test_incremental_updater_collapses_leftover_variants_when_experiment_off(
     assert "cold-treatment" not in set(cold["item_id"].astype(str))
 
 
-def test_incremental_updater_publish_failure_raises(tmp_path, feature_config: FeatureConfig):
+def test_incremental_updater_publish_failure_does_not_unsucceed(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()
     pd.DataFrame(
@@ -1113,7 +1160,7 @@ def test_incremental_updater_publish_failure_raises(tmp_path, feature_config: Fe
             return None
 
         def publish(self, _df: pd.DataFrame) -> None:
-            raise RuntimeError("broker down")
+            raise PublishError("broker down")
 
         def close(self) -> None:
             return None
@@ -1127,9 +1174,204 @@ def test_incremental_updater_publish_failure_raises(tmp_path, feature_config: Fe
         publisher=_Boom(),
     )
     events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
-    with pytest.raises(RuntimeError, match="broker down"):
+    assert updater.apply(events) == 1
+    assert called["n"] == 1
+    frame = load_recommendations_frame(settings.output)
+    assert "i9" in set(frame[frame["user_id"] == "u1"]["item_id"].astype(str))
+
+
+def test_incremental_updater_raises_when_fence_lost_after_connect(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    published: list[pd.DataFrame] = []
+    lost_after_connect = {"lost": False}
+
+    class _Pub:
+        def connect(self) -> None:
+            lost_after_connect["lost"] = True
+
+        def publish(self, df: pd.DataFrame) -> None:
+            published.append(df.copy())
+
+        def close(self) -> None:
+            return None
+
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        fence_check=lambda: not lost_after_connect["lost"],
+        publisher=_Pub(),
+    )
+    events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
+    with pytest.raises(LockLostError, match="events apply lock lost before write"):
         updater.apply(events)
-    assert called["n"] == 0
+    assert published == []
+    frame = load_recommendations_frame(settings.output)
+    assert "i9" in set(frame[frame["user_id"] == "u1"]["item_id"].astype(str))
+
+
+def test_incremental_updater_raises_when_fence_lost_before_connect(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    connected = {"n": 0}
+
+    class _Pub:
+        def connect(self) -> None:
+            connected["n"] += 1
+            raise RuntimeError("broker down")
+
+        def publish(self, df: pd.DataFrame) -> None:
+            raise AssertionError("publish should not run")
+
+        def close(self) -> None:
+            return None
+
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        fence_check=lambda: False,
+        publisher=_Pub(),
+    )
+    with pytest.raises(LockLostError, match="events apply lock lost before write"):
+        updater._publish_sidecar(
+            pd.DataFrame([{"user_id": "u1", "item_id": "i9", "rank": 1, "score": 1.0}]),
+            "2026-01-01T00:00:00+00:00",
+        )
+    assert connected["n"] == 0
+
+
+def test_incremental_updater_skips_publish_when_manifest_generation_changes(
+    tmp_path, feature_config: FeatureConfig
+):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    published: list[pd.DataFrame] = []
+
+    class _Pub:
+        def connect(self) -> None:
+            path = out / "manifest.json"
+            payload = json.loads(path.read_text())
+            payload["generated_at"] = "2099-01-01T00:00:00+00:00"
+            path.write_text(json.dumps(payload))
+
+        def publish(self, df: pd.DataFrame) -> None:
+            published.append(df.copy())
+
+        def close(self) -> None:
+            return None
+
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        publisher=_Pub(),
+    )
+    events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
+    assert updater.apply(events) == 1
+    assert published == []
+
+
+def test_incremental_updater_reraises_unexpected_sidecar_generation_error(
+    tmp_path, feature_config: FeatureConfig, monkeypatch
+):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+
+    class _Pub:
+        def connect(self) -> None:
+            return None
+
+        def publish(self, df: pd.DataFrame) -> None:
+            raise AssertionError("publish should not run after generation check failure")
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "cicerone.events.updater.sidecar_generation_current",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("generation check bug")),
+    )
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        publisher=_Pub(),
+    )
+    events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
+    with pytest.raises(RuntimeError, match="generation check bug"):
+        updater.apply(events)
+    frame = load_recommendations_frame(settings.output)
+    assert "i9" in set(frame[frame["user_id"] == "u1"]["item_id"].astype(str))
+
+
+def test_incremental_updater_reraises_writer_lock_busy_from_generation_check(
+    tmp_path, feature_config: FeatureConfig, monkeypatch
+):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+
+    class _Pub:
+        def connect(self) -> None:
+            return None
+
+        def publish(self, df: pd.DataFrame) -> None:
+            raise AssertionError("publish should not run after lock-busy generation check")
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "cicerone.events.updater.sidecar_generation_current",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(WriterLockBusyError("dataset writer lock busy")),
+    )
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        publisher=_Pub(),
+    )
+    events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
+    with pytest.raises(WriterLockBusyError, match="dataset writer lock busy"):
+        updater.apply(events)
     frame = load_recommendations_frame(settings.output)
     assert "i9" in set(frame[frame["user_id"] == "u1"]["item_id"].astype(str))
 
@@ -1199,6 +1441,9 @@ def test_incremental_updater_skips_consumed_when_publish_fails(tmp_path, feature
     )
 
     class _Boom:
+        def connect(self) -> None:
+            return None
+
         def publish(self, _df: pd.DataFrame) -> None:
             raise RuntimeError("broker down")
 
@@ -1303,6 +1548,9 @@ def test_incremental_updater_skips_catalog_when_publish_fails(tmp_path, feature_
     )
 
     class _Boom:
+        def connect(self) -> None:
+            return None
+
         def publish(self, _df: pd.DataFrame) -> None:
             raise RuntimeError("broker down")
 

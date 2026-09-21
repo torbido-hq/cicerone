@@ -130,6 +130,7 @@ export default defineConfig({
 				{
 					label: 'Reference',
 					items: [
+						{ label: 'Configuration', slug: 'configuration' },
 						{
 							label: 'Serve OpenAPI',
 							link: '/openapi/',

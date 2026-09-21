@@ -8,10 +8,33 @@ per-user top-K table, and writes that table. Optional serve mode is a
 **read API over those rows** — `GET /recommendations/{user_id}` never runs
 LightFM or SASRec.
 
+These are three separate flows:
+
+```
+BATCH
+source data → job → model/ranking → materialized recommendations → output
+    → GET /recommendations
+```
+
+```
+INCREMENTAL
+POST /events → accepted/buffered → flush/update → output changes
+    → serving sees the change
+```
+
+```
+QUALITY
+recommendation returned or rendered → impression tracking → click tracking
+    → attribution → Quality / CTR
+```
+
+Do not treat a GET, a `POST /events` `202`, and a Quality impression as
+the same operation.
+
 Packages and I/O live in [architecture.md](architecture.md). Config knobs
-live in the [README](../README.md). This page is the product and algorithm
-story: what each strategy is, how they differ, and which papers or docs to
-read next.
+live in [configuration.md](configuration.md). This page is the product and
+algorithm story: what each strategy is, how they differ, and which papers
+or docs to read next.
 
 ## Pipeline
 
@@ -35,6 +58,31 @@ read next.
 
 Full `job.run()` is the drift backstop (cron or `POST /trigger/retrain`).
 
+## What `GET /recommendations` does
+
+```
+batch job (and optional incremental flush)
+    → materialized recommendation rows
+    → [output]
+    → serve
+    → GET /recommendations/{user_id}
+```
+
+The handler loads rows (and filters `category` / availability). It does
+**not** load a model artifact, fit, or recompute from raw interactions.
+`[events.online]` LightFM `fit_partial` runs in the serve **events
+worker**, then writes rows; GET still only reads.
+
+- **Dataset output:** serve caches the parquet file in memory. A successful
+  incremental flush calls `reader.refresh()`. The
+  `[serve].refresh_interval_seconds` timer (default 60s) is the backup
+  reload, and also picks up a batch job that rewrote the file.
+- **DB output:** each GET queries the recommendation table. The refresh
+  timer only reloads the items snapshot used for filters.
+
+Unknown `user_id`: `__cold_start__` when blending wrote it, else one
+`popular_fallback` / `latest` user's top-K, else 404.
+
 ## Interaction weighting
 
 This runs **before** any model. Unknown `event_type`s are dropped.
@@ -52,7 +100,7 @@ below is Cicerone's weight recipe, not that paper's ALS.
 
 Aggregation is why **sequential sequences are unique items ordered by last
 interaction**, not raw session streams with repeats. Tune the weights in
-`config/features.toml`; see the README Interaction weights section.
+`config/features.toml`; see [configuration.md](configuration.md#feature-config).
 
 ## Strategies
 
@@ -235,7 +283,8 @@ boosts (it can still filter the items snapshot with `?category=` and
   (`boost_overfetch_factor` × `top_k`, default 3), re-rank, truncate.
   Commercial overlay; `source` stays a strategy name.
 
-Recipes: `config/features.toml` and the README Business policies section.
+Recipes: `config/features.toml` and
+[configuration.md](configuration.md#feature-config).
 
 ## Why this item
 
@@ -269,6 +318,9 @@ last model artifact and rewrites those users' personalized / item-KNN /
 content-fallback rows — still write-through, not request-path inference.
 That online rewrite is skipped while `[experiment]` is on. New catalog IDs
 and sequential models wait for the next full `job.run()`.
+`POST /events` `202` is acceptance into the source, not a completed
+rewrite. Dataset serve reloads on a successful flush (`reader.refresh`)
+and on the refresh timer; DB serve reads the table on the next GET.
 Operator guide: [incremental-events.md](incremental-events.md).
 
 ## Cold-start

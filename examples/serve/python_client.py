@@ -32,6 +32,7 @@ def main() -> int:
     print(f"item_scores n={len(scores.items)} next_cursor={scores.next_cursor}")
     for row in scores.items:
         print(f"  {row.item_id} popular={row.popular_score:.4f} latest={row.latest_score:.4f} n_users={row.n_users}")
+    # Returned GET items, not a browser render. Same contract as serve.log_impressions.
     if os.environ.get("CICERONE_POST_TRACK") == "1" and body.items:
         from datetime import UTC, datetime
 

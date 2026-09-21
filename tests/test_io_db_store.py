@@ -330,6 +330,13 @@ def test_database_output_read_model_artifact_missing_returns_none():
     assert sink.model_artifact_fingerprint() is None
 
 
+def test_database_output_read_model_artifact_rejects_oversize():
+    sink = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})
+    sink.write_model_artifact(b"123456")
+    with pytest.raises(ValueError, match="max is 4"):
+        sink.read_model_artifact(max_bytes=4)
+
+
 def test_database_output_model_artifact_custom_table_name():
     sink = DatabaseOutputSink(
         {"database_url": TEST_DATABASE_URL, "model_artifact_table": "custom_model_artifacts"}

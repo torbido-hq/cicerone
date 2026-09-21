@@ -93,6 +93,9 @@ stay isolated (popular/latest still refresh only the assigned variant).
 `GET /recommendations` is still a lookup.
 
 ```toml
+[output]
+artifact_hmac_key = "${OUTPUT_ARTIFACT_HMAC_KEY}"  # 16+ bytes
+
 [events.online]
 enabled = true
 fit_partial_epochs = 1          # 0 = frozen weights + history refresh only
@@ -100,8 +103,9 @@ fit_min_events = 100            # skip SGD until this many known-ID events
 max_extra_interactions = 50000  # online-only rows on top of the last job artifact
 ```
 
-Startup fails if the `[output]` store has no artifact — the batch job must
-set `[job].save_model_artifact = true`. An event is trained only when both
+Startup fails if `[output].artifact_hmac_key` is missing, or if the
+`[output]` store has no artifact — the batch job must set
+`[job].save_model_artifact = true`. An event is trained only when both
 its `user_id` and `item_id` already exist in that artifact (including a new
 interaction between two known IDs). Unknown IDs still get popular / latest /
 `incremental` boosts and wait for the next `job.run()`. After
@@ -112,9 +116,22 @@ affected users are re-scored from the batch-fitted sequential model.
 
 `POST /events` uses Bearer auth (`events.options.auth_token` or
 `serve.auth_token`). Body: one event object, a JSON array, or
-`{"events":[...]}`. Accepted events return **202** with `accepted` and
-`event_ids`. Invalid JSON / contract → **400**. Full backlog
-(`max_pending`) → **429**.
+`{"events":[...]}`.
+
+**`202 Accepted` means Cicerone accepted the event for incremental
+processing. It does not mean the recommendation output has already been
+updated.** `accepted` is the count of novel events pushed into the
+webhook queue (`event_ids` lists those ids). Duplicates already pending
+or in-flight are skipped.
+
+| Status | Meaning |
+| --- | --- |
+| **202** | Queued in the webhook source. Not flushed, not written, not visible on GET |
+| **400** | Invalid JSON or event contract |
+| **401** | Missing or invalid bearer token |
+| **413** | Body larger than `events.options.max_body_bytes` (default 1 MiB) |
+| **429** | Backlog full (`max_pending`, default 10000, minimum 100) |
+| **404** | Route absent (`[events]` off or `kind` is not `webhook`) |
 
 ```sh
 curl -sS -X POST \
@@ -124,11 +141,44 @@ curl -sS -X POST \
   http://localhost:8000/events
 ```
 
-Flushes run when the buffer hits `batch_size` **or**
-`batch_window_seconds` elapses. Then serve's refresh loop (dataset output)
-or the next DB read picks up the new rows. OpenAPI documents the route when
-webhook events are enabled (`/docs`, `/redoc`, checked-in
-`docs/openapi/serve.openapi.json`).
+Visibility is a later pipeline:
+
+```
+POST /events → 202 / in-memory queue
+    → worker poll (poll_interval_seconds, default 1)
+    → flush when batch_size (default 100) is reached
+      or batch_window_seconds (default 60) elapses
+    → incremental update writes [output]
+    → dataset: reader.refresh() on successful flush;
+      periodic [serve].refresh_interval_seconds (default 60) is backup
+    → db: the next GET /recommendations queries the table
+    → GET sees the new rows (if the flush produced a ranking signal)
+```
+
+`GET /recommendations` never runs this worker. A flush with no ranking
+signal increments apply counts but may leave the list unchanged.
+
+OpenAPI documents the route when webhook events are enabled (`/docs`,
+`/redoc`, checked-in `docs/openapi/serve.openapi.json`).
+
+### Webhook pending events are not durable
+
+`kind = "webhook"` keeps `_pending` and `_in_flight` **in process
+memory**. A `202` is not a durable write. A hard restart drops accepted
+events that have not flushed. Graceful stop tries to drain the buffer;
+if the apply lock is busy or the fence is lost, those events are nacked
+back into memory and still die with the process.
+
+That is different from:
+
+| State | Where |
+| --- | --- |
+| Pending / in-flight webhook events | This process only |
+| `db` / `s3` / Redis Streams / Kafka / RabbitMQ sources | Durable backend + cursor / consumer group (see [Delivery semantics](#delivery-semantics)) |
+| Flushed recommendation rows | `[output]` (parquet or db table) |
+
+Do not treat webhook `202` like `POST /track` `202` (track persists
+before it returns).
 
 Full retrain remains `[job]` cron + `[job.trigger]`. Incremental updates
 are a separate cheap path between those runs.
@@ -228,9 +278,14 @@ Optional `timeout_seconds` (default 10; Kafka min 10 ms, max signed 32-bit
 milliseconds) applies to Kafka connect/flush and RabbitMQ socket timeouts. RabbitMQ: `amqp_url` + `queue`, or `exchange` +
 optional `routing_key` (empty is valid, e.g. fanout; omitted queue-mode
 key is the queue name).
-Payload: `{user_id, recommendations: [{user_id, item_id, rank, score, source, …}]}`.
-Kafka key is `user_id`. Publish failures fail the job/flush so events are
-nacked. Requires the matching extra.
+Payload: `{user_id, message_id, recommendations: [{user_id, item_id, rank, score,
+source, …}]}`. `message_id` is a stable SHA-256 of `{user_id, recommendations}`
+(also set on RabbitMQ properties). Kafka key is `user_id`. Publish failures
+after a successful write are logged and do not fail the job or incremental
+flush. A lost apply/retrain fence after the write still fails the run. A
+newer manifest `generated_at` skips publish so a stale snapshot cannot
+land after a later write.
+Requires the matching extra.
 
 ## High availability
 

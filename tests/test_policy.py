@@ -109,6 +109,22 @@ def test_resolve_eligibility_expands_availability_filters():
     rules = resolve_eligibility(config)
     assert [r.name for r in rules] == ["availability:published", "availability:in_stock", "ships_to_user"]
     assert has_user_scoped_eligibility(rules)
+    dropped = resolve_eligibility(_base_config(eligibility=[], merge_item_availability=False))
+    assert dropped == []
+    subset = resolve_eligibility(
+        _base_config(
+            eligibility=[
+                EligibilityRule(
+                    name="ships_to_user",
+                    op="user_in_item_list",
+                    item_column="available_countries",
+                    user_column="nationality",
+                )
+            ],
+            merge_item_availability=False,
+        )
+    )
+    assert [r.name for r in subset] == ["ships_to_user"]
 
 
 def test_eligible_item_mask_item_true():

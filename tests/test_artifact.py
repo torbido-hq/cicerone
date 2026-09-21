@@ -204,6 +204,115 @@ def test_loads_artifact_rejects_both_formats_for_declared_model(
         loads_artifact(out.getvalue())
 
 
+def test_artifact_hmac_round_trip_and_reject_wrong_key(
+    feature_config, sample_events, sample_users, sample_items
+):
+    built = build_dataset(sample_events, sample_users, sample_items, feature_config, half_life_days=90)
+    _, fitted = fit_strategies(built, ["u1"], enabled_models=["popular"])
+    artifact = build_artifact(
+        fitted=fitted,
+        built=built,
+        feature_config=feature_config,
+        models=["popular"],
+        model_weights=None,
+        rrf_k=None,
+    )
+    key = "0123456789abcdef"
+    payload = dumps_artifact(artifact, hmac_key=key)
+    loaded = loads_artifact(payload, hmac_key=key)
+    assert list(loaded.models) == ["popular"]
+    with pytest.raises(ValueError, match="HMAC"):
+        loads_artifact(payload, hmac_key="fedcba9876543210")
+    with pytest.raises(ValueError, match="missing HMAC"):
+        loads_artifact(dumps_artifact(artifact), hmac_key=key)
+
+
+def test_dumps_artifact_rejects_short_hmac_key(feature_config, sample_events, sample_users, sample_items):
+    built = build_dataset(sample_events, sample_users, sample_items, feature_config, half_life_days=90)
+    _, fitted = fit_strategies(built, ["u1"], enabled_models=["popular"])
+    artifact = build_artifact(
+        fitted=fitted,
+        built=built,
+        feature_config=feature_config,
+        models=["popular"],
+        model_weights=None,
+        rrf_k=None,
+    )
+    with pytest.raises(ValueError, match="at least 16"):
+        dumps_artifact(artifact, hmac_key="short")
+
+
+def test_loads_artifact_rejects_nonpositive_max_bytes():
+    with pytest.raises(ValueError, match="max_bytes"):
+        loads_artifact(b"x", max_bytes=0)
+
+
+def test_loads_artifact_rejects_oversize_payload():
+    with pytest.raises(ValueError, match="exceeds"):
+        loads_artifact(b"PK\x03\x04" + b"x" * 20, max_bytes=8)
+
+
+def test_load_artifact_rejects_oversize_file(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    path = tmp_path / "model.artifact"
+    path.write_bytes(b"PK\x03\x04" + b"x" * 20)
+    reads: list[int | None] = []
+    original_open = Path.open
+
+    def _open(self: Path, *args: object, **kwargs: object):
+        handle = original_open(self, *args, **kwargs)
+        if self.resolve() != path.resolve():
+            return handle
+        original_read = handle.read
+
+        def _read(size: int = -1) -> bytes:
+            reads.append(size)
+            return original_read(size)
+
+        handle.read = _read  # type: ignore[method-assign]
+        return handle
+
+    monkeypatch.setattr(Path, "open", _open)
+    with pytest.raises(ValueError, match="exceeds"):
+        load_artifact(path, max_bytes=8)
+    assert reads == [9]
+
+
+def test_load_artifact_rejects_nonpositive_max_bytes(tmp_path):
+    path = tmp_path / "model.artifact"
+    path.write_bytes(b"x")
+    with pytest.raises(ValueError, match="max_bytes"):
+        load_artifact(path, max_bytes=0)
+
+
+def test_loads_artifact_rejects_oversize_hmac_member():
+    import io
+    import zipfile
+
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w") as dest:
+        dest.writestr("meta.json", "{}")
+        dest.writestr("bundle.pkl", b"x")
+        dest.writestr("hmac.sha256", b"x" * 200)
+    with pytest.raises(ValueError, match="HMAC member"):
+        loads_artifact(out.getvalue(), hmac_key="0123456789abcdef", max_bytes=1024)
+
+
+def test_loads_artifact_rejects_oversize_uncompressed_member():
+    import io
+    import zipfile
+
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as dest:
+        dest.writestr("meta.json", "{}")
+        dest.writestr("bundle.pkl", b"x" * 50_000)
+    payload = out.getvalue()
+    assert len(payload) < 500
+    with pytest.raises(ValueError, match="exceeds"):
+        loads_artifact(payload, max_bytes=500)
+
+
 def test_fit_strategies_populates_cache(feature_config, sample_events, sample_users, sample_items):
     built = build_dataset(sample_events, sample_users, sample_items, feature_config, half_life_days=90)
     cache: dict = {}
