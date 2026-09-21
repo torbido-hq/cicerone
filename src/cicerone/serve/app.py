@@ -46,7 +46,7 @@ from cicerone.io.base import (
 )
 from cicerone.io.catalog import CatalogStore
 from cicerone.io.recommendation_reader import SOURCE_COLUMN
-from cicerone.io.recommendation_schema import has_variant_column
+from cicerone.io.recommendation_schema import VARIANT_COLUMN, has_variant_column, pick_fallback_variant
 from cicerone.io.surfaces_reader import EmptySurfacesReader, SurfacesReader
 from cicerone.item_scores import empty_item_scores, normalize_item_scores, page_item_scores
 from cicerone.locks import WriterLockBusyError, build_dataset_writer_lock, build_output_writer_lock
@@ -426,6 +426,17 @@ def create_app(
         if recs is None:
             recs = reader.get_recommendations(user_id, fetch_k, variant=variant)
         used_fallback = False
+        if recs.empty and variant is not None:
+            leftover = reader.get_recommendations(user_id, fetch_k, variant=None)
+            if not leftover.empty:
+                recs = leftover
+                picked = (
+                    pick_fallback_variant(leftover[VARIANT_COLUMN].tolist())
+                    if has_variant_column(leftover)
+                    else None
+                )
+                if picked:
+                    variant = picked
         if recs.empty:
             used_fallback = True
             recs = (
@@ -433,6 +444,12 @@ def create_app(
                 if fallback_recs is not None
                 else reader.get_cold_start_fallback(fetch_k, variant=variant)
             )
+            if recs.empty and variant is not None:
+                recs = reader.get_cold_start_fallback(fetch_k, variant=None)
+                if not recs.empty and has_variant_column(recs):
+                    picked = pick_fallback_variant(recs[VARIANT_COLUMN].tolist())
+                    if picked:
+                        variant = picked
         if recs.empty:
             return None
         if not has_variant_column(recs):
