@@ -49,6 +49,7 @@ from cicerone.job_eval import score_previous_run as _score_previous_run
 from cicerone.job_eval import try_load as _try_load
 from cicerone.job_eval import try_load_pair as _try_load_pair
 from cicerone.job_output import (
+    JobManifest,
     ensure_fence,
     ensure_publication_fence,
     skip_stale_job_manifest,
@@ -96,31 +97,6 @@ def _target_user_ids(events: pd.DataFrame, users: pd.DataFrame | None) -> list[s
         for user_id in column.dropna():
             ids.add(str(user_id))
     return sorted(ids)
-
-
-_MANIFEST_DEFAULTS: dict[str, Any] = {
-    "triggered_by": None,
-    "lock_backend": None,
-    "status": "failed",
-    "error": None,
-    "n_events": None,
-    "n_target_users": None,
-    "n_users_with_recommendations": None,
-    "n_items": None,
-    "top_k": None,
-    "models": "",
-    "model_weights": "",
-    "rrf_k": None,
-    "artifact_written": False,
-    "artifact_schema_version": None,
-    "partial_outputs": False,
-    "automl_enabled": False,
-    "automl_metrics": "",
-    "experiment_id": "",
-    "experiment_variants": "",
-    "track_eval": "",
-    "served_eval": "",
-}
 
 
 def _refresh_pending_thompson(store: ExperimentStore, pending: dict[str, Any]) -> dict[str, Any]:
@@ -325,11 +301,12 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
     )
     publisher = None
 
-    manifest = dict(_MANIFEST_DEFAULTS)
-    manifest["triggered_by"] = triggered_by
-    manifest["lock_backend"] = settings.trigger.lock_backend
-    manifest["top_k"] = settings.top_k
-    manifest["automl_enabled"] = settings.automl.enabled
+    manifest = JobManifest(
+        triggered_by=triggered_by,
+        lock_backend=settings.trigger.lock_backend,
+        top_k=settings.top_k,
+        automl_enabled=settings.automl.enabled,
+    )
     track_eval_payload: dict[str, Any] | None = None
     served_eval_payload: dict[str, Any] | None = None
     recommendations: pd.DataFrame | None = None
@@ -728,7 +705,7 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
                 )
                 if manifest.get("status") == "success":
                     raise
-        logger.info("Job finished: %s", json.dumps(manifest))
+        logger.info("Job finished: %s", json.dumps(manifest.as_dict()))
         if isinstance(close_exc, LockLostError):
             raise close_exc
         if persist_exc is not None:
