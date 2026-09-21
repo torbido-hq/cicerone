@@ -13,7 +13,6 @@ from cicerone.blending import COLD_START_USER_ID
 from cicerone.io import recommendation_schema as _rec
 from cicerone.io.base import BaseRecommendationReader
 from cicerone.io.options import (
-    build_s3_client,
     is_s3_not_found,
     read_parquet,
     require_option,
@@ -45,20 +44,10 @@ class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
         self._fallback_user_id: str | None = None
         self._variant_names: tuple[str, ...] = ()
         self._init_item_filter_state()
-        self._s3_client = None
         self.refresh()
 
-    def _get_s3_client(self):
-        if self._s3_client is None:
-            self._s3_client = build_s3_client(self._options)
-        return self._s3_client
-
     def _read_recommendations(self) -> pd.DataFrame:
-        return read_parquet(
-            self._options,
-            "recommendations.parquet",
-            s3_client=self._get_s3_client() if self._backend == "s3" else None,
-        )
+        return read_parquet(self._options, "recommendations.parquet")
 
     def _read_items_snapshot(self) -> pd.DataFrame | None:
         try:
@@ -66,11 +55,7 @@ class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
                 path = Path(require_option(self._options, "path", "local")) / ITEMS_SNAPSHOT_FILENAME
                 if not path.exists():
                     return None
-            return read_parquet(
-                self._options,
-                ITEMS_SNAPSHOT_FILENAME,
-                s3_client=self._get_s3_client() if self._backend == "s3" else None,
-            )
+            return read_parquet(self._options, ITEMS_SNAPSHOT_FILENAME)
         except FileNotFoundError:
             return None
         except Exception as exc:
