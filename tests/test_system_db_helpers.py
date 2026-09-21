@@ -172,6 +172,27 @@ def test_write_system_config_enables_serve_dashboard_track_eval(tmp_path) -> Non
     assert raw["track"]["enabled"] is True
 
 
+def test_write_system_config_mixes_db_input_and_dataset_output(tmp_path) -> None:
+    import tomllib
+
+    output_path = tmp_path / "out"
+    path = write_system_config(
+        tmp_path / "cicerone.toml",
+        input_kind="db",
+        output_kind="dataset",
+        database_url="postgresql://example/cicerone_test",
+        output_path=output_path,
+    )
+    raw = tomllib.loads(path.read_text())
+    assert raw["input"]["kind"] == "db"
+    assert raw["input"]["options"]["database_url"] == "postgresql://example/cicerone_test"
+    assert "path" not in raw["input"]["options"]
+    assert raw["output"]["kind"] == "dataset"
+    assert raw["output"]["options"]["storage_backend"] == "local"
+    assert raw["output"]["options"]["path"] == str(output_path)
+    assert "database_url" not in raw["output"]["options"]
+
+
 def test_write_system_config_dataset_keeps_input_and_output_trees_apart(tmp_path) -> None:
     import tomllib
 
