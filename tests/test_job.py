@@ -1315,6 +1315,80 @@ def test_job_run_signs_model_artifact_when_hmac_key_set(tmp_path, monkeypatch):
         load_artifact(artifact_path, hmac_key="fedcba9876543210")
 
 
+def test_select_automl_models_keeps_job_models_when_disabled(tmp_path, monkeypatch):
+    from cicerone.config import load_settings
+    from cicerone.feature_config import load_feature_config
+    from cicerone.job import _select_automl_models
+
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir))
+    settings = load_settings()
+    called: list[str] = []
+
+    def boom(*_args: object, **_kwargs: object) -> list[object]:
+        called.append("evaluate")
+        raise AssertionError("AutoML must not run when disabled")
+
+    monkeypatch.setattr("cicerone.job.evaluate_candidates", boom)
+    selected = _select_automl_models(
+        settings,
+        pd.DataFrame(),
+        None,
+        None,
+        load_feature_config(settings.feature_config_path),
+    )
+    assert called == []
+    assert selected.result is None
+    assert selected.models == settings.models
+    assert selected.weights == settings.model_weights
+    assert selected.rrf_k == settings.rrf_k
+
+
+def test_select_automl_models_uses_winning_candidate(tmp_path, monkeypatch):
+    from cicerone.automl import Candidate, CandidateResult
+    from cicerone.config import load_settings
+    from cicerone.feature_config import load_feature_config
+    from cicerone.job import _select_automl_models
+
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    extra_job = """
+        [job.automl]
+        enabled = true
+        n_splits = 1
+        test_days = 7
+        primary_metric = "MAP"
+    """
+    monkeypatch.setenv(
+        "CICERONE_CONFIG_PATH",
+        _write_config(tmp_path, input_dir, output_dir, extra_job=extra_job),
+    )
+    winner = CandidateResult(
+        Candidate(models=["latest"], weights=None, rrf_k=40.0),
+        metrics={"MAP": 0.5},
+        n_folds=1,
+    )
+    monkeypatch.setattr("cicerone.job.evaluate_candidates", lambda *_args, **_kwargs: [winner])
+    monkeypatch.setattr("cicerone.job.select_best_candidate", lambda *_args, **_kwargs: winner)
+    settings = load_settings()
+    selected = _select_automl_models(
+        settings,
+        pd.DataFrame(),
+        None,
+        None,
+        load_feature_config(settings.feature_config_path),
+    )
+    assert selected.result is winner
+    assert selected.models == ["latest"]
+    assert selected.weights is None
+    assert selected.rrf_k == 40.0
+
+
 def test_job_run_with_automl_enabled_selects_and_records_best_candidate(tmp_path, monkeypatch):
     input_dir = tmp_path / "in"
     output_dir = tmp_path / "out"

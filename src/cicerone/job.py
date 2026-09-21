@@ -13,7 +13,7 @@ from typing import Any, NamedTuple
 import pandas as pd
 
 from cicerone.artifact import ARTIFACT_SCHEMA_VERSION, build_artifact, dumps_artifact
-from cicerone.automl import evaluate_candidates, select_best_candidate
+from cicerone.automl import CandidateResult, evaluate_candidates, select_best_candidate
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import Settings, load_settings
 from cicerone.config.constants import ALLOCATION_THOMPSON, DEFAULT_LOG_FORMAT
@@ -35,7 +35,7 @@ from cicerone.experiment.thompson import (
     track_rows_since,
     window_trials_from_slices,
 )
-from cicerone.feature_config import load_feature_config
+from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.io.factory import build_input_source, build_manifest_reader, build_output_sink
 from cicerone.io.recommendation_schema import USER_COLUMN, VARIANT_COLUMN, filter_variant_rows
 from cicerone.job_eval import OPTIONAL_EVAL_ERRORS as _OPTIONAL_EVAL_ERRORS
@@ -86,6 +86,13 @@ logger = logging.getLogger(__name__)
 class ThompsonSelection(NamedTuple):
     recipes: tuple[ResolvedRecipe, ...]
     state: dict[str, Any] | None = None
+
+
+class AutomlSelection(NamedTuple):
+    models: list[str] | None
+    weights: dict[str, float] | None
+    rrf_k: float | None
+    result: CandidateResult | None
 
 
 def _target_user_ids(events: pd.DataFrame, users: pd.DataFrame | None) -> list[str]:
@@ -275,6 +282,44 @@ def _recommendation_user_count(recommendations: pd.DataFrame) -> int:
     return int(user_ids[user_ids != COLD_START_USER_ID].nunique())
 
 
+def _select_automl_models(
+    settings: Settings,
+    events: pd.DataFrame,
+    users: pd.DataFrame | None,
+    items: pd.DataFrame | None,
+    feature_config: FeatureConfig,
+) -> AutomlSelection:
+    models, weights, rrf_k = settings.models, settings.model_weights, settings.rrf_k
+    if not settings.automl.enabled:
+        return AutomlSelection(models, weights, rrf_k, None)
+    result = select_best_candidate(
+        evaluate_candidates(
+            events,
+            users,
+            items,
+            feature_config,
+            top_k=settings.top_k,
+            half_life_days=settings.half_life_days,
+            candidates=settings.automl.candidates,
+            n_splits=settings.automl.n_splits,
+            test_days=settings.automl.test_days,
+            max_workers=settings.max_workers,
+            model_configs=settings.model_configs,
+            sequential_min_median_interactions=settings.sequential_min_median_interactions,
+            debias=settings.automl.debias,
+            content_fallback_enabled=settings.content_fallback_enabled,
+        ),
+        primary_metric=settings.automl.primary_metric,
+    )
+    logger.info(
+        "AutoML selected '%s' (metrics=%s, over %d fold(s))",
+        result.candidate.label,
+        result.metrics,
+        result.n_folds,
+    )
+    return AutomlSelection(result.candidate.models, result.candidate.weights, result.candidate.rrf_k, result)
+
+
 def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None = None) -> None:
     settings = load_settings()
     retrain_lock = _maybe_acquire_direct_retrain_lock(settings, fence_check)
@@ -344,37 +389,9 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
 
         target_users = _target_user_ids(events, users)
 
-        automl_result = None
-        enabled_models, weights, rrf_k = settings.models, settings.model_weights, settings.rrf_k
-        if settings.automl.enabled:
-            candidate_results = evaluate_candidates(
-                events,
-                users,
-                items,
-                feature_config,
-                top_k=settings.top_k,
-                half_life_days=settings.half_life_days,
-                candidates=settings.automl.candidates,
-                n_splits=settings.automl.n_splits,
-                test_days=settings.automl.test_days,
-                max_workers=settings.max_workers,
-                model_configs=settings.model_configs,
-                sequential_min_median_interactions=settings.sequential_min_median_interactions,
-                debias=settings.automl.debias,
-                content_fallback_enabled=settings.content_fallback_enabled,
-            )
-            automl_result = select_best_candidate(
-                candidate_results, primary_metric=settings.automl.primary_metric
-            )
-            enabled_models = automl_result.candidate.models
-            weights = automl_result.candidate.weights
-            rrf_k = automl_result.candidate.rrf_k
-            logger.info(
-                "AutoML selected '%s' (metrics=%s, over %d fold(s))",
-                automl_result.candidate.label,
-                automl_result.metrics,
-                automl_result.n_folds,
-            )
+        automl = _select_automl_models(settings, events, users, items, feature_config)
+        enabled_models, weights, rrf_k = automl.models, automl.weights, automl.rrf_k
+        automl_result = automl.result
 
         fitted: dict[str, RecommenderModel] = {}
         if settings.experiment.enabled and last_manifest is None:
