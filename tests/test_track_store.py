@@ -458,8 +458,10 @@ def test_track_store_sqlite_read_errors(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(pd, "read_sql", _boom)
     with pytest.raises(RuntimeError, match="db down"):
         store.read_rows()
-    assert store.read_eval() is None
-    assert store.read_history().empty
+    with pytest.raises(RuntimeError, match="db down"):
+        store.read_eval()
+    with pytest.raises(RuntimeError, match="db down"):
+        store.read_history()
 
 
 def test_track_store_sqlite_operational_error_reraises(tmp_path, monkeypatch) -> None:
@@ -476,6 +478,10 @@ def test_track_store_sqlite_operational_error_reraises(tmp_path, monkeypatch) ->
     monkeypatch.setattr(pd, "read_sql", _boom)
     with pytest.raises(OperationalError, match="connection refused"):
         store.read_rows()
+    with pytest.raises(OperationalError, match="connection refused"):
+        store.read_eval()
+    with pytest.raises(OperationalError, match="connection refused"):
+        store.read_history()
 
 
 def test_track_jsonl_same_batch_duplicate_event_id(tmp_path) -> None:
