@@ -675,6 +675,20 @@ def test_read_exposures_db_unexpected_error_reraises(tmp_path, monkeypatch) -> N
         store.read_exposures()
 
 
+def test_read_exposures_db_operational_error_reraises(tmp_path, monkeypatch) -> None:
+    from sqlalchemy.exc import OperationalError
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    store = ExperimentStore(IOSettings(kind="db", options={"database_url": url}))
+
+    def _read(*_args, **_kwargs):
+        raise OperationalError("SELECT 1", {}, Exception("connection refused"))
+
+    monkeypatch.setattr("cicerone.experiment.store.pd.read_sql", _read)
+    with pytest.raises(OperationalError, match="connection refused"):
+        store.read_exposures()
+
+
 def test_append_exposures_empty_is_noop(tmp_path) -> None:
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     ExperimentStore(output).append_exposures([])
