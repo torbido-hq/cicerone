@@ -24,6 +24,7 @@ from cicerone.dashboard_experiments import clear_promotion, experiment_context, 
 from cicerone.dashboard_lookup import lookup_inspector
 from cicerone.dashboard_quality import quality_context
 from cicerone.dashboard_users import load_users
+from cicerone.feature_config import load_feature_config
 from cicerone.http_auth import require_basic_auth
 from cicerone.http_security import (
     CSRF_FORM_FIELD,
@@ -39,6 +40,7 @@ from cicerone.http_security import (
 )
 from cicerone.io.base import ManifestReader, RecommendationReader, UserHistoryReader
 from cicerone.io.factory import build_manifest_reader, build_recommendation_reader, build_user_history_reader
+from cicerone.serve.item_filters import configure_reader_item_filters
 
 logging.basicConfig(level=logging.INFO, format=DEFAULT_LOG_FORMAT)
 logger = logging.getLogger(__name__)
@@ -334,6 +336,29 @@ def create_app(
     return app
 
 
+def _configure_lookup_filters(settings: Settings, rec_reader: RecommendationReader | None) -> None:
+    if rec_reader is None or not hasattr(rec_reader, "configure_item_filters"):
+        return
+    feature_path = Path(settings.feature_config_path)
+    if feature_path.is_file():
+        try:
+            feature_config = load_feature_config(feature_path)
+        except Exception:
+            logger.exception("Failed to load feature config for dashboard lookup")
+            feature_config = None
+    else:
+        logger.warning(
+            "feature config missing at %s; dashboard lookup continuing without features.toml",
+            feature_path,
+        )
+        feature_config = None
+    configure_reader_item_filters(
+        rec_reader,
+        category_column=settings.serve.category_column,
+        availability_filters=list(feature_config.item_availability_filters) if feature_config else [],
+    )
+
+
 def main() -> None:
     settings = load_settings()
     if not settings.dashboard.enabled:
@@ -352,6 +377,7 @@ def main() -> None:
     except Exception:
         logger.exception("Recommendation store is not available; dashboard lookup will be disabled")
         rec_reader = None
+    _configure_lookup_filters(settings, rec_reader)
     try:
         history_reader = build_user_history_reader(settings.input)
     except Exception:

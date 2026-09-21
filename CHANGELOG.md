@@ -33,6 +33,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Job-time Thompson samples Beta(1+s, 1+f) in-process instead of writing MABWiser's private `_imp` counts.
 - Online refresh still rewrites LightFM / popular lists when the sequential extra is missing. Only the sequential model is skipped.
 
+### Changed
+
+- Dashboard user lookup applies the same item availability filters as serve.
+
 ### Fixed
 
 - Quality replay deltas skip the latest stored run when CTR is live, and catalog Δ only attaches to the matching cutoff.

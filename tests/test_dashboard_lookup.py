@@ -554,3 +554,78 @@ def test_format_recommendation_rows_summarizes_reasons():
     )
     rows = format_recommendation_rows(recs, category_column=None)
     assert rows[0]["reasons"] == "personalized+popular_fallback · like i9"
+
+
+class _FilterRecs:
+    def __init__(self, recs: pd.DataFrame, items: pd.DataFrame):
+        self._recs = recs
+        self._items = items
+        self.requested_k: int | None = None
+
+    def refresh(self) -> None:
+        return
+
+    def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame:
+        del user_id, variant
+        self.requested_k = k
+        return self._recs.head(k).reset_index(drop=True)
+
+    def get_items(self) -> pd.DataFrame | None:
+        return self._items
+
+    def get_cold_start_fallback(self, k: int, *, variant: str | None = None) -> pd.DataFrame:
+        del k, variant
+        return pd.DataFrame()
+
+
+def test_lookup_drops_unavailable_items_and_refills(tmp_path):
+    features = tmp_path / "features.toml"
+    features.write_text('item_availability_filters = ["published", "in_stock"]\n')
+    settings = make_settings(
+        dashboard_enabled=True,
+        feature_config_path=str(features),
+        top_k=2,
+        dashboard_lookup_k=2,
+    )
+    recs = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"},
+            {"user_id": "u1", "item_id": "i2", "rank": 2, "score": 0.8, "source": "personalized"},
+            {"user_id": "u1", "item_id": "i3", "rank": 3, "score": 0.7, "source": "personalized"},
+        ]
+    )
+    items = pd.DataFrame(
+        [
+            {"item_id": "i1", "published": True, "in_stock": True},
+            {"item_id": "i2", "published": False, "in_stock": True},
+            {"item_id": "i3", "published": True, "in_stock": True},
+        ]
+    )
+    reader = _FilterRecs(recs, items)
+    result = lookup_recommendations(settings, reader, "u1")
+    assert [row["item_id"] for row in result["items"]] == ["i1", "i3"]
+    assert [row["rank"] for row in result["items"]] == ["1", "2"]
+    assert reader.requested_k == 10
+
+
+def test_lookup_keeps_items_when_features_toml_is_missing(tmp_path):
+    settings = make_settings(
+        dashboard_enabled=True,
+        feature_config_path=str(tmp_path / "missing.toml"),
+        top_k=2,
+        dashboard_lookup_k=2,
+    )
+    recs = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"},
+            {"user_id": "u1", "item_id": "i2", "rank": 2, "score": 0.8, "source": "personalized"},
+        ]
+    )
+    items = pd.DataFrame(
+        [
+            {"item_id": "i1", "published": True, "in_stock": True},
+            {"item_id": "i2", "published": False, "in_stock": True},
+        ]
+    )
+    result = lookup_recommendations(settings, _FilterRecs(recs, items), "u1")
+    assert [row["item_id"] for row in result["items"]] == ["i1", "i2"]
