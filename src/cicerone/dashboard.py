@@ -279,7 +279,7 @@ def create_app(
 
     @app.get("/dashboard/quality", dependencies=[Depends(auth)])
     def quality(request: Request):
-        context = quality_context(settings)
+        context = quality_context(settings, reader)
         context["page_title"] = "Quality · Cicerone dashboard"
         return _html(request, "quality.html", context, settings=settings)
 

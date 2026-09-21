@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.8.4] - 2026-09-21
 
+### Added
+
+- Quality splits production replay into ranking vs catalog metrics, shows
+  run-over-run deltas from job manifests, and warns when rank CTR rises.
+
 ### Fixed
 
 - Redis Streams heartbeat XCLAIM failure fails closed so apply nacks before

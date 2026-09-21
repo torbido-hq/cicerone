@@ -194,4 +194,4 @@ def test_system_track_eval_quality_loop(quality_system: QualitySystem) -> None:
     expected_ctr = f"{(1 / len(impressions)) * 100:.2f}%"
     assert re.search(rf"Impressions</dt><dd[^>]*>{len(impressions)}</dd>", quality.text)
     assert re.search(r"Clicks</dt><dd[^>]*>1</dd>", quality.text)
-    assert re.search(rf"CTR</dt><dd[^>]*>{re.escape(expected_ctr)}</dd>", quality.text)
+    assert re.search(rf"CTR</dt>\s*<dd[^>]*>{re.escape(expected_ctr)}", quality.text)
