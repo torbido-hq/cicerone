@@ -44,6 +44,8 @@ def _secret_settings(**overrides):
                 "bucket": "recs",
                 "endpoint_url": "https://minio.example:9000",
                 "webhook": "https://hooks.slack.com/services/T/B/xxx",
+                "bootstrap_servers": "kafka.internal:9092",
+                "sasl_username": "broker-user",
             },
         ),
         output=IOSettings(
@@ -87,7 +89,9 @@ def test_config_display_redacts_secrets_and_keeps_safe_values():
     assert trigger["fields"]["auth_token"] == REDACTED
     assert trigger["fields"]["postgres_url"] == REDACTED
     assert incoming["fields"]["kind"] == "dataset"
-    assert incoming["fields"]["options"]["bucket"] == "recs"
+    assert incoming["fields"]["options"]["bucket"] == REDACTED
+    assert incoming["fields"]["options"]["bootstrap_servers"] == REDACTED
+    assert incoming["fields"]["options"]["sasl_username"] == REDACTED
     assert incoming["fields"]["options"]["access_key_id"] == REDACTED
     assert incoming["fields"]["options"]["secret_access_key"] == REDACTED
     assert incoming["fields"]["options"]["api_key"] == REDACTED
@@ -137,11 +141,12 @@ def test_config_display_unreadable_feature_file(tmp_path):
 
 def test_config_display_loads_feature_file(tmp_path):
     path = tmp_path / "features.toml"
-    path.write_text("[event_weights]\npurchase = 4.0\n")
+    path.write_text("[event_weights]\npurchase = 4.0\nbucket = 2.0\n")
     settings = make_settings(feature_config_path=str(path))
     features = _section(config_display(settings), "features")
     assert features["message"] is None
     assert features["fields"]["event_weights"]["purchase"] == 4.0
+    assert features["fields"]["event_weights"]["bucket"] == 2.0
 
 
 def test_normalize_dataclass_instance():
@@ -186,7 +191,9 @@ def test_config_page_renders_redacted_html(tmp_path):
     assert "cron_schedule" in html
     assert "dataset" in html
     assert "AKIATEST" not in html
-    assert "recs" in html
+    assert "recs" not in html
+    assert "kafka.internal" not in html
+    assert "broker-user" not in html
     assert "[redacted]" in html
     assert "0123456789abcdef" not in html
     assert "super-secret-serve" not in html
