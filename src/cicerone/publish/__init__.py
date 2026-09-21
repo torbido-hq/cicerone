@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from cicerone.publish.base import RecommendationPublisher
+from cicerone.publish.base import PublishError, RecommendationPublisher
 from cicerone.publish.factory import build_publisher, registered_publish_kinds
 from cicerone.publish.kafka import KafkaPublisher
 from cicerone.publish.rabbitmq import RabbitMQPublisher
 
 __all__ = [
     "KafkaPublisher",
+    "PublishError",
     "RabbitMQPublisher",
     "RecommendationPublisher",
     "build_publisher",

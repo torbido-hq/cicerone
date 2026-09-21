@@ -247,7 +247,8 @@ def test_quality_live_eval_pushes_conversion_event_types(tmp_path, monkeypatch):
     )
     seen: dict[str, object] = {}
 
-    def _load_events(_settings, *, event_types=None):
+    def _load_events(_settings, *, event_types=None, since=None):
+        del since
         seen["event_types"] = event_types
         return pd.DataFrame(columns=["user_id", "item_id", "event_type", "quantity", "occurred_at"])
 

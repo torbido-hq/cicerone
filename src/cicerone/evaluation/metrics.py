@@ -66,6 +66,41 @@ def _ratio(numerator: int, denominator: int) -> float:
     return float(numerator) / float(denominator)
 
 
+def _fill_blank_ids(frame: pd.DataFrame, prefix: str) -> pd.DataFrame:
+    frame = frame.reset_index(drop=True).copy()
+    generated = [f"{prefix}-{i}" for i in range(len(frame))]
+    if "event_id" not in frame.columns:
+        frame["event_id"] = generated
+        return frame
+    ids = frame["event_id"].astype(str).str.strip()
+    frame["event_id"] = [
+        current if kept else fallback
+        for current, kept, fallback in zip(
+            frame["event_id"], ids.ne("") & frame["event_id"].notna(), generated, strict=True
+        )
+    ]
+    return frame
+
+
+def _clicked_impression_count(matched_clicks: pd.DataFrame) -> int:
+    if matched_clicks.empty:
+        return 0
+    if "prior_event_id" in matched_clicks.columns:
+        return int(matched_clicks["prior_event_id"].dropna().astype(str).nunique())
+    return int(len(matched_clicks))
+
+
+def _clicked_impressions_by_user(matched_clicks: pd.DataFrame) -> pd.Series:
+    if matched_clicks.empty or USER_COLUMN not in matched_clicks.columns:
+        return pd.Series(dtype=int)
+    if "prior_event_id" in matched_clicks.columns:
+        keyed = matched_clicks.dropna(subset=["prior_event_id"])
+        if keyed.empty:
+            return pd.Series(dtype=int)
+        return keyed.groupby(USER_COLUMN)["prior_event_id"].nunique()
+    return matched_clicks.groupby(USER_COLUMN).size()
+
+
 def _slice_metrics(
     impressions: pd.DataFrame,
     matched_clicks: pd.DataFrame,
@@ -73,7 +108,7 @@ def _slice_metrics(
     click_conversions: pd.DataFrame,
 ) -> SliceMetrics:
     n_impressions = int(len(impressions))
-    n_clicks = int(len(matched_clicks))
+    n_clicks = min(_clicked_impression_count(matched_clicks), n_impressions)
     n_view = min(int(len(view_conversions)), n_impressions)
     n_click = min(int(len(click_conversions)), n_impressions)
     users = set()
@@ -104,8 +139,7 @@ def _merge_asof_events(
     if "event_id" in earlier.columns:
         keep.append("event_id")
     right = earlier.loc[:, [column for column in keep if column in earlier.columns]].copy()
-    if "event_id" not in right.columns:
-        right["event_id"] = [f"prior-{i}" for i in range(len(right))]
+    right = _fill_blank_ids(right, "prior")
     right = right.rename(columns={OCCURRED_AT: "prior_at", "event_id": "prior_event_id"})
     left = left.sort_values(OCCURRED_AT)
     right = right.sort_values("prior_at")
@@ -142,7 +176,7 @@ def _coalesce_column(frame: pd.DataFrame, name: str) -> None:
 def _column_ids(frame: pd.DataFrame, column: str) -> set[str]:
     if frame.empty or column not in frame.columns:
         return set()
-    return {str(value) for value in frame[column].dropna()}
+    return {str(value) for value in frame[column].dropna() if str(value).strip()}
 
 
 def _slice_later_events(frame: pd.DataFrame, keys: pd.DataFrame, prior_ids: set[str]) -> pd.DataFrame:

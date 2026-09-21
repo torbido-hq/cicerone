@@ -4,14 +4,11 @@ from __future__ import annotations
 
 import logging
 import socket
-import threading
-from collections import deque
 from collections.abc import Sequence
-from datetime import datetime
 from typing import Any
 
 from cicerone.config import ConfigError
-from cicerone.events.base import EventSource, EventSourceHealth, NormalizedEvent
+from cicerone.events.base import EventSourceHealth, NormalizedEvent, QueuedEventSource
 from cicerone.events.normalize import EventNormalizeError, normalize_event
 
 logger = logging.getLogger(__name__)
@@ -54,11 +51,12 @@ def _require_str(options: dict[str, Any], key: str) -> str:
     return value
 
 
-class RedisStreamsEventSource(EventSource):
+class RedisStreamsEventSource(QueuedEventSource):
     """Consume flat stream hashes via a consumer group; ack with ``XACK``."""
 
     def __init__(self, options: dict[str, Any]):
         validate_redis_stream_options(options)
+        super().__init__()
         self._redis_url = _require_str(options, "redis_url")
         self._stream = _require_str(options, "stream")
         self._group = _require_str(options, "consumer_group")
@@ -72,14 +70,8 @@ class RedisStreamsEventSource(EventSource):
         self._claim_idle_ms = _as_int(options, "claim_idle_ms", _DEFAULT_CLAIM_IDLE_MS)
 
         self._client: Any | None = None
-        self._connected = False
-        self._lock = threading.Lock()
-        self._pending: deque[NormalizedEvent] = deque()
-        self._pending_ids: set[str] = set()
-        self._in_flight: set[str] = set()
         self._entry_ids: dict[str, str] = {}  # event_id → stream entry id (until XACK)
         self._held_entries: set[str] = set()  # stream entry ids we already track
-        self._last_event_at: datetime | None = None
         self._claim_cursor = "0-0"
 
     def connect(self) -> None:
@@ -124,9 +116,7 @@ class RedisStreamsEventSource(EventSource):
             client = self._client
             self._client = None
             self._connected = False
-            self._pending.clear()
-            self._pending_ids.clear()
-            self._in_flight.clear()
+            self._clear_lifecycle()
             self._entry_ids.clear()
             self._held_entries.clear()
         if client is not None:
@@ -135,75 +125,10 @@ class RedisStreamsEventSource(EventSource):
             except Exception:
                 logger.exception("Redis Streams client close failed")
 
-    def poll(self, max_events: int = 100) -> Sequence[NormalizedEvent]:
-        if max_events < 1:
-            return []
-        client = self._require_client()
-        out: list[NormalizedEvent] = []
-
-        with self._lock:
-            while self._pending and len(out) < max_events:
-                event = self._pending.popleft()
-                self._pending_ids.discard(event.event_id)
-                self._in_flight.add(event.event_id)
-                out.append(event)
-
-        remaining = max_events - len(out)
-        if remaining > 0:
-            out.extend(self._claim_idle(client, remaining))
-            remaining = max_events - len(out)
-        if remaining > 0:
-            out.extend(self._read_new(client, remaining))
-
-        if out:
-            newest = max(event.occurred_at for event in out)
-            with self._lock:
-                self._last_event_at = newest
-        return out
-
-    def ack(self, event_ids: Sequence[str]) -> Sequence[str]:
-        if not event_ids:
-            return ()
-        client = self._require_client()
-        with self._lock:
-            resolved: list[tuple[str, str]] = []
-            for event_id in event_ids:
-                eid = str(event_id)
-                entry_id = self._entry_ids.get(eid)
-                if entry_id is not None:
-                    resolved.append((eid, entry_id))
-        if not resolved:
-            return ()
-        # XACK before dropping local maps so a failed ack can still nack/retry.
-        client.xack(self._stream, self._group, *(entry_id for _, entry_id in resolved))
-        with self._lock:
-            for eid, entry_id in resolved:
-                self._entry_ids.pop(eid, None)
-                self._held_entries.discard(entry_id)
-                self._in_flight.discard(eid)
-                self._pending_ids.discard(eid)
-        return tuple(eid for eid, _entry_id in resolved)
-
-    def nack(self, events: Sequence[NormalizedEvent]) -> Sequence[NormalizedEvent]:
-        if not events:
-            return ()
-        kept: set[int] = set()
-        with self._lock:
-            for event in reversed(list(events)):
-                if event.event_id not in self._entry_ids:
-                    continue
-                self._in_flight.discard(event.event_id)
-                kept.add(id(event))
-                if event.event_id in self._pending_ids:
-                    continue
-                self._pending.appendleft(event)
-                self._pending_ids.add(event.event_id)
-        return tuple(event for event in events if id(event) not in kept)
-
     def heartbeat(self, events: Sequence[NormalizedEvent]) -> None:
         if not events:
             return
-        client = self._require_client()
+        client = self._require_ready()
         with self._lock:
             entry_ids = [
                 self._entry_ids[event.event_id] for event in events if event.event_id in self._entry_ids
@@ -220,12 +145,13 @@ class RedisStreamsEventSource(EventSource):
             )
         except Exception:
             logger.exception("Redis Streams heartbeat XCLAIM failed")
+            raise
 
     def health(self) -> EventSourceHealth:
         with self._lock:
             connected = self._connected
             client = self._client
-            local_held = len(self._pending_ids) + len(self._in_flight)
+            local_held = self._local_held_unlocked()
             last_event_at = self._last_event_at
         if not connected or client is None:
             return EventSourceHealth(connected=False, lag=None, last_event_at=last_event_at)
@@ -255,11 +181,31 @@ class RedisStreamsEventSource(EventSource):
             detail=f"stream={self._stream} group={self._group} consumer={self._consumer}",
         )
 
-    def _require_client(self) -> Any:
+    def _backend(self) -> Any:
+        return self._client
+
+    def _delivery_handle(self, event_id: str) -> Any | None:
+        return self._entry_ids.get(event_id)
+
+    def _fetch_events(self, client: Any, max_events: int) -> list[NormalizedEvent]:
+        out: list[NormalizedEvent] = []
+        remaining = max_events
+        if remaining > 0:
+            out.extend(self._claim_idle(client, remaining))
+            remaining = max_events - len(out)
+        if remaining > 0:
+            out.extend(self._read_new(client, remaining))
+        return out
+
+    def _commit_acks(self, client: Any, resolved: Sequence[tuple[str, Any]]) -> Sequence[str]:
+        # XACK before dropping local maps so a failed ack can still nack/retry.
+        client.xack(self._stream, self._group, *(entry_id for _, entry_id in resolved))
         with self._lock:
-            if not self._connected or self._client is None:
-                raise RuntimeError("RedisStreamsEventSource is not connected")
-            return self._client
+            for eid, entry_id in resolved:
+                self._entry_ids.pop(eid, None)
+                self._held_entries.discard(entry_id)
+                self._forget_ids_unlocked(eid)
+        return tuple(eid for eid, _entry_id in resolved)
 
     def _group_lag(self, client: Any) -> int | None:
         groups = client.xinfo_groups(self._stream)

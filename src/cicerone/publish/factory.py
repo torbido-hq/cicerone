@@ -19,7 +19,9 @@ _PUBLISHERS: dict[str, _PublisherFactory] = {
 }
 
 
-def build_publisher(settings: Settings | PublishSettings) -> RecommendationPublisher | None:
+def build_publisher(
+    settings: Settings | PublishSettings, *, connect: bool = True
+) -> RecommendationPublisher | None:
     publish = settings.publish if isinstance(settings, Settings) else settings
     if not publish.enabled:
         return None
@@ -27,7 +29,8 @@ def build_publisher(settings: Settings | PublishSettings) -> RecommendationPubli
     if factory is None:
         raise ConfigError(f"publish.kind must be one of {sorted(_PUBLISHERS)}, got {publish.kind!r}")
     publisher = factory(dict(publish.options))
-    publisher.connect()
+    if connect:
+        publisher.connect()
     return publisher
 
 

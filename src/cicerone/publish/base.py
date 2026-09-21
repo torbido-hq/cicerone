@@ -7,6 +7,10 @@ from typing import Protocol
 import pandas as pd
 
 
+class PublishError(RuntimeError):
+    """Sidecar publish, connect, or close failed."""
+
+
 class RecommendationPublisher(Protocol):
     def connect(self) -> None: ...
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 from contextlib import suppress
+from hashlib import sha256
 
 import pandas as pd
 
@@ -28,20 +29,21 @@ def _json_cell(value: object) -> object:
     return value
 
 
-def user_recommendation_messages(df: pd.DataFrame) -> list[tuple[str, bytes]]:
+def user_recommendation_messages(df: pd.DataFrame) -> list[tuple[str, bytes, str]]:
     if df is None or df.empty or USER_COLUMN not in df.columns:
         return []
     columns = recommendation_output_columns(df)
     indexed = df[columns].copy()
     indexed[USER_COLUMN] = indexed[USER_COLUMN].astype(str)
-    out: list[tuple[str, bytes]] = []
+    out: list[tuple[str, bytes, str]] = []
     for user_id, group in indexed.groupby(USER_COLUMN, sort=False):
         records = [
             {key: _json_cell(val) for key, val in row.items()} for row in group.to_dict(orient="records")
         ]
-        body = json.dumps(
-            {"user_id": str(user_id), "recommendations": records},
-            allow_nan=False,
-        ).encode("utf-8")
-        out.append((str(user_id), body))
+        content = {"user_id": str(user_id), "recommendations": records}
+        message_id = sha256(
+            json.dumps(content, allow_nan=False, separators=(",", ":"), sort_keys=True).encode()
+        ).hexdigest()
+        body = json.dumps({**content, "message_id": message_id}, allow_nan=False).encode()
+        out.append((str(user_id), body, message_id))
     return out
