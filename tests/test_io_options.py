@@ -390,6 +390,7 @@ def test_read_parquet_s3_uses_pyarrow_filesystem(mocker):
     read_table.assert_called_once_with(
         "recs/run/recommendations.parquet",
         filesystem="fs",
+        use_pandas_metadata=True,
         columns=["user_id"],
         filters=[("user_id", "==", "u1")],
     )

@@ -301,7 +301,10 @@ def _read_s3_parquet_pyarrow(
 ) -> pd.DataFrame:
     import pyarrow.parquet as pq
 
-    read_kwargs: dict[str, Any] = {"filesystem": _s3_filesystem(options)}
+    read_kwargs: dict[str, Any] = {
+        "filesystem": _s3_filesystem(options),
+        "use_pandas_metadata": True,
+    }
     if columns is not None:
         read_kwargs["columns"] = list(columns)
     if filters is not None:
