@@ -316,8 +316,9 @@ skip rules above still apply.
 
 ## Incremental vs full retrain
 
-`[events]` always refreshes **popular / latest slices** (and recency boosts)
-for affected users plus `__cold_start__`. With `[events.online]`, the serve
+`[events]` injects recency boosts and may backfill popular / latest for
+affected users, filtered by the items snapshot. Existing `__cold_start__`
+is kept. With `[events.online]`, the serve
 events worker also continues LightFM (`fit_partial`) on IDs already in the
 last model artifact and rewrites those users' personalized / item-KNN /
 content-fallback rows — still write-through, not request-path inference.
@@ -335,7 +336,7 @@ interactions **and** no features). Feature-only users are warm for LightFM.
 Serve / dashboard answer an unknown `user_id` with `fallback: true` rather
 than a bare 404 — when there is something to fall back to. The job writes the
 `__cold_start__` set whenever `popular` is in the run (popular-only under
-priority or RRF; blending may also mix in `latest`). Incremental events then
-keep it fresh. Without a sentinel the reader substitutes one
-`popular_fallback` / `latest` user's top-K, and 404s if the table has
-neither.
+priority or RRF; blending may also mix in `latest`). Incremental events keep
+an existing sentinel and do not rebuild it from the flush. Without a sentinel
+the reader substitutes one `popular_fallback` / `latest` user's top-K, and
+404s if the table has neither.

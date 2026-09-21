@@ -233,6 +233,7 @@ def start_events_runtime(
             publisher=publisher,
             consumed=consumed,
             catalog=catalog,
+            items_provider=getattr(reader, "get_items", None),
         )
         buffer = MicroBatchBuffer(
             batch_size=settings.events.incremental.batch_size,
