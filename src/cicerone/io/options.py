@@ -283,7 +283,7 @@ def _s3_filesystem(options: dict[str, Any]):
     return pafs.S3FileSystem(
         access_key=require_option(options, "access_key_id", "s3"),
         secret_key=require_option(options, "secret_access_key", "s3"),
-        region=str(options.get("region") or "us-east-1"),
+        region=str(options.get("region") or "auto"),
         endpoint_override=endpoint_override,
         scheme=scheme,
     )

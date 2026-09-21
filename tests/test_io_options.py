@@ -425,7 +425,6 @@ def test_s3_filesystem_parses_endpoint_override():
             "access_key_id": "id",
             "secret_access_key": "secret",
             "endpoint_url": "http://127.0.0.1:9000",
-            "region": "auto",
         }
     )
     assert fs.region == "auto"
