@@ -124,6 +124,7 @@ def test_read_parquet_s3_closes_body(mocker):
     body = _FakeS3Body(b"parquet-bytes")
     client = mocker.Mock()
     client.get_object.return_value = {"Body": body}
+    arrow = mocker.patch("cicerone.io.options._read_s3_parquet_pyarrow")
     mocker.patch("cicerone.io.options.pd.read_parquet", return_value=pd.DataFrame({"x": [1]}))
     frame = read_parquet(
         {
@@ -137,6 +138,7 @@ def test_read_parquet_s3_closes_body(mocker):
     )
     assert list(frame.columns) == ["x"]
     assert body.closed is True
+    arrow.assert_not_called()
 
 
 def test_validate_storage_options_resolves_from_options():
@@ -402,6 +404,7 @@ def test_read_parquet_s3_falls_back_to_get_object(mocker):
     body = _FakeS3Body(b"parquet-bytes")
     client = mocker.Mock()
     client.get_object.return_value = {"Body": body}
+    mocker.patch("cicerone.io.options.build_s3_client", return_value=client)
     mocker.patch("cicerone.io.options.pd.read_parquet", return_value=pd.DataFrame({"x": [1]}))
     frame = read_parquet(
         {
@@ -411,20 +414,30 @@ def test_read_parquet_s3_falls_back_to_get_object(mocker):
             "bucket": "bucket",
         },
         "data.parquet",
-        s3_client=client,
     )
     assert list(frame.columns) == ["x"]
     assert body.closed is True
 
 
-def test_s3_filesystem_parses_endpoint_override():
+def test_s3_filesystem_parses_endpoint_override(mocker):
     from cicerone.io.options import _s3_filesystem
 
-    fs = _s3_filesystem(
-        {
-            "access_key_id": "id",
-            "secret_access_key": "secret",
-            "endpoint_url": "http://127.0.0.1:9000",
-        }
+    constructed = mocker.Mock()
+    ctor = mocker.patch("pyarrow.fs.S3FileSystem", return_value=constructed)
+    assert (
+        _s3_filesystem(
+            {
+                "access_key_id": "id",
+                "secret_access_key": "secret",
+                "endpoint_url": "http://127.0.0.1:9000",
+            }
+        )
+        is constructed
     )
-    assert fs.region == "auto"
+    ctor.assert_called_once_with(
+        access_key="id",
+        secret_key="secret",
+        region="auto",
+        endpoint_override="127.0.0.1:9000",
+        scheme="http",
+    )

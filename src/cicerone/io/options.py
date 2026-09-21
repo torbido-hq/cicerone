@@ -258,12 +258,14 @@ def read_parquet(
     bucket = require_option(options, "bucket", "s3")
     key = object_key(options, filename)
     logger.info("Reading s3://%s/%s", bucket, key)
+    if s3_client is not None:
+        obj = s3_client.get_object(Bucket=bucket, Key=key)
+        return pd.read_parquet(io.BytesIO(read_s3_body(obj)), **read_kwargs)
     try:
         return _read_s3_parquet_pyarrow(options, bucket, key, columns=columns, filters=filters)
     except Exception:
         logger.debug("pyarrow S3 parquet read failed; falling back to GetObject", exc_info=True)
-    client = s3_client if s3_client is not None else build_s3_client(options)
-    obj = client.get_object(Bucket=bucket, Key=key)
+    obj = build_s3_client(options).get_object(Bucket=bucket, Key=key)
     return pd.read_parquet(io.BytesIO(read_s3_body(obj)), **read_kwargs)
 
 
