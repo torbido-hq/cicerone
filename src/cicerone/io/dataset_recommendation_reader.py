@@ -56,11 +56,7 @@ class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             path = Path(require_option(self._options, "path", "local")) / ITEM_SCORES_FILENAME
             if not path.exists():
                 raise FileNotFoundError(path)
-        frame = read_parquet(
-            self._options,
-            ITEM_SCORES_FILENAME,
-            s3_client=self._get_s3_client() if self._backend == "s3" else None,
-        )
+        frame = read_parquet(self._options, ITEM_SCORES_FILENAME)
         return normalize_item_scores(frame)
 
     def _read_items_snapshot(self) -> pd.DataFrame | None:

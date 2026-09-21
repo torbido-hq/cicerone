@@ -12,7 +12,6 @@ not add the column. Experiments similarly need ``ALTER TABLE … ADD COLUMN vari
 from __future__ import annotations
 
 import logging
-import threading
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -31,18 +30,16 @@ from sqlalchemy import (
     MetaData,
     Table,
     bindparam,
-    create_engine,
     insert,
     inspect,
     select,
     text,
 )
-from sqlalchemy.engine import make_url
 from sqlalchemy.exc import OperationalError, ProgrammingError
-from sqlalchemy.pool import StaticPool
 
 from cicerone.config.constants import DEFAULT_MAX_ARTIFACT_BYTES
 from cicerone.io.db_errors import is_missing_column_error
+from cicerone.io.engines import engine_for
 from cicerone.io.options import readonly_select, require_option, sql_identifier
 from cicerone.io.recommendation_schema import (
     REASONS_COLUMN,
@@ -86,36 +83,8 @@ DEFAULT_LATEST_TABLE = "recommendation_latest"
 DEFAULT_NEIGHBORS_TABLE = "item_neighbors"
 
 
-_MEMORY_ENGINES: dict[int, tuple[dict[str, Any], Engine]] = {}
-_MEMORY_ENGINES_LOCK = threading.Lock()
-
-
-def _is_memory_sqlite(database_url: str) -> bool:
-    parsed = make_url(database_url)
-    return parsed.get_backend_name() == "sqlite" and parsed.database in (None, "", ":memory:")
-
-
-def _new_db_engine(database_url: str) -> Engine:
-    kwargs: dict[str, Any] = {"pool_pre_ping": True}
-    if _is_memory_sqlite(database_url):
-        kwargs["poolclass"] = StaticPool
-        kwargs["connect_args"] = {"check_same_thread": False}
-    return create_engine(database_url, **kwargs)
-
-
 def create_db_engine(database_url: str, *, options: dict[str, Any] | None = None) -> Engine:
-    if options is not None and _is_memory_sqlite(database_url):
-        key = id(options)
-        with _MEMORY_ENGINES_LOCK:
-            cached = _MEMORY_ENGINES.get(key)
-            if cached is not None:
-                cached_options, engine = cached
-                if cached_options is options:
-                    return engine
-            engine = _new_db_engine(database_url)
-            _MEMORY_ENGINES[key] = (options, engine)
-            return engine
-    return _new_db_engine(database_url)
+    return engine_for(database_url, options=options)
 
 
 def _create_engine(database_url: str) -> Engine:
