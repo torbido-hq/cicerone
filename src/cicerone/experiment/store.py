@@ -19,7 +19,6 @@ from cicerone.config.constants import ConfigError
 from cicerone.config.settings import IOSettings
 from cicerone.io.blob import append_storage_bytes, read_storage_bytes, write_storage_bytes
 from cicerone.io.db_errors import is_missing_column_error, is_missing_table_error
-from cicerone.io.db_store import MISSING_TABLE_ERRORS
 from cicerone.io.options import (
     exclusive_file_lock,
     require_option,
@@ -443,8 +442,6 @@ class ExperimentStore:
             params = {}
         try:
             frame = pd.read_sql(sql, engine, params=params)
-        except MISSING_TABLE_ERRORS:
-            return []
         except Exception as exc:
             if is_missing_table_error(exc):
                 return []
@@ -452,7 +449,7 @@ class ExperimentStore:
                 logger.warning("Exposures table %r has no experiment_id column; ignoring rows", table)
                 return []
             logger.exception("Failed to read exposures table %r", table)
-            return []
+            raise
         if frame.empty:
             return []
         records = frame.to_dict(orient="records")
