@@ -10,6 +10,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - AutoML walk-forward folds drop train `(user, item)` pairs from test truth
   and from candidate lists so popular cannot score on already-seen items.
+- GET `/recommendations` serves leftover variant rows when the hashed arm
+  is empty and reports the served variant. `fallback` stays reserved for
+  cold-start.
 - Redis Streams heartbeat XCLAIM failure fails closed so apply nacks before
   writing.
 
