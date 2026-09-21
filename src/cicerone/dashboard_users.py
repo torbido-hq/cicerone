@@ -33,7 +33,12 @@ def save_users(path: str | Path, users: dict[str, str]) -> None:
     with tempfile.TemporaryDirectory(dir=file_path.parent) as temp_dir:
         temp_path = Path(temp_dir) / file_path.name
         fd = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, _OWNER_ONLY)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        try:
+            handle = os.fdopen(fd, "w", encoding="utf-8")
+        except Exception:
+            os.close(fd)
+            raise
+        with handle:
             handle.write(text)
         _restrict_owner_only(temp_path)
         temp_path.replace(file_path)
