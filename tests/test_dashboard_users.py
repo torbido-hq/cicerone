@@ -74,6 +74,36 @@ def test_save_users_does_not_truncate_destination(tmp_path, monkeypatch):
     assert load_users(path) == {"alice": "hash-a"}
 
 
+def test_save_users_closes_fd_if_fdopen_fails(tmp_path, monkeypatch):
+    path = tmp_path / "dashboard_users.toml"
+    opened: list[int] = []
+    closed: list[int] = []
+    real_open = os.open
+    real_close = os.close
+
+    def tracked_open(name: str | os.PathLike[str], flags: int, *args: object, **kwargs: object) -> int:
+        fd = real_open(name, flags, *args, **kwargs)  # type: ignore[arg-type]
+        opened.append(fd)
+        return fd
+
+    def failing_fdopen(_fd: int, *_args: object, **_kwargs: object) -> object:
+        raise OSError("fdopen failed")
+
+    def tracked_close(fd: int) -> None:
+        closed.append(fd)
+        real_close(fd)
+
+    monkeypatch.setattr(os, "open", tracked_open)
+    monkeypatch.setattr(os, "fdopen", failing_fdopen)
+    monkeypatch.setattr(os, "close", tracked_close)
+
+    with pytest.raises(OSError, match="fdopen failed"):
+        save_users(path, {"alice": "hash-a"})
+    assert opened
+    assert closed == opened
+    assert not path.exists()
+
+
 def test_restrict_owner_only_dispatches_to_windows_acl(tmp_path, monkeypatch):
     path = tmp_path / "users.toml"
     path.write_text("x")
