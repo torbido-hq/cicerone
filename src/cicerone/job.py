@@ -17,7 +17,7 @@ from cicerone.automl import CandidateResult, evaluate_candidates, select_best_ca
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import Settings, load_settings
 from cicerone.config.constants import ALLOCATION_THOMPSON, DEFAULT_LOG_FORMAT
-from cicerone.dataset import build_dataset
+from cicerone.dataset import BuiltDataset, build_dataset
 from cicerone.evaluation import conversion_events_for_settings, evaluate_tracking
 from cicerone.events.store import load_items_catalog_size, load_recommendations_frame
 from cicerone.experiment import (
@@ -69,6 +69,7 @@ from cicerone.locks import (
 from cicerone.model import (
     DEFAULT_MODELS,
     RRF_K,
+    ModelRunPlan,
     RecommenderModel,
     fit_strategies,
     plan_model_run,
@@ -98,6 +99,15 @@ class AutomlSelection(NamedTuple):
 class JobRecipes(NamedTuple):
     recipes: tuple[ResolvedRecipe, ...]
     pending_thompson: dict[str, Any] | None
+
+
+class JobRecommendations(NamedTuple):
+    recommendations: pd.DataFrame
+    fitted: dict[str, RecommenderModel]
+    run_plan: ModelRunPlan
+    models: list[str] | None
+    weights: dict[str, float] | None
+    rrf_k: float | None
 
 
 def _target_user_ids(events: pd.DataFrame, users: pd.DataFrame | None) -> list[str]:
@@ -377,6 +387,106 @@ def _select_job_recipes(
     return JobRecipes(selected.recipes, selected.state)
 
 
+def _recommend_job(
+    settings: Settings,
+    feature_config: FeatureConfig,
+    built: BuiltDataset,
+    target_users: list[str],
+    recipes: tuple[ResolvedRecipe, ...],
+    enabled_models: list[str] | None,
+    weights: dict[str, float] | None,
+    rrf_k: float | None,
+) -> JobRecommendations:
+    fitted: dict[str, RecommenderModel] = {}
+    if recipes:
+        union = union_models(recipes)
+        recommend_names: list[str] = []
+        for recipe in recipes:
+            recipe_plan = plan_model_run(
+                list(recipe.models),
+                blending_enabled=recipe.blending.enabled,
+                content_fallback_enabled=settings.content_fallback_enabled,
+            )
+            for name in recipe_plan.recommend_models:
+                if name not in recommend_names:
+                    recommend_names.append(name)
+        fit_plan = plan_model_run(
+            recommend_names,
+            blending_enabled=False,
+            content_fallback_enabled=settings.content_fallback_enabled,
+        )
+        _, fitted = fit_strategies(
+            built,
+            target_users,
+            enabled_models=list(fit_plan.recommend_models),
+            strategy_cache=fitted if settings.save_model_artifact else None,
+            max_workers=settings.max_workers,
+            epoch_metrics=settings.epoch_metrics,
+            epoch_metrics_top_k=settings.top_k,
+            item_based_k_neighbors=settings.item_based_k_neighbors,
+            model_configs=settings.model_configs,
+            content_fallback_max_neighbors=settings.content_fallback_max_neighbors,
+            content_feature_columns=feature_config.item_features,
+        )
+        frames: list[pd.DataFrame] = []
+        recommend_cache: RecommendCache = {}
+        for recipe in recipes:
+            recipe_config = apply_recipe(feature_config, recipe)
+            recipe_plan = plan_model_run(
+                list(recipe.models),
+                blending_enabled=recipe.blending.enabled,
+                content_fallback_enabled=settings.content_fallback_enabled,
+            )
+            variant_recs = recommend_with_models(
+                fitted,
+                built,
+                target_users,
+                recipe_config,
+                top_k=settings.top_k,
+                enabled_models=list(recipe_plan.enabled_models),
+                weights=recipe.weights,
+                rrf_k=recipe.rrf_k,
+                run_plan=recipe_plan,
+                recommend_cache=recommend_cache,
+                max_workers=settings.max_workers,
+                explain=settings.explain,
+            )
+            variant_recs = variant_recs.copy()
+            variant_recs[VARIANT_COLUMN] = recipe.name
+            frames.append(variant_recs)
+        return JobRecommendations(
+            pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(),
+            fitted,
+            fit_plan,
+            union,
+            recipes[0].weights,
+            recipes[0].rrf_k,
+        )
+    run_plan = plan_model_run(
+        enabled_models or DEFAULT_MODELS,
+        blending_enabled=feature_config.blending.enabled,
+        content_fallback_enabled=settings.content_fallback_enabled,
+    )
+    recommendations = train_and_recommend(
+        built,
+        target_users,
+        feature_config,
+        top_k=settings.top_k,
+        enabled_models=list(run_plan.enabled_models),
+        weights=weights,
+        rrf_k=rrf_k,
+        strategy_cache=fitted if settings.save_model_artifact else None,
+        max_workers=settings.max_workers,
+        epoch_metrics=settings.epoch_metrics,
+        item_based_k_neighbors=settings.item_based_k_neighbors,
+        model_configs=settings.model_configs,
+        content_fallback_max_neighbors=settings.content_fallback_max_neighbors,
+        run_plan=run_plan,
+        explain=settings.explain,
+    )
+    return JobRecommendations(recommendations, fitted, run_plan, enabled_models, weights, rrf_k)
+
+
 def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None = None) -> None:
     settings = load_settings()
     retrain_lock = _maybe_acquire_direct_retrain_lock(settings, fence_check)
@@ -460,95 +570,23 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
         )
         recipes = job_recipes.recipes
         pending_thompson = job_recipes.pending_thompson
-
-        fitted: dict[str, RecommenderModel] = {}
-
-        recommend_cache: RecommendCache = {}
+        scored = _recommend_job(
+            settings,
+            feature_config,
+            built,
+            target_users,
+            recipes,
+            enabled_models,
+            weights,
+            rrf_k,
+        )
+        recommendations = scored.recommendations
+        fitted = scored.fitted
+        run_plan = scored.run_plan
+        enabled_models, weights, rrf_k = scored.models, scored.weights, scored.rrf_k
         if recipes:
-            union = union_models(recipes)
-            recommend_names: list[str] = []
-            for recipe in recipes:
-                recipe_plan = plan_model_run(
-                    list(recipe.models),
-                    blending_enabled=recipe.blending.enabled,
-                    content_fallback_enabled=settings.content_fallback_enabled,
-                )
-                for name in recipe_plan.recommend_models:
-                    if name not in recommend_names:
-                        recommend_names.append(name)
-            fit_plan = plan_model_run(
-                recommend_names,
-                blending_enabled=False,
-                content_fallback_enabled=settings.content_fallback_enabled,
-            )
-            _, fitted = fit_strategies(
-                built,
-                target_users,
-                enabled_models=list(fit_plan.recommend_models),
-                strategy_cache=fitted if settings.save_model_artifact else None,
-                max_workers=settings.max_workers,
-                epoch_metrics=settings.epoch_metrics,
-                epoch_metrics_top_k=settings.top_k,
-                item_based_k_neighbors=settings.item_based_k_neighbors,
-                model_configs=settings.model_configs,
-                content_fallback_max_neighbors=settings.content_fallback_max_neighbors,
-                content_feature_columns=feature_config.item_features,
-            )
-            frames: list[pd.DataFrame] = []
-            for recipe in recipes:
-                recipe_config = apply_recipe(feature_config, recipe)
-                recipe_plan = plan_model_run(
-                    list(recipe.models),
-                    blending_enabled=recipe.blending.enabled,
-                    content_fallback_enabled=settings.content_fallback_enabled,
-                )
-                variant_recs = recommend_with_models(
-                    fitted,
-                    built,
-                    target_users,
-                    recipe_config,
-                    top_k=settings.top_k,
-                    enabled_models=list(recipe_plan.enabled_models),
-                    weights=recipe.weights,
-                    rrf_k=recipe.rrf_k,
-                    run_plan=recipe_plan,
-                    recommend_cache=recommend_cache,
-                    max_workers=settings.max_workers,
-                    explain=settings.explain,
-                )
-                variant_recs = variant_recs.copy()
-                variant_recs[VARIANT_COLUMN] = recipe.name
-                frames.append(variant_recs)
-            recommendations = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-            run_plan = fit_plan
-            enabled_models = union
-            weights = recipes[0].weights
-            rrf_k = recipes[0].rrf_k
             manifest["experiment_id"] = settings.experiment.id
             manifest["experiment_variants"] = recipes_manifest_json(recipes)
-        else:
-            run_plan = plan_model_run(
-                enabled_models or DEFAULT_MODELS,
-                blending_enabled=feature_config.blending.enabled,
-                content_fallback_enabled=settings.content_fallback_enabled,
-            )
-            recommendations = train_and_recommend(
-                built,
-                target_users,
-                feature_config,
-                top_k=settings.top_k,
-                enabled_models=list(run_plan.enabled_models),
-                weights=weights,
-                rrf_k=rrf_k,
-                strategy_cache=fitted if settings.save_model_artifact else None,
-                max_workers=settings.max_workers,
-                epoch_metrics=settings.epoch_metrics,
-                item_based_k_neighbors=settings.item_based_k_neighbors,
-                model_configs=settings.model_configs,
-                content_fallback_max_neighbors=settings.content_fallback_max_neighbors,
-                run_plan=run_plan,
-                explain=settings.explain,
-            )
 
         run_models = list(run_plan.recommend_models)
         model_weights_str = (

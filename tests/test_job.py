@@ -1502,6 +1502,112 @@ def test_select_job_recipes_applies_thompson(tmp_path, monkeypatch):
     assert selected.pending_thompson == pending
 
 
+def test_recommend_job_without_recipes_trains_once(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from cicerone.config import load_settings
+    from cicerone.feature_config import load_feature_config
+    from cicerone.job import _recommend_job
+    from cicerone.model import ModelRunPlan
+
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir))
+    plan = ModelRunPlan(enabled_models=("popular",), recommend_models=("popular",))
+    recs = pd.DataFrame({"user_id": ["u1"], "item_id": ["i1"]})
+    monkeypatch.setattr("cicerone.job.plan_model_run", lambda *_args, **_kwargs: plan)
+    monkeypatch.setattr("cicerone.job.train_and_recommend", lambda *_args, **_kwargs: recs)
+
+    def boom(*_args: object, **_kwargs: object) -> tuple[object, object]:
+        raise AssertionError("recipe fit must not run without recipes")
+
+    monkeypatch.setattr("cicerone.job.fit_strategies", boom)
+    settings = load_settings()
+    scored = _recommend_job(
+        settings,
+        load_feature_config(settings.feature_config_path),
+        SimpleNamespace(),
+        ["u1"],
+        (),
+        ["popular"],
+        None,
+        20.0,
+    )
+    assert scored.recommendations is recs
+    assert scored.run_plan is plan
+    assert scored.models == ["popular"]
+    assert scored.rrf_k == 20.0
+    assert scored.fitted == {}
+
+
+def test_recommend_job_with_recipes_tags_variants(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from cicerone.config import load_settings
+    from cicerone.feature_config import load_feature_config
+    from cicerone.job import _recommend_job
+    from cicerone.model import ModelRunPlan
+
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    extra = """
+        [experiment]
+        enabled = true
+        id = "rrf-vs-priority"
+        [[experiment.variants]]
+        name = "control"
+        traffic = 0.5
+        [[experiment.variants]]
+        name = "treatment"
+        traffic = 0.5
+    """
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, extra=extra))
+    plan = ModelRunPlan(enabled_models=("popular",), recommend_models=("popular",))
+    recipe = SimpleNamespace(
+        name="control",
+        models=("popular",),
+        blending=SimpleNamespace(enabled=False),
+        weights={"popular": 1.0},
+        rrf_k=30.0,
+    )
+    monkeypatch.setattr("cicerone.job.union_models", lambda *_args, **_kwargs: ["popular"])
+    monkeypatch.setattr("cicerone.job.plan_model_run", lambda *_args, **_kwargs: plan)
+    monkeypatch.setattr(
+        "cicerone.job.fit_strategies",
+        lambda *_args, **_kwargs: (None, {"popular": object()}),
+    )
+    monkeypatch.setattr("cicerone.job.apply_recipe", lambda config, _recipe: config)
+    monkeypatch.setattr(
+        "cicerone.job.recommend_with_models",
+        lambda *_args, **_kwargs: pd.DataFrame({"user_id": ["u1"], "item_id": ["i1"]}),
+    )
+
+    def boom(*_args: object, **_kwargs: object) -> pd.DataFrame:
+        raise AssertionError("default train must not run when recipes exist")
+
+    monkeypatch.setattr("cicerone.job.train_and_recommend", boom)
+    settings = load_settings()
+    scored = _recommend_job(
+        settings,
+        load_feature_config(settings.feature_config_path),
+        SimpleNamespace(),
+        ["u1"],
+        (recipe,),
+        None,
+        None,
+        None,
+    )
+    assert list(scored.recommendations["variant"]) == ["control"]
+    assert scored.models == ["popular"]
+    assert scored.weights == {"popular": 1.0}
+    assert scored.rrf_k == 30.0
+    assert "popular" in scored.fitted
+
+
 def test_job_run_with_automl_enabled_selects_and_records_best_candidate(tmp_path, monkeypatch):
     input_dir = tmp_path / "in"
     output_dir = tmp_path / "out"
