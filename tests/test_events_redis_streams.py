@@ -380,6 +380,7 @@ def test_read_failures_return_empty(monkeypatch):
     client.xreadgroup = boom  # type: ignore[method-assign]
     client.xautoclaim = boom  # type: ignore[method-assign]
     assert list(source.poll(10)) == []
+    assert source.health().connected is False
 
 
 def test_failed_ack_still_allows_nack(monkeypatch):

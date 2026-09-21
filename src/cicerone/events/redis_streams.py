@@ -233,6 +233,8 @@ class RedisStreamsEventSource(QueuedEventSource):
             )
         except Exception:
             logger.exception("Redis Streams XAUTOCLAIM failed")
+            with self._lock:
+                self._connected = False
             return []
 
         next_id, entries = self._parse_autoclaim(result)
@@ -252,6 +254,8 @@ class RedisStreamsEventSource(QueuedEventSource):
             )
         except Exception:
             logger.exception("Redis Streams XREADGROUP failed")
+            with self._lock:
+                self._connected = False
             return []
         entries: list[tuple[str, dict[str, Any]]] = []
         for _stream_name, messages in raw or []:
