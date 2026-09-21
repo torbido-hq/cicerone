@@ -1675,7 +1675,7 @@ def test_load_metric_events_db_pushes_since_predicate(monkeypatch) -> None:
         captured["params"] = params
         return pd.DataFrame(columns=["user_id", "item_id", "event_type", "occurred_at"])
 
-    monkeypatch.setattr("cicerone.evaluation.context.create_engine", lambda *_args, **_kwargs: _Engine())
+    monkeypatch.setattr("cicerone.evaluation.context.engine_for", lambda *_args, **_kwargs: _Engine())
     monkeypatch.setattr("cicerone.evaluation.context.pd.read_sql", _read_sql)
     frame = load_metric_events(settings, event_types=("purchase",), since="2026-08-29T05:00:00+00:00")
     assert '"occurred_at" >= :since' in str(captured["sql"])
@@ -1710,7 +1710,7 @@ def test_load_metric_events_query_pushes_since_predicate(monkeypatch) -> None:
         captured["params"] = params
         return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
 
-    monkeypatch.setattr("cicerone.evaluation.context.create_engine", lambda *_args, **_kwargs: _Engine())
+    monkeypatch.setattr("cicerone.evaluation.context.engine_for", lambda *_args, **_kwargs: _Engine())
     monkeypatch.setattr("cicerone.evaluation.context.pd.read_sql", _read_sql)
     frame = load_metric_events(settings, event_types=("purchase",), since="2026-08-29T05:00:00+00:00")
     assert "_cicerone_metric_events" in str(captured["sql"])
@@ -1748,7 +1748,7 @@ def test_load_metric_events_query_keeps_limit(monkeypatch) -> None:
         captured["params"] = params
         return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
 
-    monkeypatch.setattr("cicerone.evaluation.context.create_engine", lambda *_args, **_kwargs: _Engine())
+    monkeypatch.setattr("cicerone.evaluation.context.engine_for", lambda *_args, **_kwargs: _Engine())
     monkeypatch.setattr("cicerone.evaluation.context.pd.read_sql", _read_sql)
     load_metric_events(settings, event_types=("purchase",), since="2026-08-29T05:00:00+00:00")
     assert "_cicerone_metric_events" not in str(captured["sql"])
@@ -1781,7 +1781,7 @@ def test_load_metric_events_query_quoted_offset_still_wraps(monkeypatch) -> None
         captured["sql"] = str(stmt)
         return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
 
-    monkeypatch.setattr("cicerone.evaluation.context.create_engine", lambda *_args, **_kwargs: _Engine())
+    monkeypatch.setattr("cicerone.evaluation.context.engine_for", lambda *_args, **_kwargs: _Engine())
     monkeypatch.setattr("cicerone.evaluation.context.pd.read_sql", _read_sql)
     load_metric_events(settings, since="2026-08-29T05:00:00+00:00")
     assert "_cicerone_metric_events" in str(captured["sql"])
@@ -1814,7 +1814,7 @@ def test_load_metric_events_query_comment_limit_still_wraps(monkeypatch) -> None
         captured["params"] = params
         return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
 
-    monkeypatch.setattr("cicerone.evaluation.context.create_engine", lambda *_args, **_kwargs: _Engine())
+    monkeypatch.setattr("cicerone.evaluation.context.engine_for", lambda *_args, **_kwargs: _Engine())
     monkeypatch.setattr("cicerone.evaluation.context.pd.read_sql", _read_sql)
     load_metric_events(settings, event_types=("purchase",), since="2026-08-29T05:00:00+00:00")
     assert "_cicerone_metric_events" in str(captured["sql"])
@@ -1848,7 +1848,7 @@ def test_load_metric_events_query_block_comment_offset_still_wraps(monkeypatch) 
         captured["sql"] = str(stmt)
         return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
 
-    monkeypatch.setattr("cicerone.evaluation.context.create_engine", lambda *_args, **_kwargs: _Engine())
+    monkeypatch.setattr("cicerone.evaluation.context.engine_for", lambda *_args, **_kwargs: _Engine())
     monkeypatch.setattr("cicerone.evaluation.context.pd.read_sql", _read_sql)
     load_metric_events(settings, since="2026-08-29T05:00:00+00:00")
     assert "_cicerone_metric_events" in str(captured["sql"])
@@ -1881,7 +1881,7 @@ def test_load_metric_events_query_subquery_limit_still_wraps(monkeypatch) -> Non
         captured["sql"] = str(stmt)
         return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
 
-    monkeypatch.setattr("cicerone.evaluation.context.create_engine", lambda *_args, **_kwargs: _Engine())
+    monkeypatch.setattr("cicerone.evaluation.context.engine_for", lambda *_args, **_kwargs: _Engine())
     monkeypatch.setattr("cicerone.evaluation.context.pd.read_sql", _read_sql)
     load_metric_events(settings, since="2026-08-29T05:00:00+00:00")
     assert "_cicerone_metric_events" in str(captured["sql"])
@@ -1901,7 +1901,7 @@ def test_load_metric_events_db_bound_failure_is_empty(monkeypatch) -> None:
     def _boom(*_args, **_kwargs):
         raise RuntimeError("sql down")
 
-    monkeypatch.setattr("cicerone.evaluation.context.create_engine", lambda *_args, **_kwargs: _Engine())
+    monkeypatch.setattr("cicerone.evaluation.context.engine_for", lambda *_args, **_kwargs: _Engine())
     monkeypatch.setattr("cicerone.evaluation.context.pd.read_sql", _boom)
 
     def _source(_inp):
@@ -1922,7 +1922,7 @@ def test_load_metric_events_db_engine_failure_is_empty(monkeypatch) -> None:
     def _boom(*_args, **_kwargs):
         raise RuntimeError("engine down")
 
-    monkeypatch.setattr("cicerone.evaluation.context.create_engine", _boom)
+    monkeypatch.setattr("cicerone.evaluation.context.engine_for", _boom)
 
     def _source(_inp):
         raise AssertionError("unbounded fallback")
@@ -1991,7 +1991,7 @@ def test_load_metric_events_db_retries_without_quantity(monkeypatch) -> None:
             ]
         )
 
-    monkeypatch.setattr("cicerone.evaluation.context.create_engine", lambda *_args, **_kwargs: _Engine())
+    monkeypatch.setattr("cicerone.evaluation.context.engine_for", lambda *_args, **_kwargs: _Engine())
     monkeypatch.setattr("cicerone.evaluation.context.pd.read_sql", _read_sql)
     frame = load_metric_events(settings, event_types=("purchase",), since="2026-08-29T05:00:00+00:00")
     assert len(calls) == 2
@@ -2031,7 +2031,7 @@ def test_load_metric_events_query_limit_defaults_quantity(monkeypatch) -> None:
             ]
         )
 
-    monkeypatch.setattr("cicerone.evaluation.context.create_engine", lambda *_args, **_kwargs: _Engine())
+    monkeypatch.setattr("cicerone.evaluation.context.engine_for", lambda *_args, **_kwargs: _Engine())
     monkeypatch.setattr("cicerone.evaluation.context.pd.read_sql", _read_sql)
     frame = load_metric_events(settings, since="2026-08-29T05:00:00+00:00")
     assert frame.iloc[0]["quantity"] == 1
