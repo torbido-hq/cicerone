@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sys
 
-from cicerone.redis_client import REDIS_HEALTH_CHECK_INTERVAL, redis_from_url
+from cicerone.redis_client import REDIS_HEALTH_CHECK_INTERVAL_SECONDS, redis_from_url
 
 
 def test_redis_from_url_sets_health_check_interval(monkeypatch):
@@ -23,5 +23,5 @@ def test_redis_from_url_sets_health_check_interval(monkeypatch):
     assert seen["url"] == "redis://localhost:6379/0"
     assert seen["kwargs"] == {
         "decode_responses": True,
-        "health_check_interval": REDIS_HEALTH_CHECK_INTERVAL,
+        "health_check_interval": REDIS_HEALTH_CHECK_INTERVAL_SECONDS,
     }
