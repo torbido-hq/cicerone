@@ -99,14 +99,11 @@ class DbEventSource(EventSource):
 
     def close(self) -> None:
         with self._lock:
-            engine = self._engine
             self._engine = None
             self._connected = False
             self._source_columns = None
             self._select_clause = None
             self._has_event_id_column = None
-        if engine is not None:
-            engine.dispose()
 
     def poll(self, max_events: int = 100) -> Sequence[NormalizedEvent]:
         if max_events < 1:
