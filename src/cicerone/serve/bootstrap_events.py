@@ -227,6 +227,7 @@ def start_events_runtime(
             assign_variant=_assign_incremental_variant(settings),
             explain_enabled=settings.explain.enabled,
             publisher=publisher,
+            items_provider=getattr(reader, "get_items", None),
         )
         buffer = MicroBatchBuffer(
             batch_size=settings.events.incremental.batch_size,

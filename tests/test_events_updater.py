@@ -13,7 +13,8 @@ from cicerone.events.normalize import normalize_event
 from cicerone.events.online_result import OnlineRefreshResult, empty_online_rows
 from cicerone.events.store import load_recommendations_for_users, load_recommendations_frame
 from cicerone.events.updater import INCREMENTAL_SOURCE, IncrementalUpdater
-from cicerone.feature_config import FeatureConfig
+from cicerone.events.updater_policy import incremental_allowlists
+from cicerone.feature_config import EligibilityRule, FeatureConfig
 from cicerone.io.factory import build_output_sink
 from cicerone.io.recommendation_reader import RECOMMENDATION_COLUMNS
 from cicerone.locks import LockLostError, WriterLockBusyError
@@ -841,7 +842,7 @@ def test_incremental_updater_preserves_untouched_via_scoped_write(tmp_path, feat
     assert len(replace_calls) == 1
     user_ids, written_users = replace_calls[0]
     assert "u1" in user_ids
-    assert COLD_START_USER_ID in user_ids
+    assert COLD_START_USER_ID not in user_ids
     assert "u2" not in user_ids
     assert "u2" not in written_users
     frame = load_recommendations_frame(settings.output)
@@ -894,12 +895,9 @@ def test_incremental_updater_user_cache_lru_evicts(tmp_path, feature_config):
     )
     assert updater.apply([normalize_event(event_payload(user_id="u1", item_id="a", event_id="e1"))]) == 1
     assert updater.apply([normalize_event(event_payload(user_id="u2", item_id="b", event_id="e2"))]) == 1
-    # Cap is 2; each apply also caches __cold_start__, so older users are evicted.
     assert len(updater.cached_user_ids) <= 2
-    assert COLD_START_USER_ID in updater.cached_user_ids
     assert updater.apply([normalize_event(event_payload(user_id="u3", item_id="c", event_id="e3"))]) == 1
     assert len(updater.cached_user_ids) <= 2
-    assert COLD_START_USER_ID in updater.cached_user_ids
     assert "u3" in updater.cached_user_ids
 
 
@@ -1372,3 +1370,123 @@ def test_incremental_updater_reraises_writer_lock_busy_from_generation_check(
         updater.apply(events)
     frame = load_recommendations_frame(settings.output)
     assert "i9" in set(frame[frame["user_id"] == "u1"]["item_id"].astype(str))
+
+
+def test_incremental_allowlists_filters_unavailable_items(feature_config: FeatureConfig) -> None:
+    items = pd.DataFrame(
+        [
+            {"item_id": "ok", "published": True, "in_stock": True},
+            {"item_id": "oos", "published": True, "in_stock": False},
+        ]
+    )
+    allowed = incremental_allowlists(
+        ["u1"],
+        feature_config=feature_config,
+        items=items,
+    )
+    assert allowed["u1"] == frozenset({"ok"})
+
+
+def test_incremental_allowlists_fail_open_without_items(feature_config: FeatureConfig) -> None:
+    allowed = incremental_allowlists(["u1"], feature_config=feature_config, items=None)
+    assert allowed["u1"] is None
+
+
+def test_incremental_updater_drops_ineligible_boost(tmp_path, feature_config: FeatureConfig) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    items = pd.DataFrame(
+        [
+            {"item_id": "old", "published": True, "in_stock": True},
+            {"item_id": "oos", "published": True, "in_stock": False},
+            {"item_id": "ok", "published": True, "in_stock": True},
+        ]
+    )
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        items_provider=lambda: items,
+    )
+    updater.apply(
+        [
+            normalize_event(event_payload(user_id="u1", item_id="oos", event_id="bad")),
+            normalize_event(event_payload(user_id="u1", item_id="ok", event_id="good")),
+        ]
+    )
+    u1 = load_recommendations_frame(settings.output)
+    u1 = u1[u1["user_id"] == "u1"]
+    assert "oos" not in set(u1["item_id"].astype(str))
+    assert "ok" in set(u1["item_id"].astype(str))
+    assert "old" in set(u1["item_id"].astype(str))
+
+
+def test_incremental_updater_keeps_batch_popular_and_cold_start(
+    tmp_path, feature_config: FeatureConfig
+) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "batch-pop", "rank": 1, "score": 0.4, "source": "popular_fallback"},
+            {
+                "user_id": COLD_START_USER_ID,
+                "item_id": "cold-keep",
+                "rank": 1,
+                "score": 0.2,
+                "source": "popular_fallback",
+            },
+        ]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+    )
+    updater.apply([normalize_event(event_payload(user_id="u1", item_id="viral", event_id="v1"))])
+    frame = load_recommendations_frame(settings.output)
+    u1 = frame[frame["user_id"] == "u1"]
+    assert "batch-pop" in set(u1["item_id"].astype(str))
+    assert "viral" in set(u1["item_id"].astype(str))
+    cold = frame[frame["user_id"] == COLD_START_USER_ID]
+    assert list(cold["item_id"].astype(str)) == ["cold-keep"]
+
+
+def test_incremental_allowlists_user_scoped_when_users_present(feature_config: FeatureConfig) -> None:
+    from dataclasses import replace
+
+    scoped = replace(
+        feature_config,
+        eligibility=[
+            EligibilityRule(
+                name="region",
+                op="eq",
+                item_column="region_slug",
+                user_column="region_slug",
+            )
+        ],
+    )
+    items = pd.DataFrame(
+        [
+            {"item_id": "ok", "published": True, "in_stock": True, "region_slug": "lazio"},
+            {"item_id": "other", "published": True, "in_stock": True, "region_slug": "toscana"},
+        ]
+    )
+    users = pd.DataFrame([{"user_id": "u1", "region_slug": "lazio"}])
+    allowed = incremental_allowlists(["u1"], feature_config=scoped, items=items, users=users)
+    assert allowed["u1"] == frozenset({"ok"})
+    without_users = incremental_allowlists(["u1"], feature_config=scoped, items=items, users=None)
+    assert without_users["u1"] == frozenset({"ok", "other"})

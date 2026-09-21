@@ -22,6 +22,7 @@ from cicerone.events.updater_merge import (
     UpdaterMerge,
     _is_preserved_source,
 )
+from cicerone.events.updater_policy import incremental_allowlists
 from cicerone.events.updater_ranking import UpdaterRanking
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.base import OutputSink
@@ -68,6 +69,8 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         assign_variant: Callable[[str], str | None] | None = None,
         explain_enabled: bool = True,
         publisher: RecommendationPublisher | None = None,
+        items_provider: Callable[[], pd.DataFrame | None] | None = None,
+        users_provider: Callable[[], pd.DataFrame | None] | None = None,
     ):
         if user_cache_max_size < 1:
             raise ValueError("user_cache_max_size must be >= 1")
@@ -75,6 +78,8 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         self._output_settings = output_settings
         self._feature_config = feature_config
         self._top_k = top_k
+        self._items_provider = items_provider
+        self._users_provider = users_provider
         self._busy_check = busy_check
         self._write_busy_check = busy_check if write_busy_check is None else write_busy_check
         self._on_success = on_success
@@ -274,6 +279,20 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             if not batch.empty
             else {}
         )
+        items = self._items_provider() if self._items_provider is not None else None
+        users = self._users_provider() if self._users_provider is not None else None
+        allowlists = incremental_allowlists(
+            affected_users,
+            feature_config=self._feature_config,
+            items=items,
+            users=users,
+        )
+        cold_allowed = incremental_allowlists(
+            [COLD_START_USER_ID],
+            feature_config=self._feature_config,
+            items=items,
+            users=None,
+        ).get(COLD_START_USER_ID)
         frames: list[pd.DataFrame] = []
         replace_ids: list[str] = []
         empty_user_batch = batch.iloc[0:0]
@@ -288,13 +307,14 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
                 user_batch,
                 weights,
                 online_rows=online_by_user.get(user_id),
+                allowed=allowlists.get(user_id),
             )
             if merged_user.empty:
                 continue
             frames.append(merged_user)
             replace_ids.append(user_id)
         prior_cold = by_user.get(COLD_START_USER_ID, empty_recommendations_frame())
-        cold = self._cold_start_rows(prior_cold, popular_ranking, latest_ranking)
+        cold = self._cold_start_rows(prior_cold, popular_ranking, latest_ranking, allowed=cold_allowed)
         if not cold.empty:
             frames.append(cold)
             replace_ids.append(COLD_START_USER_ID)

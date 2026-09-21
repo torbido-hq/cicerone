@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Incremental write-through applies the items-snapshot eligibility allowlist
+  and keeps batch popular/latest and `__cold_start__` instead of replacing
+  them with the current flush.
 - Postgres and Redis lock probes only treat SQL or Redis errors as a
   lost or busy lock. Unexpected exceptions still raise.
 - Production replay scores impression lists when track rows exist, and
