@@ -26,7 +26,6 @@ from sqlalchemy import (
     MetaData,
     Table,
     bindparam,
-    create_engine,
     insert,
     inspect,
     select,
@@ -36,6 +35,7 @@ from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from cicerone.config.constants import DEFAULT_MAX_ARTIFACT_BYTES
 from cicerone.io.db_errors import is_missing_column_error
+from cicerone.io.engines import engine_for
 from cicerone.io.options import readonly_select, require_option, sql_identifier
 from cicerone.io.recommendation_schema import (
     REASONS_COLUMN,
@@ -161,7 +161,7 @@ def _sql_user_source(query: str | None, table: str) -> str:
 class DatabaseInputSource:
     def __init__(self, options: dict[str, Any]):
         self._options = options
-        self._engine = create_engine(require_option(options, "database_url", "db"), pool_pre_ping=True)
+        self._engine = engine_for(require_option(options, "database_url", "db"))
 
     def _configured_query(self, key: str) -> str | None:
         query = self._options.get(key)
@@ -268,7 +268,7 @@ class DatabaseOutputSink:
         fence_kind: str = "lock",
     ):
         self._options = options
-        self._engine = create_engine(require_option(options, "database_url", "db"), pool_pre_ping=True)
+        self._engine = engine_for(require_option(options, "database_url", "db"))
         self._writer_lock = writer_lock
         self._fence_check = fence_check
         self._fence_lost = fence_lost

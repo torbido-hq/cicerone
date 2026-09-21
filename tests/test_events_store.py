@@ -412,15 +412,17 @@ def test_load_recommendation_guardrail_rows_sqlite_missing_table(tmp_path):
     assert frame.empty
 
 
-def test_recommendation_engine_cache_evicts_oldest(tmp_path):
+def test_recommendation_engine_cache_keeps_all_urls(tmp_path):
     from cicerone.events import store as events_store
 
     events_store.dispose_recommendation_engines()
-    for i in range(events_store._MAX_CACHED_ENGINES + 2):
+    engines = []
+    for i in range(10):
         path = tmp_path / f"e{i}.db"
         sqlite3.connect(path).close()
-        events_store._engine_for(f"sqlite+pysqlite:///{path}")
-    assert len(events_store._engines) == events_store._MAX_CACHED_ENGINES
+        engines.append(events_store._engine_for(f"sqlite+pysqlite:///{path}"))
+    assert len(events_store._engines) == 10
+    assert events_store._engine_for(f"sqlite+pysqlite:///{tmp_path / 'e0.db'}") is engines[0]
     events_store.dispose_recommendation_engines()
 
 
