@@ -22,6 +22,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   writes popular / latest / item-neighbor snapshots next to recommendations.
 - Job writes `__cold_start__` under priority and weighted RRF (popular-only)
   as well as blending, so serve fallback does not depend on the combiner.
+- Dashboard latest-run card shows catalog size, target users, user coverage,
+  and AutoML scores when the manifest has them. Incremental panel shows
+  unknown-id event drops.
 
 ### Fixed
 
