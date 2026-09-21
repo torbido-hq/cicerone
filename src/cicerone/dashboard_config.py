@@ -32,11 +32,9 @@ _SECRET_KEYS = frozenset(
         "password",
         "webhook",
         "artifact_hmac_key",
-        "sasl_username",
-        "bootstrap_servers",
-        "bucket",
     }
 )
+_OPTION_SECRET_KEYS = frozenset({"sasl_username", "bootstrap_servers", "bucket"})
 _SECRET_KEY_RE = re.compile(
     r"(secret|password|token|auth|credential|api_key|private_key|url|webhook|hook)",
     re.IGNORECASE,
@@ -312,6 +310,8 @@ def _decorate_section(section: dict[str, Any]) -> dict[str, Any]:
 
 def _is_secret_key(key: str, *, in_options: bool) -> bool:
     if key in _SECRET_KEYS:
+        return True
+    if in_options and key in _OPTION_SECRET_KEYS:
         return True
     return in_options and _SECRET_KEY_RE.search(key) is not None
 

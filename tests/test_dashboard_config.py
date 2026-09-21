@@ -141,11 +141,12 @@ def test_config_display_unreadable_feature_file(tmp_path):
 
 def test_config_display_loads_feature_file(tmp_path):
     path = tmp_path / "features.toml"
-    path.write_text("[event_weights]\npurchase = 4.0\n")
+    path.write_text("[event_weights]\npurchase = 4.0\nbucket = 2.0\n")
     settings = make_settings(feature_config_path=str(path))
     features = _section(config_display(settings), "features")
     assert features["message"] is None
     assert features["fields"]["event_weights"]["purchase"] == 4.0
+    assert features["fields"]["event_weights"]["bucket"] == 2.0
 
 
 def test_normalize_dataclass_instance():
