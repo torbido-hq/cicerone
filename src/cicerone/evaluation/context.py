@@ -13,7 +13,7 @@ from cicerone.config.settings import Settings
 from cicerone.evaluation.tracking import conversion_events, filter_events_by_types
 from cicerone.io.db_errors import is_missing_column_error
 from cicerone.io.db_store import DEFAULT_EVENTS_TABLE
-from cicerone.io.engines import engine_for
+from cicerone.io.engines import engine_for, release_engine
 from cicerone.io.factory import build_input_source
 from cicerone.io.options import (
     is_s3_not_found,
@@ -204,35 +204,39 @@ def load_metric_events(
         return _filter_events_since(filter_events_by_types(_with_default_quantity(frame), types), since)
     if inp.kind == "db":
         query = inp.options.get("events_query")
+        url = require_option(inp.options, "database_url", "db")
         try:
-            engine = engine_for(require_option(inp.options, "database_url", "db"))
-            if query:
-                cleaned = readonly_select(str(query), option="input.options.events_query")
-                if _sql_has_page(cleaned):
-                    frame = pd.read_sql(text(cleaned), engine)
-                    keep = [column for column in EVENT_METRIC_COLUMNS if column in frame.columns]
-                    frame = frame.loc[:, keep] if keep else frame
-                    return _filter_events_since(
-                        filter_events_by_types(_with_default_quantity(frame), types), since
-                    )
-                source = f"({cleaned}) AS _cicerone_metric_events"
-            else:
-                table = sql_identifier(
-                    inp.options.get("events_table", DEFAULT_EVENTS_TABLE),
-                    option="events_table",
-                )
-                source = f'"{table}"'
+            engine = engine_for(url)
             try:
-                stmt, params = _metric_event_sql(source, types=types, floor=floor)
-                frame = pd.read_sql(stmt, engine, params=params)
-            except Exception as exc:
-                if not is_missing_column_error(exc):
-                    raise
-                stmt, params = _metric_event_sql(
-                    source, types=types, floor=floor, columns=REQUIRED_EVENT_COLUMNS
-                )
-                frame = pd.read_sql(stmt, engine, params=params)
-            return _filter_events_since(_with_default_quantity(frame), since)
+                if query:
+                    cleaned = readonly_select(str(query), option="input.options.events_query")
+                    if _sql_has_page(cleaned):
+                        frame = pd.read_sql(text(cleaned), engine)
+                        keep = [column for column in EVENT_METRIC_COLUMNS if column in frame.columns]
+                        frame = frame.loc[:, keep] if keep else frame
+                        return _filter_events_since(
+                            filter_events_by_types(_with_default_quantity(frame), types), since
+                        )
+                    source = f"({cleaned}) AS _cicerone_metric_events"
+                else:
+                    table = sql_identifier(
+                        inp.options.get("events_table", DEFAULT_EVENTS_TABLE),
+                        option="events_table",
+                    )
+                    source = f'"{table}"'
+                try:
+                    stmt, params = _metric_event_sql(source, types=types, floor=floor)
+                    frame = pd.read_sql(stmt, engine, params=params)
+                except Exception as exc:
+                    if not is_missing_column_error(exc):
+                        raise
+                    stmt, params = _metric_event_sql(
+                        source, types=types, floor=floor, columns=REQUIRED_EVENT_COLUMNS
+                    )
+                    frame = pd.read_sql(stmt, engine, params=params)
+                return _filter_events_since(_with_default_quantity(frame), since)
+            finally:
+                release_engine(url)
         except Exception:
             if floor is not None:
                 return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))

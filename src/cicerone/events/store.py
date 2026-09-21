@@ -19,7 +19,7 @@ from cicerone.io.db_store import (
     DEFAULT_RECOMMENDATIONS_TABLE,
     MISSING_TABLE_ERRORS,
 )
-from cicerone.io.engines import dispose_engines, engine_for
+from cicerone.io.engines import dispose_engines, engine_for, release_engine
 from cicerone.io.options import is_s3_not_found, read_parquet, require_option, sql_identifier
 from cicerone.io.recommendation_reader import ITEMS_SNAPSHOT_FILENAME
 from cicerone.io.recommendation_schema import (
@@ -111,7 +111,8 @@ def load_items_catalog_size(output: IOSettings) -> int | None:
             output.options.get("recommendation_items_table", DEFAULT_RECOMMENDATION_ITEMS_TABLE),
             option="recommendation_items_table",
         )
-        engine = _engine_for(require_option(output.options, "database_url", "db"))
+        url = require_option(output.options, "database_url", "db")
+        engine = _engine_for(url)
         try:
             with engine.connect() as conn:
                 value = conn.execute(text(f'SELECT COUNT(DISTINCT "{ITEM_COLUMN}") FROM "{table}"')).scalar()
@@ -122,6 +123,8 @@ def load_items_catalog_size(output: IOSettings) -> int | None:
                 raise
             logger.exception("Failed to count items snapshot for experiment catalog size")
             return None
+        finally:
+            release_engine(url)
         return int(value or 0)
     return None
 
@@ -142,7 +145,8 @@ def load_recommendation_guardrail_rows(output: IOSettings) -> pd.DataFrame | Non
         return _project_columns(frame, GUARDRAIL_COLUMNS)
     if output.kind == "db":
         table, _required, _user = _db_table_and_columns(output)
-        engine = _engine_for(require_option(output.options, "database_url", "db"))
+        url = require_option(output.options, "database_url", "db")
+        engine = _engine_for(url)
         column_sets = (
             GUARDRAIL_COLUMNS,
             (USER_COLUMN, ITEM_COLUMN, RANK_COLUMN, SOURCE_COLUMN),
@@ -151,21 +155,24 @@ def load_recommendation_guardrail_rows(output: IOSettings) -> pd.DataFrame | Non
         )
         loaded: pd.DataFrame | None = None
         last_exc: BaseException | None = None
-        for columns in column_sets:
-            quoted = ", ".join(f'"{column}"' for column in columns)
-            try:
-                loaded = pd.read_sql_query(text(f"SELECT {quoted} FROM {table}"), engine)
-                break
-            except MISSING_TABLE_ERRORS as exc:
-                last_exc = exc
-                mapped = _empty_frame_from_db_error(exc, table=table)
-                if mapped is not None:
-                    return mapped
-            except Exception as exc:
-                last_exc = exc
-                if is_missing_column_error(exc):
-                    continue
-                raise
+        try:
+            for columns in column_sets:
+                quoted = ", ".join(f'"{column}"' for column in columns)
+                try:
+                    loaded = pd.read_sql_query(text(f"SELECT {quoted} FROM {table}"), engine)
+                    break
+                except MISSING_TABLE_ERRORS as exc:
+                    last_exc = exc
+                    mapped = _empty_frame_from_db_error(exc, table=table)
+                    if mapped is not None:
+                        return mapped
+                except Exception as exc:
+                    last_exc = exc
+                    if is_missing_column_error(exc):
+                        continue
+                    raise
+        finally:
+            release_engine(url)
         if loaded is None:
             if last_exc is not None:
                 logger.warning("Recommendations schema mismatch; treating as empty: %s", last_exc)
@@ -244,7 +251,8 @@ def _load_dataset_recommendations_for_users(output: IOSettings, user_ids: list[s
 
 def _load_db_recommendations(output: IOSettings, *, user_ids: Collection[str] | None = None) -> pd.DataFrame:
     table, _required_columns, user_col = _db_table_and_columns(output)
-    engine = _engine_for(require_option(output.options, "database_url", "db"))
+    url = require_option(output.options, "database_url", "db")
+    engine = _engine_for(url)
     try:
         if user_ids is None:
             frame = pd.read_sql_query(text(f"SELECT * FROM {table}"), engine)
@@ -261,6 +269,8 @@ def _load_db_recommendations(output: IOSettings, *, user_ids: Collection[str] | 
         if empty is not None:
             return empty
         raise
+    finally:
+        release_engine(url)
     if frame.empty:
         return empty_recommendations_frame()
     return _empty_on_schema_mismatch(frame)
@@ -313,7 +323,8 @@ def count_recommendation_users(output: IOSettings) -> int:
 
     if output.kind == "db":
         table, _columns, user_col = _db_table_and_columns(output)
-        engine = _engine_for(require_option(output.options, "database_url", "db"))
+        url = require_option(output.options, "database_url", "db")
+        engine = _engine_for(url)
         try:
             with engine.connect() as conn:
                 value = conn.execute(text(f"SELECT COUNT(DISTINCT {user_col}) FROM {table}")).scalar()
@@ -322,6 +333,8 @@ def count_recommendation_users(output: IOSettings) -> int:
             if zero is not None:
                 return zero
             raise
+        finally:
+            release_engine(url)
         return int(value or 0)
 
     raise ValueError(f"Unsupported output kind for incremental load: {output.kind!r}")
