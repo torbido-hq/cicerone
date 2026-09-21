@@ -364,7 +364,7 @@ def test_exclusive_file_lock_reraises_unsupported_msvcrt(tmp_path, monkeypatch):
         pass
 
 
-def test_read_parquet_s3_uses_pyarrow_filesystem(mocker):
+def test_read_parquet_s3_uses_pyarrow_filesystem(mocker, enable_native_arrow_s3):
     import pandas as pd
 
     from cicerone.io.options import read_parquet
@@ -442,3 +442,46 @@ def test_s3_filesystem_parses_endpoint_override(mocker):
         endpoint_override="127.0.0.1:9000",
         scheme="http",
     )
+
+
+def test_read_parquet_s3_skips_native_arrow_in_tests(mocker):
+    import pandas as pd
+
+    from cicerone.io.options import read_parquet
+
+    ctor = mocker.patch("pyarrow.fs.S3FileSystem")
+    body = _FakeS3Body(b"parquet-bytes")
+    client = mocker.Mock()
+    client.get_object.return_value = {"Body": body}
+    mocker.patch("cicerone.io.options.build_s3_client", return_value=client)
+    mocker.patch("cicerone.io.options.pd.read_parquet", return_value=pd.DataFrame({"x": [1]}))
+    frame = read_parquet(
+        {
+            "storage_backend": "s3",
+            "access_key_id": "id",
+            "secret_access_key": "secret",
+            "bucket": "bucket",
+        },
+        "data.parquet",
+    )
+    assert list(frame.columns) == ["x"]
+    ctor.assert_not_called()
+
+
+def test_build_s3_client_uses_configured_region(mocker):
+    from cicerone.io.options import build_s3_client
+
+    client = mocker.Mock()
+    ctor = mocker.patch("boto3.client", return_value=client)
+    mocker.patch("botocore.config.Config", return_value="cfg")
+    assert (
+        build_s3_client(
+            {
+                "access_key_id": "id",
+                "secret_access_key": "secret",
+                "region": "eu-west-1",
+            }
+        )
+        is client
+    )
+    assert ctor.call_args.kwargs["region_name"] == "eu-west-1"
