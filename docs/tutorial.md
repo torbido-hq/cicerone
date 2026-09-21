@@ -10,12 +10,13 @@ with pip instead, see [README Installation](../README.md#installation)
 (`pip install cicerone-recommender`, then `cicerone --config …`; point
 `feature_config_path` and local dataset paths at host files).
 `docker-compose.yml` is for local developer convenience only — do not run
-it as a production deployment. For the full configuration reference, see
-the [README](../README.md); for algorithms and how strategies differ, see
-[how-it-works.md](how-it-works.md); for `[events]` ingest between retrains,
-see [incremental-events.md](incremental-events.md); for how the code is
-structured, see [architecture.md](architecture.md).
+it as a production deployment. Configuration knobs:
+[configuration.md](configuration.md). Algorithms:
+[how-it-works.md](how-it-works.md). Incremental ingest:
+[incremental-events.md](incremental-events.md). Package map:
+[architecture.md](architecture.md).
 
+0. [Clone the repository](#0-clone-the-repository)
 1. [Create a sample dataset](#1-create-a-sample-dataset)
 2. [Point cicerone.toml at it](#2-point-ciceronetoml-at-it)
 3. [Run the job once](#3-run-the-job-once)
@@ -33,6 +34,32 @@ structured, see [architecture.md](architecture.md).
 15. [Check job status with the dashboard](#15-check-job-status-with-the-dashboard)
 16. [Run continuously, on a schedule](#16-run-continuously-on-a-schedule)
 17. [Next steps](#17-next-steps)
+
+## 0. Clone the repository
+
+Every command below is repository-relative (`docker/Dockerfile`,
+`config/cicerone.toml`, `docker-compose.yml`). Start from a checkout of
+Cicerone, not an empty directory:
+
+```sh
+git clone https://github.com/torbido-hq/cicerone.git
+cd cicerone
+```
+
+You need **Docker** (Engine + Compose v2). The host does not need Python.
+The first `docker build` uses `docker/Dockerfile` in this tree.
+
+Commands you will see:
+
+| Command | Meaning |
+| --- | --- |
+| `cicerone job` | Run one batch job and exit. |
+| `cicerone start` | Batch mode: one job immediately, then the scheduler loop. Serve mode: read API only. |
+| `cicerone serve` | Read API (`job.mode = "serve"`). |
+| `cicerone scheduler` | Cron loop only — waits for the next `cron_schedule` tick; no immediate job. |
+
+`job` and `start` are not interchangeable. This tutorial uses `job` until
+the scheduler / trigger step.
 
 ## 1. Create a sample dataset
 
@@ -85,14 +112,14 @@ for how to adapt them to your own catalog.
 ## 2. Point `cicerone.toml` at it
 
 Copy the shipped config so you can experiment freely without touching the
-version-controlled original, and switch both `[input]`/`[output]` to the
-local backend:
+version-controlled original. The copy still has S3 `${INPUT_S3_*}` /
+`${OUTPUT_S3_*}` keys — **replace** the whole `[input.options]` and
+`[output.options]` tables (do not append a second header; leftover
+`${…}` placeholders fail load even when `storage_backend = "local"`):
 
 ```sh
 cp config/cicerone.toml config/cicerone.local.toml
 ```
-
-Edit `config/cicerone.local.toml`'s `[input.options]`/`[output.options]` to:
 
 ```toml
 [input.options]
@@ -105,7 +132,7 @@ path = "/data/output"
 ```
 
 You'll keep editing this same file's `[job]` section through the rest of
-this tutorial.
+this tutorial. Other knobs: [configuration.md](configuration.md).
 
 ## 3. Run the job once
 
@@ -116,6 +143,11 @@ docker run --rm \
   -v "$PWD/data":/data \
   cicerone-test cicerone --config /app/config/cicerone.toml job
 ```
+
+This is `job`: one train-and-write, then the container exits. `start` would
+run this job and then stay up in the cron loop — that comes in
+[step 14](#14-trigger-a-retrain-on-demand) and
+[step 16](#16-run-continuously-on-a-schedule).
 
 You'll re-run this exact command after every config change below.
 
@@ -383,20 +415,32 @@ not safe on untrusted bytes). See the README's
 
 Input/output don't have to be static files — `kind = "db"` reads/writes a
 relational database via SQLAlchemy instead (independently for input and
-output). `docker-compose.yml` already includes a Postgres 16 service —
-start just that:
+output). `docker-compose.yml` already includes a Postgres 16 service (profile `db`,
+service `postgres`). **Start it and wait for the healthcheck** before
+loading data — `up -d` without `--wait` can return before `pg_isready`
+passes (interval 3s, 20 retries):
+
+```sh
+docker compose --env-file docker/postgres/defaults.env --profile db up -d --wait postgres
+```
+
+If your Compose build has no `--wait`, start it and poll until ready:
 
 ```sh
 docker compose --env-file docker/postgres/defaults.env --profile db up -d postgres
+until docker compose --env-file docker/postgres/defaults.env --profile db exec postgres \
+  pg_isready -U cicerone -d cicerone; do
+  sleep 3
+done
 ```
 
-(Credentials, DB names, and host port live in
-[`docker/postgres/defaults.env`](../docker/postgres/defaults.env) — see
+Credentials, DB names, and host port live in
+[`docker/postgres/defaults.env`](../docker/postgres/defaults.env)
+(`cicerone` / `cicerone` / `cicerone` on `127.0.0.1:5432`). See
 [CONTRIBUTING.md](../CONTRIBUTING.md#local-postgres-defaults). From the host
 use `localhost`; from another compose container use `postgres`. For
-pytest, use the pytest DB from that file and
-[CONTRIBUTING.md](../CONTRIBUTING.md) for `TEST_DATABASE_URL`. Opt-in via
-`--profile db` so a plain `docker compose up` does not require Postgres.)
+pytest, use the pytest DB from that file. Opt-in via `--profile db` so a
+plain `docker compose up` does not require Postgres.
 
 Load the sample dataset into `events`/`users`/`items` tables:
 
@@ -457,13 +501,14 @@ add it).
 Input and output can be mixed (e.g. read from Postgres, write to S3, or
 vice versa), and raw SQL overrides (`events_query`/`users_query`/
 `items_query`) let you read straight from an existing application schema
-instead of requiring materialized tables — see the README's
-[Configuration section](../README.md#configuration-configciceronetoml).
+instead of requiring materialized tables — see
+[configuration.md](configuration.md#input-and-output).
 
 Clean up when you're done:
 
 ```sh
-docker compose --profile db down   # or: docker compose --profile db stop postgres
+docker compose --env-file docker/postgres/defaults.env --profile db down
+# or: docker compose --env-file docker/postgres/defaults.env --profile db stop postgres
 ```
 
 ## 12. Serve recommendations over an HTTP API
@@ -487,7 +532,9 @@ second `[output.options]` or `[serve]` header is a duplicate table and TOML
 parsing fails. Replacing `[output.options]` also drops the `${OUTPUT_S3_*}`
 placeholders, which would otherwise resolve against environment variables you
 have not set. Everything omitted from `[serve]` keeps its default (`host`
-`0.0.0.0`, `port` 8000, `default_k` 10, `refresh_interval_seconds` 60):
+`127.0.0.1`, `port` 8000, `default_k` 10, `refresh_interval_seconds` 60).
+The container publish (`-p 8000:8000`) needs the process listening on all
+container interfaces, so set `host` explicitly:
 
 ```toml
 [output.options]
@@ -496,7 +543,9 @@ path = "/data/output"
 
 [serve]
 auth_token = "tutorial-token"
+host = "0.0.0.0"
 category_column = "category"
+refresh_interval_seconds = 2
 
 [track]
 enabled = true
@@ -544,8 +593,13 @@ The response is an object (not a bare list):
 }
 ```
 
-Report what the host actually rendered. This writes an impression row to
-`data/output/track.jsonl`; it does not enter the training event path:
+`GET /recommendations` is a lookup. It is not an impression. Report an
+item only after the host UI rendered it (`POST /track`, `kind` is
+`impression` or `click`). That writes `data/output/track.jsonl` and does
+not enter the training event path. `202` here means the track row was
+persisted (duplicates skipped). `[serve].log_impressions` is a different
+switch — it records **returned** GET items in the background, not browser
+renders; leave it off.
 
 ```sh
 curl -sS -X POST -H "Authorization: Bearer $SERVE_TOKEN" \
@@ -590,12 +644,14 @@ docker run --rm --network host -e PYTHONPATH=/app/src \
 From a PyPI install, drop `PYTHONPATH` and run
 `python examples/serve/python_client.py` on the host with the same env vars.
 
-For a `dataset` output (as here), the recommendations file and optional
-`items_snapshot.parquet` are cached in memory and reloaded every
-`[serve].refresh_interval_seconds` (default 60s) — re-run
-[step 3](#3-run-the-job-once) and query again after that interval to see
-updated results without restarting the container. For a `db` output, every
-request queries the table directly instead. Clean up when you're done:
+For a `dataset` output (as here), serve caches `recommendations.parquet`
+and the optional items snapshot in memory. The tutorial sets
+`refresh_interval_seconds = 2` so a later batch rewrite is visible without
+restarting (production default is 60s). After a successful incremental
+flush the worker also calls `reader.refresh` immediately — the timer is
+the backup, not the only path. For a `db` output, every GET queries the
+recommendation table directly; the refresh timer only reloads the items
+snapshot. Clean up when you're done:
 
 ```sh
 docker stop cicerone-tutorial-serve
@@ -608,7 +664,9 @@ HA, and optional `[events.online]` LightFM `fit_partial`:
 [incremental-events.md](incremental-events.md).
 
 Add this to `config/cicerone.serve.local.toml` (keep the `[output]` /
-`[serve]` edits from [step 12](#12-serve-recommendations-over-an-http-api)):
+`[serve]` / `[track]` edits from
+[step 12](#12-serve-recommendations-over-an-http-api), including
+`refresh_interval_seconds = 2`):
 
 ```toml
 [events]
@@ -618,10 +676,31 @@ kind = "webhook"
 [events.incremental]
 batch_size = 1
 batch_window_seconds = 2
+poll_interval_seconds = 1
 ```
 
-Start serve again, POST one event, wait for the micro-batch window, then
-read Alice's rows (and `cicerone_events_*` on `/metrics`):
+`POST /events` is the training / incremental contract. It is not
+`POST /track` (Quality). `202 Accepted` means Cicerone queued the event
+for incremental processing. It does **not** mean the recommendation
+output has been updated.
+
+```
+POST /events
+    → 202, in-memory webhook queue
+    → worker poll (poll_interval_seconds, default 1)
+    → flush when batch_size is reached or batch_window_seconds elapses
+    → write-through to [output]
+    → dataset: reader.refresh immediately; periodic refresh is backup
+    → db: the next GET reads the table
+    → GET /recommendations can see the new rows
+```
+
+Webhook pending events are process-local. A `202` is not durable; a
+hard restart drops the queue. `batch_size = 1` flushes on the next poll
+(~1s), not on the HTTP response.
+
+Start serve again, POST one event, wait for that poll/flush, then read
+Alice's rows:
 
 ```sh
 docker run --rm -d --name cicerone-tutorial-serve -p 8000:8000 \
@@ -635,14 +714,19 @@ curl -sS -X POST -H "Authorization: Bearer $SERVE_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"user_id":"alice","item_id":"ipa-001","event_type":"purchase","quantity":1,"occurred_at":"2026-08-19T12:00:00Z"}' \
   http://localhost:8000/events
+# Expect {"accepted":1,"event_ids":[...]} — queued, not yet written.
 
-sleep 3
+# Wait for poll (1s) + flush. Do not treat this sleep as "the recs updated."
+sleep 2
 curl -s -H "Authorization: Bearer $SERVE_TOKEN" \
   "http://localhost:8000/recommendations/alice?limit=5" | python -m json.tool
 ```
 
 `occurred_at` must include a timezone (`Z` / offset) or be Unix epoch
-seconds. A full backlog returns HTTP 429. Stop serve when you are done:
+seconds. Invalid JSON / contract → **400**. Missing bearer → **401**.
+Body larger than 1 MiB (`events.options.max_body_bytes`) → **413**. A
+full backlog (`max_pending`, default 10000) → **429**. Stop serve when
+you are done:
 
 ```sh
 docker stop cicerone-tutorial-serve
@@ -658,12 +742,23 @@ separate container). Add this to `config/cicerone.local.toml`:
 [job.trigger]
 enabled = true
 auth_token = "tutorial-token"
+host = "0.0.0.0"
 port = 8080
+debounce_seconds = 2
 ```
 
-Start the scheduler in the background (this also runs the batch job
-immediately, then re-enters the cron loop) and fire the webhook. As above,
-keep the token in a shell variable instead of inlining it:
+`host = "0.0.0.0"` is required so `docker run -p 8080:8080` can reach the
+process (code default is `127.0.0.1` inside the container).
+`debounce_seconds = 2` is a tutorial override of the default 60 so you
+do not sit through a minute after the boot job.
+
+`cicerone start` in batch mode runs **one job immediately**, then enters
+the scheduler. That is why this step uses `start` instead of `job`.
+`cicerone scheduler` would only wait for the next cron tick.
+
+A trigger while that first job is in flight, or within
+`debounce_seconds` of it finishing, is **skipped**, not queued. Wait for
+the real log line `entering schedule loop`, then for the debounce:
 
 ```sh
 docker run --rm -d --name cicerone-tutorial-scheduler -p 8080:8080 \
@@ -672,16 +767,22 @@ docker run --rm -d --name cicerone-tutorial-scheduler -p 8080:8080 \
   -v "$PWD/data":/data \
   cicerone-test cicerone --config /app/config/cicerone.toml start
 
+until docker logs cicerone-tutorial-scheduler 2>&1 | grep -q "entering schedule loop"; do
+  sleep 1
+done
+sleep 2
+
 read -s -p "Trigger auth token: " TRIGGER_TOKEN && echo
 curl -X POST -H "Authorization: Bearer $TRIGGER_TOKEN" http://localhost:8080/trigger/retrain
 ```
 
 A trigger fired while a run is already in flight, or within
-`[job.trigger].debounce_seconds` (default 60) of the last one, is skipped
-rather than queued — check `docker logs cicerone-tutorial-scheduler` to see
-it happen if you call the webhook twice in a row. Single-instance locking is
-the default; see the README Event-driven retrain trigger section for optional
-`postgres` / `redis` backends when running multiple scheduler replicas. The
+`debounce_seconds` of the last one, is skipped rather than queued —
+check `docker logs cicerone-tutorial-scheduler` to see it happen if you
+call the webhook twice in a row. Single-instance locking is
+the default; see [configuration.md](configuration.md#job-trigger) for
+optional `postgres` / `redis` backends when running multiple scheduler
+replicas. The
 written manifest also records `triggered_by` (`"cron"`, `"webhook"`, or
 `"s3-poll"` if `poll_input_bucket = true`) and `lock_backend`. Clean up when
 you're done:
@@ -700,11 +801,16 @@ Reuse the same local `data/output/`:
 cp config/cicerone.dashboard.toml config/cicerone.dashboard.local.toml
 ```
 
-Edit `config/cicerone.dashboard.local.toml`'s `[output.options]` to point at
-the same local directory, and its `[job].cron_schedule` to match
-`config/cicerone.local.toml`'s:
+**Replace** `[output.options]` (drop the S3 `${OUTPUT_S3_*}` keys) and
+point `[input.options]` at the sample events so Inspect user has a
+history pane. Keep the shipped `[dashboard] host = "0.0.0.0"` so
+`-p 8090:8090` works:
 
 ```toml
+[input.options]
+storage_backend = "local"
+path = "/data/input"
+
 [output.options]
 storage_backend = "local"
 path = "/data/output"
@@ -767,14 +873,14 @@ docker stop cicerone-tutorial-dashboard
 
 ## 16. Run continuously, on a schedule
 
-Everything above ran the job once via `docker run`. In practice, Cicerone
-runs continuously as a long-lived container: `docker-compose.yml` runs the
-job immediately on boot, then again on `[job].cron_schedule` (a 5-field cron
-expression evaluated in UTC; default: every night at 03:00). Use that compose
-file to exercise recommender + serve + dashboard locally — it is for
-developer convenience, not production. Point it at your real input/output
-backend (S3-compatible storage or a database — see
-`.env.example`/`config/cicerone.toml`) and run:
+Everything above ran the job once via `docker run` (`cicerone job`).
+Compose's `recommender` service runs `cicerone start`: one job on boot,
+then `[job].cron_schedule` (5-field cron, UTC; default 03:00). That is
+`start`, not `scheduler` (which would wait for the next tick). Use that
+compose file to exercise recommender + serve + dashboard locally — it is
+for developer convenience, not production. Point it at your real
+input/output backend (S3-compatible storage or a database — see
+`.env.example` and [configuration.md](configuration.md)) and run:
 
 ```sh
 cp .env.example .env   # fill in the secrets your cicerone.toml references
@@ -785,17 +891,14 @@ docker compose up --build
 
 - Swap in your own data, following the [data contract](../README.md#data-contract).
 - Install from PyPI (`pip install cicerone-recommender`) and run
-  `cicerone --config ./config/cicerone.toml start` — set
-  `feature_config_path` (and dashboard `users_path`) to host files; see
+  `cicerone --config ./config/cicerone.toml job` (one run) or `start`
+  (job then scheduler). Set `feature_config_path` (and dashboard
+  `users_path`) to host files; see
   [README Installation](../README.md#installation).
-- Read [how-it-works.md](how-it-works.md) for algorithms,
-  the [model strategies](../README.md#model-strategies),
-  [AutoML](../README.md#automl), and
-  [model artifacts](../README.md#model-artifacts) reference for every
-  tunable knob covered above.
+- Read [how-it-works.md](how-it-works.md) for algorithms and
+  [configuration.md](configuration.md) for every TOML section.
 - Point input/output at S3-compatible object storage (R2, AWS S3, MinIO) —
-  see the README's [Configuration](../README.md#configuration-configciceronetoml)
-  section.
+  see [configuration.md](configuration.md#input-and-output).
 - Sticky A/B tests of ranking recipes (optional job-time Thompson):
   [experiments.md](experiments.md).
 - Impressions, CTR/CVR, the dashboard Quality page, and production replay:
@@ -807,4 +910,6 @@ docker compose up --build
 - Run the test suite (`docker compose -f docker-compose.ci.yml up --build
   --abort-on-container-exit --exit-code-from test test`) if you're contributing
   code — see [CONTRIBUTING.md](../CONTRIBUTING.md). That suite includes a
-  system-style Postgres end-to-end check (`tests/test_system_db.py`).
+  system-style end-to-end checks for Postgres (`tests/test_system_db.py`,
+  `tests/test_system_db_quality.py`) and local parquet
+  (`tests/test_system_dataset.py`, `tests/test_system_dataset_quality.py`).

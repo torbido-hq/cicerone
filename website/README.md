@@ -32,7 +32,8 @@ npm run preview  # serve dist/
 | `public/images/docs/` | Copied from `../docs/images/` at build time (gitignored) |
 
 Generated `src/content/docs/how-it-works.md`, `tutorial.md`,
-`architecture.md`, `incremental-events.md`, `experiments.md`, `evaluation.md`, `src/generated/latest-release.json`,
+`architecture.md`, `incremental-events.md`, `experiments.md`, `evaluation.md`,
+`configuration.md`, `src/generated/latest-release.json`,
 and `public/images/docs/` are gitignored; they are created at build/dev time. CI and local builds always
 sync from `docs/`. The homepage release line is the latest
 [`cicerone-recommender`](https://pypi.org/project/cicerone-recommender/)

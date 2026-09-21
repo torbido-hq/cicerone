@@ -32,6 +32,10 @@ on that serve process. Tutorial step 13 walks through a local webhook;
 see [docs/incremental-events.md](../../docs/incremental-events.md).
 `POST /track` is present when `[track]` is enabled — impressions and clicks,
 not training events; see [docs/evaluation.md](../../docs/evaluation.md).
+`CICERONE_POST_TRACK=1` on the Python / fetch examples posts one
+`kind=impression` row per **returned** GET item (same contract as
+`serve.log_impressions`). That is not proof the host rendered the item.
+`POST /events` `202` means queued, not that recommendations changed.
 Set `CICERONE_POST_TRACK=1` (and `CICERONE_POST_EVENTS=1` for `/events`)
 before the curl script. The script JSON-encodes `CICERONE_USER_ID` with
 `python3` (or `python`).

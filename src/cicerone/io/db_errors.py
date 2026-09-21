@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from sqlalchemy.exc import ProgrammingError
-
 
 def db_error_message(exc: BaseException) -> str:
     return str(getattr(exc, "orig", exc)).lower()
@@ -19,5 +17,13 @@ def is_missing_column_error(exc: BaseException) -> bool:
 
 
 def is_missing_table_error(exc: BaseException) -> bool:
+    if is_missing_column_error(exc):
+        return False
     message = db_error_message(exc)
-    return isinstance(exc, ProgrammingError) or "does not exist" in message or "no such table" in message
+    return (
+        "no such table" in message
+        or "no table named" in message
+        or ('relation "' in message and "does not exist" in message)
+        or ("table" in message and "does not exist" in message)
+        or ("table" in message and "doesn't exist" in message)
+    )

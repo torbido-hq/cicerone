@@ -24,6 +24,7 @@ def main() -> int:
     print(f"user={body.user_id} fallback={body.fallback} generated_at={body.generated_at} experiment={body.experiment_id} variant={body.variant}")
     for row in body.items:
         print(f"  #{row.rank} {row.item_id} score={row.score:.4f} source={row.source}")
+    # Returned GET items, not a browser render. Same contract as serve.log_impressions.
     if os.environ.get("CICERONE_POST_TRACK") == "1" and body.items:
         from datetime import UTC, datetime
 

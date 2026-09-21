@@ -1,7 +1,7 @@
-"""Shared helpers for Postgres-backed system / DB tests.
+"""Postgres-specific helpers for system / DB tests.
 
-Keeps schema-reset guardrails and fixture normalization out of the
-end-to-end scenario module so they stay reusable and unit-testable.
+Schema-reset guardrails and fixture normalization stay here. Shared catalog,
+TOML, and HTTP mounts live in ``support.system_spec`` and are re-exported.
 """
 
 from __future__ import annotations
@@ -12,8 +12,46 @@ import pandas as pd
 from sqlalchemy import MetaData
 from sqlalchemy.engine import Engine
 
-from cicerone.io.db_store import DEFAULT_DB_TABLES
+from cicerone.io.db_store import (
+    DEFAULT_DB_TABLES,
+    DEFAULT_EVENTS_TABLE,
+    DEFAULT_ITEMS_TABLE,
+    DEFAULT_USERS_TABLE,
+)
 from support.postgres_defaults import canonical_postgres_test_db, looks_like_test_database
+from support.system_spec import (
+    REPO_FEATURES_CONFIG,
+    REPO_ROOT,
+    SYSTEM_DASHBOARD_PASSWORD,
+    SYSTEM_DASHBOARD_USER,
+    SYSTEM_SERVE_TOKEN,
+    available_recommendation_ids,
+    dashboard_users,
+    mount_dashboard_app,
+    mount_serve_app,
+    run_system_job,
+    sample_system_catalog,
+    write_system_config,
+)
+
+__all__ = [
+    "REPO_FEATURES_CONFIG",
+    "REPO_ROOT",
+    "SYSTEM_DASHBOARD_PASSWORD",
+    "SYSTEM_DASHBOARD_USER",
+    "SYSTEM_SERVE_TOKEN",
+    "available_recommendation_ids",
+    "dashboard_users",
+    "is_dedicated_test_database",
+    "mount_dashboard_app",
+    "mount_serve_app",
+    "postgres_ready",
+    "reset_schema",
+    "run_system_job",
+    "sample_system_catalog",
+    "seed_catalog",
+    "write_system_config",
+]
 
 
 def is_dedicated_test_database(db_name: str | None) -> bool:
@@ -68,3 +106,10 @@ def postgres_ready(df: pd.DataFrame) -> pd.DataFrame:
             )
         )
     return out
+
+
+def seed_catalog(engine: Engine, events: pd.DataFrame, users: pd.DataFrame, items: pd.DataFrame) -> None:
+    """Persist catalog frames via the same table names the db input source reads."""
+    postgres_ready(events).to_sql(DEFAULT_EVENTS_TABLE, engine, if_exists="replace", index=False)
+    postgres_ready(users).to_sql(DEFAULT_USERS_TABLE, engine, if_exists="replace", index=False)
+    postgres_ready(items).to_sql(DEFAULT_ITEMS_TABLE, engine, if_exists="replace", index=False)

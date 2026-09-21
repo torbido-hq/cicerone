@@ -27,8 +27,10 @@ from cicerone.feature_config import FeatureConfig
 from cicerone.io.base import OutputSink
 from cicerone.io.recommendation_reader import SOURCE_COLUMN, USER_COLUMN
 from cicerone.io.recommendation_schema import recommendation_output_columns
-from cicerone.locks import LockLostError
+from cicerone.job_eval import PUBLISH_ERRORS, log_caught
+from cicerone.locks import LockLostError, WriterLockBusyError
 from cicerone.publish.base import RecommendationPublisher
+from cicerone.publish.sidecar import log_sidecar_generation_skip, sidecar_generation_current
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +149,10 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         online_result = self._refresh_online(events)
         online_by_user = {} if online_result.sequential_skipped else self._online_rows_by_user(online_result)
 
+        pending_publish: tuple[pd.DataFrame, str] | None = None
+
         def _persist() -> int:
+            nonlocal pending_publish
             if not self._ensure_write_allowed():
                 self._abort_online()
                 return 0
@@ -199,16 +204,6 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             if callable(ensure):
                 ensure()
             self._sink.write_manifest(manifest)
-            if self._publisher is not None:
-                self._ensure_fence()
-                if callable(ensure):
-                    ensure()
-                try:
-                    self._publisher.publish(merged)
-                except Exception:
-                    logger.exception("Incremental publish failed after successful write")
-                    self._abort_online()
-                    raise
             self._store_users_in_cache(set(replace_ids), merged)
             if persist_online:
                 self._commit_online()
@@ -221,13 +216,35 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
                 len(replace_ids),
                 len(events),
             )
+            pending_publish = (merged, str(manifest["generated_at"]))
             return len(events)
 
         holder = getattr(self._sink, "recommendations_write", None)
         if callable(holder):
             with holder():
-                return _persist()
-        return _persist()
+                applied = _persist()
+        else:
+            applied = _persist()
+        if pending_publish is not None:
+            self._publish_sidecar(*pending_publish)
+        return applied
+
+    def _publish_sidecar(self, merged: pd.DataFrame, generated_at: str) -> None:
+        if self._publisher is None:
+            return
+        try:
+            self._ensure_fence()
+            self._publisher.connect()
+            self._ensure_fence()
+            current = sidecar_generation_current(self._output_settings, generated_at)
+            if current:
+                self._publisher.publish(merged)
+            else:
+                log_sidecar_generation_skip(current, incremental=True)
+        except (LockLostError, WriterLockBusyError):
+            raise
+        except PUBLISH_ERRORS as exc:
+            log_caught("Incremental publish failed after successful write", exc, log=logger)
 
     def _merge_affected(
         self,

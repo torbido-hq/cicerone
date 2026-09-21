@@ -24,6 +24,7 @@ from cicerone.io.recommendation_reader_common import (
     RANK_COLUMN,
     SOURCE_COLUMN,
     USER_COLUMN,
+    VARIANT_COLUMN,
     _index_recommendations_by_user,
     _ItemFilterMixin,
     _resolve_fallback_user_id,
@@ -42,6 +43,7 @@ class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
         self._cache = pd.DataFrame(columns=[USER_COLUMN, RANK_COLUMN, SOURCE_COLUMN])
         self._by_user: dict[str, pd.DataFrame] = {}
         self._fallback_user_id: str | None = None
+        self._variant_names: tuple[str, ...] = ()
         self._init_item_filter_state()
         self._s3_client = None
         self.refresh()
@@ -86,10 +88,22 @@ class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             fallback_user_id = None
             if COLD_START_USER_ID not in by_user:
                 fallback_user_id = _resolve_fallback_user_id(by_user)
+            variant_names: tuple[str, ...] = ()
+            if VARIANT_COLUMN in cache.columns and not cache.empty:
+                variant_names = tuple(
+                    sorted(
+                        {
+                            str(name)
+                            for name in cache[VARIANT_COLUMN].tolist()
+                            if not pd.isna(name) and str(name)
+                        }
+                    )
+                )
             with self._lock:
                 self._cache = cache
                 self._by_user = by_user
                 self._fallback_user_id = fallback_user_id
+                self._variant_names = variant_names
             recommendations_ok = True
         except Exception:
             logger.exception("Failed to refresh recommendations cache; keeping previous data")
@@ -115,18 +129,26 @@ class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             record_cache_hit()
             return _rec.filter_variant_rows(rows, variant).head(k).reset_index(drop=True)
 
+    def present_variant_names(self) -> tuple[str, ...]:
+        with self._lock:
+            return self._variant_names
+
     def get_cold_start_fallback(self, k: int, *, variant: str | None = None) -> pd.DataFrame:
         with self._lock:
             sentinel = self._by_user.get(COLD_START_USER_ID)
-            if sentinel is not None:
-                sentinel = _rec.filter_variant_rows(sentinel, variant)
-            if sentinel is not None and not sentinel.empty:
-                return sentinel.head(k).reset_index(drop=True)
-            cache = _rec.filter_variant_rows(self._cache, variant)
-            if self._fallback_user_id is not None:
-                rows = self._by_user.get(self._fallback_user_id)
-                if rows is not None and not rows.empty:
-                    filtered = _rec.filter_variant_rows(rows, variant)
-                    if not filtered.empty:
-                        return filtered.head(k).reset_index(drop=True)
-            return select_cold_start_fallback(cache, k, sentinel=sentinel)
+            fallback_id = self._fallback_user_id
+            fallback_rows = self._by_user.get(fallback_id) if fallback_id is not None else None
+            cache = self._cache
+        if sentinel is not None:
+            filtered = _rec.filter_variant_rows(sentinel, variant)
+            if not filtered.empty:
+                return filtered.head(k).reset_index(drop=True)
+        if fallback_rows is not None and not fallback_rows.empty:
+            filtered = _rec.filter_variant_rows(fallback_rows, variant)
+            if not filtered.empty:
+                return filtered.head(k).reset_index(drop=True)
+        return select_cold_start_fallback(
+            _rec.filter_variant_rows(cache, variant),
+            k,
+            sentinel=_rec.filter_variant_rows(sentinel, variant) if sentinel is not None else None,
+        )

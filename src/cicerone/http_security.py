@@ -23,6 +23,10 @@ _FLASH_ERR_COOKIE = {
     "Experiment is not ready to promote": "err:Experiment%20is%20not%20ready%20to%20promote",
     "That variant is not the winner": "err:That%20variant%20is%20not%20the%20winner",
     "No experiment is enabled": "err:No%20experiment%20is%20enabled",
+    "No active champion/challenger pair is available": (
+        "err:No%20active%20champion%2Fchallenger%20pair%20is%20available"
+    ),
+    "Experiment state could not be read": "err:Experiment%20state%20could%20not%20be%20read",
 }
 FLASH_OK = frozenset(_FLASH_OK_COOKIE)
 FLASH_ERR = frozenset(_FLASH_ERR_COOKIE)
@@ -126,7 +130,10 @@ def require_csrf(request: Request, form_token: str) -> None:
     origin = request.headers.get("origin")
     referer = request.headers.get("referer")
     expected = request.url.netloc
-    if origin and urlparse(origin).netloc != expected:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="CSRF check failed")
-    if not origin and referer and urlparse(referer).netloc != expected:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="CSRF check failed")
+    if origin is not None:
+        if urlparse(origin).netloc != expected:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="CSRF check failed")
+        return
+    if referer and urlparse(referer).netloc == expected:
+        return
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="CSRF check failed")

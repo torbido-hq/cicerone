@@ -80,6 +80,7 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
         self._kind = output.kind
         self._options = output.options
         self._engine: Engine | None = None
+        self._engine_lock = threading.Lock()
         self._known_ids: set[str] | None = None
         self._track_size: int | None = None
         self._append_lock = threading.Lock()
@@ -115,7 +116,7 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
             return []
         payload = [_row_with_event_id(row) for row in rows]
         if self._kind == "db":
-            with self._writer_lease():
+            with self._append_lock, self._writer_lease():
                 return self._append_rows_db(payload)
         require_appendable_track_log(self._output)
         with self._dataset_append_lock(), self._writer_lease():
@@ -150,9 +151,10 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
     ) -> list[dict[str, Any]]:
         since = _iso_utc(since)
         if self._kind == "db":
-            rows = self._read_rows_db(kind=kind, experiment_id=experiment_id)
+            rows = self._read_rows_db(kind=kind, experiment_id=experiment_id, since=since)
         else:
-            rows = self._read_rows_dataset()
+            rows = self._read_rows_dataset(since=since)
+            since = None
         seen: set[str] = set()
         unique: list[dict[str, Any]] = []
         for row in rows:

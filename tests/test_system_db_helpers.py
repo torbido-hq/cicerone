@@ -8,7 +8,17 @@ import numpy as np
 import pandas as pd
 import pytest
 from support.postgres_defaults import postgres_test_db
-from support.system_db import is_dedicated_test_database, postgres_ready, reset_schema
+from support.system_db import (
+    REPO_FEATURES_CONFIG,
+    SYSTEM_SERVE_TOKEN,
+    available_recommendation_ids,
+    dashboard_users,
+    is_dedicated_test_database,
+    postgres_ready,
+    reset_schema,
+    sample_system_catalog,
+    write_system_config,
+)
 
 from cicerone.io.db_store import DEFAULT_DB_TABLES
 
@@ -132,3 +142,78 @@ def test_postgres_ready_normalizes_arrays_tuples_and_scalars() -> None:
     assert ready.loc[1, "scalar_col"] == 10
     assert ready["array_col"].dtype == object
     assert ready["tuple_col"].dtype == object
+
+
+def test_sample_system_catalog_has_filter_columns() -> None:
+    events, users, items = sample_system_catalog()
+    assert set(events["user_id"]) == {"u1", "u2", "u3"}
+    assert "u4" in set(users["user_id"])
+    assert set(items["item_id"]) == {"i1", "i2", "i3", "i4"}
+    wine = items.loc[items["item_id"] == "i3"].iloc[0]
+    assert wine["category"] == "wine"
+    assert bool(wine["in_stock"]) is False
+    unpublished = items.loc[items["item_id"] == "i4"].iloc[0]
+    assert bool(unpublished["published"]) is False
+
+
+def test_write_system_config_enables_serve_dashboard_track_eval(tmp_path) -> None:
+    import tomllib
+
+    path = write_system_config(tmp_path / "cicerone.toml", database_url="postgresql://example/cicerone_test")
+    raw = tomllib.loads(path.read_text())
+    assert raw["job"]["save_model_artifact"] is True
+    assert raw["job"]["eval"]["enabled"] is True
+    assert raw["job"]["feature_config_path"] == str(REPO_FEATURES_CONFIG)
+    assert raw["input"]["kind"] == "db"
+    assert raw["output"]["options"]["database_url"] == "postgresql://example/cicerone_test"
+    assert raw["serve"]["auth_token"] == SYSTEM_SERVE_TOKEN
+    assert raw["serve"]["category_column"] == "category"
+    assert raw["dashboard"]["enabled"] is True
+    assert raw["track"]["enabled"] is True
+
+
+def test_write_system_config_dataset_keeps_input_and_output_trees_apart(tmp_path) -> None:
+    import tomllib
+
+    input_path = tmp_path / "in"
+    output_path = tmp_path / "out"
+    path = write_system_config(
+        tmp_path / "cicerone.toml",
+        kind="dataset",
+        input_path=input_path,
+        output_path=output_path,
+    )
+    raw = tomllib.loads(path.read_text())
+    assert raw["input"]["kind"] == "dataset"
+    assert raw["output"]["kind"] == "dataset"
+    assert raw["input"]["options"]["storage_backend"] == "local"
+    assert raw["output"]["options"]["storage_backend"] == "local"
+    assert raw["input"]["options"]["path"] == str(input_path)
+    assert raw["output"]["options"]["path"] == str(output_path)
+    assert raw["input"]["options"]["path"] != raw["output"]["options"]["path"]
+
+
+def test_available_recommendation_ids_drops_unavailable_items() -> None:
+    recs = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i3", "rank": 1, "score": 0.9, "source": "popular_fallback"},
+            {"user_id": "u1", "item_id": "i1", "rank": 2, "score": 0.8, "source": "personalized"},
+            {"user_id": "u1", "item_id": "i4", "rank": 3, "score": 0.7, "source": "popular_fallback"},
+            {"user_id": "u1", "item_id": "i2", "rank": 4, "score": 0.6, "source": "personalized"},
+        ]
+    )
+    _events, _users, items = sample_system_catalog()
+    assert available_recommendation_ids(
+        recs,
+        items,
+        availability_filters=["published", "in_stock"],
+        k=3,
+    ) == ["i1", "i2"]
+
+
+def test_dashboard_users_hashes_password() -> None:
+    import bcrypt
+
+    users = dashboard_users("alice", "s3cret")
+    assert set(users) == {"alice"}
+    assert bcrypt.checkpw(b"s3cret", users["alice"].encode("ascii"))
