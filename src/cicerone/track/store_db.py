@@ -12,7 +12,6 @@ import pandas as pd
 from sqlalchemy import Engine, bindparam, create_engine, text
 
 from cicerone.io.db_errors import is_missing_table_error
-from cicerone.io.db_store import MISSING_TABLE_ERRORS
 from cicerone.io.options import require_option, sql_identifier
 from cicerone.track.store_common import (
     DEFAULT_EVAL_TABLE,
@@ -162,13 +161,11 @@ class TrackDbBackend:
         engine = self._db_engine()
         try:
             frame = pd.read_sql(text(f'SELECT payload FROM "{table}" LIMIT 1'), engine)
-        except MISSING_TABLE_ERRORS:
-            return None
         except Exception as exc:
             if is_missing_table_error(exc):
                 return None
             logger.exception("Failed to read eval table %r", table)
-            return None
+            raise
         if frame.empty:
             return None
         raw = frame.iloc[0]["payload"]
@@ -206,13 +203,11 @@ class TrackDbBackend:
                     stmt = stmt.bindparams(bindparam("generated_ats", expanding=True))
                 return pd.read_sql(stmt, engine, params=params)
             return pd.read_sql(text(f'SELECT * FROM "{table}"'), engine)
-        except MISSING_TABLE_ERRORS:
-            return pd.DataFrame(columns=list(HISTORY_COLUMNS))
         except Exception as exc:
             if is_missing_table_error(exc):
                 return pd.DataFrame(columns=list(HISTORY_COLUMNS))
             logger.exception("Failed to read history table %r", table)
-            return pd.DataFrame(columns=list(HISTORY_COLUMNS))
+            raise
 
 
 def _existing_event_ids(conn: Any, table: str, event_ids: Sequence[str]) -> set[str]:
