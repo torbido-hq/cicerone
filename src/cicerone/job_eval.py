@@ -21,6 +21,7 @@ from cicerone.evaluation import (
     evaluate_served,
     evaluate_tracking,
     generated_ats_from_track,
+    recs_from_impressions,
     replay_ks,
 )
 from cicerone.evaluation.context import concat_history, stamp_recommendations
@@ -288,15 +289,21 @@ def score_previous_run(
                 settings.track.conversion_event_types,
                 primary_metric=settings.experiment.primary_metric,
             )
+            impression_recs = recs_from_impressions(
+                track_rows,
+                generated_at=previous_generated_at,
+                recommendations=previous_recs,
+            )
             report = evaluate_served(
                 previous_recs,
                 events,
                 generated_at=previous_generated_at,
                 ks=replay_ks(settings.eval.ks, top_k=settings.top_k),
                 event_types=types,
-                history=history,
+                history=None if not impression_recs.empty else history,
                 catalog=items,
                 assigned=assigned,
+                impressions=impression_recs if not impression_recs.empty else None,
             )
             return report.as_dict() if report is not None else None
 

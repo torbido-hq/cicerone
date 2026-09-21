@@ -22,10 +22,12 @@ from rectools.metrics import (
 )
 
 from cicerone.blending import COLD_START_USER_ID
+from cicerone.config.constants import TRACK_KIND_IMPRESSION
 from cicerone.evaluation.metrics import OCCURRED_AT, _frame, _ratio
 from cicerone.io.recommendation_schema import (
     ITEM_COLUMN,
     RANK_COLUMN,
+    SCORE_COLUMN,
     SOURCE_COLUMN,
     USER_COLUMN,
     VARIANT_COLUMN,
@@ -126,6 +128,86 @@ def _catalog_metric_defs(k: int, *, with_prev: bool) -> dict[str, object]:
     return metrics
 
 
+def recs_from_impressions(
+    track_rows: Sequence[Mapping[str, Any]],
+    *,
+    generated_at: str | None = None,
+    recommendations: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Build reco rows from impression events (optionally stamped to one job)."""
+    rows: list[dict[str, Any]] = []
+    for raw in track_rows:
+        if str(raw.get("kind") or "") != TRACK_KIND_IMPRESSION:
+            continue
+        user_id = str(raw.get(USER_COLUMN) or "")
+        item_id = str(raw.get(ITEM_COLUMN) or "")
+        if not user_id or not item_id:
+            continue
+        stamp = str(raw.get("generated_at") or "")
+        if generated_at and stamp and stamp != str(generated_at):
+            continue
+        raw_rank = raw.get(RANK_COLUMN)
+        if isinstance(raw_rank, (int, float, str)):
+            try:
+                rank = int(raw_rank)
+            except (TypeError, ValueError):
+                rank = 1
+        else:
+            rank = 1
+        row: dict[str, Any] = {
+            USER_COLUMN: user_id,
+            ITEM_COLUMN: item_id,
+            RANK_COLUMN: rank if rank >= 1 else 1,
+        }
+        source = raw.get(SOURCE_COLUMN)
+        if source:
+            row[SOURCE_COLUMN] = str(source)
+        variant = raw.get(VARIANT_COLUMN)
+        if variant:
+            row[VARIANT_COLUMN] = str(variant)
+        rows.append(row)
+    if not rows:
+        return pd.DataFrame()
+    frame = pd.DataFrame(rows)
+    frame = frame.sort_values([USER_COLUMN, RANK_COLUMN], kind="mergesort")
+    frame = frame.drop_duplicates(subset=[USER_COLUMN, ITEM_COLUMN], keep="first")
+    if recommendations is not None and not recommendations.empty:
+        keys = [USER_COLUMN, ITEM_COLUMN]
+        extra = [
+            column
+            for column in (SOURCE_COLUMN, SCORE_COLUMN, VARIANT_COLUMN)
+            if column in recommendations.columns
+        ]
+        if extra:
+            lookup = recommendations.loc[:, [*keys, *extra]].copy()
+            lookup[USER_COLUMN] = lookup[USER_COLUMN].astype(str)
+            lookup[ITEM_COLUMN] = lookup[ITEM_COLUMN].astype(str)
+            lookup = lookup.drop_duplicates(subset=keys, keep="first")
+            frame = frame.merge(lookup, on=keys, how="left", suffixes=("", "_job"))
+            for column in extra:
+                job_column = f"{column}_job"
+                if job_column in frame.columns:
+                    frame[column] = frame[column].where(frame[column].notna(), frame[job_column])
+                    frame = frame.drop(columns=[job_column])
+    if SCORE_COLUMN not in frame.columns:
+        top = int(frame[RANK_COLUMN].max()) if RANK_COLUMN in frame.columns and not frame.empty else 1
+        frame[SCORE_COLUMN] = (top + 1 - frame[RANK_COLUMN]).astype(float)
+    else:
+        frame[SCORE_COLUMN] = pd.to_numeric(frame[SCORE_COLUMN], errors="coerce").fillna(0.0)
+    return frame.reset_index(drop=True)
+
+
+def _unseen_relevant(window: pd.DataFrame, prev: pd.DataFrame) -> pd.DataFrame:
+    if window.empty or USER_COLUMN not in window.columns or ITEM_COLUMN not in window.columns:
+        return window.iloc[0:0]
+    relevant = window.loc[:, [USER_COLUMN, ITEM_COLUMN]].drop_duplicates()
+    if relevant.empty or prev.empty:
+        return relevant
+    seen = prev.loc[:, [USER_COLUMN, ITEM_COLUMN]].drop_duplicates()
+    merged = relevant.merge(seen, on=[USER_COLUMN, ITEM_COLUMN], how="left", indicator=True)
+    return merged.loc[merged["_merge"] == "left_only", [USER_COLUMN, ITEM_COLUMN]].reset_index(drop=True)
+
+
 def _prev_interactions(events: pd.DataFrame, generated_at: str | None) -> pd.DataFrame:
     if events.empty or generated_at is None or OCCURRED_AT not in events.columns:
         return events.iloc[0:0]
@@ -166,6 +248,7 @@ def evaluate_served(
     history: pd.DataFrame | None = None,
     catalog: pd.DataFrame | Sequence[object] | None = None,
     assigned: Mapping[str, str] | None = None,
+    impressions: pd.DataFrame | None = None,
 ) -> ServedEvalReport | None:
     if recommendations is None or recommendations.empty:
         return None
@@ -205,10 +288,21 @@ def evaluate_served(
             hist_recs = filter_recs_to_assigned(hist_recs, assigned)
         if not hist_recs.empty:
             recs = hist_recs
-    relevant = window_events.loc[:, [USER_COLUMN, ITEM_COLUMN]].drop_duplicates()
+    if impressions is not None and not impressions.empty:
+        recs = impressions.copy()
+        recs[USER_COLUMN] = recs[USER_COLUMN].astype(str)
+        recs[ITEM_COLUMN] = recs[ITEM_COLUMN].astype(str)
+        recs = recs[recs[USER_COLUMN] != COLD_START_USER_ID]
+        recs = filter_recs_to_assigned(recs, assigned)
+        if recs.empty:
+            return None
+    prev = _prev_interactions(all_events, generated_at)
+    relevant = _unseen_relevant(window_events, prev)
+    if impressions is not None and not recs.empty and not relevant.empty:
+        served_users = set(recs[USER_COLUMN].astype(str))
+        relevant = relevant.loc[relevant[USER_COLUMN].isin(served_users)]
     n_users = int(recs[USER_COLUMN].nunique())
     n_with_events = int(relevant[USER_COLUMN].nunique()) if not relevant.empty else 0
-    prev = _prev_interactions(all_events, generated_at)
     catalog_ids = _served_catalog(catalog, recs, all_events)
     metrics: dict[str, float] = {}
     for k in ks:
