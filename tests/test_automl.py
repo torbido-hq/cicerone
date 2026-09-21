@@ -10,6 +10,7 @@ from cicerone.automl import (
     CandidateResult,
     _parse_candidates,
     _time_based_folds,
+    drop_seen_interactions,
     evaluate_candidates,
     exclude_content_fallback_from_candidates,
     exclude_popular_in_category_from_candidates,
@@ -43,7 +44,35 @@ def _spread_events(n_days: int) -> pd.DataFrame:
                         "occurred_at": occurred_at,
                     }
                 )
+    # Cross-user items only in the newest week so the latest fold has unseen pairs.
+    unseen = {"u1": "i3", "u2": "i1", "u3": "i2"}
+    for day_offset in range(0, min(n_days, 7), 3):
+        occurred_at = now - pd.Timedelta(days=day_offset)
+        for user, item in unseen.items():
+            rows.append(
+                {
+                    "user_id": user,
+                    "item_id": item,
+                    "event_type": "purchase",
+                    "quantity": 1,
+                    "occurred_at": occurred_at,
+                }
+            )
     return pd.DataFrame(rows)
+
+
+def test_drop_seen_interactions_keeps_unseen_pairs() -> None:
+    train = pd.DataFrame({"user_id": ["u1", "u1"], "item_id": ["i1", "i2"]})
+    test = pd.DataFrame(
+        {"user_id": ["u1", "u1", "u2"], "item_id": ["i1", "i3", "i2"], "weight": [1.0, 1.0, 1.0]}
+    )
+    kept = drop_seen_interactions(test, train)
+    assert list(zip(kept["user_id"], kept["item_id"], strict=True)) == [("u1", "i3"), ("u2", "i2")]
+    assert drop_seen_interactions(test, pd.DataFrame()).equals(test)
+    assert drop_seen_interactions(pd.DataFrame(), train).empty
+    assert drop_seen_interactions(pd.DataFrame({"weight": [1.0]}), train).equals(
+        pd.DataFrame({"weight": [1.0]})
+    )
 
 
 def test_time_based_folds_splits_oldest_test_window_first():
@@ -413,7 +442,13 @@ def test_evaluate_candidates_handles_weighted_rrf_and_averages_across_folds(samp
     per_fold_metrics = []
     for train_events, test_events in folds:
         built = build_dataset(train_events, None, sample_items, feature_config, half_life_days=90)
-        test_interactions = build_interactions(test_events, feature_config, half_life_days=90)
+        test_interactions = drop_seen_interactions(
+            build_interactions(test_events, feature_config, half_life_days=90),
+            built.interactions,
+        )
+        if test_interactions.empty:
+            per_fold_metrics.append(dict.fromkeys(metrics_defs, 0.0))
+            continue
         test_users = sorted(set(test_events["user_id"]))
         reco = train_and_recommend(
             built,
