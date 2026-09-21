@@ -7,6 +7,7 @@ import time
 from collections import Counter
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -18,6 +19,7 @@ from cicerone.experiment.assignment import (
     snapshot_variant_names,
 )
 from cicerone.experiment.store import ExperimentStore
+from cicerone.feature_config import load_feature_config
 from cicerone.io.base import RecommendationReader, UserHistoryReader
 from cicerone.io.options import is_s3_not_found
 from cicerone.io.recommendation_schema import (
@@ -29,6 +31,7 @@ from cicerone.io.recommendation_schema import (
 )
 from cicerone.io.user_lookup import OCCURRED_AT_COLUMN
 from cicerone.reasons import parse_reasons
+from cicerone.serve.item_filters import available_item_ids, filter_recommendations
 from cicerone.values import as_list, is_missing, is_sequence_attr
 
 logger = logging.getLogger(__name__)
@@ -145,7 +148,9 @@ def lookup_recommendations(
             snapshot_names=snapshot,
         )
     try:
-        recs, used_fallback = _load_rows(recommendation_reader, user_id, k, variant=variant)
+        recs, used_fallback = _load_rows(
+            recommendation_reader, user_id, k, variant=variant, settings=settings
+        )
         if not has_variant_column(recs):
             experiment_id, variant = None, None
         category_column = settings.serve.category_column
@@ -264,16 +269,64 @@ def format_user_attrs(user: dict[str, Any] | None, *, allowed: Sequence[str] = (
     return rows
 
 
+def availability_filters(settings: Settings) -> list[str]:
+    path = Path(settings.feature_config_path)
+    if not path.is_file():
+        return []
+    try:
+        return list(load_feature_config(path).item_availability_filters)
+    except Exception:
+        logger.exception("Failed to load features.toml for dashboard lookup filters")
+        return []
+
+
 def _load_rows(
-    recommendation_reader: RecommendationReader, user_id: str, k: int, *, variant: str | None = None
+    recommendation_reader: RecommendationReader,
+    user_id: str,
+    k: int,
+    *,
+    variant: str | None = None,
+    settings: Settings,
 ) -> tuple[pd.DataFrame, bool]:
-    recs = recommendation_reader.get_recommendations(user_id, k, variant=variant)
-    if not recs.empty:
-        return recs, False
-    fallback = recommendation_reader.get_cold_start_fallback(k, variant=variant)
-    if fallback.empty:
-        return recs, False
-    return fallback, True
+    filters = availability_filters(settings)
+    items = recommendation_reader.get_items()
+    can_filter = bool(filters and items is not None and not items.empty)
+    fetch_k = max(k * 5, k) if can_filter else k
+    recs = recommendation_reader.get_recommendations(user_id, fetch_k, variant=variant)
+    used_fallback = False
+    if recs.empty:
+        used_fallback = True
+        recs = recommendation_reader.get_cold_start_fallback(fetch_k, variant=variant)
+        if recs.empty:
+            return recs, False
+    if can_filter:
+        recs = _filter_unavailable(recs, items, filters, settings.serve.category_column, k)
+    return recs, used_fallback
+
+
+def _filter_unavailable(
+    recs: pd.DataFrame,
+    items: pd.DataFrame | None,
+    filters: Sequence[str],
+    category_column: str,
+    k: int,
+) -> pd.DataFrame:
+    available = available_item_ids(items if items is not None else pd.DataFrame(), filters)
+    filtered = filter_recommendations(
+        recs,
+        items=items,
+        available_ids=available,
+        category=None,
+        category_column=category_column,
+        exclude_unavailable=True,
+    )
+    if filtered.empty:
+        return filtered
+    filtered = filtered.head(k).reset_index(drop=True)
+    if RANK_COLUMN in filtered.columns:
+        filtered = filtered.copy()
+        filtered[RANK_COLUMN] = range(1, len(filtered) + 1)
+    return filtered
 
 
 def _join_category(recs: pd.DataFrame, items: pd.DataFrame | None, category_column: str) -> pd.DataFrame:

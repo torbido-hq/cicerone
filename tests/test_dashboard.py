@@ -405,6 +405,43 @@ def test_main_uses_package_default_config_path(monkeypatch):
     assert captured["config_path"] == "/patched/cicerone.toml"
 
 
+def test_main_configures_lookup_availability_filters(tmp_path, monkeypatch):
+    features = tmp_path / "features.toml"
+    features.write_text('item_availability_filters = ["published"]\n')
+    rec_reader = type(
+        "_Rec",
+        (),
+        {
+            "configured": None,
+            "configure_item_filters": lambda self, *, category_column=None, availability_filters=(): setattr(
+                self, "configured", (category_column, list(availability_filters))
+            ),
+        },
+    )()
+
+    def fake_create_app(settings, reader, users, rec_reader=None, history_reader=None, **_kwargs):
+        del settings, reader, users, history_reader
+        return object()
+
+    monkeypatch.setattr(
+        "cicerone.dashboard.load_settings",
+        lambda: _settings(feature_config_path=str(features)),
+    )
+    monkeypatch.setattr("cicerone.dashboard.load_users", lambda _path: {"alice": "hash"})
+    monkeypatch.setattr("cicerone.dashboard.build_manifest_reader", lambda _output: _FakeReader(None))
+    monkeypatch.setattr("cicerone.dashboard.build_recommendation_reader", lambda _output: rec_reader)
+    monkeypatch.setattr("cicerone.dashboard.build_user_history_reader", lambda _input: object())
+    monkeypatch.setattr("cicerone.dashboard.create_app", fake_create_app)
+    monkeypatch.setattr(
+        "cicerone.dashboard.uvicorn",
+        type("_Uvicorn", (), {"run": staticmethod(lambda *_a, **_k: None)}),
+    )
+
+    main()
+
+    assert rec_reader.configured == ("category", ["published"])
+
+
 def test_require_basic_auth_used_directly_rejects_unknown_user():
     # Call dependency directly for the timing-safe unknown-username branch.
     from fastapi import HTTPException

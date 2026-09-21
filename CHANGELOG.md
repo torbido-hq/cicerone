@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.8.4] - 2026-09-21
 
+### Changed
+
+- Dashboard user lookup applies the same item availability filters as serve.
+
 ### Fixed
 
 - Redis Streams heartbeat XCLAIM failure fails closed so apply nacks before
