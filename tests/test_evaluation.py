@@ -14,6 +14,7 @@ from cicerone.evaluation import (
     filter_events_by_types,
     filter_events_to_recommended,
     generated_ats_from_track,
+    recs_from_impressions,
     replay_ks,
     user_track_outcomes,
 )
@@ -413,6 +414,94 @@ def test_evaluate_served_hit_rate_and_history() -> None:
     )
     assert replayed is not None
     assert replayed.metrics["HitRate@1"] == pytest.approx(1.0)
+
+
+def test_evaluate_served_drops_seen_pairs_from_truth() -> None:
+    recs = pd.DataFrame(
+        [{"user_id": "alice", "item_id": "ipa", "rank": 1, "score": 1.0, "source": "popular_fallback"}]
+    )
+    events = pd.DataFrame(
+        [
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "event_type": "purchase",
+                "occurred_at": "2026-08-27T12:00:00Z",
+            },
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "event_type": "purchase",
+                "occurred_at": "2026-08-28T12:00:00Z",
+            },
+        ]
+    )
+    report = evaluate_served(
+        recs,
+        events,
+        generated_at="2026-08-28T03:00:00+00:00",
+        ks=(1,),
+        event_types=("purchase",),
+    )
+    assert report is not None
+    assert report.metrics["HitRate@1"] == pytest.approx(0.0)
+
+
+def test_evaluate_served_uses_impression_lists() -> None:
+    job = pd.DataFrame(
+        [
+            {"user_id": "alice", "item_id": "stout", "rank": 1, "score": 1.0, "source": "personalized"},
+            {"user_id": "bob", "item_id": "lager", "rank": 1, "score": 0.5, "source": "popular_fallback"},
+        ]
+    )
+    impressions = recs_from_impressions(
+        [
+            {
+                "kind": "impression",
+                "user_id": "alice",
+                "item_id": "ipa",
+                "rank": 1,
+                "generated_at": "2026-08-28T03:00:00+00:00",
+            },
+            {
+                "kind": "impression",
+                "user_id": "bob",
+                "item_id": "lager",
+                "rank": 1,
+                "generated_at": "2026-08-20T00:00:00Z",
+            },
+        ],
+        generated_at="2026-08-28T03:00:00+00:00",
+        recommendations=job,
+    )
+    assert list(impressions["item_id"]) == ["ipa"]
+    events = pd.DataFrame(
+        [
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "event_type": "purchase",
+                "occurred_at": "2026-08-28T12:00:00Z",
+            },
+            {
+                "user_id": "bob",
+                "item_id": "lager",
+                "event_type": "purchase",
+                "occurred_at": "2026-08-28T12:00:00Z",
+            },
+        ]
+    )
+    report = evaluate_served(
+        job,
+        events,
+        generated_at="2026-08-28T03:00:00+00:00",
+        ks=(1,),
+        event_types=("purchase",),
+        impressions=impressions,
+    )
+    assert report is not None
+    assert report.n_users == 1
+    assert report.metrics["HitRate@1"] == pytest.approx(1.0)
 
 
 def test_evaluate_served_catalog_coverage_uses_item_catalog() -> None:
