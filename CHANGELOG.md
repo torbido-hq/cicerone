@@ -6,11 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.8.4] - 2026-09-21
 
+### Fixed
+
+- Redis Streams heartbeat XCLAIM failure fails closed so apply nacks before
+  writing.
+
 ### Security
 
 - Config page redacts `bootstrap_servers`, `sasl_username`, and `bucket`.
 - Dashboard CSRF requires a matching Origin, or Referer when Origin is
   omitted. An empty Origin header is rejected.
+- `cicerone users` writes `dashboard_users.toml` owner-only (`0600` on
+  POSIX, owner ACL on Windows) through an atomic replace.
 
 ## [0.8.3] - 2026-09-18
 
