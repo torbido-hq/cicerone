@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.4] - 2026-09-21
+
+### Fixed
+
+- Eval, history, and exposure DB reads return empty only when the table is
+  missing. Other SQL errors fail the job.
+
 ## [0.8.3] - 2026-09-18
 
 ### Fixed
