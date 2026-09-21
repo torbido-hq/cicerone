@@ -1389,6 +1389,119 @@ def test_select_automl_models_uses_winning_candidate(tmp_path, monkeypatch):
     assert selected.rrf_k == 40.0
 
 
+def test_select_job_recipes_skips_when_experiment_disabled(tmp_path, monkeypatch):
+    from cicerone.config import load_settings
+    from cicerone.feature_config import load_feature_config
+    from cicerone.job import AutomlSelection, _select_job_recipes
+
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir))
+    called: list[str] = []
+
+    def boom(*_args: object, **_kwargs: object) -> tuple[object, ...]:
+        called.append("resolve")
+        raise AssertionError("recipes must not resolve when experiment is off")
+
+    monkeypatch.setattr("cicerone.job.resolve_recipes", boom)
+    settings = load_settings()
+    selected = _select_job_recipes(
+        settings,
+        load_feature_config(settings.feature_config_path),
+        pd.DataFrame(),
+        None,
+        AutomlSelection(None, None, None, None),
+        None,
+        None,
+    )
+    assert called == []
+    assert selected.recipes == ()
+    assert selected.pending_thompson is None
+
+
+def test_select_job_recipes_resolves_fixed_allocation(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from cicerone.config import load_settings
+    from cicerone.feature_config import load_feature_config
+    from cicerone.job import AutomlSelection, ThompsonSelection, _select_job_recipes
+
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    extra = """
+        [experiment]
+        enabled = true
+        id = "rrf-vs-priority"
+        [[experiment.variants]]
+        name = "control"
+        traffic = 0.5
+        [[experiment.variants]]
+        name = "treatment"
+        traffic = 0.5
+    """
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, extra=extra))
+    recipes = (SimpleNamespace(name="control"), SimpleNamespace(name="treatment"))
+    monkeypatch.setattr("cicerone.job.resolve_recipes", lambda *_args, **_kwargs: recipes)
+
+    def boom(*_args: object, **_kwargs: object) -> ThompsonSelection:
+        raise AssertionError("Thompson must not run for fixed allocation")
+
+    monkeypatch.setattr("cicerone.job._select_thompson_recipes", boom)
+    settings = load_settings()
+    selected = _select_job_recipes(
+        settings,
+        load_feature_config(settings.feature_config_path),
+        pd.DataFrame(),
+        {"generated_at": "already"},
+        AutomlSelection(None, None, None, None),
+        None,
+        None,
+    )
+    assert selected.recipes == recipes
+    assert selected.pending_thompson is None
+
+
+def test_select_job_recipes_applies_thompson(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from cicerone.config import load_settings
+    from cicerone.feature_config import load_feature_config
+    from cicerone.job import AutomlSelection, ThompsonSelection, _select_job_recipes
+
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    monkeypatch.setenv(
+        "CICERONE_CONFIG_PATH",
+        _write_config(tmp_path, input_dir, output_dir, extra=_thompson_job_extra()),
+    )
+    resolved = (SimpleNamespace(name="control"), SimpleNamespace(name="treatment"))
+    allocated = (SimpleNamespace(name="control"),)
+    pending = {"champion": "control"}
+    monkeypatch.setattr("cicerone.job.resolve_recipes", lambda *_args, **_kwargs: resolved)
+    monkeypatch.setattr(
+        "cicerone.job._select_thompson_recipes",
+        lambda *_args, **_kwargs: ThompsonSelection(allocated, pending),
+    )
+    settings = load_settings()
+    selected = _select_job_recipes(
+        settings,
+        load_feature_config(settings.feature_config_path),
+        pd.DataFrame(),
+        {"generated_at": "already"},
+        AutomlSelection(None, None, None, None),
+        None,
+        None,
+    )
+    assert selected.recipes == allocated
+    assert selected.pending_thompson == pending
+
+
 def test_job_run_with_automl_enabled_selects_and_records_best_candidate(tmp_path, monkeypatch):
     input_dir = tmp_path / "in"
     output_dir = tmp_path / "out"

@@ -95,6 +95,11 @@ class AutomlSelection(NamedTuple):
     result: CandidateResult | None
 
 
+class JobRecipes(NamedTuple):
+    recipes: tuple[ResolvedRecipe, ...]
+    pending_thompson: dict[str, Any] | None
+
+
 def _target_user_ids(events: pd.DataFrame, users: pd.DataFrame | None) -> list[str]:
     columns = [events[USER_COLUMN]]
     if users is not None:
@@ -320,6 +325,58 @@ def _select_automl_models(
     return AutomlSelection(result.candidate.models, result.candidate.weights, result.candidate.rrf_k, result)
 
 
+def _select_job_recipes(
+    settings: Settings,
+    feature_config: FeatureConfig,
+    events: pd.DataFrame,
+    last_manifest: dict[str, Any] | None,
+    automl: AutomlSelection,
+    preloaded_track: list[dict[str, Any]] | None,
+    preloaded_recs: pd.DataFrame | None,
+) -> JobRecipes:
+    if not settings.experiment.enabled:
+        return JobRecipes((), None)
+    manifest = last_manifest
+    if manifest is None:
+        manifest = _try_load(
+            "read last manifest for experiment recipes",
+            lambda: build_manifest_reader(settings.output).read_latest(),
+            None,
+        )
+    recipes = resolve_recipes(
+        settings,
+        feature_config,
+        automl_models=(
+            list(automl.models) if automl.result is not None and automl.models is not None else None
+        ),
+        automl_weights=automl.weights if automl.result is not None else None,
+        automl_rrf_k=automl.rrf_k if automl.result is not None else None,
+        last_manifest=manifest,
+    )
+    logger.info(
+        "Experiment %s: %d variant(s) %s",
+        settings.experiment.id,
+        len(recipes),
+        ",".join(recipe.name for recipe in recipes),
+    )
+    if settings.experiment.allocation != ALLOCATION_THOMPSON:
+        return JobRecipes(recipes, None)
+    selected = _select_thompson_recipes(
+        settings,
+        recipes,
+        events,
+        preloaded_track=preloaded_track,
+        preloaded_recs=preloaded_recs,
+    )
+    logger.info(
+        "Experiment %s after allocation: %d variant(s) %s",
+        settings.experiment.id,
+        len(selected.recipes),
+        ",".join(recipe.name for recipe in selected.recipes),
+    )
+    return JobRecipes(selected.recipes, selected.state)
+
+
 def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None = None) -> None:
     settings = load_settings()
     retrain_lock = _maybe_acquire_direct_retrain_lock(settings, fence_check)
@@ -392,49 +449,19 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
         automl = _select_automl_models(settings, events, users, items, feature_config)
         enabled_models, weights, rrf_k = automl.models, automl.weights, automl.rrf_k
         automl_result = automl.result
+        job_recipes = _select_job_recipes(
+            settings,
+            feature_config,
+            events,
+            last_manifest,
+            automl,
+            preloaded_track,
+            preloaded_recs,
+        )
+        recipes = job_recipes.recipes
+        pending_thompson = job_recipes.pending_thompson
 
         fitted: dict[str, RecommenderModel] = {}
-        if settings.experiment.enabled and last_manifest is None:
-            last_manifest = _try_load(
-                "read last manifest for experiment recipes",
-                lambda: build_manifest_reader(settings.output).read_latest(),
-                None,
-            )
-
-        recipes: tuple[ResolvedRecipe, ...] = ()
-        if settings.experiment.enabled:
-            recipes = resolve_recipes(
-                settings,
-                feature_config,
-                automl_models=(
-                    list(enabled_models) if automl_result is not None and enabled_models is not None else None
-                ),
-                automl_weights=weights if automl_result is not None else None,
-                automl_rrf_k=rrf_k if automl_result is not None else None,
-                last_manifest=last_manifest,
-            )
-            logger.info(
-                "Experiment %s: %d variant(s) %s",
-                settings.experiment.id,
-                len(recipes),
-                ",".join(recipe.name for recipe in recipes),
-            )
-            if settings.experiment.allocation == ALLOCATION_THOMPSON:
-                selected = _select_thompson_recipes(
-                    settings,
-                    recipes,
-                    events,
-                    preloaded_track=preloaded_track,
-                    preloaded_recs=preloaded_recs,
-                )
-                recipes = selected.recipes
-                pending_thompson = selected.state
-                logger.info(
-                    "Experiment %s after allocation: %d variant(s) %s",
-                    settings.experiment.id,
-                    len(recipes),
-                    ",".join(recipe.name for recipe in recipes),
-                )
 
         recommend_cache: RecommendCache = {}
         if recipes:
