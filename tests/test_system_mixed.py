@@ -19,6 +19,7 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine
 from support.postgres_defaults import resolve_test_database_url
 from support.system_db import (
+    OUTPUT_DB_TABLES,
     SYSTEM_DASHBOARD_PASSWORD,
     SYSTEM_DASHBOARD_USER,
     SYSTEM_SERVE_TOKEN,
@@ -41,16 +42,7 @@ from cicerone.artifact import (
 )
 from cicerone.config import load_settings
 from cicerone.feature_config import load_feature_config
-from cicerone.io.db_store import (
-    DEFAULT_EVENTS_TABLE,
-    DEFAULT_ITEMS_TABLE,
-    DEFAULT_MANIFEST_TABLE,
-    DEFAULT_MODEL_ARTIFACT_TABLE,
-    DEFAULT_RECOMMENDATION_ITEMS_TABLE,
-    DEFAULT_RECOMMENDATIONS_TABLE,
-    DEFAULT_TRACK_TABLE,
-    DEFAULT_USERS_TABLE,
-)
+from cicerone.io.db_store import DEFAULT_EVENTS_TABLE, DEFAULT_ITEMS_TABLE, DEFAULT_USERS_TABLE
 from cicerone.io.factory import build_manifest_reader, build_output_sink, build_recommendation_reader
 from cicerone.io.manifest_reader import DatasetManifestReader
 from cicerone.io.recommendation_reader import DatasetRecommendationReader
@@ -72,15 +64,6 @@ _OUTPUT_FILES = (
     ITEMS_SNAPSHOT_FILENAME,
     "manifest.json",
     ARTIFACT_FILENAME,
-)
-_OUTPUT_DB_TABLES = frozenset(
-    {
-        DEFAULT_RECOMMENDATIONS_TABLE,
-        DEFAULT_MANIFEST_TABLE,
-        DEFAULT_MODEL_ARTIFACT_TABLE,
-        DEFAULT_RECOMMENDATION_ITEMS_TABLE,
-        DEFAULT_TRACK_TABLE,
-    }
 )
 
 
@@ -203,7 +186,7 @@ def test_system_job_mixed_db_in_dataset_out(trained_system: TrainedSystem) -> No
 
     tables = set(inspect(trained_system.engine).get_table_names())
     assert {DEFAULT_EVENTS_TABLE, DEFAULT_USERS_TABLE, DEFAULT_ITEMS_TABLE} <= tables
-    assert tables.isdisjoint(_OUTPUT_DB_TABLES)
+    assert tables.isdisjoint(OUTPUT_DB_TABLES)
     for name in _OUTPUT_FILES:
         assert (trained_system.output_path / name).is_file()
     assert not (trained_system.output_path / "events.parquet").exists()

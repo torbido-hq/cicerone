@@ -20,6 +20,7 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine
 from support.postgres_defaults import resolve_test_database_url
 from support.system_db import (
+    OUTPUT_DB_TABLES,
     SYSTEM_DASHBOARD_PASSWORD,
     SYSTEM_DASHBOARD_USER,
     SYSTEM_SERVE_TOKEN,
@@ -35,7 +36,7 @@ from support.system_db import (
 )
 
 from cicerone.config import load_settings
-from cicerone.io.db_store import DEFAULT_EVENTS_TABLE, DEFAULT_TRACK_TABLE
+from cicerone.io.db_store import DEFAULT_EVENTS_TABLE
 from cicerone.io.factory import build_manifest_reader
 from cicerone.io.manifest_reader import DatasetManifestReader
 from cicerone.track.store import TrackStore
@@ -76,18 +77,18 @@ def db_engine() -> Iterator[Engine]:
 @pytest.fixture(scope="module")
 def quality_system(db_engine: Engine, tmp_path_factory: pytest.TempPathFactory) -> Iterator[QualitySystem]:
     reset_schema(db_engine)
-    events, users, items = sample_system_catalog()
-    seed_catalog(db_engine, events, users, items)
-    output_path = tmp_path_factory.mktemp("system-mixed-quality") / "out"
-    output_path.mkdir()
-    config_path = write_system_config(
-        output_path.parent / "cicerone.toml",
-        input_kind="db",
-        output_kind="dataset",
-        database_url=TEST_DATABASE_URL,
-        output_path=output_path,
-    )
     try:
+        events, users, items = sample_system_catalog()
+        seed_catalog(db_engine, events, users, items)
+        output_path = tmp_path_factory.mktemp("system-mixed-quality") / "out"
+        output_path.mkdir()
+        config_path = write_system_config(
+            output_path.parent / "cicerone.toml",
+            input_kind="db",
+            output_kind="dataset",
+            database_url=TEST_DATABASE_URL,
+            output_path=output_path,
+        )
         run_system_job(config_path, triggered_by="system-spec")
         yield QualitySystem(
             engine=db_engine,
@@ -152,7 +153,7 @@ def test_system_mixed_track_eval_quality_loop(quality_system: QualitySystem) -> 
     tracked_rows = [json.loads(line) for line in track_path.read_text().splitlines() if line.strip()]
     expected_ids = {event["event_id"] for event in impressions} | {"sys-clk-1"}
     assert {row["event_id"] for row in tracked_rows} == expected_ids
-    assert DEFAULT_TRACK_TABLE not in inspect(quality_system.engine).get_table_names()
+    assert OUTPUT_DB_TABLES.isdisjoint(inspect(quality_system.engine).get_table_names())
 
     conversion = pd.DataFrame(
         [
@@ -180,6 +181,7 @@ def test_system_mixed_track_eval_quality_loop(quality_system: QualitySystem) -> 
     assert first_manifest["triggered_by"] == "system-spec"
 
     run_system_job(quality_system.config_path, triggered_by="system-spec-eval")
+    assert OUTPUT_DB_TABLES.isdisjoint(inspect(quality_system.engine).get_table_names())
 
     store = TrackStore(settings.output)
     assert {row["event_id"] for row in store.read_rows()} == expected_ids

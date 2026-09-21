@@ -9,6 +9,8 @@ import pandas as pd
 import pytest
 from support.postgres_defaults import postgres_test_db
 from support.system_db import (
+    INPUT_DB_TABLES,
+    OUTPUT_DB_TABLES,
     REPO_FEATURES_CONFIG,
     SYSTEM_SERVE_TOKEN,
     available_recommendation_ids,
@@ -20,7 +22,15 @@ from support.system_db import (
     write_system_config,
 )
 
-from cicerone.io.db_store import DEFAULT_DB_TABLES
+from cicerone.io.db_store import (
+    DEFAULT_DB_TABLES,
+    DEFAULT_EVAL_TABLE,
+    DEFAULT_EVENTS_TABLE,
+    DEFAULT_HISTORY_TABLE,
+    DEFAULT_ITEMS_TABLE,
+    DEFAULT_TRACK_TABLE,
+    DEFAULT_USERS_TABLE,
+)
 
 
 @pytest.mark.parametrize(
@@ -41,6 +51,12 @@ from cicerone.io.db_store import DEFAULT_DB_TABLES
 )
 def test_is_dedicated_test_database_classification(db_name: str | None, expected: bool) -> None:
     assert is_dedicated_test_database(db_name) is expected
+
+
+def test_output_db_tables_are_default_tables_minus_catalog() -> None:
+    assert {DEFAULT_EVENTS_TABLE, DEFAULT_USERS_TABLE, DEFAULT_ITEMS_TABLE} == INPUT_DB_TABLES
+    assert OUTPUT_DB_TABLES == DEFAULT_DB_TABLES - INPUT_DB_TABLES
+    assert {DEFAULT_TRACK_TABLE, DEFAULT_EVAL_TABLE, DEFAULT_HISTORY_TABLE} <= OUTPUT_DB_TABLES
 
 
 def test_is_dedicated_test_database_accepts_canonical_postgres_test_db() -> None:

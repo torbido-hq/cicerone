@@ -34,6 +34,9 @@ from support.system_spec import (
     write_system_config,
 )
 
+INPUT_DB_TABLES = frozenset({DEFAULT_EVENTS_TABLE, DEFAULT_USERS_TABLE, DEFAULT_ITEMS_TABLE})
+OUTPUT_DB_TABLES = DEFAULT_DB_TABLES - INPUT_DB_TABLES
+
 __all__ = [
     "REPO_FEATURES_CONFIG",
     "REPO_ROOT",
@@ -42,6 +45,8 @@ __all__ = [
     "SYSTEM_SERVE_TOKEN",
     "available_recommendation_ids",
     "dashboard_users",
+    "INPUT_DB_TABLES",
+    "OUTPUT_DB_TABLES",
     "is_dedicated_test_database",
     "mount_dashboard_app",
     "mount_serve_app",
