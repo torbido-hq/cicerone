@@ -197,7 +197,7 @@ def build_s3_client(options: dict[str, Any]):
         endpoint_url=options.get("endpoint_url"),
         aws_access_key_id=require_option(options, "access_key_id", "s3"),
         aws_secret_access_key=require_option(options, "secret_access_key", "s3"),
-        region_name="auto",
+        region_name=str(options.get("region") or "auto"),
         config=Config(signature_version="s3v4", retries={"max_attempts": 3, "mode": "standard"}),
     )
 
@@ -298,11 +298,12 @@ def _read_s3_parquet_pyarrow(
     *,
     columns: Sequence[str] | None,
     filters: Sequence[Any] | None,
+    filesystem: Any | None = None,
 ) -> pd.DataFrame:
     import pyarrow.parquet as pq
 
     read_kwargs: dict[str, Any] = {
-        "filesystem": _s3_filesystem(options),
+        "filesystem": filesystem if filesystem is not None else _s3_filesystem(options),
         "use_pandas_metadata": True,
     }
     if columns is not None:
