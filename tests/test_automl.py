@@ -11,6 +11,7 @@ from cicerone.automl import (
     _parse_candidates,
     _time_based_folds,
     drop_seen_interactions,
+    drop_seen_recommendations,
     evaluate_candidates,
     exclude_content_fallback_from_candidates,
     exclude_popular_in_category_from_candidates,
@@ -30,8 +31,20 @@ def _spread_events(n_days: int) -> pd.DataFrame:
         "u2": ["i2", "i3"],
         "u3": ["i1", "i3"],
     }
-    # Repeat purchases across the window so both sides of a time split have signal.
-    for day_offset in range(0, n_days, 3):
+    extra_offsets = list(range(0, n_days, 3))
+    oldest = now - pd.Timedelta(days=max(n_days - 1, 0))
+    # Seed catalog items in the earliest train window so later test pairs stay unseen.
+    for offset in extra_offsets:
+        rows.append(
+            {
+                "user_id": "u0",
+                "item_id": f"x{offset}",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": oldest,
+            }
+        )
+    for day_offset in extra_offsets:
         occurred_at = now - pd.Timedelta(days=day_offset)
         for user, items in interactions.items():
             for item in items:
@@ -44,15 +57,10 @@ def _spread_events(n_days: int) -> pd.DataFrame:
                         "occurred_at": occurred_at,
                     }
                 )
-    # Cross-user items only in the newest week so the latest fold has unseen pairs.
-    unseen = {"u1": "i3", "u2": "i1", "u3": "i2"}
-    for day_offset in range(0, min(n_days, 7), 3):
-        occurred_at = now - pd.Timedelta(days=day_offset)
-        for user, item in unseen.items():
             rows.append(
                 {
                     "user_id": user,
-                    "item_id": item,
+                    "item_id": f"x{day_offset}",
                     "event_type": "purchase",
                     "quantity": 1,
                     "occurred_at": occurred_at,
@@ -73,6 +81,18 @@ def test_drop_seen_interactions_keeps_unseen_pairs() -> None:
     assert drop_seen_interactions(pd.DataFrame({"weight": [1.0]}), train).equals(
         pd.DataFrame({"weight": [1.0]})
     )
+    reco = pd.DataFrame(
+        {
+            "user_id": ["u1", "u1", "u1"],
+            "item_id": ["i1", "i3", "i4"],
+            "rank": [1, 2, 3],
+        }
+    )
+    unseen_reco = drop_seen_recommendations(reco, train, top_k=2)
+    assert list(zip(unseen_reco["user_id"], unseen_reco["item_id"], unseen_reco["rank"], strict=True)) == [
+        ("u1", "i3", 1),
+        ("u1", "i4", 2),
+    ]
 
 
 def test_time_based_folds_splits_oldest_test_window_first():
@@ -449,15 +469,19 @@ def test_evaluate_candidates_handles_weighted_rrf_and_averages_across_folds(samp
         if test_interactions.empty:
             per_fold_metrics.append(dict.fromkeys(metrics_defs, 0.0))
             continue
-        test_users = sorted(set(test_events["user_id"]))
-        reco = train_and_recommend(
-            built,
-            test_users,
-            feature_config,
-            top_k=2,
-            enabled_models=candidate_cfg["models"],
-            weights=candidate_cfg["weights"],
-            rrf_k=candidate_cfg["rrf_k"],
+        test_users = sorted({str(user_id) for user_id in test_interactions["user_id"]})
+        reco = drop_seen_recommendations(
+            train_and_recommend(
+                built,
+                test_users,
+                feature_config,
+                top_k=2,
+                enabled_models=candidate_cfg["models"],
+                weights=candidate_cfg["weights"],
+                rrf_k=candidate_cfg["rrf_k"],
+            ),
+            built.interactions,
+            2,
         )
         per_fold_metrics.append(calc_metrics(metrics_defs, reco=reco, interactions=test_interactions))
 

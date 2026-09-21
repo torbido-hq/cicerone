@@ -258,6 +258,19 @@ def drop_seen_interactions(test: pd.DataFrame, train: pd.DataFrame) -> pd.DataFr
     return merged.loc[merged["_merge"] == "left_only"].drop(columns=["_merge"]).reset_index(drop=True)
 
 
+def drop_seen_recommendations(reco: pd.DataFrame, train: pd.DataFrame, top_k: int) -> pd.DataFrame:
+    """Remove train pairs from a reco list and re-rank to ``top_k``."""
+    filtered = drop_seen_interactions(reco, train)
+    if filtered.empty or Columns.User not in filtered.columns:
+        return filtered
+    if Columns.Rank in filtered.columns:
+        filtered = filtered.sort_values([Columns.User, Columns.Rank], kind="mergesort")
+    trimmed = filtered.groupby(Columns.User, as_index=False).head(top_k).copy()
+    if Columns.Rank in trimmed.columns:
+        trimmed[Columns.Rank] = trimmed.groupby(Columns.User).cumcount() + 1
+    return trimmed.reset_index(drop=True)
+
+
 def _evaluate_fold(
     train_events: pd.DataFrame,
     test_events: pd.DataFrame,
@@ -279,25 +292,29 @@ def _evaluate_fold(
     )
     if test_interactions.empty:
         return [dict.fromkeys(metrics, 0.0) for _ in candidates]
-    test_users = sorted(set(test_events["user_id"]))
+    test_users = sorted({str(user_id) for user_id in test_interactions[Columns.User]})
     strategy_cache: dict[str, RecommenderModel] = {}
     recommend_cache: dict[tuple[Any, ...], Any] = {}
 
     fold_metrics = []
     for candidate in candidates:
-        reco = train_and_recommend(
-            built,
-            test_users,
-            config,
-            top_k=top_k,
-            enabled_models=candidate.models,
-            weights=candidate.weights,
-            rrf_k=candidate.rrf_k,
-            strategy_cache=strategy_cache,
-            model_configs=model_configs,
-            recommend_cache=recommend_cache,
-            explain=ExplainSettings(enabled=False),
-            content_fallback_enabled=content_fallback_enabled,
+        reco = drop_seen_recommendations(
+            train_and_recommend(
+                built,
+                test_users,
+                config,
+                top_k=top_k,
+                enabled_models=candidate.models,
+                weights=candidate.weights,
+                rrf_k=candidate.rrf_k,
+                strategy_cache=strategy_cache,
+                model_configs=model_configs,
+                recommend_cache=recommend_cache,
+                explain=ExplainSettings(enabled=False),
+                content_fallback_enabled=content_fallback_enabled,
+            ),
+            built.interactions,
+            top_k,
         )
         fold_metrics.append(calc_metrics(metrics, reco=reco, interactions=test_interactions))
     return fold_metrics
