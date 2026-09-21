@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Security
 
 - Config page redacts `bootstrap_servers`, `sasl_username`, and `bucket`.
+- Dashboard CSRF requires a matching Origin, or Referer when Origin is
+  omitted. An empty Origin header is rejected.
 
 ## [0.8.3] - 2026-09-18
 
@@ -102,10 +104,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Thompson promote accepts only the champion/challenger pair.
 - Custom `input.options.*_query` and `events.options.events_query` reject
   more Postgres file/admin functions (`pg_ls_dir`, `dblink`, large objects).
-
-### Security
-
-- Dashboard CSRF rejects requests that omit both Origin and Referer.
 
 ## [0.8.2] - 2026-09-15
 

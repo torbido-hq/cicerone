@@ -89,6 +89,16 @@ def test_require_csrf_accepts_matching_referer_without_origin():
     require_csrf(request, "tok")
 
 
+def test_require_csrf_rejects_empty_origin_even_with_matching_referer():
+    request = _request(
+        cookies=f"{CSRF_COOKIE}=tok",
+        headers=[(b"origin", b""), (b"referer", b"http://testserver/dashboard")],
+    )
+    with pytest.raises(HTTPException) as exc:
+        require_csrf(request, "tok")
+    assert exc.value.status_code == 403
+
+
 def test_set_csrf_cookie_skips_when_already_set():
     request = _request(cookies=f"{CSRF_COOKIE}=tok")
     response = Response()
