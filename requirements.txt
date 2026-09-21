@@ -11,9 +11,9 @@ scikit-learn==1.9.1
 # Configurable I/O: static datasets (S3/R2-compatible or local files) or a
 # database (input can be read straight from a Postgres source; output can
 # be written to a Postgres table).
-boto3==1.43.92
+boto3==1.43.97
 pyarrow==25.0.1
-SQLAlchemy==2.0.52
+SQLAlchemy==2.0.54
 psycopg[binary]==3.3.5
 
 # Cron-in-container scheduler (no system cron daemon needed)
@@ -22,7 +22,7 @@ croniter==6.2.4
 # Serve mode's read API + the event-driven retrain trigger's webhook
 fastapi==0.141.1
 python-multipart==0.0.32
-uvicorn[standard]==0.52.4
+uvicorn[standard]==0.53.0
 prometheus-client==0.26.0
 
 # Dashboard: server-rendered status page (Jinja2 templates) + HTTP Basic
