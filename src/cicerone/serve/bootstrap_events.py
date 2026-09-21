@@ -15,7 +15,6 @@ from cicerone.config.constants import (
 from cicerone.events.buffer import MicroBatchBuffer
 from cicerone.events.ha import poll_without_apply_lock
 from cicerone.events.registry import build_event_source
-from cicerone.events.store import dispose_recommendation_engines
 from cicerone.events.updater import IncrementalUpdater
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
@@ -49,9 +48,8 @@ class EventsRuntime:
             if self.worker is not None:
                 stopped = self.worker.stop()
                 if not stopped:
-                    logger.warning("Event worker did not stop in time; skipping engine dispose")
+                    logger.warning("Event worker did not stop in time")
                     return False
-            dispose_recommendation_engines()
             return True
         finally:
             _close_publisher(self.publisher)

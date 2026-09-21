@@ -32,7 +32,7 @@ from cicerone.events.db_identity import (
     _stable_event_id,  # noqa: F401
 )
 from cicerone.io.db_store import DEFAULT_EVENTS_TABLE
-from cicerone.io.engines import engine_for
+from cicerone.io.engines import engine_for, release_engine
 from cicerone.io.options import readonly_select, require_option, sql_identifier
 
 logger = logging.getLogger(__name__)
@@ -99,11 +99,14 @@ class DbEventSource(EventSource):
 
     def close(self) -> None:
         with self._lock:
+            held = self._engine is not None
             self._engine = None
             self._connected = False
             self._source_columns = None
             self._select_clause = None
             self._has_event_id_column = None
+        if held:
+            release_engine(self._database_url)
 
     def poll(self, max_events: int = 100) -> Sequence[NormalizedEvent]:
         if max_events < 1:
