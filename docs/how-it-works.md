@@ -302,7 +302,9 @@ reason dumps). Existing DB recommendation tables need
 
 `[job.automl]` backtests candidate `models` / `weights` / `rrf_k` over
 time folds of your events (`MAP` / `NDCG` / `Recall` via RecTools metrics)
-and picks the winner for that run. Set `[job.automl].debias = true` to pass
+and picks the winner for that run. Each fold drops train `(user, item)`
+pairs from test truth **and** from the candidate lists so popular cannot
+score or occupy slots with already-seen items. Set `[job.automl].debias = true` to pass
 RecTools `DebiasConfig` into those metrics (default off). It is not a neural
 architecture search.
 Fitted models **and** per-strategy `recommend()` frames are reused across
