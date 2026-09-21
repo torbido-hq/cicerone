@@ -130,7 +130,7 @@ def require_csrf(request: Request, form_token: str) -> None:
     origin = request.headers.get("origin")
     referer = request.headers.get("referer")
     expected = request.url.netloc
-    if origin:
+    if origin is not None:
         if urlparse(origin).netloc != expected:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="CSRF check failed")
         return
