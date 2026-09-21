@@ -32,7 +32,7 @@ from cicerone.http_auth import optional_bearer_deps
 from cicerone.http_security import SecurityHeadersMiddleware, token_equals
 from cicerone.io.base import ManifestReader, RecommendationReader
 from cicerone.io.recommendation_reader import SOURCE_COLUMN
-from cicerone.io.recommendation_schema import has_variant_column
+from cicerone.io.recommendation_schema import VARIANT_COLUMN, has_variant_column, pick_fallback_variant
 from cicerone.locks import WriterLockBusyError, build_dataset_writer_lock, build_output_writer_lock
 from cicerone.reasons import parse_reasons
 from cicerone.serve.bootstrap_events import start_events_runtime
@@ -375,9 +375,26 @@ def create_app(
         )
         recs = reader.get_recommendations(user_id, fetch_k, variant=variant)
         used_fallback = False
+        if recs.empty and variant is not None:
+            leftover = reader.get_recommendations(user_id, fetch_k, variant=None)
+            if not leftover.empty:
+                recs = leftover
+                picked = (
+                    pick_fallback_variant(leftover[VARIANT_COLUMN].tolist())
+                    if has_variant_column(leftover)
+                    else None
+                )
+                if picked:
+                    variant = picked
         if recs.empty:
             used_fallback = True
             recs = reader.get_cold_start_fallback(fetch_k, variant=variant)
+            if recs.empty and variant is not None:
+                recs = reader.get_cold_start_fallback(fetch_k, variant=None)
+                if not recs.empty and has_variant_column(recs):
+                    picked = pick_fallback_variant(recs[VARIANT_COLUMN].tolist())
+                    if picked:
+                        variant = picked
         if recs.empty:
             raise HTTPException(status_code=404, detail=f"No recommendations for user_id={user_id!r}")
         if not has_variant_column(recs):
