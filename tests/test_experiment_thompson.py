@@ -9,7 +9,6 @@ from cicerone.evaluation.metrics import SliceMetrics
 from cicerone.experiment.recipes import ResolvedRecipe
 from cicerone.experiment.thompson import (
     ArmCounts,
-    _fit_mab,
     allocate_thompson,
     p_best,
     parse_arm_counts,
@@ -38,17 +37,11 @@ def test_require_bandits_extra_fail_closed(monkeypatch) -> None:
         require_bandits_extra()
 
 
-def test_fit_mab_sets_beta_counts_without_expanding_trials() -> None:
-    mab = _fit_mab(
-        ["control", "blend"],
-        {"control": ArmCounts(80, 2), "blend": ArmCounts(1, 80)},
-        seed=0,
-    )
-    policy = mab._imp
-    assert policy.arm_to_success_count["control"] == 81
-    assert policy.arm_to_fail_count["control"] == 3
-    assert policy.arm_to_success_count["blend"] == 2
-    assert policy.arm_to_fail_count["blend"] == 81
+def test_thompson_prefers_the_stronger_arm_without_mabwiser_privates() -> None:
+    counts = {"control": ArmCounts(80, 2), "blend": ArmCounts(1, 80)}
+    assert sample_arm(["control", "blend"], counts, seed=0) == "control"
+    probs = p_best(["control", "blend"], counts, draws=200, seed=0)
+    assert probs["control"] > probs["blend"]
 
 
 def test_window_trials_from_slices_uses_click_conversions() -> None:
