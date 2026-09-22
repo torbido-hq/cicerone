@@ -36,6 +36,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Redis Streams marks the source disconnected after XREADGROUP or XAUTOCLAIM failure so the worker reconnects instead of polling an empty dead socket.
 - Popular, latest, and neighbor snapshots drop missing or blank item/user ids instead of casting them to `"nan"`.
 - DB popular/latest/similar reads re-raise SQL connectivity errors instead of treating every `OperationalError` as a missing table.
 - Serve refreshes surface snapshots in the same loop as `generated_at` so the stamp and surfaces stay on one job.
