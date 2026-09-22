@@ -199,6 +199,7 @@ def test_write_system_config_enables_serve_dashboard_track_eval(tmp_path) -> Non
     assert raw["serve"]["category_column"] == "category"
     assert raw["dashboard"]["enabled"] is True
     assert raw["track"]["enabled"] is True
+    assert "events" not in raw
 
 
 def test_write_system_config_mixes_db_input_and_dataset_output(tmp_path) -> None:
@@ -241,6 +242,22 @@ def test_write_system_config_dataset_keeps_input_and_output_trees_apart(tmp_path
     assert raw["input"]["options"]["path"] == str(input_path)
     assert raw["output"]["options"]["path"] == str(output_path)
     assert raw["input"]["options"]["path"] != raw["output"]["options"]["path"]
+
+
+def test_write_system_config_events_webhook_defaults(tmp_path) -> None:
+    import tomllib
+
+    path = write_system_config(
+        tmp_path / "cicerone.toml",
+        database_url="postgresql://example/cicerone_test",
+        events_webhook=True,
+    )
+    raw = tomllib.loads(path.read_text())
+    assert raw["events"]["enabled"] is True
+    assert raw["events"]["kind"] == "webhook"
+    assert raw["events"]["incremental"]["batch_size"] == 1
+    assert raw["events"]["incremental"]["batch_window_seconds"] == 60
+    assert raw["events"]["incremental"]["poll_interval_seconds"] == 60
 
 
 def test_available_recommendation_ids_drops_unavailable_items() -> None:
