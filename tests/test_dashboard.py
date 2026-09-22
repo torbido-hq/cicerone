@@ -836,7 +836,7 @@ def test_recommendations_partial_without_reader_shows_error():
 
 
 def test_recommendations_partial_refresh_error_still_looks_up():
-    rec_reader = _FakeRecReader(_recs_df(), refresh_error=RuntimeError("cache boom"))
+    rec_reader = _FakeRecReader(_recs_df(), refresh_error=OSError("cache boom"))
     response = _recs_client(rec_reader).get(
         "/partials/recommendations",
         params={"user_id": "u1"},
@@ -848,7 +848,7 @@ def test_recommendations_partial_refresh_error_still_looks_up():
 
 
 def test_recommendations_partial_lookup_error_shows_message():
-    rec_reader = _FakeRecReader(_recs_df(), lookup_error=RuntimeError("store boom"))
+    rec_reader = _FakeRecReader(_recs_df(), lookup_error=OSError("store boom"))
     response = _recs_client(rec_reader).get(
         "/partials/recommendations",
         params={"user_id": "u1"},

@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 import pandas as pd
+import pytest
 from conftest import make_settings
 from fastapi.testclient import TestClient
 
@@ -185,6 +186,36 @@ def test_quality_live_label_when_stored_eval_lacks_track_eval(tmp_path):
     assert "Lists from" in response.text
 
 
+def test_quality_context_propagates_unexpected_eval_errors(tmp_path, monkeypatch):
+    from cicerone.dashboard_quality import quality_context
+    from cicerone.track.normalize import normalize_track
+
+    settings = _settings(tmp_path, track={"enabled": True})
+    TrackStore(settings.output).append_rows(
+        [
+            normalize_track(
+                {
+                    "kind": "impression",
+                    "user_id": "u1",
+                    "item_id": "i1",
+                    "rank": 1,
+                    "occurred_at": "2026-08-28T12:00:00Z",
+                }
+            ).as_row()
+        ]
+    )
+
+    class Boom(Exception):
+        pass
+
+    monkeypatch.setattr(
+        "cicerone.dashboard_quality.evaluate_tracking",
+        lambda *args, **kwargs: (_ for _ in ()).throw(Boom("bug")),
+    )
+    with pytest.raises(Boom, match="bug"):
+        quality_context(settings)
+
+
 def test_quality_live_eval_error_falls_back_to_empty(tmp_path, monkeypatch):
     from cicerone.dashboard_quality import quality_context
     from cicerone.track.normalize import normalize_track
@@ -205,7 +236,7 @@ def test_quality_live_eval_error_falls_back_to_empty(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         "cicerone.dashboard_quality.evaluate_tracking",
-        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("eval failed")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("eval failed")),
     )
     context = quality_context(settings)
     assert context["empty_track"] is True
@@ -218,7 +249,7 @@ def test_quality_live_eval_read_rows_error(tmp_path, monkeypatch):
     settings = _settings(tmp_path, track={"enabled": True})
     monkeypatch.setattr(
         "cicerone.track.store.TrackStore.read_rows",
-        lambda self, **_kwargs: (_ for _ in ()).throw(RuntimeError("rows")),
+        lambda self, **_kwargs: (_ for _ in ()).throw(OSError("rows")),
     )
     context = quality_context(settings)
     assert context["empty_track"] is True
@@ -278,7 +309,7 @@ def test_quality_live_eval_conversion_load_error_still_scores(tmp_path, monkeypa
     )
     monkeypatch.setattr(
         "cicerone.dashboard_quality.load_metric_events",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("events")),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("events")),
     )
     context = quality_context(settings)
     assert context["empty_track"] is False
@@ -395,13 +426,29 @@ def test_quality_eval_enabled_empty_replay_copy(tmp_path):
     assert "Production replay is on" in response.text
 
 
+def test_quality_context_propagates_unexpected_read_errors(tmp_path, monkeypatch):
+    from cicerone.dashboard_quality import quality_context
+
+    settings = _settings(tmp_path, track={"enabled": True})
+
+    class Boom(Exception):
+        pass
+
+    def _boom(self):
+        raise Boom("bug")
+
+    monkeypatch.setattr("cicerone.track.store.TrackStore.read_eval", _boom)
+    with pytest.raises(Boom, match="bug"):
+        quality_context(settings)
+
+
 def test_quality_context_handles_read_errors(tmp_path, monkeypatch):
     from cicerone.dashboard_quality import quality_context
 
     settings = _settings(tmp_path, track={"enabled": True})
 
     def _boom(self):
-        raise RuntimeError("nope")
+        raise OSError("nope")
 
     monkeypatch.setattr("cicerone.track.store.TrackStore.read_eval", _boom)
     context = quality_context(settings)
@@ -430,7 +477,7 @@ def test_quality_context_clears_error_when_live_track_succeeds(tmp_path, monkeyp
     )
 
     def _boom(self):
-        raise RuntimeError("nope")
+        raise OSError("nope")
 
     monkeypatch.setattr("cicerone.track.store.TrackStore.read_eval", _boom)
     context = quality_context(settings)
@@ -572,7 +619,7 @@ def test_quality_live_eval_history_error_keeps_current_recs(tmp_path, monkeypatc
     ).to_parquet(tmp_path / "recommendations.parquet", index=False)
     monkeypatch.setattr(
         "cicerone.track.store.TrackStore.read_history",
-        lambda self, **_kwargs: (_ for _ in ()).throw(RuntimeError("history")),
+        lambda self, **_kwargs: (_ for _ in ()).throw(OSError("history")),
     )
     context = quality_context(settings)
     assert context["empty_track"] is False
