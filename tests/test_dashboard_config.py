@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import pytest
 from conftest import make_settings
 from fastapi.testclient import TestClient
 
@@ -128,6 +129,22 @@ def test_config_display_missing_feature_file(tmp_path):
     features = _section(config_display(settings), "features")
     assert features["fields"] is None
     assert "No feature config file" in features["message"]
+
+
+def test_config_display_propagates_unexpected_feature_errors(tmp_path, monkeypatch):
+    path = tmp_path / "features.toml"
+    path.write_text("[event_weights]\npurchase = 4.0\n")
+    settings = make_settings(feature_config_path=str(path))
+
+    class Boom(Exception):
+        pass
+
+    monkeypatch.setattr(
+        "cicerone.dashboard_config.load_feature_config",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(Boom("bug")),
+    )
+    with pytest.raises(Boom, match="bug"):
+        config_display(settings)
 
 
 def test_config_display_unreadable_feature_file(tmp_path):

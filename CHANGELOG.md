@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Dashboard experiment and config pages no longer turn unexpected errors
+  into a blank report or missing feature section. Store and feature-config
+  I/O failures still fall back as before.
 - Dashboard Quality and user lookup no longer turn unexpected errors into
   an empty page. Store and eval I/O failures still show the existing load
   error.

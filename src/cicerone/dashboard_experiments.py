@@ -7,7 +7,7 @@ import logging
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any
 
 import pandas as pd
 
@@ -40,6 +40,7 @@ from cicerone.experiment.store import ExperimentStore, active_pair_from_state, m
 from cicerone.experiment.thompson import ArmCounts, parse_arm_counts, select_active_recipes
 from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.io.factory import build_manifest_reader
+from cicerone.job_eval import OPTIONAL_IO_ERRORS, log_caught, try_load
 from cicerone.locks import (
     LockLostError,
     WriterLockBusyError,
@@ -52,7 +53,6 @@ from cicerone.track.store_common import DASHBOARD_TRACK_FLOOR_HOURS, lookback_si
 logger = logging.getLogger(__name__)
 
 _PROMOTE_STATE: dict[str, dict[str, Any]] = {}
-_T = TypeVar("_T")
 _THOMPSON_SHIP_IGNORE = frozenset({"undecided", "split_winners"})
 
 
@@ -70,8 +70,10 @@ def _matched_state(settings: Settings, store: ExperimentStore) -> dict[str, Any]
         else:
             _PROMOTE_STATE.pop(settings.experiment.id, None)
             state = None
-    except Exception:
-        logger.exception("Failed to read experiment state")
+    except LockLostError:
+        raise
+    except OPTIONAL_IO_ERRORS as exc:
+        log_caught("Failed to read experiment state", exc, log=logger)
         state = store.last_state(settings.experiment.id) or _PROMOTE_STATE.get(settings.experiment.id)
     if state and str(state.get("experiment_id") or "") == str(settings.experiment.id):
         return dict(state)
@@ -81,8 +83,10 @@ def _matched_state(settings: Settings, store: ExperimentStore) -> dict[str, Any]
 def _fresh_matched_state(settings: Settings, store: ExperimentStore) -> dict[str, Any] | None:
     try:
         state = store.read_state()
-    except Exception as exc:
-        logger.exception("Failed to read experiment state")
+    except LockLostError:
+        raise
+    except OPTIONAL_IO_ERRORS as exc:
+        log_caught("Failed to read experiment state", exc, log=logger)
         raise _PromoteRejected("Experiment state could not be read") from exc
     if state and str(state.get("experiment_id") or "") == str(settings.experiment.id):
         _PROMOTE_STATE[settings.experiment.id] = dict(state)
@@ -263,25 +267,25 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
     )
     with ThreadPoolExecutor(max_workers=5) as pool:
         events_f = pool.submit(
-            _try_load,
+            try_load,
             "read events for experiment metrics",
             lambda: _load_metric_events(settings, event_types=event_types, since=since),
             pd.DataFrame(),
         )
         recs_f = pool.submit(
-            _try_load,
+            try_load,
             "load recommendations for experiment guardrails",
             lambda: load_recommendation_guardrail_rows(settings.output),
             None,
         )
         exposures_f = pool.submit(
-            _try_load,
+            try_load,
             "read experiment exposures",
             lambda: store.read_exposures(experiment_id=experiment.id) if experiment.log_exposures else None,
             [] if experiment.log_exposures else None,
         )
         catalog_f = pool.submit(
-            _try_load,
+            try_load,
             "read items snapshot for experiment catalog size",
             lambda: load_items_catalog_size(settings.output),
             None,
@@ -289,7 +293,7 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
         track_f = None
         if settings.track.enabled:
             track_f = pool.submit(
-                _try_load,
+                try_load,
                 "read track rows for experiment metrics",
                 lambda: TrackStore(settings.output).read_rows(experiment_id=experiment.id, since=since),
                 None,
@@ -467,14 +471,6 @@ def clear_promotion(settings: Settings) -> str | None:
     )
 
 
-def _try_load(label: str, fn: Callable[[], _T], default: _T) -> _T:
-    try:
-        return fn()
-    except Exception:
-        logger.exception("Failed to %s", label)
-        return default
-
-
 def _metric_event_types(settings: Settings, experiment: ExperimentSettings) -> tuple[str, ...] | None:
     if experiment.primary_metric in {PRIMARY_METRIC_CTR, PRIMARY_METRIC_CONVERSION} and (
         experiment.attribution in {ATTRIBUTION_CLICK, ATTRIBUTION_IMPRESSION}
@@ -493,8 +489,8 @@ def _load_features(settings: Settings) -> FeatureConfig | None:
         return None
     try:
         return load_feature_config(path)
-    except Exception:
-        logger.exception("Failed to load feature config for experiment page")
+    except OPTIONAL_IO_ERRORS as exc:
+        log_caught("Failed to load feature config for experiment page", exc, log=logger)
         return None
 
 
@@ -503,17 +499,17 @@ def _recipes(settings: Settings, feature_config: FeatureConfig | None) -> tuple[
         return ()
     try:
         last = build_manifest_reader(settings.output).read_latest()
-    except Exception:
+    except OPTIONAL_IO_ERRORS as exc:
         last = None
-        logger.exception("Failed to read manifest for experiment recipes")
+        log_caught("Failed to read manifest for experiment recipes", exc, log=logger)
     try:
         recipes = resolve_recipes(settings, feature_config, last_manifest=last)
         if recipes:
             return recipes
     except ConfigError:
         raise
-    except Exception:
-        logger.exception("Failed to resolve experiment recipes from config")
+    except OPTIONAL_IO_ERRORS as exc:
+        log_caught("Failed to resolve experiment recipes from config", exc, log=logger)
     if last and last.get("experiment_variants"):
         try:
             parsed = json.loads(str(last["experiment_variants"]))
