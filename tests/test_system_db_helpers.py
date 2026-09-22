@@ -244,7 +244,7 @@ def test_write_system_config_dataset_keeps_input_and_output_trees_apart(tmp_path
     assert raw["input"]["options"]["path"] != raw["output"]["options"]["path"]
 
 
-def test_write_system_config_events_webhook_flushes_on_next_tick(tmp_path) -> None:
+def test_write_system_config_events_webhook_defaults(tmp_path) -> None:
     import tomllib
 
     path = write_system_config(
