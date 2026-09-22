@@ -72,6 +72,9 @@ def quality_context(settings: Settings, reader: ManifestReader | None = None) ->
             history = []
         recent_runs = _quality_history(history)
         history_single = len(recent_runs) == 1 and settings.output.kind == "dataset"
+    current_stamp = _eval_stamp(report.get("generated_at") if isinstance(report, dict) else None)
+    if current_stamp is None:
+        current_stamp = _eval_stamp(served_eval.get("generated_at") if served_eval else None)
     return {
         "track_enabled": settings.track.enabled,
         "eval_enabled": settings.eval.enabled,
@@ -89,6 +92,7 @@ def quality_context(settings: Settings, reader: ManifestReader | None = None) ->
             recent_runs,
             skip_first_track=not used_live_track,
             skip_first_replay=True,
+            current_stamp=current_stamp,
         ),
         "quality_history": recent_runs,
         "quality_history_single": history_single,
@@ -244,9 +248,40 @@ def _subtract(current: float | None, previous: float | None) -> float | None:
     return current - previous
 
 
-def _previous_quality_row(history: list[dict[str, Any]], *, skip_first: bool) -> dict[str, Any] | None:
-    rows = history[1:] if skip_first else history
-    return rows[0] if rows else None
+def _eval_stamp(value: object) -> str | None:
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
+def _same_served_eval(left: object, right: object) -> bool:
+    if not isinstance(left, dict) or not isinstance(right, dict):
+        return False
+    left_stamp = _eval_stamp(left.get("generated_at"))
+    right_stamp = _eval_stamp(right.get("generated_at"))
+    return bool(left_stamp and right_stamp and left_stamp == right_stamp)
+
+
+def _previous_quality_row(
+    history: list[dict[str, Any]],
+    *,
+    skip_current: bool,
+    current_stamp: str | None = None,
+    current_served: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    if not skip_current:
+        return history[0] if history else None
+    served_stamp = _eval_stamp(current_served.get("generated_at") if current_served else None)
+    if current_stamp is None and served_stamp is None:
+        return history[1] if len(history) > 1 else None
+    for row in history:
+        row_stamp = _eval_stamp(row.get("generated_at"))
+        if current_stamp and row_stamp and row_stamp > current_stamp:
+            continue
+        if _same_served_eval(row.get("served_eval"), current_served):
+            continue
+        return row
+    return None
 
 
 def _empty_quality_deltas() -> dict[str, str | None]:
@@ -282,6 +317,7 @@ def _quality_deltas(
     *,
     skip_first_track: bool,
     skip_first_replay: bool,
+    current_stamp: str | None = None,
 ) -> dict[str, str | None]:
     out = _empty_quality_deltas()
     ndcg_name, ndcg = _metric_at_largest_k(served_eval, "NDCG")
@@ -292,7 +328,12 @@ def _quality_deltas(
     out["coverage_name"] = coverage_name
     out["miuf_name"] = miuf_name
     out["popularity_name"] = popularity_name
-    track_previous = _previous_quality_row(history, skip_first=skip_first_track)
+    track_previous = _previous_quality_row(
+        history,
+        skip_current=skip_first_track,
+        current_stamp=current_stamp,
+        current_served=served_eval,
+    )
     if track_previous is not None:
         out["ctr"] = _format_delta_rate(
             _subtract(_overall_float(track_eval, "ctr"), track_previous.get("ctr"))
@@ -300,7 +341,12 @@ def _quality_deltas(
         out["cvr_click"] = _format_delta_rate(
             _subtract(_overall_float(track_eval, "cvr_click"), track_previous.get("cvr_click"))
         )
-    replay_previous = _previous_quality_row(history, skip_first=skip_first_replay)
+    replay_previous = _previous_quality_row(
+        history,
+        skip_current=skip_first_replay,
+        current_stamp=current_stamp,
+        current_served=served_eval,
+    )
     if replay_previous is None:
         return out
     prev_served = replay_previous.get("served_eval")

@@ -653,7 +653,7 @@ def test_quality_page_shows_previous_run_delta(tmp_path):
     }
     TrackStore(settings.output).write_eval(
         {
-            "generated_at": "2026-09-08T12:00:00+00:00",
+            "generated_at": "2026-09-07T12:00:00+00:00",
             "track_eval": current,
             "served_eval": {
                 "metrics": {"NDCG@10": 0.4, "CatalogCoverage@10": 0.25},
@@ -733,6 +733,113 @@ def test_quality_deltas_live_track_skips_latest_replay_row():
     assert single["ctr"] == "+10.00 pp"
     assert single["ndcg"] == "—"
     assert single["coverage"] == "—"
+
+
+def test_quality_deltas_skip_newer_manifest_when_report_lags():
+    from cicerone.dashboard_quality import _quality_deltas
+
+    current_served = {
+        "generated_at": "2026-09-07T12:00:00+00:00",
+        "metrics": {"NDCG@10": 0.4, "CatalogCoverage@10": 0.25},
+    }
+    newer = {
+        "generated_at": "2026-09-09T12:00:00+00:00",
+        "ctr": 0.3,
+        "cvr_click": 0.06,
+        "served_eval": {
+            "generated_at": "2026-09-08T12:00:00+00:00",
+            "metrics": {"NDCG@10": 0.5, "CatalogCoverage@10": 0.3},
+        },
+    }
+    matching = {
+        "generated_at": "2026-09-08T12:00:00+00:00",
+        "ctr": 0.2,
+        "cvr_click": 0.05,
+        "served_eval": current_served,
+    }
+    previous = {
+        "generated_at": "2026-09-07T12:00:00+00:00",
+        "ctr": 0.1,
+        "cvr_click": 0.02,
+        "served_eval": {
+            "generated_at": "2026-09-06T12:00:00+00:00",
+            "metrics": {"NDCG@10": 0.3, "CatalogCoverage@10": 0.2},
+        },
+    }
+    deltas = _quality_deltas(
+        {"overall": {"ctr": 0.2, "cvr_click": 0.05}},
+        current_served,
+        [newer, matching, previous],
+        skip_first_track=True,
+        skip_first_replay=True,
+        current_stamp="2026-09-07T12:00:00+00:00",
+    )
+    assert deltas["ndcg"] == "+0.1000"
+    assert deltas["coverage"] == "+0.0500"
+    assert deltas["ctr"] == "+10.00 pp"
+    assert deltas["cvr_click"] == "+3.00 pp"
+
+
+def test_quality_context_stale_report_skips_newer_manifest(tmp_path):
+    from cicerone.dashboard_quality import quality_context
+
+    settings = _settings(tmp_path, track={"enabled": True}, eval={"enabled": True})
+    current_served = {
+        "generated_at": "2026-09-07T12:00:00+00:00",
+        "metrics": {"NDCG@10": 0.4, "CatalogCoverage@10": 0.25},
+        "by_source": {},
+    }
+    TrackStore(settings.output).write_eval(
+        {
+            "generated_at": "2026-09-07T12:00:00+00:00",
+            "track_eval": {
+                "overall": {
+                    "n_impressions": 200,
+                    "n_clicks": 40,
+                    "n_conversions_click": 10,
+                    "n_conversions_view": 0,
+                    "ctr": 0.2,
+                    "cvr_click": 0.05,
+                    "cvr_view": 0.0,
+                    "n_users": 20,
+                }
+            },
+            "served_eval": current_served,
+        }
+    )
+    history = [
+        {
+            "status": "success",
+            "triggered_by": "cron",
+            "generated_at": "2026-09-09T12:00:00+00:00",
+            "track_eval": {"overall": {"ctr": 0.3, "cvr_click": 0.06}},
+            "served_eval": {
+                "generated_at": "2026-09-08T12:00:00+00:00",
+                "metrics": {"NDCG@10": 0.5, "CatalogCoverage@10": 0.3},
+            },
+        },
+        {
+            "status": "success",
+            "triggered_by": "cron",
+            "generated_at": "2026-09-08T12:00:00+00:00",
+            "track_eval": {"overall": {"ctr": 0.2, "cvr_click": 0.05}},
+            "served_eval": current_served,
+        },
+        {
+            "status": "success",
+            "triggered_by": "cron",
+            "generated_at": "2026-09-07T12:00:00+00:00",
+            "track_eval": {"overall": {"ctr": 0.1, "cvr_click": 0.02}},
+            "served_eval": {
+                "generated_at": "2026-09-06T12:00:00+00:00",
+                "metrics": {"NDCG@10": 0.3, "CatalogCoverage@10": 0.2},
+            },
+        },
+    ]
+    context = quality_context(settings, _FakeReader(history))
+    assert context["quality_deltas"]["ndcg"] == "+0.1000"
+    assert context["quality_deltas"]["coverage"] == "+0.0500"
+    assert context["quality_deltas"]["ctr"] == "+10.00 pp"
 
 
 def test_quality_live_track_replay_delta_skips_current_manifest(tmp_path):
