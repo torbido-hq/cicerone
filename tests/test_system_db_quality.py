@@ -6,29 +6,25 @@ the first module's trained catalog mid-suite.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
 import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
-from support.postgres_defaults import resolve_test_database_url
 from support.system_db import (
-    SYSTEM_DASHBOARD_PASSWORD,
-    SYSTEM_DASHBOARD_USER,
-    SYSTEM_SERVE_TOKEN,
-    dashboard_users,
-    mount_dashboard_app,
-    mount_serve_app,
+    DASHBOARD_AUTH,
+    SERVE_HEADERS,
+    SKIP_NO_TEST_DB,
+    TEST_DATABASE_URL,
+    dashboard_client,
+    parse_track_eval,
     postgres_ready,
-    reset_schema,
     run_system_job,
     sample_system_catalog,
     seed_catalog,
+    serve_client,
     write_system_config,
 )
 
@@ -36,18 +32,6 @@ from cicerone.config import load_settings
 from cicerone.io.db_store import DEFAULT_EVENTS_TABLE
 from cicerone.io.factory import build_manifest_reader
 from cicerone.track.store import TrackStore
-
-TEST_DATABASE_URL = resolve_test_database_url()
-
-_SKIP_NO_TEST_DB = (
-    "TEST_DATABASE_URL / POSTGRES_TEST_HOST not set — start compose postgres "
-    "(`docker compose --env-file docker/postgres/defaults.env --profile db up -d postgres`) "
-    "and export POSTGRES_TEST_HOST=localhost ALLOW_SCHEMA_RESET_FOR_TESTS=1, "
-    "or run via docker-compose.ci.yml"
-)
-
-_SERVE_HEADERS = {"Authorization": f"Bearer {SYSTEM_SERVE_TOKEN}"}
-_DASHBOARD_AUTH = (SYSTEM_DASHBOARD_USER, SYSTEM_DASHBOARD_PASSWORD)
 
 
 @dataclass(frozen=True)
@@ -57,38 +41,25 @@ class QualitySystem:
     events: pd.DataFrame
 
 
-@pytest.fixture(scope="session")
-def db_engine() -> Iterator[Engine]:
-    if not TEST_DATABASE_URL:
-        pytest.skip(_SKIP_NO_TEST_DB)
-    engine = create_engine(TEST_DATABASE_URL, pool_pre_ping=True)
-    try:
-        yield engine
-    finally:
-        engine.dispose()
-
-
 @pytest.fixture(scope="module")
-def quality_system(db_engine: Engine, tmp_path_factory: pytest.TempPathFactory) -> Iterator[QualitySystem]:
-    reset_schema(db_engine)
+def quality_system(
+    db_engine: Engine, clean_schema: None, tmp_path_factory: pytest.TempPathFactory
+) -> Iterator[QualitySystem]:
     events, users, items = sample_system_catalog()
     seed_catalog(db_engine, events, users, items)
     config_path = write_system_config(
         tmp_path_factory.mktemp("system-quality") / "cicerone.toml",
         database_url=TEST_DATABASE_URL,
     )
-    try:
-        run_system_job(config_path, triggered_by="system-spec")
-        yield QualitySystem(engine=db_engine, config_path=config_path, events=events)
-    finally:
-        reset_schema(db_engine)
+    run_system_job(config_path, triggered_by="system-spec")
+    yield QualitySystem(engine=db_engine, config_path=config_path, events=events)
 
 
-@pytest.mark.skipif(not TEST_DATABASE_URL, reason=_SKIP_NO_TEST_DB)
+@pytest.mark.skipif(not TEST_DATABASE_URL, reason=SKIP_NO_TEST_DB)
 def test_system_track_eval_quality_loop(quality_system: QualitySystem) -> None:
     settings = load_settings(str(quality_system.config_path))
-    serve = TestClient(mount_serve_app(settings))
-    served = serve.get("/recommendations/u1", headers=_SERVE_HEADERS)
+    serve = serve_client(settings)
+    served = serve.get("/recommendations/u1", headers=SERVE_HEADERS)
     assert served.status_code == 200
     body = served.json()
     items = body["items"]
@@ -117,7 +88,7 @@ def test_system_track_eval_quality_loop(quality_system: QualitySystem) -> None:
         "event_id": "sys-clk-1",
         "generated_at": generated_at,
     }
-    tracked = serve.post("/track", headers=_SERVE_HEADERS, json={"events": [*impressions, click]})
+    tracked = serve.post("/track", headers=SERVE_HEADERS, json={"events": [*impressions, click]})
     assert tracked.status_code == 202
     assert tracked.json()["accepted"] == len(impressions) + 1
 
@@ -150,11 +121,10 @@ def test_system_track_eval_quality_loop(quality_system: QualitySystem) -> None:
     assert latest["triggered_by"] == "system-spec-eval"
     assert latest["status"] == "success"
     assert int(latest["n_events"]) == len(quality_system.events) + 1
-    track_eval = json.loads(str(latest.get("track_eval") or "{}") or "{}")
+    track_eval = parse_track_eval(latest.get("track_eval"))
     if not track_eval:
         stored = store.read_eval() or {}
-        raw = stored.get("track_eval")
-        track_eval = raw if isinstance(raw, dict) else {}
+        track_eval = parse_track_eval(stored.get("track_eval"))
     overall = track_eval.get("overall") if isinstance(track_eval, dict) else None
     assert isinstance(overall, dict)
     assert int(overall.get("n_impressions") or 0) >= len(impressions)
@@ -165,10 +135,8 @@ def test_system_track_eval_quality_loop(quality_system: QualitySystem) -> None:
     assert history is not None
     assert not history.empty
 
-    dashboard = TestClient(
-        mount_dashboard_app(settings, dashboard_users(), config_path=quality_system.config_path)
-    )
-    quality = dashboard.get("/dashboard/quality", auth=_DASHBOARD_AUTH)
+    dashboard = dashboard_client(settings, quality_system.config_path)
+    quality = dashboard.get("/dashboard/quality", auth=DASHBOARD_AUTH)
     assert quality.status_code == 200
     assert "Could not load quality metrics." not in quality.text
     assert "No impressions yet." not in quality.text

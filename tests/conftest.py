@@ -4,6 +4,10 @@ from collections.abc import Iterator
 
 import pandas as pd
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.engine import Engine
+from support.system_db import TEST_DATABASE_URL, reset_schema
+from support.system_spec import SKIP_NO_TEST_DB
 
 from cicerone.config import make_settings
 from cicerone.feature_config import FeatureColumn, FeatureConfig
@@ -34,6 +38,24 @@ def _dispose_shared_engines() -> Iterator[None]:
     dispose_engines()
     yield
     dispose_engines()
+
+
+@pytest.fixture(scope="session")
+def db_engine() -> Iterator[Engine]:
+    if not TEST_DATABASE_URL:
+        pytest.skip(SKIP_NO_TEST_DB)
+    engine = create_engine(TEST_DATABASE_URL, pool_pre_ping=True)
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+
+
+@pytest.fixture(scope="module")
+def clean_schema(db_engine: Engine) -> Iterator[None]:
+    reset_schema(db_engine)
+    yield
+    reset_schema(db_engine)
 
 
 @pytest.fixture

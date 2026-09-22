@@ -6,6 +6,7 @@ scenario modules stay focused on the journeys.
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Sequence
 from pathlib import Path
@@ -14,12 +15,28 @@ from typing import Any
 import pandas as pd
 
 from cicerone import job
+from cicerone.artifact import ARTIFACT_FILENAME
+from cicerone.io.recommendation_reader_common import ITEMS_SNAPSHOT_FILENAME
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REPO_FEATURES_CONFIG = REPO_ROOT / "config" / "features.toml"
 SYSTEM_SERVE_TOKEN = "system-spec-secret"
 SYSTEM_DASHBOARD_USER = "alice"
 SYSTEM_DASHBOARD_PASSWORD = "s3cret"
+SKIP_NO_TEST_DB = (
+    "TEST_DATABASE_URL / POSTGRES_TEST_HOST not set — start compose postgres "
+    "(`docker compose --env-file docker/postgres/defaults.env --profile db up -d postgres`) "
+    "and export POSTGRES_TEST_HOST=localhost ALLOW_SCHEMA_RESET_FOR_TESTS=1, "
+    "or run via docker-compose.ci.yml"
+)
+SERVE_HEADERS = {"Authorization": f"Bearer {SYSTEM_SERVE_TOKEN}"}
+DASHBOARD_AUTH = (SYSTEM_DASHBOARD_USER, SYSTEM_DASHBOARD_PASSWORD)
+DATASET_OUTPUT_FILES = (
+    "recommendations.parquet",
+    ITEMS_SNAPSHOT_FILENAME,
+    "manifest.json",
+    ARTIFACT_FILENAME,
+)
 
 
 def sample_system_catalog() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -243,4 +260,47 @@ def mount_dashboard_app(
         build_recommendation_reader(settings.output),
         build_user_history_reader(settings.input),
         config_path=None if config_path is None else str(config_path),
+    )
+
+
+def serve_client(settings: Any):
+    from fastapi.testclient import TestClient
+
+    return TestClient(mount_serve_app(settings))
+
+
+def dashboard_client(settings: Any, config_path: Path | str | None = None):
+    from fastapi.testclient import TestClient
+
+    return TestClient(mount_dashboard_app(settings, dashboard_users(), config_path=config_path))
+
+
+def parse_track_eval(raw: object) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    parsed = json.loads(str(raw or "") or "{}")
+    if not isinstance(parsed, dict):
+        raise AssertionError(f"expected track_eval object, got {type(parsed).__name__}")
+    return parsed
+
+
+def available_ids_from_files(
+    output_path: Path,
+    user_id: str,
+    *,
+    settings: Any,
+    k: int | None = None,
+) -> list[str]:
+    from cicerone.feature_config import load_feature_config
+
+    feature_config = load_feature_config(settings.feature_config_path)
+    recs = pd.read_parquet(output_path / "recommendations.parquet")
+    items = pd.read_parquet(output_path / ITEMS_SNAPSHOT_FILENAME)
+    user_rows = recs.loc[recs["user_id"].astype(str) == user_id]
+    return available_recommendation_ids(
+        user_rows,
+        items,
+        availability_filters=feature_config.item_availability_filters,
+        category_column=settings.serve.category_column,
+        k=settings.serve.default_k if k is None else k,
     )

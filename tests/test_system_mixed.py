@@ -8,31 +8,27 @@ the parquet tree — not recommendation tables on the same database.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
 import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
-from support.postgres_defaults import resolve_test_database_url
 from support.system_db import (
+    DASHBOARD_AUTH,
     OUTPUT_DB_TABLES,
-    SYSTEM_DASHBOARD_PASSWORD,
-    SYSTEM_DASHBOARD_USER,
-    SYSTEM_SERVE_TOKEN,
-    available_recommendation_ids,
-    dashboard_users,
-    mount_dashboard_app,
-    mount_serve_app,
-    reset_schema,
+    SERVE_HEADERS,
+    SKIP_NO_TEST_DB,
+    TEST_DATABASE_URL,
+    dashboard_client,
     run_system_job,
     sample_system_catalog,
     seed_catalog,
+    serve_client,
     write_system_config,
 )
+from support.system_spec import DATASET_OUTPUT_FILES, available_ids_from_files
 
 from cicerone.artifact import (
     ARTIFACT_FILENAME,
@@ -41,30 +37,11 @@ from cicerone.artifact import (
     recommend_from_artifact,
 )
 from cicerone.config import load_settings
-from cicerone.feature_config import load_feature_config
 from cicerone.io.db_store import DEFAULT_EVENTS_TABLE, DEFAULT_ITEMS_TABLE, DEFAULT_USERS_TABLE
 from cicerone.io.factory import build_manifest_reader, build_output_sink, build_recommendation_reader
 from cicerone.io.manifest_reader import DatasetManifestReader
 from cicerone.io.recommendation_reader import DatasetRecommendationReader
 from cicerone.io.recommendation_reader_common import ITEMS_SNAPSHOT_FILENAME
-
-TEST_DATABASE_URL = resolve_test_database_url()
-
-_SKIP_NO_TEST_DB = (
-    "TEST_DATABASE_URL / POSTGRES_TEST_HOST not set — start compose postgres "
-    "(`docker compose --env-file docker/postgres/defaults.env --profile db up -d postgres`) "
-    "and export POSTGRES_TEST_HOST=localhost ALLOW_SCHEMA_RESET_FOR_TESTS=1, "
-    "or run via docker-compose.ci.yml"
-)
-
-_SERVE_HEADERS = {"Authorization": f"Bearer {SYSTEM_SERVE_TOKEN}"}
-_DASHBOARD_AUTH = (SYSTEM_DASHBOARD_USER, SYSTEM_DASHBOARD_PASSWORD)
-_OUTPUT_FILES = (
-    "recommendations.parquet",
-    ITEMS_SNAPSHOT_FILENAME,
-    "manifest.json",
-    ARTIFACT_FILENAME,
-)
 
 
 @dataclass(frozen=True)
@@ -77,24 +54,6 @@ class TrainedSystem:
     items: pd.DataFrame
     rec_reader: DatasetRecommendationReader
     manifest_reader: DatasetManifestReader
-
-
-@pytest.fixture(scope="session")
-def db_engine() -> Iterator[Engine]:
-    if not TEST_DATABASE_URL:
-        pytest.skip(_SKIP_NO_TEST_DB)
-    engine = create_engine(TEST_DATABASE_URL, pool_pre_ping=True)
-    try:
-        yield engine
-    finally:
-        engine.dispose()
-
-
-@pytest.fixture(scope="module")
-def clean_schema(db_engine: Engine) -> Iterator[None]:
-    reset_schema(db_engine)
-    yield
-    reset_schema(db_engine)
 
 
 @pytest.fixture(scope="module")
@@ -136,15 +95,6 @@ def _settings(trained: TrainedSystem):
     return load_settings(str(trained.config_path))
 
 
-def _serve_client(trained: TrainedSystem) -> TestClient:
-    return TestClient(mount_serve_app(_settings(trained)))
-
-
-def _dashboard_client(trained: TrainedSystem) -> TestClient:
-    app = mount_dashboard_app(_settings(trained), dashboard_users(), config_path=trained.config_path)
-    return TestClient(app)
-
-
 def _output_recs(trained: TrainedSystem) -> pd.DataFrame:
     return pd.read_parquet(trained.output_path / "recommendations.parquet")
 
@@ -157,26 +107,7 @@ def _output_manifest(trained: TrainedSystem) -> dict:
     return json.loads((trained.output_path / "manifest.json").read_text())
 
 
-def _available_ids_from_files(
-    trained: TrainedSystem,
-    user_id: str,
-    *,
-    k: int | None = None,
-) -> list[str]:
-    settings = _settings(trained)
-    feature_config = load_feature_config(settings.feature_config_path)
-    recs = _output_recs(trained)
-    user_rows = recs.loc[recs["user_id"].astype(str) == user_id]
-    return available_recommendation_ids(
-        user_rows,
-        _output_items(trained),
-        availability_filters=feature_config.item_availability_filters,
-        category_column=settings.serve.category_column,
-        k=settings.serve.default_k if k is None else k,
-    )
-
-
-@pytest.mark.skipif(not TEST_DATABASE_URL, reason=_SKIP_NO_TEST_DB)
+@pytest.mark.skipif(not TEST_DATABASE_URL, reason=SKIP_NO_TEST_DB)
 def test_system_job_mixed_db_in_dataset_out(trained_system: TrainedSystem) -> None:
     settings = _settings(trained_system)
     assert settings.input.kind == "db"
@@ -187,7 +118,7 @@ def test_system_job_mixed_db_in_dataset_out(trained_system: TrainedSystem) -> No
     tables = set(inspect(trained_system.engine).get_table_names())
     assert {DEFAULT_EVENTS_TABLE, DEFAULT_USERS_TABLE, DEFAULT_ITEMS_TABLE} <= tables
     assert tables.isdisjoint(OUTPUT_DB_TABLES)
-    for name in _OUTPUT_FILES:
+    for name in DATASET_OUTPUT_FILES:
         assert (trained_system.output_path / name).is_file()
     assert not (trained_system.output_path / "events.parquet").exists()
 
@@ -221,14 +152,15 @@ def test_system_job_mixed_db_in_dataset_out(trained_system: TrainedSystem) -> No
     assert not recommend_from_artifact(loaded, ["u1"], top_k=3).empty
 
 
-@pytest.mark.skipif(not TEST_DATABASE_URL, reason=_SKIP_NO_TEST_DB)
+@pytest.mark.skipif(not TEST_DATABASE_URL, reason=SKIP_NO_TEST_DB)
 def test_system_serve_http_reads_dataset_output(trained_system: TrainedSystem) -> None:
-    expected_u1 = _available_ids_from_files(trained_system, "u1")
-    expected_u4 = _available_ids_from_files(trained_system, "u4")
+    settings = _settings(trained_system)
+    expected_u1 = available_ids_from_files(trained_system.output_path, "u1", settings=settings)
+    expected_u4 = available_ids_from_files(trained_system.output_path, "u4", settings=settings)
     generated_at = _output_manifest(trained_system)["generated_at"]
-    client = _serve_client(trained_system)
+    client = serve_client(settings)
 
-    response = client.get("/recommendations/u1", headers=_SERVE_HEADERS)
+    response = client.get("/recommendations/u1", headers=SERVE_HEADERS)
     assert response.status_code == 200
     body = response.json()
     assert body["fallback"] is False
@@ -236,24 +168,24 @@ def test_system_serve_http_reads_dataset_output(trained_system: TrainedSystem) -
     assert body["generated_at"] == generated_at
     assert response.headers.get("X-Generated-At") == generated_at
 
-    warm = client.get("/recommendations/u4", headers=_SERVE_HEADERS)
+    warm = client.get("/recommendations/u4", headers=SERVE_HEADERS)
     assert warm.status_code == 200
     assert warm.json()["fallback"] is False
     assert [row["item_id"] for row in warm.json()["items"]] == expected_u4
 
-    unknown = client.get("/recommendations/u-unknown", headers=_SERVE_HEADERS)
+    unknown = client.get("/recommendations/u-unknown", headers=SERVE_HEADERS)
     assert unknown.status_code == 200
     assert unknown.json()["fallback"] is True
     assert unknown.json()["items"]
 
-    beer = client.get("/recommendations/u1?category=beer", headers=_SERVE_HEADERS)
+    beer = client.get("/recommendations/u1?category=beer", headers=SERVE_HEADERS)
     beer_ids = {row["item_id"] for row in beer.json()["items"]}
     assert beer_ids
     assert beer_ids <= {"i1", "i2"}
 
     filtered = client.get(
         "/recommendations/u1?exclude_unavailable=true&limit=10",
-        headers=_SERVE_HEADERS,
+        headers=SERVE_HEADERS,
     )
     filtered_ids = {row["item_id"] for row in filtered.json()["items"]}
     assert filtered_ids
@@ -261,16 +193,17 @@ def test_system_serve_http_reads_dataset_output(trained_system: TrainedSystem) -
     assert "i4" not in filtered_ids
 
 
-@pytest.mark.skipif(not TEST_DATABASE_URL, reason=_SKIP_NO_TEST_DB)
+@pytest.mark.skipif(not TEST_DATABASE_URL, reason=SKIP_NO_TEST_DB)
 def test_system_dashboard_http_matches_dataset_output(trained_system: TrainedSystem) -> None:
-    serve_ids = _available_ids_from_files(trained_system, "u1")
+    settings = _settings(trained_system)
+    serve_ids = available_ids_from_files(trained_system.output_path, "u1", settings=settings)
     manifest = _output_manifest(trained_system)
-    client = _dashboard_client(trained_system)
-    status = client.get("/dashboard", auth=_DASHBOARD_AUTH)
+    client = dashboard_client(settings, trained_system.config_path)
+    status = client.get("/dashboard", auth=DASHBOARD_AUTH)
     assert status.status_code == 200
     assert manifest["triggered_by"] in status.text
     assert str(manifest["n_events"]) in status.text
-    lookup = client.get("/dashboard", params={"user_id": "u1"}, auth=_DASHBOARD_AUTH)
+    lookup = client.get("/dashboard", params={"user_id": "u1"}, auth=DASHBOARD_AUTH)
     assert lookup.status_code == 200
     for item_id in serve_ids:
         assert item_id in lookup.text

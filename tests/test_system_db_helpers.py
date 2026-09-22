@@ -9,19 +9,27 @@ import pandas as pd
 import pytest
 from support.postgres_defaults import postgres_test_db
 from support.system_db import (
+    DASHBOARD_AUTH,
     INPUT_DB_TABLES,
     OUTPUT_DB_TABLES,
     REPO_FEATURES_CONFIG,
+    SERVE_HEADERS,
+    SKIP_NO_TEST_DB,
+    SYSTEM_DASHBOARD_PASSWORD,
+    SYSTEM_DASHBOARD_USER,
     SYSTEM_SERVE_TOKEN,
     available_recommendation_ids,
     dashboard_users,
     is_dedicated_test_database,
+    parse_track_eval,
     postgres_ready,
     reset_schema,
     sample_system_catalog,
     write_system_config,
 )
+from support.system_spec import DATASET_OUTPUT_FILES
 
+from cicerone.artifact import ARTIFACT_FILENAME
 from cicerone.io.db_store import (
     DEFAULT_DB_TABLES,
     DEFAULT_EVAL_TABLE,
@@ -31,6 +39,7 @@ from cicerone.io.db_store import (
     DEFAULT_TRACK_TABLE,
     DEFAULT_USERS_TABLE,
 )
+from cicerone.io.recommendation_reader_common import ITEMS_SNAPSHOT_FILENAME
 
 
 @pytest.mark.parametrize(
@@ -254,3 +263,28 @@ def test_dashboard_users_hashes_password() -> None:
     users = dashboard_users("alice", "s3cret")
     assert set(users) == {"alice"}
     assert bcrypt.checkpw(b"s3cret", users["alice"].encode("ascii"))
+
+
+def test_shared_system_spec_auth_and_skip_text() -> None:
+    assert {"Authorization": f"Bearer {SYSTEM_SERVE_TOKEN}"} == SERVE_HEADERS
+    assert (SYSTEM_DASHBOARD_USER, SYSTEM_DASHBOARD_PASSWORD) == DASHBOARD_AUTH
+    assert "POSTGRES_TEST_HOST" in SKIP_NO_TEST_DB
+    assert (
+        "recommendations.parquet",
+        ITEMS_SNAPSHOT_FILENAME,
+        "manifest.json",
+        ARTIFACT_FILENAME,
+    ) == DATASET_OUTPUT_FILES
+
+
+def test_parse_track_eval_accepts_dict_and_json() -> None:
+    payload = {"overall": {"ctr": 0.5}}
+    assert parse_track_eval(payload) == payload
+    assert parse_track_eval('{"overall": {"ctr": 0.5}}') == payload
+    assert parse_track_eval(None) == {}
+    assert parse_track_eval("") == {}
+
+
+def test_parse_track_eval_rejects_non_object() -> None:
+    with pytest.raises(AssertionError, match="expected track_eval object"):
+        parse_track_eval("[]")
