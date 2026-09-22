@@ -900,6 +900,88 @@ def test_track_read_bytes_s3_generic_error(monkeypatch) -> None:
             TrackStore(output).read_eval()
 
 
+def _s3_dataset() -> IOSettings:
+    return IOSettings(
+        kind="dataset",
+        options={
+            "storage_backend": "s3",
+            "bucket": "recs",
+            "access_key_id": "test",
+            "secret_access_key": "test",
+        },
+    )
+
+
+def test_track_history_s3_unexpected_error_ignores_not_found_helper(monkeypatch) -> None:
+    class _Boom:
+        def list_objects_v2(self, **_kwargs):
+            raise RuntimeError("list failed")
+
+    def _legacy(*_args, **_kwargs):
+        raise FileNotFoundError("legacy")
+
+    monkeypatch.setattr("cicerone.io.options.read_parquet", _legacy)
+    monkeypatch.setattr("cicerone.track.store_dataset.build_s3_client", lambda _options: _Boom())
+    monkeypatch.setattr("cicerone.track.store_dataset.is_s3_not_found", lambda _exc: True)
+    with pytest.raises(RuntimeError, match="list failed"):
+        TrackStore(_s3_dataset()).read_history()
+
+
+def test_track_history_s3_access_denied_reraises(monkeypatch) -> None:
+    from botocore.exceptions import ClientError
+
+    denied = ClientError({"Error": {"Code": "AccessDenied", "Message": "nope"}}, "ListObjectsV2")
+
+    class _Denied:
+        def list_objects_v2(self, **_kwargs):
+            raise denied
+
+    def _legacy(*_args, **_kwargs):
+        raise FileNotFoundError("legacy")
+
+    monkeypatch.setattr("cicerone.io.options.read_parquet", _legacy)
+    monkeypatch.setattr("cicerone.track.store_dataset.build_s3_client", lambda _options: _Denied())
+    with pytest.raises(ClientError, match="AccessDenied"):
+        TrackStore(_s3_dataset()).read_history()
+
+
+def test_s3_parquet_frame_unexpected_error_ignores_not_found_helper(monkeypatch) -> None:
+    from cicerone.track.store_dataset import _s3_parquet_frame
+
+    class _Boom:
+        def get_object(self, **_kwargs):
+            raise RuntimeError("get failed")
+
+    monkeypatch.setattr("cicerone.track.store_dataset.is_s3_not_found", lambda _exc: True)
+    with pytest.raises(RuntimeError, match="get failed"):
+        _s3_parquet_frame(_Boom(), "recs", "history/part.parquet")
+
+
+def test_s3_parquet_frame_access_denied_reraises() -> None:
+    from botocore.exceptions import ClientError
+
+    from cicerone.track.store_dataset import _s3_parquet_frame
+
+    class _Denied:
+        def get_object(self, **_kwargs):
+            raise ClientError({"Error": {"Code": "AccessDenied", "Message": "nope"}}, "GetObject")
+
+    with pytest.raises(ClientError, match="AccessDenied"):
+        _s3_parquet_frame(_Denied(), "recs", "history/part.parquet")
+
+
+def test_track_read_eval_s3_access_denied_reraises(monkeypatch) -> None:
+    from botocore.exceptions import ClientError
+
+    class _Denied:
+        def get_object(self, **_kwargs):
+            raise ClientError({"Error": {"Code": "AccessDenied", "Message": "nope"}}, "GetObject")
+
+    monkeypatch.setattr("cicerone.io.blob.build_s3_client", lambda _options: _Denied())
+    with pytest.raises(ClientError, match="AccessDenied"):
+        TrackStore(_s3_dataset()).read_eval()
+
+
 def test_track_read_rows_filters_experiment_and_since(tmp_path) -> None:
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     store = TrackStore(output)
