@@ -28,6 +28,9 @@ class _BoomReader:
     def get_items(self) -> pd.DataFrame | None:
         return None
 
+    def items_version(self) -> int:
+        return 0
+
     def get_cold_start_fallback(self, k: int, *, variant: str | None = None) -> pd.DataFrame:
         return pd.DataFrame()
 
@@ -52,6 +55,9 @@ class _KReader:
 
     def get_items(self) -> pd.DataFrame | None:
         return None
+
+    def items_version(self) -> int:
+        return 0
 
     def get_cold_start_fallback(self, k: int, *, variant: str | None = None) -> pd.DataFrame:
         return pd.DataFrame()
@@ -554,3 +560,164 @@ def test_format_recommendation_rows_summarizes_reasons():
     )
     rows = format_recommendation_rows(recs, category_column=None)
     assert rows[0]["reasons"] == "personalized+popular_fallback · like i9"
+
+
+class _FilterRecs:
+    def __init__(self, recs: pd.DataFrame, items: pd.DataFrame):
+        self._recs = recs
+        self._items = items
+        self.requested_k: int | None = None
+
+    def refresh(self) -> None:
+        return
+
+    def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame:
+        del user_id, variant
+        self.requested_k = k
+        return self._recs.head(k).reset_index(drop=True)
+
+    def get_items(self) -> pd.DataFrame | None:
+        return self._items
+
+    def items_version(self) -> int:
+        return 0
+
+    def get_cold_start_fallback(self, k: int, *, variant: str | None = None) -> pd.DataFrame:
+        del k, variant
+        return pd.DataFrame()
+
+
+def test_lookup_drops_unavailable_items_and_refills():
+    settings = make_settings(
+        dashboard_enabled=True,
+        top_k=2,
+        dashboard_lookup_k=2,
+    )
+    recs = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"},
+            {"user_id": "u1", "item_id": "i2", "rank": 2, "score": 0.8, "source": "personalized"},
+            {"user_id": "u1", "item_id": "i3", "rank": 3, "score": 0.7, "source": "personalized"},
+        ]
+    )
+    items = pd.DataFrame(
+        [
+            {"item_id": "i1", "published": True, "in_stock": True},
+            {"item_id": "i2", "published": False, "in_stock": True},
+            {"item_id": "i3", "published": True, "in_stock": True},
+        ]
+    )
+    reader = _FilterRecs(recs, items)
+    result = lookup_recommendations(
+        settings,
+        reader,
+        "u1",
+        availability_filters=["published", "in_stock"],
+    )
+    assert [row["item_id"] for row in result["items"]] == ["i1", "i3"]
+    assert [row["rank"] for row in result["items"]] == ["1", "2"]
+    assert reader.requested_k == 10
+
+
+def test_lookup_keeps_items_when_availability_filters_are_empty(tmp_path):
+    settings = make_settings(
+        dashboard_enabled=True,
+        feature_config_path=str(tmp_path / "missing.toml"),
+        top_k=2,
+        dashboard_lookup_k=2,
+    )
+    recs = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"},
+            {"user_id": "u1", "item_id": "i2", "rank": 2, "score": 0.8, "source": "personalized"},
+        ]
+    )
+    items = pd.DataFrame(
+        [
+            {"item_id": "i1", "published": True, "in_stock": True},
+            {"item_id": "i2", "published": False, "in_stock": True},
+        ]
+    )
+    result = lookup_recommendations(settings, _FilterRecs(recs, items), "u1")
+    assert [row["item_id"] for row in result["items"]] == ["i1", "i2"]
+
+
+def test_lookup_joins_category_when_recommendation_item_ids_are_numeric():
+    recs = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": 1, "rank": 1, "score": 0.9, "source": "personalized"},
+            {"user_id": "u1", "item_id": 2, "rank": 2, "score": 0.8, "source": "personalized"},
+        ]
+    )
+    items = pd.DataFrame(
+        [
+            {"item_id": "1", "category": "beer"},
+            {"item_id": "2", "category": "wine"},
+        ]
+    )
+    result = lookup_recommendations(
+        make_settings(dashboard_enabled=True, top_k=2, dashboard_lookup_k=2),
+        _FilterRecs(recs, items),
+        "u1",
+    )
+    assert result["error"] is None
+    assert [row["item_id"] for row in result["items"]] == ["1", "2"]
+    assert [row["category"] for row in result["items"]] == ["beer", "wine"]
+
+
+class _SkewedItems:
+    def __init__(self, recs: pd.DataFrame, first: pd.DataFrame, later: pd.DataFrame):
+        self._recs = recs
+        self._first = first
+        self._later = later
+        self._version = 1
+        self.get_items_calls = 0
+
+    def refresh(self) -> None:
+        return
+
+    def items_version(self) -> int:
+        return self._version
+
+    def get_items(self) -> pd.DataFrame:
+        self.get_items_calls += 1
+        return self._first if self.get_items_calls == 1 else self._later
+
+    def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame:
+        del user_id, variant
+        self._version += 1
+        return self._recs.head(k).reset_index(drop=True)
+
+    def get_cold_start_fallback(self, k: int, *, variant: str | None = None) -> pd.DataFrame:
+        del k, variant
+        return pd.DataFrame()
+
+
+def test_lookup_filters_against_the_cached_items_snapshot():
+    recs = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"},
+            {"user_id": "u1", "item_id": "i2", "rank": 2, "score": 0.8, "source": "personalized"},
+        ]
+    )
+    first = pd.DataFrame(
+        [
+            {"item_id": "i1", "published": True},
+            {"item_id": "i2", "published": False},
+        ]
+    )
+    later = pd.DataFrame(
+        [
+            {"item_id": "i1", "published": True},
+            {"item_id": "i2", "published": True},
+        ]
+    )
+    reader = _SkewedItems(recs, first, later)
+    result = lookup_recommendations(
+        make_settings(dashboard_enabled=True, top_k=2, dashboard_lookup_k=2),
+        reader,
+        "u1",
+        availability_filters=["published"],
+    )
+    assert [row["item_id"] for row in result["items"]] == ["i1"]
+    assert reader.get_items_calls == 1

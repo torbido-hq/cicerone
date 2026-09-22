@@ -29,6 +29,7 @@ from cicerone.io.recommendation_schema import (
 )
 from cicerone.io.user_lookup import OCCURRED_AT_COLUMN
 from cicerone.reasons import parse_reasons
+from cicerone.serve.item_filters import ItemsFilterCache, filter_recommendations
 from cicerone.values import as_list, is_missing, is_sequence_attr
 
 logger = logging.getLogger(__name__)
@@ -85,11 +86,20 @@ def lookup_inspector(
     recommendation_reader: RecommendationReader | None,
     history_reader: UserHistoryReader | None,
     user_id: str,
+    *,
+    items_cache: ItemsFilterCache | None = None,
+    availability_filters: Sequence[str] = (),
 ) -> dict[str, Any]:
     user_id = user_id.strip()
     if not user_id:
         return empty_recommendations_context()
-    recs = lookup_recommendations(settings, recommendation_reader, user_id)
+    recs = lookup_recommendations(
+        settings,
+        recommendation_reader,
+        user_id,
+        items_cache=items_cache,
+        availability_filters=availability_filters,
+    )
     if not recs["queried"] or recommendation_reader is None:
         return recs
     recs.update(lookup_history(settings, history_reader, user_id))
@@ -105,6 +115,9 @@ def lookup_recommendations(
     settings: Settings,
     recommendation_reader: RecommendationReader | None,
     user_id: str,
+    *,
+    items_cache: ItemsFilterCache | None = None,
+    availability_filters: Sequence[str] = (),
 ) -> dict[str, Any]:
     user_id = user_id.strip()
     if not user_id:
@@ -145,12 +158,20 @@ def lookup_recommendations(
             snapshot_names=snapshot,
         )
     try:
-        recs, used_fallback = _load_rows(recommendation_reader, user_id, k, variant=variant)
+        recs, used_fallback, items = _load_rows(
+            recommendation_reader,
+            user_id,
+            k,
+            variant=variant,
+            settings=settings,
+            items_cache=items_cache,
+            filters=availability_filters,
+        )
         if not has_variant_column(recs):
             experiment_id, variant = None, None
         category_column = settings.serve.category_column
         if category_column not in recs.columns:
-            recs = _join_category(recs, recommendation_reader.get_items(), category_column)
+            recs = _join_category(recs, items, category_column)
         show_category = category_column in recs.columns
         items = format_recommendation_rows(recs, category_column=category_column if show_category else None)
         return {
@@ -264,16 +285,69 @@ def format_user_attrs(user: dict[str, Any] | None, *, allowed: Sequence[str] = (
     return rows
 
 
+def _items_cache(
+    recommendation_reader: RecommendationReader,
+    settings: Settings,
+    items_cache: ItemsFilterCache | None,
+    filters: Sequence[str],
+) -> ItemsFilterCache:
+    if items_cache is not None:
+        return items_cache
+    return ItemsFilterCache(
+        recommendation_reader,
+        category_column=settings.serve.category_column,
+        availability_filters=filters,
+    )
+
+
 def _load_rows(
-    recommendation_reader: RecommendationReader, user_id: str, k: int, *, variant: str | None = None
-) -> tuple[pd.DataFrame, bool]:
-    recs = recommendation_reader.get_recommendations(user_id, k, variant=variant)
-    if not recs.empty:
-        return recs, False
-    fallback = recommendation_reader.get_cold_start_fallback(k, variant=variant)
-    if fallback.empty:
-        return recs, False
-    return fallback, True
+    recommendation_reader: RecommendationReader,
+    user_id: str,
+    k: int,
+    *,
+    variant: str | None = None,
+    settings: Settings,
+    items_cache: ItemsFilterCache | None = None,
+    filters: Sequence[str] = (),
+) -> tuple[pd.DataFrame, bool, pd.DataFrame | None]:
+    cache = _items_cache(recommendation_reader, settings, items_cache, filters)
+    items, available_ids, _ = cache.get()
+    can_filter = bool(filters and items is not None and not items.empty)
+    fetch_k = max(k * 5, k) if can_filter else k
+    recs = recommendation_reader.get_recommendations(user_id, fetch_k, variant=variant)
+    used_fallback = False
+    if recs.empty:
+        used_fallback = True
+        recs = recommendation_reader.get_cold_start_fallback(fetch_k, variant=variant)
+        if recs.empty:
+            return recs, False, items
+    if can_filter:
+        recs = _filter_unavailable(recs, items, available_ids, settings.serve.category_column, k)
+    return recs, used_fallback, items
+
+
+def _filter_unavailable(
+    recs: pd.DataFrame,
+    items: pd.DataFrame | None,
+    available_ids: frozenset[str] | None,
+    category_column: str,
+    k: int,
+) -> pd.DataFrame:
+    filtered = filter_recommendations(
+        recs,
+        items=items,
+        available_ids=available_ids,
+        category=None,
+        category_column=category_column,
+        exclude_unavailable=True,
+    )
+    if filtered.empty:
+        return filtered
+    filtered = filtered.head(k).reset_index(drop=True)
+    if RANK_COLUMN in filtered.columns:
+        filtered = filtered.copy()
+        filtered[RANK_COLUMN] = range(1, len(filtered) + 1)
+    return filtered
 
 
 def _join_category(recs: pd.DataFrame, items: pd.DataFrame | None, category_column: str) -> pd.DataFrame:
@@ -286,8 +360,11 @@ def _join_category(recs: pd.DataFrame, items: pd.DataFrame | None, category_colu
         or category_column not in items.columns
     ):
         return recs
-    extra = items[[ITEM_COLUMN, category_column]].drop_duplicates(subset=[ITEM_COLUMN])
-    return recs.merge(extra, on=ITEM_COLUMN, how="left")
+    extra = items[[ITEM_COLUMN, category_column]].drop_duplicates(subset=[ITEM_COLUMN]).copy()
+    extra[ITEM_COLUMN] = extra[ITEM_COLUMN].astype(str)
+    out = recs.copy()
+    out[ITEM_COLUMN] = out[ITEM_COLUMN].astype(str)
+    return out.merge(extra, on=ITEM_COLUMN, how="left")
 
 
 def _coerce_float(value: object) -> float | None:

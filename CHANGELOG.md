@@ -30,11 +30,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Dashboard user lookup applies the same item availability filters as serve.
 - Job-time Thompson samples Beta(1+s, 1+f) in-process instead of writing MABWiser's private `_imp` counts.
 - Online refresh still rewrites LightFM / popular lists when the sequential extra is missing. Only the sequential model is skipped.
 
 ### Fixed
 
+- Dashboard lookup keeps the startup availability filters and one items snapshot per request.
+- Dashboard lookup joins category on string item ids so numeric catalogs do not raise.
 - Quality replay deltas skip the latest stored run when CTR is live, and catalog Δ only attaches to the matching cutoff.
 - Quality deltas pick the previous run by eval identity, so a newer manifest cannot self-delta against a lagging track report.
 - Quality single-run history footnote is dataset-only.
