@@ -119,6 +119,54 @@ def test_start_events_runtime_disabled_and_webhook(tmp_path, feature_config: Fea
     assert enabled.worker._thread is None or not enabled.worker._thread.is_alive()
 
 
+def test_start_events_runtime_can_skip_background_worker(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+
+    class _Reader:
+        def __init__(self) -> None:
+            self.refreshed = 0
+
+        def refresh(self) -> None:
+            self.refreshed += 1
+
+    reader = _Reader()
+    runtime = start_events_runtime(
+        make_settings(
+            output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+            events=EventsSettings(
+                enabled=True,
+                kind="webhook",
+                incremental=EventsIncrementalSettings(
+                    batch_size=1, batch_window_seconds=60.0, poll_interval_seconds=0.05
+                ),
+            ),
+        ),
+        feature_config=feature_config,
+        reader=reader,  # type: ignore[arg-type]
+        start_worker=False,
+    )
+    assert runtime.worker is not None
+    assert runtime.worker._thread is None
+    assert isinstance(runtime.webhook_source, WebhookEventSource)
+    runtime.webhook_source.ingest(
+        {
+            "user_id": "u1",
+            "item_id": "i9",
+            "event_type": "purchase",
+            "occurred_at": "2026-08-13T12:00:00Z",
+            "event_id": "skip-start-1",
+        }
+    )
+    assert runtime.worker.tick() == 1
+    assert reader.refreshed == 1
+    runtime.stop()
+    assert runtime.worker._thread is None
+
+
 def test_start_events_runtime_closes_publisher(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()

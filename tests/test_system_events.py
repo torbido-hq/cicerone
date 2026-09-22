@@ -74,7 +74,7 @@ def test_system_events_webhook_write_through_serve_and_dashboard(
     assert "Source: webhook" in empty.text
     assert "No incremental flushes recorded in recent manifests yet." in empty.text
 
-    app = mount_serve_app(settings)
+    app = mount_serve_app(settings, start_events_worker=False)
     try:
         from fastapi.testclient import TestClient
 

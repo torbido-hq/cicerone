@@ -231,7 +231,7 @@ def dashboard_users(
     return {username: bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("ascii")}
 
 
-def mount_serve_app(settings: Any):
+def mount_serve_app(settings: Any, *, start_events_worker: bool = True):
     from cicerone.feature_config import load_feature_config
     from cicerone.io.factory import build_manifest_reader, build_recommendation_reader
     from cicerone.serve import create_app
@@ -247,7 +247,12 @@ def mount_serve_app(settings: Any):
         category_column=settings.serve.category_column,
         availability_filters=availability,
     )
-    events_runtime = start_events_runtime(settings, feature_config=feature_config, reader=reader)
+    events_runtime = start_events_runtime(
+        settings,
+        feature_config=feature_config,
+        reader=reader,
+        start_worker=start_events_worker,
+    )
     app = create_app(
         settings,
         reader,
