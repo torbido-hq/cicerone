@@ -780,6 +780,54 @@ def test_experiment_store_state_roundtrip_s3() -> None:
         assert state["promoted_variant"] == "treatment"
 
 
+def test_experiment_store_s3_unexpected_read_reraises(monkeypatch) -> None:
+    class _Boom:
+        def get_object(self, **_kwargs):
+            raise RuntimeError("network")
+
+    monkeypatch.setattr("cicerone.io.blob.build_s3_client", lambda _options: _Boom())
+    store = ExperimentStore(
+        IOSettings(
+            kind="dataset",
+            options={
+                "storage_backend": "s3",
+                "bucket": "recs",
+                "access_key_id": "test",
+                "secret_access_key": "test",
+            },
+        )
+    )
+    with pytest.raises(RuntimeError, match="network"):
+        store.read_state()
+    with pytest.raises(RuntimeError, match="network"):
+        store.read_exposures()
+
+
+def test_experiment_store_s3_access_denied_reraises(monkeypatch) -> None:
+    from botocore.exceptions import ClientError
+
+    class _Denied:
+        def get_object(self, **_kwargs):
+            raise ClientError({"Error": {"Code": "AccessDenied", "Message": "nope"}}, "GetObject")
+
+    monkeypatch.setattr("cicerone.io.blob.build_s3_client", lambda _options: _Denied())
+    store = ExperimentStore(
+        IOSettings(
+            kind="dataset",
+            options={
+                "storage_backend": "s3",
+                "bucket": "recs",
+                "access_key_id": "test",
+                "secret_access_key": "test",
+            },
+        )
+    )
+    with pytest.raises(ClientError, match="AccessDenied"):
+        store.read_state()
+    with pytest.raises(ClientError, match="AccessDenied"):
+        store.read_exposures()
+
+
 def test_promoted_variant_reuses_cache_when_read_fails(tmp_path, monkeypatch) -> None:
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     store = ExperimentStore(output)
