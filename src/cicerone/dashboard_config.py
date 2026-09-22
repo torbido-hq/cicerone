@@ -11,6 +11,7 @@ from typing import Any
 from cicerone import __version__
 from cicerone.config import Settings
 from cicerone.feature_config import load_feature_config
+from cicerone.job_eval import OPTIONAL_IO_ERRORS, log_caught
 
 logger = logging.getLogger(__name__)
 
@@ -365,7 +366,7 @@ def _feature_section(settings: Settings) -> tuple[Any, str | None]:
         return None, f"No feature config file at {path}."
     try:
         loaded = load_feature_config(path)
-    except Exception:
-        logger.exception("Failed to load feature config for dashboard config page")
+    except OPTIONAL_IO_ERRORS as exc:
+        log_caught("Failed to load feature config for dashboard config page", exc, log=logger)
         return None, "Feature config could not be loaded."
     return _normalize(_redact(asdict(loaded))), None
