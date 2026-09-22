@@ -186,6 +186,11 @@ class RedisStreamsEventSource(QueuedEventSource):
     def _delivery_handle(self, event_id: str) -> Any | None:
         return self._entry_ids.get(event_id)
 
+    def _mark_disconnected_if_current(self, client: Any) -> None:
+        with self._lock:
+            if self._client is client:
+                self._connected = False
+
     def _fetch_events(self, client: Any, max_events: int) -> list[NormalizedEvent]:
         out: list[NormalizedEvent] = []
         remaining = max_events
@@ -233,8 +238,7 @@ class RedisStreamsEventSource(QueuedEventSource):
             )
         except Exception:
             logger.exception("Redis Streams XAUTOCLAIM failed")
-            with self._lock:
-                self._connected = False
+            self._mark_disconnected_if_current(client)
             return []
 
         next_id, entries = self._parse_autoclaim(result)
@@ -254,8 +258,7 @@ class RedisStreamsEventSource(QueuedEventSource):
             )
         except Exception:
             logger.exception("Redis Streams XREADGROUP failed")
-            with self._lock:
-                self._connected = False
+            self._mark_disconnected_if_current(client)
             return []
         entries: list[tuple[str, dict[str, Any]]] = []
         for _stream_name, messages in raw or []:

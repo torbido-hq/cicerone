@@ -383,6 +383,42 @@ def test_read_failures_return_empty(monkeypatch):
     assert source.health().connected is False
 
 
+def test_stale_client_read_failure_keeps_new_connection(monkeypatch):
+    stale = FakeRedis()
+    current = FakeRedis()
+    clients = [stale, current]
+
+    class _Redis:
+        ResponseError = _ResponseError
+
+        @staticmethod
+        def from_url(*_args: Any, **_kwargs: Any) -> FakeRedis:
+            return clients.pop(0)
+
+    fake_mod = type(sys)("redis")
+    fake_mod.Redis = _Redis
+    fake_mod.ResponseError = _ResponseError
+    monkeypatch.setitem(sys.modules, "redis", fake_mod)
+
+    source = RedisStreamsEventSource(_options())
+    source.connect()
+    assert source._client is stale
+
+    def boom(*_a, **_k):
+        raise RuntimeError("stale socket")
+
+    stale.xreadgroup = boom  # type: ignore[method-assign]
+    stale.xautoclaim = boom  # type: ignore[method-assign]
+    source.connect()
+    assert source._client is current
+    assert source._claim_idle(stale, 10) == []
+    assert source._read_new(stale, 10) == []
+    assert source.health().connected is True
+    current.xadd("cicerone:events", event_payload(event_id="after-reconnect"))
+    events = list(source.poll(10))
+    assert [event.event_id for event in events] == ["after-reconnect"]
+
+
 def test_failed_ack_still_allows_nack(monkeypatch):
     client = _install_fake_redis(monkeypatch, FakeRedis())
     source = RedisStreamsEventSource(_options())
