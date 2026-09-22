@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from cicerone.config.constants import ConfigError
@@ -18,6 +19,9 @@ DEFAULT_TIMEOUT_SECONDS = 10.0
 MIN_TIMEOUT_MS = 10  # librdkafka socket.timeout.ms
 MIN_TIMEOUT_SECONDS = MIN_TIMEOUT_MS / 1000.0
 MAX_TIMEOUT_MS = 2**31 - 1
+DEFAULT_SESSION_TIMEOUT_MS = 45_000
+DEFAULT_MAX_POLL_INTERVAL_MS = 300_000
+MIN_SESSION_TIMEOUT_MS = 2
 
 
 def kafka_timeout_seconds(options: dict[str, Any], *, prefix: str) -> float:
@@ -75,31 +79,46 @@ def kafka_client_config(options: dict[str, Any], *, prefix: str) -> dict[str, An
 def kafka_consumer_config(options: dict[str, Any], *, prefix: str) -> dict[str, Any]:
     conf = kafka_client_config(options, prefix=prefix)
     max_poll = _optional_timeout_ms(options, "max_poll_interval_ms", prefix=prefix)
-    session = _optional_timeout_ms(options, "session_timeout_ms", prefix=prefix, minimum=2)
-    if max_poll is not None and session is not None and max_poll < session:
+    session = _optional_timeout_ms(
+        options, "session_timeout_ms", prefix=prefix, minimum=MIN_SESSION_TIMEOUT_MS
+    )
+    effective_max_poll = max_poll if max_poll is not None else DEFAULT_MAX_POLL_INTERVAL_MS
+    effective_session = session if session is not None else DEFAULT_SESSION_TIMEOUT_MS
+    if effective_max_poll < effective_session:
+        max_name = f"{prefix}.max_poll_interval_ms"
+        session_name = f"{prefix}.session_timeout_ms"
+        if max_poll is None:
+            max_name = f"{max_name} (librdkafka default {DEFAULT_MAX_POLL_INTERVAL_MS})"
+        if session is None:
+            session_name = f"{session_name} (librdkafka default {DEFAULT_SESSION_TIMEOUT_MS})"
         raise ConfigError(
-            f"{prefix}.max_poll_interval_ms must be >= {prefix}.session_timeout_ms, "
-            f"got {max_poll} < {session}"
+            f"{max_name} must be >= {session_name}, got {effective_max_poll} < {effective_session}"
         )
     if max_poll is not None:
         conf["max.poll.interval.ms"] = max_poll
     if session is not None:
         conf["session.timeout.ms"] = session
-        # librdkafka default heartbeat is 3000ms; session must be larger.
-        conf["heartbeat.interval.ms"] = max(1, min(session - 1, session // 3))
+        conf["heartbeat.interval.ms"] = _heartbeat_interval_ms(session)
     return conf
+
+
+def _heartbeat_interval_ms(session: int) -> int:
+    heartbeat = max(1, min(session - 1, session // 3))
+    if heartbeat >= session:
+        raise ConfigError(
+            f"session_timeout_ms must be >= {MIN_SESSION_TIMEOUT_MS} so "
+            f"heartbeat.interval.ms stays below session.timeout.ms, got {session}"
+        )
+    return heartbeat
 
 
 def _optional_timeout_ms(options: dict[str, Any], key: str, *, prefix: str, minimum: int = 1) -> int | None:
     if key not in options or options[key] in (None, ""):
         return None
     raw = options[key]
-    if isinstance(raw, bool) or (isinstance(raw, float) and not raw.is_integer()):
+    if isinstance(raw, bool) or (isinstance(raw, float) and (not math.isfinite(raw) or not raw.is_integer())):
         raise ConfigError(f"{prefix}.{key} must be an integer, got {raw!r}")
-    try:
-        value = optional_int(options, key, 0, prefix=prefix, minimum=minimum)
-    except OverflowError as exc:
-        raise ConfigError(f"{prefix}.{key} must be an integer, got {raw!r}") from exc
+    value = optional_int(options, key, 0, prefix=prefix, minimum=minimum)
     if value > MAX_TIMEOUT_MS:
         raise ConfigError(f"{prefix}.{key} must be <= {MAX_TIMEOUT_MS}, got {value}")
     return value

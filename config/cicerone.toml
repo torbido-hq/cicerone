@@ -359,8 +359,8 @@ prefix = "recommendations/latest"
 # # sasl_username = "${KAFKA_USERNAME}"
 # # sasl_password = "${KAFKA_PASSWORD}"
 # # timeout_seconds = 10          # min 0.01 (librdkafka socket.timeout.ms)
-# # max_poll_interval_ms = 300000
-# # session_timeout_ms = 45000
+# # max_poll_interval_ms = 300000  # must be >= session (default 45000 if unset)
+# # session_timeout_ms = 45000     # >= 2; also pins heartbeat.interval.ms
 
 # RabbitMQ queue. Requires: pip install 'cicerone-recommender[rabbitmq]'
 # [events]

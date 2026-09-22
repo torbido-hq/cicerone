@@ -51,6 +51,15 @@ def test_optional_int_validation():
         optional_int({"n": "nope"}, "n", 3, prefix="x", minimum=1)
     with pytest.raises(ConfigError, match=">= 1"):
         optional_int({"n": 0}, "n", 3, prefix="x", minimum=1)
+    with pytest.raises(ConfigError, match="integer"):
+        optional_int({"n": float("inf")}, "n", 3, prefix="x", minimum=1)
+
+    class _OverflowInt:
+        def __int__(self) -> int:
+            raise OverflowError("too big")
+
+    with pytest.raises(ConfigError, match="integer"):
+        optional_int({"n": _OverflowInt()}, "n", 3, prefix="x", minimum=1)
 
 
 def test_optional_float_validation():
@@ -127,6 +136,14 @@ def test_validate_rejects_bad_poll_interval():
         validate_kafka_event_options(_options(session_timeout_ms=1))
     with pytest.raises(ConfigError, match="max_poll_interval_ms must be >="):
         validate_kafka_event_options(_options(max_poll_interval_ms=1000, session_timeout_ms=2000))
+    with pytest.raises(ConfigError, match="session_timeout_ms"):
+        validate_kafka_event_options(_options(max_poll_interval_ms=10_000))
+    with pytest.raises(ConfigError, match="max_poll_interval_ms"):
+        validate_kafka_event_options(_options(session_timeout_ms=400_000))
+    from cicerone.kafka_options import _heartbeat_interval_ms
+
+    with pytest.raises(ConfigError, match="heartbeat"):
+        _heartbeat_interval_ms(1)
     from cicerone.kafka_options import MAX_TIMEOUT_MS
 
     with pytest.raises(ConfigError, match="max_poll_interval_ms"):
