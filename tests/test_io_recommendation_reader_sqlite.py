@@ -209,6 +209,34 @@ def test_sqlite_db_reader_bulk_limits_fallback_variant_in_sql(tmp_path, monkeypa
     assert loaded == [2]
 
 
+def test_sqlite_db_reader_bulk_keeps_rank_order(tmp_path, monkeypatch):
+    url = _sqlite_url(tmp_path)
+    sink = DatabaseOutputSink({"database_url": url})
+    rows = [
+        {
+            "user_id": "u1",
+            "item_id": f"i{rank}",
+            "rank": rank,
+            "score": 1.0 - rank * 0.1,
+            "source": "personalized",
+        }
+        for rank in (5, 4, 1, 3, 2)
+    ]
+    sink.write_recommendations(pd.DataFrame(rows))
+    reader = DbRecommendationReader({"database_url": url})
+    real_read = pd.read_sql
+    seen: list[str] = []
+
+    def tracking(sql, *args, **kwargs):
+        seen.append(str(sql))
+        return real_read(sql, *args, **kwargs)
+
+    monkeypatch.setattr(pd, "read_sql", tracking)
+    bulk = reader.get_recommendations_for_users(["u1"], k=3)
+    assert list(bulk["u1"]["item_id"]) == ["i1", "i2", "i3"]
+    assert any("_cicerone_rn" in sql and "ORDER BY" in sql.upper() for sql in seen)
+
+
 def test_sqlite_db_reader_item_scores_write_replace_and_missing(tmp_path):
     url = _sqlite_url(tmp_path)
     reader = DbRecommendationReader({"database_url": url})

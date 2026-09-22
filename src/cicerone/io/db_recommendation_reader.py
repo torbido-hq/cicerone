@@ -305,7 +305,8 @@ def _top_k_per_user_sql(table: str, *, where: str, order_by: str) -> TextClause:
         f"SELECT * FROM ("
         f'SELECT *, ROW_NUMBER() OVER (PARTITION BY "{USER_COLUMN}" ORDER BY {order_by}) '
         f'AS "{_RN_COLUMN}" FROM "{table}" WHERE {where}'
-        f') AS ranked WHERE "{_RN_COLUMN}" <= :k'
+        f') AS ranked WHERE "{_RN_COLUMN}" <= :k '
+        f'ORDER BY "{USER_COLUMN}" ASC, "{_RN_COLUMN}" ASC'
     ).bindparams(bindparam("user_ids", expanding=True))
 
 
@@ -336,6 +337,8 @@ def _frames_by_user(
             continue
         if collapse:
             part = _rec.collapse_mixed_variants(part)
+        if RANK_COLUMN in part.columns:
+            part = part.sort_values(RANK_COLUMN, kind="mergesort")
         part = part.head(k).reset_index(drop=True)
         if part.empty:
             record_cache_miss()
