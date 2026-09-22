@@ -179,21 +179,16 @@ class KafkaEventSource(QueuedEventSource):
         return self._messages.get(event_id)
 
     def _fetch_events(self, consumer: Any, max_events: int) -> list[NormalizedEvent]:
+        try:
+            messages = consumer.consume(num_messages=max_events, timeout=0.0)
+        except Exception:
+            logger.exception("Kafka consume failed")
+            return []
         out: list[NormalizedEvent] = []
-        remaining = max_events
-        while remaining > 0:
-            try:
-                message = consumer.poll(0.0)
-            except Exception:
-                logger.exception("Kafka poll failed")
-                break
-            if message is None:
-                break
+        for message in messages or []:
             incoming = self._message_to_event(consumer, message)
-            if incoming is None:
-                continue
-            out.append(incoming)
-            remaining -= 1
+            if incoming is not None:
+                out.append(incoming)
         return out
 
     def _message_to_event(self, consumer: Any, message: Any) -> NormalizedEvent | None:

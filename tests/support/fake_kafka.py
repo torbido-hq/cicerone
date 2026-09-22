@@ -105,6 +105,15 @@ class FakeConsumer:
                 return messages[cursor]
         return None
 
+    def consume(self, num_messages: int = 1, timeout: float = -1) -> list[FakeKafkaMessage]:
+        out: list[FakeKafkaMessage] = []
+        for _ in range(max(0, int(num_messages))):
+            message = self.poll(timeout)
+            if message is None:
+                break
+            out.append(message)
+        return out
+
     def commit(
         self,
         message: FakeKafkaMessage | None = None,

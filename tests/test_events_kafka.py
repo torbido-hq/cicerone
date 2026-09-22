@@ -460,10 +460,11 @@ def test_poll_exception_returns_partial(monkeypatch):
     first = list(source.poll(1))
     source.nack(first)
 
-    def _boom(_timeout):
-        raise RuntimeError("poll fail")
+    def _boom(*, num_messages: int = 1, timeout: float = -1):
+        del num_messages, timeout
+        raise RuntimeError("consume fail")
 
-    source._consumer.poll = _boom  # type: ignore[method-assign]
+    source._consumer.consume = _boom  # type: ignore[method-assign]
     again = list(source.poll(10))
     assert [event.event_id for event in again] == ["e1"]
 
