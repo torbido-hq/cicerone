@@ -37,6 +37,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - Dashboard lookup keeps the startup availability filters and one items snapshot per request.
+- Dashboard lookup joins category on string item ids so numeric catalogs do not raise.
 - Quality replay deltas skip the latest stored run when CTR is live, and catalog Δ only attaches to the matching cutoff.
 - Quality deltas pick the previous run by eval identity, so a newer manifest cannot self-delta against a lagging track report.
 - Quality single-run history footnote is dataset-only.

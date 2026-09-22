@@ -642,6 +642,29 @@ def test_lookup_keeps_items_when_availability_filters_are_empty(tmp_path):
     assert [row["item_id"] for row in result["items"]] == ["i1", "i2"]
 
 
+def test_lookup_joins_category_when_recommendation_item_ids_are_numeric():
+    recs = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": 1, "rank": 1, "score": 0.9, "source": "personalized"},
+            {"user_id": "u1", "item_id": 2, "rank": 2, "score": 0.8, "source": "personalized"},
+        ]
+    )
+    items = pd.DataFrame(
+        [
+            {"item_id": "1", "category": "beer"},
+            {"item_id": "2", "category": "wine"},
+        ]
+    )
+    result = lookup_recommendations(
+        make_settings(dashboard_enabled=True, top_k=2, dashboard_lookup_k=2),
+        _FilterRecs(recs, items),
+        "u1",
+    )
+    assert result["error"] is None
+    assert [row["item_id"] for row in result["items"]] == ["1", "2"]
+    assert [row["category"] for row in result["items"]] == ["beer", "wine"]
+
+
 class _SkewedItems:
     def __init__(self, recs: pd.DataFrame, first: pd.DataFrame, later: pd.DataFrame):
         self._recs = recs

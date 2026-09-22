@@ -360,8 +360,11 @@ def _join_category(recs: pd.DataFrame, items: pd.DataFrame | None, category_colu
         or category_column not in items.columns
     ):
         return recs
-    extra = items[[ITEM_COLUMN, category_column]].drop_duplicates(subset=[ITEM_COLUMN])
-    return recs.merge(extra, on=ITEM_COLUMN, how="left")
+    extra = items[[ITEM_COLUMN, category_column]].drop_duplicates(subset=[ITEM_COLUMN]).copy()
+    extra[ITEM_COLUMN] = extra[ITEM_COLUMN].astype(str)
+    out = recs.copy()
+    out[ITEM_COLUMN] = out[ITEM_COLUMN].astype(str)
+    return out.merge(extra, on=ITEM_COLUMN, how="left")
 
 
 def _coerce_float(value: object) -> float | None:
