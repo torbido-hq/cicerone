@@ -103,7 +103,7 @@ CONTRIBUTING.md). CI uses a separate throwaway instance via
 same journeys against local parquet (`kind = "dataset"`).
 `tests/test_system_mixed.py` / `test_system_mixed_quality.py` mix a
 Postgres catalog with dataset output.
-`tests/test_system_events.py` continues the Postgres catalog through
+`tests/test_system_events.py` continues a local parquet catalog through
 webhook `POST /events` write-through to serve and the dashboard.
 
 Public imports stay stable after the package splits:
