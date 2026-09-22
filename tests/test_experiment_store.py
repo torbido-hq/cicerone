@@ -651,7 +651,67 @@ def test_append_exposures_db_rolls_back_when_fence_lost_after_insert(tmp_path, m
     assert store.read_exposures() == []
 
 
+def test_read_state_db_pandas_database_error_is_empty(tmp_path, monkeypatch) -> None:
+    from pandas.errors import DatabaseError
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    store = ExperimentStore(IOSettings(kind="db", options={"database_url": url}))
+
+    def _read(*_args, **_kwargs):
+        raise DatabaseError("no such table: experiment_state")
+
+    monkeypatch.setattr("cicerone.experiment.store.pd.read_sql", _read)
+    assert store.read_state() is None
+
+
+def test_read_state_db_pandas_database_error_retries_legacy_schema(tmp_path, monkeypatch) -> None:
+    from pandas.errors import DatabaseError
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    store = ExperimentStore(IOSettings(kind="db", options={"database_url": url}))
+    calls = {"n": 0}
+
+    def _read(*_args, **_kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise DatabaseError("no such column: promoted_at")
+        return pd.DataFrame([{"experiment_id": "exp", "promoted_variant": "treatment", "payload": None}])
+
+    monkeypatch.setattr("cicerone.experiment.store.pd.read_sql", _read)
+    state = store.read_state()
+    assert state is not None
+    assert state["promoted_variant"] == "treatment"
+    assert calls["n"] == 2
+
+
+def test_read_exposures_db_pandas_database_error_is_empty(tmp_path, monkeypatch) -> None:
+    from pandas.errors import DatabaseError
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    store = ExperimentStore(IOSettings(kind="db", options={"database_url": url}))
+
+    def _read(*_args, **_kwargs):
+        raise DatabaseError("no such table: exposures")
+
+    monkeypatch.setattr("cicerone.experiment.store.pd.read_sql", _read)
+    assert store.read_exposures() == []
+
+
 def test_read_exposures_db_generic_missing_table_is_empty(tmp_path, monkeypatch) -> None:
+    from sqlalchemy.exc import SQLAlchemyError
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    store = ExperimentStore(IOSettings(kind="db", options={"database_url": url}))
+
+    def _read(*_args, **_kwargs):
+        raise SQLAlchemyError("no such table: exposures")
+
+    monkeypatch.setattr("cicerone.experiment.store.pd.read_sql", _read)
+    monkeypatch.setattr("cicerone.experiment.store.is_missing_table_error", lambda _exc: True)
+    assert store.read_exposures() == []
+
+
+def test_read_exposures_db_unexpected_error_ignores_missing_table_helper(tmp_path, monkeypatch) -> None:
     url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
     store = ExperimentStore(IOSettings(kind="db", options={"database_url": url}))
 
@@ -660,7 +720,8 @@ def test_read_exposures_db_generic_missing_table_is_empty(tmp_path, monkeypatch)
 
     monkeypatch.setattr("cicerone.experiment.store.pd.read_sql", _read)
     monkeypatch.setattr("cicerone.experiment.store.is_missing_table_error", lambda _exc: True)
-    assert store.read_exposures() == []
+    with pytest.raises(RuntimeError, match="no such table"):
+        store.read_exposures()
 
 
 def test_read_exposures_db_unexpected_error_reraises(tmp_path, monkeypatch) -> None:
@@ -717,6 +778,54 @@ def test_experiment_store_state_roundtrip_s3() -> None:
         state = store.read_state()
         assert state is not None
         assert state["promoted_variant"] == "treatment"
+
+
+def test_experiment_store_s3_unexpected_read_reraises(monkeypatch) -> None:
+    class _Boom:
+        def get_object(self, **_kwargs):
+            raise RuntimeError("network")
+
+    monkeypatch.setattr("cicerone.io.blob.build_s3_client", lambda _options: _Boom())
+    store = ExperimentStore(
+        IOSettings(
+            kind="dataset",
+            options={
+                "storage_backend": "s3",
+                "bucket": "recs",
+                "access_key_id": "test",
+                "secret_access_key": "test",
+            },
+        )
+    )
+    with pytest.raises(RuntimeError, match="network"):
+        store.read_state()
+    with pytest.raises(RuntimeError, match="network"):
+        store.read_exposures()
+
+
+def test_experiment_store_s3_access_denied_reraises(monkeypatch) -> None:
+    from botocore.exceptions import ClientError
+
+    class _Denied:
+        def get_object(self, **_kwargs):
+            raise ClientError({"Error": {"Code": "AccessDenied", "Message": "nope"}}, "GetObject")
+
+    monkeypatch.setattr("cicerone.io.blob.build_s3_client", lambda _options: _Denied())
+    store = ExperimentStore(
+        IOSettings(
+            kind="dataset",
+            options={
+                "storage_backend": "s3",
+                "bucket": "recs",
+                "access_key_id": "test",
+                "secret_access_key": "test",
+            },
+        )
+    )
+    with pytest.raises(ClientError, match="AccessDenied"):
+        store.read_state()
+    with pytest.raises(ClientError, match="AccessDenied"):
+        store.read_exposures()
 
 
 def test_promoted_variant_reuses_cache_when_read_fails(tmp_path, monkeypatch) -> None:

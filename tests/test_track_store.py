@@ -770,15 +770,63 @@ def test_track_jsonl_dedupes_duplicate_event_ids(tmp_path) -> None:
 
 
 def test_track_store_sqlite_missing_table_error_helper(tmp_path, monkeypatch) -> None:
+    from sqlalchemy.exc import SQLAlchemyError
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
+    output = IOSettings(kind="db", options={"database_url": url})
+    store = TrackStore(output)
+    store.append_rows([_row()])
+    monkeypatch.setattr(
+        pd,
+        "read_sql",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(SQLAlchemyError("x")),
+    )
+    monkeypatch.setattr("cicerone.track.store_db.is_missing_table_error", lambda _exc: True)
+    assert store.read_rows() == []
+    assert store.read_eval() is None
+    assert store.read_history().empty
+
+
+def test_track_store_sqlite_pandas_database_error_is_empty(tmp_path, monkeypatch) -> None:
+    from pandas.errors import DatabaseError
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
+    store = TrackStore(IOSettings(kind="db", options={"database_url": url}))
+    store.append_rows([_row()])
+    monkeypatch.setattr(
+        pd,
+        "read_sql",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(DatabaseError("no such table: track")),
+    )
+    assert store.read_rows() == []
+    assert store.read_eval() is None
+    assert store.read_history().empty
+
+
+def test_track_store_sqlite_pandas_database_error_unexpected_reraises(tmp_path, monkeypatch) -> None:
+    from pandas.errors import DatabaseError
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
+    store = TrackStore(IOSettings(kind="db", options={"database_url": url}))
+    store.append_rows([_row()])
+    monkeypatch.setattr(
+        pd,
+        "read_sql",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(DatabaseError("connection refused")),
+    )
+    with pytest.raises(DatabaseError, match="connection refused"):
+        store.read_rows()
+
+
+def test_track_store_sqlite_unexpected_error_ignores_missing_table_helper(tmp_path, monkeypatch) -> None:
     url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
     output = IOSettings(kind="db", options={"database_url": url})
     store = TrackStore(output)
     store.append_rows([_row()])
     monkeypatch.setattr(pd, "read_sql", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("x")))
     monkeypatch.setattr("cicerone.track.store_db.is_missing_table_error", lambda _exc: True)
-    assert store.read_rows() == []
-    assert store.read_eval() is None
-    assert store.read_history().empty
+    with pytest.raises(RuntimeError, match="x"):
+        store.read_rows()
 
 
 def test_track_history_non_s3_error_reraises(tmp_path, monkeypatch) -> None:
@@ -850,6 +898,88 @@ def test_track_read_bytes_s3_generic_error(monkeypatch) -> None:
         )
         with pytest.raises(RuntimeError, match="network"):
             TrackStore(output).read_eval()
+
+
+def _s3_dataset() -> IOSettings:
+    return IOSettings(
+        kind="dataset",
+        options={
+            "storage_backend": "s3",
+            "bucket": "recs",
+            "access_key_id": "test",
+            "secret_access_key": "test",
+        },
+    )
+
+
+def test_track_history_s3_unexpected_error_ignores_not_found_helper(monkeypatch) -> None:
+    class _Boom:
+        def list_objects_v2(self, **_kwargs):
+            raise RuntimeError("list failed")
+
+    def _legacy(*_args, **_kwargs):
+        raise FileNotFoundError("legacy")
+
+    monkeypatch.setattr("cicerone.io.options.read_parquet", _legacy)
+    monkeypatch.setattr("cicerone.track.store_dataset.build_s3_client", lambda _options: _Boom())
+    monkeypatch.setattr("cicerone.track.store_dataset.is_s3_not_found", lambda _exc: True)
+    with pytest.raises(RuntimeError, match="list failed"):
+        TrackStore(_s3_dataset()).read_history()
+
+
+def test_track_history_s3_access_denied_reraises(monkeypatch) -> None:
+    from botocore.exceptions import ClientError
+
+    denied = ClientError({"Error": {"Code": "AccessDenied", "Message": "nope"}}, "ListObjectsV2")
+
+    class _Denied:
+        def list_objects_v2(self, **_kwargs):
+            raise denied
+
+    def _legacy(*_args, **_kwargs):
+        raise FileNotFoundError("legacy")
+
+    monkeypatch.setattr("cicerone.io.options.read_parquet", _legacy)
+    monkeypatch.setattr("cicerone.track.store_dataset.build_s3_client", lambda _options: _Denied())
+    with pytest.raises(ClientError, match="AccessDenied"):
+        TrackStore(_s3_dataset()).read_history()
+
+
+def test_s3_parquet_frame_unexpected_error_ignores_not_found_helper(monkeypatch) -> None:
+    from cicerone.track.store_dataset import _s3_parquet_frame
+
+    class _Boom:
+        def get_object(self, **_kwargs):
+            raise RuntimeError("get failed")
+
+    monkeypatch.setattr("cicerone.track.store_dataset.is_s3_not_found", lambda _exc: True)
+    with pytest.raises(RuntimeError, match="get failed"):
+        _s3_parquet_frame(_Boom(), "recs", "history/part.parquet")
+
+
+def test_s3_parquet_frame_access_denied_reraises() -> None:
+    from botocore.exceptions import ClientError
+
+    from cicerone.track.store_dataset import _s3_parquet_frame
+
+    class _Denied:
+        def get_object(self, **_kwargs):
+            raise ClientError({"Error": {"Code": "AccessDenied", "Message": "nope"}}, "GetObject")
+
+    with pytest.raises(ClientError, match="AccessDenied"):
+        _s3_parquet_frame(_Denied(), "recs", "history/part.parquet")
+
+
+def test_track_read_eval_s3_access_denied_reraises(monkeypatch) -> None:
+    from botocore.exceptions import ClientError
+
+    class _Denied:
+        def get_object(self, **_kwargs):
+            raise ClientError({"Error": {"Code": "AccessDenied", "Message": "nope"}}, "GetObject")
+
+    monkeypatch.setattr("cicerone.io.blob.build_s3_client", lambda _options: _Denied())
+    with pytest.raises(ClientError, match="AccessDenied"):
+        TrackStore(_s3_dataset()).read_eval()
 
 
 def test_track_read_rows_filters_experiment_and_since(tmp_path) -> None:
