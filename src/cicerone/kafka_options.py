@@ -8,6 +8,7 @@ from cicerone.config.constants import ConfigError
 from cicerone.option_parse import (
     MAX_BROKER_TIMEOUT_SECONDS,
     optional_float,
+    optional_int,
     optional_nonempty_str,
     require_nonempty_str,
 )
@@ -69,3 +70,28 @@ def kafka_client_config(options: dict[str, Any], *, prefix: str) -> dict[str, An
     if password is not None:
         conf["sasl.password"] = password
     return conf
+
+
+def kafka_consumer_config(options: dict[str, Any], *, prefix: str) -> dict[str, Any]:
+    conf = kafka_client_config(options, prefix=prefix)
+    max_poll = _optional_timeout_ms(options, "max_poll_interval_ms", prefix=prefix)
+    session = _optional_timeout_ms(options, "session_timeout_ms", prefix=prefix)
+    if max_poll is not None and session is not None and max_poll < session:
+        raise ConfigError(
+            f"{prefix}.max_poll_interval_ms must be >= {prefix}.session_timeout_ms, "
+            f"got {max_poll} < {session}"
+        )
+    if max_poll is not None:
+        conf["max.poll.interval.ms"] = max_poll
+    if session is not None:
+        conf["session.timeout.ms"] = session
+    return conf
+
+
+def _optional_timeout_ms(options: dict[str, Any], key: str, *, prefix: str) -> int | None:
+    if key not in options or options[key] in (None, ""):
+        return None
+    value = optional_int(options, key, 0, prefix=prefix, minimum=1)
+    if value > MAX_TIMEOUT_MS:
+        raise ConfigError(f"{prefix}.{key} must be <= {MAX_TIMEOUT_MS}, got {value}")
+    return value

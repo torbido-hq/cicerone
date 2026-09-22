@@ -12,7 +12,7 @@ from cicerone.events.base import EventSourceHealth, NormalizedEvent, QueuedEvent
 from cicerone.events.json_payload import decode_json_object
 from cicerone.events.normalize import EventNormalizeError, normalize_event
 from cicerone.kafka_options import (
-    kafka_client_config,
+    kafka_consumer_config,
     kafka_timeout_seconds,
     optional_nonempty_str,
     require_nonempty_str,
@@ -24,7 +24,7 @@ _EVENTS_PREFIX = "events.options"
 
 
 def validate_kafka_event_options(options: dict[str, Any]) -> None:
-    kafka_client_config(options, prefix=_EVENTS_PREFIX)
+    kafka_consumer_config(options, prefix=_EVENTS_PREFIX)
     require_nonempty_str(options, "topic", prefix=_EVENTS_PREFIX)
     require_nonempty_str(options, "group_id", prefix=_EVENTS_PREFIX)
     optional_nonempty_str(options, "consumer_name", prefix=_EVENTS_PREFIX)
@@ -43,7 +43,7 @@ class KafkaEventSource(QueuedEventSource):
     def __init__(self, options: dict[str, Any]):
         validate_kafka_event_options(options)
         super().__init__()
-        self._conf = kafka_client_config(options, prefix=_EVENTS_PREFIX)
+        self._conf = kafka_consumer_config(options, prefix=_EVENTS_PREFIX)
         self._timeout_seconds = kafka_timeout_seconds(options, prefix=_EVENTS_PREFIX)
         self._topic = require_nonempty_str(options, "topic", prefix=_EVENTS_PREFIX)
         self._group_id = require_nonempty_str(options, "group_id", prefix=_EVENTS_PREFIX)

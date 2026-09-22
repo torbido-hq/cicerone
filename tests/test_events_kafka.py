@@ -100,6 +100,31 @@ def test_kafka_client_timeouts_default_and_override(monkeypatch):
     assert broker.list_topics_timeouts[-1] == 3.0
 
 
+def test_consumer_poll_interval_options(monkeypatch):
+    install_fake_kafka(monkeypatch)
+    source = KafkaEventSource(_options(max_poll_interval_ms=600_000, session_timeout_ms=45_000))
+    source.connect()
+    assert source._consumer.config["max.poll.interval.ms"] == 600_000
+    assert source._consumer.config["session.timeout.ms"] == 45_000
+    default = KafkaEventSource(_options())
+    default.connect()
+    assert "max.poll.interval.ms" not in default._consumer.config
+    assert "session.timeout.ms" not in default._consumer.config
+
+
+def test_validate_rejects_bad_poll_interval():
+    with pytest.raises(ConfigError, match="max_poll_interval_ms"):
+        validate_kafka_event_options(_options(max_poll_interval_ms=0))
+    with pytest.raises(ConfigError, match="session_timeout_ms"):
+        validate_kafka_event_options(_options(session_timeout_ms="nope"))
+    with pytest.raises(ConfigError, match="max_poll_interval_ms must be >="):
+        validate_kafka_event_options(_options(max_poll_interval_ms=1000, session_timeout_ms=2000))
+    from cicerone.kafka_options import MAX_TIMEOUT_MS
+
+    with pytest.raises(ConfigError, match="max_poll_interval_ms"):
+        validate_kafka_event_options(_options(max_poll_interval_ms=MAX_TIMEOUT_MS + 1))
+
+
 def test_validate_rejects_bad_timeout():
     with pytest.raises(ConfigError, match="timeout_seconds"):
         validate_kafka_event_options(_options(timeout_seconds=0))

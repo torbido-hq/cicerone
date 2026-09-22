@@ -345,7 +345,7 @@ prefix = "recommendations/latest"
 # # claim_idle_ms = 300000
 
 # Kafka consumer group. Requires: pip install 'cicerone-recommender[kafka]'
-# Raise max.poll.interval.ms on the broker/client if apply can exceed 5 minutes.
+# Raise max_poll_interval_ms if apply can exceed the librdkafka default (~5 minutes).
 # [events]
 # enabled = true
 # kind = "kafka"
@@ -359,6 +359,8 @@ prefix = "recommendations/latest"
 # # sasl_username = "${KAFKA_USERNAME}"
 # # sasl_password = "${KAFKA_PASSWORD}"
 # # timeout_seconds = 10          # min 0.01 (librdkafka socket.timeout.ms)
+# # max_poll_interval_ms = 300000
+# # session_timeout_ms = 45000
 
 # RabbitMQ queue. Requires: pip install 'cicerone-recommender[rabbitmq]'
 # [events]
