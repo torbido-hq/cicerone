@@ -77,7 +77,9 @@ serve then sends 100% traffic to that variant until you **Resume split**
 `[experiment]`, leftover `variant` rows collapse to `control` (else the
 lexicographically first remaining name; blank/NaN names are ignored) on
 **serve reads and incremental write-through** until the next job rewrite.
-Do not mix lists.
+Do not mix lists. If the hashed arm has no rows (new pair, or state
+written after recs), serve returns the leftover list and reports that
+variant. `fallback` is still only cold-start.
 
 ## Thompson at retrain
 

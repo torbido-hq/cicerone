@@ -1315,6 +1315,414 @@ def test_job_run_signs_model_artifact_when_hmac_key_set(tmp_path, monkeypatch):
         load_artifact(artifact_path, hmac_key="fedcba9876543210")
 
 
+def test_select_automl_models_keeps_job_models_when_disabled(tmp_path, monkeypatch):
+    from cicerone.config import load_settings
+    from cicerone.feature_config import load_feature_config
+    from cicerone.job import _select_automl_models
+
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir))
+    settings = load_settings()
+    called: list[str] = []
+
+    def boom(*_args: object, **_kwargs: object) -> list[object]:
+        called.append("evaluate")
+        raise AssertionError("AutoML must not run when disabled")
+
+    monkeypatch.setattr("cicerone.job.evaluate_candidates", boom)
+    selected = _select_automl_models(
+        settings,
+        pd.DataFrame(),
+        None,
+        None,
+        load_feature_config(settings.feature_config_path),
+    )
+    assert called == []
+    assert selected.result is None
+    assert selected.models == settings.models
+    assert selected.weights == settings.model_weights
+    assert selected.rrf_k == settings.rrf_k
+
+
+def test_select_automl_models_uses_winning_candidate(tmp_path, monkeypatch):
+    from cicerone.automl import Candidate, CandidateResult
+    from cicerone.config import load_settings
+    from cicerone.feature_config import load_feature_config
+    from cicerone.job import _select_automl_models
+
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    extra_job = """
+        [job.automl]
+        enabled = true
+        n_splits = 1
+        test_days = 7
+        primary_metric = "MAP"
+    """
+    monkeypatch.setenv(
+        "CICERONE_CONFIG_PATH",
+        _write_config(tmp_path, input_dir, output_dir, extra_job=extra_job),
+    )
+    winner = CandidateResult(
+        Candidate(models=["latest"], weights=None, rrf_k=40.0),
+        metrics={"MAP": 0.5},
+        n_folds=1,
+    )
+    monkeypatch.setattr("cicerone.job.evaluate_candidates", lambda *_args, **_kwargs: [winner])
+    monkeypatch.setattr("cicerone.job.select_best_candidate", lambda *_args, **_kwargs: winner)
+    settings = load_settings()
+    selected = _select_automl_models(
+        settings,
+        pd.DataFrame(),
+        None,
+        None,
+        load_feature_config(settings.feature_config_path),
+    )
+    assert selected.result is winner
+    assert selected.models == ["latest"]
+    assert selected.weights is None
+    assert selected.rrf_k == 40.0
+
+
+def test_select_job_recipes_skips_when_experiment_disabled(tmp_path, monkeypatch):
+    from cicerone.config import load_settings
+    from cicerone.feature_config import load_feature_config
+    from cicerone.job import AutomlSelection, _select_job_recipes
+
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir))
+    called: list[str] = []
+
+    def boom(*_args: object, **_kwargs: object) -> tuple[object, ...]:
+        called.append("resolve")
+        raise AssertionError("recipes must not resolve when experiment is off")
+
+    monkeypatch.setattr("cicerone.job.resolve_recipes", boom)
+    settings = load_settings()
+    selected = _select_job_recipes(
+        settings,
+        load_feature_config(settings.feature_config_path),
+        pd.DataFrame(),
+        None,
+        AutomlSelection(None, None, None, None),
+        None,
+        None,
+    )
+    assert called == []
+    assert selected.recipes == ()
+    assert selected.pending_thompson is None
+
+
+def test_select_job_recipes_resolves_fixed_allocation(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from cicerone.config import load_settings
+    from cicerone.feature_config import load_feature_config
+    from cicerone.job import AutomlSelection, ThompsonSelection, _select_job_recipes
+
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    extra = """
+        [experiment]
+        enabled = true
+        id = "rrf-vs-priority"
+        [[experiment.variants]]
+        name = "control"
+        traffic = 0.5
+        [[experiment.variants]]
+        name = "treatment"
+        traffic = 0.5
+    """
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, extra=extra))
+    recipes = (SimpleNamespace(name="control"), SimpleNamespace(name="treatment"))
+    monkeypatch.setattr("cicerone.job.resolve_recipes", lambda *_args, **_kwargs: recipes)
+
+    def boom(*_args: object, **_kwargs: object) -> ThompsonSelection:
+        raise AssertionError("Thompson must not run for fixed allocation")
+
+    monkeypatch.setattr("cicerone.job._select_thompson_recipes", boom)
+    settings = load_settings()
+    selected = _select_job_recipes(
+        settings,
+        load_feature_config(settings.feature_config_path),
+        pd.DataFrame(),
+        {"generated_at": "already"},
+        AutomlSelection(None, None, None, None),
+        None,
+        None,
+    )
+    assert selected.recipes == recipes
+    assert selected.pending_thompson is None
+
+
+def test_select_job_recipes_applies_thompson(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from cicerone.config import load_settings
+    from cicerone.feature_config import load_feature_config
+    from cicerone.job import AutomlSelection, ThompsonSelection, _select_job_recipes
+
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    monkeypatch.setenv(
+        "CICERONE_CONFIG_PATH",
+        _write_config(tmp_path, input_dir, output_dir, extra=_thompson_job_extra()),
+    )
+    resolved = (SimpleNamespace(name="control"), SimpleNamespace(name="treatment"))
+    allocated = (SimpleNamespace(name="control"),)
+    pending = {"champion": "control"}
+    monkeypatch.setattr("cicerone.job.resolve_recipes", lambda *_args, **_kwargs: resolved)
+    monkeypatch.setattr(
+        "cicerone.job._select_thompson_recipes",
+        lambda *_args, **_kwargs: ThompsonSelection(allocated, pending),
+    )
+    settings = load_settings()
+    selected = _select_job_recipes(
+        settings,
+        load_feature_config(settings.feature_config_path),
+        pd.DataFrame(),
+        {"generated_at": "already"},
+        AutomlSelection(None, None, None, None),
+        None,
+        None,
+    )
+    assert selected.recipes == allocated
+    assert selected.pending_thompson == pending
+
+
+def test_recommend_job_without_recipes_trains_once(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from cicerone.config import load_settings
+    from cicerone.feature_config import load_feature_config
+    from cicerone.job import _recommend_job
+    from cicerone.model import ModelRunPlan
+
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir))
+    plan = ModelRunPlan(enabled_models=("popular",), recommend_models=("popular",))
+    recs = pd.DataFrame({"user_id": ["u1"], "item_id": ["i1"]})
+    monkeypatch.setattr("cicerone.job.plan_model_run", lambda *_args, **_kwargs: plan)
+    monkeypatch.setattr("cicerone.job.train_and_recommend", lambda *_args, **_kwargs: recs)
+
+    def boom(*_args: object, **_kwargs: object) -> tuple[object, object]:
+        raise AssertionError("recipe fit must not run without recipes")
+
+    monkeypatch.setattr("cicerone.job.fit_strategies", boom)
+    settings = load_settings()
+    scored = _recommend_job(
+        settings,
+        load_feature_config(settings.feature_config_path),
+        SimpleNamespace(),
+        ["u1"],
+        (),
+        ["popular"],
+        None,
+        20.0,
+    )
+    assert scored.recommendations is recs
+    assert scored.run_plan is plan
+    assert scored.models == ["popular"]
+    assert scored.rrf_k == 20.0
+    assert scored.fitted == {}
+
+
+def test_recommend_job_with_recipes_tags_variants(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from cicerone.config import load_settings
+    from cicerone.feature_config import load_feature_config
+    from cicerone.job import _recommend_job
+    from cicerone.model import ModelRunPlan
+
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    extra = """
+        [experiment]
+        enabled = true
+        id = "rrf-vs-priority"
+        [[experiment.variants]]
+        name = "control"
+        traffic = 0.5
+        [[experiment.variants]]
+        name = "treatment"
+        traffic = 0.5
+    """
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, extra=extra))
+    plan = ModelRunPlan(enabled_models=("popular",), recommend_models=("popular",))
+    recipe = SimpleNamespace(
+        name="control",
+        models=("popular",),
+        blending=SimpleNamespace(enabled=False),
+        weights={"popular": 1.0},
+        rrf_k=30.0,
+    )
+    monkeypatch.setattr("cicerone.job.union_models", lambda *_args, **_kwargs: ["popular"])
+    monkeypatch.setattr("cicerone.job.plan_model_run", lambda *_args, **_kwargs: plan)
+    monkeypatch.setattr(
+        "cicerone.job.fit_strategies",
+        lambda *_args, **_kwargs: (None, {"popular": object()}),
+    )
+    monkeypatch.setattr("cicerone.job.apply_recipe", lambda config, _recipe: config)
+    monkeypatch.setattr(
+        "cicerone.job.recommend_with_models",
+        lambda *_args, **_kwargs: pd.DataFrame({"user_id": ["u1"], "item_id": ["i1"]}),
+    )
+
+    def boom(*_args: object, **_kwargs: object) -> pd.DataFrame:
+        raise AssertionError("default train must not run when recipes exist")
+
+    monkeypatch.setattr("cicerone.job.train_and_recommend", boom)
+    settings = load_settings()
+    scored = _recommend_job(
+        settings,
+        load_feature_config(settings.feature_config_path),
+        SimpleNamespace(),
+        ["u1"],
+        (recipe,),
+        None,
+        None,
+        None,
+    )
+    assert list(scored.recommendations["variant"]) == ["control"]
+    assert scored.models == ["popular"]
+    assert scored.weights == {"popular": 1.0}
+    assert scored.rrf_k == 30.0
+    assert "popular" in scored.fitted
+
+
+def test_write_job_outputs_marks_success_manifest(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from cicerone.config import load_settings
+    from cicerone.feature_config import load_feature_config
+    from cicerone.job import JobManifest, _write_job_outputs
+    from cicerone.model import ModelRunPlan
+
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir))
+    settings = load_settings()
+    recs = pd.DataFrame({"user_id": ["u1"], "item_id": ["i1"]})
+    events = pd.DataFrame({"user_id": ["u1"], "item_id": ["i1"]})
+    written: list[object] = []
+
+    class _Sink:
+        def write_recommendations(self, frame: pd.DataFrame) -> None:
+            written.append(frame)
+
+        def write_manifest(self, payload: dict[str, object], skip_if_newer_than: str | None = None) -> bool:
+            written.append(payload)
+            return True
+
+    manifest = JobManifest(triggered_by="test", top_k=10)
+    result = _write_job_outputs(
+        settings,
+        sink=_Sink(),
+        publication_lock=None,
+        manifest=manifest,
+        fence_check=None,
+        started_at="2026-01-01T00:00:00+00:00",
+        events=events,
+        items=None,
+        built=SimpleNamespace(
+            dataset=SimpleNamespace(item_id_map=SimpleNamespace(external_ids=pd.Series(["i1"])))
+        ),
+        target_users=["u1"],
+        recommendations=recs,
+        fitted={},
+        run_plan=ModelRunPlan(enabled_models=("popular",), recommend_models=("popular",)),
+        weights=None,
+        rrf_k=None,
+        automl_result=None,
+        track_eval_payload=None,
+        served_eval_payload=None,
+        pending_thompson=None,
+        feature_config=load_feature_config(settings.feature_config_path),
+    )
+    assert result.manifest_written is True
+    assert result.success_generated_at
+    assert manifest["status"] == "success"
+    assert written[0] is recs
+    assert written[1]["models"] == "popular"
+
+
+def test_write_job_outputs_keeps_failure_manifest_written(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from cicerone.config import load_settings
+    from cicerone.feature_config import load_feature_config
+    from cicerone.job import JobManifest, JobWriteResult, _write_job_outputs
+    from cicerone.model import ModelRunPlan
+
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir))
+    settings = load_settings()
+    payloads: list[dict[str, object]] = []
+
+    class _Sink:
+        def write_recommendations(self, frame: pd.DataFrame) -> None:
+            raise RuntimeError("disk full")
+
+        def write_manifest(self, payload: dict[str, object], skip_if_newer_than: str | None = None) -> bool:
+            payloads.append(payload)
+            return True
+
+    result = JobWriteResult()
+    with pytest.raises(RuntimeError, match="disk full"):
+        _write_job_outputs(
+            settings,
+            sink=_Sink(),
+            publication_lock=None,
+            manifest=JobManifest(triggered_by="test", top_k=10),
+            fence_check=None,
+            started_at="2026-01-01T00:00:00+00:00",
+            events=pd.DataFrame({"user_id": ["u1"], "item_id": ["i1"]}),
+            items=None,
+            built=SimpleNamespace(
+                dataset=SimpleNamespace(item_id_map=SimpleNamespace(external_ids=pd.Series(["i1"])))
+            ),
+            target_users=["u1"],
+            recommendations=pd.DataFrame({"user_id": ["u1"], "item_id": ["i1"]}),
+            fitted={},
+            run_plan=ModelRunPlan(enabled_models=("popular",), recommend_models=("popular",)),
+            weights=None,
+            rrf_k=None,
+            automl_result=None,
+            track_eval_payload=None,
+            served_eval_payload=None,
+            pending_thompson=None,
+            feature_config=load_feature_config(settings.feature_config_path),
+            written=result,
+        )
+    assert result.manifest_written is True
+    assert len(payloads) == 1
+    assert payloads[0]["status"] == "failed"
+    assert "disk full" in str(payloads[0]["error"])
+
+
 def test_job_run_with_automl_enabled_selects_and_records_best_candidate(tmp_path, monkeypatch):
     input_dir = tmp_path / "in"
     output_dir = tmp_path / "out"
@@ -1712,6 +2120,36 @@ def test_job_marks_partial_outputs_when_recommendation_write_fails(tmp_path, mon
     assert manifest["partial_outputs"] is True
     assert manifest["artifact_written"] is True
     del original_write
+
+
+def test_job_does_not_rewrite_failure_manifest_after_sink_error(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.now(tz="UTC")
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
+
+    from cicerone.io.dataset_store import DatasetOutputSink
+
+    writes: list[str] = []
+    original = DatasetOutputSink.write_manifest
+
+    def counting(self, manifest, *, skip_if_newer_than=None):
+        writes.append(str(manifest.get("status")))
+        return original(self, manifest, skip_if_newer_than=skip_if_newer_than)
+
+    def boom(self, df: pd.DataFrame) -> None:
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(DatasetOutputSink, "write_recommendations", boom)
+    monkeypatch.setattr(DatasetOutputSink, "write_manifest", counting)
+    with pytest.raises(RuntimeError, match="disk full"):
+        job.run()
+    assert writes == ["failed"]
 
 
 def test_write_job_manifest_accepts_legacy_signature():

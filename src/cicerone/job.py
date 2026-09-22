@@ -7,17 +7,18 @@ import logging
 import sys
 from collections.abc import Callable
 from contextlib import nullcontext
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, NamedTuple
 
 import pandas as pd
 
 from cicerone.artifact import ARTIFACT_SCHEMA_VERSION, build_artifact, dumps_artifact
-from cicerone.automl import evaluate_candidates, select_best_candidate
+from cicerone.automl import CandidateResult, evaluate_candidates, select_best_candidate
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import Settings, load_settings
 from cicerone.config.constants import ALLOCATION_THOMPSON, DEFAULT_LOG_FORMAT
-from cicerone.dataset import build_dataset
+from cicerone.dataset import BuiltDataset, build_dataset
 from cicerone.evaluation import conversion_events_for_settings, evaluate_tracking
 from cicerone.events.store import load_items_catalog_size, load_recommendations_frame
 from cicerone.experiment import (
@@ -35,7 +36,7 @@ from cicerone.experiment.thompson import (
     track_rows_since,
     window_trials_from_slices,
 )
-from cicerone.feature_config import load_feature_config
+from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.io.factory import build_input_source, build_manifest_reader, build_output_sink
 from cicerone.io.recommendation_schema import USER_COLUMN, VARIANT_COLUMN, filter_variant_rows
 from cicerone.job_eval import OPTIONAL_EVAL_ERRORS as _OPTIONAL_EVAL_ERRORS
@@ -69,6 +70,7 @@ from cicerone.locks import (
 from cicerone.model import (
     DEFAULT_MODELS,
     RRF_K,
+    ModelRunPlan,
     RecommenderModel,
     fit_strategies,
     plan_model_run,
@@ -86,6 +88,33 @@ logger = logging.getLogger(__name__)
 class ThompsonSelection(NamedTuple):
     recipes: tuple[ResolvedRecipe, ...]
     state: dict[str, Any] | None = None
+
+
+class AutomlSelection(NamedTuple):
+    models: list[str] | None
+    weights: dict[str, float] | None
+    rrf_k: float | None
+    result: CandidateResult | None
+
+
+class JobRecipes(NamedTuple):
+    recipes: tuple[ResolvedRecipe, ...]
+    pending_thompson: dict[str, Any] | None
+
+
+class JobRecommendations(NamedTuple):
+    recommendations: pd.DataFrame
+    fitted: dict[str, RecommenderModel]
+    run_plan: ModelRunPlan
+    models: list[str] | None
+    weights: dict[str, float] | None
+    rrf_k: float | None
+
+
+@dataclass
+class JobWriteResult:
+    manifest_written: bool = False
+    success_generated_at: str | None = None
 
 
 def _target_user_ids(events: pd.DataFrame, users: pd.DataFrame | None) -> list[str]:
@@ -275,6 +304,355 @@ def _recommendation_user_count(recommendations: pd.DataFrame) -> int:
     return int(user_ids[user_ids != COLD_START_USER_ID].nunique())
 
 
+def _select_automl_models(
+    settings: Settings,
+    events: pd.DataFrame,
+    users: pd.DataFrame | None,
+    items: pd.DataFrame | None,
+    feature_config: FeatureConfig,
+) -> AutomlSelection:
+    models, weights, rrf_k = settings.models, settings.model_weights, settings.rrf_k
+    if not settings.automl.enabled:
+        return AutomlSelection(models, weights, rrf_k, None)
+    result = select_best_candidate(
+        evaluate_candidates(
+            events,
+            users,
+            items,
+            feature_config,
+            top_k=settings.top_k,
+            half_life_days=settings.half_life_days,
+            candidates=settings.automl.candidates,
+            n_splits=settings.automl.n_splits,
+            test_days=settings.automl.test_days,
+            max_workers=settings.max_workers,
+            model_configs=settings.model_configs,
+            sequential_min_median_interactions=settings.sequential_min_median_interactions,
+            debias=settings.automl.debias,
+            content_fallback_enabled=settings.content_fallback_enabled,
+        ),
+        primary_metric=settings.automl.primary_metric,
+    )
+    logger.info(
+        "AutoML selected '%s' (metrics=%s, over %d fold(s))",
+        result.candidate.label,
+        result.metrics,
+        result.n_folds,
+    )
+    return AutomlSelection(result.candidate.models, result.candidate.weights, result.candidate.rrf_k, result)
+
+
+def _select_job_recipes(
+    settings: Settings,
+    feature_config: FeatureConfig,
+    events: pd.DataFrame,
+    last_manifest: dict[str, Any] | None,
+    automl: AutomlSelection,
+    preloaded_track: list[dict[str, Any]] | None,
+    preloaded_recs: pd.DataFrame | None,
+) -> JobRecipes:
+    if not settings.experiment.enabled:
+        return JobRecipes((), None)
+    manifest = last_manifest
+    if manifest is None:
+        manifest = _try_load(
+            "read last manifest for experiment recipes",
+            lambda: build_manifest_reader(settings.output).read_latest(),
+            None,
+        )
+    recipes = resolve_recipes(
+        settings,
+        feature_config,
+        automl_models=(
+            list(automl.models) if automl.result is not None and automl.models is not None else None
+        ),
+        automl_weights=automl.weights if automl.result is not None else None,
+        automl_rrf_k=automl.rrf_k if automl.result is not None else None,
+        last_manifest=manifest,
+    )
+    logger.info(
+        "Experiment %s: %d variant(s) %s",
+        settings.experiment.id,
+        len(recipes),
+        ",".join(recipe.name for recipe in recipes),
+    )
+    if settings.experiment.allocation != ALLOCATION_THOMPSON:
+        return JobRecipes(recipes, None)
+    selected = _select_thompson_recipes(
+        settings,
+        recipes,
+        events,
+        preloaded_track=preloaded_track,
+        preloaded_recs=preloaded_recs,
+    )
+    logger.info(
+        "Experiment %s after allocation: %d variant(s) %s",
+        settings.experiment.id,
+        len(selected.recipes),
+        ",".join(recipe.name for recipe in selected.recipes),
+    )
+    return JobRecipes(selected.recipes, selected.state)
+
+
+def _recommend_job(
+    settings: Settings,
+    feature_config: FeatureConfig,
+    built: BuiltDataset,
+    target_users: list[str],
+    recipes: tuple[ResolvedRecipe, ...],
+    enabled_models: list[str] | None,
+    weights: dict[str, float] | None,
+    rrf_k: float | None,
+) -> JobRecommendations:
+    fitted: dict[str, RecommenderModel] = {}
+    if recipes:
+        union = union_models(recipes)
+        recommend_names: list[str] = []
+        for recipe in recipes:
+            recipe_plan = plan_model_run(
+                list(recipe.models),
+                blending_enabled=recipe.blending.enabled,
+                content_fallback_enabled=settings.content_fallback_enabled,
+            )
+            for name in recipe_plan.recommend_models:
+                if name not in recommend_names:
+                    recommend_names.append(name)
+        fit_plan = plan_model_run(
+            recommend_names,
+            blending_enabled=False,
+            content_fallback_enabled=settings.content_fallback_enabled,
+        )
+        _, fitted = fit_strategies(
+            built,
+            target_users,
+            enabled_models=list(fit_plan.recommend_models),
+            strategy_cache=fitted if settings.save_model_artifact else None,
+            max_workers=settings.max_workers,
+            epoch_metrics=settings.epoch_metrics,
+            epoch_metrics_top_k=settings.top_k,
+            item_based_k_neighbors=settings.item_based_k_neighbors,
+            model_configs=settings.model_configs,
+            content_fallback_max_neighbors=settings.content_fallback_max_neighbors,
+            content_feature_columns=feature_config.item_features,
+        )
+        frames: list[pd.DataFrame] = []
+        recommend_cache: RecommendCache = {}
+        for recipe in recipes:
+            recipe_config = apply_recipe(feature_config, recipe)
+            recipe_plan = plan_model_run(
+                list(recipe.models),
+                blending_enabled=recipe.blending.enabled,
+                content_fallback_enabled=settings.content_fallback_enabled,
+            )
+            variant_recs = recommend_with_models(
+                fitted,
+                built,
+                target_users,
+                recipe_config,
+                top_k=settings.top_k,
+                enabled_models=list(recipe_plan.enabled_models),
+                weights=recipe.weights,
+                rrf_k=recipe.rrf_k,
+                run_plan=recipe_plan,
+                recommend_cache=recommend_cache,
+                max_workers=settings.max_workers,
+                explain=settings.explain,
+            )
+            variant_recs = variant_recs.copy()
+            variant_recs[VARIANT_COLUMN] = recipe.name
+            frames.append(variant_recs)
+        return JobRecommendations(
+            pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(),
+            fitted,
+            fit_plan,
+            union,
+            recipes[0].weights,
+            recipes[0].rrf_k,
+        )
+    run_plan = plan_model_run(
+        enabled_models or DEFAULT_MODELS,
+        blending_enabled=feature_config.blending.enabled,
+        content_fallback_enabled=settings.content_fallback_enabled,
+    )
+    recommendations = train_and_recommend(
+        built,
+        target_users,
+        feature_config,
+        top_k=settings.top_k,
+        enabled_models=list(run_plan.enabled_models),
+        weights=weights,
+        rrf_k=rrf_k,
+        strategy_cache=fitted if settings.save_model_artifact else None,
+        max_workers=settings.max_workers,
+        epoch_metrics=settings.epoch_metrics,
+        item_based_k_neighbors=settings.item_based_k_neighbors,
+        model_configs=settings.model_configs,
+        content_fallback_max_neighbors=settings.content_fallback_max_neighbors,
+        run_plan=run_plan,
+        explain=settings.explain,
+    )
+    return JobRecommendations(recommendations, fitted, run_plan, enabled_models, weights, rrf_k)
+
+
+def _write_job_outputs(
+    settings: Settings,
+    *,
+    sink: Any,
+    publication_lock: Any,
+    manifest: JobManifest,
+    fence_check: Callable[[], bool] | None,
+    started_at: str,
+    events: pd.DataFrame,
+    items: pd.DataFrame | None,
+    built: BuiltDataset,
+    target_users: list[str],
+    recommendations: pd.DataFrame,
+    fitted: dict[str, RecommenderModel],
+    run_plan: ModelRunPlan,
+    weights: dict[str, float] | None,
+    rrf_k: float | None,
+    automl_result: CandidateResult | None,
+    track_eval_payload: dict[str, Any] | None,
+    served_eval_payload: dict[str, Any] | None,
+    pending_thompson: dict[str, Any] | None,
+    feature_config: FeatureConfig,
+    written: JobWriteResult | None = None,
+) -> JobWriteResult:
+    run_models = list(run_plan.recommend_models)
+    model_weights_str = (
+        ",".join(f"{name}={weights.get(name, 1.0)}" for name in run_models) if weights is not None else ""
+    )
+    artifact_bytes: bytes | None = None
+    if settings.save_model_artifact:
+        artifact_models = [name for name in run_models if name in fitted]
+        artifact_weights = (
+            {name: weights.get(name, 1.0) for name in artifact_models} if weights is not None else None
+        )
+        artifact_bytes = dumps_artifact(
+            build_artifact(
+                fitted=fitted,
+                built=built,
+                feature_config=feature_config,
+                models=artifact_models,
+                model_weights=artifact_weights,
+                rrf_k=rrf_k if rrf_k is not None else RRF_K,
+            ),
+            hmac_key=settings.output.artifact_hmac_key,
+        )
+
+    result = written if written is not None else JobWriteResult()
+    # Artifact → snapshot → recommendations; success only after all writes.
+    outputs_written = False
+    recs_write = getattr(sink, "recommendations_write", None)
+    ensure_fence(fence_check)
+    try:
+        with recs_write() if callable(recs_write) else nullcontext():
+            try:
+                if artifact_bytes is not None:
+                    ensure_publication_fence(sink, fence_check)
+                    sink.write_model_artifact(artifact_bytes)
+                    manifest["artifact_written"] = True
+                    manifest["artifact_schema_version"] = ARTIFACT_SCHEMA_VERSION
+
+                if items is not None and not items.empty:
+                    ensure_publication_fence(sink, fence_check)
+                    sink.write_items_snapshot(items)
+
+                ensure_publication_fence(sink, fence_check)
+                sink.write_recommendations(recommendations)
+                outputs_written = True
+                if pending_thompson is not None:
+                    ensure_publication_fence(sink, fence_check)
+                    store = ExperimentStore(
+                        settings.output,
+                        writer_lock=publication_lock,
+                        fence_check=fence_check,
+                        fence_lost="retrain lock lost before write",
+                        fence_kind="retrain",
+                    )
+                    store.write_state(_refresh_pending_thompson(store, pending_thompson))
+                ensure_publication_fence(sink, fence_check)
+                manifest.update(
+                    {
+                        "status": "success",
+                        "n_events": int(len(events)),
+                        "n_target_users": len(target_users),
+                        "n_users_with_recommendations": _recommendation_user_count(recommendations),
+                        "n_items": int(built.dataset.item_id_map.external_ids.shape[0]),
+                        "models": ",".join(run_models),
+                        "model_weights": model_weights_str,
+                        "rrf_k": rrf_k if rrf_k is not None else RRF_K,
+                        "automl_metrics": (
+                            ",".join(
+                                f"{name}={automl_result.metrics[name]:.4f}"
+                                for name in sorted(automl_result.metrics)
+                            )
+                            if automl_result is not None
+                            else ""
+                        ),
+                        "track_eval": json.dumps(track_eval_payload) if track_eval_payload else "",
+                        "served_eval": json.dumps(served_eval_payload) if served_eval_payload else "",
+                    }
+                )
+                manifest["generated_at"] = datetime.now(UTC).isoformat()
+                ensure_publication_fence(sink, fence_check)
+                if write_job_manifest(sink, manifest):
+                    result.manifest_written = True
+                    result.success_generated_at = str(manifest.get("generated_at") or "")
+            except _SINK_WRITE_ERRORS as exc:
+                if outputs_written or manifest.get("artifact_written"):
+                    manifest["partial_outputs"] = True
+                if (
+                    not result.manifest_written
+                    and manifest.get("status") != "success"
+                    and not skip_stale_job_manifest(
+                        fence_check=fence_check,
+                        exc=exc,
+                    )
+                ):
+                    manifest["error"] = truncate_job_error(exc)
+                    manifest["generated_at"] = datetime.now(UTC).isoformat()
+                    try:
+                        if write_job_manifest(sink, manifest, skip_if_newer_than=started_at):
+                            result.manifest_written = True
+                    except _SINK_WRITE_ERRORS as manifest_exc:
+                        _log_caught(
+                            "Failed to write manifest; original job error (if any) is preserved",
+                            manifest_exc,
+                            log=logger,
+                        )
+                raise
+    except _SINK_WRITE_ERRORS:
+        if outputs_written or manifest.get("artifact_written"):
+            manifest["partial_outputs"] = True
+        raise
+    return result
+
+
+def _publish_job_sidecar(
+    settings: Settings,
+    publisher: Any,
+    recommendations: pd.DataFrame,
+    manifest: JobManifest,
+    fence_check: Callable[[], bool] | None,
+) -> None:
+    if publisher is None or manifest.get("status") != "success":
+        return
+    try:
+        ensure_fence(fence_check)
+        publisher.connect()
+        ensure_fence(fence_check)
+        current = sidecar_generation_current(settings.output, str(manifest.get("generated_at") or ""))
+        if current:
+            publisher.publish(recommendations)
+        else:
+            log_sidecar_generation_skip(current)
+    except LockLostError:
+        raise
+    except _PUBLISH_ERRORS as exc:
+        _log_caught("Publish failed after successful write", exc, log=logger)
+
+
 def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None = None) -> None:
     settings = load_settings()
     retrain_lock = _maybe_acquire_direct_retrain_lock(settings, fence_check)
@@ -315,6 +693,7 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
     manifest_written = False
     replace_success_manifest = False
     success_generated_at: str | None = None
+    written = JobWriteResult()
 
     try:
         publisher = build_publisher(settings, connect=False)
@@ -344,296 +723,72 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
 
         target_users = _target_user_ids(events, users)
 
-        automl_result = None
-        enabled_models, weights, rrf_k = settings.models, settings.model_weights, settings.rrf_k
-        if settings.automl.enabled:
-            candidate_results = evaluate_candidates(
-                events,
-                users,
-                items,
-                feature_config,
-                top_k=settings.top_k,
-                half_life_days=settings.half_life_days,
-                candidates=settings.automl.candidates,
-                n_splits=settings.automl.n_splits,
-                test_days=settings.automl.test_days,
-                max_workers=settings.max_workers,
-                model_configs=settings.model_configs,
-                sequential_min_median_interactions=settings.sequential_min_median_interactions,
-                debias=settings.automl.debias,
-                content_fallback_enabled=settings.content_fallback_enabled,
-            )
-            automl_result = select_best_candidate(
-                candidate_results, primary_metric=settings.automl.primary_metric
-            )
-            enabled_models = automl_result.candidate.models
-            weights = automl_result.candidate.weights
-            rrf_k = automl_result.candidate.rrf_k
-            logger.info(
-                "AutoML selected '%s' (metrics=%s, over %d fold(s))",
-                automl_result.candidate.label,
-                automl_result.metrics,
-                automl_result.n_folds,
-            )
-
-        fitted: dict[str, RecommenderModel] = {}
-        if settings.experiment.enabled and last_manifest is None:
-            last_manifest = _try_load(
-                "read last manifest for experiment recipes",
-                lambda: build_manifest_reader(settings.output).read_latest(),
-                None,
-            )
-
-        recipes: tuple[ResolvedRecipe, ...] = ()
-        if settings.experiment.enabled:
-            recipes = resolve_recipes(
-                settings,
-                feature_config,
-                automl_models=(
-                    list(enabled_models) if automl_result is not None and enabled_models is not None else None
-                ),
-                automl_weights=weights if automl_result is not None else None,
-                automl_rrf_k=rrf_k if automl_result is not None else None,
-                last_manifest=last_manifest,
-            )
-            logger.info(
-                "Experiment %s: %d variant(s) %s",
-                settings.experiment.id,
-                len(recipes),
-                ",".join(recipe.name for recipe in recipes),
-            )
-            if settings.experiment.allocation == ALLOCATION_THOMPSON:
-                selected = _select_thompson_recipes(
-                    settings,
-                    recipes,
-                    events,
-                    preloaded_track=preloaded_track,
-                    preloaded_recs=preloaded_recs,
-                )
-                recipes = selected.recipes
-                pending_thompson = selected.state
-                logger.info(
-                    "Experiment %s after allocation: %d variant(s) %s",
-                    settings.experiment.id,
-                    len(recipes),
-                    ",".join(recipe.name for recipe in recipes),
-                )
-
-        recommend_cache: RecommendCache = {}
+        automl = _select_automl_models(settings, events, users, items, feature_config)
+        enabled_models, weights, rrf_k = automl.models, automl.weights, automl.rrf_k
+        automl_result = automl.result
+        job_recipes = _select_job_recipes(
+            settings,
+            feature_config,
+            events,
+            last_manifest,
+            automl,
+            preloaded_track,
+            preloaded_recs,
+        )
+        recipes = job_recipes.recipes
+        pending_thompson = job_recipes.pending_thompson
+        scored = _recommend_job(
+            settings,
+            feature_config,
+            built,
+            target_users,
+            recipes,
+            enabled_models,
+            weights,
+            rrf_k,
+        )
+        recommendations = scored.recommendations
+        fitted = scored.fitted
+        run_plan = scored.run_plan
+        enabled_models, weights, rrf_k = scored.models, scored.weights, scored.rrf_k
         if recipes:
-            union = union_models(recipes)
-            recommend_names: list[str] = []
-            for recipe in recipes:
-                recipe_plan = plan_model_run(
-                    list(recipe.models),
-                    blending_enabled=recipe.blending.enabled,
-                    content_fallback_enabled=settings.content_fallback_enabled,
-                )
-                for name in recipe_plan.recommend_models:
-                    if name not in recommend_names:
-                        recommend_names.append(name)
-            fit_plan = plan_model_run(
-                recommend_names,
-                blending_enabled=False,
-                content_fallback_enabled=settings.content_fallback_enabled,
-            )
-            _, fitted = fit_strategies(
-                built,
-                target_users,
-                enabled_models=list(fit_plan.recommend_models),
-                strategy_cache=fitted if settings.save_model_artifact else None,
-                max_workers=settings.max_workers,
-                epoch_metrics=settings.epoch_metrics,
-                epoch_metrics_top_k=settings.top_k,
-                item_based_k_neighbors=settings.item_based_k_neighbors,
-                model_configs=settings.model_configs,
-                content_fallback_max_neighbors=settings.content_fallback_max_neighbors,
-                content_feature_columns=feature_config.item_features,
-            )
-            frames: list[pd.DataFrame] = []
-            for recipe in recipes:
-                recipe_config = apply_recipe(feature_config, recipe)
-                recipe_plan = plan_model_run(
-                    list(recipe.models),
-                    blending_enabled=recipe.blending.enabled,
-                    content_fallback_enabled=settings.content_fallback_enabled,
-                )
-                variant_recs = recommend_with_models(
-                    fitted,
-                    built,
-                    target_users,
-                    recipe_config,
-                    top_k=settings.top_k,
-                    enabled_models=list(recipe_plan.enabled_models),
-                    weights=recipe.weights,
-                    rrf_k=recipe.rrf_k,
-                    run_plan=recipe_plan,
-                    recommend_cache=recommend_cache,
-                    max_workers=settings.max_workers,
-                    explain=settings.explain,
-                )
-                variant_recs = variant_recs.copy()
-                variant_recs[VARIANT_COLUMN] = recipe.name
-                frames.append(variant_recs)
-            recommendations = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-            run_plan = fit_plan
-            enabled_models = union
-            weights = recipes[0].weights
-            rrf_k = recipes[0].rrf_k
             manifest["experiment_id"] = settings.experiment.id
             manifest["experiment_variants"] = recipes_manifest_json(recipes)
-        else:
-            run_plan = plan_model_run(
-                enabled_models or DEFAULT_MODELS,
-                blending_enabled=feature_config.blending.enabled,
-                content_fallback_enabled=settings.content_fallback_enabled,
-            )
-            recommendations = train_and_recommend(
-                built,
-                target_users,
-                feature_config,
-                top_k=settings.top_k,
-                enabled_models=list(run_plan.enabled_models),
-                weights=weights,
-                rrf_k=rrf_k,
-                strategy_cache=fitted if settings.save_model_artifact else None,
-                max_workers=settings.max_workers,
-                epoch_metrics=settings.epoch_metrics,
-                item_based_k_neighbors=settings.item_based_k_neighbors,
-                model_configs=settings.model_configs,
-                content_fallback_max_neighbors=settings.content_fallback_max_neighbors,
-                run_plan=run_plan,
-                explain=settings.explain,
-            )
 
-        run_models = list(run_plan.recommend_models)
-        model_weights_str = (
-            ",".join(f"{name}={weights.get(name, 1.0)}" for name in run_models) if weights is not None else ""
+        _write_job_outputs(
+            settings,
+            sink=sink,
+            publication_lock=publication_lock,
+            manifest=manifest,
+            fence_check=fence_check,
+            started_at=started_at,
+            events=events,
+            items=items,
+            built=built,
+            target_users=target_users,
+            recommendations=recommendations,
+            fitted=fitted,
+            run_plan=run_plan,
+            weights=weights,
+            rrf_k=rrf_k,
+            automl_result=automl_result,
+            track_eval_payload=track_eval_payload,
+            served_eval_payload=served_eval_payload,
+            pending_thompson=pending_thompson,
+            feature_config=feature_config,
+            written=written,
         )
-
-        artifact_bytes: bytes | None = None
-        if settings.save_model_artifact:
-            artifact_models = [name for name in run_models if name in fitted]
-            artifact_weights = (
-                {name: weights.get(name, 1.0) for name in artifact_models} if weights is not None else None
-            )
-            artifact_bytes = dumps_artifact(
-                build_artifact(
-                    fitted=fitted,
-                    built=built,
-                    feature_config=feature_config,
-                    models=artifact_models,
-                    model_weights=artifact_weights,
-                    rrf_k=rrf_k if rrf_k is not None else RRF_K,
-                ),
-                hmac_key=settings.output.artifact_hmac_key,
-            )
-
-        # Artifact → snapshot → recommendations; success only after all writes.
-        outputs_written = False
-        recs_write = getattr(sink, "recommendations_write", None)
-        ensure_fence(fence_check)
-        try:
-            with recs_write() if callable(recs_write) else nullcontext():
-                try:
-                    if artifact_bytes is not None:
-                        ensure_publication_fence(sink, fence_check)
-                        sink.write_model_artifact(artifact_bytes)
-                        manifest["artifact_written"] = True
-                        manifest["artifact_schema_version"] = ARTIFACT_SCHEMA_VERSION
-
-                    if items is not None and not items.empty:
-                        ensure_publication_fence(sink, fence_check)
-                        sink.write_items_snapshot(items)
-
-                    ensure_publication_fence(sink, fence_check)
-                    sink.write_recommendations(recommendations)
-                    outputs_written = True
-                    if pending_thompson is not None:
-                        ensure_publication_fence(sink, fence_check)
-                        store = ExperimentStore(
-                            settings.output,
-                            writer_lock=publication_lock,
-                            fence_check=fence_check,
-                            fence_lost="retrain lock lost before write",
-                            fence_kind="retrain",
-                        )
-                        store.write_state(_refresh_pending_thompson(store, pending_thompson))
-                    ensure_publication_fence(sink, fence_check)
-                    manifest.update(
-                        {
-                            "status": "success",
-                            "n_events": int(len(events)),
-                            "n_target_users": len(target_users),
-                            "n_users_with_recommendations": _recommendation_user_count(recommendations),
-                            "n_items": int(built.dataset.item_id_map.external_ids.shape[0]),
-                            "models": ",".join(run_models),
-                            "model_weights": model_weights_str,
-                            "rrf_k": rrf_k if rrf_k is not None else RRF_K,
-                            "automl_metrics": (
-                                ",".join(
-                                    f"{name}={automl_result.metrics[name]:.4f}"
-                                    for name in sorted(automl_result.metrics)
-                                )
-                                if automl_result is not None
-                                else ""
-                            ),
-                            "track_eval": json.dumps(track_eval_payload) if track_eval_payload else "",
-                            "served_eval": json.dumps(served_eval_payload) if served_eval_payload else "",
-                        }
-                    )
-                    manifest["generated_at"] = datetime.now(UTC).isoformat()
-                    ensure_publication_fence(sink, fence_check)
-                    if write_job_manifest(sink, manifest):
-                        manifest_written = True
-                        success_generated_at = str(manifest.get("generated_at") or "")
-                except _SINK_WRITE_ERRORS as exc:
-                    if outputs_written or manifest.get("artifact_written"):
-                        manifest["partial_outputs"] = True
-                    if (
-                        not manifest_written
-                        and manifest.get("status") != "success"
-                        and not skip_stale_job_manifest(
-                            fence_check=fence_check,
-                            exc=exc,
-                        )
-                    ):
-                        manifest["error"] = truncate_job_error(exc)
-                        manifest["generated_at"] = datetime.now(UTC).isoformat()
-                        try:
-                            if write_job_manifest(sink, manifest, skip_if_newer_than=started_at):
-                                manifest_written = True
-                        except _SINK_WRITE_ERRORS as manifest_exc:
-                            _log_caught(
-                                "Failed to write manifest; original job error (if any) is preserved",
-                                manifest_exc,
-                                log=logger,
-                            )
-                    raise
-        except _SINK_WRITE_ERRORS:
-            if outputs_written or manifest.get("artifact_written"):
-                manifest["partial_outputs"] = True
-            raise
-        if publisher is not None and manifest.get("status") == "success":
-            try:
-                ensure_fence(fence_check)
-                publisher.connect()
-                ensure_fence(fence_check)
-                current = sidecar_generation_current(settings.output, str(manifest.get("generated_at") or ""))
-                if current:
-                    publisher.publish(recommendations)
-                else:
-                    log_sidecar_generation_skip(current)
-            except LockLostError:
-                raise
-            except _PUBLISH_ERRORS as exc:
-                _log_caught("Publish failed after successful write", exc, log=logger)
+        manifest_written = written.manifest_written
+        success_generated_at = written.success_generated_at
+        _publish_job_sidecar(settings, publisher, recommendations, manifest, fence_check)
     except Exception as exc:
         manifest["error"] = truncate_job_error(exc)
         if manifest.get("status") == "success":
             manifest["status"] = "failed"
-            manifest_written = False
+            written.manifest_written = False
             replace_success_manifest = True
+        manifest_written = written.manifest_written
+        success_generated_at = written.success_generated_at
         raise
     finally:
         persist_exc: BaseException | None = None
