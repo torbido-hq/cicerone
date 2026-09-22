@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Sequence
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import bindparam, create_engine, inspect, text
 
 from cicerone.blending import COLD_START_USER_ID, LATEST_SOURCE, POPULAR_SOURCE
 from cicerone.io import recommendation_schema as _rec
@@ -203,6 +204,62 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             record_cache_hit()
         return rows
 
+    def get_recommendations_for_users(
+        self, user_ids: Sequence[str], k: int, *, variant: str | None = None
+    ) -> dict[str, pd.DataFrame]:
+        ids = [str(user_id) for user_id in user_ids]
+        if not ids:
+            return {}
+        assigned = self._assigned_variant(variant)
+        prefer_fallback = assigned is None and self._supports_variant_column() is not False
+        if assigned is not None:
+            sql = text(
+                f'SELECT * FROM "{self._table}" WHERE "{USER_COLUMN}" IN :user_ids '
+                f'AND "{VARIANT_COLUMN}" = :variant '
+                f'ORDER BY "{USER_COLUMN}" ASC, "{RANK_COLUMN}" ASC'
+            ).bindparams(bindparam("user_ids", expanding=True))
+            params: dict[str, Any] = {"user_ids": ids, "variant": assigned}
+        elif prefer_fallback:
+            sql = text(
+                f'SELECT * FROM "{self._table}" WHERE "{USER_COLUMN}" IN :user_ids '
+                f'ORDER BY "{USER_COLUMN}" ASC, '
+                f'CASE WHEN "{VARIANT_COLUMN}" = :fallback THEN 0 ELSE 1 END, '
+                f'"{VARIANT_COLUMN}" ASC, "{RANK_COLUMN}" ASC'
+            ).bindparams(bindparam("user_ids", expanding=True))
+            params = {"user_ids": ids, "fallback": _rec.FALLBACK_VARIANT}
+        else:
+            sql = text(
+                f'SELECT * FROM "{self._table}" WHERE "{USER_COLUMN}" IN :user_ids '
+                f'ORDER BY "{USER_COLUMN}" ASC, "{RANK_COLUMN}" ASC'
+            ).bindparams(bindparam("user_ids", expanding=True))
+            params = {"user_ids": ids}
+        try:
+            rows = pd.read_sql(sql, self._engine, params=params)
+        except Exception as exc:
+            if assigned is not None:
+                if not self._remember_missing_variant_column(exc):
+                    raise
+                return self.get_recommendations_for_users(ids, k)
+            if prefer_fallback and self._remember_missing_variant_column(exc):
+                return self.get_recommendations_for_users(ids, k)
+            if prefer_fallback:
+                logger.exception(
+                    "Failed to prefer leftover variant for users %r in %r",
+                    ids,
+                    self._table,
+                )
+                rows = pd.read_sql(
+                    text(
+                        f'SELECT * FROM "{self._table}" WHERE "{USER_COLUMN}" IN :user_ids '
+                        f'ORDER BY "{USER_COLUMN}" ASC, "{RANK_COLUMN}" ASC'
+                    ).bindparams(bindparam("user_ids", expanding=True)),
+                    self._engine,
+                    params={"user_ids": ids},
+                )
+            else:
+                raise
+        return _frames_by_user(rows, ids, k, collapse=assigned is None)
+
     def get_cold_start_fallback(self, k: int, *, variant: str | None = None) -> pd.DataFrame:
         variant = self._assigned_variant(variant)
         sentinel = self.get_recommendations(COLD_START_USER_ID, k, variant=variant)
@@ -232,3 +289,33 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             return sentinel
         sample_user = str(picked.iloc[0][USER_COLUMN])
         return self.get_recommendations(sample_user, k, variant=variant)
+
+
+def _frames_by_user(
+    rows: pd.DataFrame, user_ids: Sequence[str], k: int, *, collapse: bool
+) -> dict[str, pd.DataFrame]:
+    empty = rows.iloc[0:0]
+    if rows.empty:
+        for _user_id in user_ids:
+            record_cache_miss()
+        return {user_id: empty.copy() for user_id in user_ids}
+    frame = rows.copy()
+    if USER_COLUMN in frame.columns:
+        frame[USER_COLUMN] = frame[USER_COLUMN].astype(str)
+    grouped = {str(key): group for key, group in frame.groupby(USER_COLUMN, sort=False)}
+    out: dict[str, pd.DataFrame] = {}
+    for user_id in user_ids:
+        part = grouped.get(user_id)
+        if part is None:
+            record_cache_miss()
+            out[user_id] = empty.copy()
+            continue
+        if collapse:
+            part = _rec.collapse_mixed_variants(part)
+        part = part.head(k).reset_index(drop=True)
+        if part.empty:
+            record_cache_miss()
+        else:
+            record_cache_hit()
+        out[user_id] = part
+    return out

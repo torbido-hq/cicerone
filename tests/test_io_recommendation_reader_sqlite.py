@@ -84,6 +84,34 @@ def test_sqlite_db_reader_get_recommendations_and_items(tmp_path):
     assert list(items["item_id"]) == ["i1"]
 
 
+def test_sqlite_db_reader_get_recommendations_for_users(tmp_path, monkeypatch):
+    url = _sqlite_url(tmp_path)
+    sink = DatabaseOutputSink({"database_url": url})
+    sink.write_recommendations(
+        pd.DataFrame(
+            [
+                {"user_id": "u1", "item_id": "i2", "rank": 2, "score": 0.5, "source": "personalized"},
+                {"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"},
+                {"user_id": "u2", "item_id": "i3", "rank": 1, "score": 0.4, "source": "personalized"},
+            ]
+        )
+    )
+    reader = DbRecommendationReader({"database_url": url})
+    real_read = pd.read_sql
+    rec_reads: list[str] = []
+
+    def counting_read(sql, *args, **kwargs):
+        rec_reads.append(str(sql))
+        return real_read(sql, *args, **kwargs)
+
+    monkeypatch.setattr(pd, "read_sql", counting_read)
+    bulk = reader.get_recommendations_for_users(["u1", "u2", "nobody"], k=2)
+    assert list(bulk["u1"]["item_id"]) == ["i1", "i2"]
+    assert list(bulk["u2"]["item_id"]) == ["i3"]
+    assert bulk["nobody"].empty
+    assert sum("IN" in query.upper() for query in rec_reads) == 1
+
+
 def test_sqlite_db_reader_item_scores_write_replace_and_missing(tmp_path):
     url = _sqlite_url(tmp_path)
     reader = DbRecommendationReader({"database_url": url})

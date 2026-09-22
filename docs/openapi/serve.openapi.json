@@ -2287,7 +2287,7 @@
           {
             "label": "curl",
             "lang": "Shell",
-            "source": "curl -fsS -H \"Authorization: Bearer ${CICERONE_SERVE_TOKEN:?set CICERONE_SERVE_TOKEN}\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"user_ids\":[\"${CICERONE_USER_ID:-alice}\"],\"limit\":5}' \\\n  \"${CICERONE_SERVE_URL:-http://localhost:8000}/recommendations/batch\" || exit 1\n"
+            "source": "BASE_URL=\"${CICERONE_SERVE_URL:-http://localhost:8000}\"\nBASE_URL=\"${BASE_URL%/}\"\nTOKEN=\"${CICERONE_SERVE_TOKEN:?set CICERONE_SERVE_TOKEN}\"\nUSER_ID=\"${CICERONE_USER_ID:-alice}\"\nif command -v python3 >/dev/null 2>&1; then PYTHON=python3\nelif command -v python >/dev/null 2>&1; then PYTHON=python\nelse PYTHON=\nfi\nif [ -n \"$PYTHON\" ]; then\n  BODY=\"$(\n    USER_ID=\"$USER_ID\" \"$PYTHON\" -c \\\n      'import json, os\nprint(json.dumps({\n    \"user_ids\": [os.environ[\"USER_ID\"]],\n    \"limit\": 5,\n}))'\n  )\"\nelif command -v jq >/dev/null 2>&1; then\n  BODY=\"$(\n    jq -n --arg user_id \"$USER_ID\" \\\n      '{user_ids:[$user_id],limit:5}'\n  )\"\nelse\n  echo \"python3, python, or jq required to JSON-encode USER_ID\" >&2\n  exit 1\nfi\ncurl -fsS -X POST \\\n  -H \"Authorization: Bearer $TOKEN\" \\\n  -H \"Content-Type: application/json\" \\\n  -d \"$BODY\" \\\n  \"$BASE_URL/recommendations/batch\" || exit 1\n"
           }
         ]
       }

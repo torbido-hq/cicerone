@@ -610,6 +610,77 @@ def test_recommendations_batch_rejects_empty_and_oversized_lists():
     assert client.post("/recommendations/batch", json=too_many, headers=headers).status_code == 422
 
 
+def test_recommendations_batch_uses_request_scoped_generated_at(monkeypatch):
+    stamps = iter(["t-1", "t-2", "t-3"])
+    monkeypatch.setattr(_GeneratedAtCache, "get", lambda self: next(stamps))
+    recs = pd.concat(
+        [
+            _recs_df(),
+            pd.DataFrame(
+                [{"user_id": "u2", "item_id": "i2", "rank": 1, "score": 0.8, "source": "personalized"}]
+            ),
+        ],
+        ignore_index=True,
+    )
+    app = create_app(_settings(), _FakeReader(recs), manifest_reader=_FakeManifest())
+    response = TestClient(app).post(
+        "/recommendations/batch",
+        json={"user_ids": ["u1", "u2"]},
+        headers={"Authorization": "Bearer secret"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["generated_at"] == "t-1"
+    assert [row["generated_at"] for row in body["users"]] == ["t-1", "t-1"]
+    assert response.headers["X-Generated-At"] == "t-1"
+
+
+def test_recommendations_batch_uses_bulk_reader():
+    class CountingReader(_FakeReader):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.single_calls = 0
+            self.bulk_calls = 0
+
+        def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame:
+            self.single_calls += 1
+            return super().get_recommendations(user_id, k, variant=variant)
+
+        def get_recommendations_for_users(
+            self, user_ids, k: int, *, variant: str | None = None
+        ) -> dict[str, pd.DataFrame]:
+            self.bulk_calls += 1
+            return {
+                str(user_id): _FakeReader.get_recommendations(self, str(user_id), k, variant=variant)
+                for user_id in user_ids
+            }
+
+        def get_cold_start_fallback(self, k: int, *, variant: str | None = None) -> pd.DataFrame:
+            return super().get_cold_start_fallback(k, variant=variant)
+
+    recs = pd.concat(
+        [
+            _recs_df(),
+            pd.DataFrame(
+                [{"user_id": "u2", "item_id": "i2", "rank": 1, "score": 0.8, "source": "personalized"}]
+            ),
+        ],
+        ignore_index=True,
+    )
+    reader = CountingReader(recs)
+    app = create_app(_settings(), reader, manifest_reader=_FakeManifest())
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer secret"}
+    single = client.get("/recommendations/u1", headers=headers)
+    assert single.status_code == 200
+    assert reader.single_calls == 1
+    assert reader.bulk_calls == 0
+    batch = client.post("/recommendations/batch", json={"user_ids": ["u1", "u2", "nobody"]}, headers=headers)
+    assert batch.status_code == 200
+    assert reader.bulk_calls == 1
+    assert reader.single_calls == 1
+
+
 def test_recommendations_batch_applies_category():
     app = create_app(
         _settings(),

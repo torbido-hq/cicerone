@@ -46,6 +46,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `POST /recommendations/batch` stamps every user, the batch `generated_at`, impressions, and exposures from one request-scoped manifest time.
+- `POST /recommendations/batch` loads stored rows for the requested users in one reader call per assigned variant.
 - Dashboard lookup keeps the startup availability filters and one items snapshot per request.
 - Dashboard lookup joins category on string item ids so numeric catalogs do not raise.
 - Quality replay deltas skip the latest stored run when CTR is live, and catalog Δ only attaches to the matching cutoff.

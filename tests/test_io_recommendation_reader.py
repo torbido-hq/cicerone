@@ -167,6 +167,10 @@ def test_dataset_reader_returns_top_k_sorted_by_rank(tmp_path):
 
     assert list(recs["item_id"]) == ["i1", "i2"]
     assert list(recs["rank"]) == [1, 2]
+    bulk = reader.get_recommendations_for_users(["u1", "u2", "nobody"], k=2)
+    assert list(bulk["u1"]["item_id"]) == ["i1", "i2"]
+    assert list(bulk["u2"]["item_id"]) == ["i1"]
+    assert bulk["nobody"].empty
 
 
 def test_dataset_reader_filters_variant_and_ignores_missing_column(tmp_path):

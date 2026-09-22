@@ -46,6 +46,10 @@ def test_db_reader_returns_top_k_sorted_by_rank():
     recs = reader.get_recommendations("u1", k=2)
 
     assert list(recs["item_id"]) == ["i1", "i2"]
+    bulk = reader.get_recommendations_for_users(["u1", "u2", "nobody"], k=2)
+    assert list(bulk["u1"]["item_id"]) == ["i1", "i2"]
+    assert list(bulk["u2"]["item_id"]) == ["i1"]
+    assert bulk["nobody"].empty
 
 
 def test_db_reader_missing_items_table_returns_none():

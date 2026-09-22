@@ -355,10 +355,33 @@ for user in body.users:
 """
 
 _RECOMMENDATIONS_BATCH_SHELL = f"""\
-curl -fsS -H "Authorization: Bearer ${{{ENV_SERVE_TOKEN}:?set {ENV_SERVE_TOKEN}}}" \\
+BASE_URL="${{{ENV_SERVE_URL}:-{DEFAULT_SERVE_URL}}}"
+BASE_URL="${{BASE_URL%/}}"
+TOKEN="${{{ENV_SERVE_TOKEN}:?set {ENV_SERVE_TOKEN}}}"
+USER_ID="${{{ENV_USER_ID}:-{DEFAULT_USER_ID}}}"
+{PYTHON_DETECT}if [ -n "$PYTHON" ]; then
+  BODY="$(
+    USER_ID="$USER_ID" "$PYTHON" -c \\
+      'import json, os
+print(json.dumps({{
+    "user_ids": [os.environ["USER_ID"]],
+    "limit": 5,
+}}))'
+  )"
+elif command -v jq >/dev/null 2>&1; then
+  BODY="$(
+    jq -n --arg user_id "$USER_ID" \\
+      '{{user_ids:[$user_id],limit:5}}'
+  )"
+else
+  echo "python3, python, or jq required to JSON-encode USER_ID" >&2
+  exit 1
+fi
+curl -fsS -X POST \\
+  -H "Authorization: Bearer $TOKEN" \\
   -H "Content-Type: application/json" \\
-  -d '{{"user_ids":["${{{ENV_USER_ID}:-{DEFAULT_USER_ID}}}"],"limit":5}}' \\
-  "${{{ENV_SERVE_URL}:-{DEFAULT_SERVE_URL}}}{RECOMMENDATIONS_BATCH_PATH}" || exit 1
+  -d "$BODY" \\
+  "$BASE_URL{RECOMMENDATIONS_BATCH_PATH}" || exit 1
 """
 
 RECOMMENDATIONS_BATCH_CODE_SAMPLES: list[dict[str, str]] = [

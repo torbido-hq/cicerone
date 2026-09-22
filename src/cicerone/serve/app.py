@@ -38,7 +38,12 @@ from cicerone.experiment.store import ExperimentStore
 from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.http_security import SecurityHeadersMiddleware, token_equals
-from cicerone.io.base import ManifestReader, RecommendationReader, UserHistoryReader
+from cicerone.io.base import (
+    ManifestReader,
+    RecommendationReader,
+    UserHistoryReader,
+    recommendations_for_users,
+)
 from cicerone.io.catalog import CatalogStore
 from cicerone.io.recommendation_reader import SOURCE_COLUMN
 from cicerone.io.recommendation_schema import has_variant_column
@@ -377,6 +382,10 @@ def create_app(
         available_ids: frozenset[str] | None,
         ids_by_category: dict[str, frozenset[str]],
         background_tasks: BackgroundTasks,
+        generated_at: str | None,
+        recs: Any | None = None,
+        fallback_recs: Any | None = None,
+        assignment: tuple[str | None, str | None] | None = None,
     ) -> RecommendationsResponse | None:
         consumed_ids: set[str] = set()
         if hide_consumed:
@@ -395,24 +404,32 @@ def create_app(
             or consumed_ids
         )
         fetch_k = max(top_k * 5, top_k) if can_filter else top_k
-        promoted, active_pair = overlay_cache.get()
-        snapshot = (
-            _snapshot_variant_names(reader)
-            if assignment_needs_snapshot(settings, promoted_variant=promoted, active_pair=active_pair)
-            else None
-        )
-        experiment_id, variant = resolve_assignment(
-            settings,
-            user_id,
-            promoted_variant=promoted,
-            active_pair=active_pair,
-            snapshot_names=snapshot,
-        )
-        recs = reader.get_recommendations(user_id, fetch_k, variant=variant)
+        if assignment is None:
+            promoted, active_pair = overlay_cache.get()
+            snapshot = (
+                _snapshot_variant_names(reader)
+                if assignment_needs_snapshot(settings, promoted_variant=promoted, active_pair=active_pair)
+                else None
+            )
+            experiment_id, variant = resolve_assignment(
+                settings,
+                user_id,
+                promoted_variant=promoted,
+                active_pair=active_pair,
+                snapshot_names=snapshot,
+            )
+        else:
+            experiment_id, variant = assignment
+        if recs is None:
+            recs = reader.get_recommendations(user_id, fetch_k, variant=variant)
         used_fallback = False
         if recs.empty:
             used_fallback = True
-            recs = reader.get_cold_start_fallback(fetch_k, variant=variant)
+            recs = (
+                fallback_recs
+                if fallback_recs is not None
+                else reader.get_cold_start_fallback(fetch_k, variant=variant)
+            )
         if recs.empty:
             return None
         if not has_variant_column(recs):
@@ -441,7 +458,11 @@ def create_app(
             on_missing_category_column=_warn_missing_category_column,
         )
         if settings.serve.fallback_fill and len(filtered) < top_k and dropped_by_hide_or_availability:
-            filler = reader.get_cold_start_fallback(fetch_k, variant=variant)
+            filler = (
+                fallback_recs
+                if fallback_recs is not None
+                else reader.get_cold_start_fallback(fetch_k, variant=variant)
+            )
             filler = filter_recommendations(
                 filler,
                 items=items,
@@ -459,7 +480,6 @@ def create_app(
             filtered["rank"] = range(1, len(filtered) + 1)
             if SOURCE_COLUMN in filtered.columns:
                 record_recommendations_served(set(filtered[SOURCE_COLUMN].astype(str)))
-        generated_at = generated_at_cache.get()
         if experiment_id and variant:
             record_experiment_served(experiment_id, variant)
             if settings.experiment.log_exposures and experiment_store is not None:
@@ -560,6 +580,7 @@ def create_app(
         top_k = min(top_k, DEFAULT_SERVE_MAX_K)
         hide_consumed = settings.serve.exclude_consumed if exclude_consumed is None else exclude_consumed
         items, available_ids, ids_by_category = items_cache.get()
+        generated_at = generated_at_cache.get()
         body = _recommend_for_user(
             user_id,
             top_k=top_k,
@@ -570,6 +591,7 @@ def create_app(
             available_ids=available_ids,
             ids_by_category=ids_by_category,
             background_tasks=background_tasks,
+            generated_at=generated_at,
         )
         if body is None:
             raise HTTPException(status_code=404, detail=f"No recommendations for user_id={user_id!r}")
@@ -608,8 +630,38 @@ def create_app(
         )
         items, available_ids, ids_by_category = items_cache.get()
         generated_at = generated_at_cache.get()
+        request_can_filter = bool(
+            items is not None
+            and not getattr(items, "empty", True)
+            and (body.category is not None or (body.exclude_unavailable and availability_filters))
+        )
+        fetch_k = max(top_k * 5, top_k) if request_can_filter or hide_consumed else top_k
+        promoted, active_pair = overlay_cache.get()
+        snapshot = (
+            _snapshot_variant_names(reader)
+            if assignment_needs_snapshot(settings, promoted_variant=promoted, active_pair=active_pair)
+            else None
+        )
+        assignments: dict[str, tuple[str | None, str | None]] = {}
+        by_variant: dict[str | None, list[str]] = {}
+        for user_id in user_ids:
+            assignment = resolve_assignment(
+                settings,
+                user_id,
+                promoted_variant=promoted,
+                active_pair=active_pair,
+                snapshot_names=snapshot,
+            )
+            assignments[user_id] = assignment
+            by_variant.setdefault(assignment[1], []).append(user_id)
+        recs_by_user: dict[str, Any] = {}
+        fallback_by_variant: dict[str | None, Any] = {}
+        for variant, ids in by_variant.items():
+            recs_by_user.update(recommendations_for_users(reader, ids, fetch_k, variant=variant))
+            fallback_by_variant[variant] = reader.get_cold_start_fallback(fetch_k, variant=variant)
         users: list[RecommendationsResponse] = []
         for user_id in user_ids:
+            variant = assignments[user_id][1]
             row = _recommend_for_user(
                 user_id,
                 top_k=top_k,
@@ -620,6 +672,10 @@ def create_app(
                 available_ids=available_ids,
                 ids_by_category=ids_by_category,
                 background_tasks=background_tasks,
+                generated_at=generated_at,
+                recs=recs_by_user.get(user_id),
+                fallback_recs=fallback_by_variant[variant],
+                assignment=assignments[user_id],
             )
             if row is None:
                 users.append(
