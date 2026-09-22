@@ -16,6 +16,7 @@ from typing import Any
 
 import pandas as pd
 
+from cicerone.io.blob import S3_READ_ERRORS
 from cicerone.io.options import (
     build_s3_client,
     is_s3_not_found,
@@ -46,7 +47,7 @@ class DatasetManifestReader:
         client = build_s3_client(self._options)
         try:
             obj = client.get_object(Bucket=bucket, Key=key)
-        except Exception as exc:
+        except S3_READ_ERRORS as exc:
             if is_s3_not_found(exc):
                 return None
             raise
