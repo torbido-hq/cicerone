@@ -18,18 +18,16 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-from fastapi.testclient import TestClient
 from support.system_spec import (
-    SYSTEM_DASHBOARD_PASSWORD,
-    SYSTEM_DASHBOARD_USER,
-    SYSTEM_SERVE_TOKEN,
+    DASHBOARD_AUTH,
+    SERVE_HEADERS,
     append_dataset_events,
-    dashboard_users,
-    mount_dashboard_app,
-    mount_serve_app,
+    dashboard_client,
+    parse_track_eval,
     run_system_job,
     sample_system_catalog,
     seed_dataset_catalog,
+    serve_client,
     write_system_config,
 )
 
@@ -38,9 +36,6 @@ from cicerone.io.factory import build_manifest_reader
 from cicerone.io.manifest_reader import DatasetManifestReader
 from cicerone.track.store import TrackStore
 from cicerone.track.store_common import EVAL_FILENAME, HISTORY_DIR, TRACK_FILENAME
-
-_SERVE_HEADERS = {"Authorization": f"Bearer {SYSTEM_SERVE_TOKEN}"}
-_DASHBOARD_AUTH = (SYSTEM_DASHBOARD_USER, SYSTEM_DASHBOARD_PASSWORD)
 
 
 @dataclass(frozen=True)
@@ -74,20 +69,11 @@ def quality_system(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Quality
     )
 
 
-def _parse_track_eval(raw: object) -> dict:
-    if isinstance(raw, dict):
-        return raw
-    parsed = json.loads(str(raw or ""))
-    if not isinstance(parsed, dict):
-        raise AssertionError(f"expected track_eval object, got {type(parsed).__name__}")
-    return parsed
-
-
 def test_system_track_eval_quality_loop(quality_system: QualitySystem) -> None:
     settings = load_settings(str(quality_system.config_path))
     assert settings.output.kind == "dataset"
-    serve = TestClient(mount_serve_app(settings))
-    served = serve.get("/recommendations/u1", headers=_SERVE_HEADERS)
+    serve = serve_client(settings)
+    served = serve.get("/recommendations/u1", headers=SERVE_HEADERS)
     assert served.status_code == 200
     body = served.json()
     items = body["items"]
@@ -116,7 +102,7 @@ def test_system_track_eval_quality_loop(quality_system: QualitySystem) -> None:
         "event_id": "sys-clk-1",
         "generated_at": generated_at,
     }
-    tracked = serve.post("/track", headers=_SERVE_HEADERS, json={"events": [*impressions, click]})
+    tracked = serve.post("/track", headers=SERVE_HEADERS, json={"events": [*impressions, click]})
     assert tracked.status_code == 202
     assert tracked.json()["accepted"] == len(impressions) + 1
 
@@ -166,7 +152,7 @@ def test_system_track_eval_quality_loop(quality_system: QualitySystem) -> None:
     assert latest["status"] == "success"
     assert int(latest["n_events"]) == len(quality_system.events) + 1
 
-    track_eval = _parse_track_eval(latest.get("track_eval"))
+    track_eval = parse_track_eval(latest.get("track_eval"))
     overall = track_eval["overall"]
     assert int(overall["n_impressions"]) == len(impressions)
     assert int(overall["n_clicks"]) == 1
@@ -184,10 +170,8 @@ def test_system_track_eval_quality_loop(quality_system: QualitySystem) -> None:
     assert "u1" in set(history["user_id"].astype(str))
     assert first_item in set(history["item_id"].astype(str))
 
-    dashboard = TestClient(
-        mount_dashboard_app(settings, dashboard_users(), config_path=quality_system.config_path)
-    )
-    quality = dashboard.get("/dashboard/quality", auth=_DASHBOARD_AUTH)
+    dashboard = dashboard_client(settings, quality_system.config_path)
+    quality = dashboard.get("/dashboard/quality", auth=DASHBOARD_AUTH)
     assert quality.status_code == 200
     assert "Could not load quality metrics." not in quality.text
     assert "No impressions yet." not in quality.text

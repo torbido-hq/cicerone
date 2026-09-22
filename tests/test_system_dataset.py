@@ -15,18 +15,16 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-from fastapi.testclient import TestClient
 from support.system_spec import (
-    SYSTEM_DASHBOARD_PASSWORD,
-    SYSTEM_DASHBOARD_USER,
-    SYSTEM_SERVE_TOKEN,
-    available_recommendation_ids,
-    dashboard_users,
-    mount_dashboard_app,
-    mount_serve_app,
+    DASHBOARD_AUTH,
+    DATASET_OUTPUT_FILES,
+    SERVE_HEADERS,
+    available_ids_from_files,
+    dashboard_client,
     run_system_job,
     sample_system_catalog,
     seed_dataset_catalog,
+    serve_client,
     write_system_config,
 )
 
@@ -37,20 +35,10 @@ from cicerone.artifact import (
     recommend_from_artifact,
 )
 from cicerone.config import load_settings
-from cicerone.feature_config import load_feature_config
 from cicerone.io.factory import build_manifest_reader, build_output_sink, build_recommendation_reader
 from cicerone.io.manifest_reader import DatasetManifestReader
 from cicerone.io.recommendation_reader import DatasetRecommendationReader
 from cicerone.io.recommendation_reader_common import ITEMS_SNAPSHOT_FILENAME
-
-_SERVE_HEADERS = {"Authorization": f"Bearer {SYSTEM_SERVE_TOKEN}"}
-_DASHBOARD_AUTH = (SYSTEM_DASHBOARD_USER, SYSTEM_DASHBOARD_PASSWORD)
-_OUTPUT_FILES = (
-    "recommendations.parquet",
-    ITEMS_SNAPSHOT_FILENAME,
-    "manifest.json",
-    ARTIFACT_FILENAME,
-)
 
 
 @dataclass(frozen=True)
@@ -101,15 +89,6 @@ def _settings(trained: TrainedSystem):
     return load_settings(str(trained.config_path))
 
 
-def _serve_client(trained: TrainedSystem) -> TestClient:
-    return TestClient(mount_serve_app(_settings(trained)))
-
-
-def _dashboard_client(trained: TrainedSystem) -> TestClient:
-    app = mount_dashboard_app(_settings(trained), dashboard_users(), config_path=trained.config_path)
-    return TestClient(app)
-
-
 def _output_recs(trained: TrainedSystem) -> pd.DataFrame:
     return pd.read_parquet(trained.output_path / "recommendations.parquet")
 
@@ -120,25 +99,6 @@ def _output_items(trained: TrainedSystem) -> pd.DataFrame:
 
 def _output_manifest(trained: TrainedSystem) -> dict:
     return json.loads((trained.output_path / "manifest.json").read_text())
-
-
-def _available_ids_from_files(
-    trained: TrainedSystem,
-    user_id: str,
-    *,
-    k: int | None = None,
-) -> list[str]:
-    settings = _settings(trained)
-    feature_config = load_feature_config(settings.feature_config_path)
-    recs = _output_recs(trained)
-    user_rows = recs.loc[recs["user_id"].astype(str) == user_id]
-    return available_recommendation_ids(
-        user_rows,
-        _output_items(trained),
-        availability_filters=feature_config.item_availability_filters,
-        category_column=settings.serve.category_column,
-        k=settings.serve.default_k if k is None else k,
-    )
 
 
 def test_system_job_dataset_round_trip_with_artifact_and_readers(trained_system: TrainedSystem) -> None:
@@ -153,7 +113,7 @@ def test_system_job_dataset_round_trip_with_artifact_and_readers(trained_system:
     for name in ("events.parquet", "users.parquet", "items.parquet"):
         assert (trained_system.input_path / name).is_file()
         assert not (trained_system.output_path / name).exists()
-    for name in _OUTPUT_FILES:
+    for name in DATASET_OUTPUT_FILES:
         assert (trained_system.output_path / name).is_file()
         assert not (trained_system.input_path / name).exists()
 
@@ -201,13 +161,14 @@ def test_system_job_dataset_round_trip_with_artifact_and_readers(trained_system:
 
 
 def test_system_serve_http_reads_job_output(trained_system: TrainedSystem) -> None:
-    expected_u1 = _available_ids_from_files(trained_system, "u1")
-    expected_u4 = _available_ids_from_files(trained_system, "u4")
+    settings = _settings(trained_system)
+    expected_u1 = available_ids_from_files(trained_system.output_path, "u1", settings=settings)
+    expected_u4 = available_ids_from_files(trained_system.output_path, "u4", settings=settings)
     manifest = _output_manifest(trained_system)
     generated_at = manifest["generated_at"]
-    client = _serve_client(trained_system)
+    client = serve_client(settings)
 
-    response = client.get("/recommendations/u1", headers=_SERVE_HEADERS)
+    response = client.get("/recommendations/u1", headers=SERVE_HEADERS)
     assert response.status_code == 200
     body = response.json()
     assert body["user_id"] == "u1"
@@ -216,12 +177,12 @@ def test_system_serve_http_reads_job_output(trained_system: TrainedSystem) -> No
     assert response.headers.get("X-Generated-At") == generated_at
     assert body["generated_at"] == generated_at
 
-    warm = client.get("/recommendations/u4", headers=_SERVE_HEADERS)
+    warm = client.get("/recommendations/u4", headers=SERVE_HEADERS)
     assert warm.status_code == 200
     assert warm.json()["fallback"] is False
     assert [row["item_id"] for row in warm.json()["items"]] == expected_u4
 
-    unknown = client.get("/recommendations/u-unknown", headers=_SERVE_HEADERS)
+    unknown = client.get("/recommendations/u-unknown", headers=SERVE_HEADERS)
     assert unknown.status_code == 200
     assert unknown.json()["fallback"] is True
     unknown_ids = [row["item_id"] for row in unknown.json()["items"]]
@@ -233,7 +194,7 @@ def test_system_serve_http_reads_job_output(trained_system: TrainedSystem) -> No
     ].astype(str)
     assert set(unknown_ids) <= set(available) & rec_ids
 
-    beer = client.get("/recommendations/u1?category=beer", headers=_SERVE_HEADERS)
+    beer = client.get("/recommendations/u1?category=beer", headers=SERVE_HEADERS)
     assert beer.status_code == 200
     beer_ids = [row["item_id"] for row in beer.json()["items"]]
     beer_catalog = set(snapshot.loc[snapshot["category"].astype(str) == "beer", "item_id"].astype(str))
@@ -242,7 +203,7 @@ def test_system_serve_http_reads_job_output(trained_system: TrainedSystem) -> No
 
     filtered = client.get(
         "/recommendations/u1?exclude_unavailable=true&limit=10",
-        headers=_SERVE_HEADERS,
+        headers=SERVE_HEADERS,
     )
     assert filtered.status_code == 200
     filtered_ids = [row["item_id"] for row in filtered.json()["items"]]
@@ -253,17 +214,18 @@ def test_system_serve_http_reads_job_output(trained_system: TrainedSystem) -> No
 
 
 def test_system_dashboard_http_matches_serve(trained_system: TrainedSystem) -> None:
-    serve_ids = _available_ids_from_files(trained_system, "u1")
+    settings = _settings(trained_system)
+    serve_ids = available_ids_from_files(trained_system.output_path, "u1", settings=settings)
     manifest = _output_manifest(trained_system)
 
-    client = _dashboard_client(trained_system)
-    status = client.get("/dashboard", auth=_DASHBOARD_AUTH)
+    client = dashboard_client(settings, trained_system.config_path)
+    status = client.get("/dashboard", auth=DASHBOARD_AUTH)
     assert status.status_code == 200
     assert manifest["status"] in status.text
     assert manifest["triggered_by"] in status.text
     assert str(manifest["n_events"]) in status.text
 
-    lookup = client.get("/dashboard", params={"user_id": "u1"}, auth=_DASHBOARD_AUTH)
+    lookup = client.get("/dashboard", params={"user_id": "u1"}, auth=DASHBOARD_AUTH)
     assert lookup.status_code == 200
     assert "Recommendations for" in lookup.text
     assert "u1" in lookup.text

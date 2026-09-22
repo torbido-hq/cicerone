@@ -11,28 +11,23 @@ gated by ``support.system_db.reset_schema``.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
 import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
-from support.postgres_defaults import resolve_test_database_url
 from support.system_db import (
-    SYSTEM_DASHBOARD_PASSWORD,
-    SYSTEM_DASHBOARD_USER,
-    SYSTEM_SERVE_TOKEN,
+    DASHBOARD_AUTH,
+    SERVE_HEADERS,
+    SKIP_NO_TEST_DB,
+    TEST_DATABASE_URL,
     available_recommendation_ids,
-    dashboard_users,
-    mount_dashboard_app,
-    mount_serve_app,
-    reset_schema,
+    dashboard_client,
     run_system_job,
     sample_system_catalog,
     seed_catalog,
+    serve_client,
     write_system_config,
 )
 
@@ -41,18 +36,6 @@ from cicerone.config import load_settings
 from cicerone.feature_config import load_feature_config
 from cicerone.io.base import ManifestReader, RecommendationReader
 from cicerone.io.factory import build_manifest_reader, build_output_sink, build_recommendation_reader
-
-TEST_DATABASE_URL = resolve_test_database_url()
-
-_SKIP_NO_TEST_DB = (
-    "TEST_DATABASE_URL / POSTGRES_TEST_HOST not set — start compose postgres "
-    "(`docker compose --env-file docker/postgres/defaults.env --profile db up -d postgres`) "
-    "and export POSTGRES_TEST_HOST=localhost ALLOW_SCHEMA_RESET_FOR_TESTS=1, "
-    "or run via docker-compose.ci.yml"
-)
-
-_SERVE_HEADERS = {"Authorization": f"Bearer {SYSTEM_SERVE_TOKEN}"}
-_DASHBOARD_AUTH = (SYSTEM_DASHBOARD_USER, SYSTEM_DASHBOARD_PASSWORD)
 
 
 @dataclass(frozen=True)
@@ -64,26 +47,6 @@ class TrainedSystem:
     items: pd.DataFrame
     rec_reader: RecommendationReader
     manifest_reader: ManifestReader
-
-
-@pytest.fixture(scope="session")
-def db_engine() -> Iterator[Engine]:
-    """One Engine for the whole test session — avoids per-test connect/dispose."""
-    if not TEST_DATABASE_URL:
-        pytest.skip(_SKIP_NO_TEST_DB)
-    engine = create_engine(TEST_DATABASE_URL, pool_pre_ping=True)
-    try:
-        yield engine
-    finally:
-        engine.dispose()
-
-
-@pytest.fixture(scope="module")
-def clean_schema(db_engine: Engine) -> Iterator[None]:
-    """Reset schema once around the system-spec."""
-    reset_schema(db_engine)
-    yield
-    reset_schema(db_engine)
 
 
 @pytest.fixture(scope="module")
@@ -115,16 +78,7 @@ def _settings(trained: TrainedSystem):
     return load_settings(str(trained.config_path))
 
 
-def _serve_client(trained: TrainedSystem) -> TestClient:
-    return TestClient(mount_serve_app(_settings(trained)))
-
-
-def _dashboard_client(trained: TrainedSystem) -> TestClient:
-    app = mount_dashboard_app(_settings(trained), dashboard_users(), config_path=trained.config_path)
-    return TestClient(app)
-
-
-@pytest.mark.skipif(not TEST_DATABASE_URL, reason=_SKIP_NO_TEST_DB)
+@pytest.mark.skipif(not TEST_DATABASE_URL, reason=SKIP_NO_TEST_DB)
 def test_system_job_db_round_trip_with_artifact_and_readers(trained_system: TrainedSystem) -> None:
     """Postgres catalog → job.run → recommendations/manifest/artifact readers."""
     expected_users = set(trained_system.events["user_id"]) | set(trained_system.users["user_id"])
@@ -161,7 +115,7 @@ def test_system_job_db_round_trip_with_artifact_and_readers(trained_system: Trai
     assert set(from_artifact["user_id"]) <= {"u1", "u2"}
 
 
-@pytest.mark.skipif(not TEST_DATABASE_URL, reason=_SKIP_NO_TEST_DB)
+@pytest.mark.skipif(not TEST_DATABASE_URL, reason=SKIP_NO_TEST_DB)
 def test_system_serve_http_reads_job_output(trained_system: TrainedSystem) -> None:
     settings = _settings(trained_system)
     feature_config = load_feature_config(settings.feature_config_path)
@@ -175,9 +129,9 @@ def test_system_serve_http_reads_job_output(trained_system: TrainedSystem) -> No
     )
     latest = trained_system.manifest_reader.read_latest()
     assert latest is not None
-    client = _serve_client(trained_system)
+    client = serve_client(settings)
 
-    response = client.get("/recommendations/u1", headers=_SERVE_HEADERS)
+    response = client.get("/recommendations/u1", headers=SERVE_HEADERS)
     assert response.status_code == 200
     body = response.json()
     assert body["user_id"] == "u1"
@@ -189,24 +143,24 @@ def test_system_serve_http_reads_job_output(trained_system: TrainedSystem) -> No
         assert response.headers.get("X-Generated-At") == str(generated_at)
         assert body["generated_at"] == str(generated_at)
 
-    warm = client.get("/recommendations/u4", headers=_SERVE_HEADERS)
+    warm = client.get("/recommendations/u4", headers=SERVE_HEADERS)
     assert warm.status_code == 200
     assert warm.json()["items"]
     assert warm.json()["fallback"] is False
 
-    unknown = client.get("/recommendations/u-unknown", headers=_SERVE_HEADERS)
+    unknown = client.get("/recommendations/u-unknown", headers=SERVE_HEADERS)
     assert unknown.status_code == 200
     assert unknown.json()["fallback"] is True
     assert unknown.json()["items"]
 
-    beer = client.get("/recommendations/u1?category=beer", headers=_SERVE_HEADERS)
+    beer = client.get("/recommendations/u1?category=beer", headers=SERVE_HEADERS)
     assert beer.status_code == 200
     beer_ids = {row["item_id"] for row in beer.json()["items"]}
     assert beer_ids <= {"i1", "i2"}
 
     filtered = client.get(
         "/recommendations/u1?exclude_unavailable=true&limit=10",
-        headers=_SERVE_HEADERS,
+        headers=SERVE_HEADERS,
     )
     assert filtered.status_code == 200
     filtered_ids = {row["item_id"] for row in filtered.json()["items"]}
@@ -214,20 +168,20 @@ def test_system_serve_http_reads_job_output(trained_system: TrainedSystem) -> No
     assert "i4" not in filtered_ids
 
 
-@pytest.mark.skipif(not TEST_DATABASE_URL, reason=_SKIP_NO_TEST_DB)
+@pytest.mark.skipif(not TEST_DATABASE_URL, reason=SKIP_NO_TEST_DB)
 def test_system_dashboard_http_matches_serve(trained_system: TrainedSystem) -> None:
-    serve = _serve_client(trained_system).get("/recommendations/u1", headers=_SERVE_HEADERS)
+    serve = serve_client(_settings(trained_system)).get("/recommendations/u1", headers=SERVE_HEADERS)
     assert serve.status_code == 200
     serve_ids = [row["item_id"] for row in serve.json()["items"]]
 
-    client = _dashboard_client(trained_system)
-    status = client.get("/dashboard", auth=_DASHBOARD_AUTH)
+    client = dashboard_client(_settings(trained_system), trained_system.config_path)
+    status = client.get("/dashboard", auth=DASHBOARD_AUTH)
     assert status.status_code == 200
     assert "success" in status.text
     assert "system-spec" in status.text
     assert str(len(trained_system.events)) in status.text
 
-    lookup = client.get("/dashboard", params={"user_id": "u1"}, auth=_DASHBOARD_AUTH)
+    lookup = client.get("/dashboard", params={"user_id": "u1"}, auth=DASHBOARD_AUTH)
     assert lookup.status_code == 200
     assert "Recommendations for" in lookup.text
     assert "u1" in lookup.text
