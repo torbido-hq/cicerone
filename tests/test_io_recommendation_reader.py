@@ -233,6 +233,21 @@ def test_dataset_reader_refresh_keeps_previous_cache_on_error(tmp_path):
     assert list(recs["item_id"]) == ["i1"]
 
 
+def test_dataset_reader_refresh_propagates_unexpected_errors(tmp_path, monkeypatch):
+    _write_recommendations(tmp_path, [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9}])
+    reader = DatasetRecommendationReader({"storage_backend": "local", "path": str(tmp_path)})
+
+    class Boom(Exception):
+        pass
+
+    monkeypatch.setattr(
+        "cicerone.io.dataset_recommendation_reader.read_parquet",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(Boom("bug")),
+    )
+    with pytest.raises(Boom, match="bug"):
+        reader.refresh()
+
+
 def test_dataset_reader_cold_start_fallback_and_items(tmp_path):
     _write_recommendations(
         tmp_path,

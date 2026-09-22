@@ -7,6 +7,7 @@ import logging
 import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import SQLAlchemyError
 
 from cicerone.io.db_store import DatabaseOutputSink
 from cicerone.io.recommendation_reader import DbRecommendationReader
@@ -243,13 +244,44 @@ def test_sqlite_db_reader_keeps_variant_filter_when_inspect_fails(tmp_path, monk
     reader._variant_supported = None
 
     def boom(*_args, **_kwargs):
-        raise RuntimeError("inspect down")
+        raise SQLAlchemyError("inspect down")
 
     monkeypatch.setattr("cicerone.io.db_recommendation_reader.inspect", boom)
     rows = reader.get_recommendations("u1", k=10, variant="treatment")
     assert list(rows["item_id"]) == ["treatment-item"]
     assert list(rows["variant"]) == ["treatment"]
     assert reader._variant_supported is None
+
+
+def test_sqlite_db_reader_inspect_propagates_unexpected_errors(tmp_path, monkeypatch):
+    url = _sqlite_url(tmp_path)
+    sink = DatabaseOutputSink({"database_url": url})
+    sink.write_recommendations(
+        pd.DataFrame(
+            [
+                {
+                    "user_id": "u1",
+                    "item_id": "control-item",
+                    "rank": 1,
+                    "score": 0.9,
+                    "source": "personalized",
+                    "variant": "control",
+                }
+            ]
+        )
+    )
+    reader = DbRecommendationReader({"database_url": url})
+    reader._variant_supported = None
+
+    class Boom(Exception):
+        pass
+
+    monkeypatch.setattr(
+        "cicerone.io.db_recommendation_reader.inspect",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(Boom("bug")),
+    )
+    with pytest.raises(Boom, match="bug"):
+        reader.get_recommendations("u1", k=10, variant="treatment")
 
 
 def test_sqlite_db_reader_skips_distinct_when_unassigned(tmp_path, monkeypatch):
@@ -417,7 +449,7 @@ def test_sqlite_db_reader_unassigned_probe_error_falls_back(tmp_path, monkeypatc
 
     def fake_read_sql(sql, *args, **kwargs):
         if ":fallback" in str(sql):
-            raise RuntimeError("prefer leftover down")
+            raise SQLAlchemyError("prefer leftover down")
         return original(sql, *args, **kwargs)
 
     monkeypatch.setattr("cicerone.io.db_recommendation_reader.pd.read_sql", fake_read_sql)

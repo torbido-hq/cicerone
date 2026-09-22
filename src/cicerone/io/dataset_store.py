@@ -19,8 +19,9 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from pyarrow.lib import ArrowException
 
-from cicerone.io.blob import read_storage_bytes, write_storage_bytes
+from cicerone.io.blob import S3_READ_ERRORS, read_storage_bytes, write_storage_bytes
 from cicerone.io.options import (
     build_s3_client,
     exclusive_file_lock,
@@ -70,7 +71,7 @@ class DatasetInputSource:
         except FileNotFoundError:
             logger.warning("Optional input %r not found — continuing without %s features.", filename, label)
             return None
-        except Exception as exc:
+        except S3_READ_ERRORS as exc:
             if is_s3_not_found(exc):
                 logger.warning(
                     "Optional input %r not found — continuing without %s features.", filename, label
@@ -89,9 +90,11 @@ class DatasetInputSource:
             frame = read_parquet(self._options, filename, filters=[("user_id", "==", user_id)])
         except FileNotFoundError:
             raise
-        except Exception as exc:
+        except S3_READ_ERRORS as exc:
             if is_s3_not_found(exc):
                 raise
+            raise
+        except (OSError, ValueError, TypeError, ArrowException) as exc:
             message = str(exc).lower()
             if "user_id" in message or "fieldref" in message or "filter" in message:
                 logger.warning("Filtered %s read failed; falling back to full-file load: %s", filename, exc)
@@ -110,7 +113,7 @@ class DatasetInputSource:
             frame = self._read_for_user("users.parquet", user_id)
         except FileNotFoundError:
             return None
-        except Exception as exc:
+        except S3_READ_ERRORS as exc:
             if is_s3_not_found(exc):
                 return None
             raise
@@ -234,7 +237,7 @@ class DatasetOutputSink:
                 existing = read_parquet(self._options, "recommendations.parquet")
             except FileNotFoundError:
                 existing = pd.DataFrame()
-            except Exception as exc:
+            except S3_READ_ERRORS as exc:
                 if is_s3_not_found(exc):
                     existing = pd.DataFrame()
                 else:
@@ -317,7 +320,7 @@ class DatasetOutputSink:
         client = build_s3_client(self._options)
         try:
             head = client.head_object(Bucket=bucket, Key=key)
-        except Exception as exc:
+        except S3_READ_ERRORS as exc:
             if is_s3_not_found(exc):
                 return None
             raise
