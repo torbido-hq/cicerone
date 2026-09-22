@@ -25,17 +25,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Dashboard latest-run card shows catalog size, target users, user coverage,
   and AutoML scores when the manifest has them. Incremental panel shows
   unknown-id event drops.
-
-### Changed
-
-- Online refresh still rewrites LightFM / popular lists when the sequential extra is missing. Only the sequential model is skipped.
+- Quality splits production replay into ranking vs catalog metrics, shows
+  run-over-run deltas from job manifests, and warns when rank CTR rises.
 
 ### Changed
 
 - Job-time Thompson samples Beta(1+s, 1+f) in-process instead of writing MABWiser's private `_imp` counts.
+- Online refresh still rewrites LightFM / popular lists when the sequential extra is missing. Only the sequential model is skipped.
 
 ### Fixed
 
+- Quality replay deltas skip the latest stored run when CTR is live, and catalog Δ only attaches to the matching cutoff.
+- Quality deltas pick the previous run by eval identity, so a newer manifest cannot self-delta against a lagging track report.
+- Quality single-run history footnote is dataset-only.
 - Redis Streams marks the source disconnected after XREADGROUP or XAUTOCLAIM failure so the worker reconnects instead of polling an empty dead socket.
 - Popular, latest, and neighbor snapshots drop missing or blank item/user ids instead of casting them to `"nan"`.
 - DB popular/latest/similar reads re-raise SQL connectivity errors instead of treating every `OperationalError` as a missing table.

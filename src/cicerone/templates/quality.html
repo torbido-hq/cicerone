@@ -51,8 +51,14 @@
         <div><dt class="text-slate-600">Impressions</dt><dd class="font-medium text-slate-800">{{ track_eval.overall.n_impressions }}</dd></div>
         <div><dt class="text-slate-600">Clicks</dt><dd class="font-medium text-slate-800">{{ track_eval.overall.n_clicks }}</dd></div>
         <div><dt class="text-slate-600">Users</dt><dd class="font-medium text-slate-800">{{ track_eval.overall.n_users }}</dd></div>
-        <div><dt class="text-slate-600">CTR</dt><dd class="font-medium text-slate-800">{{ track_eval.overall.ctr|as_percent }}</dd></div>
-        <div><dt class="text-slate-600">CVR (click)</dt><dd class="font-medium text-slate-800">{{ track_eval.overall.cvr_click|as_percent }}</dd></div>
+        <div>
+          <dt class="text-slate-600">CTR</dt>
+          <dd class="font-medium text-slate-800">{{ track_eval.overall.ctr|as_percent }}{% if quality_deltas.ctr != "—" %} <span class="font-normal text-slate-500">{{ quality_deltas.ctr }}</span>{% endif %}</dd>
+        </div>
+        <div>
+          <dt class="text-slate-600">CVR (click)</dt>
+          <dd class="font-medium text-slate-800">{{ track_eval.overall.cvr_click|as_percent }}{% if quality_deltas.cvr_click != "—" %} <span class="font-normal text-slate-500">{{ quality_deltas.cvr_click }}</span>{% endif %}</dd>
+        </div>
         <div><dt class="text-slate-600">CVR (view)</dt><dd class="font-medium text-slate-800">{{ track_eval.overall.cvr_view|as_percent }}</dd></div>
       </dl>
       {% if track_eval.by_rank %}
@@ -88,6 +94,11 @@
         </tbody>
       </table>
       </div>
+      {% if rank_curve_inverted %}
+      <p class="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800" role="status">
+        Rank CTR is not weakly decreasing. Later ranks beat earlier ones — check impression logging or the ranker.
+      </p>
+      {% endif %}
       {% endif %}
       {% if track_eval.by_source %}
       <h3 class="text-sm font-medium text-slate-800 mb-2">By source</h3>
@@ -178,7 +189,7 @@
         </div>
         {% endif %}
       </dl>
-      {% if served_eval.metrics %}
+      {% if ranking_metrics %}
       <div class="overflow-x-auto mb-4">
       <table class="w-full text-sm border-collapse">
         <caption class="sr-only">Production replay ranking metrics</caption>
@@ -186,13 +197,45 @@
           <tr class="text-left text-slate-600 border-b border-slate-200">
             <th scope="col" class="py-2 px-2">Metric</th>
             <th scope="col" class="py-2 px-2">Value</th>
+            <th scope="col" class="py-2 px-2">Δ</th>
           </tr>
         </thead>
         <tbody>
-          {% for name, value in served_eval.metrics.items() %}
+          {% for name, value in ranking_metrics.items() %}
           <tr class="border-b border-slate-100">
             <th scope="row" class="py-2 px-2 text-left font-medium text-slate-800">{{ name }}</th>
             <td class="py-2 px-2 text-slate-700">{{ "%.4f"|format(value) }}</td>
+            <td class="py-2 px-2 text-slate-700">{% if quality_deltas.ndcg_name == name %}{{ quality_deltas.ndcg }}{% else %}—{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      </div>
+      {% endif %}
+      {% if catalog_metrics %}
+      <h3 class="text-sm font-medium text-slate-800 mb-2">Catalog</h3>
+      <p class="mb-2 text-xs text-slate-600">Coverage is the share of the catalog in lists. Novelty (MeanInvUserFreq) rises with rarer items. Popularity rises when head items take more slots.</p>
+      <div class="overflow-x-auto mb-4">
+      <table class="w-full text-sm border-collapse">
+        <caption class="sr-only">Production replay catalog metrics</caption>
+        <thead>
+          <tr class="text-left text-slate-600 border-b border-slate-200">
+            <th scope="col" class="py-2 px-2">Metric</th>
+            <th scope="col" class="py-2 px-2">Value</th>
+            <th scope="col" class="py-2 px-2">Δ</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for name, value in catalog_metrics.items() %}
+          <tr class="border-b border-slate-100">
+            <th scope="row" class="py-2 px-2 text-left font-medium text-slate-800">{{ name }}</th>
+            <td class="py-2 px-2 text-slate-700">{{ "%.4f"|format(value) }}</td>
+            <td class="py-2 px-2 text-slate-700">
+              {% if quality_deltas.coverage_name == name %}{{ quality_deltas.coverage }}
+              {% elif quality_deltas.miuf_name == name %}{{ quality_deltas.miuf }}
+              {% elif quality_deltas.popularity_name == name %}{{ quality_deltas.popularity }}
+              {% else %}—{% endif %}
+            </td>
           </tr>
           {% endfor %}
         </tbody>
@@ -228,6 +271,52 @@
     </section>
     {% elif eval_enabled %}
     <p class="text-sm text-slate-700">Production replay is on; metrics appear after the next job scores the previous lists.</p>
+    {% endif %}
+    {% if quality_history %}
+    <section class="rounded-lg border border-slate-200 bg-white p-4 mb-4" aria-labelledby="quality-history-heading">
+      <h2 id="quality-history-heading" class="text-sm font-medium text-slate-800 mb-2">Recent quality</h2>
+      <div class="overflow-x-auto">
+      <table class="w-full text-sm border-collapse">
+        <caption class="sr-only">Recent job quality metrics</caption>
+        <thead>
+          <tr class="text-left text-slate-600 border-b border-slate-200">
+            <th scope="col" class="py-2 px-2">When</th>
+            <th scope="col" class="py-2 px-2">CTR</th>
+            <th scope="col" class="py-2 px-2">CVR click</th>
+            <th scope="col" class="py-2 px-2">NDCG</th>
+            <th scope="col" class="py-2 px-2">Coverage</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in quality_history %}
+          <tr class="border-b border-slate-100">
+            <td class="py-2 px-2 text-slate-700 whitespace-nowrap">
+              {% if row.generated_at %}
+              <time
+                datetime="{{ row.generated_at }}"
+                data-controller="time-ago"
+                data-time-ago-value="{{ row.generated_at }}"
+              >{{ row.generated_at }}</time>
+              {% else %}
+              —
+              {% endif %}
+            </td>
+            <td class="py-2 px-2 text-slate-700">{{ row.ctr|as_percent }}</td>
+            <td class="py-2 px-2 text-slate-700">{{ row.cvr_click|as_percent }}</td>
+            <td class="py-2 px-2 text-slate-700">{% if row.ndcg is not none %}{{ "%.4f"|format(row.ndcg) }}{% else %}—{% endif %}</td>
+            <td class="py-2 px-2 text-slate-700">{% if row.coverage is not none %}{{ "%.4f"|format(row.coverage) }}{% else %}—{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      </div>
+      {% if quality_history_single %}
+      <p class="mt-2 text-xs text-slate-600">
+        Only the latest run is available for this output backend (a "dataset" output overwrites
+        manifest.json every run -- switch to a "db" output for full history).
+      </p>
+      {% endif %}
+    </section>
     {% endif %}
   </main>
 </body>
