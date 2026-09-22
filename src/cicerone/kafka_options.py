@@ -85,13 +85,21 @@ def kafka_consumer_config(options: dict[str, Any], *, prefix: str) -> dict[str, 
         conf["max.poll.interval.ms"] = max_poll
     if session is not None:
         conf["session.timeout.ms"] = session
+        # librdkafka default heartbeat is 3000ms; session must be larger.
+        conf["heartbeat.interval.ms"] = max(1, min(session - 1, session // 3))
     return conf
 
 
 def _optional_timeout_ms(options: dict[str, Any], key: str, *, prefix: str) -> int | None:
     if key not in options or options[key] in (None, ""):
         return None
-    value = optional_int(options, key, 0, prefix=prefix, minimum=1)
+    raw = options[key]
+    if isinstance(raw, bool) or (isinstance(raw, float) and not raw.is_integer()):
+        raise ConfigError(f"{prefix}.{key} must be an integer, got {raw!r}")
+    try:
+        value = optional_int(options, key, 0, prefix=prefix, minimum=1)
+    except OverflowError as exc:
+        raise ConfigError(f"{prefix}.{key} must be an integer, got {raw!r}") from exc
     if value > MAX_TIMEOUT_MS:
         raise ConfigError(f"{prefix}.{key} must be <= {MAX_TIMEOUT_MS}, got {value}")
     return value
