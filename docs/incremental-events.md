@@ -260,8 +260,9 @@ JSON objects from one durable queue (`basic_get` / `basic_ack`). Required:
 timeouts and I/O-thread `reply.get`).
 Missing `event_id` / `idempotency_key` gets a generated UUID; the adapter maps that
 id to the delivery tag for ack. Reconnect redeliveries get a new id and are
-deduped by event fingerprint. `nack` returns events to a local deque (broker
-delivery stays unacked). AMQP calls run on one I/O thread; `heartbeat`
+deduped by event fingerprint. `nack` calls `basic_nack(requeue=True)` so
+prefetch is released and the broker redelivers. AMQP calls run on one I/O
+thread; `heartbeat`
 pumps `process_data_events` there so apply does not share the connection
 with the worker thread. Poison messages are acked and dropped. Requires
 `pip install 'cicerone-recommender[rabbitmq]'` or
