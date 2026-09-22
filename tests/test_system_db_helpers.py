@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -288,3 +292,19 @@ def test_parse_track_eval_accepts_dict_and_json() -> None:
 def test_parse_track_eval_rejects_non_object() -> None:
     with pytest.raises(AssertionError, match="expected track_eval object"):
         parse_track_eval("[]")
+
+
+def test_root_conftest_import_survives_invalid_test_database_url() -> None:
+    root = Path(__file__).resolve().parents[1]
+    env = os.environ.copy()
+    env["PYTHONPATH"] = f"{root / 'src'}{os.pathsep}{root / 'tests'}"
+    env["TEST_DATABASE_URL"] = "postgresql+psycopg://u:p@localhost:5432/cicerone"
+    proc = subprocess.run(
+        [sys.executable, "-c", "import conftest"],
+        cwd=root / "tests",
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
