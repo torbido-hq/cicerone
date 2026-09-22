@@ -697,6 +697,185 @@ def test_quality_page_shows_previous_run_delta(tmp_path):
     assert "Only the latest run is available" not in response.text
 
 
+def test_quality_deltas_live_track_skips_latest_replay_row():
+    from cicerone.dashboard_quality import _quality_deltas
+
+    latest = {
+        "ctr": 0.1,
+        "cvr_click": 0.02,
+        "served_eval": {"metrics": {"NDCG@10": 0.4, "CatalogCoverage@10": 0.25}},
+    }
+    previous = {
+        "ctr": 0.05,
+        "cvr_click": 0.01,
+        "served_eval": {"metrics": {"NDCG@10": 0.3, "CatalogCoverage@10": 0.2}},
+    }
+    live_track = {"overall": {"ctr": 0.2, "cvr_click": 0.05}}
+    stored_served = {"metrics": {"NDCG@10": 0.4, "CatalogCoverage@10": 0.25}}
+    deltas = _quality_deltas(
+        live_track,
+        stored_served,
+        [latest, previous],
+        skip_first_track=False,
+        skip_first_replay=True,
+    )
+    assert deltas["ctr"] == "+10.00 pp"
+    assert deltas["cvr_click"] == "+3.00 pp"
+    assert deltas["ndcg"] == "+0.1000"
+    assert deltas["coverage"] == "+0.0500"
+    single = _quality_deltas(
+        live_track,
+        stored_served,
+        [latest],
+        skip_first_track=False,
+        skip_first_replay=True,
+    )
+    assert single["ctr"] == "+10.00 pp"
+    assert single["ndcg"] == "—"
+    assert single["coverage"] == "—"
+
+
+def test_quality_live_track_replay_delta_skips_current_manifest(tmp_path):
+    from cicerone.dashboard_quality import quality_context
+    from cicerone.track.normalize import normalize_track
+
+    settings = _settings(tmp_path, track={"enabled": True}, eval={"enabled": True})
+    stored_served = {"metrics": {"NDCG@10": 0.4, "CatalogCoverage@10": 0.25}, "by_source": {}}
+    store = TrackStore(settings.output)
+    store.write_eval({"served_eval": stored_served})
+    store.append_rows(
+        [
+            normalize_track(
+                {
+                    "kind": "impression",
+                    "user_id": "u1",
+                    "item_id": "i1",
+                    "rank": 1,
+                    "occurred_at": "2026-08-28T12:00:00Z",
+                    "event_id": "imp-live-delta",
+                }
+            ).as_row()
+        ]
+    )
+    history = [
+        {
+            "status": "success",
+            "triggered_by": "cron",
+            "generated_at": "2026-09-08T12:00:00+00:00",
+            "track_eval": {"overall": {"ctr": 0.2, "cvr_click": 0.05}},
+            "served_eval": stored_served,
+        },
+        {
+            "status": "success",
+            "triggered_by": "cron",
+            "generated_at": "2026-09-07T12:00:00+00:00",
+            "track_eval": {"overall": {"ctr": 0.1, "cvr_click": 0.02}},
+            "served_eval": {"metrics": {"NDCG@10": 0.3, "CatalogCoverage@10": 0.2}},
+        },
+    ]
+    context = quality_context(settings, _FakeReader(history))
+    assert context["track_live"] is True
+    assert context["quality_deltas"]["ndcg"] == "+0.1000"
+    assert context["quality_deltas"]["coverage"] == "+0.0500"
+    assert context["quality_deltas"]["ndcg"] != "+0.0000"
+
+
+def test_quality_catalog_delta_requires_matching_cutoff():
+    from cicerone.dashboard_quality import _quality_deltas
+
+    deltas = _quality_deltas(
+        None,
+        {"metrics": {"NDCG@10": 0.4, "CatalogCoverage@10": 0.3, "MeanInvUserFreq@10": 2.0}},
+        [
+            {"served_eval": {"metrics": {"NDCG@10": 0.4, "CatalogCoverage@10": 0.3}}},
+            {"served_eval": {"metrics": {"NDCG@5": 0.2, "CatalogCoverage@5": 0.1, "MeanInvUserFreq@5": 1.0}}},
+        ],
+        skip_first_track=True,
+        skip_first_replay=True,
+    )
+    assert deltas["ndcg"] == "—"
+    assert deltas["coverage"] == "—"
+    assert deltas["miuf"] == "—"
+    assert deltas["coverage_name"] == "CatalogCoverage@10"
+    assert deltas["ndcg_name"] == "NDCG@10"
+
+
+def test_quality_page_catalog_delta_only_on_selected_cutoff(tmp_path):
+    settings = _settings(tmp_path, track={"enabled": True}, eval={"enabled": True})
+    TrackStore(settings.output).write_eval(
+        {
+            "track_eval": {
+                "overall": {
+                    "n_impressions": 10,
+                    "n_clicks": 2,
+                    "n_conversions_click": 0,
+                    "n_conversions_view": 0,
+                    "ctr": 0.2,
+                    "cvr_click": 0.0,
+                    "cvr_view": 0.0,
+                    "n_users": 2,
+                }
+            },
+            "served_eval": {
+                "n_users": 3,
+                "n_users_with_events": 1,
+                "metrics": {
+                    "NDCG@5": 0.2,
+                    "NDCG@10": 0.4,
+                    "CatalogCoverage@5": 0.15,
+                    "CatalogCoverage@10": 0.25,
+                    "MeanInvUserFreq@5": 1.5,
+                    "MeanInvUserFreq@10": 2.0,
+                    "AvgRecPopularity@5": 8.0,
+                    "AvgRecPopularity@10": 10.0,
+                },
+                "by_source": {},
+            },
+        }
+    )
+    history = [
+        {
+            "status": "success",
+            "triggered_by": "cron",
+            "generated_at": "2026-09-08T12:00:00+00:00",
+            "served_eval": {
+                "metrics": {
+                    "NDCG@10": 0.4,
+                    "CatalogCoverage@10": 0.25,
+                    "MeanInvUserFreq@10": 2.0,
+                    "AvgRecPopularity@10": 10.0,
+                }
+            },
+        },
+        {
+            "status": "success",
+            "triggered_by": "cron",
+            "generated_at": "2026-09-07T12:00:00+00:00",
+            "served_eval": {
+                "metrics": {
+                    "NDCG@10": 0.3,
+                    "CatalogCoverage@10": 0.2,
+                    "MeanInvUserFreq@10": 1.5,
+                    "AvgRecPopularity@10": 9.0,
+                }
+            },
+        },
+    ]
+    app = create_app(settings, _FakeReader(history), _users_with("alice", "s3cret"))
+    response = TestClient(app).get("/dashboard/quality", auth=("alice", "s3cret"))
+    catalog = response.text.split("Production replay catalog metrics", 1)[1]
+    coverage_five = catalog.split("CatalogCoverage@5", 1)[1].split("</tr>", 1)[0]
+    coverage_ten = catalog.split("CatalogCoverage@10", 1)[1].split("</tr>", 1)[0]
+    assert "+0.0500" not in coverage_five
+    assert "—" in coverage_five
+    assert "+0.0500" in coverage_ten
+    ranking = response.text.split("Production replay ranking metrics", 1)[1]
+    ndcg_five = ranking.split("NDCG@5", 1)[1].split("</tr>", 1)[0]
+    ndcg_ten = ranking.split("NDCG@10", 1)[1].split("</tr>", 1)[0]
+    assert "+0.1000" not in ndcg_five
+    assert "+0.1000" in ndcg_ten
+
+
 def test_quality_history_single_run_footnote(tmp_path):
     settings = _settings(tmp_path, track={"enabled": True})
     TrackStore(settings.output).write_eval(

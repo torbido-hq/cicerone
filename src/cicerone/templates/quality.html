@@ -231,9 +231,9 @@
             <th scope="row" class="py-2 px-2 text-left font-medium text-slate-800">{{ name }}</th>
             <td class="py-2 px-2 text-slate-700">{{ "%.4f"|format(value) }}</td>
             <td class="py-2 px-2 text-slate-700">
-              {% if name.startswith("CatalogCoverage") %}{{ quality_deltas.coverage }}
-              {% elif name.startswith("MeanInvUserFreq") %}{{ quality_deltas.miuf }}
-              {% elif name.startswith("AvgRecPopularity") %}{{ quality_deltas.popularity }}
+              {% if quality_deltas.coverage_name == name %}{{ quality_deltas.coverage }}
+              {% elif quality_deltas.miuf_name == name %}{{ quality_deltas.miuf }}
+              {% elif quality_deltas.popularity_name == name %}{{ quality_deltas.popularity }}
               {% else %}—{% endif %}
             </td>
           </tr>

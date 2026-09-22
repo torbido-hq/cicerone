@@ -87,7 +87,8 @@ def quality_context(settings: Settings, reader: ManifestReader | None = None) ->
             track_eval,
             served_eval,
             recent_runs,
-            skip_first=not used_live_track,
+            skip_first_track=not used_live_track,
+            skip_first_replay=True,
         ),
         "quality_history": recent_runs,
         "quality_history_single": history_single,
@@ -248,45 +249,72 @@ def _previous_quality_row(history: list[dict[str, Any]], *, skip_first: bool) ->
     return rows[0] if rows else None
 
 
+def _empty_quality_deltas() -> dict[str, str | None]:
+    return {
+        "ctr": "—",
+        "cvr_click": "—",
+        "ndcg": "—",
+        "ndcg_name": None,
+        "coverage": "—",
+        "coverage_name": None,
+        "miuf": "—",
+        "miuf_name": None,
+        "popularity": "—",
+        "popularity_name": None,
+    }
+
+
+def _named_cutoff_delta(
+    current_name: str | None,
+    current_value: float | None,
+    previous_name: str | None,
+    previous_value: float | None,
+) -> str:
+    if current_name and previous_name and current_name != previous_name:
+        previous_value = None
+    return _format_delta_metric(_subtract(current_value, previous_value))
+
+
 def _quality_deltas(
     track_eval: dict[str, Any] | None,
     served_eval: dict[str, Any] | None,
     history: list[dict[str, Any]],
     *,
-    skip_first: bool,
+    skip_first_track: bool,
+    skip_first_replay: bool,
 ) -> dict[str, str | None]:
-    previous = _previous_quality_row(history, skip_first=skip_first)
-    if previous is None:
-        return {
-            "ctr": "—",
-            "cvr_click": "—",
-            "ndcg": "—",
-            "ndcg_name": None,
-            "coverage": "—",
-            "miuf": "—",
-            "popularity": "—",
-        }
+    out = _empty_quality_deltas()
     ndcg_name, ndcg = _metric_at_largest_k(served_eval, "NDCG")
-    _, coverage = _metric_at_largest_k(served_eval, "CatalogCoverage")
-    _, miuf = _metric_at_largest_k(served_eval, "MeanInvUserFreq")
-    _, popularity = _metric_at_largest_k(served_eval, "AvgRecPopularity")
-    prev_ndcg_name, prev_ndcg = previous["ndcg_name"], previous["ndcg"]
-    if ndcg_name and prev_ndcg_name and ndcg_name != prev_ndcg_name:
-        prev_ndcg = None
-    _, prev_coverage = _metric_at_largest_k(previous.get("served_eval"), "CatalogCoverage")
-    _, prev_miuf = _metric_at_largest_k(previous.get("served_eval"), "MeanInvUserFreq")
-    _, prev_popularity = _metric_at_largest_k(previous.get("served_eval"), "AvgRecPopularity")
-    return {
-        "ctr": _format_delta_rate(_subtract(_overall_float(track_eval, "ctr"), previous["ctr"])),
-        "cvr_click": _format_delta_rate(
-            _subtract(_overall_float(track_eval, "cvr_click"), previous["cvr_click"])
-        ),
-        "ndcg": _format_delta_metric(_subtract(ndcg, prev_ndcg)),
-        "ndcg_name": ndcg_name,
-        "coverage": _format_delta_metric(_subtract(coverage, prev_coverage)),
-        "miuf": _format_delta_metric(_subtract(miuf, prev_miuf)),
-        "popularity": _format_delta_metric(_subtract(popularity, prev_popularity)),
-    }
+    coverage_name, coverage = _metric_at_largest_k(served_eval, "CatalogCoverage")
+    miuf_name, miuf = _metric_at_largest_k(served_eval, "MeanInvUserFreq")
+    popularity_name, popularity = _metric_at_largest_k(served_eval, "AvgRecPopularity")
+    out["ndcg_name"] = ndcg_name
+    out["coverage_name"] = coverage_name
+    out["miuf_name"] = miuf_name
+    out["popularity_name"] = popularity_name
+    track_previous = _previous_quality_row(history, skip_first=skip_first_track)
+    if track_previous is not None:
+        out["ctr"] = _format_delta_rate(
+            _subtract(_overall_float(track_eval, "ctr"), track_previous.get("ctr"))
+        )
+        out["cvr_click"] = _format_delta_rate(
+            _subtract(_overall_float(track_eval, "cvr_click"), track_previous.get("cvr_click"))
+        )
+    replay_previous = _previous_quality_row(history, skip_first=skip_first_replay)
+    if replay_previous is None:
+        return out
+    prev_served = replay_previous.get("served_eval")
+    prev_ndcg_name, prev_ndcg = _metric_at_largest_k(prev_served, "NDCG")
+    prev_coverage_name, prev_coverage = _metric_at_largest_k(prev_served, "CatalogCoverage")
+    prev_miuf_name, prev_miuf = _metric_at_largest_k(prev_served, "MeanInvUserFreq")
+    prev_popularity_name, prev_popularity = _metric_at_largest_k(prev_served, "AvgRecPopularity")
+    out["ndcg"] = _named_cutoff_delta(ndcg_name, ndcg, prev_ndcg_name, prev_ndcg)
+    out["coverage"] = _named_cutoff_delta(coverage_name, coverage, prev_coverage_name, prev_coverage)
+    out["miuf"] = _named_cutoff_delta(miuf_name, miuf, prev_miuf_name, prev_miuf)
+    out["popularity"] = _named_cutoff_delta(
+        popularity_name, popularity, prev_popularity_name, prev_popularity
+    )
+    return out
 
 
 def _rank_curve_inverted(track_eval: dict[str, Any] | None, min_impressions: int) -> bool:
