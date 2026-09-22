@@ -240,6 +240,8 @@ def test_status_partial_shows_incremental_panel_when_events_enabled():
     assert "3" in response.text
     assert "Online users refreshed" in response.text
     assert "Unknown-id events dropped" in response.text
+    dropped = response.text.split("Unknown-id events dropped", 1)[1].split("</dd>", 1)[0]
+    assert "<dd>4" in dropped
     assert "cicerone_events_source_lag" in response.text
 
 
