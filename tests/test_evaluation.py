@@ -1091,6 +1091,36 @@ def test_evaluation_remaining_branches(monkeypatch) -> None:
     assert empty_asof.empty
 
 
+def test_evaluate_served_source_rectools_unexpected_propagates(monkeypatch) -> None:
+    calls = {"n": 0}
+
+    def _calc(*_args, **_kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"HitRate@1": 1.0}
+        raise RuntimeError("source-metrics")
+
+    monkeypatch.setattr("cicerone.evaluation.served.calc_metrics", _calc)
+    with pytest.raises(RuntimeError, match="source-metrics"):
+        evaluate_served(
+            pd.DataFrame([{"user_id": "alice", "item_id": "ipa", "rank": 1, "source": "personalized"}]),
+            pd.DataFrame(
+                [
+                    {
+                        "user_id": "alice",
+                        "item_id": "ipa",
+                        "event_type": "purchase",
+                        "occurred_at": "2026-08-28T12:00:00Z",
+                    }
+                ]
+            ),
+            generated_at=None,
+            ks=(1,),
+            event_types=("purchase",),
+        )
+    assert calls["n"] == 2
+
+
 def test_annotate_source_latest_uses_newest_generated_at() -> None:
     from cicerone.evaluation import _annotate_source
 
@@ -1989,6 +2019,24 @@ def test_load_metric_events_dataset_arrow_invalid_is_empty(tmp_path, monkeypatch
 
     def _read(*_args, **_kwargs):
         raise ArrowInvalid("filter type mismatch")
+
+    monkeypatch.setattr("cicerone.evaluation.context.read_parquet", _read)
+    frame = load_metric_events(settings, since="2026-08-29T05:00:00+00:00")
+    assert frame.empty
+
+
+def test_load_metric_events_dataset_arrow_io_is_empty(tmp_path, monkeypatch) -> None:
+    from conftest import make_settings
+    from pyarrow.lib import ArrowIOError
+
+    from cicerone.config import IOSettings
+
+    settings = make_settings(
+        input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+
+    def _read(*_args, **_kwargs):
+        raise ArrowIOError("parquet read failed")
 
     monkeypatch.setattr("cicerone.evaluation.context.read_parquet", _read)
     frame = load_metric_events(settings, since="2026-08-29T05:00:00+00:00")
