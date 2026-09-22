@@ -167,6 +167,19 @@ def _html(request: Request, template: str, context: dict[str, Any], *, settings:
     return response
 
 
+def _user_coverage(manifest: dict[str, Any] | None) -> float | None:
+    if not manifest:
+        return None
+    try:
+        users = float(manifest["n_users_with_recommendations"])
+        targets = float(manifest["n_target_users"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if targets <= 0:
+        return None
+    return users / targets
+
+
 def _incremental_status(history: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Most recent incremental write-through run from manifest history (newest first)."""
     for run in history:
@@ -179,6 +192,7 @@ def _incremental_status(history: list[dict[str, Any]]) -> dict[str, Any] | None:
             "events": run.get("incremental_events_applied", run.get("n_events")),
             "online_users_refreshed": run.get("online_users_refreshed"),
             "online_fit_partial_epochs": run.get("online_fit_partial_epochs"),
+            "online_events_dropped_unknown": run.get("online_events_dropped_unknown"),
             "error": run.get("error"),
         }
     return None
@@ -228,6 +242,7 @@ def create_app(
             "manifest": manifest,
             "history": history,
             "staleness": staleness,
+            "user_coverage": _user_coverage(manifest),
             "events_enabled": settings.events.enabled,
             "events_kind": settings.events.kind if settings.events.enabled else None,
             "incremental": _incremental_status(history),

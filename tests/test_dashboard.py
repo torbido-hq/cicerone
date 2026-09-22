@@ -173,7 +173,10 @@ def test_status_partial_renders_latest_manifest():
         "triggered_by": "cron",
         "n_events": 42,
         "n_users_with_recommendations": 7,
+        "n_target_users": 10,
+        "n_items": 50,
         "models": "collaborative,popular",
+        "automl_metrics": "MAP@10=0.1200,NDCG@10=0.0900",
         "error": None,
     }
     app = create_app(_settings(), _FakeReader(manifest), _users_with("alice", "s3cret"))
@@ -186,6 +189,12 @@ def test_status_partial_renders_latest_manifest():
     assert "cron" in response.text
     assert "42" in response.text
     assert "Users with recommendations" in response.text
+    assert "Target users" in response.text
+    assert "Items" in response.text
+    assert "User coverage" in response.text
+    assert "70.00%" in response.text
+    assert "AutoML" in response.text
+    assert "MAP@10=0.1200" in response.text
     assert "Latest run" in response.text
     assert "Recent runs" in response.text
     assert 'data-run-status="success"' in response.text
@@ -207,6 +216,7 @@ def test_status_partial_shows_incremental_panel_when_events_enabled():
             "incremental_events_applied": 3,
             "online_users_refreshed": 2,
             "online_fit_partial_epochs": 1,
+            "online_events_dropped_unknown": 4,
             "n_events": 3,
             "error": None,
         },
@@ -229,6 +239,9 @@ def test_status_partial_shows_incremental_panel_when_events_enabled():
     assert "Source: webhook" in response.text
     assert "3" in response.text
     assert "Online users refreshed" in response.text
+    assert "Unknown-id events dropped" in response.text
+    dropped = response.text.split("Unknown-id events dropped", 1)[1].split("</dd>", 1)[0]
+    assert "<dd>4" in dropped
     assert "cicerone_events_source_lag" in response.text
 
 
@@ -1252,6 +1265,35 @@ def test_experiments_flash_cookie_is_one_shot():
     client.cookies.pop("cicerone_flash", None)
     second = client.get("/dashboard/experiments", auth=("alice", "s3cret"))
     assert "Promoted control" not in second.text
+
+
+def test_user_coverage_ratio():
+    from cicerone.dashboard import _user_coverage
+
+    assert _user_coverage(None) is None
+    assert _user_coverage({"n_users_with_recommendations": 7}) is None
+    assert _user_coverage({"n_users_with_recommendations": 7, "n_target_users": 0}) is None
+    assert _user_coverage({"n_users_with_recommendations": None, "n_target_users": 10}) is None
+    assert _user_coverage({"n_users_with_recommendations": 7, "n_target_users": 10}) == pytest.approx(0.7)
+
+
+def test_status_partial_omits_coverage_when_manifest_lacks_counts():
+    manifest = {
+        "status": "success",
+        "generated_at": "2026-07-28T00:00:00+00:00",
+        "triggered_by": "cron",
+        "n_events": 42,
+        "n_users_with_recommendations": 7,
+        "models": "collaborative,popular",
+        "error": None,
+    }
+    app = create_app(_settings(), _FakeReader(manifest), _users_with("alice", "s3cret"))
+    response = TestClient(app).get("/partials/status", auth=("alice", "s3cret"))
+    assert response.status_code == 200
+    assert "Target users" not in response.text
+    assert ">Items</dt>" not in response.text
+    assert "User coverage" not in response.text
+    assert "AutoML" not in response.text
 
 
 def test_as_percent_formats_rates():
