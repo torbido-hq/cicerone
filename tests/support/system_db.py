@@ -41,6 +41,7 @@ from support.system_spec import (
     run_system_job,
     sample_system_catalog,
     serve_client,
+    stop_serve_events,
     write_system_config,
 )
 
@@ -74,6 +75,7 @@ __all__ = [
     "sample_system_catalog",
     "seed_catalog",
     "serve_client",
+    "stop_serve_events",
     "write_system_config",
 ]
 

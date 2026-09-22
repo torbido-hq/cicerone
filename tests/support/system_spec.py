@@ -1,4 +1,4 @@
-"""Shared helpers for system-style end-to-end specs (db and local dataset).
+"""Shared helpers for system-style end-to-end specs (db, dataset, events).
 
 Catalog, TOML, HTTP mounts, and dataset parquet seed live here so the
 scenario modules stay focused on the journeys.
