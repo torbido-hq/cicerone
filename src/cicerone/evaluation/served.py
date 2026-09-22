@@ -35,6 +35,7 @@ from cicerone.io.recommendation_schema import (
 )
 
 logger = logging.getLogger(__name__)
+_RECTOOLS_ERRORS = (ValueError, TypeError, LookupError)
 
 
 @dataclass(frozen=True)
@@ -340,8 +341,13 @@ def evaluate_served(
                     prev_interactions=prev if not prev.empty else None,
                 )
                 metrics.update({key: float(value) for key, value in computed.items()})
-            except Exception:
-                logger.exception("RecTools calc_metrics failed for k=%s", k)
+            except _RECTOOLS_ERRORS as exc:
+                logger.exception(
+                    "RecTools calc_metrics failed for k=%s (%s: %s)",
+                    k,
+                    type(exc).__name__,
+                    exc,
+                )
                 metrics[f"HitRate@{k}"] = _hit_rate(recs, relevant, k=k)
             if not prev.empty and catalog_ids:
                 try:
@@ -374,8 +380,14 @@ def evaluate_served(
                             interactions=interactions,
                         )
                         source_metrics.update({key: float(value) for key, value in computed.items()})
-                    except Exception:
-                        logger.exception("RecTools HitRate failed for source=%s k=%s", source, k)
+                    except _RECTOOLS_ERRORS as exc:
+                        logger.exception(
+                            "RecTools HitRate failed for source=%s k=%s (%s: %s)",
+                            source,
+                            k,
+                            type(exc).__name__,
+                            exc,
+                        )
                         source_metrics[f"HitRate@{k}"] = _hit_rate(group, relevant, k=k)
                 else:
                     source_metrics[f"HitRate@{k}"] = _hit_rate(group, relevant, k=k)

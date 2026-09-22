@@ -1037,7 +1037,7 @@ def test_evaluation_remaining_branches(monkeypatch) -> None:
     assert _recs_from_history(hist, events).empty
     monkeypatch.setattr(
         "cicerone.evaluation.served.calc_metrics",
-        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("x")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("x")),
     )
     failed = evaluate_served(
         pd.DataFrame([{"user_id": "alice", "item_id": "ipa", "rank": 1, "source": "personalized"}]),
@@ -1057,6 +1057,31 @@ def test_evaluation_remaining_branches(monkeypatch) -> None:
     )
     assert failed is not None
     assert "HitRate@1" in failed.metrics
+
+    class Boom(Exception):
+        pass
+
+    monkeypatch.setattr(
+        "cicerone.evaluation.served.calc_metrics",
+        lambda *args, **kwargs: (_ for _ in ()).throw(Boom("bug")),
+    )
+    with pytest.raises(Boom, match="bug"):
+        evaluate_served(
+            pd.DataFrame([{"user_id": "alice", "item_id": "ipa", "rank": 1, "source": "personalized"}]),
+            pd.DataFrame(
+                [
+                    {
+                        "user_id": "alice",
+                        "item_id": "ipa",
+                        "event_type": "purchase",
+                        "occurred_at": "2026-08-28T12:00:00Z",
+                    }
+                ]
+            ),
+            generated_at=None,
+            ks=(1,),
+            event_types=("purchase",),
+        )
     monkeypatch.setattr(
         pd,
         "merge_asof",
@@ -1617,7 +1642,7 @@ def test_load_metric_events_dataset_s3_missing_is_empty(tmp_path, monkeypatch) -
     )
 
     def _read(*_args, **_kwargs):
-        raise RuntimeError("NoSuchKey")
+        raise OSError("NoSuchKey")
 
     monkeypatch.setattr("cicerone.evaluation.context.read_parquet", _read)
     monkeypatch.setattr("cicerone.evaluation.context.is_s3_not_found", lambda _exc: True)
@@ -1899,7 +1924,7 @@ def test_load_metric_events_db_bound_failure_is_empty(monkeypatch) -> None:
             return None
 
     def _boom(*_args, **_kwargs):
-        raise RuntimeError("sql down")
+        raise OSError("sql down")
 
     monkeypatch.setattr("cicerone.evaluation.context.engine_for", lambda *_args, **_kwargs: _Engine())
     monkeypatch.setattr("cicerone.evaluation.context.pd.read_sql", _boom)
@@ -1920,7 +1945,7 @@ def test_load_metric_events_db_engine_failure_is_empty(monkeypatch) -> None:
     settings = make_settings(input=IOSettings(kind="db", options={"database_url": "sqlite+pysqlite://"}))
 
     def _boom(*_args, **_kwargs):
-        raise RuntimeError("engine down")
+        raise OSError("engine down")
 
     monkeypatch.setattr("cicerone.evaluation.context.engine_for", _boom)
 
@@ -1930,6 +1955,44 @@ def test_load_metric_events_db_engine_failure_is_empty(monkeypatch) -> None:
     monkeypatch.setattr("cicerone.evaluation.context.build_input_source", _source)
     frame = load_metric_events(settings, event_types=("purchase",), since="2026-08-29T05:00:00+00:00")
     assert frame.empty
+
+
+def test_load_metric_events_dataset_propagates_unexpected_errors(tmp_path, monkeypatch) -> None:
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+
+    settings = make_settings(
+        input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+
+    class Boom(Exception):
+        pass
+
+    monkeypatch.setattr(
+        "cicerone.evaluation.context.read_parquet",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(Boom("bug")),
+    )
+    with pytest.raises(Boom, match="bug"):
+        load_metric_events(settings, since="2026-08-29T05:00:00+00:00")
+
+
+def test_load_metric_events_db_propagates_unexpected_errors(monkeypatch) -> None:
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+
+    settings = make_settings(input=IOSettings(kind="db", options={"database_url": "sqlite+pysqlite://"}))
+
+    class Boom(Exception):
+        pass
+
+    monkeypatch.setattr(
+        "cicerone.evaluation.context.engine_for",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(Boom("bug")),
+    )
+    with pytest.raises(Boom, match="bug"):
+        load_metric_events(settings, since="2026-08-29T05:00:00+00:00")
 
 
 def test_load_metric_events_dataset_keeps_quantity(tmp_path, monkeypatch) -> None:

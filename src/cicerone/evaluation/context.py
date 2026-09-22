@@ -7,7 +7,10 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 import pandas as pd
+from botocore.exceptions import BotoCoreError
+from pyarrow.lib import ArrowException
 from sqlalchemy import bindparam, text
+from sqlalchemy.exc import SQLAlchemyError
 
 from cicerone.config.settings import Settings
 from cicerone.evaluation.tracking import conversion_events, filter_events_by_types
@@ -23,7 +26,18 @@ from cicerone.io.options import (
     sql_identifier,
 )
 from cicerone.io.recommendation_schema import USER_COLUMN
+from cicerone.io.replace_users import RecommendationSchemaError
 from cicerone.track.store_common import since_date_floor
+
+_METRIC_READ_ERRORS: tuple[type[BaseException], ...] = (
+    OSError,
+    ValueError,
+    TypeError,
+    SQLAlchemyError,
+    ArrowException,
+    BotoCoreError,
+    RecommendationSchemaError,
+)
 
 REQUIRED_EVENT_COLUMNS = (USER_COLUMN, "item_id", "event_type", "occurred_at")
 EVENT_METRIC_COLUMNS = (USER_COLUMN, "item_id", "event_type", "quantity", "occurred_at")
@@ -156,7 +170,7 @@ def _read_metric_parquet(
             attempts.append([*base, ("occurred_at", ">=", text_floor)])
     else:
         attempts.append(base or None)
-    last_error: Exception | None = None
+    last_error: BaseException | None = None
     for columns in (EVENT_METRIC_COLUMNS, REQUIRED_EVENT_COLUMNS):
         for filters in attempts:
             try:
@@ -168,7 +182,7 @@ def _read_metric_parquet(
                 )
             except FileNotFoundError:
                 raise
-            except Exception as exc:
+            except _METRIC_READ_ERRORS as exc:
                 if is_s3_not_found(exc):
                     raise
                 last_error = exc
@@ -190,14 +204,14 @@ def load_metric_events(
             frame = _read_metric_parquet(inp.options, types=types, floor=floor)
         except FileNotFoundError:
             return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
-        except Exception as exc:
+        except _METRIC_READ_ERRORS as exc:
             if is_s3_not_found(exc):
                 return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
             if floor is not None:
                 return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
             try:
                 frame = read_parquet(inp.options, "events.parquet")
-            except Exception:
+            except _METRIC_READ_ERRORS:
                 frame = build_input_source(inp).read_events()
         keep = [column for column in EVENT_METRIC_COLUMNS if column in frame.columns]
         frame = frame.loc[:, keep] if keep else frame
@@ -227,7 +241,7 @@ def load_metric_events(
                 try:
                     stmt, params = _metric_event_sql(source, types=types, floor=floor)
                     frame = pd.read_sql(stmt, engine, params=params)
-                except Exception as exc:
+                except _METRIC_READ_ERRORS as exc:
                     if not is_missing_column_error(exc):
                         raise
                     stmt, params = _metric_event_sql(
@@ -237,7 +251,7 @@ def load_metric_events(
                 return _filter_events_since(_with_default_quantity(frame), since)
             finally:
                 release_engine(url)
-        except Exception:
+        except _METRIC_READ_ERRORS:
             if floor is not None:
                 return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
             frame = build_input_source(inp).read_events()
