@@ -770,15 +770,32 @@ def test_track_jsonl_dedupes_duplicate_event_ids(tmp_path) -> None:
 
 
 def test_track_store_sqlite_missing_table_error_helper(tmp_path, monkeypatch) -> None:
+    from sqlalchemy.exc import SQLAlchemyError
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
+    output = IOSettings(kind="db", options={"database_url": url})
+    store = TrackStore(output)
+    store.append_rows([_row()])
+    monkeypatch.setattr(
+        pd,
+        "read_sql",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(SQLAlchemyError("x")),
+    )
+    monkeypatch.setattr("cicerone.track.store_db.is_missing_table_error", lambda _exc: True)
+    assert store.read_rows() == []
+    assert store.read_eval() is None
+    assert store.read_history().empty
+
+
+def test_track_store_sqlite_unexpected_error_ignores_missing_table_helper(tmp_path, monkeypatch) -> None:
     url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
     output = IOSettings(kind="db", options={"database_url": url})
     store = TrackStore(output)
     store.append_rows([_row()])
     monkeypatch.setattr(pd, "read_sql", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("x")))
     monkeypatch.setattr("cicerone.track.store_db.is_missing_table_error", lambda _exc: True)
-    assert store.read_rows() == []
-    assert store.read_eval() is None
-    assert store.read_history().empty
+    with pytest.raises(RuntimeError, match="x"):
+        store.read_rows()
 
 
 def test_track_history_non_s3_error_reraises(tmp_path, monkeypatch) -> None:

@@ -652,6 +652,20 @@ def test_append_exposures_db_rolls_back_when_fence_lost_after_insert(tmp_path, m
 
 
 def test_read_exposures_db_generic_missing_table_is_empty(tmp_path, monkeypatch) -> None:
+    from sqlalchemy.exc import SQLAlchemyError
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    store = ExperimentStore(IOSettings(kind="db", options={"database_url": url}))
+
+    def _read(*_args, **_kwargs):
+        raise SQLAlchemyError("no such table: exposures")
+
+    monkeypatch.setattr("cicerone.experiment.store.pd.read_sql", _read)
+    monkeypatch.setattr("cicerone.experiment.store.is_missing_table_error", lambda _exc: True)
+    assert store.read_exposures() == []
+
+
+def test_read_exposures_db_unexpected_error_ignores_missing_table_helper(tmp_path, monkeypatch) -> None:
     url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
     store = ExperimentStore(IOSettings(kind="db", options={"database_url": url}))
 
@@ -660,7 +674,8 @@ def test_read_exposures_db_generic_missing_table_is_empty(tmp_path, monkeypatch)
 
     monkeypatch.setattr("cicerone.experiment.store.pd.read_sql", _read)
     monkeypatch.setattr("cicerone.experiment.store.is_missing_table_error", lambda _exc: True)
-    assert store.read_exposures() == []
+    with pytest.raises(RuntimeError, match="no such table"):
+        store.read_exposures()
 
 
 def test_read_exposures_db_unexpected_error_reraises(tmp_path, monkeypatch) -> None:

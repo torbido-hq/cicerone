@@ -326,11 +326,11 @@ class ExperimentStore:
                 text(f'SELECT * FROM "{table}" ORDER BY (promoted_at IS NULL), promoted_at DESC LIMIT 1'),
                 engine,
             )
-        except Exception as exc:
+        except SQLAlchemyError as exc:
             if is_missing_column_error(exc):
                 try:
                     frame = pd.read_sql(text(f'SELECT * FROM "{table}" LIMIT 1'), engine)
-                except Exception as retry_exc:
+                except SQLAlchemyError as retry_exc:
                     if is_missing_table_error(retry_exc) or is_missing_column_error(retry_exc):
                         return None
                     logger.exception("Failed to read experiment state table %r", table)
@@ -398,7 +398,7 @@ class ExperimentStore:
                 _fence()
                 conn.execute(create_sql)
                 _replace_row(conn)
-        except Exception as exc:
+        except SQLAlchemyError as exc:
             if not is_missing_column_error(exc):
                 raise
             with engine.begin() as conn:
@@ -441,7 +441,7 @@ class ExperimentStore:
             params = {}
         try:
             frame = pd.read_sql(sql, engine, params=params)
-        except Exception as exc:
+        except SQLAlchemyError as exc:
             if is_missing_table_error(exc):
                 return []
             if experiment_id and is_missing_column_error(exc):

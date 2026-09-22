@@ -10,6 +10,7 @@ from typing import Any
 
 import pandas as pd
 from sqlalchemy import Engine, bindparam, text
+from sqlalchemy.exc import SQLAlchemyError
 
 from cicerone.io.db_errors import is_missing_table_error
 from cicerone.io.engines import engine_for
@@ -121,7 +122,7 @@ class TrackDbBackend:
         clause, params = _track_row_sql_filter(kind=kind, experiment_id=experiment_id, since=since)
         try:
             frame = pd.read_sql(text(f'SELECT * FROM "{table}"{clause}'), engine, params=params)
-        except Exception as exc:
+        except SQLAlchemyError as exc:
             if is_missing_table_error(exc):
                 return []
             logger.exception("Failed to read track table %r", table)
@@ -160,7 +161,7 @@ class TrackDbBackend:
         engine = self._db_engine()
         try:
             frame = pd.read_sql(text(f'SELECT payload FROM "{table}" LIMIT 1'), engine)
-        except Exception as exc:
+        except SQLAlchemyError as exc:
             if is_missing_table_error(exc):
                 return None
             logger.exception("Failed to read eval table %r", table)
@@ -202,7 +203,7 @@ class TrackDbBackend:
                     stmt = stmt.bindparams(bindparam("generated_ats", expanding=True))
                 return pd.read_sql(stmt, engine, params=params)
             return pd.read_sql(text(f'SELECT * FROM "{table}"'), engine)
-        except Exception as exc:
+        except SQLAlchemyError as exc:
             if is_missing_table_error(exc):
                 return pd.DataFrame(columns=list(HISTORY_COLUMNS))
             logger.exception("Failed to read history table %r", table)
