@@ -3,9 +3,9 @@ version: "3.9"
 # CI-only stack: runs the pytest suite (>=95% coverage enforced by
 # pyproject.toml) against a real, throwaway Postgres instance for the
 # database-backend tests and tests/test_system_db*.py /
-# tests/test_system_mixed*.py / tests/test_system_events.py.
-# Local parquet system specs (tests/test_system_dataset*.py) do not need
-# Postgres.
+# tests/test_system_mixed*.py. Local parquet system specs
+# (tests/test_system_dataset*.py, tests/test_system_events.py) do not
+# need Postgres.
 # Sequential extra tests run in `test-sequential` (rectools[torch]); the
 # `test` and runtime images stay torch-free. Never used in production — see
 # docker-compose.yml (which also ships a durable local `postgres` service

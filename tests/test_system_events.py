@@ -1,6 +1,6 @@
 """System-style check: webhook ``POST /events`` write-through after a batch job.
 
-Seeds the shared Postgres catalog, runs ``job.run``, then mounts the same
+Seeds the shared local parquet catalog, runs ``job.run``, then mounts the same
 serve / dashboard apps as production — including ``start_events_runtime`` —
 so a queued purchase is not visible until the worker flushes.
 """
@@ -10,18 +10,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+import pandas as pd
 import pytest
-from sqlalchemy.engine import Engine
-from support.system_db import (
+from support.system_spec import (
     DASHBOARD_AUTH,
     SERVE_HEADERS,
-    SKIP_NO_TEST_DB,
-    TEST_DATABASE_URL,
     dashboard_client,
     mount_serve_app,
     run_system_job,
     sample_system_catalog,
-    seed_catalog,
+    seed_dataset_catalog,
     stop_serve_events,
     write_system_config,
 )
@@ -38,30 +36,32 @@ LIVE_EVENT_ID = "system-spec-events-1"
 @dataclass(frozen=True)
 class TrainedEventsSystem:
     config_path: Path
+    output_path: Path
 
 
 @pytest.fixture(scope="module")
-def trained_system(
-    db_engine: Engine,
-    clean_schema: None,
-    tmp_path_factory: pytest.TempPathFactory,
-) -> TrainedEventsSystem:
+def trained_system(tmp_path_factory: pytest.TempPathFactory) -> TrainedEventsSystem:
+    root = tmp_path_factory.mktemp("system-spec-events")
+    input_path = root / "in"
+    output_path = root / "out"
+    output_path.mkdir()
     events, users, items = sample_system_catalog()
-    seed_catalog(db_engine, events, users, items)
+    seed_dataset_catalog(input_path, events, users, items)
     config_path = write_system_config(
-        tmp_path_factory.mktemp("system-spec-events") / "cicerone.toml",
-        database_url=TEST_DATABASE_URL,
+        root / "cicerone.toml",
+        kind="dataset",
+        input_path=input_path,
+        output_path=output_path,
         events_webhook=True,
     )
     run_system_job(config_path, triggered_by="system-spec")
-    return TrainedEventsSystem(config_path=config_path)
+    return TrainedEventsSystem(config_path=config_path, output_path=output_path)
 
 
 def _settings(trained: TrainedEventsSystem):
     return load_settings(str(trained.config_path))
 
 
-@pytest.mark.skipif(not TEST_DATABASE_URL, reason=SKIP_NO_TEST_DB)
 def test_system_events_webhook_write_through_serve_and_dashboard(
     trained_system: TrainedEventsSystem,
 ) -> None:
@@ -132,6 +132,12 @@ def test_system_events_webhook_write_through_serve_and_dashboard(
     assert latest["status"] == "success"
     assert int(latest["n_events"]) == 1
     assert int(latest["incremental_events_applied"]) == 1
+
+    on_disk = pd.read_parquet(trained_system.output_path / "recommendations.parquet")
+    live = on_disk.loc[on_disk["user_id"].astype(str) == LIVE_USER]
+    assert not live.empty
+    assert LIVE_ITEM in set(live["item_id"].astype(str))
+    assert INCREMENTAL_SOURCE in set(live["source"].astype(str))
 
     flushed = dash.get("/dashboard", auth=DASHBOARD_AUTH)
     assert flushed.status_code == 200

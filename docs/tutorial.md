@@ -915,4 +915,4 @@ docker compose up --build
   (`tests/test_system_dataset.py`, `tests/test_system_dataset_quality.py`),
   mixed db-input / dataset-output (`tests/test_system_mixed.py`,
   `tests/test_system_mixed_quality.py`), and webhook incremental ingest
-  (`tests/test_system_events.py`).
+  on local parquet (`tests/test_system_events.py`).

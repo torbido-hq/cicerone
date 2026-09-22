@@ -22,7 +22,8 @@ tests, the local-parquet dataset system spec
 (`tests/test_system_dataset.py`, `tests/test_system_dataset_quality.py`),
 the mixed db-input / dataset-output spec
 (`tests/test_system_mixed.py`, `tests/test_system_mixed_quality.py`),
-the webhook incremental-events spec (`tests/test_system_events.py`),
+the webhook incremental-events spec (`tests/test_system_events.py`;
+local parquet, no Postgres),
 and the Postgres system-style end-to-end checks in
 `tests/test_system_db.py` and `tests/test_system_db_quality.py`, and
 enforces the 95% coverage gate
