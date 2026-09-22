@@ -237,9 +237,10 @@ max signed 32-bit milliseconds; sets librdkafka `socket.timeout.ms` /
 `request.timeout.ms` and `list_topics`). Optional `max_poll_interval_ms`
 and `session_timeout_ms` map to librdkafka `max.poll.interval.ms` /
 `session.timeout.ms` (omit both to keep client defaults; when both are set,
-`max_poll_interval_ms` must be >= `session_timeout_ms`). Setting
-`session_timeout_ms` also sets `heartbeat.interval.ms` to one third of the
-session so a short session is not paired with the 3s client default.
+`max_poll_interval_ms` must be >= `session_timeout_ms`). `session_timeout_ms`
+must be >= 2 so `heartbeat.interval.ms` can stay strictly below the session.
+Setting `session_timeout_ms` also sets `heartbeat.interval.ms` to one third of
+the session so a short session is not paired with the 3s client default.
 Missing `event_id`
 uses `{partition}-{offset}`. Manual commits of the contiguous watermark per
 partition (an out-of-order ack cannot skip an earlier offset). `nack`

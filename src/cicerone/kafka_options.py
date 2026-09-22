@@ -75,7 +75,7 @@ def kafka_client_config(options: dict[str, Any], *, prefix: str) -> dict[str, An
 def kafka_consumer_config(options: dict[str, Any], *, prefix: str) -> dict[str, Any]:
     conf = kafka_client_config(options, prefix=prefix)
     max_poll = _optional_timeout_ms(options, "max_poll_interval_ms", prefix=prefix)
-    session = _optional_timeout_ms(options, "session_timeout_ms", prefix=prefix)
+    session = _optional_timeout_ms(options, "session_timeout_ms", prefix=prefix, minimum=2)
     if max_poll is not None and session is not None and max_poll < session:
         raise ConfigError(
             f"{prefix}.max_poll_interval_ms must be >= {prefix}.session_timeout_ms, "
@@ -90,14 +90,14 @@ def kafka_consumer_config(options: dict[str, Any], *, prefix: str) -> dict[str, 
     return conf
 
 
-def _optional_timeout_ms(options: dict[str, Any], key: str, *, prefix: str) -> int | None:
+def _optional_timeout_ms(options: dict[str, Any], key: str, *, prefix: str, minimum: int = 1) -> int | None:
     if key not in options or options[key] in (None, ""):
         return None
     raw = options[key]
     if isinstance(raw, bool) or (isinstance(raw, float) and not raw.is_integer()):
         raise ConfigError(f"{prefix}.{key} must be an integer, got {raw!r}")
     try:
-        value = optional_int(options, key, 0, prefix=prefix, minimum=1)
+        value = optional_int(options, key, 0, prefix=prefix, minimum=minimum)
     except OverflowError as exc:
         raise ConfigError(f"{prefix}.{key} must be an integer, got {raw!r}") from exc
     if value > MAX_TIMEOUT_MS:

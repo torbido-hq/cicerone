@@ -107,6 +107,10 @@ def test_consumer_poll_interval_options(monkeypatch):
     assert source._consumer.config["max.poll.interval.ms"] == 600_000
     assert source._consumer.config["session.timeout.ms"] == 45_000
     assert source._consumer.config["heartbeat.interval.ms"] == 15_000
+    floor = KafkaEventSource(_options(session_timeout_ms=2))
+    floor.connect()
+    assert floor._consumer.config["session.timeout.ms"] == 2
+    assert floor._consumer.config["heartbeat.interval.ms"] == 1
     default = KafkaEventSource(_options())
     default.connect()
     assert "max.poll.interval.ms" not in default._consumer.config
@@ -119,6 +123,8 @@ def test_validate_rejects_bad_poll_interval():
         validate_kafka_event_options(_options(max_poll_interval_ms=0))
     with pytest.raises(ConfigError, match="session_timeout_ms"):
         validate_kafka_event_options(_options(session_timeout_ms="nope"))
+    with pytest.raises(ConfigError, match="session_timeout_ms"):
+        validate_kafka_event_options(_options(session_timeout_ms=1))
     with pytest.raises(ConfigError, match="max_poll_interval_ms must be >="):
         validate_kafka_event_options(_options(max_poll_interval_ms=1000, session_timeout_ms=2000))
     from cicerone.kafka_options import MAX_TIMEOUT_MS
