@@ -164,6 +164,8 @@ def test_kafka_publisher_uses_timeout_seconds(monkeypatch):
     publisher.connect()
     assert publisher._producer.config["socket.timeout.ms"] == 4000
     assert publisher._producer.config["request.timeout.ms"] == 4000
+    assert publisher._producer.config["enable.idempotence"] is True
+    assert publisher._producer.config["acks"] == "all"
     assert broker.list_topics_timeouts[-1] == 4.0
     publisher.publish(pd.DataFrame())
     assert broker.flush_calls[-1] == 4.0
