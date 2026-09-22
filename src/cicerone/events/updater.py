@@ -153,7 +153,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         popular_ranking = self._popular_ranking(batch, weights)
         latest_ranking = self._latest_ranking(batch, weights)
         online_result = self._refresh_online(events)
-        online_by_user = {} if online_result.sequential_skipped else self._online_rows_by_user(online_result)
+        online_by_user = self._online_rows_by_user(online_result)
 
         pending_publish: tuple[pd.DataFrame, str] | None = None
 

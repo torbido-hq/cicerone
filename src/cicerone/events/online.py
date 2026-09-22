@@ -205,13 +205,8 @@ class OnlineTrainer:
         if artifact is None or working is None:
             return OnlineRefreshResult(rows=empty_online_rows())
         models, fitted, skip_sequential = self._recommend_models(artifact)
-        if skip_sequential:
-            logger.info(
-                "Online refresh skipped (sequential in artifact, torch extra missing); "
-                "%d event(s) not rewritten",
-                len(events),
-            )
-            return OnlineRefreshResult(rows=empty_online_rows(), sequential_skipped=True)
+        if not models:
+            return OnlineRefreshResult(rows=empty_online_rows(), sequential_skipped=skip_sequential)
 
         batch = events_to_dataframe(events)
         users = batch[USER_COLUMN].astype(str)
@@ -223,6 +218,7 @@ class OnlineTrainer:
             return OnlineRefreshResult(
                 rows=empty_online_rows(),
                 events_dropped_unknown=dropped,
+                sequential_skipped=skip_sequential,
             )
 
         extra = build_interactions(known, artifact.feature_config, self._half_life_days)
@@ -231,6 +227,7 @@ class OnlineTrainer:
                 rows=empty_online_rows(),
                 events_dropped_unknown=dropped,
                 events_known=int(len(known)),
+                sequential_skipped=skip_sequential,
             )
 
         extra = extra.copy()
@@ -243,6 +240,7 @@ class OnlineTrainer:
                 rows=empty_online_rows(),
                 events_dropped_unknown=dropped,
                 events_known=int(len(known)),
+                sequential_skipped=skip_sequential,
             )
         maps = artifact.dataset
         working = _dataset_with_interactions(maps, _merge_interaction_frames(self._job_raw, extra_raw))
@@ -298,6 +296,7 @@ class OnlineTrainer:
                 fit_partial_epochs=epochs_run,
                 events_dropped_unknown=dropped,
                 events_known=int(len(known)),
+                sequential_skipped=skip_sequential,
             )
         rows = rows.copy()
         rows[USER_COLUMN] = rows[USER_COLUMN].astype(str)
@@ -317,6 +316,7 @@ class OnlineTrainer:
             fit_partial_epochs=epochs_run,
             events_dropped_unknown=dropped,
             events_known=int(len(known)),
+            sequential_skipped=skip_sequential,
         )
 
     def _reload(self) -> bool:

@@ -26,6 +26,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and AutoML scores when the manifest has them. Incremental panel shows
   unknown-id event drops.
 
+### Changed
+
+- Online refresh still rewrites LightFM / popular lists when the sequential extra is missing. Only the sequential model is skipped.
+
 ### Fixed
 
 - Popular, latest, and neighbor snapshots drop missing or blank item/user ids instead of casting them to `"nan"`.

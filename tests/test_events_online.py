@@ -60,14 +60,16 @@ def _write_artifact(
     enabled = models if models is not None else ["collaborative", "item_based", "popular"]
     built = build_dataset(sample_events, sample_users, sample_items, feature_config, half_life_days=90)
     fitted: dict = {}
-    train_and_recommend(
-        built,
-        ["u1", "u2", "u3"],
-        feature_config,
-        top_k=3,
-        enabled_models=[name for name in enabled if name != "sequential"],
-        strategy_cache=fitted,
-    )
+    train_models = [name for name in enabled if name != "sequential"]
+    if train_models:
+        train_and_recommend(
+            built,
+            ["u1", "u2", "u3"],
+            feature_config,
+            top_k=3,
+            enabled_models=train_models,
+            strategy_cache=fitted,
+        )
     if extra_fitted:
         fitted.update(extra_fitted)
     artifact = build_artifact(
@@ -315,10 +317,30 @@ def test_online_trainer_skips_sequential_without_torch(
     result = trainer.refresh([_known_event("seq")])
     trainer.commit()
     assert result.sequential_skipped is True
-    assert result.fit_partial_epochs == 0
-    assert calls["n"] == 0
-    assert result.users_refreshed == 0
+    assert result.fit_partial_epochs == 1
+    assert calls["n"] == 1
+    assert result.users_refreshed >= 1
+    assert not result.rows.empty
+
+
+def test_online_trainer_sequential_only_without_torch_returns_empty(
+    tmp_path, feature_config, sample_events, sample_users, sample_items, monkeypatch
+):
+    sink, _enabled = _write_artifact(
+        tmp_path,
+        feature_config,
+        sample_events,
+        sample_users,
+        sample_items,
+        models=["sequential"],
+        extra_fitted={"sequential": _BoomSequential()},
+    )
+    monkeypatch.setattr("cicerone.events.online.sequential_extra_available", lambda: False)
+    trainer = _trainer(sink)
+    result = trainer.refresh([_known_event("seq-only")])
+    assert result.sequential_skipped is True
     assert result.rows.empty
+    assert result.users_refreshed == 0
 
 
 def test_online_trainer_caps_extra_interactions(
@@ -966,8 +988,9 @@ def test_incremental_updater_preserves_sequential_without_torch(
     assert updater.apply([_known_event("seq-e2e")]) == 1
     frame = load_recommendations_frame(settings.output)
     u2 = frame[frame["user_id"].astype(str) == "u2"]
-    assert "seq-keep" in set(u2["item_id"].astype(str))
-    assert "old" in set(u2["item_id"].astype(str))
+    items = set(u2["item_id"].astype(str))
+    assert "seq-keep" in items
+    assert "old" not in items
     assert "personalized" in set(u2["source"].astype(str))
 
 
