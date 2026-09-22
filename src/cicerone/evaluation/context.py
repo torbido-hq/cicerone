@@ -8,7 +8,7 @@ from typing import Any
 
 import pandas as pd
 from botocore.exceptions import BotoCoreError
-from pyarrow.lib import ArrowException
+from pyarrow.lib import ArrowInvalid, ArrowNotImplementedError
 from sqlalchemy import bindparam, text
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -34,7 +34,8 @@ _METRIC_READ_ERRORS: tuple[type[BaseException], ...] = (
     ValueError,
     TypeError,
     SQLAlchemyError,
-    ArrowException,
+    ArrowInvalid,
+    ArrowNotImplementedError,
     BotoCoreError,
     RecommendationSchemaError,
 )
