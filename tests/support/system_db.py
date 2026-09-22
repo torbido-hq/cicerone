@@ -18,43 +18,62 @@ from cicerone.io.db_store import (
     DEFAULT_ITEMS_TABLE,
     DEFAULT_USERS_TABLE,
 )
-from support.postgres_defaults import canonical_postgres_test_db, looks_like_test_database
+from support.postgres_defaults import (
+    canonical_postgres_test_db,
+    looks_like_test_database,
+    resolve_test_database_url,
+)
 from support.system_spec import (
+    DASHBOARD_AUTH,
     REPO_FEATURES_CONFIG,
     REPO_ROOT,
+    SERVE_HEADERS,
+    SKIP_NO_TEST_DB,
     SYSTEM_DASHBOARD_PASSWORD,
     SYSTEM_DASHBOARD_USER,
     SYSTEM_SERVE_TOKEN,
     available_recommendation_ids,
+    dashboard_client,
     dashboard_users,
     mount_dashboard_app,
     mount_serve_app,
+    parse_track_eval,
     run_system_job,
     sample_system_catalog,
+    serve_client,
     write_system_config,
 )
+
+TEST_DATABASE_URL = resolve_test_database_url()
 
 INPUT_DB_TABLES = frozenset({DEFAULT_EVENTS_TABLE, DEFAULT_USERS_TABLE, DEFAULT_ITEMS_TABLE})
 OUTPUT_DB_TABLES = DEFAULT_DB_TABLES - INPUT_DB_TABLES
 
 __all__ = [
+    "DASHBOARD_AUTH",
+    "INPUT_DB_TABLES",
+    "OUTPUT_DB_TABLES",
     "REPO_FEATURES_CONFIG",
     "REPO_ROOT",
+    "SERVE_HEADERS",
+    "SKIP_NO_TEST_DB",
     "SYSTEM_DASHBOARD_PASSWORD",
     "SYSTEM_DASHBOARD_USER",
     "SYSTEM_SERVE_TOKEN",
+    "TEST_DATABASE_URL",
     "available_recommendation_ids",
+    "dashboard_client",
     "dashboard_users",
-    "INPUT_DB_TABLES",
-    "OUTPUT_DB_TABLES",
     "is_dedicated_test_database",
     "mount_dashboard_app",
     "mount_serve_app",
+    "parse_track_eval",
     "postgres_ready",
     "reset_schema",
     "run_system_job",
     "sample_system_catalog",
     "seed_catalog",
+    "serve_client",
     "write_system_config",
 ]
 
