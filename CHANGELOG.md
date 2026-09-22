@@ -36,6 +36,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - Quality replay deltas skip the latest stored run when CTR is live, and catalog Δ only attaches to the matching cutoff.
+- Quality single-run history footnote is dataset-only.
 - Redis Streams marks the source disconnected after XREADGROUP or XAUTOCLAIM failure so the worker reconnects instead of polling an empty dead socket.
 - Popular, latest, and neighbor snapshots drop missing or blank item/user ids instead of casting them to `"nan"`.
 - DB popular/latest/similar reads re-raise SQL connectivity errors instead of treating every `OperationalError` as a missing table.

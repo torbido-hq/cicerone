@@ -908,6 +908,34 @@ def test_quality_history_single_run_footnote(tmp_path):
     assert "Only the latest run is available" in response.text
 
 
+def test_quality_history_single_footnote_skips_db_output(tmp_path):
+    from cicerone.dashboard_quality import quality_context
+
+    db_path = tmp_path / "quality.db"
+    url = f"sqlite+pysqlite:///{db_path}"
+    settings = _settings(
+        tmp_path,
+        track={"enabled": True},
+        output=IOSettings(kind="db", options={"database_url": url}),
+        input=IOSettings(kind="db", options={"database_url": url}),
+    )
+    history = [
+        {
+            "status": "success",
+            "triggered_by": "cron",
+            "generated_at": "2026-09-08T12:00:00+00:00",
+            "track_eval": {"overall": {"ctr": 0.1, "cvr_click": 0.0}},
+        }
+    ]
+    context = quality_context(settings, _FakeReader(history))
+    assert len(context["quality_history"]) == 1
+    assert context["quality_history_single"] is False
+    app = create_app(settings, _FakeReader(history), _users_with("alice", "s3cret"))
+    response = TestClient(app).get("/dashboard/quality", auth=("alice", "s3cret"))
+    assert "Recent quality" in response.text
+    assert "Only the latest run is available" not in response.text
+
+
 def test_quality_history_single_ignores_filtered_manifests(tmp_path):
     from cicerone.dashboard_quality import quality_context
 

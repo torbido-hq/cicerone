@@ -71,7 +71,7 @@ def quality_context(settings: Settings, reader: ManifestReader | None = None) ->
             logger.exception("Failed to read manifests for Quality history")
             history = []
         recent_runs = _quality_history(history)
-        history_single = len(recent_runs) == 1
+        history_single = len(recent_runs) == 1 and settings.output.kind == "dataset"
     return {
         "track_enabled": settings.track.enabled,
         "eval_enabled": settings.eval.enabled,
