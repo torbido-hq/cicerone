@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from cicerone.config import Settings
 from cicerone.dashboard import ROBOTS_TAG, ROBOTS_TXT, create_app, main
 from cicerone.dashboard_lookup import HISTORY_UNAVAILABLE, LOOKUP_FAILED, MISSING
+from cicerone.feature_config import load_feature_config
 from cicerone.http_auth import require_basic_auth
 
 
@@ -455,6 +456,45 @@ def test_main_configures_lookup_availability_filters(tmp_path, monkeypatch):
     assert rec_reader.configured == ("category", ["published"])
 
 
+def test_create_app_loads_availability_filters_once(tmp_path, monkeypatch):
+    features = tmp_path / "features.toml"
+    features.write_text('item_availability_filters = ["published"]\n')
+    loads = {"n": 0}
+    real_load = load_feature_config
+
+    def counting_load(path):
+        loads["n"] += 1
+        return real_load(path)
+
+    monkeypatch.setattr("cicerone.dashboard.load_feature_config", counting_load)
+    recs = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"},
+            {"user_id": "u1", "item_id": "i2", "rank": 2, "score": 0.8, "source": "personalized"},
+        ]
+    )
+    items = pd.DataFrame(
+        [
+            {"item_id": "i1", "published": True},
+            {"item_id": "i2", "published": False},
+        ]
+    )
+    client = _recs_client(
+        _FakeRecReader(recs, items),
+        feature_config_path=str(features),
+        top_k=2,
+        dashboard_lookup_k=2,
+    )
+    first = client.get("/partials/recommendations?user_id=u1", auth=("alice", "s3cret"))
+    second = client.get("/partials/recommendations?user_id=u1", auth=("alice", "s3cret"))
+
+    assert loads["n"] == 1
+    assert "i1" in first.text
+    assert "i2" not in first.text
+    assert "i1" in second.text
+    assert "i2" not in second.text
+
+
 def test_require_basic_auth_used_directly_rejects_unknown_user():
     # Call dependency directly for the timing-safe unknown-username branch.
     from fastapi import HTTPException
@@ -615,9 +655,11 @@ class _FakeRecReader:
         self._refresh_error = refresh_error
         self._lookup_error = lookup_error
         self.refresh_calls = 0
+        self._items_version = 0
 
     def refresh(self) -> None:
         self.refresh_calls += 1
+        self._items_version += 1
         if self._refresh_error is not None:
             raise self._refresh_error
 
@@ -633,6 +675,9 @@ class _FakeRecReader:
 
     def get_items(self) -> pd.DataFrame | None:
         return self._items
+
+    def items_version(self) -> int:
+        return self._items_version
 
     def get_cold_start_fallback(self, k: int, *, variant: str | None = None) -> pd.DataFrame:
         return self._fallback.head(k).reset_index(drop=True)

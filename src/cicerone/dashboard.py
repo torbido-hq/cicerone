@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -40,7 +40,7 @@ from cicerone.http_security import (
 )
 from cicerone.io.base import ManifestReader, RecommendationReader, UserHistoryReader
 from cicerone.io.factory import build_manifest_reader, build_recommendation_reader, build_user_history_reader
-from cicerone.serve.item_filters import configure_reader_item_filters
+from cicerone.serve.item_filters import ItemsFilterCache, configure_reader_item_filters
 
 logging.basicConfig(level=logging.INFO, format=DEFAULT_LOG_FORMAT)
 logger = logging.getLogger(__name__)
@@ -207,6 +207,7 @@ def create_app(
     recommendation_reader: RecommendationReader | None = None,
     history_reader: UserHistoryReader | None = None,
     config_path: str | None = None,
+    availability_filters: Sequence[str] | None = None,
 ) -> FastAPI:
     app = FastAPI(
         title="cicerone-dashboard",
@@ -217,6 +218,30 @@ def create_app(
     app.add_middleware(SecurityHeadersMiddleware)
     app.mount("/static", StaticFiles(directory=str(_PACKAGE_DIR / "static")), name="static")
     auth = require_basic_auth(users)
+    filters = (
+        list(availability_filters)
+        if availability_filters is not None
+        else _item_availability_filters(settings)
+    )
+    items_cache = (
+        ItemsFilterCache(
+            recommendation_reader,
+            category_column=settings.serve.category_column,
+            availability_filters=filters,
+        )
+        if recommendation_reader is not None
+        else None
+    )
+
+    def _lookup(user_id: str) -> dict[str, Any]:
+        return lookup_inspector(
+            settings,
+            recommendation_reader,
+            history_reader,
+            user_id,
+            items_cache=items_cache,
+            availability_filters=filters,
+        )
 
     @app.middleware("http")
     async def anti_index_headers(
@@ -259,14 +284,14 @@ def create_app(
         return _TEMPLATES.TemplateResponse(
             request,
             "_recommendations.html",
-            lookup_inspector(settings, recommendation_reader, history_reader, user_id),
+            _lookup(user_id),
         )
 
     @app.get("/dashboard", dependencies=[Depends(auth)])
     def dashboard(request: Request, user_id: str = Query(default="")):
         context = _status_context()
         context["refresh_interval_seconds"] = settings.dashboard.refresh_interval_seconds
-        context.update(lookup_inspector(settings, recommendation_reader, history_reader, user_id))
+        context.update(_lookup(user_id))
         context["page_title"] = page_title(
             user_id=str(context.get("user_id") or ""),
             manifest=context["manifest"],
@@ -336,26 +361,31 @@ def create_app(
     return app
 
 
-def _configure_lookup_filters(settings: Settings, rec_reader: RecommendationReader | None) -> None:
+def _item_availability_filters(settings: Settings, *, warn_missing: bool = False) -> list[str]:
+    feature_path = Path(settings.feature_config_path)
+    if not feature_path.is_file():
+        if warn_missing:
+            logger.warning(
+                "feature config missing at %s; dashboard lookup continuing without features.toml",
+                feature_path,
+            )
+        return []
+    try:
+        return list(load_feature_config(feature_path).item_availability_filters)
+    except Exception:
+        logger.exception("Failed to load feature config for dashboard lookup")
+        return []
+
+
+def _configure_lookup_filters(
+    settings: Settings, rec_reader: RecommendationReader | None, filters: Sequence[str]
+) -> None:
     if rec_reader is None or not hasattr(rec_reader, "configure_item_filters"):
         return
-    feature_path = Path(settings.feature_config_path)
-    if feature_path.is_file():
-        try:
-            feature_config = load_feature_config(feature_path)
-        except Exception:
-            logger.exception("Failed to load feature config for dashboard lookup")
-            feature_config = None
-    else:
-        logger.warning(
-            "feature config missing at %s; dashboard lookup continuing without features.toml",
-            feature_path,
-        )
-        feature_config = None
     configure_reader_item_filters(
         rec_reader,
         category_column=settings.serve.category_column,
-        availability_filters=list(feature_config.item_availability_filters) if feature_config else [],
+        availability_filters=list(filters),
     )
 
 
@@ -377,7 +407,8 @@ def main() -> None:
     except Exception:
         logger.exception("Recommendation store is not available; dashboard lookup will be disabled")
         rec_reader = None
-    _configure_lookup_filters(settings, rec_reader)
+    filters = _item_availability_filters(settings, warn_missing=True)
+    _configure_lookup_filters(settings, rec_reader, filters)
     try:
         history_reader = build_user_history_reader(settings.input)
     except Exception:
@@ -391,6 +422,7 @@ def main() -> None:
         rec_reader,
         history_reader,
         config_path=loaded_config_path,
+        availability_filters=filters,
     )
     uvicorn.run(app, host=settings.dashboard.host, port=settings.dashboard.port)
 

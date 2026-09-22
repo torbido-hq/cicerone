@@ -7,7 +7,6 @@ import time
 from collections import Counter
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -19,7 +18,6 @@ from cicerone.experiment.assignment import (
     snapshot_variant_names,
 )
 from cicerone.experiment.store import ExperimentStore
-from cicerone.feature_config import load_feature_config
 from cicerone.io.base import RecommendationReader, UserHistoryReader
 from cicerone.io.options import is_s3_not_found
 from cicerone.io.recommendation_schema import (
@@ -31,7 +29,7 @@ from cicerone.io.recommendation_schema import (
 )
 from cicerone.io.user_lookup import OCCURRED_AT_COLUMN
 from cicerone.reasons import parse_reasons
-from cicerone.serve.item_filters import available_item_ids, filter_recommendations
+from cicerone.serve.item_filters import ItemsFilterCache, filter_recommendations
 from cicerone.values import as_list, is_missing, is_sequence_attr
 
 logger = logging.getLogger(__name__)
@@ -88,11 +86,20 @@ def lookup_inspector(
     recommendation_reader: RecommendationReader | None,
     history_reader: UserHistoryReader | None,
     user_id: str,
+    *,
+    items_cache: ItemsFilterCache | None = None,
+    availability_filters: Sequence[str] = (),
 ) -> dict[str, Any]:
     user_id = user_id.strip()
     if not user_id:
         return empty_recommendations_context()
-    recs = lookup_recommendations(settings, recommendation_reader, user_id)
+    recs = lookup_recommendations(
+        settings,
+        recommendation_reader,
+        user_id,
+        items_cache=items_cache,
+        availability_filters=availability_filters,
+    )
     if not recs["queried"] or recommendation_reader is None:
         return recs
     recs.update(lookup_history(settings, history_reader, user_id))
@@ -108,6 +115,9 @@ def lookup_recommendations(
     settings: Settings,
     recommendation_reader: RecommendationReader | None,
     user_id: str,
+    *,
+    items_cache: ItemsFilterCache | None = None,
+    availability_filters: Sequence[str] = (),
 ) -> dict[str, Any]:
     user_id = user_id.strip()
     if not user_id:
@@ -148,14 +158,20 @@ def lookup_recommendations(
             snapshot_names=snapshot,
         )
     try:
-        recs, used_fallback = _load_rows(
-            recommendation_reader, user_id, k, variant=variant, settings=settings
+        recs, used_fallback, items = _load_rows(
+            recommendation_reader,
+            user_id,
+            k,
+            variant=variant,
+            settings=settings,
+            items_cache=items_cache,
+            filters=availability_filters,
         )
         if not has_variant_column(recs):
             experiment_id, variant = None, None
         category_column = settings.serve.category_column
         if category_column not in recs.columns:
-            recs = _join_category(recs, recommendation_reader.get_items(), category_column)
+            recs = _join_category(recs, items, category_column)
         show_category = category_column in recs.columns
         items = format_recommendation_rows(recs, category_column=category_column if show_category else None)
         return {
@@ -269,15 +285,19 @@ def format_user_attrs(user: dict[str, Any] | None, *, allowed: Sequence[str] = (
     return rows
 
 
-def availability_filters(settings: Settings) -> list[str]:
-    path = Path(settings.feature_config_path)
-    if not path.is_file():
-        return []
-    try:
-        return list(load_feature_config(path).item_availability_filters)
-    except Exception:
-        logger.exception("Failed to load features.toml for dashboard lookup filters")
-        return []
+def _items_cache(
+    recommendation_reader: RecommendationReader,
+    settings: Settings,
+    items_cache: ItemsFilterCache | None,
+    filters: Sequence[str],
+) -> ItemsFilterCache:
+    if items_cache is not None:
+        return items_cache
+    return ItemsFilterCache(
+        recommendation_reader,
+        category_column=settings.serve.category_column,
+        availability_filters=filters,
+    )
 
 
 def _load_rows(
@@ -287,9 +307,11 @@ def _load_rows(
     *,
     variant: str | None = None,
     settings: Settings,
-) -> tuple[pd.DataFrame, bool]:
-    filters = availability_filters(settings)
-    items = recommendation_reader.get_items()
+    items_cache: ItemsFilterCache | None = None,
+    filters: Sequence[str] = (),
+) -> tuple[pd.DataFrame, bool, pd.DataFrame | None]:
+    cache = _items_cache(recommendation_reader, settings, items_cache, filters)
+    items, available_ids, _ = cache.get()
     can_filter = bool(filters and items is not None and not items.empty)
     fetch_k = max(k * 5, k) if can_filter else k
     recs = recommendation_reader.get_recommendations(user_id, fetch_k, variant=variant)
@@ -298,24 +320,23 @@ def _load_rows(
         used_fallback = True
         recs = recommendation_reader.get_cold_start_fallback(fetch_k, variant=variant)
         if recs.empty:
-            return recs, False
+            return recs, False, items
     if can_filter:
-        recs = _filter_unavailable(recs, items, filters, settings.serve.category_column, k)
-    return recs, used_fallback
+        recs = _filter_unavailable(recs, items, available_ids, settings.serve.category_column, k)
+    return recs, used_fallback, items
 
 
 def _filter_unavailable(
     recs: pd.DataFrame,
     items: pd.DataFrame | None,
-    filters: Sequence[str],
+    available_ids: frozenset[str] | None,
     category_column: str,
     k: int,
 ) -> pd.DataFrame:
-    available = available_item_ids(items if items is not None else pd.DataFrame(), filters)
     filtered = filter_recommendations(
         recs,
         items=items,
-        available_ids=available,
+        available_ids=available_ids,
         category=None,
         category_column=category_column,
         exclude_unavailable=True,
