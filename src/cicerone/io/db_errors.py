@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from pandas.errors import DatabaseError
+from sqlalchemy.exc import SQLAlchemyError
+
+SQL_READ_ERRORS: tuple[type[BaseException], ...] = (SQLAlchemyError, DatabaseError)
+
 
 def db_error_message(exc: BaseException) -> str:
     return str(getattr(exc, "orig", exc)).lower()

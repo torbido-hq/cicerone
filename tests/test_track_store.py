@@ -787,6 +787,37 @@ def test_track_store_sqlite_missing_table_error_helper(tmp_path, monkeypatch) ->
     assert store.read_history().empty
 
 
+def test_track_store_sqlite_pandas_database_error_is_empty(tmp_path, monkeypatch) -> None:
+    from pandas.errors import DatabaseError
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
+    store = TrackStore(IOSettings(kind="db", options={"database_url": url}))
+    store.append_rows([_row()])
+    monkeypatch.setattr(
+        pd,
+        "read_sql",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(DatabaseError("no such table: track")),
+    )
+    assert store.read_rows() == []
+    assert store.read_eval() is None
+    assert store.read_history().empty
+
+
+def test_track_store_sqlite_pandas_database_error_unexpected_reraises(tmp_path, monkeypatch) -> None:
+    from pandas.errors import DatabaseError
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
+    store = TrackStore(IOSettings(kind="db", options={"database_url": url}))
+    store.append_rows([_row()])
+    monkeypatch.setattr(
+        pd,
+        "read_sql",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(DatabaseError("connection refused")),
+    )
+    with pytest.raises(DatabaseError, match="connection refused"):
+        store.read_rows()
+
+
 def test_track_store_sqlite_unexpected_error_ignores_missing_table_helper(tmp_path, monkeypatch) -> None:
     url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
     output = IOSettings(kind="db", options={"database_url": url})

@@ -1,8 +1,14 @@
 from __future__ import annotations
 
-from sqlalchemy.exc import OperationalError, ProgrammingError
+from pandas.errors import DatabaseError
+from sqlalchemy.exc import OperationalError, ProgrammingError, SQLAlchemyError
 
-from cicerone.io.db_errors import db_error_message, is_missing_column_error, is_missing_table_error
+from cicerone.io.db_errors import (
+    SQL_READ_ERRORS,
+    db_error_message,
+    is_missing_column_error,
+    is_missing_table_error,
+)
 
 
 def test_is_missing_column_error():
@@ -35,3 +41,11 @@ def test_is_missing_table_error():
 def test_db_error_message_uses_orig():
     exc = OperationalError("stmt", {}, Exception("ORIG MSG"))
     assert db_error_message(exc) == "orig msg"
+
+
+def test_sql_read_errors_include_pandas_wrapper():
+    assert SQLAlchemyError in SQL_READ_ERRORS
+    assert DatabaseError in SQL_READ_ERRORS
+    assert is_missing_table_error(DatabaseError("no such table: track"))
+    assert is_missing_column_error(DatabaseError("no such column: promoted_at"))
+    assert not is_missing_table_error(DatabaseError("connection refused"))

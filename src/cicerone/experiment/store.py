@@ -18,7 +18,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from cicerone.config.constants import ConfigError
 from cicerone.config.settings import IOSettings
 from cicerone.io.blob import append_storage_bytes, read_storage_bytes, write_storage_bytes
-from cicerone.io.db_errors import is_missing_column_error, is_missing_table_error
+from cicerone.io.db_errors import SQL_READ_ERRORS, is_missing_column_error, is_missing_table_error
 from cicerone.io.engines import engine_for
 from cicerone.io.options import (
     exclusive_file_lock,
@@ -30,7 +30,7 @@ from cicerone.locks import LockBackend, ensure_writer_owned, held_writer_lock, w
 
 logger = logging.getLogger(__name__)
 
-_OVERLAY_READ_ERRORS = (OSError, ValueError, TypeError, SQLAlchemyError, BotoCoreError)
+_OVERLAY_READ_ERRORS = (OSError, ValueError, TypeError, BotoCoreError, *SQL_READ_ERRORS)
 
 STATE_FILENAME = "experiment_state.json"
 EXPOSURES_FILENAME = "exposures.jsonl"
@@ -326,11 +326,11 @@ class ExperimentStore:
                 text(f'SELECT * FROM "{table}" ORDER BY (promoted_at IS NULL), promoted_at DESC LIMIT 1'),
                 engine,
             )
-        except SQLAlchemyError as exc:
+        except SQL_READ_ERRORS as exc:
             if is_missing_column_error(exc):
                 try:
                     frame = pd.read_sql(text(f'SELECT * FROM "{table}" LIMIT 1'), engine)
-                except SQLAlchemyError as retry_exc:
+                except SQL_READ_ERRORS as retry_exc:
                     if is_missing_table_error(retry_exc) or is_missing_column_error(retry_exc):
                         return None
                     logger.exception("Failed to read experiment state table %r", table)
@@ -441,7 +441,7 @@ class ExperimentStore:
             params = {}
         try:
             frame = pd.read_sql(sql, engine, params=params)
-        except SQLAlchemyError as exc:
+        except SQL_READ_ERRORS as exc:
             if is_missing_table_error(exc):
                 return []
             if experiment_id and is_missing_column_error(exc):

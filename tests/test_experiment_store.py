@@ -651,6 +651,52 @@ def test_append_exposures_db_rolls_back_when_fence_lost_after_insert(tmp_path, m
     assert store.read_exposures() == []
 
 
+def test_read_state_db_pandas_database_error_is_empty(tmp_path, monkeypatch) -> None:
+    from pandas.errors import DatabaseError
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    store = ExperimentStore(IOSettings(kind="db", options={"database_url": url}))
+
+    def _read(*_args, **_kwargs):
+        raise DatabaseError("no such table: experiment_state")
+
+    monkeypatch.setattr("cicerone.experiment.store.pd.read_sql", _read)
+    assert store.read_state() is None
+
+
+def test_read_state_db_pandas_database_error_retries_legacy_schema(tmp_path, monkeypatch) -> None:
+    from pandas.errors import DatabaseError
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    store = ExperimentStore(IOSettings(kind="db", options={"database_url": url}))
+    calls = {"n": 0}
+
+    def _read(*_args, **_kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise DatabaseError("no such column: promoted_at")
+        return pd.DataFrame([{"experiment_id": "exp", "promoted_variant": "treatment", "payload": None}])
+
+    monkeypatch.setattr("cicerone.experiment.store.pd.read_sql", _read)
+    state = store.read_state()
+    assert state is not None
+    assert state["promoted_variant"] == "treatment"
+    assert calls["n"] == 2
+
+
+def test_read_exposures_db_pandas_database_error_is_empty(tmp_path, monkeypatch) -> None:
+    from pandas.errors import DatabaseError
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    store = ExperimentStore(IOSettings(kind="db", options={"database_url": url}))
+
+    def _read(*_args, **_kwargs):
+        raise DatabaseError("no such table: exposures")
+
+    monkeypatch.setattr("cicerone.experiment.store.pd.read_sql", _read)
+    assert store.read_exposures() == []
+
+
 def test_read_exposures_db_generic_missing_table_is_empty(tmp_path, monkeypatch) -> None:
     from sqlalchemy.exc import SQLAlchemyError
 
