@@ -9,6 +9,7 @@ from typing import Any
 
 import pandas as pd
 from sqlalchemy import bindparam, create_engine, inspect, text
+from sqlalchemy.sql.elements import TextClause
 
 from cicerone.blending import COLD_START_USER_ID, LATEST_SOURCE, POPULAR_SOURCE
 from cicerone.io import recommendation_schema as _rec
@@ -33,6 +34,8 @@ from cicerone.item_scores import normalize_item_scores
 from cicerone.serve.metrics import observe_cache_refresh, record_cache_hit, record_cache_miss
 
 logger = logging.getLogger(__name__)
+
+_RN_COLUMN = "_cicerone_rn"
 
 
 class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
@@ -213,28 +216,31 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
         assigned = self._assigned_variant(variant)
         prefer_fallback = assigned is None and self._supports_variant_column() is not False
         if assigned is not None:
-            sql = text(
-                f'SELECT * FROM "{self._table}" WHERE "{USER_COLUMN}" IN :user_ids '
-                f'AND "{VARIANT_COLUMN}" = :variant '
-                f'ORDER BY "{USER_COLUMN}" ASC, "{RANK_COLUMN}" ASC'
-            ).bindparams(bindparam("user_ids", expanding=True))
-            params: dict[str, Any] = {"user_ids": ids, "variant": assigned}
+            sql = _top_k_per_user_sql(
+                self._table,
+                where=f'"{USER_COLUMN}" IN :user_ids AND "{VARIANT_COLUMN}" = :variant',
+                order_by=f'"{RANK_COLUMN}" ASC',
+            )
+            params: dict[str, Any] = {"user_ids": ids, "k": k, "variant": assigned}
         elif prefer_fallback:
-            sql = text(
-                f'SELECT * FROM "{self._table}" WHERE "{USER_COLUMN}" IN :user_ids '
-                f'ORDER BY "{USER_COLUMN}" ASC, '
-                f'CASE WHEN "{VARIANT_COLUMN}" = :fallback THEN 0 ELSE 1 END, '
-                f'"{VARIANT_COLUMN}" ASC, "{RANK_COLUMN}" ASC'
-            ).bindparams(bindparam("user_ids", expanding=True))
-            params = {"user_ids": ids, "fallback": _rec.FALLBACK_VARIANT}
+            sql = _top_k_per_user_sql(
+                self._table,
+                where=f'"{USER_COLUMN}" IN :user_ids',
+                order_by=(
+                    f'CASE WHEN "{VARIANT_COLUMN}" = :fallback THEN 0 ELSE 1 END, '
+                    f'"{VARIANT_COLUMN}" ASC, "{RANK_COLUMN}" ASC'
+                ),
+            )
+            params = {"user_ids": ids, "k": k, "fallback": _rec.FALLBACK_VARIANT}
         else:
-            sql = text(
-                f'SELECT * FROM "{self._table}" WHERE "{USER_COLUMN}" IN :user_ids '
-                f'ORDER BY "{USER_COLUMN}" ASC, "{RANK_COLUMN}" ASC'
-            ).bindparams(bindparam("user_ids", expanding=True))
-            params = {"user_ids": ids}
+            sql = _top_k_per_user_sql(
+                self._table,
+                where=f'"{USER_COLUMN}" IN :user_ids',
+                order_by=f'"{RANK_COLUMN}" ASC',
+            )
+            params = {"user_ids": ids, "k": k}
         try:
-            rows = pd.read_sql(sql, self._engine, params=params)
+            rows = _drop_window_rank(pd.read_sql(sql, self._engine, params=params))
         except Exception as exc:
             if assigned is not None:
                 if not self._remember_missing_variant_column(exc):
@@ -248,13 +254,16 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
                     ids,
                     self._table,
                 )
-                rows = pd.read_sql(
-                    text(
-                        f'SELECT * FROM "{self._table}" WHERE "{USER_COLUMN}" IN :user_ids '
-                        f'ORDER BY "{USER_COLUMN}" ASC, "{RANK_COLUMN}" ASC'
-                    ).bindparams(bindparam("user_ids", expanding=True)),
-                    self._engine,
-                    params={"user_ids": ids},
+                rows = _drop_window_rank(
+                    pd.read_sql(
+                        _top_k_per_user_sql(
+                            self._table,
+                            where=f'"{USER_COLUMN}" IN :user_ids',
+                            order_by=f'"{RANK_COLUMN}" ASC',
+                        ),
+                        self._engine,
+                        params={"user_ids": ids, "k": k},
+                    )
                 )
             else:
                 raise
@@ -289,6 +298,21 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             return sentinel
         sample_user = str(picked.iloc[0][USER_COLUMN])
         return self.get_recommendations(sample_user, k, variant=variant)
+
+
+def _top_k_per_user_sql(table: str, *, where: str, order_by: str) -> TextClause:
+    return text(
+        f"SELECT * FROM ("
+        f'SELECT *, ROW_NUMBER() OVER (PARTITION BY "{USER_COLUMN}" ORDER BY {order_by}) '
+        f'AS "{_RN_COLUMN}" FROM "{table}" WHERE {where}'
+        f') AS ranked WHERE "{_RN_COLUMN}" <= :k'
+    ).bindparams(bindparam("user_ids", expanding=True))
+
+
+def _drop_window_rank(rows: pd.DataFrame) -> pd.DataFrame:
+    if _RN_COLUMN in rows.columns:
+        return rows.drop(columns=[_RN_COLUMN])
+    return rows
 
 
 def _frames_by_user(
