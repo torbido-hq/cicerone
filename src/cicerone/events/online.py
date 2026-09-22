@@ -205,6 +205,8 @@ class OnlineTrainer:
         if artifact is None or working is None:
             return OnlineRefreshResult(rows=empty_online_rows())
         models, fitted, skip_sequential = self._recommend_models(artifact)
+        if not models:
+            return OnlineRefreshResult(rows=empty_online_rows(), sequential_skipped=skip_sequential)
 
         batch = events_to_dataframe(events)
         users = batch[USER_COLUMN].astype(str)
