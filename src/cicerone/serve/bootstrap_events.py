@@ -250,6 +250,8 @@ def start_events_runtime(
                 settings.events.incremental.poll_interval_seconds,
                 settings.events.ha,
             )
+        else:
+            source.connect()
         if apply_lock is None:
             logger.warning(
                 "Incremental events assume a single writer process "
