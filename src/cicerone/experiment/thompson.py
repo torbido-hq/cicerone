@@ -1,4 +1,4 @@
-"""Job-time Thompson sampling (MABWiser) for champion/challenger recipes."""
+"""Job-time Thompson sampling for champion/challenger recipes."""
 
 from __future__ import annotations
 
@@ -21,9 +21,6 @@ from cicerone.config.constants import (
 )
 from cicerone.evaluation.metrics import SliceMetrics
 from cicerone.experiment.recipes import CONTROL_NAME, ResolvedRecipe
-
-_EMPTY = np.array([], dtype=object)
-_EMPTY_REWARDS = np.array([], dtype=float)
 
 
 def bandits_extra_available() -> bool:
@@ -142,26 +139,25 @@ def pick_champion_name(names: Sequence[str], promoted_variant: str | None = None
     return str(names[0])
 
 
-def _fit_mab(
+def _rng(seed: int | None) -> np.random.Generator:
+    return np.random.default_rng(None if seed is None else int(seed))
+
+
+def _sample_arm(
     arms: Sequence[str],
     counts: Mapping[str, ArmCounts],
-    *,
-    seed: int | None,
-) -> Any:
-    from mabwiser.mab import MAB, LearningPolicy
-
-    kwargs: dict[str, Any] = {}
-    if seed is not None:
-        kwargs["seed"] = int(seed)
-    mab = MAB(list(arms), LearningPolicy.ThompsonSampling(), **kwargs)
-    mab.fit(_EMPTY, _EMPTY_REWARDS)
-    policy = mab._imp
-    for name in arms:
-        arm = counts.get(name, ArmCounts(0, 0))
-        # Beta(1+s, 1+f) without expanding one trial per impression.
-        policy.arm_to_success_count[name] = 1 + arm.successes
-        policy.arm_to_fail_count[name] = 1 + arm.failures
-    return mab
+    rng: np.random.Generator,
+) -> str:
+    thetas = [
+        float(
+            rng.beta(
+                1 + counts.get(name, ArmCounts(0, 0)).successes,
+                1 + counts.get(name, ArmCounts(0, 0)).failures,
+            )
+        )
+        for name in arms
+    ]
+    return str(arms[int(np.argmax(thetas))])
 
 
 def p_best(
@@ -175,8 +171,8 @@ def p_best(
     if not arms:
         return {}
     n = max(1, int(draws))
-    mab = _fit_mab(arms, counts, seed=seed)
-    tallies = Counter(str(mab.predict()) for _ in range(n))
+    rng = _rng(seed)
+    tallies = Counter(_sample_arm(arms, counts, rng) for _ in range(n))
     return {name: float(tallies.get(name, 0)) / float(n) for name in arms}
 
 
@@ -191,8 +187,7 @@ def sample_arm(
         raise ValueError("sample_arm requires at least one arm")
     if len(arms) == 1:
         return str(arms[0])
-    mab = _fit_mab(arms, counts, seed=seed)
-    return str(mab.predict())
+    return _sample_arm(arms, counts, _rng(seed))
 
 
 def select_active_recipes(

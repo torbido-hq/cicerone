@@ -89,15 +89,17 @@ CVR (`primary_metric = "conversion"` with `attribution = "click"` or
 Serve still hashes the user onto the active pair (or 100% to a **Ship** /
 Promote winner).
 
-Requires `[track]` and `pip install 'cicerone-recommender[bandits]'` (Fidelity
-[MABWiser](https://github.com/fidelity/mabwiser) `LearningPolicy.ThompsonSampling()`).
-Config load is a `ConfigError` without the extra or with track off. At runtime
-the job fail-closes to `allocation = "fixed"` (writes every named recipe) if
-track is empty and there is no stored pair.
+Requires `[track]` and `pip install 'cicerone-recommender[bandits]'`. The extra
+is still required at config load; sampling is in-process Beta(1+s, 1+f), not
+Fidelity [MABWiser](https://github.com/fidelity/mabwiser)
+`LearningPolicy.ThompsonSampling()`. Config load is a `ConfigError` without
+the extra or with track off. At runtime the job fail-closes to
+`allocation = "fixed"` (writes every named recipe) if track is empty and there
+is no stored pair.
 
 The pair stays sticky until `track.min_impressions` on that pair. Then if
 P(champion is best) is at least `rotate_min_prob` and catalog guardrails pass,
-the champion stays and MABWiser samples the next challenger from the remaining
+the champion stays and the job samples the next challenger from the remaining
 names. Do not rewrite TOML `traffic` every night — that remaps users.
 
 ```toml

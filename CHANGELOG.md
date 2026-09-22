@@ -30,6 +30,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Online refresh still rewrites LightFM / popular lists when the sequential extra is missing. Only the sequential model is skipped.
 
+### Changed
+
+- Job-time Thompson samples Beta(1+s, 1+f) in-process instead of writing MABWiser's private `_imp` counts.
+
 ### Fixed
 
 - Popular, latest, and neighbor snapshots drop missing or blank item/user ids instead of casting them to `"nan"`.
