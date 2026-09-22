@@ -1666,6 +1666,63 @@ def test_write_job_outputs_marks_success_manifest(tmp_path, monkeypatch):
     assert written[1]["models"] == "popular"
 
 
+def test_write_job_outputs_keeps_failure_manifest_written(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from cicerone.config import load_settings
+    from cicerone.feature_config import load_feature_config
+    from cicerone.job import JobManifest, JobWriteResult, _write_job_outputs
+    from cicerone.model import ModelRunPlan
+
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir))
+    settings = load_settings()
+    payloads: list[dict[str, object]] = []
+
+    class _Sink:
+        def write_recommendations(self, frame: pd.DataFrame) -> None:
+            raise RuntimeError("disk full")
+
+        def write_manifest(self, payload: dict[str, object], skip_if_newer_than: str | None = None) -> bool:
+            payloads.append(payload)
+            return True
+
+    result = JobWriteResult()
+    with pytest.raises(RuntimeError, match="disk full"):
+        _write_job_outputs(
+            settings,
+            sink=_Sink(),
+            publication_lock=None,
+            manifest=JobManifest(triggered_by="test", top_k=10),
+            fence_check=None,
+            started_at="2026-01-01T00:00:00+00:00",
+            events=pd.DataFrame({"user_id": ["u1"], "item_id": ["i1"]}),
+            items=None,
+            built=SimpleNamespace(
+                dataset=SimpleNamespace(item_id_map=SimpleNamespace(external_ids=pd.Series(["i1"])))
+            ),
+            target_users=["u1"],
+            recommendations=pd.DataFrame({"user_id": ["u1"], "item_id": ["i1"]}),
+            fitted={},
+            run_plan=ModelRunPlan(enabled_models=("popular",), recommend_models=("popular",)),
+            weights=None,
+            rrf_k=None,
+            automl_result=None,
+            track_eval_payload=None,
+            served_eval_payload=None,
+            pending_thompson=None,
+            feature_config=load_feature_config(settings.feature_config_path),
+            written=result,
+        )
+    assert result.manifest_written is True
+    assert len(payloads) == 1
+    assert payloads[0]["status"] == "failed"
+    assert "disk full" in str(payloads[0]["error"])
+
+
 def test_job_run_with_automl_enabled_selects_and_records_best_candidate(tmp_path, monkeypatch):
     input_dir = tmp_path / "in"
     output_dir = tmp_path / "out"
@@ -2063,6 +2120,36 @@ def test_job_marks_partial_outputs_when_recommendation_write_fails(tmp_path, mon
     assert manifest["partial_outputs"] is True
     assert manifest["artifact_written"] is True
     del original_write
+
+
+def test_job_does_not_rewrite_failure_manifest_after_sink_error(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.now(tz="UTC")
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
+
+    from cicerone.io.dataset_store import DatasetOutputSink
+
+    writes: list[str] = []
+    original = DatasetOutputSink.write_manifest
+
+    def counting(self, manifest, *, skip_if_newer_than=None):
+        writes.append(str(manifest.get("status")))
+        return original(self, manifest, skip_if_newer_than=skip_if_newer_than)
+
+    def boom(self, df: pd.DataFrame) -> None:
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(DatasetOutputSink, "write_recommendations", boom)
+    monkeypatch.setattr(DatasetOutputSink, "write_manifest", counting)
+    with pytest.raises(RuntimeError, match="disk full"):
+        job.run()
+    assert writes == ["failed"]
 
 
 def test_write_job_manifest_accepts_legacy_signature():

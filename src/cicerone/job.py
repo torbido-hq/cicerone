@@ -7,6 +7,7 @@ import logging
 import sys
 from collections.abc import Callable
 from contextlib import nullcontext
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, NamedTuple
 
@@ -110,9 +111,10 @@ class JobRecommendations(NamedTuple):
     rrf_k: float | None
 
 
-class JobWriteResult(NamedTuple):
-    manifest_written: bool
-    success_generated_at: str | None
+@dataclass
+class JobWriteResult:
+    manifest_written: bool = False
+    success_generated_at: str | None = None
 
 
 def _target_user_ids(events: pd.DataFrame, users: pd.DataFrame | None) -> list[str]:
@@ -514,6 +516,7 @@ def _write_job_outputs(
     served_eval_payload: dict[str, Any] | None,
     pending_thompson: dict[str, Any] | None,
     feature_config: FeatureConfig,
+    written: JobWriteResult | None = None,
 ) -> JobWriteResult:
     run_models = list(run_plan.recommend_models)
     model_weights_str = (
@@ -537,8 +540,7 @@ def _write_job_outputs(
             hmac_key=settings.output.artifact_hmac_key,
         )
 
-    manifest_written = False
-    success_generated_at: str | None = None
+    result = written if written is not None else JobWriteResult()
     # Artifact → snapshot → recommendations; success only after all writes.
     outputs_written = False
     recs_write = getattr(sink, "recommendations_write", None)
@@ -595,13 +597,13 @@ def _write_job_outputs(
                 manifest["generated_at"] = datetime.now(UTC).isoformat()
                 ensure_publication_fence(sink, fence_check)
                 if write_job_manifest(sink, manifest):
-                    manifest_written = True
-                    success_generated_at = str(manifest.get("generated_at") or "")
+                    result.manifest_written = True
+                    result.success_generated_at = str(manifest.get("generated_at") or "")
             except _SINK_WRITE_ERRORS as exc:
                 if outputs_written or manifest.get("artifact_written"):
                     manifest["partial_outputs"] = True
                 if (
-                    not manifest_written
+                    not result.manifest_written
                     and manifest.get("status") != "success"
                     and not skip_stale_job_manifest(
                         fence_check=fence_check,
@@ -612,7 +614,7 @@ def _write_job_outputs(
                     manifest["generated_at"] = datetime.now(UTC).isoformat()
                     try:
                         if write_job_manifest(sink, manifest, skip_if_newer_than=started_at):
-                            manifest_written = True
+                            result.manifest_written = True
                     except _SINK_WRITE_ERRORS as manifest_exc:
                         _log_caught(
                             "Failed to write manifest; original job error (if any) is preserved",
@@ -624,7 +626,7 @@ def _write_job_outputs(
         if outputs_written or manifest.get("artifact_written"):
             manifest["partial_outputs"] = True
         raise
-    return JobWriteResult(manifest_written, success_generated_at)
+    return result
 
 
 def _publish_job_sidecar(
@@ -691,6 +693,7 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
     manifest_written = False
     replace_success_manifest = False
     success_generated_at: str | None = None
+    written = JobWriteResult()
 
     try:
         publisher = build_publisher(settings, connect=False)
@@ -752,7 +755,7 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
             manifest["experiment_id"] = settings.experiment.id
             manifest["experiment_variants"] = recipes_manifest_json(recipes)
 
-        written = _write_job_outputs(
+        _write_job_outputs(
             settings,
             sink=sink,
             publication_lock=publication_lock,
@@ -773,6 +776,7 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
             served_eval_payload=served_eval_payload,
             pending_thompson=pending_thompson,
             feature_config=feature_config,
+            written=written,
         )
         manifest_written = written.manifest_written
         success_generated_at = written.success_generated_at
@@ -781,8 +785,10 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
         manifest["error"] = truncate_job_error(exc)
         if manifest.get("status") == "success":
             manifest["status"] = "failed"
-            manifest_written = False
+            written.manifest_written = False
             replace_success_manifest = True
+        manifest_written = written.manifest_written
+        success_generated_at = written.success_generated_at
         raise
     finally:
         persist_exc: BaseException | None = None
