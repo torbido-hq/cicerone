@@ -96,6 +96,8 @@ HTTP against that real Postgres (resetting only
 same journeys against local parquet (`kind = "dataset"`).
 `tests/test_system_mixed.py` / `test_system_mixed_quality.py` mix a
 Postgres catalog with dataset output.
+`tests/test_system_events.py` continues the Postgres catalog through
+webhook `POST /events` write-through to serve and the dashboard.
 
 Public imports stay stable after the package splits:
 `from cicerone.model import …` and `from cicerone.config import …`.
@@ -128,6 +130,7 @@ Test modules mirror the packages (same pattern as `tests/test_io_*.py`):
 | `tests/test_system_db.py` / `test_system_db_quality.py` | Postgres system spec: job → serve/dashboard HTTP; track → second job → Quality |
 | `tests/test_system_dataset.py` / `test_system_dataset_quality.py` | Local parquet system spec: same journeys as the Postgres spec |
 | `tests/test_system_mixed.py` / `test_system_mixed_quality.py` | Mixed I/O: Postgres catalog in, local parquet out; track → Quality |
+| `tests/test_system_events.py` | Postgres system spec: job → webhook `POST /events` → flush → serve + dashboard |
 | `tests/test_explain.py` / `test_reasons.py` | Batch `reasons` JSON + serve-safe parse |
 
 ## Data flow

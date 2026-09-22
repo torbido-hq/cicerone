@@ -22,6 +22,7 @@ tests, the local-parquet dataset system spec
 (`tests/test_system_dataset.py`, `tests/test_system_dataset_quality.py`),
 the mixed db-input / dataset-output spec
 (`tests/test_system_mixed.py`, `tests/test_system_mixed_quality.py`),
+the webhook incremental-events spec (`tests/test_system_events.py`),
 and the Postgres system-style end-to-end checks in
 `tests/test_system_db.py` and `tests/test_system_db_quality.py`, and
 enforces the 95% coverage gate
@@ -71,8 +72,8 @@ Shared catalog / TOML / HTTP mounts for both I/O backends live in
 `tests/support/system_spec.py`. Schema-reset guardrails for the Postgres
 system test live in `tests/support/system_db.py` (reusable across
 DB-backed tests; keep `tests/test_system_db*.py`,
-`tests/test_system_dataset*.py`, and `tests/test_system_mixed*.py`
-focused on the end-to-end scenarios).
+`tests/test_system_dataset*.py`, `tests/test_system_mixed*.py`, and
+`tests/test_system_events.py` focused on the end-to-end scenarios).
 
 Host vs container hostname for the same Postgres:
 

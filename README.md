@@ -740,7 +740,8 @@ backend tests and the Postgres system-style end-to-end checks in
 `tests/test_system_db.py` / `tests/test_system_db_quality.py`; the
 local-parquet journeys are `tests/test_system_dataset.py` /
 `tests/test_system_dataset_quality.py`; mixed db→dataset is
-`tests/test_system_mixed.py` / `tests/test_system_mixed_quality.py`) inside
+`tests/test_system_mixed.py` / `tests/test_system_mixed_quality.py`;
+webhook incremental ingest is `tests/test_system_events.py`) inside
 Docker — nothing to install on the host.
 Locally you can also point pytest at the compose `postgres` service's
 pytest database via `POSTGRES_TEST_HOST=localhost` (see
