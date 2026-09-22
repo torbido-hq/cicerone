@@ -1036,7 +1036,7 @@ def test_experiment_context_events_full_parquet_fallback(tmp_path, monkeypatch):
 
     def _boom(*_args, **_kwargs):
         calls["n"] += 1
-        raise RuntimeError("parquet")
+        raise OSError("parquet")
 
     monkeypatch.setattr("cicerone.evaluation.context.read_parquet", _boom)
     monkeypatch.setattr("cicerone.evaluation.context.is_s3_not_found", lambda _exc: False)
