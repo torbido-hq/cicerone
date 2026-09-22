@@ -1977,6 +1977,42 @@ def test_load_metric_events_dataset_propagates_unexpected_errors(tmp_path, monke
         load_metric_events(settings, since="2026-08-29T05:00:00+00:00")
 
 
+def test_load_metric_events_dataset_arrow_invalid_is_empty(tmp_path, monkeypatch) -> None:
+    from conftest import make_settings
+    from pyarrow.lib import ArrowInvalid
+
+    from cicerone.config import IOSettings
+
+    settings = make_settings(
+        input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+
+    def _read(*_args, **_kwargs):
+        raise ArrowInvalid("filter type mismatch")
+
+    monkeypatch.setattr("cicerone.evaluation.context.read_parquet", _read)
+    frame = load_metric_events(settings, since="2026-08-29T05:00:00+00:00")
+    assert frame.empty
+
+
+def test_load_metric_events_dataset_arrow_memory_propagates(tmp_path, monkeypatch) -> None:
+    from conftest import make_settings
+    from pyarrow.lib import ArrowMemoryError
+
+    from cicerone.config import IOSettings
+
+    settings = make_settings(
+        input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+
+    def _read(*_args, **_kwargs):
+        raise ArrowMemoryError("oom")
+
+    monkeypatch.setattr("cicerone.evaluation.context.read_parquet", _read)
+    with pytest.raises(ArrowMemoryError, match="oom"):
+        load_metric_events(settings, since="2026-08-29T05:00:00+00:00")
+
+
 def test_load_metric_events_db_propagates_unexpected_errors(monkeypatch) -> None:
     from conftest import make_settings
 
