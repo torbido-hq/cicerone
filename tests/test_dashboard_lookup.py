@@ -430,6 +430,19 @@ def test_lookup_inspector_history_unavailable_keeps_recommendations():
     assert result["error"] is None
 
 
+def test_lookup_inspector_propagates_unexpected_history_errors():
+    class Boom(Exception):
+        pass
+
+    with pytest.raises(Boom, match="bug"):
+        lookup_inspector(
+            make_settings(dashboard_enabled=True),
+            _KReader(),
+            _History(pd.DataFrame(), events_error=Boom("bug")),
+            "u1",
+        )
+
+
 def test_lookup_inspector_hides_history_exception_details():
     result = lookup_inspector(
         make_settings(dashboard_enabled=True),

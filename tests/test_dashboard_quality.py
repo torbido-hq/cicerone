@@ -186,6 +186,36 @@ def test_quality_live_label_when_stored_eval_lacks_track_eval(tmp_path):
     assert "Lists from" in response.text
 
 
+def test_quality_context_propagates_unexpected_eval_errors(tmp_path, monkeypatch):
+    from cicerone.dashboard_quality import quality_context
+    from cicerone.track.normalize import normalize_track
+
+    settings = _settings(tmp_path, track={"enabled": True})
+    TrackStore(settings.output).append_rows(
+        [
+            normalize_track(
+                {
+                    "kind": "impression",
+                    "user_id": "u1",
+                    "item_id": "i1",
+                    "rank": 1,
+                    "occurred_at": "2026-08-28T12:00:00Z",
+                }
+            ).as_row()
+        ]
+    )
+
+    class Boom(Exception):
+        pass
+
+    monkeypatch.setattr(
+        "cicerone.dashboard_quality.evaluate_tracking",
+        lambda *args, **kwargs: (_ for _ in ()).throw(Boom("bug")),
+    )
+    with pytest.raises(Boom, match="bug"):
+        quality_context(settings)
+
+
 def test_quality_live_eval_error_falls_back_to_empty(tmp_path, monkeypatch):
     from cicerone.dashboard_quality import quality_context
     from cicerone.track.normalize import normalize_track
