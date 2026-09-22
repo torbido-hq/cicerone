@@ -913,5 +913,6 @@ docker compose up --build
   system-style end-to-end checks for Postgres (`tests/test_system_db.py`,
   `tests/test_system_db_quality.py`) and local parquet
   (`tests/test_system_dataset.py`, `tests/test_system_dataset_quality.py`),
-  and mixed db-input / dataset-output (`tests/test_system_mixed.py`,
-  `tests/test_system_mixed_quality.py`).
+  mixed db-input / dataset-output (`tests/test_system_mixed.py`,
+  `tests/test_system_mixed_quality.py`), and webhook incremental ingest
+  on local parquet (`tests/test_system_events.py`).
