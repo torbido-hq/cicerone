@@ -17,6 +17,8 @@ from cicerone.evaluation import (
     load_metric_events,
 )
 from cicerone.evaluation.context import prefer_history
+from cicerone.job_eval import OPTIONAL_EVAL_ERRORS, OPTIONAL_IO_ERRORS, log_caught
+from cicerone.locks import LockLostError
 from cicerone.track.store import TrackStore
 from cicerone.track.store_common import DASHBOARD_TRACK_FLOOR_HOURS, lookback_since
 
@@ -30,8 +32,10 @@ def quality_context(settings: Settings) -> dict[str, Any]:
     error: str | None = None
     try:
         report = store.read_eval()
-    except Exception:
-        logger.exception("Failed to read track eval report")
+    except LockLostError:
+        raise
+    except OPTIONAL_IO_ERRORS as exc:
+        log_caught("Failed to read track eval report", exc, log=logger)
         error = "Could not load quality metrics."
     track_eval = None
     served_eval = None
@@ -94,8 +98,10 @@ def _replay_metric_names(served_eval: dict[str, Any] | None) -> list[str]:
 def _future_or(future: Future[_T], label: str, default: _T) -> _T:
     try:
         return future.result()
-    except Exception:
-        logger.exception("Failed to %s", label)
+    except LockLostError:
+        raise
+    except OPTIONAL_IO_ERRORS as exc:
+        log_caught(f"Failed to {label}", exc, log=logger)
         return default
 
 
@@ -115,8 +121,10 @@ def _live_track_eval(settings: Settings, store: TrackStore) -> dict[str, Any] | 
             floor_hours=DASHBOARD_TRACK_FLOOR_HOURS,
         )
         rows = store.read_rows(since=since)
-    except Exception:
-        logger.exception("Failed to read track rows for Quality")
+    except LockLostError:
+        raise
+    except OPTIONAL_IO_ERRORS as exc:
+        log_caught("Failed to read track rows for Quality", exc, log=logger)
         return None
     if not rows:
         return None
@@ -156,8 +164,10 @@ def _live_track_eval(settings: Settings, store: TrackStore) -> dict[str, Any] | 
             current = _future_or(recs_f, "load recommendations for live Quality metrics", None)
             history = _future_or(hist_f, "read recommendation history for Quality", None)
             recs = prefer_history(history, current)
-    except Exception:
-        logger.exception("Failed to load conversions for live Quality metrics")
+    except LockLostError:
+        raise
+    except OPTIONAL_IO_ERRORS as exc:
+        log_caught("Failed to load conversions for live Quality metrics", exc, log=logger)
     try:
         return evaluate_tracking(
             track_rows=rows,
@@ -165,6 +175,6 @@ def _live_track_eval(settings: Settings, store: TrackStore) -> dict[str, Any] | 
             recommendations=recs,
             window_hours=settings.track.attribution_window_hours,
         ).as_dict()
-    except Exception:
-        logger.exception("Failed to compute live track eval")
+    except OPTIONAL_EVAL_ERRORS as exc:
+        log_caught("Failed to compute live track eval", exc, log=logger)
         return None

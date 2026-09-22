@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 from conftest import make_settings
 
 from cicerone.dashboard_lookup import (
@@ -23,7 +24,7 @@ class _BoomReader:
         return
 
     def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame:
-        raise RuntimeError("dsn=postgres://secret@host/db")
+        raise OSError("dsn=postgres://secret@host/db")
 
     def get_items(self) -> pd.DataFrame | None:
         return None
@@ -101,6 +102,18 @@ def test_lookup_recommendations_empty_user_id_is_not_queried():
     assert result["queried"] is False
     assert result["items"] == []
     assert result["events"] == []
+
+
+def test_lookup_recommendations_propagates_unexpected_errors():
+    class Boom(Exception):
+        pass
+
+    class _BugReader(_BoomReader):
+        def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame:
+            raise Boom("bug")
+
+    with pytest.raises(Boom, match="bug"):
+        lookup_recommendations(make_settings(dashboard_enabled=True), _BugReader(), "u1")
 
 
 def test_lookup_recommendations_hides_exception_details():
@@ -421,7 +434,7 @@ def test_lookup_inspector_hides_history_exception_details():
     result = lookup_inspector(
         make_settings(dashboard_enabled=True),
         _KReader(),
-        _History(pd.DataFrame(), events_error=RuntimeError("dsn=postgres://secret@host/db")),
+        _History(pd.DataFrame(), events_error=OSError("dsn=postgres://secret@host/db")),
         "u1",
     )
 
@@ -471,7 +484,7 @@ def test_lookup_inspector_user_attr_error_still_returns_events():
     result = lookup_inspector(
         make_settings(dashboard_enabled=True, dashboard_lookup_user_attrs=("region_slug",)),
         _KReader(),
-        _History(events, user_error=RuntimeError("users boom")),
+        _History(events, user_error=OSError("users boom")),
         "u1",
     )
 
