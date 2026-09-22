@@ -684,7 +684,7 @@ def test_experiment_context_events_query_falls_back(tmp_path, monkeypatch):
 def test_experiment_context_events_s3_missing(tmp_path, monkeypatch):
     settings = _settings(tmp_path, log_exposures=False)
 
-    class _S3Missing(Exception):
+    class _S3Missing(OSError):
         pass
 
     def _raise(*_args, **_kwargs):
