@@ -653,6 +653,101 @@ def _publish_job_sidecar(
         _log_caught("Publish failed after successful write", exc, log=logger)
 
 
+def _finalize_job(
+    settings: Settings,
+    *,
+    sink: Any,
+    publisher: Any,
+    writer_lock: Any,
+    manifest: JobManifest,
+    fence_check: Callable[[], bool] | None,
+    started_at: str,
+    manifest_written: bool,
+    replace_success_manifest: bool,
+    success_generated_at: str | None,
+    eval_generated_at: str | None,
+    track_eval_payload: dict[str, Any] | None,
+    served_eval_payload: dict[str, Any] | None,
+    recommendations: pd.DataFrame | None,
+) -> None:
+    persist_exc: BaseException | None = None
+    close_exc: BaseException | None = None
+    if publisher is not None:
+        try:
+            publisher.close()
+        except _PUBLISH_ERRORS as exc:
+            _log_caught("Failed to close recommendation publisher", exc, log=logger)
+        except Exception as exc:
+            _log_caught("Failed to close recommendation publisher", exc, log=logger)
+            close_exc = exc
+    if manifest.get("status") == "success" and (settings.track.enabled or settings.eval.enabled):
+        try:
+            _persist_track_outputs(
+                TrackStore(
+                    settings.output,
+                    writer_lock=writer_lock,
+                    fence_check=fence_check,
+                    fence_lost="retrain lock lost before write",
+                    fence_kind="retrain",
+                ),
+                kind=settings.output.kind,
+                eval_report={
+                    "generated_at": eval_generated_at,
+                    "track_eval": track_eval_payload,
+                    "served_eval": served_eval_payload,
+                },
+                recommendations=recommendations,
+                generated_at=str(manifest["generated_at"]),
+                fence_check=fence_check,
+            )
+        except Exception as exc:
+            manifest["status"] = "failed"
+            manifest["error"] = truncate_job_error(exc)
+            manifest_written = False
+            persist_exc = exc
+            replace_success_manifest = True
+    if (
+        close_exc is not None
+        and manifest.get("status") == "success"
+        and not isinstance(close_exc, LockLostError)
+    ):
+        manifest["status"] = "failed"
+        manifest["error"] = truncate_job_error(close_exc)
+        manifest_written = False
+        replace_success_manifest = True
+    leftover_exc = persist_exc or sys.exc_info()[1]
+    if isinstance(close_exc, LockLostError) and persist_exc is not None:
+        leftover_exc = close_exc
+    skip_if_newer_than = (success_generated_at or started_at) if replace_success_manifest else started_at
+    if not manifest_written and not skip_stale_job_manifest(
+        fence_check=fence_check,
+        exc=leftover_exc,
+    ):
+        manifest["generated_at"] = datetime.now(UTC).isoformat()
+        try:
+            holder = getattr(sink, "recommendations_write", None)
+            if callable(holder):
+                with holder():
+                    write_job_manifest(sink, manifest, skip_if_newer_than=skip_if_newer_than)
+            else:
+                write_job_manifest(sink, manifest, skip_if_newer_than=skip_if_newer_than)
+        except _SINK_WRITE_ERRORS as exc:
+            _log_caught(
+                "Failed to write manifest; original job error (if any) is preserved",
+                exc,
+                log=logger,
+            )
+            if manifest.get("status") == "success":
+                raise
+    logger.info("Job finished: %s", json.dumps(manifest.as_dict()))
+    if isinstance(close_exc, LockLostError):
+        raise close_exc
+    if persist_exc is not None:
+        raise persist_exc
+    if close_exc is not None and sys.exc_info()[1] is None:
+        raise close_exc
+
+
 def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None = None) -> None:
     settings = load_settings()
     retrain_lock = _maybe_acquire_direct_retrain_lock(settings, fence_check)
@@ -791,82 +886,22 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
         success_generated_at = written.success_generated_at
         raise
     finally:
-        persist_exc: BaseException | None = None
-        close_exc: BaseException | None = None
-        if publisher is not None:
-            try:
-                publisher.close()
-            except _PUBLISH_ERRORS as exc:
-                _log_caught("Failed to close recommendation publisher", exc, log=logger)
-            except Exception as exc:
-                _log_caught("Failed to close recommendation publisher", exc, log=logger)
-                close_exc = exc
-        if manifest.get("status") == "success" and (settings.track.enabled or settings.eval.enabled):
-            try:
-                _persist_track_outputs(
-                    TrackStore(
-                        settings.output,
-                        writer_lock=writer_lock,
-                        fence_check=fence_check,
-                        fence_lost="retrain lock lost before write",
-                        fence_kind="retrain",
-                    ),
-                    kind=settings.output.kind,
-                    eval_report={
-                        "generated_at": eval_generated_at,
-                        "track_eval": track_eval_payload,
-                        "served_eval": served_eval_payload,
-                    },
-                    recommendations=recommendations,
-                    generated_at=str(manifest["generated_at"]),
-                    fence_check=fence_check,
-                )
-            except Exception as exc:
-                manifest["status"] = "failed"
-                manifest["error"] = truncate_job_error(exc)
-                manifest_written = False
-                persist_exc = exc
-                replace_success_manifest = True
-        if (
-            close_exc is not None
-            and manifest.get("status") == "success"
-            and not isinstance(close_exc, LockLostError)
-        ):
-            manifest["status"] = "failed"
-            manifest["error"] = truncate_job_error(close_exc)
-            manifest_written = False
-            replace_success_manifest = True
-        leftover_exc = persist_exc or sys.exc_info()[1]
-        if isinstance(close_exc, LockLostError) and persist_exc is not None:
-            leftover_exc = close_exc
-        skip_if_newer_than = (success_generated_at or started_at) if replace_success_manifest else started_at
-        if not manifest_written and not skip_stale_job_manifest(
+        _finalize_job(
+            settings,
+            sink=sink,
+            publisher=publisher,
+            writer_lock=writer_lock,
+            manifest=manifest,
             fence_check=fence_check,
-            exc=leftover_exc,
-        ):
-            manifest["generated_at"] = datetime.now(UTC).isoformat()
-            try:
-                holder = getattr(sink, "recommendations_write", None)
-                if callable(holder):
-                    with holder():
-                        write_job_manifest(sink, manifest, skip_if_newer_than=skip_if_newer_than)
-                else:
-                    write_job_manifest(sink, manifest, skip_if_newer_than=skip_if_newer_than)
-            except _SINK_WRITE_ERRORS as exc:
-                _log_caught(
-                    "Failed to write manifest; original job error (if any) is preserved",
-                    exc,
-                    log=logger,
-                )
-                if manifest.get("status") == "success":
-                    raise
-        logger.info("Job finished: %s", json.dumps(manifest.as_dict()))
-        if isinstance(close_exc, LockLostError):
-            raise close_exc
-        if persist_exc is not None:
-            raise persist_exc
-        if close_exc is not None and sys.exc_info()[1] is None:
-            raise close_exc
+            started_at=started_at,
+            manifest_written=manifest_written,
+            replace_success_manifest=replace_success_manifest,
+            success_generated_at=success_generated_at,
+            eval_generated_at=eval_generated_at,
+            track_eval_payload=track_eval_payload,
+            served_eval_payload=served_eval_payload,
+            recommendations=recommendations,
+        )
 
 
 if __name__ == "__main__":
