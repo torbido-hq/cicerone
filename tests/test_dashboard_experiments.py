@@ -448,6 +448,20 @@ def test_experiment_context_db_events_missing_table(tmp_path):
     assert context["report"] is not None or context["error"]
 
 
+def test_experiment_context_propagates_unexpected_state_errors(tmp_path, monkeypatch):
+    settings = _settings(tmp_path)
+
+    class Boom(Exception):
+        pass
+
+    monkeypatch.setattr(
+        "cicerone.experiment.store.ExperimentStore.read_state",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(Boom("bug")),
+    )
+    with pytest.raises(Boom, match="bug"):
+        experiment_context(settings)
+
+
 def test_experiment_context_tolerates_load_failures(tmp_path, monkeypatch):
     settings = _settings(tmp_path)
     _write_frames(
@@ -466,7 +480,7 @@ def test_experiment_context_tolerates_load_failures(tmp_path, monkeypatch):
     )
 
     def _boom(*_args, **_kwargs):
-        raise RuntimeError("boom")
+        raise OSError("boom")
 
     monkeypatch.setattr("cicerone.experiment.store.ExperimentStore.read_state", _boom)
     monkeypatch.setattr("cicerone.dashboard_experiments._load_metric_events", _boom)
@@ -497,7 +511,7 @@ def test_experiment_context_reuses_cached_promote_state_on_read_failure(tmp_path
     assert experiment_context(settings)["promoted_variant"] == "treatment"
 
     def _boom(*_args, **_kwargs):
-        raise RuntimeError("store down")
+        raise OSError("store down")
 
     monkeypatch.setattr("cicerone.experiment.store.ExperimentStore.read_state", _boom)
     assert experiment_context(settings)["promoted_variant"] == "treatment"
@@ -533,7 +547,7 @@ def test_experiment_context_clears_promote_cache_when_store_returns_other_experi
     assert experiment_context(settings)["promoted_variant"] is None
 
     def _boom(*_args, **_kwargs):
-        raise RuntimeError("store down")
+        raise OSError("store down")
 
     monkeypatch.setattr("cicerone.experiment.store.ExperimentStore.read_state", _boom)
     assert experiment_context(settings)["promoted_variant"] is None
@@ -725,12 +739,12 @@ def test_experiment_context_manifest_read_and_resolve_errors(tmp_path, monkeypat
 
     class _BoomReader:
         def read_latest(self):
-            raise RuntimeError("manifest")
+            raise OSError("manifest")
 
     monkeypatch.setattr("cicerone.dashboard_experiments.build_manifest_reader", lambda _output: _BoomReader())
     monkeypatch.setattr(
         "cicerone.dashboard_experiments.resolve_recipes",
-        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("recipes")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("recipes")),
     )
     context = experiment_context(settings)
     assert context["error"] == "No experiment variants to evaluate."
@@ -1076,7 +1090,7 @@ def test_experiment_context_track_read_error(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         "cicerone.track.store.TrackStore.read_rows",
-        lambda self, **_kwargs: (_ for _ in ()).throw(RuntimeError("track")),
+        lambda self, **_kwargs: (_ for _ in ()).throw(OSError("track")),
     )
     context = experiment_context(settings)
     assert context["report"] is not None
@@ -1631,7 +1645,7 @@ def test_thompson_promote_fails_closed_when_state_read_fails(tmp_path, monkeypat
     original = ExperimentStore.read_state
 
     def _boom(self):
-        raise RuntimeError("store down")
+        raise OSError("store down")
 
     monkeypatch.setattr(ExperimentStore, "read_state", _boom)
     assert promote_winner(settings, "treatment") == "Experiment state could not be read"
