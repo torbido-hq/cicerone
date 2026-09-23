@@ -122,9 +122,9 @@ class UpdaterMerge:
                 allowed=allowed,
             )
             if merged.empty:
-                if prior_slice.empty:
+                merged = _restrict_items(prior_slice, allowed)
+                if merged.empty:
                     continue
-                merged = prior_slice
             merged = merged.copy()
             merged[VARIANT_COLUMN] = variant
             parts.append(merged)
@@ -289,9 +289,9 @@ class UpdaterMerge:
             )
             merged = self._cold_start_one_list(prior_slice, popular, latest, allowed=allowed)
             if merged.empty:
-                if prior_slice.empty:
+                merged = _restrict_items(prior_slice, allowed)
+                if merged.empty:
                     continue
-                merged = prior_slice
             merged = merged.copy()
             merged[VARIANT_COLUMN] = variant
             parts.append(merged)

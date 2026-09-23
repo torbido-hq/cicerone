@@ -1490,3 +1490,172 @@ def test_incremental_allowlists_user_scoped_when_users_present(feature_config: F
     assert allowed["u1"] == frozenset({"ok"})
     without_users = incremental_allowlists(["u1"], feature_config=scoped, items=items, users=None)
     assert without_users["u1"] == frozenset({"ok", "other"})
+
+
+def test_incremental_updater_deletes_user_when_allowlist_empties_list(
+    tmp_path, feature_config: FeatureConfig
+) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "oos", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    items = pd.DataFrame([{"item_id": "oos", "published": True, "in_stock": False}])
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        items_provider=lambda: items,
+    )
+    updater.apply([normalize_event(event_payload(user_id="u1", item_id="oos", event_id="gone"))])
+    frame = load_recommendations_frame(settings.output)
+    assert frame[frame["user_id"] == "u1"].empty
+
+
+def test_incremental_updater_deletes_cold_start_when_allowlist_empties_list(
+    tmp_path, feature_config: FeatureConfig
+) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "ok", "rank": 1, "score": 1.0, "source": "personalized"},
+            {
+                "user_id": COLD_START_USER_ID,
+                "item_id": "oos",
+                "rank": 1,
+                "score": 0.2,
+                "source": "popular_fallback",
+            },
+        ]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    items = pd.DataFrame(
+        [
+            {"item_id": "ok", "published": True, "in_stock": True},
+            {"item_id": "oos", "published": True, "in_stock": False},
+        ]
+    )
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        items_provider=lambda: items,
+    )
+    updater.apply([normalize_event(event_payload(user_id="u1", item_id="ok", event_id="keep"))])
+    frame = load_recommendations_frame(settings.output)
+    assert frame[frame["user_id"] == COLD_START_USER_ID].empty
+    assert "ok" in set(frame[frame["user_id"] == "u1"]["item_id"].astype(str))
+
+
+def test_incremental_updater_does_not_restore_ineligible_parked_variant(
+    tmp_path, feature_config: FeatureConfig
+) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "old-control",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                "variant": "control",
+            },
+            {
+                "user_id": "u1",
+                "item_id": "old-treatment",
+                "rank": 1,
+                "score": 0.8,
+                "source": "personalized",
+                "variant": "treatment",
+            },
+        ]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    items = pd.DataFrame(
+        [
+            {"item_id": "old-control", "published": True, "in_stock": True},
+            {"item_id": "old-treatment", "published": True, "in_stock": False},
+            {"item_id": "ok", "published": True, "in_stock": True},
+        ]
+    )
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        variant_names=("control", "treatment"),
+        assign_variant=lambda _user_id: "control",
+        items_provider=lambda: items,
+    )
+    updater.apply([normalize_event(event_payload(user_id="u1", item_id="ok", event_id="v-elig"))])
+    u1 = load_recommendations_frame(settings.output)
+    u1 = u1[u1["user_id"] == "u1"]
+    assert "old-treatment" not in set(u1["item_id"].astype(str))
+    assert "old-control" in set(u1[u1["variant"] == "control"]["item_id"].astype(str))
+
+
+def test_incremental_updater_does_not_restore_ineligible_cold_variant(
+    tmp_path, feature_config: FeatureConfig
+) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [
+            {
+                "user_id": COLD_START_USER_ID,
+                "item_id": "cold-ok",
+                "rank": 1,
+                "score": 0.2,
+                "source": "popular_fallback",
+                "variant": "control",
+            },
+            {
+                "user_id": COLD_START_USER_ID,
+                "item_id": "cold-oos",
+                "rank": 1,
+                "score": 0.2,
+                "source": "popular_fallback",
+                "variant": "treatment",
+            },
+            {"user_id": "u1", "item_id": "ok", "rank": 1, "score": 1.0, "source": "personalized"},
+        ]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    items = pd.DataFrame(
+        [
+            {"item_id": "cold-ok", "published": True, "in_stock": True},
+            {"item_id": "cold-oos", "published": True, "in_stock": False},
+            {"item_id": "ok", "published": True, "in_stock": True},
+        ]
+    )
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        variant_names=("control", "treatment"),
+        items_provider=lambda: items,
+    )
+    updater.apply([normalize_event(event_payload(user_id="u1", item_id="ok", event_id="cold-elig"))])
+    cold = load_recommendations_frame(settings.output)
+    cold = cold[cold["user_id"] == COLD_START_USER_ID]
+    assert "cold-oos" not in set(cold["item_id"].astype(str))
+    assert "cold-ok" in set(cold["item_id"].astype(str))

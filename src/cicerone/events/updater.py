@@ -309,18 +309,19 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
                 online_rows=online_by_user.get(user_id),
                 allowed=allowlists.get(user_id),
             )
-            if merged_user.empty:
-                continue
-            frames.append(merged_user)
+            if not merged_user.empty:
+                frames.append(merged_user)
             replace_ids.append(user_id)
         prior_cold = by_user.get(COLD_START_USER_ID, empty_recommendations_frame())
         cold = self._cold_start_rows(prior_cold, popular_ranking, latest_ranking, allowed=cold_allowed)
         if not cold.empty:
             frames.append(cold)
             replace_ids.append(COLD_START_USER_ID)
+        elif not prior_cold.empty:
+            replace_ids.append(COLD_START_USER_ID)
         if not replace_ids:
             return None, []
-        merged = pd.concat(frames, ignore_index=True)
+        merged = pd.concat(frames, ignore_index=True) if frames else empty_recommendations_frame()
         return merged[recommendation_output_columns(merged)], replace_ids
 
     def _commit_online(self) -> None:

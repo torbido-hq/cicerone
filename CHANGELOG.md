@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - Incremental write-through applies the items-snapshot eligibility allowlist
+<<<<<<< HEAD
   and keeps batch popular/latest and `__cold_start__` instead of replacing
   them with the current flush.
 - Postgres and Redis lock probes only treat SQL or Redis errors as a
@@ -18,6 +19,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   on already-seen items. A stamped job only keeps impressions whose
   `generated_at` matches that instant (UTC); undated rows are ignored.
   Empty-event replay reports `n_users` from the served impression list.
+=======
+  (user-scoped rules use the input users frame), deletes lists that filter
+  to empty, and keeps batch popular/latest and `__cold_start__` instead of
+  replacing them with the current flush.
+>>>>>>> 988bf16d (Delete emptied incremental lists and wire serve users.)
 - Metric event loads and RecTools served replay no longer turn unexpected
   errors into an empty frame or a silent HitRate fallback. Store and
   eval I/O failures still fall back as before.
