@@ -47,6 +47,16 @@ def test_user_recommendation_messages_empty():
     assert user_recommendation_messages(pd.DataFrame({"item_id": ["i1"]})) == []
 
 
+def test_user_recommendation_messages_user_ids_emit_empty_lists():
+    messages = user_recommendation_messages(pd.DataFrame(), user_ids=["u1", "u2"])
+    assert [user_id for user_id, _body, _message_id in messages] == ["u1", "u2"]
+    for user_id, body, message_id in messages:
+        payload = json.loads(body)
+        assert payload["user_id"] == user_id
+        assert payload["recommendations"] == []
+        assert payload["message_id"] == message_id
+
+
 def test_user_recommendation_messages_rejects_nan():
     frame = pd.DataFrame(
         [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": float("nan"), "source": "popular"}]
@@ -300,7 +310,7 @@ def test_updater_publishes_after_replace(tmp_path, feature_config: FeatureConfig
         def connect(self) -> None:
             return None
 
-        def publish(self, df: pd.DataFrame) -> None:
+        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
             captured.append(df.copy())
 
         def close(self) -> None:
@@ -462,6 +472,20 @@ def test_publish_empty_frame_is_noop(monkeypatch):
     publisher.close()
 
 
+def test_kafka_publisher_user_ids_emit_empty_lists(monkeypatch):
+    broker = install_fake_kafka(monkeypatch)
+    publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "t"})
+    publisher.connect()
+    publisher.publish(pd.DataFrame(), user_ids=["u1"])
+    assert len(broker.produced) == 1
+    _topic, key, value = broker.produced[0]
+    assert key == b"u1"
+    payload = json.loads(value)
+    assert payload["user_id"] == "u1"
+    assert payload["recommendations"] == []
+    publisher.close()
+
+
 def test_updater_publish_failure_does_not_unsucceed(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()
@@ -477,7 +501,7 @@ def test_updater_publish_failure_does_not_unsucceed(tmp_path, feature_config: Fe
         def connect(self) -> None:
             return None
 
-        def publish(self, df: pd.DataFrame) -> None:
+        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
             raise PublishError("broker down")
 
     updater = IncrementalUpdater(

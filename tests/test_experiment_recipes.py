@@ -20,6 +20,7 @@ from cicerone.experiment.recipes import (
     resolve_boost_policy,
     resolve_eligibility_policy,
     resolve_recipes,
+    resolve_variant_policy_configs,
     union_models,
 )
 from cicerone.feature_config import BlendingConfig, BoostRule, EligibilityRule, FeatureConfig
@@ -212,6 +213,33 @@ def test_automl_challenger_requires_automl_pick() -> None:
     )
     with pytest.raises(ConfigError, match="AutoML"):
         resolve_recipes(settings, _features())
+
+
+def test_resolve_variant_policy_configs_without_automl_models() -> None:
+    features = _features()
+    synthesized = resolve_variant_policy_configs(
+        make_settings(experiment=ExperimentSettings(enabled=True, id="auto", automl_challenger=True)),
+        features,
+    )
+    assert set(synthesized) == {CONTROL_NAME, TREATMENT_NAME}
+    assert [rule.name for rule in synthesized[TREATMENT_NAME].eligibility] == ["in_stock"]
+    configs = resolve_variant_policy_configs(
+        make_settings(
+            experiment=ExperimentSettings(
+                enabled=True,
+                id="auto",
+                automl_challenger=True,
+                variants=(
+                    VariantSettings(name="control", traffic=0.5, eligibility=False),
+                    VariantSettings(name="treatment", traffic=0.5),
+                ),
+            ),
+        ),
+        features,
+    )
+    assert configs["control"].eligibility == []
+    assert configs["control"].merge_item_availability is False
+    assert [rule.name for rule in configs["treatment"].eligibility] == ["in_stock"]
 
 
 def test_resolve_recipes_named_and_replacement_policy() -> None:

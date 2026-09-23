@@ -10,8 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Incremental write-through applies the items-snapshot eligibility allowlist
   per experiment recipe (user-scoped rules use the input users frame),
-  deletes lists that filter to empty, and keeps batch popular/latest and
-  `__cold_start__` instead of replacing them with the current flush.
+  deletes lists that filter to empty and publishes empty sidecar lists for
+  those users, and keeps batch popular/latest and `__cold_start__` instead
+  of replacing them with the current flush. AutoML challenger arms resolve
+  eligibility without a model pick.
 - Postgres and Redis lock probes only treat SQL or Redis errors as a
   lost or busy lock. Unexpected exceptions still raise.
 - Production replay scores impression lists when track rows exist, and

@@ -19,7 +19,8 @@ torch-free. New catalog IDs still wait for a full retrain.
 The incremental path injects recency boosts and may backfill popular / latest
 slots for affected users. Those injects use the items-snapshot eligibility
 allowlist (availability always; user-scoped rules from the input users
-frame). A list that filters to empty is deleted. Batch popular / latest
+frame). A list that filters to empty is deleted, and the publish sidecar
+emits an empty-list message for each cleared user. Batch popular / latest
 rows stay; a flush does not rebuild `__cold_start__`. When `[experiment]` is
 on, that popular/latest refresh runs only on the **assigned** (or promoted)
 variant; other variants keep their last batch lists. Online LightFM

@@ -1156,7 +1156,7 @@ def test_incremental_updater_publish_failure_does_not_unsucceed(tmp_path, featur
         def connect(self) -> None:
             return None
 
-        def publish(self, _df: pd.DataFrame) -> None:
+        def publish(self, _df: pd.DataFrame, *, user_ids=None) -> None:
             raise PublishError("broker down")
 
         def close(self) -> None:
@@ -1194,7 +1194,7 @@ def test_incremental_updater_raises_when_fence_lost_after_connect(tmp_path, feat
         def connect(self) -> None:
             lost_after_connect["lost"] = True
 
-        def publish(self, df: pd.DataFrame) -> None:
+        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
             published.append(df.copy())
 
         def close(self) -> None:
@@ -1230,7 +1230,7 @@ def test_incremental_updater_raises_when_fence_lost_before_connect(tmp_path, fea
             connected["n"] += 1
             raise RuntimeError("broker down")
 
-        def publish(self, df: pd.DataFrame) -> None:
+        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
             raise AssertionError("publish should not run")
 
         def close(self) -> None:
@@ -1248,6 +1248,7 @@ def test_incremental_updater_raises_when_fence_lost_before_connect(tmp_path, fea
         updater._publish_sidecar(
             pd.DataFrame([{"user_id": "u1", "item_id": "i9", "rank": 1, "score": 1.0}]),
             "2026-01-01T00:00:00+00:00",
+            ["u1"],
         )
     assert connected["n"] == 0
 
@@ -1273,7 +1274,7 @@ def test_incremental_updater_skips_publish_when_manifest_generation_changes(
             payload["generated_at"] = "2099-01-01T00:00:00+00:00"
             path.write_text(json.dumps(payload))
 
-        def publish(self, df: pd.DataFrame) -> None:
+        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
             published.append(df.copy())
 
         def close(self) -> None:
@@ -1308,7 +1309,7 @@ def test_incremental_updater_reraises_unexpected_sidecar_generation_error(
         def connect(self) -> None:
             return None
 
-        def publish(self, df: pd.DataFrame) -> None:
+        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
             raise AssertionError("publish should not run after generation check failure")
 
         def close(self) -> None:
@@ -1349,7 +1350,7 @@ def test_incremental_updater_reraises_writer_lock_busy_from_generation_check(
         def connect(self) -> None:
             return None
 
-        def publish(self, df: pd.DataFrame) -> None:
+        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
             raise AssertionError("publish should not run after lock-busy generation check")
 
         def close(self) -> None:
@@ -1514,6 +1515,47 @@ def test_incremental_updater_deletes_user_when_allowlist_empties_list(
     updater.apply([normalize_event(event_payload(user_id="u1", item_id="oos", event_id="gone"))])
     frame = load_recommendations_frame(settings.output)
     assert frame[frame["user_id"] == "u1"].empty
+
+
+def test_incremental_updater_publishes_empty_list_when_allowlist_empties(
+    tmp_path, feature_config: FeatureConfig
+) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "oos", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    items = pd.DataFrame([{"item_id": "oos", "published": True, "in_stock": False}])
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    published: list[tuple[pd.DataFrame, list[str] | None]] = []
+
+    class _Pub:
+        def connect(self) -> None:
+            return None
+
+        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
+            published.append((df.copy(), None if user_ids is None else list(user_ids)))
+
+        def close(self) -> None:
+            return None
+
+    IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        items_provider=lambda: items,
+        publisher=_Pub(),
+    ).apply([normalize_event(event_payload(user_id="u1", item_id="oos", event_id="gone-pub"))])
+    frame = load_recommendations_frame(settings.output)
+    assert frame[frame["user_id"] == "u1"].empty
+    assert len(published) == 1
+    merged, user_ids = published[0]
+    assert user_ids == ["u1"]
+    assert merged.empty
 
 
 def test_incremental_updater_deletes_cold_start_when_allowlist_empties_list(
