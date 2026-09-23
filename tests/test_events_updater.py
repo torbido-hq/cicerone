@@ -587,6 +587,38 @@ def test_incremental_updater_empty_and_unknown_event_type(tmp_path, feature_conf
     assert frame.empty or "ix" not in set(frame["item_id"].astype(str))
 
 
+def test_incremental_updater_unknown_event_skips_new_user_without_prior(
+    tmp_path, feature_config: FeatureConfig
+) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    published: list[tuple[pd.DataFrame, list[str] | None]] = []
+
+    class _Pub:
+        def connect(self) -> None:
+            return None
+
+        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
+            published.append((df.copy(), None if user_ids is None else list(user_ids)))
+
+        def close(self) -> None:
+            return None
+
+    IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=3,
+        publisher=_Pub(),
+    ).apply([normalize_event(event_payload(event_type="unknown_type", event_id="u", item_id="ix"))])
+    assert published == []
+    assert load_recommendations_frame(settings.output).empty
+
+
 def test_incremental_updater_unknown_event_keeps_popular_only_user(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()

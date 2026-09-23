@@ -339,7 +339,9 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             )
             if not merged_user.empty:
                 frames.append(merged_user)
-            replace_ids.append(user_id)
+                replace_ids.append(user_id)
+            elif not prior.empty:
+                replace_ids.append(user_id)
         prior_cold = by_user.get(COLD_START_USER_ID, empty_recommendations_frame())
         cold = self._cold_start_rows(
             prior_cold,
