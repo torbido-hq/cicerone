@@ -15,7 +15,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   missing table or object. Unexpected exceptions still raise.
 - Dataset and DB recommendation readers no longer keep a stale cache on
   unexpected errors. Missing objects and SQL errors still fall back as
-  before.
+  before. A hard S3 or processing failure on the items snapshot no longer
+  clears filters.
 - Dashboard experiment and config pages no longer turn unexpected errors
   into a blank report or missing feature section. Store and feature-config
   I/O failures still fall back as before.

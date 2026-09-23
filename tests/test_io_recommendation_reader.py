@@ -248,6 +248,53 @@ def test_dataset_reader_refresh_propagates_unexpected_errors(tmp_path, monkeypat
         reader.refresh()
 
 
+def test_dataset_reader_items_hard_s3_reraises_and_keeps_filters(tmp_path, monkeypatch):
+    from botocore.exceptions import ClientError
+
+    _write_recommendations(tmp_path, [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9}])
+    pd.DataFrame([{"item_id": "i1", "category": "beer", "published": True}]).to_parquet(
+        tmp_path / "items_snapshot.parquet", index=False
+    )
+    reader = DatasetRecommendationReader({"storage_backend": "local", "path": str(tmp_path)})
+    assert list(reader.get_items()["item_id"]) == ["i1"]
+    import cicerone.io.dataset_recommendation_reader as reader_mod
+
+    original = reader_mod.read_parquet
+
+    def _read(options, filename, **kwargs):
+        if filename == "items_snapshot.parquet":
+            raise ClientError({"Error": {"Code": "AccessDenied", "Message": "nope"}}, "GetObject")
+        return original(options, filename, **kwargs)
+
+    monkeypatch.setattr(reader_mod, "read_parquet", _read)
+    with pytest.raises(ClientError, match="AccessDenied"):
+        reader.refresh()
+    assert list(reader.get_items()["item_id"]) == ["i1"]
+
+
+def test_dataset_reader_refresh_propagates_index_errors(tmp_path, monkeypatch):
+    _write_recommendations(tmp_path, [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9}])
+    reader = DatasetRecommendationReader({"storage_backend": "local", "path": str(tmp_path)})
+    monkeypatch.setattr(
+        "cicerone.io.dataset_recommendation_reader._index_recommendations_by_user",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("bad index")),
+    )
+    with pytest.raises(ValueError, match="bad index"):
+        reader.refresh()
+    assert list(reader.get_recommendations("u1", k=1)["item_id"]) == ["i1"]
+
+
+def test_dataset_reader_refresh_propagates_items_processing_errors(tmp_path, monkeypatch):
+    _write_recommendations(tmp_path, [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9}])
+    reader = DatasetRecommendationReader({"storage_backend": "local", "path": str(tmp_path)})
+    monkeypatch.setattr(
+        "cicerone.io.dataset_recommendation_reader.normalize_items_snapshot",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(TypeError("bad items")),
+    )
+    with pytest.raises(TypeError, match="bad items"):
+        reader.refresh()
+
+
 def test_dataset_reader_cold_start_fallback_and_items(tmp_path):
     _write_recommendations(
         tmp_path,
