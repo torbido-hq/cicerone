@@ -30,7 +30,7 @@ def optional_int(options: dict[str, Any], key: str, default: int, *, prefix: str
     raw = options.get(key, default)
     try:
         value = int(raw)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise ConfigError(f"{prefix}.{key} must be an integer, got {raw!r}") from exc
     if value < minimum:
         raise ConfigError(f"{prefix}.{key} must be >= {minimum}, got {value}")

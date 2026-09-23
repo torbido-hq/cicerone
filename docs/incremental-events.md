@@ -234,12 +234,21 @@ Consumer group, JSON objects matching the event contract. Required:
 (default hostname), `security_protocol`, `sasl_mechanism`,
 `sasl_username`, `sasl_password`, `timeout_seconds` (default 10, min 10 ms,
 max signed 32-bit milliseconds; sets librdkafka `socket.timeout.ms` /
-`request.timeout.ms` and `list_topics`). Missing `event_id` uses
-`{partition}-{offset}`. Manual commits of the contiguous watermark per
+`request.timeout.ms` and `list_topics`). Optional `max_poll_interval_ms`
+and `session_timeout_ms` map to librdkafka `max.poll.interval.ms` /
+`session.timeout.ms` (omit both to keep client defaults). An omitted value
+is checked against the librdkafka default (`max.poll.interval.ms` 300000,
+`session.timeout.ms` 45000): `max_poll_interval_ms` must be >= the effective
+session. `session_timeout_ms` must be >= 2 and <= 3600000 (librdkafka
+`session.timeout.ms`); `max_poll_interval_ms` must be <= 86400000.
+Setting `session_timeout_ms` also sets `heartbeat.interval.ms` to one third
+of the session so a short session is not paired with the 3s client default.
+Missing `event_id`
+uses `{partition}-{offset}`. Manual commits of the contiguous watermark per
 partition (an out-of-order ack cannot skip an earlier offset). `nack`
-returns the batch to a local deque without committing. Librdkafka session
-heartbeats cover apply; raise `max.poll.interval.ms` if a flush can exceed
-the default (~5 minutes). Requires `pip install 'cicerone-recommender[kafka]'`
+returns the batch to a local deque without committing. Raise
+`max_poll_interval_ms` if a flush can exceed the librdkafka default
+(~5 minutes). Requires `pip install 'cicerone-recommender[kafka]'`
 or `pip install -r requirements-kafka.txt`.
 
 ### `rabbitmq`
