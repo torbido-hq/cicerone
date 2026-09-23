@@ -504,6 +504,60 @@ def test_evaluate_served_uses_impression_lists() -> None:
     assert report.metrics["HitRate@1"] == pytest.approx(1.0)
 
 
+def test_recs_from_impressions_drops_undated_when_job_stamped() -> None:
+    frame = recs_from_impressions(
+        [
+            {"kind": "impression", "user_id": "alice", "item_id": "ipa", "rank": 1},
+            {
+                "kind": "impression",
+                "user_id": "bob",
+                "item_id": "lager",
+                "rank": 1,
+                "generated_at": "2026-08-28T03:00:00+00:00",
+            },
+        ],
+        generated_at="2026-08-28T03:00:00+00:00",
+    )
+    assert list(frame["user_id"]) == ["bob"]
+
+
+def test_recs_from_impressions_matches_equivalent_utc_stamps() -> None:
+    frame = recs_from_impressions(
+        [
+            {
+                "kind": "impression",
+                "user_id": "alice",
+                "item_id": "ipa",
+                "rank": 1,
+                "generated_at": "2026-08-28T03:00:00Z",
+            }
+        ],
+        generated_at="2026-08-28T03:00:00+00:00",
+    )
+    assert list(frame["item_id"]) == ["ipa"]
+
+
+def test_evaluate_served_empty_events_uses_impression_n_users() -> None:
+    job = pd.DataFrame(
+        [
+            {"user_id": "alice", "item_id": "ipa", "rank": 1, "score": 1.0, "source": "personalized"},
+            {"user_id": "bob", "item_id": "lager", "rank": 1, "score": 0.5, "source": "popular_fallback"},
+        ]
+    )
+    impressions = pd.DataFrame([{"user_id": "alice", "item_id": "ipa", "rank": 1, "score": 1.0}])
+    report = evaluate_served(
+        job,
+        pd.DataFrame(),
+        generated_at="2026-08-28T03:00:00+00:00",
+        ks=(1,),
+        event_types=("purchase",),
+        impressions=impressions,
+    )
+    assert report is not None
+    assert report.n_users == 1
+    assert report.n_users_with_events == 0
+
+
 def test_evaluate_served_catalog_coverage_uses_item_catalog() -> None:
     recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa", "rank": 1, "source": "personalized"}])
     events = pd.DataFrame(
