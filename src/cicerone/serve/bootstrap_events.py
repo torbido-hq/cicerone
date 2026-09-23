@@ -24,7 +24,7 @@ from cicerone.experiment.store import ExperimentStore
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.base import RecommendationReader
 from cicerone.io.catalog import CatalogStore
-from cicerone.io.factory import build_output_sink
+from cicerone.io.factory import build_input_source, build_output_sink
 from cicerone.locks import (
     LockBackend,
     build_lock_backend,
@@ -234,6 +234,7 @@ def start_events_runtime(
             consumed=consumed,
             catalog=catalog,
             items_provider=getattr(reader, "get_items", None),
+            users_provider=build_input_source(settings.input).read_users,
         )
         buffer = MicroBatchBuffer(
             batch_size=settings.events.incremental.batch_size,
