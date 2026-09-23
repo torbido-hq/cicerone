@@ -60,7 +60,7 @@ from cicerone.serve.code_samples import (
     RECOMMENDATIONS_PATH,
     attach_code_samples,
 )
-from cicerone.serve.consumed import consumed_item_ids, drop_consumed, merge_fill
+from cicerone.serve.consumed import consumed_item_ids, consumed_item_ids_for_users, drop_consumed, merge_fill
 from cicerone.serve.events_routes import attach_events_ingest_openapi, mount_events_routes
 from cicerone.serve.item_filters import (
     ItemsFilterCache,
@@ -386,15 +386,18 @@ def create_app(
         recs: Any | None = None,
         fallback_recs: Any | None = None,
         assignment: tuple[str | None, str | None] | None = None,
+        consumed_ids: set[str] | None = None,
     ) -> RecommendationsResponse | None:
-        consumed_ids: set[str] = set()
         if hide_consumed:
-            consumed_ids = consumed_item_ids(
-                user_id,
-                history=history_reader,
-                overlay=overlay,
-                lookback=settings.serve.consumed_lookback,
-            )
+            if consumed_ids is None:
+                consumed_ids = consumed_item_ids(
+                    user_id,
+                    history=history_reader,
+                    overlay=overlay,
+                    lookback=settings.serve.consumed_lookback,
+                )
+        else:
+            consumed_ids = set()
         can_filter = bool(
             (
                 items is not None
@@ -630,6 +633,16 @@ def create_app(
         )
         items, available_ids, ids_by_category = items_cache.get()
         generated_at = generated_at_cache.get()
+        consumed_by_user = (
+            consumed_item_ids_for_users(
+                user_ids,
+                history=history_reader,
+                overlay=overlay,
+                lookback=settings.serve.consumed_lookback,
+            )
+            if hide_consumed
+            else {}
+        )
         request_can_filter = bool(
             items is not None
             and not getattr(items, "empty", True)
@@ -676,6 +689,7 @@ def create_app(
                 recs=recs_by_user.get(user_id),
                 fallback_recs=fallback_by_variant[variant],
                 assignment=assignments[user_id],
+                consumed_ids=consumed_by_user.get(user_id, set()) if hide_consumed else None,
             )
             if row is None:
                 users.append(

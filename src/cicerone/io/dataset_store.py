@@ -32,7 +32,7 @@ from cicerone.io.options import (
 )
 from cicerone.io.recommendation_schema import USER_COLUMN
 from cicerone.io.replace_users import RecommendationSchemaError, normalize_replace_user_ids
-from cicerone.io.user_lookup import filter_rows_for_user, newest_events
+from cicerone.io.user_lookup import filter_rows_for_user, newest_events, newest_events_by_user
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +104,32 @@ class DatasetInputSource:
 
     def get_events_for_user(self, user_id: str, limit: int) -> pd.DataFrame:
         return newest_events(self._read_for_user("events.parquet", user_id), limit)
+
+    def get_events_for_users(self, user_ids: Sequence[str], limit: int) -> dict[str, pd.DataFrame]:
+        ids = [str(user_id) for user_id in user_ids]
+        empty = pd.DataFrame()
+        if not ids:
+            return {}
+        if limit < 1:
+            return {user_id: empty.copy() for user_id in ids}
+        try:
+            frame = read_parquet(self._options, "events.parquet", filters=[("user_id", "in", ids)])
+        except FileNotFoundError:
+            raise
+        except Exception as exc:
+            if is_s3_not_found(exc):
+                raise
+            message = str(exc).lower()
+            if "user_id" in message or "fieldref" in message or "filter" in message:
+                logger.warning("Filtered events.parquet read failed; falling back to full-file load: %s", exc)
+                frame = read_parquet(self._options, "events.parquet")
+            else:
+                raise
+        if USER_COLUMN not in frame.columns:
+            frame = read_parquet(self._options, "events.parquet")
+        if USER_COLUMN in frame.columns:
+            frame = frame.loc[frame[USER_COLUMN].astype(str).isin(ids)]
+        return newest_events_by_user(frame, ids, limit)
 
     def get_user(self, user_id: str) -> dict[str, Any] | None:
         try:

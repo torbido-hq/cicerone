@@ -50,7 +50,12 @@ from cicerone.io.recommendation_schema import (
     recommendations_sql_names,
 )
 from cicerone.io.replace_users import RecommendationSchemaError, normalize_replace_user_ids
-from cicerone.io.user_lookup import OCCURRED_AT_COLUMN, filter_rows_for_user, newest_events
+from cicerone.io.user_lookup import (
+    OCCURRED_AT_COLUMN,
+    filter_rows_for_user,
+    newest_events,
+    newest_events_by_user,
+)
 from cicerone.item_scores import ITEM_SCORES_COLUMNS, normalize_item_scores
 
 logger = logging.getLogger(__name__)
@@ -373,6 +378,38 @@ class DatabaseInputSource:
         except _MISSING_TABLE_ERRORS:
             frame = self._select_user_rows(query, table, user_id, limit=sql_limit)
         return newest_events(filter_rows_for_user(frame, user_id), limit)
+
+    def get_events_for_users(self, user_ids: Sequence[str], limit: int) -> dict[str, pd.DataFrame]:
+        ids = [str(user_id) for user_id in user_ids]
+        if not ids:
+            return {}
+        if limit < 1:
+            return {user_id: pd.DataFrame() for user_id in ids}
+        table = sql_identifier(self._options.get("events_table", DEFAULT_EVENTS_TABLE), option="events_table")
+        query = self._configured_query("events_query")
+        if query is not None:
+            return {user_id: self.get_events_for_user(user_id, limit) for user_id in ids}
+        sql_limit = max(int(limit) * _SQL_HISTORY_OVERFETCH, int(limit))
+        windowed = text(
+            f"SELECT * FROM ("
+            f'SELECT *, ROW_NUMBER() OVER (PARTITION BY "user_id" '
+            f'ORDER BY "{OCCURRED_AT_COLUMN}" DESC NULLS LAST) AS "_cicerone_rn" '
+            f'FROM "{table}" WHERE "user_id" IN :user_ids'
+            f') AS ranked WHERE "_cicerone_rn" <= :limit'
+        ).bindparams(bindparam("user_ids", expanding=True))
+        plain = text(f'SELECT * FROM "{table}" WHERE "user_id" IN :user_ids').bindparams(
+            bindparam("user_ids", expanding=True)
+        )
+        try:
+            frame = pd.read_sql(windowed, self._engine, params={"user_ids": ids, "limit": sql_limit})
+        except _MISSING_TABLE_ERRORS:
+            try:
+                frame = pd.read_sql(plain, self._engine, params={"user_ids": ids})
+            except _MISSING_TABLE_ERRORS:
+                return {user_id: pd.DataFrame() for user_id in ids}
+        if "_cicerone_rn" in frame.columns:
+            frame = frame.drop(columns=["_cicerone_rn"])
+        return newest_events_by_user(frame, ids, limit)
 
     def get_user(self, user_id: str) -> dict[str, Any] | None:
         query = self._configured_query("users_query")

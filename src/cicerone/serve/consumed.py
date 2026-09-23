@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Sequence
 
 import pandas as pd
 
@@ -14,6 +15,7 @@ from cicerone.io.recommendation_schema import ITEM_COLUMN, USER_COLUMN
 __all__ = [
     "ConsumedOverlay",
     "consumed_item_ids",
+    "consumed_item_ids_for_users",
     "drop_consumed",
     "drop_item_ids",
     "merge_fill",
@@ -75,6 +77,39 @@ def consumed_item_ids(
         return ids
     ids.update(events[ITEM_COLUMN].astype(str).tolist())
     return ids
+
+
+def consumed_item_ids_for_users(
+    user_ids: Sequence[str],
+    *,
+    history: UserHistoryReader | None,
+    overlay: ConsumedOverlay | None,
+    lookback: int,
+) -> dict[str, set[str]]:
+    ids = [str(user_id) for user_id in user_ids]
+    out: dict[str, set[str]] = {user_id: set() for user_id in ids}
+    if overlay is not None:
+        for user_id in ids:
+            out[user_id] |= overlay.item_ids(user_id)
+    if history is None or lookback < 1 or not ids:
+        return out
+    bulk = getattr(history, "get_events_for_users", None)
+    try:
+        frames = (
+            bulk(ids, lookback)
+            if callable(bulk)
+            else {user_id: history.get_events_for_user(user_id, lookback) for user_id in ids}
+        )
+    except Exception as exc:
+        if not _missing_history(exc):
+            _log_history_failure(ids[0])
+        return out
+    for user_id in ids:
+        events = frames.get(user_id)
+        if events is None or events.empty or ITEM_COLUMN not in events.columns:
+            continue
+        out[user_id].update(events[ITEM_COLUMN].astype(str).tolist())
+    return out
 
 
 def drop_consumed(frame: pd.DataFrame, consumed: set[str]) -> pd.DataFrame:
