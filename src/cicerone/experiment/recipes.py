@@ -228,19 +228,26 @@ def resolve_variant_policy_configs(
     """Per-variant eligibility and boosts without AutoML model selection."""
     if not settings.experiment.enabled:
         return {}
-    inherited = inherit_combiner(settings, feature_config)
     configs: dict[str, FeatureConfig] = {}
     for variant in _policy_variants(settings):
-        recipe = _resolve_one(
-            variant,
-            settings=settings,
-            feature_config=feature_config,
-            inherited_combiner=inherited,
-            automl_models=None,
-            automl_weights=None,
-            automl_rrf_k=None,
+        configs[variant.name] = replace(
+            feature_config,
+            boosts=list(
+                resolve_boost_policy(
+                    variant.boosts,
+                    feature_config.boosts,
+                    label=f"experiment.variants[{variant.name}].boosts",
+                )
+            ),
+            eligibility=list(
+                resolve_eligibility_policy(
+                    variant.eligibility,
+                    feature_config.eligibility,
+                    label=f"experiment.variants[{variant.name}].eligibility",
+                )
+            ),
+            merge_item_availability=variant.eligibility is True,
         )
-        configs[recipe.name] = apply_recipe(feature_config, recipe)
     return configs
 
 
