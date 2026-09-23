@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from pyarrow.lib import ArrowException
+from pyarrow.lib import ArrowInvalid, ArrowIOError
 
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.io import recommendation_schema as _rec
@@ -37,7 +37,12 @@ from cicerone.item_scores import ITEM_SCORES_FILENAME, normalize_item_scores
 from cicerone.serve.metrics import observe_cache_refresh, record_cache_hit, record_cache_miss
 
 logger = logging.getLogger(__name__)
-_CACHE_READ_ERRORS = (OSError, ValueError, TypeError, ArrowException, *S3_READ_ERRORS)
+_CACHE_IO_ERRORS: tuple[type[BaseException], ...] = (
+    OSError,
+    ArrowInvalid,
+    ArrowIOError,
+    *S3_READ_ERRORS,
+)
 
 
 class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
@@ -74,11 +79,7 @@ class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
         except S3_READ_ERRORS as exc:
             if is_s3_not_found(exc):
                 return None
-            logger.exception("Failed to load items snapshot; continuing without item filters")
-            return None
-        except _CACHE_READ_ERRORS:
-            logger.exception("Failed to load items snapshot; continuing without item filters")
-            return None
+            raise
 
     def refresh(self) -> None:
         started = time.perf_counter()
@@ -106,19 +107,16 @@ class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
                 self._fallback_user_id = fallback_user_id
                 self._variant_names = variant_names
             recommendations_ok = True
-        except _CACHE_READ_ERRORS:
+        except _CACHE_IO_ERRORS:
             logger.exception("Failed to refresh recommendations cache; keeping previous data")
-        try:
-            items = normalize_items_snapshot(
-                self._read_items_snapshot(),
-                category_column=self._category_column,
-                availability_filters=self._availability_filters,
-            )
-            with self._lock:
-                self._items = items
-                self._items_version += 1
-        except _CACHE_READ_ERRORS:
-            logger.exception("Failed to refresh items snapshot; keeping previous data")
+        items = normalize_items_snapshot(
+            self._read_items_snapshot(),
+            category_column=self._category_column,
+            availability_filters=self._availability_filters,
+        )
+        with self._lock:
+            self._items = items
+            self._items_version += 1
         try:
             scores = self._read_item_scores()
             with self._lock:
