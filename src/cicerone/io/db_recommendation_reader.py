@@ -15,7 +15,7 @@ from sqlalchemy.sql.elements import TextClause
 from cicerone.blending import COLD_START_USER_ID, LATEST_SOURCE, POPULAR_SOURCE
 from cicerone.io import recommendation_schema as _rec
 from cicerone.io.base import BaseRecommendationReader
-from cicerone.io.db_errors import db_error_message, is_missing_column_error
+from cicerone.io.db_errors import SQL_READ_ERRORS, db_error_message, is_missing_column_error
 from cicerone.io.db_store import (
     DEFAULT_ITEM_SCORES_TABLE,
     DEFAULT_RECOMMENDATION_ITEMS_TABLE,
@@ -86,7 +86,7 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
                 self._items = None
                 self._items_version += 1
             items_ok = True
-        except SQLAlchemyError:
+        except SQL_READ_ERRORS:
             logger.exception("Failed to refresh recommendation items snapshot; keeping previous data")
         try:
             frame = pd.read_sql(text(f'SELECT * FROM "{self._item_scores_table}"'), self._engine)
@@ -141,7 +141,7 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
                 text(f'SELECT DISTINCT "{VARIANT_COLUMN}" FROM "{self._table}"'),
                 self._engine,
             )
-        except SQLAlchemyError as exc:
+        except SQL_READ_ERRORS as exc:
             if self._remember_missing_variant_column(exc):
                 self._present_variants = ()
                 return ()
@@ -176,7 +176,7 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             params = {"user_id": user_id, "k": k}
         try:
             rows = pd.read_sql(sql, self._engine, params=params)
-        except SQLAlchemyError as exc:
+        except SQL_READ_ERRORS as exc:
             if assigned is not None:
                 if not self._remember_missing_variant_column(exc):
                     raise
@@ -292,7 +292,7 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             params["variant"] = variant
         try:
             picked = pd.read_sql(pick_sql, self._engine, params=params)
-        except SQLAlchemyError as exc:
+        except SQL_READ_ERRORS as exc:
             if variant is not None and self._remember_missing_variant_column(exc):
                 return self.get_cold_start_fallback(k)
             return sentinel

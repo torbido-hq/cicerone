@@ -85,6 +85,56 @@ def test_sqlite_db_reader_get_recommendations_and_items(tmp_path):
     assert list(items["item_id"]) == ["i1"]
 
 
+def test_sqlite_db_reader_keeps_items_on_pandas_database_error(tmp_path, monkeypatch):
+    from pandas.errors import DatabaseError
+
+    url = _sqlite_url(tmp_path)
+    sink = DatabaseOutputSink({"database_url": url})
+    sink.write_recommendations(
+        pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"}])
+    )
+    sink.write_items_snapshot(pd.DataFrame([{"item_id": "i1", "category": "beer", "published": True}]))
+    reader = DbRecommendationReader({"database_url": url})
+    assert list(reader.get_items()["item_id"]) == ["i1"]
+    version_before = reader.items_version()
+
+    def boom(*_args, **_kwargs):
+        raise DatabaseError("no such table: recommendation_items")
+
+    monkeypatch.setattr("cicerone.io.db_recommendation_reader.pd.read_sql", boom)
+    reader.refresh()
+    assert list(reader.get_items()["item_id"]) == ["i1"]
+    assert reader.items_version() == version_before
+
+
+def test_sqlite_db_reader_lists_variants_on_pandas_database_error(tmp_path, monkeypatch):
+    from pandas.errors import DatabaseError
+
+    url = _sqlite_url(tmp_path)
+    sink = DatabaseOutputSink({"database_url": url})
+    sink.write_recommendations(
+        pd.DataFrame(
+            [
+                {
+                    "user_id": "u1",
+                    "item_id": "i1",
+                    "rank": 1,
+                    "score": 0.9,
+                    "source": "personalized",
+                    "variant": "control",
+                }
+            ]
+        )
+    )
+    reader = DbRecommendationReader({"database_url": url})
+
+    def boom(*_args, **_kwargs):
+        raise DatabaseError("connection reset")
+
+    monkeypatch.setattr("cicerone.io.db_recommendation_reader.pd.read_sql", boom)
+    assert reader.present_variant_names() is None
+
+
 def test_sqlite_db_reader_get_recommendations_for_users(tmp_path, monkeypatch):
     url = _sqlite_url(tmp_path)
     sink = DatabaseOutputSink({"database_url": url})
