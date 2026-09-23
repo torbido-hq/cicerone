@@ -185,6 +185,25 @@ def test_sqlite_get_events_for_users_one_query(monkeypatch):
     assert len(loaded) == 1
 
 
+def test_sqlite_get_events_for_users_custom_query_keeps_other_users():
+    source = DatabaseInputSource(
+        {"database_url": "sqlite+pysqlite://", "events_query": 'SELECT * FROM "events"'}
+    )
+    with source._engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE events ("
+                "user_id TEXT, item_id TEXT, event_type TEXT, quantity INTEGER, occurred_at TEXT)"
+            )
+        )
+        conn.execute(text("INSERT INTO events VALUES ('u1', 'i1', 'view', 1, '2026-08-21')"))
+        conn.execute(text("INSERT INTO events VALUES ('u2', 'i3', 'view', 1, '2026-08-22')"))
+    frames = source.get_events_for_users(["u1", "missing", "u2"], limit=1)
+    assert list(frames["u1"]["item_id"]) == ["i1"]
+    assert frames["missing"].empty
+    assert list(frames["u2"]["item_id"]) == ["i3"]
+
+
 def test_recommendations_hide_consumed_from_overlay():
     overlay = ConsumedOverlay()
     overlay.add("u1", "i2")

@@ -132,11 +132,11 @@ Query parameters for `/recommendations/{user_id}`:
 | `exclude_consumed` | `[serve].exclude_consumed` (`true`) | Drop items in the user's live `[input]` / incremental events |
 
 `POST /recommendations/batch` takes the same filters in the JSON body plus
-`user_ids` (max 100, order preserved, duplicates dropped). Each element of
-`users` matches a single GET. A user with no rows and no fallback is
-`items: []` (HTTP 200), not 404.
+`user_ids` (max 100, order preserved, duplicates dropped). The batch body is
+`{ "generated_at", "users": [ … ] }`. Each `users` element matches a single
+GET. A user with no rows and no fallback is `items: []` (HTTP 200), not 404.
 
-Response JSON:
+GET `/recommendations/{user_id}` (and each batch `users[]` row):
 
 ```json
 {

@@ -78,11 +78,13 @@ worker**, then writes rows; GET still only reads.
   incremental flush calls `reader.refresh()`. The
   `[serve].refresh_interval_seconds` timer (default 60s) is the backup
   reload, and also picks up a batch job that rewrote the file.
-- **DB output:** each GET queries the recommendation table. The refresh
-  timer only reloads the items snapshot used for filters.
+- **DB output:** GET queries one user. `POST /recommendations/batch` loads
+  those users in one `WHERE user_id IN (…)` read. The refresh timer only
+  reloads the items snapshot used for filters.
 
 Unknown `user_id`: `__cold_start__` when blending wrote it, else one
-`popular_fallback` / `latest` user's top-K, else 404.
+`popular_fallback` / `latest` user's top-K, else GET 404s and batch returns
+`items: []`.
 
 ## Interaction weighting
 

@@ -577,7 +577,8 @@ curl -s -H "Authorization: Bearer $SERVE_TOKEN" \
   "http://localhost:8000/recommendations/batch" | python -m json.tool
 ```
 
-The response is an object (not a bare list):
+GET returns one object (not a bare list). Batch wraps the same objects in
+`users` (`items: []` instead of 404 when a user has no rows):
 
 ```json
 {

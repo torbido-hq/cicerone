@@ -312,8 +312,10 @@ serve-only image.
   track store): [configuration.md](configuration.md#where-state-lives).
 - `serve.create_app()` exposes `GET /health` and
   `GET /recommendations/{user_id}` (`limit`/`k`, `category`,
-  `exclude_unavailable`) behind `http_auth.require_bearer_token`.
-  `POST /recommendations/batch` is the same lookup for up to 100 users.
+  `exclude_unavailable`, `exclude_consumed`) behind
+  `http_auth.require_bearer_token`.
+  `POST /recommendations/batch` is the same lookup for up to 100 users
+  (one bulk recommendation read and one bulk consumed-history read).
   Unknown users fall back to the `__cold_start__` list when the job wrote one (any
   combiner, if `popular` ran), else to one `popular_fallback` / `latest`
   user's top-K; with neither, GET 404s and batch returns empty `items`.

@@ -388,12 +388,19 @@ class DatabaseInputSource:
         table = sql_identifier(self._options.get("events_table", DEFAULT_EVENTS_TABLE), option="events_table")
         query = self._configured_query("events_query")
         if query is not None:
-            return {user_id: self.get_events_for_user(user_id, limit) for user_id in ids}
+            out: dict[str, pd.DataFrame] = {}
+            for user_id in ids:
+                try:
+                    out[user_id] = self.get_events_for_user(user_id, limit)
+                except _MISSING_TABLE_ERRORS:
+                    out[user_id] = pd.DataFrame()
+            return out
         sql_limit = max(int(limit) * _SQL_HISTORY_OVERFETCH, int(limit))
         windowed = text(
             f"SELECT * FROM ("
             f'SELECT *, ROW_NUMBER() OVER (PARTITION BY "user_id" '
-            f'ORDER BY "{OCCURRED_AT_COLUMN}" DESC NULLS LAST) AS "_cicerone_rn" '
+            f'ORDER BY CASE WHEN "{OCCURRED_AT_COLUMN}" IS NULL THEN 1 ELSE 0 END, '
+            f'"{OCCURRED_AT_COLUMN}" DESC) AS "_cicerone_rn" '
             f'FROM "{table}" WHERE "user_id" IN :user_ids'
             f') AS ranked WHERE "_cicerone_rn" <= :limit'
         ).bindparams(bindparam("user_ids", expanding=True))
