@@ -22,6 +22,8 @@ MAX_TIMEOUT_MS = 2**31 - 1
 DEFAULT_SESSION_TIMEOUT_MS = 45_000
 DEFAULT_MAX_POLL_INTERVAL_MS = 300_000
 MIN_SESSION_TIMEOUT_MS = 2
+MAX_SESSION_TIMEOUT_MS = 3_600_000  # librdkafka session.timeout.ms
+MAX_MAX_POLL_INTERVAL_MS = 86_400_000  # librdkafka max.poll.interval.ms
 
 
 def kafka_timeout_seconds(options: dict[str, Any], *, prefix: str) -> float:
@@ -78,9 +80,15 @@ def kafka_client_config(options: dict[str, Any], *, prefix: str) -> dict[str, An
 
 def kafka_consumer_config(options: dict[str, Any], *, prefix: str) -> dict[str, Any]:
     conf = kafka_client_config(options, prefix=prefix)
-    max_poll = _optional_timeout_ms(options, "max_poll_interval_ms", prefix=prefix)
+    max_poll = _optional_timeout_ms(
+        options, "max_poll_interval_ms", prefix=prefix, maximum=MAX_MAX_POLL_INTERVAL_MS
+    )
     session = _optional_timeout_ms(
-        options, "session_timeout_ms", prefix=prefix, minimum=MIN_SESSION_TIMEOUT_MS
+        options,
+        "session_timeout_ms",
+        prefix=prefix,
+        minimum=MIN_SESSION_TIMEOUT_MS,
+        maximum=MAX_SESSION_TIMEOUT_MS,
     )
     effective_max_poll = max_poll if max_poll is not None else DEFAULT_MAX_POLL_INTERVAL_MS
     effective_session = session if session is not None else DEFAULT_SESSION_TIMEOUT_MS
@@ -112,13 +120,20 @@ def _heartbeat_interval_ms(session: int) -> int:
     return heartbeat
 
 
-def _optional_timeout_ms(options: dict[str, Any], key: str, *, prefix: str, minimum: int = 1) -> int | None:
+def _optional_timeout_ms(
+    options: dict[str, Any],
+    key: str,
+    *,
+    prefix: str,
+    minimum: int = 1,
+    maximum: int = MAX_TIMEOUT_MS,
+) -> int | None:
     if key not in options or options[key] in (None, ""):
         return None
     raw = options[key]
     if isinstance(raw, bool) or (isinstance(raw, float) and (not math.isfinite(raw) or not raw.is_integer())):
         raise ConfigError(f"{prefix}.{key} must be an integer, got {raw!r}")
     value = optional_int(options, key, 0, prefix=prefix, minimum=minimum)
-    if value > MAX_TIMEOUT_MS:
-        raise ConfigError(f"{prefix}.{key} must be <= {MAX_TIMEOUT_MS}, got {value}")
+    if value > maximum:
+        raise ConfigError(f"{prefix}.{key} must be <= {maximum}, got {value}")
     return value
