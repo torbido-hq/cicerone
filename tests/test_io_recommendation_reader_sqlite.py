@@ -85,6 +85,115 @@ def test_sqlite_db_reader_get_recommendations_and_items(tmp_path):
     assert list(items["item_id"]) == ["i1"]
 
 
+def test_sqlite_db_reader_keeps_items_on_pandas_database_error(tmp_path, monkeypatch):
+    from pandas.errors import DatabaseError
+
+    url = _sqlite_url(tmp_path)
+    sink = DatabaseOutputSink({"database_url": url})
+    sink.write_recommendations(
+        pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"}])
+    )
+    sink.write_items_snapshot(pd.DataFrame([{"item_id": "i1", "category": "beer", "published": True}]))
+    reader = DbRecommendationReader({"database_url": url})
+    assert list(reader.get_items()["item_id"]) == ["i1"]
+    version_before = reader.items_version()
+
+    def boom(*_args, **_kwargs):
+        raise DatabaseError("no such table: recommendation_items")
+
+    monkeypatch.setattr("cicerone.io.db_recommendation_reader.pd.read_sql", boom)
+    reader.refresh()
+    assert list(reader.get_items()["item_id"]) == ["i1"]
+    assert reader.items_version() == version_before
+
+
+def test_sqlite_db_reader_lists_variants_on_pandas_database_error(tmp_path, monkeypatch):
+    from pandas.errors import DatabaseError
+
+    url = _sqlite_url(tmp_path)
+    sink = DatabaseOutputSink({"database_url": url})
+    sink.write_recommendations(
+        pd.DataFrame(
+            [
+                {
+                    "user_id": "u1",
+                    "item_id": "i1",
+                    "rank": 1,
+                    "score": 0.9,
+                    "source": "personalized",
+                    "variant": "control",
+                }
+            ]
+        )
+    )
+    reader = DbRecommendationReader({"database_url": url})
+
+    def boom(*_args, **_kwargs):
+        raise DatabaseError("connection reset")
+
+    monkeypatch.setattr("cicerone.io.db_recommendation_reader.pd.read_sql", boom)
+    assert reader.present_variant_names() is None
+
+
+def test_sqlite_db_reader_assigned_variant_pandas_database_error_reraises(tmp_path, monkeypatch):
+    from pandas.errors import DatabaseError
+
+    url = _sqlite_url(tmp_path)
+    sink = DatabaseOutputSink({"database_url": url})
+    sink.write_recommendations(
+        pd.DataFrame(
+            [
+                {
+                    "user_id": "u1",
+                    "item_id": "i1",
+                    "rank": 1,
+                    "score": 0.9,
+                    "source": "personalized",
+                    "variant": "control",
+                }
+            ]
+        )
+    )
+    reader = DbRecommendationReader({"database_url": url})
+
+    def boom(*_args, **_kwargs):
+        raise DatabaseError("connection reset")
+
+    monkeypatch.setattr("cicerone.io.db_recommendation_reader.pd.read_sql", boom)
+    with pytest.raises(DatabaseError, match="connection reset"):
+        reader.get_recommendations("u1", k=1, variant="control")
+
+
+def test_sqlite_db_reader_cold_start_pandas_database_error_returns_empty(tmp_path, monkeypatch):
+    from pandas.errors import DatabaseError
+
+    url = _sqlite_url(tmp_path)
+    sink = DatabaseOutputSink({"database_url": url})
+    sink.write_recommendations(
+        pd.DataFrame(
+            [
+                {
+                    "user_id": "regular_user",
+                    "item_id": "i1",
+                    "rank": 1,
+                    "score": 0.9,
+                    "source": "popular_fallback",
+                }
+            ]
+        )
+    )
+    reader = DbRecommendationReader({"database_url": url})
+    original = pd.read_sql
+
+    def fake_read_sql(sql, *args, **kwargs):
+        if ":popular" in str(sql):
+            raise DatabaseError("connection reset")
+        return original(sql, *args, **kwargs)
+
+    monkeypatch.setattr("cicerone.io.db_recommendation_reader.pd.read_sql", fake_read_sql)
+    assert reader.get_cold_start_fallback(k=1).empty
+
+
 def test_sqlite_clear_table_for_replace_falls_back_to_delete(tmp_path):
     url = _sqlite_url(tmp_path)
     sink = DatabaseOutputSink({"database_url": url})
