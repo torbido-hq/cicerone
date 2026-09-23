@@ -11,6 +11,7 @@ from cicerone.config import Settings
 from cicerone.config.constants import (
     DEFAULT_EVENTS_APPLY_LOCK_TTL_SECONDS,
     DEFAULT_EVENTS_RETRAIN_PROBE_TTL_SECONDS,
+    ConfigError,
 )
 from cicerone.events.buffer import MicroBatchBuffer
 from cicerone.events.ha import poll_without_apply_lock
@@ -19,6 +20,7 @@ from cicerone.events.updater import IncrementalUpdater
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
 from cicerone.experiment.assignment import experiment_variant_names, resolve_assignment
+from cicerone.experiment.recipes import apply_recipe, resolve_recipes
 from cicerone.experiment.store import ExperimentStore
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.base import RecommendationReader
@@ -125,6 +127,18 @@ def _assign_incremental_variant(
     return assigned
 
 
+def _variant_feature_configs(
+    settings: Settings, feature_config: FeatureConfig | None
+) -> dict[str, FeatureConfig]:
+    if feature_config is None or not settings.experiment.enabled:
+        return {}
+    try:
+        recipes = resolve_recipes(settings, feature_config)
+    except ConfigError:
+        return {}
+    return {recipe.name: apply_recipe(feature_config, recipe) for recipe in recipes}
+
+
 def _close_publisher(publisher: RecommendationPublisher | None) -> None:
     if publisher is None:
         return
@@ -229,6 +243,7 @@ def start_events_runtime(
             publisher=publisher,
             items_provider=getattr(reader, "get_items", None),
             users_provider=build_input_source(settings.input).read_users,
+            variant_feature_configs=_variant_feature_configs(settings, feature_config),
         )
         buffer = MicroBatchBuffer(
             batch_size=settings.events.incremental.batch_size,

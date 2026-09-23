@@ -206,6 +206,47 @@ def test_start_events_runtime_wires_input_users_provider(tmp_path, feature_confi
         runtime.stop()
 
 
+def test_start_events_runtime_wires_variant_feature_configs(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+
+    class _Reader:
+        def refresh(self) -> None:
+            return None
+
+    runtime = start_events_runtime(
+        make_settings(
+            output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+            events=EventsSettings(
+                enabled=True,
+                kind="webhook",
+                incremental=EventsIncrementalSettings(
+                    batch_size=1, batch_window_seconds=60.0, poll_interval_seconds=0.05
+                ),
+            ),
+            experiment=ExperimentSettings(
+                enabled=True,
+                id="ab",
+                variants=(
+                    VariantSettings(name="control", traffic=0.5),
+                    VariantSettings(name="treatment", traffic=0.5),
+                ),
+            ),
+        ),
+        feature_config=feature_config,
+        reader=_Reader(),  # type: ignore[arg-type]
+        start_worker=False,
+    )
+    try:
+        assert runtime.worker is not None
+        assert set(runtime.worker._updater._variant_feature_configs) == {"control", "treatment"}
+    finally:
+        runtime.stop()
+
+
 def test_start_events_runtime_connects_source_when_worker_not_started(
     tmp_path, feature_config: FeatureConfig
 ):

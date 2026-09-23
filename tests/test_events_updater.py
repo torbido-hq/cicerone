@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from contextlib import nullcontext
+from dataclasses import replace
 
 import pandas as pd
 import pytest
@@ -1466,8 +1467,6 @@ def test_incremental_updater_keeps_batch_popular_and_cold_start(
 
 
 def test_incremental_allowlists_user_scoped_when_users_present(feature_config: FeatureConfig) -> None:
-    from dataclasses import replace
-
     scoped = replace(
         feature_config,
         eligibility=[
@@ -1659,3 +1658,131 @@ def test_incremental_updater_does_not_restore_ineligible_cold_variant(
     cold = cold[cold["user_id"] == COLD_START_USER_ID]
     assert "cold-oos" not in set(cold["item_id"].astype(str))
     assert "cold-ok" in set(cold["item_id"].astype(str))
+
+
+def test_incremental_updater_skips_users_read_without_user_scoped_rules(
+    tmp_path, feature_config: FeatureConfig
+) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "ok", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    items = pd.DataFrame([{"item_id": "ok", "published": True, "in_stock": True}])
+    calls = {"n": 0}
+
+    def users() -> pd.DataFrame:
+        calls["n"] += 1
+        return pd.DataFrame([{"user_id": "u1", "region_slug": "lazio"}])
+
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        items_provider=lambda: items,
+        users_provider=users,
+    ).apply([normalize_event(event_payload(user_id="u1", item_id="ok", event_id="no-users"))])
+    assert calls["n"] == 0
+
+
+def test_incremental_updater_reads_users_for_user_scoped_rules(
+    tmp_path, feature_config: FeatureConfig
+) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "ok", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    items = pd.DataFrame(
+        [
+            {"item_id": "ok", "published": True, "in_stock": True, "region_slug": "lazio"},
+            {"item_id": "other", "published": True, "in_stock": True, "region_slug": "toscana"},
+        ]
+    )
+    calls = {"n": 0}
+
+    def users() -> pd.DataFrame:
+        calls["n"] += 1
+        return pd.DataFrame([{"user_id": "u1", "region_slug": "lazio"}])
+
+    scoped = replace(
+        feature_config,
+        eligibility=[
+            EligibilityRule(
+                name="region",
+                op="eq",
+                item_column="region_slug",
+                user_column="region_slug",
+            )
+        ],
+    )
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=scoped,
+        top_k=5,
+        items_provider=lambda: items,
+        users_provider=users,
+    ).apply([normalize_event(event_payload(user_id="u1", item_id="ok", event_id="need-users"))])
+    assert calls["n"] == 1
+
+
+def test_incremental_updater_uses_per_variant_eligibility(tmp_path, feature_config: FeatureConfig) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "oos",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                "variant": "control",
+            },
+            {
+                "user_id": "u1",
+                "item_id": "oos",
+                "rank": 1,
+                "score": 0.8,
+                "source": "personalized",
+                "variant": "treatment",
+            },
+        ]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    items = pd.DataFrame(
+        [
+            {"item_id": "oos", "published": True, "in_stock": False},
+            {"item_id": "ok", "published": True, "in_stock": True},
+        ]
+    )
+    open_cfg = replace(feature_config, eligibility=[], merge_item_availability=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        variant_names=("control", "treatment"),
+        assign_variant=lambda _user_id: "control",
+        items_provider=lambda: items,
+        variant_feature_configs={"control": open_cfg, "treatment": feature_config},
+    ).apply([normalize_event(event_payload(user_id="u1", item_id="ok", event_id="per-arm"))])
+    u1 = load_recommendations_frame(settings.output)
+    u1 = u1[u1["user_id"] == "u1"]
+    control_items = set(u1[u1["variant"] == "control"]["item_id"].astype(str))
+    treatment_items = set(u1[u1["variant"] == "treatment"]["item_id"].astype(str))
+    assert "oos" in control_items
+    assert "oos" not in treatment_items

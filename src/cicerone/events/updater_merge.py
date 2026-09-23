@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING
 
 import pandas as pd
@@ -64,6 +64,16 @@ def _restrict_items(frame: pd.DataFrame, allowed: frozenset[str] | None) -> pd.D
     return frame.loc[frame[ITEM_COLUMN].astype(str).isin(allowed)]
 
 
+def _allowed_for(
+    variant: str,
+    allowed: frozenset[str] | None,
+    allowed_by_variant: Mapping[str, frozenset[str] | None] | None,
+) -> frozenset[str] | None:
+    if allowed_by_variant and variant in allowed_by_variant:
+        return allowed_by_variant[variant]
+    return allowed
+
+
 class UpdaterMerge:
     _variant_names: tuple[str, ...]
     _assign_variant: Callable[[str], str | None] | None
@@ -84,6 +94,7 @@ class UpdaterMerge:
         weights: pd.Series | None = None,
         online_rows: pd.DataFrame | None = None,
         allowed: frozenset[str] | None = None,
+        allowed_by_variant: Mapping[str, frozenset[str] | None] | None = None,
     ) -> pd.DataFrame:
         variants = self._variants_for()
         if not variants:
@@ -105,6 +116,7 @@ class UpdaterMerge:
         empty_batch = batch.iloc[0:0]
         parts = []
         for variant in variants:
+            variant_allowed = _allowed_for(variant, allowed, allowed_by_variant)
             prior_slice = (
                 filter_variant_rows(prior, variant)
                 if has_variant
@@ -119,10 +131,10 @@ class UpdaterMerge:
                 batch if inject else empty_batch,
                 weights if inject else None,
                 online_rows=online_rows if inject else None,
-                allowed=allowed,
+                allowed=variant_allowed,
             )
             if merged.empty:
-                merged = _restrict_items(prior_slice, allowed)
+                merged = _restrict_items(prior_slice, variant_allowed)
                 if merged.empty:
                     continue
             merged = merged.copy()
@@ -271,6 +283,7 @@ class UpdaterMerge:
         popular: pd.DataFrame,
         latest: pd.DataFrame,
         allowed: frozenset[str] | None = None,
+        allowed_by_variant: Mapping[str, frozenset[str] | None] | None = None,
     ) -> pd.DataFrame:
         variants = self._variants_for()
         if not variants:
@@ -282,14 +295,15 @@ class UpdaterMerge:
         primary = FALLBACK_VARIANT if FALLBACK_VARIANT in variants else variants[0]
         parts = []
         for variant in variants:
+            variant_allowed = _allowed_for(variant, allowed, allowed_by_variant)
             prior_slice = (
                 prior[prior[VARIANT_COLUMN].astype(str) == variant]
                 if has_variant
                 else (prior if variant == primary else empty_recommendations_frame())
             )
-            merged = self._cold_start_one_list(prior_slice, popular, latest, allowed=allowed)
+            merged = self._cold_start_one_list(prior_slice, popular, latest, allowed=variant_allowed)
             if merged.empty:
-                merged = _restrict_items(prior_slice, allowed)
+                merged = _restrict_items(prior_slice, variant_allowed)
                 if merged.empty:
                     continue
             merged = merged.copy()
