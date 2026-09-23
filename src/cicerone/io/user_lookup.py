@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import pandas as pd
 
 from cicerone.io.recommendation_schema import USER_COLUMN
@@ -30,3 +32,16 @@ def newest_events(frame: pd.DataFrame, limit: int) -> pd.DataFrame:
         )
         work = work.drop(columns=[_NEWEST_EVENTS_SORT])
     return work.head(limit).reset_index(drop=True)
+
+
+def newest_events_by_user(
+    frame: pd.DataFrame, user_ids: Sequence[str], limit: int
+) -> dict[str, pd.DataFrame]:
+    ids = [str(user_id) for user_id in user_ids]
+    empty = frame.iloc[0:0]
+    if frame.empty or USER_COLUMN not in frame.columns:
+        return {user_id: empty.copy() for user_id in ids}
+    work = frame.copy()
+    work[USER_COLUMN] = work[USER_COLUMN].astype(str)
+    grouped = {str(key): group for key, group in work.groupby(USER_COLUMN, sort=False)}
+    return {user_id: newest_events(grouped.get(user_id, empty), limit) for user_id in ids}

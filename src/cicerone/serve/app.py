@@ -19,6 +19,7 @@ from cicerone import __version__
 from cicerone.config import Settings, load_settings
 from cicerone.config.constants import (
     DEFAULT_LOG_FORMAT,
+    DEFAULT_SERVE_BATCH_USERS,
     DEFAULT_SERVE_ITEM_SCORES_LIMIT,
     DEFAULT_SERVE_ITEM_SCORES_MAX,
     DEFAULT_SERVE_MAX_K,
@@ -37,7 +38,12 @@ from cicerone.experiment.store import ExperimentStore
 from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.http_security import SecurityHeadersMiddleware, token_equals
-from cicerone.io.base import ManifestReader, RecommendationReader, UserHistoryReader
+from cicerone.io.base import (
+    ManifestReader,
+    RecommendationReader,
+    UserHistoryReader,
+    recommendations_for_users,
+)
 from cicerone.io.catalog import CatalogStore
 from cicerone.io.recommendation_reader import SOURCE_COLUMN
 from cicerone.io.recommendation_schema import has_variant_column
@@ -50,10 +56,11 @@ from cicerone.serve.catalog_routes import attach_catalog_events_openapi, mount_c
 from cicerone.serve.code_samples import (
     HEALTH_PATH,
     ITEM_SCORES_PATH,
+    RECOMMENDATIONS_BATCH_PATH,
     RECOMMENDATIONS_PATH,
     attach_code_samples,
 )
-from cicerone.serve.consumed import consumed_item_ids, drop_consumed, merge_fill
+from cicerone.serve.consumed import consumed_item_ids, consumed_item_ids_for_users, drop_consumed, merge_fill
 from cicerone.serve.events_routes import attach_events_ingest_openapi, mount_events_routes
 from cicerone.serve.item_filters import (
     ItemsFilterCache,
@@ -76,6 +83,8 @@ from cicerone.serve_schemas import (
     ItemScore,
     ItemScoresResponse,
     RecommendationItem,
+    RecommendationsBatchRequest,
+    RecommendationsBatchResponse,
     RecommendationsResponse,
 )
 from cicerone.track.routes import attach_track_ingest_openapi, mount_track_routes
@@ -148,6 +157,7 @@ indexers. See `docs/search-weights.md`.
 `GET /recommendations` can hide items from the user's live `[input]` events
 (`[serve].exclude_consumed`) and fill short lists from popular/latest
 (`[serve].fallback_fill`) when hide or availability filters drop rows.
+`POST /recommendations/batch` is the same lookup for many users.
 Catalog writes live under `/users`, `/items`, and `/catalog/events`.
 Named surfaces: `GET /popular`, `GET /latest`, `GET /similar/{{item_id}}`,
 `POST /session/recommendations`.
@@ -361,6 +371,169 @@ def create_app(
                 update_events_source_health(connected=False, lag=None)
             return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
+    def _recommend_for_user(
+        user_id: str,
+        *,
+        top_k: int,
+        category: str | None,
+        exclude_unavailable: bool,
+        hide_consumed: bool,
+        items: Any,
+        available_ids: frozenset[str] | None,
+        ids_by_category: dict[str, frozenset[str]],
+        background_tasks: BackgroundTasks,
+        generated_at: str | None,
+        recs: Any | None = None,
+        fallback_recs: Any | None = None,
+        assignment: tuple[str | None, str | None] | None = None,
+        consumed_ids: set[str] | None = None,
+    ) -> RecommendationsResponse | None:
+        if hide_consumed:
+            if consumed_ids is None:
+                consumed_ids = consumed_item_ids(
+                    user_id,
+                    history=history_reader,
+                    overlay=overlay,
+                    lookback=settings.serve.consumed_lookback,
+                )
+        else:
+            consumed_ids = set()
+        can_filter = bool(
+            (
+                items is not None
+                and not items.empty
+                and (category is not None or (exclude_unavailable and availability_filters))
+            )
+            or consumed_ids
+        )
+        fetch_k = max(top_k * 5, top_k) if can_filter else top_k
+        if assignment is None:
+            promoted, active_pair = overlay_cache.get()
+            snapshot = (
+                _snapshot_variant_names(reader)
+                if assignment_needs_snapshot(settings, promoted_variant=promoted, active_pair=active_pair)
+                else None
+            )
+            experiment_id, variant = resolve_assignment(
+                settings,
+                user_id,
+                promoted_variant=promoted,
+                active_pair=active_pair,
+                snapshot_names=snapshot,
+            )
+        else:
+            experiment_id, variant = assignment
+        if recs is None:
+            recs = reader.get_recommendations(user_id, fetch_k, variant=variant)
+        used_fallback = False
+        if recs.empty:
+            used_fallback = True
+            recs = (
+                fallback_recs
+                if fallback_recs is not None
+                else reader.get_cold_start_fallback(fetch_k, variant=variant)
+            )
+        if recs.empty:
+            return None
+        if not has_variant_column(recs):
+            experiment_id, variant = None, None
+
+        after_availability = filter_recommendations(
+            recs,
+            items=items,
+            available_ids=available_ids,
+            category=None,
+            category_column=category_column,
+            exclude_unavailable=exclude_unavailable,
+            ids_by_category=ids_by_category,
+            on_missing_category_column=_warn_missing_category_column,
+        )
+        after_hide = drop_consumed(after_availability, consumed_ids)
+        dropped_by_hide_or_availability = len(after_hide) < len(recs)
+        filtered = filter_recommendations(
+            after_hide,
+            items=items,
+            available_ids=available_ids,
+            category=category,
+            category_column=category_column,
+            exclude_unavailable=False,
+            ids_by_category=ids_by_category,
+            on_missing_category_column=_warn_missing_category_column,
+        )
+        if settings.serve.fallback_fill and len(filtered) < top_k and dropped_by_hide_or_availability:
+            filler = (
+                fallback_recs
+                if fallback_recs is not None
+                else reader.get_cold_start_fallback(fetch_k, variant=variant)
+            )
+            filler = filter_recommendations(
+                filler,
+                items=items,
+                available_ids=available_ids,
+                category=category,
+                category_column=category_column,
+                exclude_unavailable=exclude_unavailable,
+                ids_by_category=ids_by_category,
+                on_missing_category_column=_warn_missing_category_column,
+            )
+            filtered = merge_fill(filtered, filler, k=top_k, exclude=consumed_ids)
+        filtered = filtered.head(top_k).reset_index(drop=True)
+        if not filtered.empty:
+            filtered = filtered.copy()
+            filtered["rank"] = range(1, len(filtered) + 1)
+            if SOURCE_COLUMN in filtered.columns:
+                record_recommendations_served(set(filtered[SOURCE_COLUMN].astype(str)))
+        if experiment_id and variant:
+            record_experiment_served(experiment_id, variant)
+            if settings.experiment.log_exposures and experiment_store is not None:
+                background_tasks.add_task(
+                    _append_exposures_safe,
+                    experiment_store,
+                    [
+                        exposure_row(
+                            user_id=user_id,
+                            experiment_id=experiment_id,
+                            variant=variant,
+                            generated_at=generated_at,
+                        )
+                    ],
+                    user_id,
+                )
+        if settings.serve.log_impressions and track_store is not None and not filtered.empty:
+            occurred = datetime.now(UTC).isoformat()
+            rows = [
+                {
+                    "kind": TRACK_KIND_IMPRESSION,
+                    "user_id": user_id,
+                    "item_id": str(row.item_id),
+                    "rank": int(row.rank),
+                    "occurred_at": occurred,
+                    "event_id": str(uuid4()),
+                    "variant": variant,
+                    "experiment_id": experiment_id,
+                    "generated_at": generated_at,
+                }
+                for row in filtered.itertuples(index=False)
+            ]
+            background_tasks.add_task(_append_impressions_safe, track_store, rows, user_id)
+        return RecommendationsResponse(
+            generated_at=generated_at,
+            user_id=user_id,
+            fallback=used_fallback,
+            experiment_id=experiment_id,
+            variant=variant,
+            items=[
+                RecommendationItem(
+                    item_id=str(row.item_id),
+                    rank=int(row.rank),
+                    score=float(row.score),
+                    source=str(row.source),
+                    reasons=parse_reasons(getattr(row, "reasons", None)),
+                )
+                for row in filtered.itertuples(index=False)
+            ],
+        )
+
     @app.get(
         RECOMMENDATIONS_PATH,
         response_model=RecommendationsResponse,
@@ -410,142 +583,128 @@ def create_app(
         top_k = min(top_k, DEFAULT_SERVE_MAX_K)
         hide_consumed = settings.serve.exclude_consumed if exclude_consumed is None else exclude_consumed
         items, available_ids, ids_by_category = items_cache.get()
-        consumed_ids: set[str] = set()
-        if hide_consumed:
-            consumed_ids = consumed_item_ids(
-                user_id,
+        generated_at = generated_at_cache.get()
+        body = _recommend_for_user(
+            user_id,
+            top_k=top_k,
+            category=category,
+            exclude_unavailable=exclude_unavailable,
+            hide_consumed=hide_consumed,
+            items=items,
+            available_ids=available_ids,
+            ids_by_category=ids_by_category,
+            background_tasks=background_tasks,
+            generated_at=generated_at,
+        )
+        if body is None:
+            raise HTTPException(status_code=404, detail=f"No recommendations for user_id={user_id!r}")
+        if body.generated_at is not None:
+            response.headers["X-Generated-At"] = str(body.generated_at)
+        return body
+
+    @app.post(
+        RECOMMENDATIONS_BATCH_PATH,
+        response_model=RecommendationsBatchResponse,
+        dependencies=dependencies,
+        tags=["recommendations"],
+        summary="Precomputed top-K recommendations for many users",
+        responses={
+            400: {"model": ErrorDetail, "description": "Blank user_id"},
+            401: {"model": ErrorDetail, "description": "Missing or invalid bearer token"},
+        },
+    )
+    def post_recommendations_batch(
+        body: RecommendationsBatchRequest,
+        response: Response,
+        background_tasks: BackgroundTasks,
+    ) -> RecommendationsBatchResponse:
+        raw_ids = [str(user_id).strip() for user_id in body.user_ids]
+        if any(not user_id for user_id in raw_ids):
+            raise HTTPException(status_code=400, detail="user_ids must be non-blank")
+        user_ids = list(dict.fromkeys(raw_ids))
+        if len(user_ids) > DEFAULT_SERVE_BATCH_USERS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"user_ids must have at most {DEFAULT_SERVE_BATCH_USERS} distinct values",
+            )
+        top_k = settings.serve.default_k if body.limit is None else min(body.limit, DEFAULT_SERVE_MAX_K)
+        hide_consumed = (
+            settings.serve.exclude_consumed if body.exclude_consumed is None else body.exclude_consumed
+        )
+        items, available_ids, ids_by_category = items_cache.get()
+        generated_at = generated_at_cache.get()
+        consumed_by_user = (
+            consumed_item_ids_for_users(
+                user_ids,
                 history=history_reader,
                 overlay=overlay,
                 lookback=settings.serve.consumed_lookback,
             )
-        can_filter = bool(
-            (
-                items is not None
-                and not items.empty
-                and (category is not None or (exclude_unavailable and availability_filters))
-            )
-            or consumed_ids
+            if hide_consumed
+            else {}
         )
-        fetch_k = max(top_k * 5, top_k) if can_filter else top_k
+        request_can_filter = bool(
+            items is not None
+            and not getattr(items, "empty", True)
+            and (body.category is not None or (body.exclude_unavailable and availability_filters))
+        )
+        fetch_k = max(top_k * 5, top_k) if request_can_filter or hide_consumed else top_k
         promoted, active_pair = overlay_cache.get()
         snapshot = (
             _snapshot_variant_names(reader)
             if assignment_needs_snapshot(settings, promoted_variant=promoted, active_pair=active_pair)
             else None
         )
-        experiment_id, variant = resolve_assignment(
-            settings,
-            user_id,
-            promoted_variant=promoted,
-            active_pair=active_pair,
-            snapshot_names=snapshot,
-        )
-        recs = reader.get_recommendations(user_id, fetch_k, variant=variant)
-        used_fallback = False
-        if recs.empty:
-            used_fallback = True
-            recs = reader.get_cold_start_fallback(fetch_k, variant=variant)
-        if recs.empty:
-            raise HTTPException(status_code=404, detail=f"No recommendations for user_id={user_id!r}")
-        if not has_variant_column(recs):
-            experiment_id, variant = None, None
-
-        after_availability = filter_recommendations(
-            recs,
-            items=items,
-            available_ids=available_ids,
-            category=None,
-            category_column=category_column,
-            exclude_unavailable=exclude_unavailable,
-            ids_by_category=ids_by_category,
-            on_missing_category_column=_warn_missing_category_column,
-        )
-        after_hide = drop_consumed(after_availability, consumed_ids)
-        dropped_by_hide_or_availability = len(after_hide) < len(recs)
-        filtered = filter_recommendations(
-            after_hide,
-            items=items,
-            available_ids=available_ids,
-            category=category,
-            category_column=category_column,
-            exclude_unavailable=False,
-            ids_by_category=ids_by_category,
-            on_missing_category_column=_warn_missing_category_column,
-        )
-        if settings.serve.fallback_fill and len(filtered) < top_k and dropped_by_hide_or_availability:
-            filler = reader.get_cold_start_fallback(fetch_k, variant=variant)
-            filler = filter_recommendations(
-                filler,
+        assignments: dict[str, tuple[str | None, str | None]] = {}
+        by_variant: dict[str | None, list[str]] = {}
+        for user_id in user_ids:
+            assignment = resolve_assignment(
+                settings,
+                user_id,
+                promoted_variant=promoted,
+                active_pair=active_pair,
+                snapshot_names=snapshot,
+            )
+            assignments[user_id] = assignment
+            by_variant.setdefault(assignment[1], []).append(user_id)
+        recs_by_user: dict[str, Any] = {}
+        fallback_by_variant: dict[str | None, Any] = {}
+        for variant, ids in by_variant.items():
+            recs_by_user.update(recommendations_for_users(reader, ids, fetch_k, variant=variant))
+            fallback_by_variant[variant] = reader.get_cold_start_fallback(fetch_k, variant=variant)
+        users: list[RecommendationsResponse] = []
+        for user_id in user_ids:
+            variant = assignments[user_id][1]
+            row = _recommend_for_user(
+                user_id,
+                top_k=top_k,
+                category=body.category,
+                exclude_unavailable=body.exclude_unavailable,
+                hide_consumed=hide_consumed,
                 items=items,
                 available_ids=available_ids,
-                category=category,
-                category_column=category_column,
-                exclude_unavailable=exclude_unavailable,
                 ids_by_category=ids_by_category,
-                on_missing_category_column=_warn_missing_category_column,
+                background_tasks=background_tasks,
+                generated_at=generated_at,
+                recs=recs_by_user.get(user_id),
+                fallback_recs=fallback_by_variant[variant],
+                assignment=assignments[user_id],
+                consumed_ids=consumed_by_user.get(user_id, set()) if hide_consumed else None,
             )
-            filtered = merge_fill(filtered, filler, k=top_k, exclude=consumed_ids)
-        filtered = filtered.head(top_k).reset_index(drop=True)
-        if not filtered.empty:
-            filtered = filtered.copy()
-            filtered["rank"] = range(1, len(filtered) + 1)
-            if SOURCE_COLUMN in filtered.columns:
-                record_recommendations_served(set(filtered[SOURCE_COLUMN].astype(str)))
-        generated_at = generated_at_cache.get()
-        if experiment_id and variant:
-            record_experiment_served(experiment_id, variant)
-            if settings.experiment.log_exposures and experiment_store is not None:
-                background_tasks.add_task(
-                    _append_exposures_safe,
-                    experiment_store,
-                    [
-                        exposure_row(
-                            user_id=user_id,
-                            experiment_id=experiment_id,
-                            variant=variant,
-                            generated_at=generated_at,
-                        )
-                    ],
-                    user_id,
+            if row is None:
+                users.append(
+                    RecommendationsResponse(
+                        generated_at=generated_at,
+                        user_id=user_id,
+                        fallback=False,
+                        items=[],
+                    )
                 )
-        if settings.serve.log_impressions and track_store is not None and not filtered.empty:
-            occurred = datetime.now(UTC).isoformat()
-            rows = [
-                {
-                    "kind": TRACK_KIND_IMPRESSION,
-                    "user_id": user_id,
-                    "item_id": str(row.item_id),
-                    "rank": int(row.rank),
-                    "occurred_at": occurred,
-                    "event_id": str(uuid4()),
-                    "variant": variant,
-                    "experiment_id": experiment_id,
-                    "generated_at": generated_at,
-                }
-                for row in filtered.itertuples(index=False)
-            ]
-            background_tasks.add_task(_append_impressions_safe, track_store, rows, user_id)
-
-        body = RecommendationsResponse(
-            generated_at=generated_at,
-            user_id=user_id,
-            fallback=used_fallback,
-            experiment_id=experiment_id,
-            variant=variant,
-            items=[
-                RecommendationItem(
-                    item_id=str(row.item_id),
-                    rank=int(row.rank),
-                    score=float(row.score),
-                    source=str(row.source),
-                    reasons=parse_reasons(getattr(row, "reasons", None)),
-                )
-                for row in filtered.itertuples(index=False)
-            ],
-        )
+            else:
+                users.append(row)
         if generated_at is not None:
             response.headers["X-Generated-At"] = str(generated_at)
-        return body
+        return RecommendationsBatchResponse(generated_at=generated_at, users=users)
 
     @app.get(
         ITEM_SCORES_PATH,
@@ -626,14 +785,13 @@ def create_app(
             "description": "ISO timestamp from the last job-run manifest (mirrors body.generated_at)",
             "schema": {"type": "string", "example": "2026-08-04T03:00:00+00:00"},
         }
-        rec_responses = (
-            schema.get("paths", {}).get(RECOMMENDATIONS_PATH, {}).get("get", {}).get("responses", {})
-        )
-        ok = rec_responses.get("200")
-        if isinstance(ok, dict):
-            ok.setdefault("headers", {})["X-Generated-At"] = {
-                "$ref": "#/components/headers/X-Generated-At",
-            }
+        for path, method in ((RECOMMENDATIONS_PATH, "get"), (RECOMMENDATIONS_BATCH_PATH, "post")):
+            rec_responses = schema.get("paths", {}).get(path, {}).get(method, {}).get("responses", {})
+            ok = rec_responses.get("200")
+            if isinstance(ok, dict):
+                ok.setdefault("headers", {})["X-Generated-At"] = {
+                    "$ref": "#/components/headers/X-Generated-At",
+                }
         attach_code_samples(schema)
         attach_events_ingest_openapi(schema)
         attach_catalog_events_openapi(schema)

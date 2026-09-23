@@ -23,6 +23,8 @@ from cicerone.serve.code_samples import (
     HEALTH_PATH,
     ITEM_SCORES_CODE_SAMPLES,
     ITEM_SCORES_PATH,
+    RECOMMENDATIONS_BATCH_CODE_SAMPLES,
+    RECOMMENDATIONS_BATCH_PATH,
     RECOMMENDATIONS_CODE_SAMPLES,
     RECOMMENDATIONS_PATH,
     TRACK_CODE_SAMPLES,
@@ -72,11 +74,13 @@ def test_openapi_json_lists_serve_paths_and_schemas():
     assert "/latest" in schema["paths"]
     assert "/similar/{item_id}" in schema["paths"]
     assert "/session/recommendations" in schema["paths"]
+    assert RECOMMENDATIONS_BATCH_PATH in schema["paths"]
     for path, method in (
         ("/popular", "get"),
         ("/latest", "get"),
         ("/similar/{item_id}", "get"),
         ("/session/recommendations", "post"),
+        (RECOMMENDATIONS_BATCH_PATH, "post"),
     ):
         assert "401" in schema["paths"][path][method]["responses"]
 
@@ -87,6 +91,8 @@ def test_openapi_json_lists_serve_paths_and_schemas():
     assert "CatalogRowResponse" in components
     assert "CatalogEventsResponse" in components
     assert "RecommendationsResponse" in components
+    assert "RecommendationsBatchRequest" in components
+    assert "RecommendationsBatchResponse" in components
     assert "experiment_id" in components["RecommendationsResponse"]["properties"]
     assert "variant" in components["RecommendationsResponse"]["properties"]
     assert "RecommendationItem" in components
@@ -99,6 +105,10 @@ def test_openapi_json_lists_serve_paths_and_schemas():
 
     rec = schema["paths"][RECOMMENDATIONS_PATH]["get"]
     assert "X-Generated-At" in rec["responses"]["200"].get("headers", {})
+    batch = schema["paths"][RECOMMENDATIONS_BATCH_PATH]["post"]
+    assert "X-Generated-At" in batch["responses"]["200"].get("headers", {})
+    batch_samples = batch["x-codeSamples"]
+    assert {s["lang"] for s in batch_samples} >= {s["lang"] for s in RECOMMENDATIONS_BATCH_CODE_SAMPLES}
 
     for status_code in ("400", "401", "404"):
         error_response = rec["responses"][status_code]
@@ -225,6 +235,8 @@ def test_serve_client_surface_methods_serialize(monkeypatch):
         seen.append((method, path, params, json_body))
         if path.startswith("/similar/"):
             return {"item_id": "i1", "items": []}
+        if path == "/recommendations/batch":
+            return {"users": []}
         if method == "POST":
             return {"fallback": False, "items": []}
         return {"items": []}
@@ -235,6 +247,7 @@ def test_serve_client_surface_methods_serialize(monkeypatch):
     client.latest(limit=3, category="wine", exclude_unavailable=True, user_id="u2")
     client.similar("i 1", limit=2, exclude_unavailable=False, user_id="u3")
     client.session(["i1", "i2"])
+    client.recommendations_batch(["u1", "u2"], limit=5, category="beer", exclude_consumed=False)
     assert seen[0] == (
         "GET",
         "/popular",
@@ -251,6 +264,17 @@ def test_serve_client_surface_methods_serialize(monkeypatch):
     assert seen[2][1] == "/similar/i%201"
     assert seen[2][2] == {"limit": "2", "exclude_unavailable": "false", "user_id": "u3"}
     assert seen[3] == ("POST", "/session/recommendations", None, {"items": ["i1", "i2"]})
+    assert seen[4] == (
+        "POST",
+        "/recommendations/batch",
+        None,
+        {
+            "user_ids": ["u1", "u2"],
+            "limit": 5,
+            "category": "beer",
+            "exclude_consumed": False,
+        },
+    )
 
 
 def test_serve_client_sends_exclude_consumed(monkeypatch):

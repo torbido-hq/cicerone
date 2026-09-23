@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -152,6 +153,24 @@ class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
                 return self._cache.iloc[0:0]
             record_cache_hit()
             return _rec.filter_variant_rows(rows, variant).head(k).reset_index(drop=True)
+
+    def get_recommendations_for_users(
+        self, user_ids: Sequence[str], k: int, *, variant: str | None = None
+    ) -> dict[str, pd.DataFrame]:
+        ids = [str(user_id) for user_id in user_ids]
+        with self._lock:
+            empty = self._cache.iloc[0:0]
+            by_user = self._by_user
+            out: dict[str, pd.DataFrame] = {}
+            for user_id in ids:
+                rows = by_user.get(user_id)
+                if rows is None:
+                    record_cache_miss()
+                    out[user_id] = empty.copy()
+                    continue
+                record_cache_hit()
+                out[user_id] = _rec.filter_variant_rows(rows, variant).head(k).reset_index(drop=True)
+        return out
 
     def present_variant_names(self) -> tuple[str, ...]:
         with self._lock:

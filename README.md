@@ -107,6 +107,7 @@ events worker loads the last artifact for write-through only:
 | --- | --- | --- |
 | `GET` | `/health` | Liveness probe (no auth) |
 | `GET` | `/recommendations/{user_id}` | Precomputed top-K for that user (optional `reasons`) |
+| `POST` | `/recommendations/batch` | Same lookup for many users (`user_ids`, optional `limit` / filters) |
 | `GET` | `/item-scores` | Catalog popular/latest scores for search ranking |
 | `PUT`/`GET`/`DELETE` | `/users/{user_id}`, `/items/{item_id}` | Catalog upsert when `[input]` is dataset or table-backed db (not query-backed) |
 | `POST` | `/catalog/events` | Persist events on writable dataset or table-backed db `[input]` |
@@ -130,7 +131,12 @@ Query parameters for `/recommendations/{user_id}`:
 | `exclude_unavailable` | `true` | Re-apply `item_availability_filters` against the items snapshot written with the last run |
 | `exclude_consumed` | `[serve].exclude_consumed` (`true`) | Drop items in the user's live `[input]` / incremental events |
 
-Response JSON:
+`POST /recommendations/batch` takes the same filters in the JSON body plus
+`user_ids` (max 100, order preserved, duplicates dropped). The batch body is
+`{ "generated_at", "users": [ … ] }`. Each `users` element matches a single
+GET. A user with no rows and no fallback is `items: []` (HTTP 200), not 404.
+
+GET `/recommendations/{user_id}` (and each batch `users[]` row):
 
 ```json
 {

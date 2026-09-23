@@ -76,6 +76,10 @@ class ItemScoresWriter(Protocol):
 class RecommendationReader(Protocol):
     def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame: ...
 
+    def get_recommendations_for_users(
+        self, user_ids: Sequence[str], k: int, *, variant: str | None = None
+    ) -> dict[str, pd.DataFrame]: ...
+
     def refresh(self) -> None:
         """Reload caches. No-op for live backends."""
         ...
@@ -143,6 +147,29 @@ class BaseRecommendationReader(ABC):
 
     @abstractmethod
     def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame: ...
+
+    def get_recommendations_for_users(
+        self, user_ids: Sequence[str], k: int, *, variant: str | None = None
+    ) -> dict[str, pd.DataFrame]:
+        return {
+            str(user_id): self.get_recommendations(str(user_id), k, variant=variant) for user_id in user_ids
+        }
+
+
+def recommendations_for_users(
+    reader: RecommendationReader,
+    user_ids: Sequence[str],
+    k: int,
+    *,
+    variant: str | None = None,
+) -> dict[str, pd.DataFrame]:
+    ids = [str(user_id) for user_id in user_ids]
+    bulk = getattr(reader, "get_recommendations_for_users", None)
+    if callable(bulk):
+        loaded = bulk(ids, k, variant=variant)
+        empty = pd.DataFrame()
+        return {user_id: loaded.get(user_id, empty) for user_id in ids}
+    return {user_id: reader.get_recommendations(user_id, k, variant=variant) for user_id in ids}
 
 
 class ManifestReader(Protocol):

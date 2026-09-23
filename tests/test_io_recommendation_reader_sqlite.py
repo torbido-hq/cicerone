@@ -84,6 +84,159 @@ def test_sqlite_db_reader_get_recommendations_and_items(tmp_path):
     assert list(items["item_id"]) == ["i1"]
 
 
+def test_sqlite_db_reader_get_recommendations_for_users(tmp_path, monkeypatch):
+    url = _sqlite_url(tmp_path)
+    sink = DatabaseOutputSink({"database_url": url})
+    sink.write_recommendations(
+        pd.DataFrame(
+            [
+                {"user_id": "u1", "item_id": "i2", "rank": 2, "score": 0.5, "source": "personalized"},
+                {"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"},
+                {"user_id": "u2", "item_id": "i3", "rank": 1, "score": 0.4, "source": "personalized"},
+            ]
+        )
+    )
+    reader = DbRecommendationReader({"database_url": url})
+    real_read = pd.read_sql
+    rec_reads: list[str] = []
+
+    def counting_read(sql, *args, **kwargs):
+        rec_reads.append(str(sql))
+        return real_read(sql, *args, **kwargs)
+
+    monkeypatch.setattr(pd, "read_sql", counting_read)
+    bulk = reader.get_recommendations_for_users(["u1", "u2", "nobody"], k=2)
+    assert list(bulk["u1"]["item_id"]) == ["i1", "i2"]
+    assert list(bulk["u2"]["item_id"]) == ["i3"]
+    assert bulk["nobody"].empty
+    assert sum("IN" in query.upper() for query in rec_reads) == 1
+    assert any("ROW_NUMBER" in query.upper() for query in rec_reads)
+
+
+def test_sqlite_db_reader_bulk_limits_rows_in_sql(tmp_path, monkeypatch):
+    url = _sqlite_url(tmp_path)
+    sink = DatabaseOutputSink({"database_url": url})
+    rows = [
+        {
+            "user_id": user_id,
+            "item_id": f"{user_id}-i{rank}",
+            "rank": rank,
+            "score": 1.0 - rank * 0.1,
+            "source": "personalized",
+        }
+        for user_id in ("u1", "u2")
+        for rank in range(1, 6)
+    ]
+    sink.write_recommendations(pd.DataFrame(rows))
+    reader = DbRecommendationReader({"database_url": url})
+    real_read = pd.read_sql
+    loaded: list[int] = []
+
+    def counting_read(sql, *args, **kwargs):
+        frame = real_read(sql, *args, **kwargs)
+        if "IN" in str(sql).upper():
+            loaded.append(len(frame))
+        return frame
+
+    monkeypatch.setattr(pd, "read_sql", counting_read)
+    bulk = reader.get_recommendations_for_users(["u1", "u2"], k=2)
+    assert list(bulk["u1"]["item_id"]) == ["u1-i1", "u1-i2"]
+    assert list(bulk["u2"]["item_id"]) == ["u2-i1", "u2-i2"]
+    assert loaded == [4]
+
+
+def test_sqlite_db_reader_bulk_limits_assigned_variant_in_sql(tmp_path, monkeypatch):
+    url = _sqlite_url(tmp_path)
+    sink = DatabaseOutputSink({"database_url": url})
+    rows = [
+        {
+            "user_id": "u1",
+            "item_id": f"{variant}-i{rank}",
+            "rank": rank,
+            "score": 1.0 - rank * 0.1,
+            "source": "personalized",
+            "variant": variant,
+        }
+        for variant in ("control", "treatment")
+        for rank in range(1, 6)
+    ]
+    sink.write_recommendations(pd.DataFrame(rows))
+    reader = DbRecommendationReader({"database_url": url})
+    real_read = pd.read_sql
+    loaded: list[int] = []
+
+    def counting_read(sql, *args, **kwargs):
+        frame = real_read(sql, *args, **kwargs)
+        if "IN" in str(sql).upper():
+            loaded.append(len(frame))
+        return frame
+
+    monkeypatch.setattr(pd, "read_sql", counting_read)
+    bulk = reader.get_recommendations_for_users(["u1"], k=2, variant="treatment")
+    assert list(bulk["u1"]["item_id"]) == ["treatment-i1", "treatment-i2"]
+    assert loaded == [2]
+
+
+def test_sqlite_db_reader_bulk_limits_fallback_variant_in_sql(tmp_path, monkeypatch):
+    url = _sqlite_url(tmp_path)
+    sink = DatabaseOutputSink({"database_url": url})
+    rows = [
+        {
+            "user_id": "u1",
+            "item_id": f"{variant}-i{rank}",
+            "rank": rank,
+            "score": 1.0 - rank * 0.1,
+            "source": "personalized",
+            "variant": variant,
+        }
+        for variant in ("control", "treatment")
+        for rank in range(1, 6)
+    ]
+    sink.write_recommendations(pd.DataFrame(rows))
+    reader = DbRecommendationReader({"database_url": url})
+    real_read = pd.read_sql
+    loaded: list[int] = []
+
+    def counting_read(sql, *args, **kwargs):
+        frame = real_read(sql, *args, **kwargs)
+        if "IN" in str(sql).upper():
+            loaded.append(len(frame))
+        return frame
+
+    monkeypatch.setattr(pd, "read_sql", counting_read)
+    bulk = reader.get_recommendations_for_users(["u1"], k=2)
+    assert list(bulk["u1"]["item_id"]) == ["control-i1", "control-i2"]
+    assert loaded == [2]
+
+
+def test_sqlite_db_reader_bulk_keeps_rank_order(tmp_path, monkeypatch):
+    url = _sqlite_url(tmp_path)
+    sink = DatabaseOutputSink({"database_url": url})
+    rows = [
+        {
+            "user_id": "u1",
+            "item_id": f"i{rank}",
+            "rank": rank,
+            "score": 1.0 - rank * 0.1,
+            "source": "personalized",
+        }
+        for rank in (5, 4, 1, 3, 2)
+    ]
+    sink.write_recommendations(pd.DataFrame(rows))
+    reader = DbRecommendationReader({"database_url": url})
+    real_read = pd.read_sql
+    seen: list[str] = []
+
+    def tracking(sql, *args, **kwargs):
+        seen.append(str(sql))
+        return real_read(sql, *args, **kwargs)
+
+    monkeypatch.setattr(pd, "read_sql", tracking)
+    bulk = reader.get_recommendations_for_users(["u1"], k=3)
+    assert list(bulk["u1"]["item_id"]) == ["i1", "i2", "i3"]
+    assert any("_cicerone_rn" in sql and "ORDER BY" in sql.upper() for sql in seen)
+
+
 def test_sqlite_db_reader_item_scores_write_replace_and_missing(tmp_path):
     url = _sqlite_url(tmp_path)
     reader = DbRecommendationReader({"database_url": url})

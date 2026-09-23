@@ -11,6 +11,7 @@ from typing import Any
 from cicerone.serve_schemas import (
     HealthResponse,
     ItemScoresResponse,
+    RecommendationsBatchResponse,
     RecommendationsResponse,
     SessionRecommendResponse,
     SimilarResponse,
@@ -88,6 +89,28 @@ class ServeClient:
             params["exclude_consumed"] = "true" if exclude_consumed else "false"
         path = f"/recommendations/{urllib.parse.quote(str(user_id), safe='')}"
         return RecommendationsResponse.model_validate(self._request("GET", path, params=params))
+
+    def recommendations_batch(
+        self,
+        user_ids: list[str],
+        *,
+        limit: int | None = None,
+        category: str | None = None,
+        exclude_unavailable: bool | None = None,
+        exclude_consumed: bool | None = None,
+    ) -> RecommendationsBatchResponse:
+        payload: dict[str, Any] = {"user_ids": user_ids}
+        if limit is not None:
+            payload["limit"] = limit
+        if category is not None:
+            payload["category"] = category
+        if exclude_unavailable is not None:
+            payload["exclude_unavailable"] = exclude_unavailable
+        if exclude_consumed is not None:
+            payload["exclude_consumed"] = exclude_consumed
+        return RecommendationsBatchResponse.model_validate(
+            self._request("POST", "/recommendations/batch", json_body=payload)
+        )
 
     def item_scores(
         self,

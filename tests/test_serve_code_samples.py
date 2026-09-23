@@ -14,6 +14,8 @@ from cicerone.serve.code_samples import (
     HEALTH_CODE_SAMPLES,
     HEALTH_PATH,
     PYTHON_DETECT,
+    RECOMMENDATIONS_BATCH_CODE_SAMPLES,
+    RECOMMENDATIONS_BATCH_PATH,
     RECOMMENDATIONS_CODE_SAMPLES,
     RECOMMENDATIONS_PATH,
     RECOMMENDATIONS_PATH_PREFIX,
@@ -157,6 +159,30 @@ def test_recommendations_shell_invariants():
     assert f"{ENV_USER_ID}:-{DEFAULT_USER_ID}" in shell
     assert f"?limit={DEFAULT_LIMIT}" in shell
     assert "curl -fsS" in shell
+
+
+def test_recommendations_batch_shell_expands_user_id():
+    schema = {
+        "paths": {
+            HEALTH_PATH: {"get": {}},
+            RECOMMENDATIONS_PATH: {"get": {}},
+            RECOMMENDATIONS_BATCH_PATH: {"post": {}},
+        }
+    }
+    attach_code_samples(schema)
+    samples = schema["paths"][RECOMMENDATIONS_BATCH_PATH]["post"]["x-codeSamples"]
+    assert [s["lang"] for s in samples] == [s["lang"] for s in RECOMMENDATIONS_BATCH_CODE_SAMPLES]
+    shell = _sample_source(schema, RECOMMENDATIONS_BATCH_PATH, "Shell", method="post")
+    assert f"{ENV_USER_ID}:-{DEFAULT_USER_ID}" in shell
+    assert 'os.environ["USER_ID"]' in shell
+    assert '"user_ids"' in shell
+    assert "json.dumps" in shell
+    assert PYTHON_DETECT in shell
+    assert "command -v jq" in shell
+    assert "--arg user_id" in shell
+    assert "curl -fsS -X POST" in shell
+    assert RECOMMENDATIONS_BATCH_PATH in shell
+    assert '-d \'{"user_ids":["${' not in shell
 
 
 def test_health_shell_fails_on_http_errors():
