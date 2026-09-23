@@ -8,10 +8,12 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from pyarrow.lib import ArrowInvalid, ArrowIOError
 
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.io import recommendation_schema as _rec
 from cicerone.io.base import BaseRecommendationReader
+from cicerone.io.blob import S3_READ_ERRORS
 from cicerone.io.options import (
     is_s3_not_found,
     read_parquet,
@@ -33,6 +35,12 @@ from cicerone.io.recommendation_reader_common import (
 from cicerone.serve.metrics import observe_cache_refresh, record_cache_hit, record_cache_miss
 
 logger = logging.getLogger(__name__)
+_CACHE_IO_ERRORS: tuple[type[BaseException], ...] = (
+    OSError,
+    ArrowInvalid,
+    ArrowIOError,
+    *S3_READ_ERRORS,
+)
 
 
 class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
@@ -58,11 +66,10 @@ class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             return read_parquet(self._options, ITEMS_SNAPSHOT_FILENAME)
         except FileNotFoundError:
             return None
-        except Exception as exc:
+        except S3_READ_ERRORS as exc:
             if is_s3_not_found(exc):
                 return None
-            logger.exception("Failed to load items snapshot; continuing without item filters")
-            return None
+            raise
 
     def refresh(self) -> None:
         started = time.perf_counter()
@@ -90,19 +97,16 @@ class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
                 self._fallback_user_id = fallback_user_id
                 self._variant_names = variant_names
             recommendations_ok = True
-        except Exception:
+        except _CACHE_IO_ERRORS:
             logger.exception("Failed to refresh recommendations cache; keeping previous data")
-        try:
-            items = normalize_items_snapshot(
-                self._read_items_snapshot(),
-                category_column=self._category_column,
-                availability_filters=self._availability_filters,
-            )
-            with self._lock:
-                self._items = items
-                self._items_version += 1
-        except Exception:
-            logger.exception("Failed to refresh items snapshot; keeping previous data")
+        items = normalize_items_snapshot(
+            self._read_items_snapshot(),
+            category_column=self._category_column,
+            availability_filters=self._availability_filters,
+        )
+        with self._lock:
+            self._items = items
+            self._items_version += 1
         observe_cache_refresh(duration_seconds=time.perf_counter() - started, success=recommendations_ok)
 
     def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame:

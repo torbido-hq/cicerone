@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from botocore.exceptions import BotoCoreError, ClientError
+
 from cicerone.config.constants import DEFAULT_MAX_STORAGE_READ_BYTES
 from cicerone.io.options import (
     build_s3_client,
@@ -14,6 +16,8 @@ from cicerone.io.options import (
     require_option,
     validate_storage_options,
 )
+
+S3_READ_ERRORS: tuple[type[BaseException], ...] = (BotoCoreError, ClientError)
 
 
 def _reject_oversize(size: int, max_bytes: int) -> None:
@@ -48,7 +52,7 @@ def read_storage_bytes(
     client = build_s3_client(options)
     try:
         response = client.get_object(Bucket=bucket, Key=key)
-    except Exception as exc:
+    except S3_READ_ERRORS as exc:
         if is_s3_not_found(exc):
             return None
         raise

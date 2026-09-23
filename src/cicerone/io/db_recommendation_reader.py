@@ -8,11 +8,12 @@ from typing import Any
 
 import pandas as pd
 from sqlalchemy import inspect, text
+from sqlalchemy.exc import SQLAlchemyError
 
 from cicerone.blending import COLD_START_USER_ID, LATEST_SOURCE, POPULAR_SOURCE
 from cicerone.io import recommendation_schema as _rec
 from cicerone.io.base import BaseRecommendationReader
-from cicerone.io.db_errors import db_error_message, is_missing_column_error
+from cicerone.io.db_errors import SQL_READ_ERRORS, db_error_message, is_missing_column_error
 from cicerone.io.db_store import (
     DEFAULT_RECOMMENDATION_ITEMS_TABLE,
     DEFAULT_RECOMMENDATIONS_TABLE,
@@ -75,7 +76,7 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
                 self._items = None
                 self._items_version += 1
             items_ok = True
-        except Exception:
+        except SQL_READ_ERRORS:
             logger.exception("Failed to refresh recommendation items snapshot; keeping previous data")
         observe_cache_refresh(duration_seconds=time.perf_counter() - started, success=items_ok)
 
@@ -85,7 +86,7 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             return cached
         try:
             columns = {col["name"] for col in inspect(self._engine).get_columns(self._table)}
-        except Exception:
+        except SQLAlchemyError:
             logger.exception("Failed to inspect recommendations table %r for variant column", self._table)
             return None
         supported = VARIANT_COLUMN in columns
@@ -118,7 +119,7 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
                 text(f'SELECT DISTINCT "{VARIANT_COLUMN}" FROM "{self._table}"'),
                 self._engine,
             )
-        except Exception as exc:
+        except SQL_READ_ERRORS as exc:
             if self._remember_missing_variant_column(exc):
                 self._present_variants = ()
                 return ()
@@ -153,7 +154,7 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             params = {"user_id": user_id, "k": k}
         try:
             rows = pd.read_sql(sql, self._engine, params=params)
-        except Exception as exc:
+        except SQL_READ_ERRORS as exc:
             if assigned is not None:
                 if not self._remember_missing_variant_column(exc):
                     raise
@@ -207,7 +208,7 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             params["variant"] = variant
         try:
             picked = pd.read_sql(pick_sql, self._engine, params=params)
-        except Exception as exc:
+        except SQL_READ_ERRORS as exc:
             if variant is not None and self._remember_missing_variant_column(exc):
                 return self.get_cold_start_fallback(k)
             return sentinel
