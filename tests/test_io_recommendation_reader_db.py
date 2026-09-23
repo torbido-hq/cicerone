@@ -3,6 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import SQLAlchemyError
 from support.postgres_defaults import resolve_test_database_url
 
 from cicerone.config import ConfigError
@@ -64,13 +65,44 @@ def test_db_reader_keeps_items_on_transient_refresh_error(monkeypatch):
     version_before = reader.items_version()
 
     def boom(*_args, **_kwargs):
-        raise RuntimeError("connection reset")
+        raise SQLAlchemyError("connection reset")
 
     monkeypatch.setattr(pd, "read_sql", boom)
     reader.refresh()
 
     assert list(reader.get_items()["item_id"]) == ["i1"]
     assert reader.items_version() == version_before
+
+
+def test_db_reader_keeps_items_on_pandas_database_error(monkeypatch):
+    from pandas.errors import DatabaseError
+
+    sink = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})
+    sink.write_items_snapshot(pd.DataFrame([{"item_id": "i1", "category": "beer", "published": True}]))
+    reader = DbRecommendationReader({"database_url": TEST_DATABASE_URL})
+    assert list(reader.get_items()["item_id"]) == ["i1"]
+    version_before = reader.items_version()
+
+    def boom(*_args, **_kwargs):
+        raise DatabaseError("no such table: recommendation_items")
+
+    monkeypatch.setattr(pd, "read_sql", boom)
+    reader.refresh()
+    assert list(reader.get_items()["item_id"]) == ["i1"]
+    assert reader.items_version() == version_before
+
+
+def test_db_reader_refresh_propagates_unexpected_errors(monkeypatch):
+    sink = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})
+    sink.write_items_snapshot(pd.DataFrame([{"item_id": "i1", "category": "beer", "published": True}]))
+    reader = DbRecommendationReader({"database_url": TEST_DATABASE_URL})
+
+    class Boom(Exception):
+        pass
+
+    monkeypatch.setattr(pd, "read_sql", lambda *_args, **_kwargs: (_ for _ in ()).throw(Boom("bug")))
+    with pytest.raises(Boom, match="bug"):
+        reader.refresh()
 
 
 def test_db_reader_items_snapshot_and_cold_start_fallback():
