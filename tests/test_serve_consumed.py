@@ -233,6 +233,49 @@ def test_consumed_item_ids_for_users_isolates_single_user_errors():
     }
 
 
+def test_consumed_item_ids_for_users_missing_bulk_does_not_retry_per_user():
+    class _MissingBulk(_CountingHistory):
+        def get_events_for_users(self, user_ids, limit: int) -> dict[str, pd.DataFrame]:
+            self.bulk += 1
+            del user_ids, limit
+            raise FileNotFoundError("events.parquet")
+
+    history = _MissingBulk(pd.DataFrame([{"user_id": "u1", "item_id": "i1"}]))
+    overlay = ConsumedOverlay()
+    overlay.add("u1", "i2")
+    assert consumed_item_ids_for_users(["u1", "u2"], history=history, overlay=overlay, lookback=10) == {
+        "u1": {"i2"},
+        "u2": set(),
+    }
+    assert history.bulk == 1
+    assert history.single == 0
+
+
+def test_consumed_item_ids_for_users_missing_single_stops_remaining_reads():
+    class _MissingAfterFirst(_History):
+        def __init__(self, events: pd.DataFrame):
+            super().__init__(events)
+            self.single = 0
+
+        def get_events_for_user(self, user_id: str, limit: int) -> pd.DataFrame:
+            self.single += 1
+            if user_id == "u2":
+                raise FileNotFoundError("events.parquet")
+            return super().get_events_for_user(user_id, limit)
+
+    history = _MissingAfterFirst(
+        pd.DataFrame([{"user_id": "u1", "item_id": "i1"}, {"user_id": "u2", "item_id": "i3"}])
+    )
+    overlay = ConsumedOverlay()
+    overlay.add("u3", "i9")
+    assert consumed_item_ids_for_users(["u1", "u2", "u3"], history=history, overlay=overlay, lookback=10) == {
+        "u1": {"i1"},
+        "u2": set(),
+        "u3": {"i9"},
+    }
+    assert history.single == 2
+
+
 def test_consumed_item_ids_for_users_bulk_error_falls_back_per_user():
     class _BoomBulk(_CountingHistory):
         def get_events_for_users(self, user_ids, limit: int) -> dict[str, pd.DataFrame]:

@@ -112,15 +112,17 @@ def _history_frames_for_users(
         try:
             return dict(bulk(user_ids, lookback))
         except Exception as exc:
-            if not _missing_history(exc):
-                _log_history_failure(user_ids[0])
+            if _missing_history(exc):
+                return {}
+            _log_history_failure(user_ids[0])
     frames: dict[str, pd.DataFrame] = {}
     for user_id in user_ids:
         try:
             frames[user_id] = history.get_events_for_user(user_id, lookback)
         except Exception as exc:
-            if not _missing_history(exc):
-                _log_history_failure(user_id)
+            if _missing_history(exc):
+                return frames
+            _log_history_failure(user_id)
     return frames
 
 
