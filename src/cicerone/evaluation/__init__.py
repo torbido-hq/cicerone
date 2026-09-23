@@ -14,6 +14,7 @@ from cicerone.evaluation.served import (
     evaluate_served,
     filter_events_to_recommended,
     filter_recs_to_assigned,
+    recs_from_impressions,
     replay_ks,
 )
 from cicerone.evaluation.tracking import (
@@ -46,6 +47,7 @@ __all__ = [
     "filter_recs_to_assigned",
     "generated_ats_from_track",
     "load_metric_events",
+    "recs_from_impressions",
     "replay_ks",
     "user_track_outcomes",
 ]
