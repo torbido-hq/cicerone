@@ -128,6 +128,17 @@ def _catalog_metric_defs(k: int, *, with_prev: bool) -> dict[str, object]:
     return metrics
 
 
+def _impression_matches_generated_at(stamp: object, generated_at: str) -> bool:
+    raw = str(stamp or "").strip()
+    if not raw:
+        return False
+    left = pd.to_datetime(raw, utc=True, errors="coerce")
+    right = pd.to_datetime(generated_at, utc=True, errors="coerce")
+    if pd.isna(left) or pd.isna(right):
+        return False
+    return bool(left == right)
+
+
 def recs_from_impressions(
     track_rows: Sequence[Mapping[str, Any]],
     *,
@@ -143,8 +154,7 @@ def recs_from_impressions(
         item_id = str(raw.get(ITEM_COLUMN) or "")
         if not user_id or not item_id:
             continue
-        stamp = str(raw.get("generated_at") or "")
-        if generated_at and stamp and stamp != str(generated_at):
+        if generated_at and not _impression_matches_generated_at(raw.get("generated_at"), generated_at):
             continue
         raw_rank = raw.get(RANK_COLUMN)
         if isinstance(raw_rank, (int, float, str)):
@@ -259,6 +269,16 @@ def evaluate_served(
     recs = filter_recs_to_assigned(recs, assigned)
     if recs.empty:
         return None
+    used_impressions = False
+    if impressions is not None and not impressions.empty:
+        recs = impressions.copy()
+        recs[USER_COLUMN] = recs[USER_COLUMN].astype(str)
+        recs[ITEM_COLUMN] = recs[ITEM_COLUMN].astype(str)
+        recs = recs[recs[USER_COLUMN] != COLD_START_USER_ID]
+        recs = filter_recs_to_assigned(recs, assigned)
+        if recs.empty:
+            return None
+        used_impressions = True
     all_events = _frame(events)
     if all_events.empty:
         return ServedEvalReport(
@@ -275,7 +295,12 @@ def evaluate_served(
             window_events = window_events[window_events[OCCURRED_AT] > start]
     if event_types and "event_type" in window_events.columns:
         window_events = window_events[window_events["event_type"].astype(str).isin(set(event_types))]
-    if history is not None and not history.empty and OCCURRED_AT in window_events.columns:
+    if (
+        not used_impressions
+        and history is not None
+        and not history.empty
+        and OCCURRED_AT in window_events.columns
+    ):
         live = recs.copy()
         if generated_at:
             live["generated_at"] = generated_at
@@ -288,17 +313,9 @@ def evaluate_served(
             hist_recs = filter_recs_to_assigned(hist_recs, assigned)
         if not hist_recs.empty:
             recs = hist_recs
-    if impressions is not None and not impressions.empty:
-        recs = impressions.copy()
-        recs[USER_COLUMN] = recs[USER_COLUMN].astype(str)
-        recs[ITEM_COLUMN] = recs[ITEM_COLUMN].astype(str)
-        recs = recs[recs[USER_COLUMN] != COLD_START_USER_ID]
-        recs = filter_recs_to_assigned(recs, assigned)
-        if recs.empty:
-            return None
     prev = _prev_interactions(all_events, generated_at)
     relevant = _unseen_relevant(window_events, prev)
-    if impressions is not None and not recs.empty and not relevant.empty:
+    if used_impressions and not recs.empty and not relevant.empty:
         served_users = set(recs[USER_COLUMN].astype(str))
         relevant = relevant.loc[relevant[USER_COLUMN].isin(served_users)]
     n_users = int(recs[USER_COLUMN].nunique())

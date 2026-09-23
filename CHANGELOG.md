@@ -10,7 +10,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Production replay scores impression lists when track rows exist, and
   drops pre-list `(user, item)` pairs from truth so popular cannot score
-  on already-seen items.
+  on already-seen items. A stamped job only keeps impressions whose
+  `generated_at` matches that instant (UTC); undated rows are ignored.
+  Empty-event replay reports `n_users` from the served impression list.
 - Metric event loads and RecTools served replay no longer turn unexpected
   errors into an empty frame or a silent HitRate fallback. Store and
   eval I/O failures still fall back as before.

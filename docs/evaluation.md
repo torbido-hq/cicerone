@@ -156,7 +156,9 @@ enabled = true
 ```
 
 At the start of the next job, **served impression lists** (when `[track]`
-has rows) are scored against later events. If there are no impressions,
+has rows stamped to that job's `generated_at`) are scored against later
+events. Undated impressions are ignored for that replay, and equivalent
+UTC stamps (`Z` vs `+00:00`) match. If there are no matching impressions,
 the previous recommendation table is used instead. Repeat `(user, item)`
 pairs from before the list was written are dropped from truth so popular
 cannot score on already-seen items. Metrics are `HitRate` / `MAP` /
