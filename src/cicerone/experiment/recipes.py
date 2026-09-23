@@ -221,6 +221,41 @@ def resolve_recipes(
     return tuple(recipes)
 
 
+def resolve_variant_policy_configs(
+    settings: Settings,
+    feature_config: FeatureConfig,
+) -> dict[str, FeatureConfig]:
+    """Per-variant eligibility and boosts without AutoML model selection."""
+    if not settings.experiment.enabled:
+        return {}
+    inherited = inherit_combiner(settings, feature_config)
+    configs: dict[str, FeatureConfig] = {}
+    for variant in _policy_variants(settings):
+        recipe = _resolve_one(
+            variant,
+            settings=settings,
+            feature_config=feature_config,
+            inherited_combiner=inherited,
+            automl_models=None,
+            automl_weights=None,
+            automl_rrf_k=None,
+        )
+        configs[recipe.name] = apply_recipe(feature_config, recipe)
+    return configs
+
+
+def _policy_variants(settings: Settings) -> list[VariantSettings]:
+    experiment = settings.experiment
+    variants = list(experiment.variants)
+    if experiment.automl_challenger:
+        by_name = {variant.name: variant for variant in variants}
+        return [
+            by_name.get(CONTROL_NAME) or VariantSettings(name=CONTROL_NAME, traffic=0.5),
+            by_name.get(TREATMENT_NAME) or VariantSettings(name=TREATMENT_NAME, traffic=0.5),
+        ]
+    return variants
+
+
 def _challenger_variants(
     variants: list[VariantSettings],
     *,

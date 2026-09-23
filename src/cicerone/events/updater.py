@@ -165,7 +165,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         online_result = self._refresh_online(events)
         online_by_user = self._online_rows_by_user(online_result)
 
-        pending_publish: tuple[pd.DataFrame, str] | None = None
+        pending_publish: tuple[pd.DataFrame, str, list[str]] | None = None
 
         def _persist() -> int:
             nonlocal pending_publish
@@ -233,7 +233,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
                 len(replace_ids),
                 len(events),
             )
-            pending_publish = (merged, str(manifest["generated_at"]))
+            pending_publish = (merged, str(manifest["generated_at"]), list(replace_ids))
             return len(events)
 
         holder = getattr(self._sink, "recommendations_write", None)
@@ -247,7 +247,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             self._persist_catalog(events)
         return applied
 
-    def _publish_sidecar(self, merged: pd.DataFrame, generated_at: str) -> None:
+    def _publish_sidecar(self, merged: pd.DataFrame, generated_at: str, replace_ids: list[str]) -> None:
         if self._publisher is None:
             return
         try:
@@ -256,7 +256,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             self._ensure_fence()
             current = sidecar_generation_current(self._output_settings, generated_at)
             if current:
-                self._publisher.publish(merged)
+                self._publisher.publish(merged, user_ids=replace_ids)
             else:
                 log_sidecar_generation_skip(current, incremental=True)
         except (LockLostError, WriterLockBusyError):

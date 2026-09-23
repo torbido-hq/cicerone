@@ -84,8 +84,8 @@ class RabbitMQPublisher:
         self._channel = channel
         self._connected_once = True
 
-    def publish(self, df: pd.DataFrame) -> None:
-        messages = user_recommendation_messages(df)
+    def publish(self, df: pd.DataFrame, *, user_ids: Sequence[str] | None = None) -> None:
+        messages = user_recommendation_messages(df, user_ids=user_ids)
         if not messages:
             return
         sent = [0]
