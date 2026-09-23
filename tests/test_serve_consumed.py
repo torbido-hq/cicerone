@@ -217,6 +217,65 @@ def test_recommendations_exclude_consumed_query_false_keeps_history_items():
     assert [row["item_id"] for row in body["items"]] == ["i1", "i2"]
 
 
+def test_consumed_item_ids_for_users_isolates_single_user_errors():
+    class _Partial(_History):
+        def get_events_for_user(self, user_id: str, limit: int) -> pd.DataFrame:
+            if user_id == "u2":
+                raise RuntimeError("unavailable")
+            return super().get_events_for_user(user_id, limit)
+
+    history = _Partial(pd.DataFrame([{"user_id": "u1", "item_id": "i1"}, {"user_id": "u2", "item_id": "i3"}]))
+    overlay = ConsumedOverlay()
+    overlay.add("u2", "i9")
+    assert consumed_item_ids_for_users(["u1", "u2"], history=history, overlay=overlay, lookback=10) == {
+        "u1": {"i1"},
+        "u2": {"i9"},
+    }
+
+
+def test_consumed_item_ids_for_users_bulk_error_falls_back_per_user():
+    class _BoomBulk(_CountingHistory):
+        def get_events_for_users(self, user_ids, limit: int) -> dict[str, pd.DataFrame]:
+            self.bulk += 1
+            del user_ids, limit
+            raise RuntimeError("bulk down")
+
+    history = _BoomBulk(
+        pd.DataFrame([{"user_id": "u1", "item_id": "i1"}, {"user_id": "u2", "item_id": "i3"}])
+    )
+    overlay = ConsumedOverlay()
+    overlay.add("u1", "i2")
+    assert consumed_item_ids_for_users(["u1", "u2"], history=history, overlay=overlay, lookback=10) == {
+        "u1": {"i1", "i2"},
+        "u2": {"i3"},
+    }
+    assert history.bulk == 1
+    assert history.single == 2
+
+
+def test_sqlite_get_events_for_users_bounds_fallback_without_occurred_at(monkeypatch):
+    source = DatabaseInputSource({"database_url": "sqlite+pysqlite://"})
+    with source._engine.begin() as conn:
+        conn.execute(text("CREATE TABLE events (user_id TEXT, item_id TEXT)"))
+        for index in range(20):
+            conn.execute(text("INSERT INTO events VALUES ('u1', :item)"), {"item": f"i{index}"})
+            conn.execute(text("INSERT INTO events VALUES ('u2', :item)"), {"item": f"j{index}"})
+    real_read = pd.read_sql
+    loaded: list[int] = []
+
+    def counting_read(sql, *args, **kwargs):
+        frame = real_read(sql, *args, **kwargs)
+        loaded.append(len(frame))
+        return frame
+
+    monkeypatch.setattr(pd, "read_sql", counting_read)
+    frames = source.get_events_for_users(["u1", "u2"], limit=1)
+    assert len(frames["u1"]) == 1
+    assert len(frames["u2"]) == 1
+    assert loaded
+    assert max(loaded) <= 16
+
+
 def test_consumed_item_ids_history_error_keeps_overlay():
     class _Boom:
         def get_events_for_user(self, user_id: str, limit: int) -> pd.DataFrame:

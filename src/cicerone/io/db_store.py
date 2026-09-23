@@ -397,14 +397,17 @@ class DatabaseInputSource:
             f'FROM "{table}" WHERE "user_id" IN :user_ids'
             f') AS ranked WHERE "_cicerone_rn" <= :limit'
         ).bindparams(bindparam("user_ids", expanding=True))
-        plain = text(f'SELECT * FROM "{table}" WHERE "user_id" IN :user_ids').bindparams(
-            bindparam("user_ids", expanding=True)
-        )
+        bounded = text(
+            f"SELECT * FROM ("
+            f'SELECT *, ROW_NUMBER() OVER (PARTITION BY "user_id") AS "_cicerone_rn" '
+            f'FROM "{table}" WHERE "user_id" IN :user_ids'
+            f') AS ranked WHERE "_cicerone_rn" <= :limit'
+        ).bindparams(bindparam("user_ids", expanding=True))
         try:
             frame = pd.read_sql(windowed, self._engine, params={"user_ids": ids, "limit": sql_limit})
         except _MISSING_TABLE_ERRORS:
             try:
-                frame = pd.read_sql(plain, self._engine, params={"user_ids": ids})
+                frame = pd.read_sql(bounded, self._engine, params={"user_ids": ids, "limit": sql_limit})
             except _MISSING_TABLE_ERRORS:
                 return {user_id: pd.DataFrame() for user_id in ids}
         if "_cicerone_rn" in frame.columns:

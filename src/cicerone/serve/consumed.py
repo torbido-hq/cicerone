@@ -93,23 +93,35 @@ def consumed_item_ids_for_users(
             out[user_id] |= overlay.item_ids(user_id)
     if history is None or lookback < 1 or not ids:
         return out
-    bulk = getattr(history, "get_events_for_users", None)
-    try:
-        frames = (
-            bulk(ids, lookback)
-            if callable(bulk)
-            else {user_id: history.get_events_for_user(user_id, lookback) for user_id in ids}
-        )
-    except Exception as exc:
-        if not _missing_history(exc):
-            _log_history_failure(ids[0])
-        return out
+    frames = _history_frames_for_users(history, ids, lookback)
     for user_id in ids:
         events = frames.get(user_id)
         if events is None or events.empty or ITEM_COLUMN not in events.columns:
             continue
         out[user_id].update(events[ITEM_COLUMN].astype(str).tolist())
     return out
+
+
+def _history_frames_for_users(
+    history: UserHistoryReader,
+    user_ids: list[str],
+    lookback: int,
+) -> dict[str, pd.DataFrame]:
+    bulk = getattr(history, "get_events_for_users", None)
+    if callable(bulk):
+        try:
+            return dict(bulk(user_ids, lookback))
+        except Exception as exc:
+            if not _missing_history(exc):
+                _log_history_failure(user_ids[0])
+    frames: dict[str, pd.DataFrame] = {}
+    for user_id in user_ids:
+        try:
+            frames[user_id] = history.get_events_for_user(user_id, lookback)
+        except Exception as exc:
+            if not _missing_history(exc):
+                _log_history_failure(user_id)
+    return frames
 
 
 def drop_consumed(frame: pd.DataFrame, consumed: set[str]) -> pd.DataFrame:
