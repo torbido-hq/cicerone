@@ -7,6 +7,8 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
+import pandas as pd
+
 from cicerone.config import Settings
 from cicerone.config.constants import (
     DEFAULT_EVENTS_APPLY_LOCK_TTL_SECONDS,
@@ -134,6 +136,17 @@ def _variant_feature_configs(
     return resolve_variant_policy_configs(settings, feature_config)
 
 
+def _input_users_provider(settings: Settings) -> Callable[[], pd.DataFrame | None]:
+    source = build_input_source(settings.input)
+    snapshot = source.read_users()
+
+    def read_users() -> pd.DataFrame | None:
+        frame = source.read_users()
+        return snapshot if frame is None else frame
+
+    return read_users
+
+
 def _close_publisher(publisher: RecommendationPublisher | None) -> None:
     if publisher is None:
         return
@@ -237,7 +250,7 @@ def start_events_runtime(
             explain_enabled=settings.explain.enabled,
             publisher=publisher,
             items_provider=getattr(reader, "get_items", None),
-            users_provider=build_input_source(settings.input).read_users,
+            users_provider=_input_users_provider(settings),
             variant_feature_configs=_variant_feature_configs(settings, feature_config),
         )
         buffer = MicroBatchBuffer(

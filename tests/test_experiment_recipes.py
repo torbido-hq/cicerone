@@ -240,6 +240,26 @@ def test_resolve_variant_policy_configs_without_automl_models() -> None:
     assert configs["control"].eligibility == []
     assert configs["control"].merge_item_availability is False
     assert [rule.name for rule in configs["treatment"].eligibility] == ["in_stock"]
+    rrf = resolve_variant_policy_configs(
+        make_settings(
+            experiment=ExperimentSettings(
+                enabled=True,
+                id="auto",
+                automl_challenger=True,
+                variants=(
+                    VariantSettings(name="control", traffic=0.5),
+                    VariantSettings(
+                        name="treatment",
+                        traffic=0.5,
+                        combiner="rrf",
+                        model_weights={"latest": 1.0},
+                    ),
+                ),
+            ),
+        ),
+        features,
+    )
+    assert [rule.name for rule in rrf["treatment"].eligibility] == ["in_stock"]
 
 
 def test_resolve_recipes_named_and_replacement_policy() -> None:

@@ -11,7 +11,11 @@ from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantS
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.experiment.store import ExperimentStore, experiment_state
 from cicerone.feature_config import FeatureConfig
-from cicerone.serve.bootstrap_events import _assign_incremental_variant, start_events_runtime
+from cicerone.serve.bootstrap_events import (
+    _assign_incremental_variant,
+    _input_users_provider,
+    start_events_runtime,
+)
 
 
 def test_start_events_runtime_defers_publisher_connect(tmp_path, feature_config: FeatureConfig):
@@ -204,6 +208,19 @@ def test_start_events_runtime_wires_input_users_provider(tmp_path, feature_confi
         assert list(users["user_id"].astype(str)) == ["u1"]
     finally:
         runtime.stop()
+
+
+def test_input_users_provider_falls_back_to_bootstrap_snapshot(monkeypatch) -> None:
+    frames = iter([pd.DataFrame([{"user_id": "u1", "region_slug": "lazio"}]), None])
+
+    class _Src:
+        def read_users(self) -> pd.DataFrame | None:
+            return next(frames)
+
+    monkeypatch.setattr("cicerone.serve.bootstrap_events.build_input_source", lambda _input: _Src())
+    users = _input_users_provider(make_settings())()
+    assert users is not None
+    assert list(users["user_id"].astype(str)) == ["u1"]
 
 
 def test_start_events_runtime_wires_variant_feature_configs(tmp_path, feature_config: FeatureConfig):
