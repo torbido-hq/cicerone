@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
@@ -10,7 +11,7 @@ from cicerone.config.constants import ALLOCATION_THOMPSON, DEFAULT_EVENTS_RETRAI
 from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.experiment.store import ExperimentStore, experiment_state
-from cicerone.feature_config import FeatureConfig
+from cicerone.feature_config import EligibilityRule, FeatureConfig
 from cicerone.serve.bootstrap_events import (
     _assign_incremental_variant,
     _input_users_provider,
@@ -197,7 +198,17 @@ def test_start_events_runtime_wires_input_users_provider(tmp_path, feature_confi
                 ),
             ),
         ),
-        feature_config=feature_config,
+        feature_config=replace(
+            feature_config,
+            eligibility=[
+                EligibilityRule(
+                    name="region",
+                    op="eq",
+                    item_column="region_slug",
+                    user_column="region_slug",
+                )
+            ],
+        ),
         reader=_Reader(),  # type: ignore[arg-type]
         start_worker=False,
     )
@@ -206,6 +217,45 @@ def test_start_events_runtime_wires_input_users_provider(tmp_path, feature_confi
         users = runtime.worker._updater._users_provider()
         assert users is not None
         assert list(users["user_id"].astype(str)) == ["u1"]
+    finally:
+        runtime.stop()
+
+
+def test_start_events_runtime_skips_users_provider_without_user_scoped_rules(
+    tmp_path, feature_config: FeatureConfig, monkeypatch
+):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+
+    class _Reader:
+        def refresh(self) -> None:
+            return None
+
+    def _fail_build(_input):
+        raise AssertionError("input users must not be read without user-scoped eligibility")
+
+    monkeypatch.setattr("cicerone.serve.bootstrap_events.build_input_source", _fail_build)
+    runtime = start_events_runtime(
+        make_settings(
+            output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+            events=EventsSettings(
+                enabled=True,
+                kind="webhook",
+                incremental=EventsIncrementalSettings(
+                    batch_size=1, batch_window_seconds=60.0, poll_interval_seconds=0.05
+                ),
+            ),
+        ),
+        feature_config=feature_config,
+        reader=_Reader(),  # type: ignore[arg-type]
+        start_worker=False,
+    )
+    try:
+        assert runtime.worker is not None
+        assert runtime.worker._updater._users_provider is None
     finally:
         runtime.stop()
 

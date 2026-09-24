@@ -9,12 +9,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - Incremental write-through applies the items-snapshot eligibility allowlist
-  per experiment recipe (user-scoped rules use the input users frame),
-  deletes lists that filter to empty and publishes empty sidecar lists for
-  those users (users with no prior list and no ranking signal stay a
-  no-op), and keeps batch popular/latest and `__cold_start__` instead of
-  replacing them with the current flush. AutoML challenger arms resolve
-  eligibility without a model pick.
+  per experiment recipe (user-scoped rules use the input users frame; an
+  empty users table still applies missing-user handling). Serve reads that
+  frame only when a recipe is user-scoped. Lists that filter to empty are
+  deleted and empty sidecar lists are published for those users (users with
+  no prior list and no ranking signal stay a no-op). Batch popular/latest
+  and `__cold_start__` stay instead of being replaced by the current flush.
+  AutoML challenger arms resolve eligibility without a model pick.
 - Postgres and Redis lock probes only treat SQL or Redis errors as a
   lost or busy lock. Unexpected exceptions still raise.
 - Production replay scores impression lists when track rows exist, and

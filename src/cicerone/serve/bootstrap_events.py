@@ -18,6 +18,7 @@ from cicerone.events.buffer import MicroBatchBuffer
 from cicerone.events.ha import poll_without_apply_lock
 from cicerone.events.registry import build_event_source
 from cicerone.events.updater import IncrementalUpdater
+from cicerone.events.updater_policy import incremental_needs_users_frame
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
 from cicerone.experiment.assignment import experiment_variant_names, resolve_assignment
@@ -232,6 +233,12 @@ def start_events_runtime(
                 settings.events.online.fit_partial_epochs,
                 settings.events.online.fit_min_events,
             )
+        variant_feature_configs = _variant_feature_configs(settings, feature_config)
+        users_provider = (
+            _input_users_provider(settings)
+            if incremental_needs_users_frame(feature_config, variant_feature_configs)
+            else None
+        )
         updater = IncrementalUpdater(
             sink=sink,
             output_settings=settings.output,
@@ -250,8 +257,8 @@ def start_events_runtime(
             explain_enabled=settings.explain.enabled,
             publisher=publisher,
             items_provider=getattr(reader, "get_items", None),
-            users_provider=_input_users_provider(settings),
-            variant_feature_configs=_variant_feature_configs(settings, feature_config),
+            users_provider=users_provider,
+            variant_feature_configs=variant_feature_configs,
         )
         buffer = MicroBatchBuffer(
             batch_size=settings.events.incremental.batch_size,

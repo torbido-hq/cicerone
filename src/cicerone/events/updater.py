@@ -22,7 +22,7 @@ from cicerone.events.updater_merge import (
     UpdaterMerge,
     _is_preserved_source,
 )
-from cicerone.events.updater_policy import incremental_allowlists
+from cicerone.events.updater_policy import incremental_allowlists, incremental_needs_users_frame
 from cicerone.events.updater_ranking import UpdaterRanking
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.base import OutputSink
@@ -30,7 +30,6 @@ from cicerone.io.recommendation_reader import SOURCE_COLUMN, USER_COLUMN
 from cicerone.io.recommendation_schema import recommendation_output_columns
 from cicerone.job_eval import PUBLISH_ERRORS, log_caught
 from cicerone.locks import LockLostError, WriterLockBusyError
-from cicerone.policy.eligibility import has_user_scoped_eligibility, resolve_eligibility
 from cicerone.publish.base import RecommendationPublisher
 from cicerone.publish.sidecar import log_sidecar_generation_skip, sidecar_generation_current
 
@@ -414,8 +413,4 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             raise LockLostError("events apply lock lost before write", kind="apply")
 
     def _needs_users_frame(self) -> bool:
-        configs = [self._feature_config, *self._variant_feature_configs.values()]
-        return any(
-            config is not None and has_user_scoped_eligibility(resolve_eligibility(config))
-            for config in configs
-        )
+        return incremental_needs_users_frame(self._feature_config, self._variant_feature_configs)

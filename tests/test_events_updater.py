@@ -1522,6 +1522,8 @@ def test_incremental_allowlists_user_scoped_when_users_present(feature_config: F
     assert allowed["u1"] == frozenset({"ok"})
     without_users = incremental_allowlists(["u1"], feature_config=scoped, items=items, users=None)
     assert without_users["u1"] == frozenset({"ok", "other"})
+    empty_users = incremental_allowlists(["u1"], feature_config=scoped, items=items, users=pd.DataFrame())
+    assert empty_users["u1"] == frozenset()
 
 
 def test_incremental_updater_deletes_user_when_allowlist_empties_list(
