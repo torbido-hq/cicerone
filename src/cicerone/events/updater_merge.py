@@ -64,6 +64,20 @@ def _restrict_items(frame: pd.DataFrame, allowed: frozenset[str] | None) -> pd.D
     return frame.loc[frame[ITEM_COLUMN].astype(str).isin(allowed)]
 
 
+def _kept_list(frame: pd.DataFrame, user_id: str, top_k: int) -> pd.DataFrame:
+    if frame.empty:
+        return empty_recommendations_frame()
+    kept = frame
+    if RANK_COLUMN in kept.columns:
+        kept = kept.sort_values(RANK_COLUMN, kind="mergesort")
+    if ITEM_COLUMN in kept.columns:
+        kept = kept.drop_duplicates(subset=[ITEM_COLUMN], keep="first").head(top_k)
+    kept = kept.copy()
+    kept[USER_COLUMN] = user_id
+    kept[RANK_COLUMN] = range(1, len(kept) + 1)
+    return kept[recommendation_output_columns(kept)].reset_index(drop=True)
+
+
 def _allowed_for(
     variant: str,
     allowed: frozenset[str] | None,
@@ -179,6 +193,9 @@ class UpdaterMerge:
         online_rows: pd.DataFrame | None = None,
         allowed: frozenset[str] | None = None,
     ) -> pd.DataFrame:
+        user_batch = self._signal_rows(batch[batch[USER_COLUMN].astype(str) == user_id], weights)
+        if user_batch.empty:
+            return _kept_list(_restrict_items(prior, allowed), user_id, self._top_k)
         if not prior.empty and SOURCE_COLUMN in prior.columns:
             mask = prior[SOURCE_COLUMN].astype(str).map(_is_preserved_source)
             preserved = prior.loc[mask].copy()
@@ -187,9 +204,6 @@ class UpdaterMerge:
         online_part, kept = self._split_online_preserved(preserved, online_rows)
         online_part = _restrict_items(online_part, allowed)
         kept = _restrict_items(kept, allowed)
-
-        user_batch = self._signal_rows(batch[batch[USER_COLUMN].astype(str) == user_id], weights)
-        has_signal = not user_batch.empty
         preserved_ids: set[str] = set()
         if not kept.empty:
             preserved_ids.update(kept[ITEM_COLUMN].astype(str))
@@ -200,8 +214,6 @@ class UpdaterMerge:
             .astype(str)
             .drop_duplicates()
             .tolist()
-            if has_signal
-            else []
         )
         boost_items = [item_id for item_id in boost_items if item_id not in preserved_ids]
         if allowed is not None:
@@ -238,10 +250,7 @@ class UpdaterMerge:
         # Unknown/zero-weight events must not rewrite popular-only users.
         popular = _restrict_items(popular, allowed)
         latest = _restrict_items(latest, allowed)
-        parts = [boost, preserved]
-        if has_signal:
-            parts.extend((popular, latest))
-        parts = [frame for frame in parts if not frame.empty]
+        parts = [frame for frame in (boost, preserved, popular, latest) if not frame.empty]
         combined = pd.concat(parts, ignore_index=True) if parts else empty_recommendations_frame()
         if combined.empty:
             return empty_recommendations_frame()
@@ -323,14 +332,4 @@ class UpdaterMerge:
         allowed: frozenset[str] | None = None,
     ) -> pd.DataFrame:
         del popular, latest
-        kept = _restrict_items(prior, allowed)
-        if kept.empty:
-            return empty_recommendations_frame()
-        if RANK_COLUMN in kept.columns:
-            kept = kept.sort_values(RANK_COLUMN, kind="mergesort")
-        if ITEM_COLUMN in kept.columns:
-            kept = kept.drop_duplicates(subset=[ITEM_COLUMN], keep="first").head(self._top_k)
-        kept = kept.copy()
-        kept[USER_COLUMN] = COLD_START_USER_ID
-        kept[RANK_COLUMN] = range(1, len(kept) + 1)
-        return kept[recommendation_output_columns(kept)].reset_index(drop=True)
+        return _kept_list(_restrict_items(prior, allowed), COLD_START_USER_ID, self._top_k)

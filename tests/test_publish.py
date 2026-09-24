@@ -126,6 +126,51 @@ def test_publish_recommendations_does_not_retry_uninspectable_typeerror(monkeypa
     assert user_ids == ["u1", "u2"]
 
 
+def test_publish_recommendations_treats_positional_only_user_ids_as_legacy() -> None:
+    seen: list[pd.DataFrame] = []
+
+    class _Positional:
+        def connect(self) -> None:
+            return None
+
+        def publish(self, df: pd.DataFrame, user_ids=None, /) -> None:
+            seen.append(df)
+
+        def close(self) -> None:
+            return None
+
+    frame = _recs_frame()
+    publish_recommendations(_Positional(), frame, user_ids=["u1", "u2"])
+    assert seen == [frame]
+
+
+def test_incremental_updater_rejects_positional_only_user_ids(
+    tmp_path, feature_config: FeatureConfig
+) -> None:
+    class _Positional:
+        def connect(self) -> None:
+            return None
+
+        def publish(self, df: pd.DataFrame, user_ids=None, /) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        top_k=5,
+    )
+    with pytest.raises(TypeError, match="user_ids"):
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=5,
+            publisher=_Positional(),
+        )
+
+
 def test_user_recommendation_messages_user_ids_emit_empty_lists():
     messages = user_recommendation_messages(pd.DataFrame(), user_ids=["u1", "u2"])
     assert [user_id for user_id, _body, _message_id in messages] == ["u1", "u2"]

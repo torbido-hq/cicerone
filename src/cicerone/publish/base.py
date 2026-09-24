@@ -44,7 +44,13 @@ def _publisher_accepts_user_ids(publish: object) -> bool | None:
     if signature is None:
         return None
     params = signature.parameters
-    return "user_ids" in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+    if any(param.kind is inspect.Parameter.VAR_KEYWORD for param in params.values()):
+        return True
+    user_ids = params.get("user_ids")
+    return user_ids is not None and user_ids.kind in (
+        inspect.Parameter.KEYWORD_ONLY,
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+    )
 
 
 def _tombstone_user_ids(df: pd.DataFrame | None, user_ids: Sequence[str] | None) -> list[str]:
