@@ -52,18 +52,18 @@ class PostgresAdvisoryLock:
                         {"k1": self._key1, "k2": self._key2},
                     ).scalar()
                 )
-            except Exception:
-                conn.close()
-                raise
-            if not got:
-                conn.close()
-                return False
-            self._conn = conn
-            return True
+                if not got:
+                    return False
+                self._conn = conn
+                return True
+            finally:
+                if self._conn is not conn:
+                    conn.close()
 
     def owned(self, generation: int | None = None) -> bool:
         del generation
         from sqlalchemy import text
+        from sqlalchemy.exc import SQLAlchemyError
 
         with self._mutex:
             if self._conn is None:
@@ -76,7 +76,7 @@ class PostgresAdvisoryLock:
                         {"k1": self._key1, "k2": self._key2},
                     ).scalar()
                 )
-            except Exception:
+            except SQLAlchemyError:
                 logger.warning(
                     "Postgres advisory lock owned() probe failed; treating as lost",
                     exc_info=True,
@@ -85,6 +85,7 @@ class PostgresAdvisoryLock:
 
     def is_locked(self) -> bool:
         from sqlalchemy import text
+        from sqlalchemy.exc import SQLAlchemyError
 
         with self._mutex:
             conn = self._conn
@@ -96,7 +97,7 @@ class PostgresAdvisoryLock:
                             {"k1": self._key1, "k2": self._key2},
                         ).scalar()
                     )
-                except Exception:
+                except SQLAlchemyError:
                     logger.warning(
                         "Postgres advisory lock is_locked() on held connection failed; "
                         "retrying with a new session",
@@ -110,12 +111,13 @@ class PostgresAdvisoryLock:
                         {"k1": self._key1, "k2": self._key2},
                     ).scalar()
                 )
-        except Exception:
+        except SQLAlchemyError:
             logger.exception("Postgres advisory lock is_locked() probe failed")
             raise
 
     def release(self) -> None:
         from sqlalchemy import text
+        from sqlalchemy.exc import SQLAlchemyError
 
         with self._mutex:
             if self._conn is None:
@@ -125,7 +127,7 @@ class PostgresAdvisoryLock:
                     text("SELECT pg_advisory_unlock(:k1, :k2)"),
                     {"k1": self._key1, "k2": self._key2},
                 )
-            except Exception:
+            except SQLAlchemyError:
                 logger.exception("Failed to release Postgres advisory lock")
             finally:
                 self._conn.close()
