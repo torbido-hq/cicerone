@@ -25,7 +25,8 @@ filters to empty is deleted, and the publish sidecar
 emits an empty-list message for each cleared user. Batch popular / latest
 rows stay; a flush does not rebuild `__cold_start__`. When `[experiment]` is
 on, that popular/latest refresh runs only on the **assigned** (or promoted)
-variant; other variants keep their last batch lists. Online LightFM
+variant; other variants keep their last batch lists. AutoML challenger arms
+use each configured variant's eligibility, including custom names. Online LightFM
 rewrite is skipped while `[experiment]` is on so arms stay isolated.
 [how-it-works.md](how-it-works.md) explains the split. Experiments:
 [experiments.md](experiments.md).

@@ -254,13 +254,14 @@ def resolve_variant_policy_configs(
 def _policy_variants(settings: Settings) -> list[VariantSettings]:
     experiment = settings.experiment
     variants = list(experiment.variants)
+    if variants:
+        return variants
     if experiment.automl_challenger:
-        by_name = {variant.name: variant for variant in variants}
         return [
-            by_name.get(CONTROL_NAME) or VariantSettings(name=CONTROL_NAME, traffic=0.5),
-            by_name.get(TREATMENT_NAME) or VariantSettings(name=TREATMENT_NAME, traffic=0.5),
+            VariantSettings(name=CONTROL_NAME, traffic=0.5),
+            VariantSettings(name=TREATMENT_NAME, traffic=0.5),
         ]
-    return variants
+    return []
 
 
 def _challenger_variants(
