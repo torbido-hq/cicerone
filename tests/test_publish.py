@@ -100,6 +100,30 @@ def test_publish_recommendations_publishes_nonempty_before_legacy_tombstone_erro
     assert set(seen[0]["user_id"].astype(str)) == {"u1", "u2"}
 
 
+def test_publish_recommendations_does_not_retry_uninspectable_typeerror(monkeypatch) -> None:
+    calls: list[tuple[pd.DataFrame, object]] = []
+
+    class _Uninspectable:
+        def connect(self) -> None:
+            return None
+
+        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
+            calls.append((df, user_ids))
+            raise TypeError("payload invalid after send")
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr("cicerone.publish.base.inspect.signature", lambda _fn: None)
+    frame = _recs_frame()
+    with pytest.raises(TypeError, match="payload invalid after send"):
+        publish_recommendations(_Uninspectable(), frame, user_ids=["u1", "u2"])
+    assert len(calls) == 1
+    published, user_ids = calls[0]
+    assert published is frame
+    assert user_ids == ["u1", "u2"]
+
+
 def test_user_recommendation_messages_user_ids_emit_empty_lists():
     messages = user_recommendation_messages(pd.DataFrame(), user_ids=["u1", "u2"])
     assert [user_id for user_id, _body, _message_id in messages] == ["u1", "u2"]
