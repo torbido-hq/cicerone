@@ -13,7 +13,7 @@ from cicerone.events.normalize import normalize_event
 from cicerone.events.updater import IncrementalUpdater
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.factory import build_output_sink
-from cicerone.publish import PublishError, build_publisher, registered_publish_kinds
+from cicerone.publish import PublishError, build_publisher, publish_recommendations, registered_publish_kinds
 from cicerone.publish.factory import build_publisher_from_kind
 from cicerone.publish.kafka import KafkaPublisher, validate_kafka_publish_options
 from cicerone.publish.payload import user_recommendation_messages
@@ -45,6 +45,24 @@ def test_user_recommendation_messages_one_per_user():
 def test_user_recommendation_messages_empty():
     assert user_recommendation_messages(pd.DataFrame()) == []
     assert user_recommendation_messages(pd.DataFrame({"item_id": ["i1"]})) == []
+
+
+def test_publish_recommendations_skips_user_ids_for_legacy_publishers() -> None:
+    seen: list[object] = []
+
+    class _Legacy:
+        def connect(self) -> None:
+            return None
+
+        def publish(self, df: pd.DataFrame) -> None:
+            seen.append(df)
+
+        def close(self) -> None:
+            return None
+
+    frame = pd.DataFrame()
+    publish_recommendations(_Legacy(), frame, user_ids=["u1"])
+    assert seen == [frame]
 
 
 def test_user_recommendation_messages_user_ids_emit_empty_lists():
