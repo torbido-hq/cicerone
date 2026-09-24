@@ -326,6 +326,8 @@ class UpdaterMerge:
         kept = _restrict_items(prior, allowed)
         if kept.empty:
             return empty_recommendations_frame()
+        if RANK_COLUMN in kept.columns:
+            kept = kept.sort_values(RANK_COLUMN, kind="mergesort")
         if ITEM_COLUMN in kept.columns:
             kept = kept.drop_duplicates(subset=[ITEM_COLUMN], keep="first").head(self._top_k)
         kept = kept.copy()

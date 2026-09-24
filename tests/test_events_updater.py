@@ -1616,6 +1616,51 @@ def test_incremental_updater_keeps_batch_popular_and_cold_start(
     assert list(cold["item_id"].astype(str)) == ["cold-keep"]
 
 
+def test_incremental_updater_keeps_cold_start_top_k_by_rank(tmp_path, feature_config: FeatureConfig) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"},
+            {
+                "user_id": COLD_START_USER_ID,
+                "item_id": "cold-3",
+                "rank": 3,
+                "score": 0.1,
+                "source": "popular_fallback",
+            },
+            {
+                "user_id": COLD_START_USER_ID,
+                "item_id": "cold-1",
+                "rank": 1,
+                "score": 0.3,
+                "source": "popular_fallback",
+            },
+            {
+                "user_id": COLD_START_USER_ID,
+                "item_id": "cold-2",
+                "rank": 2,
+                "score": 0.2,
+                "source": "popular_fallback",
+            },
+        ]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=2,
+    )
+    IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=2,
+    ).apply([normalize_event(event_payload(user_id="u1", item_id="i9", event_id="cold-rank"))])
+    cold = load_recommendations_frame(settings.output)
+    cold = cold[cold["user_id"] == COLD_START_USER_ID].sort_values("rank")
+    assert list(cold["item_id"].astype(str)) == ["cold-1", "cold-2"]
+    assert list(cold["rank"].astype(int)) == [1, 2]
+
+
 def test_incremental_allowlists_user_scoped_when_users_present(feature_config: FeatureConfig) -> None:
     scoped = replace(
         feature_config,
