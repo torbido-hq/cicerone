@@ -13,7 +13,8 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from cicerone.config import IOSettings
 from cicerone.io import engines as _io_engines
-from cicerone.io.db_errors import is_missing_column_error, is_missing_table_error
+from cicerone.io.blob import S3_READ_ERRORS
+from cicerone.io.db_errors import SQL_READ_ERRORS, is_missing_column_error, is_missing_table_error
 from cicerone.io.db_store import (
     DEFAULT_RECOMMENDATION_ITEMS_TABLE,
     DEFAULT_RECOMMENDATIONS_TABLE,
@@ -37,6 +38,7 @@ _engines = _io_engines._engines
 logger = logging.getLogger(__name__)
 
 _CATALOG_READ_ERRORS = (OSError, ValueError, TypeError, SQLAlchemyError, BotoCoreError, ArrowInvalid)
+_PARQUET_PROJECTION_ERRORS = (OSError, ValueError, TypeError, ArrowInvalid)
 
 GUARDRAIL_COLUMNS: tuple[str, ...] = (USER_COLUMN, ITEM_COLUMN, SOURCE_COLUMN, VARIANT_COLUMN)
 
@@ -73,9 +75,7 @@ def _read_parquet_columns(output: IOSettings, filename: str, columns: Sequence[s
         return read_parquet(output.options, filename, columns=list(columns))
     except FileNotFoundError:
         raise
-    except Exception as exc:
-        if is_s3_not_found(exc):
-            raise
+    except _PARQUET_PROJECTION_ERRORS:
         return read_parquet(output.options, filename)
 
 
@@ -95,11 +95,14 @@ def load_items_catalog_size(output: IOSettings) -> int | None:
             frame = _read_parquet_columns(output, ITEMS_SNAPSHOT_FILENAME, (ITEM_COLUMN,))
         except FileNotFoundError:
             return None
-        except Exception as exc:
+        except S3_READ_ERRORS as exc:
             if is_s3_not_found(exc):
                 return None
             if not isinstance(exc, _CATALOG_READ_ERRORS):
                 raise
+            logger.exception("Failed to read items snapshot for experiment catalog size")
+            return None
+        except _CATALOG_READ_ERRORS:
             logger.exception("Failed to read items snapshot for experiment catalog size")
             return None
         if frame.empty or ITEM_COLUMN not in frame.columns:
@@ -115,7 +118,7 @@ def load_items_catalog_size(output: IOSettings) -> int | None:
         try:
             with engine.connect() as conn:
                 value = conn.execute(text(f'SELECT COUNT(DISTINCT "{ITEM_COLUMN}") FROM "{table}"')).scalar()
-        except Exception as exc:
+        except SQL_READ_ERRORS as exc:
             if is_missing_table_error(exc) or is_missing_column_error(exc):
                 return None
             if not isinstance(exc, _CATALOG_READ_ERRORS):
@@ -135,7 +138,7 @@ def load_recommendation_guardrail_rows(output: IOSettings) -> pd.DataFrame | Non
             frame = _read_parquet_columns(output, "recommendations.parquet", GUARDRAIL_COLUMNS)
         except FileNotFoundError:
             return pd.DataFrame(columns=list(GUARDRAIL_COLUMNS))
-        except Exception as exc:
+        except S3_READ_ERRORS as exc:
             if is_s3_not_found(exc):
                 return pd.DataFrame(columns=list(GUARDRAIL_COLUMNS))
             raise
@@ -160,7 +163,7 @@ def load_recommendation_guardrail_rows(output: IOSettings) -> pd.DataFrame | Non
                     mapped = _empty_frame_from_db_error(exc, table=table)
                     if mapped is not None:
                         return mapped
-                except Exception as exc:
+                except SQL_READ_ERRORS as exc:
                     last_exc = exc
                     if is_missing_column_error(exc):
                         continue
@@ -204,7 +207,7 @@ def _load_dataset_recommendations(output: IOSettings) -> pd.DataFrame:
         frame = read_parquet(output.options, "recommendations.parquet")
     except FileNotFoundError:
         return empty_recommendations_frame()
-    except Exception as exc:
+    except S3_READ_ERRORS as exc:
         if is_s3_not_found(exc):
             return empty_recommendations_frame()
         raise
@@ -223,9 +226,11 @@ def _load_dataset_recommendations_for_users(output: IOSettings, user_ids: list[s
         )
     except FileNotFoundError:
         return empty_recommendations_frame()
-    except Exception as exc:
+    except S3_READ_ERRORS as exc:
         if is_s3_not_found(exc):
             return empty_recommendations_frame()
+        raise
+    except _PARQUET_PROJECTION_ERRORS as exc:
         message = str(exc).lower()
         if USER_COLUMN in message or "fieldref" in message or "filter" in message:
             logger.warning("Filtered recommendations read failed; falling back to full-file load: %s", exc)
@@ -301,9 +306,11 @@ def count_recommendation_users(output: IOSettings) -> int:
             frame = read_parquet(output.options, "recommendations.parquet", columns=[USER_COLUMN])
         except FileNotFoundError:
             return 0
-        except Exception as exc:
+        except S3_READ_ERRORS as exc:
             if is_s3_not_found(exc):
                 return 0
+            raise
+        except _PARQUET_PROJECTION_ERRORS as exc:
             message = str(exc).lower()
             if USER_COLUMN in message or "fieldref" in message:
                 logger.warning(

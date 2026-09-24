@@ -463,7 +463,7 @@ def test_read_parquet_columns_falls_back_without_projection(tmp_path, monkeypatc
 
     def _maybe_fail(options, filename, *, s3_client=None, columns=None, filters=None):
         if columns is not None:
-            raise RuntimeError("no projection")
+            raise ValueError("no projection")
         return real(options, filename, s3_client=s3_client, columns=columns, filters=filters)
 
     monkeypatch.setattr("cicerone.events.store.read_parquet", _maybe_fail)
@@ -499,7 +499,7 @@ def test_load_recommendations_for_users_filter_fallback(tmp_path, monkeypatch):
 
     def _fail_filters(options, filename, *, s3_client=None, columns=None, filters=None):
         if filters is not None:
-            raise RuntimeError("user_id filter unsupported")
+            raise ValueError("user_id filter unsupported")
         return real(options, filename, s3_client=s3_client, columns=columns, filters=filters)
 
     monkeypatch.setattr("cicerone.events.store.read_parquet", _fail_filters)
@@ -569,3 +569,45 @@ def test_load_items_catalog_size_backend_io_errors(tmp_path, monkeypatch):
 
     monkeypatch.setattr("cicerone.events.store._engine_for", lambda _url: _Busy())
     assert load_items_catalog_size(output) is None
+
+
+def test_event_store_raises_unexpected_and_hard_s3(tmp_path, monkeypatch):
+    from botocore.exceptions import ClientError
+
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    )
+    pd.DataFrame({"item_id": ["a"]}).to_parquet(tmp_path / "items_snapshot.parquet", index=False)
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(tmp_path / "recommendations.parquet", index=False)
+
+    denied = ClientError({"Error": {"Code": "AccessDenied", "Message": "no"}}, "GetObject")
+    monkeypatch.setattr(
+        "cicerone.events.store._read_parquet_columns",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(denied),
+    )
+    with pytest.raises(ClientError):
+        load_items_catalog_size(settings.output)
+    monkeypatch.undo()
+
+    monkeypatch.setattr(
+        "cicerone.events.store.read_parquet",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    with pytest.raises(RuntimeError, match="boom"):
+        load_recommendations_frame(settings.output)
+    with pytest.raises(RuntimeError, match="boom"):
+        load_recommendation_guardrail_rows(settings.output)
+    with pytest.raises(RuntimeError, match="boom"):
+        count_recommendation_users(settings.output)
+
+    def _fail_filters(*_args, **kwargs):
+        if kwargs.get("filters") is not None:
+            raise RuntimeError("filter boom")
+        raise RuntimeError("full boom")
+
+    monkeypatch.setattr("cicerone.events.store.read_parquet", _fail_filters)
+
+    with pytest.raises(RuntimeError, match="filter boom"):
+        load_recommendations_for_users(settings.output, ["u1"])
