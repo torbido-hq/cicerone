@@ -255,16 +255,13 @@ def automl_challenger_pair(variants: Sequence[VariantSettings]) -> tuple[Variant
     """Control/treatment arms for AutoML, keeping configured names when present."""
     items = list(variants)
     by_name = {item.name: item for item in items}
-    if CONTROL_NAME in by_name or TREATMENT_NAME in by_name:
-        return (
-            by_name.get(CONTROL_NAME) or VariantSettings(name=CONTROL_NAME, traffic=0.5),
-            by_name.get(TREATMENT_NAME) or VariantSettings(name=TREATMENT_NAME, traffic=0.5),
-        )
+    if CONTROL_NAME in by_name and TREATMENT_NAME in by_name:
+        return by_name[CONTROL_NAME], by_name[TREATMENT_NAME]
     if len(items) >= 2:
         return items[0], items[1]
     return (
-        VariantSettings(name=CONTROL_NAME, traffic=0.5),
-        VariantSettings(name=TREATMENT_NAME, traffic=0.5),
+        by_name.get(CONTROL_NAME) or VariantSettings(name=CONTROL_NAME, traffic=0.5),
+        by_name.get(TREATMENT_NAME) or VariantSettings(name=TREATMENT_NAME, traffic=0.5),
     )
 
 

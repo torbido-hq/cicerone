@@ -69,8 +69,10 @@ def _allowed_for(
     allowed: frozenset[str] | None,
     allowed_by_variant: Mapping[str, frozenset[str] | None] | None,
 ) -> frozenset[str] | None:
-    if allowed_by_variant and variant in allowed_by_variant:
-        return allowed_by_variant[variant]
+    if allowed_by_variant:
+        if variant in allowed_by_variant:
+            return allowed_by_variant[variant]
+        return frozenset()
     return allowed
 
 

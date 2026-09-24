@@ -28,6 +28,9 @@ def test_start_events_runtime_defers_publisher_connect(tmp_path, feature_config:
     seen: dict[str, bool] = {}
 
     class _Pub:
+        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
+            return None
+
         def close(self) -> None:
             return None
 
@@ -318,17 +321,22 @@ def test_start_events_runtime_skips_users_when_variants_are_not_user_scoped(
         runtime.stop()
 
 
-def test_input_users_provider_falls_back_to_bootstrap_snapshot(monkeypatch) -> None:
-    frames = iter([pd.DataFrame([{"user_id": "u1", "region_slug": "lazio"}]), None])
+def test_input_users_provider_uses_bootstrap_snapshot_only(monkeypatch) -> None:
+    reads = {"n": 0}
 
     class _Src:
         def read_users(self) -> pd.DataFrame | None:
-            return next(frames)
+            reads["n"] += 1
+            return pd.DataFrame([{"user_id": "u1", "region_slug": "lazio"}])
 
     monkeypatch.setattr("cicerone.serve.bootstrap_events.build_input_source", lambda _input: _Src())
-    users = _input_users_provider(make_settings())()
-    assert users is not None
-    assert list(users["user_id"].astype(str)) == ["u1"]
+    provider = _input_users_provider(make_settings())
+    first = provider()
+    second = provider()
+    assert reads["n"] == 1
+    assert first is not None and second is not None
+    assert list(first["user_id"].astype(str)) == ["u1"]
+    assert list(second["user_id"].astype(str)) == ["u1"]
 
 
 def test_start_events_runtime_wires_variant_feature_configs(tmp_path, feature_config: FeatureConfig):
@@ -535,6 +543,9 @@ def test_start_events_runtime_closes_publisher(tmp_path, feature_config: Feature
     closed = {"n": 0}
 
     class _Pub:
+        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
+            return None
+
         def close(self) -> None:
             closed["n"] += 1
             raise RuntimeError("close failed")
@@ -577,6 +588,9 @@ def test_stop_closes_publisher_when_worker_hangs(tmp_path, feature_config: Featu
     closed = {"n": 0}
 
     class _Pub:
+        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
+            return None
+
         def close(self) -> None:
             closed["n"] += 1
 
@@ -626,6 +640,9 @@ def test_start_events_runtime_closes_publisher_on_startup_error(tmp_path, featur
     closed = {"n": 0}
 
     class _Pub:
+        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
+            return None
+
         def close(self) -> None:
             closed["n"] += 1
 

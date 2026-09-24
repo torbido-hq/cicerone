@@ -656,148 +656,84 @@ def test_incremental_updater_tombstones_new_user_when_signal_is_ineligible(
     assert merged.empty
 
 
-def test_incremental_updater_legacy_publisher_without_user_ids(
-    tmp_path, feature_config: FeatureConfig
-) -> None:
+def test_incremental_updater_requires_publisher_user_ids(tmp_path, feature_config: FeatureConfig) -> None:
     out = tmp_path / "out"
     out.mkdir()
-    pd.DataFrame(
-        [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
-    ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
         top_k=5,
     )
-    published: list[pd.DataFrame] = []
 
     class _Legacy:
         def connect(self) -> None:
             return None
 
         def publish(self, df: pd.DataFrame) -> None:
-            published.append(df.copy())
+            return None
 
         def close(self) -> None:
             return None
 
+    with pytest.raises(TypeError, match="user_ids"):
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=5,
+            publisher=_Legacy(),
+        )
+
+
+def test_incremental_updater_unknown_variant_does_not_use_base_allowlist(
+    tmp_path, feature_config: FeatureConfig
+) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "oos",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                "variant": "control",
+            },
+            {
+                "user_id": "u1",
+                "item_id": "ok",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                "variant": "treatment",
+            },
+        ]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    items = pd.DataFrame(
+        [
+            {"item_id": "oos", "published": True, "in_stock": False},
+            {"item_id": "ok", "published": True, "in_stock": True},
+        ]
+    )
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    open_cfg = replace(feature_config, eligibility=[], merge_item_availability=False)
     IncrementalUpdater(
         sink=build_output_sink(settings.output),
         output_settings=settings.output,
-        feature_config=feature_config,
-        top_k=5,
-        publisher=_Legacy(),
-    ).apply([normalize_event(event_payload(user_id="u1", item_id="i9", event_id="legacy-pub"))])
-    assert len(published) == 1
-    assert "i9" in set(load_recommendations_frame(settings.output)["item_id"].astype(str))
-
-
-def test_incremental_updater_legacy_publisher_does_not_retry_after_tombstone(
-    tmp_path, feature_config: FeatureConfig
-) -> None:
-    out = tmp_path / "out"
-    out.mkdir()
-    pd.DataFrame(
-        [{"user_id": "u1", "item_id": "oos", "rank": 1, "score": 1.0, "source": "personalized"}]
-    ).to_parquet(out / "recommendations.parquet", index=False)
-    items = pd.DataFrame([{"item_id": "oos", "published": True, "in_stock": False}])
-    settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
-        top_k=5,
-    )
-
-    class _Legacy:
-        def connect(self) -> None:
-            return None
-
-        def publish(self, df: pd.DataFrame) -> None:
-            raise AssertionError("legacy publish must not drop tombstones")
-
-        def close(self) -> None:
-            return None
-
-    applied = IncrementalUpdater(
-        sink=build_output_sink(settings.output),
-        output_settings=settings.output,
-        feature_config=feature_config,
+        feature_config=open_cfg,
         top_k=5,
         items_provider=lambda: items,
-        publisher=_Legacy(),
-    ).apply([normalize_event(event_payload(user_id="u1", item_id="oos", event_id="legacy-tomb"))])
-    assert applied == 1
+        variant_names=("control", "treatment"),
+        assign_variant=lambda _user_id: "control",
+        variant_feature_configs={"treatment": feature_config},
+    ).apply([normalize_event(event_payload(user_id="u1", item_id="oos", event_id="arm-gap"))])
     frame = load_recommendations_frame(settings.output)
-    assert frame[frame["user_id"] == "u1"].empty
-
-
-def test_incremental_updater_legacy_publisher_publishes_nonempty_before_tombstone(
-    tmp_path, feature_config: FeatureConfig
-) -> None:
-    out = tmp_path / "out"
-    out.mkdir()
-    pd.DataFrame(
-        [
-            {"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"},
-            {"user_id": "u2", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"},
-        ]
-    ).to_parquet(out / "recommendations.parquet", index=False)
-    scoped = replace(
-        feature_config,
-        eligibility=[
-            EligibilityRule(
-                name="region",
-                op="eq",
-                item_column="region_slug",
-                user_column="region_slug",
-            )
-        ],
-    )
-    items = pd.DataFrame(
-        [
-            {"item_id": "old", "published": True, "in_stock": True, "region_slug": "lazio"},
-            {"item_id": "i9", "published": True, "in_stock": True, "region_slug": "lazio"},
-        ]
-    )
-    users = pd.DataFrame(
-        [
-            {"user_id": "u1", "region_slug": "nowhere"},
-            {"user_id": "u2", "region_slug": "lazio"},
-        ]
-    )
-    settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
-        top_k=5,
-    )
-    published: list[pd.DataFrame] = []
-
-    class _Legacy:
-        def connect(self) -> None:
-            return None
-
-        def publish(self, df: pd.DataFrame) -> None:
-            published.append(df.copy())
-
-        def close(self) -> None:
-            return None
-
-    applied = IncrementalUpdater(
-        sink=build_output_sink(settings.output),
-        output_settings=settings.output,
-        feature_config=scoped,
-        top_k=5,
-        items_provider=lambda: items,
-        users_provider=lambda: users,
-        publisher=_Legacy(),
-    ).apply(
-        [
-            normalize_event(event_payload(user_id="u1", item_id="i9", event_id="mix-tomb")),
-            normalize_event(event_payload(user_id="u2", item_id="i9", event_id="mix-keep")),
-        ]
-    )
-    assert applied == 2
-    assert len(published) == 1
-    assert set(published[0]["user_id"].astype(str)) == {"u2"}
-    frame = load_recommendations_frame(settings.output)
-    assert frame[frame["user_id"] == "u1"].empty
-    assert "i9" in set(frame[frame["user_id"] == "u2"]["item_id"].astype(str))
+    assert "oos" not in set(frame["item_id"].astype(str))
+    treatment = frame[(frame["user_id"] == "u1") & (frame["variant"] == "treatment")]
+    assert list(treatment["item_id"].astype(str)) == ["ok"]
 
 
 def test_incremental_updater_unknown_event_keeps_popular_only_user(tmp_path, feature_config: FeatureConfig):

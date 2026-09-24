@@ -138,12 +138,10 @@ def _variant_feature_configs(
 
 
 def _input_users_provider(settings: Settings) -> Callable[[], pd.DataFrame | None]:
-    source = build_input_source(settings.input)
-    snapshot = source.read_users()
+    snapshot = build_input_source(settings.input).read_users()
 
     def read_users() -> pd.DataFrame | None:
-        frame = source.read_users()
-        return snapshot if frame is None else frame
+        return snapshot
 
     return read_users
 

@@ -15,6 +15,7 @@ from cicerone.experiment.recipes import (
     CONTROL_NAME,
     TREATMENT_NAME,
     apply_recipe,
+    automl_challenger_pair,
     inherit_combiner,
     recipes_manifest_json,
     resolve_boost_policy,
@@ -106,6 +107,31 @@ def test_automl_challenger_uses_last_manifest_as_control() -> None:
     assert list(recipes[0].models) == ["collaborative", "popular"]
     assert recipes[0].weights == {"collaborative": 2.0, "popular": 1.0}
     assert list(recipes[1].models) == ["item_based", "popular"]
+
+
+def test_automl_challenger_pair_keeps_mixed_custom_names() -> None:
+    control, challenger = automl_challenger_pair(
+        (
+            VariantSettings(name="control", traffic=0.5),
+            VariantSettings(name="challenger", traffic=0.5),
+        )
+    )
+    assert (control.name, challenger.name) == ("control", "challenger")
+    champion, treatment = automl_challenger_pair(
+        (
+            VariantSettings(name="champion", traffic=0.4),
+            VariantSettings(name="treatment", traffic=0.6),
+        )
+    )
+    assert (champion.name, treatment.name) == ("champion", "treatment")
+    both = automl_challenger_pair(
+        (
+            VariantSettings(name="control", traffic=0.5),
+            VariantSettings(name="treatment", traffic=0.4),
+            VariantSettings(name="extra", traffic=0.1),
+        )
+    )
+    assert (both[0].name, both[1].name) == ("control", "treatment")
 
 
 def test_automl_challenger_keeps_configured_variant_names() -> None:

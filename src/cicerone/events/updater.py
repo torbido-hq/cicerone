@@ -30,7 +30,11 @@ from cicerone.io.recommendation_reader import SOURCE_COLUMN, USER_COLUMN
 from cicerone.io.recommendation_schema import recommendation_output_columns
 from cicerone.job_eval import PUBLISH_ERRORS, log_caught
 from cicerone.locks import LockLostError, WriterLockBusyError
-from cicerone.publish.base import RecommendationPublisher, publish_recommendations
+from cicerone.publish.base import (
+    RecommendationPublisher,
+    publish_recommendations,
+    require_incremental_publisher,
+)
 from cicerone.publish.sidecar import log_sidecar_generation_skip, sidecar_generation_current
 
 logger = logging.getLogger(__name__)
@@ -96,7 +100,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         self._variant_names = tuple(str(name) for name in variant_names)
         self._assign_variant = assign_variant
         self._explain_enabled = explain_enabled
-        self._publisher = publisher
+        self._publisher = require_incremental_publisher(publisher)
 
     @property
     def last_success_at(self) -> datetime | None:

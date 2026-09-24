@@ -25,6 +25,17 @@ class RecommendationPublisher(Protocol):
     def close(self) -> None: ...
 
 
+def require_incremental_publisher(
+    publisher: RecommendationPublisher | None,
+) -> RecommendationPublisher | None:
+    if publisher is None:
+        return None
+    publish = getattr(publisher, "publish", None)
+    if not callable(publish) or _publisher_accepts_user_ids(publish) is False:
+        raise TypeError("IncrementalUpdater publisher.publish must accept user_ids=")
+    return publisher
+
+
 def _publisher_accepts_user_ids(publish: object) -> bool | None:
     try:
         params = inspect.signature(publish).parameters  # type: ignore[arg-type]
