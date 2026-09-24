@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Protocol
 
 import pandas as pd
 
 from cicerone.io.recommendation_schema import USER_COLUMN
+
+_TOMBSTONE_PUBLISH_ERROR = "publisher.publish must accept user_ids= to emit empty recommendation lists"
 
 
 class PublishError(RuntimeError):
@@ -40,6 +42,23 @@ def _tombstone_user_ids(df: pd.DataFrame | None, user_ids: Sequence[str] | None)
     return [str(user_id) for user_id in dict.fromkeys(user_ids) if str(user_id) not in present]
 
 
+def _publish_without_user_ids(
+    publish: Callable[..., None],
+    df: pd.DataFrame,
+    tombstones: list[str],
+    *,
+    hide_cause: bool = False,
+) -> None:
+    if tombstones:
+        if df is not None and not df.empty:
+            publish(df)
+        error = PublishError(_TOMBSTONE_PUBLISH_ERROR)
+        if hide_cause:
+            raise error from None
+        raise error
+    publish(df)
+
+
 def publish_recommendations(
     publisher: RecommendationPublisher,
     df: pd.DataFrame,
@@ -48,8 +67,9 @@ def publish_recommendations(
 ) -> None:
     """Call ``publish``, passing ``user_ids`` only when the implementation accepts it.
 
-    Empty-list tombstones need ``user_ids``. A one-argument publisher cannot emit
-    them; this raises ``PublishError`` instead of publishing a no-op empty frame.
+    Empty-list tombstones need ``user_ids``. A one-argument publisher still
+    receives any non-empty frame, then this raises ``PublishError`` so mixed
+    flushes do not drop live lists.
     """
     publish = publisher.publish
     accepts = _publisher_accepts_user_ids(publish)
@@ -58,15 +78,9 @@ def publish_recommendations(
         publish(df, user_ids=user_ids)
         return
     if accepts is False:
-        if tombstones:
-            raise PublishError("publisher.publish must accept user_ids= to emit empty recommendation lists")
-        publish(df)
+        _publish_without_user_ids(publish, df, tombstones)
         return
     try:
         publish(df, user_ids=user_ids)
     except TypeError:
-        if tombstones:
-            raise PublishError(
-                "publisher.publish must accept user_ids= to emit empty recommendation lists"
-            ) from None
-        publish(df)
+        _publish_without_user_ids(publish, df, tombstones, hide_cause=True)

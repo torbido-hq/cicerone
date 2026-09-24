@@ -80,6 +80,26 @@ def test_publish_recommendations_rejects_legacy_when_tombstones_required() -> No
         publish_recommendations(_Legacy(), pd.DataFrame(), user_ids=["u1"])
 
 
+def test_publish_recommendations_publishes_nonempty_before_legacy_tombstone_error() -> None:
+    seen: list[pd.DataFrame] = []
+
+    class _Legacy:
+        def connect(self) -> None:
+            return None
+
+        def publish(self, df: pd.DataFrame) -> None:
+            seen.append(df.copy())
+
+        def close(self) -> None:
+            return None
+
+    frame = _recs_frame()
+    with pytest.raises(PublishError, match="user_ids"):
+        publish_recommendations(_Legacy(), frame, user_ids=["u1", "u2", "u3"])
+    assert len(seen) == 1
+    assert set(seen[0]["user_id"].astype(str)) == {"u1", "u2"}
+
+
 def test_user_recommendation_messages_user_ids_emit_empty_lists():
     messages = user_recommendation_messages(pd.DataFrame(), user_ids=["u1", "u2"])
     assert [user_id for user_id, _body, _message_id in messages] == ["u1", "u2"]
