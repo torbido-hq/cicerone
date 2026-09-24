@@ -194,7 +194,11 @@ class RedisLock:
         return value == token
 
     def is_locked(self) -> bool:
-        return bool(self._client.exists(self._key))
+        try:
+            return bool(self._client.exists(self._key))
+        except RedisError:
+            logger.exception("Redis lock is_locked() probe failed")
+            raise
 
     @property
     def hold_generation(self) -> int:
