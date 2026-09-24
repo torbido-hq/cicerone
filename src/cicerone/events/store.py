@@ -98,10 +98,7 @@ def load_items_catalog_size(output: IOSettings) -> int | None:
         except S3_READ_ERRORS as exc:
             if is_s3_not_found(exc):
                 return None
-            if not isinstance(exc, _CATALOG_READ_ERRORS):
-                raise
-            logger.exception("Failed to read items snapshot for experiment catalog size")
-            return None
+            raise
         except _CATALOG_READ_ERRORS:
             logger.exception("Failed to read items snapshot for experiment catalog size")
             return None

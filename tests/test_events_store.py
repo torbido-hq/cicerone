@@ -544,7 +544,8 @@ def test_load_items_catalog_size_backend_io_errors(tmp_path, monkeypatch):
         lambda *_args, **_kwargs: (_ for _ in ()).throw(BotoCoreError()),
     )
     monkeypatch.setattr("cicerone.events.store.is_s3_not_found", lambda _exc: False)
-    assert load_items_catalog_size(settings.output) is None
+    with pytest.raises(BotoCoreError):
+        load_items_catalog_size(settings.output)
     monkeypatch.setattr(
         "cicerone.events.store._read_parquet_columns",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(ArrowInvalid("corrupt parquet")),
@@ -572,7 +573,7 @@ def test_load_items_catalog_size_backend_io_errors(tmp_path, monkeypatch):
 
 
 def test_event_store_raises_unexpected_and_hard_s3(tmp_path, monkeypatch):
-    from botocore.exceptions import ClientError
+    from botocore.exceptions import BotoCoreError, ClientError
 
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
@@ -588,6 +589,13 @@ def test_event_store_raises_unexpected_and_hard_s3(tmp_path, monkeypatch):
         lambda *_args, **_kwargs: (_ for _ in ()).throw(denied),
     )
     with pytest.raises(ClientError):
+        load_items_catalog_size(settings.output)
+    monkeypatch.setattr(
+        "cicerone.events.store._read_parquet_columns",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(BotoCoreError()),
+    )
+    monkeypatch.setattr("cicerone.events.store.is_s3_not_found", lambda _exc: False)
+    with pytest.raises(BotoCoreError):
         load_items_catalog_size(settings.output)
     monkeypatch.undo()
 
