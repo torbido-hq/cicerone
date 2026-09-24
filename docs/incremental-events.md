@@ -246,8 +246,9 @@ of the session so a short session is not paired with the 3s client default.
 Missing `event_id`
 uses `{partition}-{offset}`. Manual commits of the contiguous watermark per
 partition (an out-of-order ack cannot skip an earlier offset). `nack`
-returns the batch to a local deque without committing. Raise
-`max_poll_interval_ms` if a flush can exceed the librdkafka default
+returns the batch to a local deque without committing. Fetch uses
+`consume()` (non-blocking). Librdkafka session heartbeats cover apply;
+raise `max_poll_interval_ms` if a flush can exceed the librdkafka default
 (~5 minutes). Requires `pip install 'cicerone-recommender[kafka]'`
 or `pip install -r requirements-kafka.txt`.
 
