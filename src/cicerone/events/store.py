@@ -16,7 +16,6 @@ from cicerone.io.db_errors import SQL_READ_ERRORS, is_missing_column_error, is_m
 from cicerone.io.db_store import (
     DEFAULT_RECOMMENDATION_ITEMS_TABLE,
     DEFAULT_RECOMMENDATIONS_TABLE,
-    MISSING_TABLE_ERRORS,
 )
 from cicerone.io.engines import dispose_engines, engine_for, release_engine
 from cicerone.io.options import is_s3_not_found, read_parquet, require_option, sql_identifier
@@ -68,13 +67,27 @@ def _empty_on_schema_mismatch(frame: pd.DataFrame) -> pd.DataFrame:
         return empty_recommendations_frame()
 
 
+def _is_parquet_projection_error(exc: BaseException, columns: Sequence[str]) -> bool:
+    if isinstance(exc, (ArrowInvalid, ArrowNotImplementedError)):
+        return True
+    message = str(exc).lower()
+    return (
+        any(str(column).lower() in message for column in columns)
+        or "fieldref" in message
+        or "column" in message
+        or "projection" in message
+    )
+
+
 def _read_parquet_columns(output: IOSettings, filename: str, columns: Sequence[str]) -> pd.DataFrame:
     try:
         return read_parquet(output.options, filename, columns=list(columns))
     except FileNotFoundError:
         raise
-    except _PARQUET_PROJECTION_ERRORS:
-        return read_parquet(output.options, filename)
+    except _PARQUET_PROJECTION_ERRORS as exc:
+        if _is_parquet_projection_error(exc, columns):
+            return read_parquet(output.options, filename)
+        raise
 
 
 def _project_columns(frame: pd.DataFrame, columns: Sequence[str]) -> pd.DataFrame:
@@ -150,18 +163,13 @@ def load_recommendation_guardrail_rows(output: IOSettings) -> pd.DataFrame | Non
                 try:
                     loaded = pd.read_sql_query(text(f"SELECT {quoted} FROM {table}"), engine)
                     break
-                except MISSING_TABLE_ERRORS as exc:
+                except SQL_READ_ERRORS as exc:
                     last_exc = exc
                     if is_missing_column_error(exc):
                         continue
                     mapped = _empty_frame_from_db_error(exc, table=table)
                     if mapped is not None:
                         return mapped
-                    raise
-                except SQL_READ_ERRORS as exc:
-                    last_exc = exc
-                    if is_missing_column_error(exc):
-                        continue
                     raise
         finally:
             release_engine(url)
@@ -263,7 +271,7 @@ def _load_db_recommendations(output: IOSettings, *, user_ids: Collection[str] | 
                 bindparam("user_ids", expanding=True)
             )
             frame = pd.read_sql_query(stmt, engine, params={"user_ids": ids})
-    except MISSING_TABLE_ERRORS as exc:
+    except SQL_READ_ERRORS as exc:
         empty = _empty_frame_from_db_error(exc, table=table)
         if empty is not None:
             return empty
@@ -311,6 +319,14 @@ def count_recommendation_users(output: IOSettings) -> int:
                 return 0
             raise
         except _PARQUET_PROJECTION_ERRORS as exc:
+            if isinstance(exc, ArrowNotImplementedError):
+                logger.warning(
+                    "Recommendations column projection failed; falling back to full-file load: %s", exc
+                )
+                frame = _load_dataset_recommendations(output)
+                if frame.empty or USER_COLUMN not in frame.columns:
+                    return 0
+                return int(frame[USER_COLUMN].astype(str).nunique())
             message = str(exc).lower()
             if USER_COLUMN in message or "fieldref" in message:
                 logger.warning(
@@ -329,7 +345,7 @@ def count_recommendation_users(output: IOSettings) -> int:
         try:
             with engine.connect() as conn:
                 value = conn.execute(text(f"SELECT COUNT(DISTINCT {user_col}) FROM {table}")).scalar()
-        except MISSING_TABLE_ERRORS as exc:
+        except SQL_READ_ERRORS as exc:
             zero = _zero_from_db_error(exc, table=table)
             if zero is not None:
                 return zero
