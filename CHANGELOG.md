@@ -26,9 +26,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Incremental sidecar must not retry publish after an ambiguous TypeError.
   A post-write publisher TypeError is a sidecar failure and does not nack
   the already-applied flush.
-- Incremental recommendation loads only treat SQL, S3, and parquet
-  projection errors as a missing catalog or empty frame. Unexpected
-  exceptions still raise.
+- Incremental recommendation loads only treat missing objects, missing
+  tables or columns, and parquet projection or schema errors as empty.
+  Hard S3, local I/O, and unexpected exceptions still raise.
 - Postgres and Redis lock probes only treat SQL or Redis errors as a
   lost or busy lock. Unexpected exceptions still raise.
 - Production replay scores impression lists when track rows exist, and

@@ -6,10 +6,8 @@ import logging
 from collections.abc import Collection, Sequence
 
 import pandas as pd
-from botocore.exceptions import BotoCoreError
-from pyarrow.lib import ArrowInvalid
+from pyarrow.lib import ArrowInvalid, ArrowNotImplementedError
 from sqlalchemy import Engine, bindparam, text
-from sqlalchemy.exc import SQLAlchemyError
 
 from cicerone.config import IOSettings
 from cicerone.io import engines as _io_engines
@@ -37,8 +35,8 @@ _engines = _io_engines._engines
 
 logger = logging.getLogger(__name__)
 
-_CATALOG_READ_ERRORS = (OSError, ValueError, TypeError, SQLAlchemyError, BotoCoreError, ArrowInvalid)
-_PARQUET_PROJECTION_ERRORS = (OSError, ValueError, TypeError, ArrowInvalid)
+_CATALOG_SOFT_ERRORS = (ArrowInvalid,)
+_PARQUET_PROJECTION_ERRORS = (ValueError, TypeError, ArrowInvalid, ArrowNotImplementedError)
 
 GUARDRAIL_COLUMNS: tuple[str, ...] = (USER_COLUMN, ITEM_COLUMN, SOURCE_COLUMN, VARIANT_COLUMN)
 
@@ -99,7 +97,7 @@ def load_items_catalog_size(output: IOSettings) -> int | None:
             if is_s3_not_found(exc):
                 return None
             raise
-        except _CATALOG_READ_ERRORS:
+        except _CATALOG_SOFT_ERRORS:
             logger.exception("Failed to read items snapshot for experiment catalog size")
             return None
         if frame.empty or ITEM_COLUMN not in frame.columns:
@@ -118,10 +116,7 @@ def load_items_catalog_size(output: IOSettings) -> int | None:
         except SQL_READ_ERRORS as exc:
             if is_missing_table_error(exc) or is_missing_column_error(exc):
                 return None
-            if not isinstance(exc, _CATALOG_READ_ERRORS):
-                raise
-            logger.exception("Failed to count items snapshot for experiment catalog size")
-            return None
+            raise
         finally:
             release_engine(url)
         return int(value or 0)
@@ -229,7 +224,12 @@ def _load_dataset_recommendations_for_users(output: IOSettings, user_ids: list[s
         raise
     except _PARQUET_PROJECTION_ERRORS as exc:
         message = str(exc).lower()
-        if USER_COLUMN in message or "fieldref" in message or "filter" in message:
+        if (
+            isinstance(exc, ArrowNotImplementedError)
+            or USER_COLUMN in message
+            or "fieldref" in message
+            or "filter" in message
+        ):
             logger.warning("Filtered recommendations read failed; falling back to full-file load: %s", exc)
             frame = _load_dataset_recommendations(output)
             if frame.empty:

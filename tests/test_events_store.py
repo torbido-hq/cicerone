@@ -441,7 +441,14 @@ def test_load_items_catalog_size_empty_and_read_errors(tmp_path, monkeypatch):
         lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("boom")),
     )
     monkeypatch.setattr("cicerone.events.store.is_s3_not_found", lambda _exc: False)
-    assert load_items_catalog_size(settings.output) is None
+    with pytest.raises(OSError, match="boom"):
+        load_items_catalog_size(settings.output)
+    monkeypatch.setattr(
+        "cicerone.events.store._read_parquet_columns",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("Stored object is 9 bytes; max is 8")),
+    )
+    with pytest.raises(ValueError, match="Stored object"):
+        load_items_catalog_size(settings.output)
     monkeypatch.setattr(
         "cicerone.events.store._read_parquet_columns",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
@@ -562,14 +569,16 @@ def test_load_items_catalog_size_backend_io_errors(tmp_path, monkeypatch):
     monkeypatch.setattr("cicerone.events.store._engine_for", lambda _url: _Engine())
     monkeypatch.setattr("cicerone.events.store.is_missing_table_error", lambda _exc: False)
     monkeypatch.setattr("cicerone.events.store.is_missing_column_error", lambda _exc: False)
-    assert load_items_catalog_size(output) is None
+    with pytest.raises(SQLAlchemyError, match="engine"):
+        load_items_catalog_size(output)
 
     class _Busy:
         def connect(self):
             raise OperationalError("SELECT 1", {}, Exception("connection refused"))
 
     monkeypatch.setattr("cicerone.events.store._engine_for", lambda _url: _Busy())
-    assert load_items_catalog_size(output) is None
+    with pytest.raises(OperationalError, match="connection refused"):
+        load_items_catalog_size(output)
 
 
 def test_event_store_raises_unexpected_and_hard_s3(tmp_path, monkeypatch):
@@ -619,3 +628,27 @@ def test_event_store_raises_unexpected_and_hard_s3(tmp_path, monkeypatch):
 
     with pytest.raises(RuntimeError, match="filter boom"):
         load_recommendations_for_users(settings.output, ["u1"])
+
+
+def test_load_recommendations_for_users_arrow_not_implemented_fallback(tmp_path, monkeypatch):
+    from pyarrow.lib import ArrowNotImplementedError
+
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"},
+            {"user_id": "u2", "item_id": "i2", "rank": 1, "score": 0.5, "source": "personalized"},
+        ]
+    ).to_parquet(tmp_path / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    )
+    real = __import__("cicerone.io.options", fromlist=["read_parquet"]).read_parquet
+
+    def _fail_filters(options, filename, *, s3_client=None, columns=None, filters=None):
+        if filters is not None:
+            raise ArrowNotImplementedError("filter kernel")
+        return real(options, filename, s3_client=s3_client, columns=columns, filters=filters)
+
+    monkeypatch.setattr("cicerone.events.store.read_parquet", _fail_filters)
+    frame = load_recommendations_for_users(settings.output, ["u2"])
+    assert list(frame["user_id"]) == ["u2"]
