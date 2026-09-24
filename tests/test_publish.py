@@ -60,9 +60,24 @@ def test_publish_recommendations_skips_user_ids_for_legacy_publishers() -> None:
         def close(self) -> None:
             return None
 
-    frame = pd.DataFrame()
-    publish_recommendations(_Legacy(), frame, user_ids=["u1"])
+    frame = _recs_frame()
+    publish_recommendations(_Legacy(), frame, user_ids=["u1", "u2"])
     assert seen == [frame]
+
+
+def test_publish_recommendations_rejects_legacy_when_tombstones_required() -> None:
+    class _Legacy:
+        def connect(self) -> None:
+            return None
+
+        def publish(self, df: pd.DataFrame) -> None:
+            raise AssertionError("legacy publish must not drop tombstones")
+
+        def close(self) -> None:
+            return None
+
+    with pytest.raises(PublishError, match="user_ids"):
+        publish_recommendations(_Legacy(), pd.DataFrame(), user_ids=["u1"])
 
 
 def test_user_recommendation_messages_user_ids_emit_empty_lists():
