@@ -875,6 +875,24 @@ def test_redis_owned_and_is_locked(monkeypatch):
     lock.release()
 
 
+def test_redis_is_locked_raises_on_redis_error(monkeypatch):
+    client = _mock_redis_module(monkeypatch)
+    client.exists.side_effect = RedisError("redis down")
+
+    lock = RedisLock("redis://localhost:6379/0")
+    with pytest.raises(RedisError, match="redis down"):
+        lock.is_locked()
+
+
+def test_redis_is_locked_raises_unexpected(monkeypatch):
+    client = _mock_redis_module(monkeypatch)
+    client.exists.side_effect = RuntimeError("redis down")
+
+    lock = RedisLock("redis://localhost:6379/0")
+    with pytest.raises(RuntimeError, match="redis down"):
+        lock.is_locked()
+
+
 def test_redis_owned_raises_unexpected(monkeypatch):
     client = _mock_redis_module(monkeypatch)
     client.set.return_value = True
