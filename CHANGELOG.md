@@ -16,8 +16,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   deleted and empty sidecar lists are published for those users (users with
   no prior list and no ranking signal stay a no-op; a new user whose
   ranking signal is fully filtered still gets an empty sidecar list).
-  Incremental sidecar publish requires ``publish(..., user_ids=)``; batch job
-  publish is unchanged. Batch popular/latest and
+  Incremental sidecar publish requires a keyword ``user_ids=`` parameter; batch
+  job publish is unchanged. A flush with no ranking signal keeps the prior
+  list, including ``incremental`` rows (eligibility still trims). Batch popular/latest and
   `__cold_start__` stay instead of being replaced by the current flush.
   AutoML challenger arms resolve eligibility and batch recipes under the two
   configured names (or ``control``/``treatment`` when those both exist),

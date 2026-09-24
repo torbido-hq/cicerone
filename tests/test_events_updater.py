@@ -2095,3 +2095,71 @@ def test_incremental_updater_uses_per_variant_eligibility(tmp_path, feature_conf
     treatment_items = set(u1[u1["variant"] == "treatment"]["item_id"].astype(str))
     assert "oos" in control_items
     assert "oos" not in treatment_items
+
+
+def test_incremental_updater_keeps_incremental_list_on_unknown_event(
+    tmp_path, feature_config: FeatureConfig
+) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "boosted",
+                "rank": 1,
+                "score": 2.0,
+                "source": INCREMENTAL_SOURCE,
+            }
+        ]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+    ).apply(
+        [normalize_event(event_payload(user_id="u1", item_id="boosted", event_type="unknown", event_id="z1"))]
+    )
+    u1 = load_recommendations_frame(settings.output)
+    u1 = u1[u1["user_id"] == "u1"]
+    assert list(u1["item_id"].astype(str)) == ["boosted"]
+    assert list(u1["source"].astype(str)) == [INCREMENTAL_SOURCE]
+
+
+def test_incremental_updater_unknown_event_deletes_ineligible_incremental_list(
+    tmp_path, feature_config: FeatureConfig
+) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "oos",
+                "rank": 1,
+                "score": 2.0,
+                "source": INCREMENTAL_SOURCE,
+            }
+        ]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    items = pd.DataFrame([{"item_id": "oos", "published": True, "in_stock": False}])
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        items_provider=lambda: items,
+    ).apply(
+        [normalize_event(event_payload(user_id="u1", item_id="oos", event_type="unknown", event_id="z2"))]
+    )
+    frame = load_recommendations_frame(settings.output)
+    assert frame.empty or "u1" not in set(frame["user_id"].astype(str))
