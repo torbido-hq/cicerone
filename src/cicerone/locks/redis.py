@@ -5,9 +5,21 @@ from __future__ import annotations
 import logging
 import threading
 import uuid
+from typing import TYPE_CHECKING
 
 from cicerone.config.constants import DEFAULT_LOCK_KEY, ConfigError
 from cicerone.locks.keys import REDIS_LOCK_TTL_MS
+
+if TYPE_CHECKING:
+    from redis.exceptions import RedisError
+else:
+    try:
+        from redis.exceptions import RedisError
+    except ImportError:
+
+        class RedisError(Exception):
+            pass
+
 
 logger = logging.getLogger(__name__)
 
@@ -93,24 +105,30 @@ class RedisLock:
             self._stop_refresh.clear()
 
             def _run() -> None:
-                while not self._stop_refresh.wait(self._refresh_interval_ms / 1000.0):
-                    with self._mutex:
-                        if not self._held or self._hold_generation != generation:
-                            break
-                        token = self._token
-                    try:
-                        if not self._refresh_script(keys=[self._key], args=[token, self._ttl_ms]):
-                            # Intentional release sets stop before clearing hold; skip _mark_lost.
+                try:
+                    while not self._stop_refresh.wait(self._refresh_interval_ms / 1000.0):
+                        with self._mutex:
+                            if not self._held or self._hold_generation != generation:
+                                break
+                            token = self._token
+                        try:
+                            if not self._refresh_script(keys=[self._key], args=[token, self._ttl_ms]):
+                                # Intentional release sets stop before clearing hold; skip _mark_lost.
+                                if self._stop_refresh.is_set():
+                                    break
+                                self._mark_lost(generation)
+                                break
+                        except RedisError:
                             if self._stop_refresh.is_set():
                                 break
+                            logger.exception("Failed to refresh Redis lock TTL")
                             self._mark_lost(generation)
                             break
-                    except Exception:
-                        if self._stop_refresh.is_set():
-                            break
-                        logger.exception("Failed to refresh Redis lock TTL")
+                except Exception:
+                    logger.exception("Unexpected Redis lock refresh failure")
+                finally:
+                    if not self._stop_refresh.is_set():
                         self._mark_lost(generation)
-                        break
 
             self._refresh_thread = threading.Thread(
                 target=_run,
@@ -150,7 +168,7 @@ class RedisLock:
         if generation is None:
             try:
                 self._release_script(keys=[self._key], args=[token])
-            except Exception:
+            except RedisError:
                 logger.exception("Failed to release stale Redis lock token")
             return None
         self._start_refresh(generation)
@@ -168,7 +186,7 @@ class RedisLock:
             token = self._token
         try:
             value = self._client.get(self._key)
-        except Exception:
+        except RedisError:
             logger.warning("Redis lock owned() probe failed; treating as lost", exc_info=True)
             return False
         if isinstance(value, bytes):
@@ -176,7 +194,11 @@ class RedisLock:
         return value == token
 
     def is_locked(self) -> bool:
-        return bool(self._client.exists(self._key))
+        try:
+            return bool(self._client.exists(self._key))
+        except RedisError:
+            logger.exception("Redis lock is_locked() probe failed")
+            raise
 
     @property
     def hold_generation(self) -> int:
@@ -205,5 +227,5 @@ class RedisLock:
             return
         try:
             self._release_script(keys=[self._key], args=[token])
-        except Exception:
+        except RedisError:
             logger.exception("Failed to release Redis lock")
