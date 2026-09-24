@@ -10,6 +10,7 @@ from support.fake_rabbitmq import FakeChannel, install_fake_rabbitmq
 
 from cicerone.config import ConfigError, IOSettings, PublishSettings, make_settings
 from cicerone.events.normalize import normalize_event
+from cicerone.events.store import load_recommendations_frame
 from cicerone.events.updater import IncrementalUpdater
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.factory import build_output_sink
@@ -116,8 +117,9 @@ def test_publish_recommendations_does_not_retry_uninspectable_typeerror(monkeypa
 
     monkeypatch.setattr("cicerone.publish.base.inspect.signature", lambda _fn: None)
     frame = _recs_frame()
-    with pytest.raises(TypeError, match="payload invalid after send"):
+    with pytest.raises(PublishError, match="payload invalid after send") as raised:
         publish_recommendations(_Uninspectable(), frame, user_ids=["u1", "u2"])
+    assert isinstance(raised.value.__cause__, TypeError)
     assert len(calls) == 1
     published, user_ids = calls[0]
     assert published is frame
@@ -404,6 +406,43 @@ def test_updater_publishes_after_replace(tmp_path, feature_config: FeatureConfig
     assert updater.apply(events) == 1
     assert len(captured) == 1
     assert "u1" in set(captured[0]["user_id"].astype(str))
+
+
+def test_updater_does_not_nack_after_publish_typeerror(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    calls: list[object] = []
+
+    class _Pub:
+        def connect(self) -> None:
+            return None
+
+        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
+            calls.append((df.copy(), user_ids))
+            raise TypeError("payload invalid after send")
+
+        def close(self) -> None:
+            return None
+
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        publisher=_Pub(),
+    )
+    events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
+    assert updater.apply(events) == 1
+    assert len(calls) == 1
+    written = load_recommendations_frame(settings.output)
+    assert "i9" in set(written[written["user_id"] == "u1"]["item_id"].astype(str))
 
 
 def test_kafka_publisher_not_connected():

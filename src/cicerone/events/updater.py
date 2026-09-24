@@ -39,6 +39,8 @@ from cicerone.publish.sidecar import log_sidecar_generation_skip, sidecar_genera
 
 logger = logging.getLogger(__name__)
 
+_SIDECAR_PUBLISH_ERRORS: tuple[type[BaseException], ...] = (*PUBLISH_ERRORS, TypeError)
+
 # Bound in-process per-user frames for long-lived serve workers.
 DEFAULT_USER_CACHE_MAX_SIZE = 2048
 
@@ -256,7 +258,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
                 log_sidecar_generation_skip(current, incremental=True)
         except (LockLostError, WriterLockBusyError):
             raise
-        except PUBLISH_ERRORS as exc:
+        except _SIDECAR_PUBLISH_ERRORS as exc:
             log_caught("Incremental publish failed after successful write", exc, log=logger)
 
     def _merge_affected(

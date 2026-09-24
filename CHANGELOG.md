@@ -23,6 +23,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   configured names (or ``control``/``treatment`` when those both exist),
   without a model pick.
 - Incremental sidecar must not retry publish after an ambiguous TypeError.
+  A post-write publisher TypeError is a sidecar failure and does not nack
+  the already-applied flush.
 - Postgres and Redis lock probes only treat SQL or Redis errors as a
   lost or busy lock. Unexpected exceptions still raise.
 - Production replay scores impression lists when track rows exist, and

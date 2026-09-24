@@ -81,10 +81,15 @@ def publish_recommendations(
     this raises ``PublishError`` so mixed flushes do not drop live lists.
     When the signature cannot be inspected, ``user_ids`` is passed once; a
     ``TypeError`` from that call is not retried as a one-argument fallback.
+    That ``TypeError`` is raised as ``PublishError`` so incremental write
+    treats it as a non-retryable sidecar failure.
     """
     publish = publisher.publish
     accepts = _publisher_accepts_user_ids(publish)
     if accepts is False:
         _publish_without_user_ids(publish, df, _tombstone_user_ids(df, user_ids))
         return
-    publish(df, user_ids=user_ids)
+    try:
+        publish(df, user_ids=user_ids)
+    except TypeError as exc:
+        raise PublishError(str(exc) or "publisher.publish failed") from exc
