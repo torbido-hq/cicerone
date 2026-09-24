@@ -447,6 +447,32 @@ def test_redis_lock_marks_lost_on_refresh_redis_error(monkeypatch):
     lock.release()
 
 
+def test_redis_lock_marks_lost_on_unexpected_refresh_error(monkeypatch):
+    client = _mock_redis_module(monkeypatch)
+    client.set.return_value = True
+    client.refresh_script.side_effect = RuntimeError("ttl refresh failed")
+
+    lock = RedisLock(
+        "redis://localhost:6379/0",
+        ttl_ms=200,
+        refresh_interval_ms=1,
+    )
+    lost = threading.Event()
+    real_mark_lost = lock._mark_lost
+
+    def mark_lost(generation: int | None = None) -> None:
+        real_mark_lost(generation)
+        lost.set()
+
+    lock._mark_lost = mark_lost  # type: ignore[method-assign]
+
+    assert lock.acquire() is True
+    _wait_for_event(lost)
+    assert lock._held is False
+    assert lock.acquire() is True
+    lock.release()
+
+
 def test_redis_acquire_starts_new_refresher_after_release(monkeypatch):
     client = _mock_redis_module(monkeypatch)
     client.set.return_value = True
