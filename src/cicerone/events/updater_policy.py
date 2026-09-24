@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 import pandas as pd
 
@@ -16,6 +16,16 @@ from cicerone.policy.eligibility import (
     is_user_scoped,
     resolve_eligibility,
 )
+
+
+def incremental_needs_users_frame(
+    feature_config: FeatureConfig | None,
+    variant_feature_configs: Mapping[str, FeatureConfig] | None = None,
+) -> bool:
+    configs = [feature_config, *(variant_feature_configs or {}).values()]
+    return any(
+        config is not None and has_user_scoped_eligibility(resolve_eligibility(config)) for config in configs
+    )
 
 
 def incremental_allowlists(
@@ -34,7 +44,7 @@ def incremental_allowlists(
     if not rules:
         return open_map
     apply_rules = list(rules)
-    if has_user_scoped_eligibility(rules) and (users is None or users.empty):
+    if has_user_scoped_eligibility(rules) and users is None:
         apply_rules = [rule for rule in rules if not is_user_scoped(rule)]
         if not apply_rules:
             return open_map
