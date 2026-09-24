@@ -20,7 +20,7 @@ The incremental path injects recency boosts and may backfill popular / latest
 slots for affected users. Those injects use the items-snapshot eligibility
 allowlist (availability always; user-scoped rules from the input users
 frame — an empty users table still applies missing-user handling, and
-serve reads that frame only when a recipe is user-scoped). A list that
+serve reads that frame only when an applied recipe is user-scoped). A list that
 filters to empty is deleted, and the publish sidecar
 emits an empty-list message for each cleared user (the publisher must
 accept `user_ids=`). Batch popular / latest

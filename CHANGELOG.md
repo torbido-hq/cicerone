@@ -11,7 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Incremental write-through applies the items-snapshot eligibility allowlist
   per experiment recipe (user-scoped rules use the input users frame; an
   empty users table still applies missing-user handling). Serve reads that
-  frame only when a recipe is user-scoped. Lists that filter to empty are
+  frame only when an applied recipe is user-scoped (experiment arms when
+  an experiment is on). Lists that filter to empty are
   deleted and empty sidecar lists are published for those users (users with
   no prior list and no ranking signal stay a no-op; a new user whose
   ranking signal is fully filtered still gets an empty sidecar list).

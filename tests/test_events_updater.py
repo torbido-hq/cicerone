@@ -14,7 +14,7 @@ from cicerone.events.normalize import normalize_event
 from cicerone.events.online_result import OnlineRefreshResult, empty_online_rows
 from cicerone.events.store import load_recommendations_for_users, load_recommendations_frame
 from cicerone.events.updater import INCREMENTAL_SOURCE, IncrementalUpdater
-from cicerone.events.updater_policy import incremental_allowlists
+from cicerone.events.updater_policy import incremental_allowlists, incremental_needs_users_frame
 from cicerone.feature_config import EligibilityRule, FeatureConfig
 from cicerone.io.factory import build_output_sink
 from cicerone.io.recommendation_reader import RECOMMENDATION_COLUMNS
@@ -1633,6 +1633,24 @@ def test_incremental_allowlists_user_scoped_when_users_present(feature_config: F
     assert without_users["u1"] == frozenset({"ok", "other"})
     empty_users = incremental_allowlists(["u1"], feature_config=scoped, items=items, users=pd.DataFrame())
     assert empty_users["u1"] == frozenset()
+
+
+def test_incremental_needs_users_frame_uses_applied_variant_recipes(feature_config: FeatureConfig) -> None:
+    scoped = replace(
+        feature_config,
+        eligibility=[
+            EligibilityRule(
+                name="region",
+                op="eq",
+                item_column="region_slug",
+                user_column="region_slug",
+            )
+        ],
+    )
+    open_cfg = replace(feature_config, eligibility=[], merge_item_availability=False)
+    assert incremental_needs_users_frame(scoped) is True
+    assert incremental_needs_users_frame(scoped, {"control": open_cfg, "treatment": open_cfg}) is False
+    assert incremental_needs_users_frame(scoped, {"control": open_cfg, "treatment": scoped}) is True
 
 
 def test_incremental_updater_deletes_user_when_allowlist_empties_list(
