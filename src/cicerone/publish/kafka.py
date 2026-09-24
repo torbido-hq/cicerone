@@ -46,7 +46,13 @@ class KafkaPublisher:
             raise _missing_extra() from exc
         producer = None
         try:
-            producer = Producer(self._conf)
+            producer = Producer(
+                {
+                    **self._conf,
+                    "enable.idempotence": True,
+                    "acks": "all",
+                }
+            )
             producer.list_topics(timeout=self._timeout_seconds)
         except Exception as exc:
             if producer is not None:
