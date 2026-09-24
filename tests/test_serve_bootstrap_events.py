@@ -260,6 +260,64 @@ def test_start_events_runtime_skips_users_provider_without_user_scoped_rules(
         runtime.stop()
 
 
+def test_start_events_runtime_skips_users_when_variants_are_not_user_scoped(
+    tmp_path, feature_config: FeatureConfig, monkeypatch
+):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+
+    class _Reader:
+        def refresh(self) -> None:
+            return None
+
+    def _fail_build(_input):
+        raise AssertionError("input users must not be read when experiment arms are not user-scoped")
+
+    monkeypatch.setattr("cicerone.serve.bootstrap_events.build_input_source", _fail_build)
+    scoped = replace(
+        feature_config,
+        eligibility=[
+            EligibilityRule(
+                name="region",
+                op="eq",
+                item_column="region_slug",
+                user_column="region_slug",
+            )
+        ],
+    )
+    runtime = start_events_runtime(
+        make_settings(
+            output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+            events=EventsSettings(
+                enabled=True,
+                kind="webhook",
+                incremental=EventsIncrementalSettings(
+                    batch_size=1, batch_window_seconds=60.0, poll_interval_seconds=0.05
+                ),
+            ),
+            experiment=ExperimentSettings(
+                enabled=True,
+                id="ab",
+                variants=(
+                    VariantSettings(name="control", traffic=0.5, eligibility=False),
+                    VariantSettings(name="treatment", traffic=0.5, eligibility=False),
+                ),
+            ),
+        ),
+        feature_config=scoped,
+        reader=_Reader(),  # type: ignore[arg-type]
+        start_worker=False,
+    )
+    try:
+        assert runtime.worker is not None
+        assert runtime.worker._updater._users_provider is None
+    finally:
+        runtime.stop()
+
+
 def test_input_users_provider_falls_back_to_bootstrap_snapshot(monkeypatch) -> None:
     frames = iter([pd.DataFrame([{"user_id": "u1", "region_slug": "lazio"}]), None])
 

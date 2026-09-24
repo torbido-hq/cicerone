@@ -22,7 +22,7 @@ def incremental_needs_users_frame(
     feature_config: FeatureConfig | None,
     variant_feature_configs: Mapping[str, FeatureConfig] | None = None,
 ) -> bool:
-    configs = [feature_config, *(variant_feature_configs or {}).values()]
+    configs = list((variant_feature_configs or {}).values()) or [feature_config]
     return any(
         config is not None and has_user_scoped_eligibility(resolve_eligibility(config)) for config in configs
     )
