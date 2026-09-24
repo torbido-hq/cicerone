@@ -20,7 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   tombstones require ``publish(..., user_ids=)``. Batch popular/latest and
   `__cold_start__` stay instead of being replaced by the current flush.
   AutoML challenger arms (including custom-named variants) resolve eligibility
-  without a model pick.
+  and batch recipes under those names, without a model pick.
 - Postgres and Redis lock probes only treat SQL or Redis errors as a
   lost or busy lock. Unexpected exceptions still raise.
 - Production replay scores impression lists when track rows exist, and
