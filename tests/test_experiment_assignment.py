@@ -108,6 +108,18 @@ def test_experiment_variant_names_challenger_defaults() -> None:
     experiment_id, variant = resolve_assignment(custom, "u1")
     assert experiment_id == "auto"
     assert variant in {"champion", "challenger"}
+    mixed = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="auto",
+            automl_challenger=True,
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="challenger", traffic=0.5),
+            ),
+        )
+    )
+    assert experiment_variant_names(mixed) == ("control", "challenger")
     enabled_empty = make_settings(experiment=ExperimentSettings(enabled=True, id="exp"))
     assert experiment_variant_names(enabled_empty) == ()
 
