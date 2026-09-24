@@ -7,6 +7,7 @@ import time
 from unittest.mock import MagicMock
 
 import pytest
+from sqlalchemy.exc import OperationalError
 
 from cicerone import locks as locks_mod
 from cicerone.config import (
@@ -32,6 +33,7 @@ from cicerone.locks import (
     has_distributed_lock,
     held_writer_lock,
 )
+from cicerone.locks.redis import RedisError
 from cicerone.trigger import RunGuard
 
 
@@ -347,11 +349,23 @@ def test_redis_release_when_not_held(monkeypatch):
 def test_redis_release_logs_on_failure(monkeypatch):
     client = _mock_redis_module(monkeypatch)
     client.set.return_value = True
-    client.release_script.side_effect = RuntimeError("boom")
+    client.release_script.side_effect = RedisError("boom")
 
     lock = RedisLock("redis://localhost:6379/0")
     assert lock.acquire() is True
     lock.release()
+    assert lock._held is False
+
+
+def test_redis_release_raises_unexpected(monkeypatch):
+    client = _mock_redis_module(monkeypatch)
+    client.set.return_value = True
+    client.release_script.side_effect = RuntimeError("boom")
+
+    lock = RedisLock("redis://localhost:6379/0")
+    assert lock.acquire() is True
+    with pytest.raises(RuntimeError, match="boom"):
+        lock.release()
     assert lock._held is False
 
 
@@ -403,6 +417,32 @@ def test_redis_lock_allows_reacquire_after_refresh_loss(monkeypatch):
     _wait_for_event(lost)
     assert lock._held is False
     assert lock._token != first_token
+    assert lock.acquire() is True
+    lock.release()
+
+
+def test_redis_lock_marks_lost_on_refresh_redis_error(monkeypatch):
+    client = _mock_redis_module(monkeypatch)
+    client.set.return_value = True
+    client.refresh_script.side_effect = RedisError("ttl refresh failed")
+
+    lock = RedisLock(
+        "redis://localhost:6379/0",
+        ttl_ms=200,
+        refresh_interval_ms=1,
+    )
+    lost = threading.Event()
+    real_mark_lost = lock._mark_lost
+
+    def mark_lost(generation: int | None = None) -> None:
+        real_mark_lost(generation)
+        lost.set()
+
+    lock._mark_lost = mark_lost  # type: ignore[method-assign]
+
+    assert lock.acquire() is True
+    _wait_for_event(lost)
+    assert lock._held is False
     assert lock.acquire() is True
     lock.release()
 
@@ -479,11 +519,30 @@ def test_redis_stale_token_release_failure_is_logged(monkeypatch, caplog):
         return True
 
     client.set.side_effect = _set
-    client.release_script.side_effect = RuntimeError("boom")
+    client.release_script.side_effect = RedisError("boom")
     with caplog.at_level("ERROR"):
         assert lock.try_acquire() is None
     assert lock._held is False
     assert "Failed to release stale Redis lock token" in caplog.text
+
+
+def test_redis_stale_token_release_raises_unexpected(monkeypatch):
+    client = _mock_redis_module(monkeypatch)
+    lock = RedisLock(
+        "redis://localhost:6379/0",
+        ttl_ms=200,
+        refresh_interval_ms=10_000,
+    )
+
+    def _set(*_args, **_kwargs):
+        lock._mark_lost()
+        return True
+
+    client.set.side_effect = _set
+    client.release_script.side_effect = RuntimeError("boom")
+    with pytest.raises(RuntimeError, match="boom"):
+        lock.try_acquire()
+    assert lock._held is False
 
 
 def test_redis_stale_start_refresh_does_not_stop_new_holder(monkeypatch):
@@ -701,8 +760,23 @@ def test_postgres_advisory_lock_release_error(monkeypatch):
 
     lock = PostgresAdvisoryLock("postgresql+psycopg://u:p@h/db")
     assert lock.acquire() is True
-    conn.execute.side_effect = RuntimeError("unlock failed")
+    conn.execute.side_effect = OperationalError("unlock failed", None, None)
     lock.release()
+    assert lock._conn is None
+
+
+def test_postgres_advisory_lock_release_raises_unexpected(monkeypatch):
+    conn = MagicMock()
+    conn.execute.return_value.scalar.return_value = True
+    engine = MagicMock()
+    engine.connect.return_value = conn
+    monkeypatch.setattr("sqlalchemy.create_engine", lambda *a, **k: engine)
+
+    lock = PostgresAdvisoryLock("postgresql+psycopg://u:p@h/db")
+    assert lock.acquire() is True
+    conn.execute.side_effect = RuntimeError("unlock failed")
+    with pytest.raises(RuntimeError, match="unlock failed"):
+        lock.release()
     assert lock._conn is None
 
 
@@ -770,8 +844,21 @@ def test_redis_owned_and_is_locked(monkeypatch):
     assert lock.owned() is True
     client.get.return_value = b"stolen"
     assert lock.owned() is False
-    client.get.side_effect = RuntimeError("redis down")
+    client.get.side_effect = RedisError("redis down")
     assert lock.owned() is False
+    lock.release()
+
+
+def test_redis_owned_raises_unexpected(monkeypatch):
+    client = _mock_redis_module(monkeypatch)
+    client.set.return_value = True
+    client.get.return_value = "held"
+
+    lock = RedisLock("redis://localhost:6379/0")
+    assert lock.acquire() is True
+    client.get.side_effect = RuntimeError("redis down")
+    with pytest.raises(RuntimeError, match="redis down"):
+        lock.owned()
     lock.release()
 
 
@@ -1106,11 +1193,27 @@ def test_postgres_owned_and_is_locked(monkeypatch):
     sqls = [getattr(call.args[0], "text", str(call.args[0])) for call in held_conn.execute.call_args_list]
     assert any("pg_locks" in sql and "pg_backend_pid()" in sql for sql in sqls)
     assert any("pg_try_advisory_lock" in sql for sql in sqls)
-    held_conn.execute.side_effect = RuntimeError("session dead")
+    held_conn.execute.side_effect = OperationalError("session dead", None, None)
     assert lock.owned() is False
     engine.connect.return_value = probe_cm
     probe_conn.execute.return_value.scalar.return_value = False
     assert lock.is_locked() is False
+    lock.release()
+
+
+def test_postgres_owned_raises_unexpected(monkeypatch):
+    held_conn = MagicMock()
+    held_conn.execute.return_value.scalar.return_value = True
+    engine = MagicMock()
+    engine.connect.return_value = held_conn
+    monkeypatch.setattr("sqlalchemy.create_engine", lambda *a, **k: engine)
+
+    lock = PostgresAdvisoryLock("postgresql+psycopg://u:p@h/db")
+    assert lock.acquire() is True
+    held_conn.execute.side_effect = RuntimeError("session dead")
+    with pytest.raises(RuntimeError, match="session dead"):
+        lock.owned()
+    held_conn.execute.side_effect = None
     lock.release()
 
 
@@ -1121,3 +1224,28 @@ def test_postgres_is_locked_raises_on_probe_failure(monkeypatch):
     lock = PostgresAdvisoryLock("postgresql+psycopg://u:p@h/db")
     with pytest.raises(RuntimeError, match="db down"):
         lock.is_locked()
+
+
+def test_postgres_is_locked_logs_sql_probe_failure(monkeypatch):
+    engine = MagicMock()
+    engine.connect.side_effect = OperationalError("probe failed", {}, Exception("down"))
+    monkeypatch.setattr("sqlalchemy.create_engine", lambda *a, **k: engine)
+    lock = PostgresAdvisoryLock("postgresql+psycopg://u:p@h/db")
+    with pytest.raises(OperationalError, match="probe failed"):
+        lock.is_locked()
+
+
+def test_postgres_is_locked_held_conn_raises_unexpected(monkeypatch):
+    held_conn = MagicMock()
+    held_conn.execute.return_value.scalar.return_value = True
+    engine = MagicMock()
+    engine.connect.return_value = held_conn
+    monkeypatch.setattr("sqlalchemy.create_engine", lambda *a, **k: engine)
+
+    lock = PostgresAdvisoryLock("postgresql+psycopg://u:p@h/db")
+    assert lock.acquire() is True
+    held_conn.execute.side_effect = RuntimeError("session dead")
+    with pytest.raises(RuntimeError, match="session dead"):
+        lock.is_locked()
+    held_conn.execute.side_effect = None
+    lock.release()

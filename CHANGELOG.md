@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Postgres and Redis lock probes only treat SQL or Redis errors as a
+  lost or busy lock. Unexpected exceptions still raise.
 - Production replay scores impression lists when track rows exist, and
   drops pre-list `(user, item)` pairs from truth so popular cannot score
   on already-seen items. A stamped job only keeps impressions whose
