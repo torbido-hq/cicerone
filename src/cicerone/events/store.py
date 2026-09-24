@@ -152,9 +152,12 @@ def load_recommendation_guardrail_rows(output: IOSettings) -> pd.DataFrame | Non
                     break
                 except MISSING_TABLE_ERRORS as exc:
                     last_exc = exc
+                    if is_missing_column_error(exc):
+                        continue
                     mapped = _empty_frame_from_db_error(exc, table=table)
                     if mapped is not None:
                         return mapped
+                    raise
                 except SQL_READ_ERRORS as exc:
                     last_exc = exc
                     if is_missing_column_error(exc):

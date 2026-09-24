@@ -412,6 +412,21 @@ def test_load_recommendation_guardrail_rows_sqlite_missing_table(tmp_path):
     assert frame.empty
 
 
+def test_load_recommendation_guardrail_rows_raises_hard_sql(tmp_path, monkeypatch):
+    from sqlalchemy.exc import OperationalError
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'guard_busy.db'}"
+    sqlite3.connect(tmp_path / "guard_busy.db").close()
+    settings = make_settings(output=IOSettings(kind="db", options={"database_url": url}))
+
+    def _boom(*_args, **_kwargs):
+        raise OperationalError("SELECT 1", {}, Exception("connection refused"))
+
+    monkeypatch.setattr("cicerone.events.store.pd.read_sql_query", _boom)
+    with pytest.raises(OperationalError, match="connection refused"):
+        load_recommendation_guardrail_rows(settings.output)
+
+
 def test_recommendation_engine_cache_keeps_all_urls(tmp_path):
     from cicerone.events import store as events_store
 
