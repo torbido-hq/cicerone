@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections import OrderedDict
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Protocol
 
@@ -22,6 +22,7 @@ from cicerone.events.updater_merge import (
     UpdaterMerge,
     _is_preserved_source,
 )
+from cicerone.events.updater_policy import incremental_allowlists, incremental_needs_users_frame
 from cicerone.events.updater_ranking import UpdaterRanking
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.base import OutputSink
@@ -29,10 +30,16 @@ from cicerone.io.recommendation_reader import SOURCE_COLUMN, USER_COLUMN
 from cicerone.io.recommendation_schema import recommendation_output_columns
 from cicerone.job_eval import PUBLISH_ERRORS, log_caught
 from cicerone.locks import LockLostError, WriterLockBusyError
-from cicerone.publish.base import RecommendationPublisher
+from cicerone.publish.base import (
+    RecommendationPublisher,
+    publish_recommendations,
+    require_incremental_publisher,
+)
 from cicerone.publish.sidecar import log_sidecar_generation_skip, sidecar_generation_current
 
 logger = logging.getLogger(__name__)
+
+_SIDECAR_PUBLISH_ERRORS: tuple[type[BaseException], ...] = (*PUBLISH_ERRORS, TypeError)
 
 # Bound in-process per-user frames for long-lived serve workers.
 DEFAULT_USER_CACHE_MAX_SIZE = 2048
@@ -68,6 +75,9 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         assign_variant: Callable[[str], str | None] | None = None,
         explain_enabled: bool = True,
         publisher: RecommendationPublisher | None = None,
+        items_provider: Callable[[], pd.DataFrame | None] | None = None,
+        users_provider: Callable[[], pd.DataFrame | None] | None = None,
+        variant_feature_configs: Mapping[str, FeatureConfig] | None = None,
     ):
         if user_cache_max_size < 1:
             raise ValueError("user_cache_max_size must be >= 1")
@@ -75,6 +85,11 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         self._output_settings = output_settings
         self._feature_config = feature_config
         self._top_k = top_k
+        self._items_provider = items_provider
+        self._users_provider = users_provider
+        self._variant_feature_configs = {
+            str(name): config for name, config in (variant_feature_configs or {}).items()
+        }
         self._busy_check = busy_check
         self._write_busy_check = busy_check if write_busy_check is None else write_busy_check
         self._on_success = on_success
@@ -87,7 +102,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         self._variant_names = tuple(str(name) for name in variant_names)
         self._assign_variant = assign_variant
         self._explain_enabled = explain_enabled
-        self._publisher = publisher
+        self._publisher = require_incremental_publisher(publisher)
 
     @property
     def last_success_at(self) -> datetime | None:
@@ -149,7 +164,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         online_result = self._refresh_online(events)
         online_by_user = {} if online_result.sequential_skipped else self._online_rows_by_user(online_result)
 
-        pending_publish: tuple[pd.DataFrame, str] | None = None
+        pending_publish: tuple[pd.DataFrame, str, list[str]] | None = None
 
         def _persist() -> int:
             nonlocal pending_publish
@@ -216,7 +231,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
                 len(replace_ids),
                 len(events),
             )
-            pending_publish = (merged, str(manifest["generated_at"]))
+            pending_publish = (merged, str(manifest["generated_at"]), list(replace_ids))
             return len(events)
 
         holder = getattr(self._sink, "recommendations_write", None)
@@ -229,7 +244,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             self._publish_sidecar(*pending_publish)
         return applied
 
-    def _publish_sidecar(self, merged: pd.DataFrame, generated_at: str) -> None:
+    def _publish_sidecar(self, merged: pd.DataFrame, generated_at: str, replace_ids: list[str]) -> None:
         if self._publisher is None:
             return
         try:
@@ -238,12 +253,12 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             self._ensure_fence()
             current = sidecar_generation_current(self._output_settings, generated_at)
             if current:
-                self._publisher.publish(merged)
+                publish_recommendations(self._publisher, merged, user_ids=replace_ids)
             else:
                 log_sidecar_generation_skip(current, incremental=True)
         except (LockLostError, WriterLockBusyError):
             raise
-        except PUBLISH_ERRORS as exc:
+        except _SIDECAR_PUBLISH_ERRORS as exc:
             log_caught("Incremental publish failed after successful write", exc, log=logger)
 
     def _merge_affected(
@@ -274,6 +289,40 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             if not batch.empty
             else {}
         )
+        items = self._items_provider() if self._items_provider is not None else None
+        users = (
+            self._users_provider() if self._users_provider is not None and self._needs_users_frame() else None
+        )
+        allowlists = incremental_allowlists(
+            affected_users,
+            feature_config=self._feature_config,
+            items=items,
+            users=users,
+        )
+        allowlists_by_variant = {
+            name: incremental_allowlists(
+                affected_users,
+                feature_config=config,
+                items=items,
+                users=users,
+            )
+            for name, config in self._variant_feature_configs.items()
+        }
+        cold_allowed = incremental_allowlists(
+            [COLD_START_USER_ID],
+            feature_config=self._feature_config,
+            items=items,
+            users=None,
+        ).get(COLD_START_USER_ID)
+        cold_allowed_by_variant = {
+            name: incremental_allowlists(
+                [COLD_START_USER_ID],
+                feature_config=config,
+                items=items,
+                users=None,
+            ).get(COLD_START_USER_ID)
+            for name, config in self._variant_feature_configs.items()
+        }
         frames: list[pd.DataFrame] = []
         replace_ids: list[str] = []
         empty_user_batch = batch.iloc[0:0]
@@ -288,19 +337,32 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
                 user_batch,
                 weights,
                 online_rows=online_by_user.get(user_id),
+                allowed=allowlists.get(user_id),
+                allowed_by_variant={
+                    name: lists.get(user_id) for name, lists in allowlists_by_variant.items()
+                },
             )
-            if merged_user.empty:
-                continue
-            frames.append(merged_user)
-            replace_ids.append(user_id)
+            if not merged_user.empty:
+                frames.append(merged_user)
+                replace_ids.append(user_id)
+            elif not prior.empty or not self._signal_rows(user_batch, weights).empty:
+                replace_ids.append(user_id)
         prior_cold = by_user.get(COLD_START_USER_ID, empty_recommendations_frame())
-        cold = self._cold_start_rows(prior_cold, popular_ranking, latest_ranking)
+        cold = self._cold_start_rows(
+            prior_cold,
+            popular_ranking,
+            latest_ranking,
+            allowed=cold_allowed,
+            allowed_by_variant=cold_allowed_by_variant,
+        )
         if not cold.empty:
             frames.append(cold)
             replace_ids.append(COLD_START_USER_ID)
+        elif not prior_cold.empty:
+            replace_ids.append(COLD_START_USER_ID)
         if not replace_ids:
             return None, []
-        merged = pd.concat(frames, ignore_index=True)
+        merged = pd.concat(frames, ignore_index=True) if frames else empty_recommendations_frame()
         return merged[recommendation_output_columns(merged)], replace_ids
 
     def _commit_online(self) -> None:
@@ -355,3 +417,6 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
     def _ensure_fence(self) -> None:
         if self._fence_check is not None and not self._fence_check():
             raise LockLostError("events apply lock lost before write", kind="apply")
+
+    def _needs_users_frame(self) -> bool:
+        return incremental_needs_users_frame(self._feature_config, self._variant_feature_configs)

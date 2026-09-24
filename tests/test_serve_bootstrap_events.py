@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
@@ -10,8 +11,12 @@ from cicerone.config.constants import ALLOCATION_THOMPSON, DEFAULT_EVENTS_RETRAI
 from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.experiment.store import ExperimentStore, experiment_state
-from cicerone.feature_config import FeatureConfig
-from cicerone.serve.bootstrap_events import _assign_incremental_variant, start_events_runtime
+from cicerone.feature_config import EligibilityRule, FeatureConfig
+from cicerone.serve.bootstrap_events import (
+    _assign_incremental_variant,
+    _input_users_provider,
+    start_events_runtime,
+)
 
 
 def test_start_events_runtime_defers_publisher_connect(tmp_path, feature_config: FeatureConfig):
@@ -23,6 +28,9 @@ def test_start_events_runtime_defers_publisher_connect(tmp_path, feature_config:
     seen: dict[str, bool] = {}
 
     class _Pub:
+        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
+            return None
+
         def close(self) -> None:
             return None
 
@@ -167,6 +175,295 @@ def test_start_events_runtime_can_skip_background_worker(tmp_path, feature_confi
     assert runtime.worker._thread is None
 
 
+def test_start_events_runtime_wires_input_users_provider(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    inp = tmp_path / "in"
+    out.mkdir()
+    inp.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    pd.DataFrame([{"user_id": "u1", "region_slug": "lazio"}]).to_parquet(inp / "users.parquet", index=False)
+
+    class _Reader:
+        def refresh(self) -> None:
+            return None
+
+    runtime = start_events_runtime(
+        make_settings(
+            input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(inp)}),
+            output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+            events=EventsSettings(
+                enabled=True,
+                kind="webhook",
+                incremental=EventsIncrementalSettings(
+                    batch_size=1, batch_window_seconds=60.0, poll_interval_seconds=0.05
+                ),
+            ),
+        ),
+        feature_config=replace(
+            feature_config,
+            eligibility=[
+                EligibilityRule(
+                    name="region",
+                    op="eq",
+                    item_column="region_slug",
+                    user_column="region_slug",
+                )
+            ],
+        ),
+        reader=_Reader(),  # type: ignore[arg-type]
+        start_worker=False,
+    )
+    try:
+        assert runtime.worker is not None
+        users = runtime.worker._updater._users_provider()
+        assert users is not None
+        assert list(users["user_id"].astype(str)) == ["u1"]
+    finally:
+        runtime.stop()
+
+
+def test_start_events_runtime_skips_users_provider_without_user_scoped_rules(
+    tmp_path, feature_config: FeatureConfig, monkeypatch
+):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+
+    class _Reader:
+        def refresh(self) -> None:
+            return None
+
+    def _fail_build(_input):
+        raise AssertionError("input users must not be read without user-scoped eligibility")
+
+    monkeypatch.setattr("cicerone.serve.bootstrap_events.build_input_source", _fail_build)
+    runtime = start_events_runtime(
+        make_settings(
+            output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+            events=EventsSettings(
+                enabled=True,
+                kind="webhook",
+                incremental=EventsIncrementalSettings(
+                    batch_size=1, batch_window_seconds=60.0, poll_interval_seconds=0.05
+                ),
+            ),
+        ),
+        feature_config=feature_config,
+        reader=_Reader(),  # type: ignore[arg-type]
+        start_worker=False,
+    )
+    try:
+        assert runtime.worker is not None
+        assert runtime.worker._updater._users_provider is None
+    finally:
+        runtime.stop()
+
+
+def test_start_events_runtime_skips_users_when_variants_are_not_user_scoped(
+    tmp_path, feature_config: FeatureConfig, monkeypatch
+):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+
+    class _Reader:
+        def refresh(self) -> None:
+            return None
+
+    def _fail_build(_input):
+        raise AssertionError("input users must not be read when experiment arms are not user-scoped")
+
+    monkeypatch.setattr("cicerone.serve.bootstrap_events.build_input_source", _fail_build)
+    scoped = replace(
+        feature_config,
+        eligibility=[
+            EligibilityRule(
+                name="region",
+                op="eq",
+                item_column="region_slug",
+                user_column="region_slug",
+            )
+        ],
+    )
+    runtime = start_events_runtime(
+        make_settings(
+            output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+            events=EventsSettings(
+                enabled=True,
+                kind="webhook",
+                incremental=EventsIncrementalSettings(
+                    batch_size=1, batch_window_seconds=60.0, poll_interval_seconds=0.05
+                ),
+            ),
+            experiment=ExperimentSettings(
+                enabled=True,
+                id="ab",
+                variants=(
+                    VariantSettings(name="control", traffic=0.5, eligibility=False),
+                    VariantSettings(name="treatment", traffic=0.5, eligibility=False),
+                ),
+            ),
+        ),
+        feature_config=scoped,
+        reader=_Reader(),  # type: ignore[arg-type]
+        start_worker=False,
+    )
+    try:
+        assert runtime.worker is not None
+        assert runtime.worker._updater._users_provider is None
+    finally:
+        runtime.stop()
+
+
+def test_input_users_provider_uses_bootstrap_snapshot_only(monkeypatch) -> None:
+    reads = {"n": 0}
+
+    class _Src:
+        def read_users(self) -> pd.DataFrame | None:
+            reads["n"] += 1
+            return pd.DataFrame([{"user_id": "u1", "region_slug": "lazio"}])
+
+    monkeypatch.setattr("cicerone.serve.bootstrap_events.build_input_source", lambda _input: _Src())
+    provider = _input_users_provider(make_settings())
+    first = provider()
+    second = provider()
+    assert reads["n"] == 1
+    assert first is not None and second is not None
+    assert list(first["user_id"].astype(str)) == ["u1"]
+    assert list(second["user_id"].astype(str)) == ["u1"]
+
+
+def test_start_events_runtime_wires_variant_feature_configs(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+
+    class _Reader:
+        def refresh(self) -> None:
+            return None
+
+    runtime = start_events_runtime(
+        make_settings(
+            output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+            events=EventsSettings(
+                enabled=True,
+                kind="webhook",
+                incremental=EventsIncrementalSettings(
+                    batch_size=1, batch_window_seconds=60.0, poll_interval_seconds=0.05
+                ),
+            ),
+            experiment=ExperimentSettings(
+                enabled=True,
+                id="ab",
+                variants=(
+                    VariantSettings(name="control", traffic=0.5),
+                    VariantSettings(name="treatment", traffic=0.5),
+                ),
+            ),
+        ),
+        feature_config=feature_config,
+        reader=_Reader(),  # type: ignore[arg-type]
+        start_worker=False,
+    )
+    try:
+        assert runtime.worker is not None
+        assert set(runtime.worker._updater._variant_feature_configs) == {"control", "treatment"}
+    finally:
+        runtime.stop()
+
+
+def test_start_events_runtime_wires_automl_challenger_variant_feature_configs(
+    tmp_path, feature_config: FeatureConfig
+):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+
+    class _Reader:
+        def refresh(self) -> None:
+            return None
+
+    runtime = start_events_runtime(
+        make_settings(
+            output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+            events=EventsSettings(
+                enabled=True,
+                kind="webhook",
+                incremental=EventsIncrementalSettings(
+                    batch_size=1, batch_window_seconds=60.0, poll_interval_seconds=0.05
+                ),
+            ),
+            experiment=ExperimentSettings(enabled=True, id="ab", automl_challenger=True),
+        ),
+        feature_config=feature_config,
+        reader=_Reader(),  # type: ignore[arg-type]
+        start_worker=False,
+    )
+    try:
+        assert runtime.worker is not None
+        configs = runtime.worker._updater._variant_feature_configs
+        assert set(configs) == {"control", "treatment"}
+    finally:
+        runtime.stop()
+
+
+def test_start_events_runtime_wires_custom_automl_variant_policy_names(
+    tmp_path, feature_config: FeatureConfig
+):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+
+    class _Reader:
+        def refresh(self) -> None:
+            return None
+
+    runtime = start_events_runtime(
+        make_settings(
+            output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+            events=EventsSettings(
+                enabled=True,
+                kind="webhook",
+                incremental=EventsIncrementalSettings(
+                    batch_size=1, batch_window_seconds=60.0, poll_interval_seconds=0.05
+                ),
+            ),
+            experiment=ExperimentSettings(
+                enabled=True,
+                id="ab",
+                automl_challenger=True,
+                variants=(
+                    VariantSettings(name="champion", traffic=0.5, eligibility=False),
+                    VariantSettings(name="challenger", traffic=0.5),
+                ),
+            ),
+        ),
+        feature_config=feature_config,
+        reader=_Reader(),  # type: ignore[arg-type]
+        start_worker=False,
+    )
+    try:
+        assert runtime.worker is not None
+        configs = runtime.worker._updater._variant_feature_configs
+        assert set(configs) == {"champion", "challenger"}
+        assert configs["champion"].eligibility == []
+        assert configs["champion"].merge_item_availability is False
+    finally:
+        runtime.stop()
+
+
 def test_start_events_runtime_connects_source_when_worker_not_started(
     tmp_path, feature_config: FeatureConfig
 ):
@@ -246,6 +543,9 @@ def test_start_events_runtime_closes_publisher(tmp_path, feature_config: Feature
     closed = {"n": 0}
 
     class _Pub:
+        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
+            return None
+
         def close(self) -> None:
             closed["n"] += 1
             raise RuntimeError("close failed")
@@ -288,6 +588,9 @@ def test_stop_closes_publisher_when_worker_hangs(tmp_path, feature_config: Featu
     closed = {"n": 0}
 
     class _Pub:
+        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
+            return None
+
         def close(self) -> None:
             closed["n"] += 1
 
@@ -337,6 +640,9 @@ def test_start_events_runtime_closes_publisher_on_startup_error(tmp_path, featur
     closed = {"n": 0}
 
     class _Pub:
+        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
+            return None
+
         def close(self) -> None:
             closed["n"] += 1
 

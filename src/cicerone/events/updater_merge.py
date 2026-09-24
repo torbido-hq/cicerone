@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING
 
 import pandas as pd
@@ -37,6 +37,9 @@ _PRESERVE_LABELS = frozenset(
         "als",
         "content_fallback",
         "blended",
+        "popular_fallback",
+        "popular_in_category",
+        "latest",
     }
 )
 # Reserve slots so recent interactions can enter top-K even when preserved rows fill it.
@@ -53,6 +56,38 @@ def _is_preserved_source(source: str) -> bool:
 
 def _overlaps_source_parts(source: str, parts: set[str]) -> bool:
     return bool(_source_parts(source) & parts)
+
+
+def _restrict_items(frame: pd.DataFrame, allowed: frozenset[str] | None) -> pd.DataFrame:
+    if allowed is None or frame.empty or ITEM_COLUMN not in frame.columns:
+        return frame
+    return frame.loc[frame[ITEM_COLUMN].astype(str).isin(allowed)]
+
+
+def _kept_list(frame: pd.DataFrame, user_id: str, top_k: int) -> pd.DataFrame:
+    if frame.empty:
+        return empty_recommendations_frame()
+    kept = frame
+    if RANK_COLUMN in kept.columns:
+        kept = kept.sort_values(RANK_COLUMN, kind="mergesort")
+    if ITEM_COLUMN in kept.columns:
+        kept = kept.drop_duplicates(subset=[ITEM_COLUMN], keep="first").head(top_k)
+    kept = kept.copy()
+    kept[USER_COLUMN] = user_id
+    kept[RANK_COLUMN] = range(1, len(kept) + 1)
+    return kept[recommendation_output_columns(kept)].reset_index(drop=True)
+
+
+def _allowed_for(
+    variant: str,
+    allowed: frozenset[str] | None,
+    allowed_by_variant: Mapping[str, frozenset[str] | None] | None,
+) -> frozenset[str] | None:
+    if allowed_by_variant:
+        if variant in allowed_by_variant:
+            return allowed_by_variant[variant]
+        return frozenset()
+    return allowed
 
 
 class UpdaterMerge:
@@ -74,12 +109,21 @@ class UpdaterMerge:
         batch: pd.DataFrame,
         weights: pd.Series | None = None,
         online_rows: pd.DataFrame | None = None,
+        allowed: frozenset[str] | None = None,
+        allowed_by_variant: Mapping[str, frozenset[str] | None] | None = None,
     ) -> pd.DataFrame:
         variants = self._variants_for()
         if not variants:
             prior = collapse_mixed_variants(prior)
             merged = self._merge_one_list(
-                user_id, prior, popular, latest, batch, weights, online_rows=online_rows
+                user_id,
+                prior,
+                popular,
+                latest,
+                batch,
+                weights,
+                online_rows=online_rows,
+                allowed=allowed,
             )
             return self._stamp_collapsed_variant(merged, prior)
         has_variant = VARIANT_COLUMN in prior.columns and not prior.empty
@@ -88,6 +132,7 @@ class UpdaterMerge:
         empty_batch = batch.iloc[0:0]
         parts = []
         for variant in variants:
+            variant_allowed = _allowed_for(variant, allowed, allowed_by_variant)
             prior_slice = (
                 filter_variant_rows(prior, variant)
                 if has_variant
@@ -102,11 +147,12 @@ class UpdaterMerge:
                 batch if inject else empty_batch,
                 weights if inject else None,
                 online_rows=online_rows if inject else None,
+                allowed=variant_allowed,
             )
             if merged.empty:
-                if prior_slice.empty:
+                merged = _restrict_items(prior_slice, variant_allowed)
+                if merged.empty:
                     continue
-                merged = prior_slice
             merged = merged.copy()
             merged[VARIANT_COLUMN] = variant
             parts.append(merged)
@@ -145,16 +191,19 @@ class UpdaterMerge:
         batch: pd.DataFrame,
         weights: pd.Series | None = None,
         online_rows: pd.DataFrame | None = None,
+        allowed: frozenset[str] | None = None,
     ) -> pd.DataFrame:
+        user_batch = self._signal_rows(batch[batch[USER_COLUMN].astype(str) == user_id], weights)
+        if user_batch.empty:
+            return _kept_list(_restrict_items(prior, allowed), user_id, self._top_k)
         if not prior.empty and SOURCE_COLUMN in prior.columns:
             mask = prior[SOURCE_COLUMN].astype(str).map(_is_preserved_source)
             preserved = prior.loc[mask].copy()
         else:
             preserved = prior.iloc[0:0] if not prior.empty else prior
         online_part, kept = self._split_online_preserved(preserved, online_rows)
-
-        user_batch = self._signal_rows(batch[batch[USER_COLUMN].astype(str) == user_id], weights)
-        has_signal = not user_batch.empty
+        online_part = _restrict_items(online_part, allowed)
+        kept = _restrict_items(kept, allowed)
         preserved_ids: set[str] = set()
         if not kept.empty:
             preserved_ids.update(kept[ITEM_COLUMN].astype(str))
@@ -165,10 +214,10 @@ class UpdaterMerge:
             .astype(str)
             .drop_duplicates()
             .tolist()
-            if has_signal
-            else []
         )
         boost_items = [item_id for item_id in boost_items if item_id not in preserved_ids]
+        if allowed is not None:
+            boost_items = [item_id for item_id in boost_items if item_id in allowed]
         boost_slots = max(1, int(self._top_k * _BOOST_SLOT_FRACTION)) if boost_items else 0
         boost = pd.DataFrame(
             [
@@ -197,13 +246,11 @@ class UpdaterMerge:
             else empty_recommendations_frame()
         )
 
-        # Batch-global popular/latest only for users with signal or preserved rows
-        # (unknown/zero-weight events must not rewrite popular-only users).
-        use_global = has_signal or not preserved.empty
-        parts = [boost, preserved]
-        if use_global:
-            parts.extend((popular, latest))
-        parts = [frame for frame in parts if not frame.empty]
+        # Flush popular/latest only backfill users who had a scored event.
+        # Unknown/zero-weight events must not rewrite popular-only users.
+        popular = _restrict_items(popular, allowed)
+        latest = _restrict_items(latest, allowed)
+        parts = [frame for frame in (boost, preserved, popular, latest) if not frame.empty]
         combined = pd.concat(parts, ignore_index=True) if parts else empty_recommendations_frame()
         if combined.empty:
             return empty_recommendations_frame()
@@ -246,25 +293,30 @@ class UpdaterMerge:
         prior: pd.DataFrame,
         popular: pd.DataFrame,
         latest: pd.DataFrame,
+        allowed: frozenset[str] | None = None,
+        allowed_by_variant: Mapping[str, frozenset[str] | None] | None = None,
     ) -> pd.DataFrame:
         variants = self._variants_for()
         if not variants:
             prior = collapse_mixed_variants(prior)
-            return self._stamp_collapsed_variant(self._cold_start_one_list(prior, popular, latest), prior)
+            return self._stamp_collapsed_variant(
+                self._cold_start_one_list(prior, popular, latest, allowed=allowed), prior
+            )
         has_variant = VARIANT_COLUMN in prior.columns and not prior.empty
         primary = FALLBACK_VARIANT if FALLBACK_VARIANT in variants else variants[0]
         parts = []
         for variant in variants:
+            variant_allowed = _allowed_for(variant, allowed, allowed_by_variant)
             prior_slice = (
                 prior[prior[VARIANT_COLUMN].astype(str) == variant]
                 if has_variant
                 else (prior if variant == primary else empty_recommendations_frame())
             )
-            merged = self._cold_start_one_list(prior_slice, popular, latest)
+            merged = self._cold_start_one_list(prior_slice, popular, latest, allowed=variant_allowed)
             if merged.empty:
-                if prior_slice.empty:
+                merged = _restrict_items(prior_slice, variant_allowed)
+                if merged.empty:
                     continue
-                merged = prior_slice
             merged = merged.copy()
             merged[VARIANT_COLUMN] = variant
             parts.append(merged)
@@ -277,14 +329,7 @@ class UpdaterMerge:
         prior: pd.DataFrame,
         popular: pd.DataFrame,
         latest: pd.DataFrame,
+        allowed: frozenset[str] | None = None,
     ) -> pd.DataFrame:
-        # Prefers batch popular/latest, then keeps prior cold-start fill.
-        parts = [frame for frame in (popular, latest, prior) if not frame.empty]
-        combined = pd.concat(parts, ignore_index=True) if parts else empty_recommendations_frame()
-        if combined.empty:
-            return empty_recommendations_frame()
-        if ITEM_COLUMN in combined.columns:
-            combined = combined.drop_duplicates(subset=[ITEM_COLUMN], keep="first").head(self._top_k)
-        combined[USER_COLUMN] = COLD_START_USER_ID
-        combined[RANK_COLUMN] = range(1, len(combined) + 1)
-        return combined[recommendation_output_columns(combined)].reset_index(drop=True)
+        del popular, latest
+        return _kept_list(_restrict_items(prior, allowed), COLD_START_USER_ID, self._top_k)

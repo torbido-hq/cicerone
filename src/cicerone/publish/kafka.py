@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from typing import Any
 
 import pandas as pd
@@ -57,7 +58,7 @@ class KafkaPublisher:
             raise ConfigError(f"publish.options.bootstrap_servers is unreachable: {exc}") from exc
         self._producer = producer
 
-    def publish(self, df: pd.DataFrame) -> None:
+    def publish(self, df: pd.DataFrame, *, user_ids: Sequence[str] | None = None) -> None:
         producer = self._require()
         errors: list[str] = []
 
@@ -65,7 +66,7 @@ class KafkaPublisher:
             if err is not None:
                 errors.append(str(err))
 
-        messages = user_recommendation_messages(df)
+        messages = user_recommendation_messages(df, user_ids=user_ids)
         try:
             for user_id, body, _message_id in messages:
                 producer.produce(

@@ -16,10 +16,20 @@ personalized / item-KNN / content-fallback rows for affected users.
 Sequential never runs `fit_partial`. The default runtime image is
 torch-free. New catalog IDs still wait for a full retrain.
 
-The incremental path always refreshes **popular / latest slices** (and recency
-boosts) for affected users plus `__cold_start__`. When `[experiment]` is
+The incremental path injects recency boosts and may backfill popular / latest
+slots for affected users. Those injects use the items-snapshot eligibility
+allowlist (availability always; user-scoped rules from the serve-start
+users snapshot — an empty users table still applies missing-user handling,
+and serve takes that snapshot only when an applied recipe is user-scoped).
+A list that filters to empty is deleted, and the publish sidecar
+emits an empty-list message for each cleared user. An unknown or
+zero-weight flush keeps the prior list (including `incremental` rows)
+instead of deleting it. Incremental publish
+requires keyword `user_ids=`. Batch popular / latest
+rows stay; a flush does not rebuild `__cold_start__`. When `[experiment]` is
 on, that popular/latest refresh runs only on the **assigned** (or promoted)
-variant; other variants keep their last batch lists. Online LightFM
+variant; other variants keep their last batch lists. AutoML challenger arms
+use each configured variant's eligibility, including custom names. Online LightFM
 rewrite is skipped while `[experiment]` is on so arms stay isolated.
 [how-it-works.md](how-it-works.md) explains the split. Experiments:
 [experiments.md](experiments.md).

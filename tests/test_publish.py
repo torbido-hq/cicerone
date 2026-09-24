@@ -10,10 +10,11 @@ from support.fake_rabbitmq import FakeChannel, install_fake_rabbitmq
 
 from cicerone.config import ConfigError, IOSettings, PublishSettings, make_settings
 from cicerone.events.normalize import normalize_event
+from cicerone.events.store import load_recommendations_frame
 from cicerone.events.updater import IncrementalUpdater
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.factory import build_output_sink
-from cicerone.publish import PublishError, build_publisher, registered_publish_kinds
+from cicerone.publish import PublishError, build_publisher, publish_recommendations, registered_publish_kinds
 from cicerone.publish.factory import build_publisher_from_kind
 from cicerone.publish.kafka import KafkaPublisher, validate_kafka_publish_options
 from cicerone.publish.payload import user_recommendation_messages
@@ -45,6 +46,139 @@ def test_user_recommendation_messages_one_per_user():
 def test_user_recommendation_messages_empty():
     assert user_recommendation_messages(pd.DataFrame()) == []
     assert user_recommendation_messages(pd.DataFrame({"item_id": ["i1"]})) == []
+
+
+def test_publish_recommendations_skips_user_ids_for_legacy_publishers() -> None:
+    seen: list[object] = []
+
+    class _Legacy:
+        def connect(self) -> None:
+            return None
+
+        def publish(self, df: pd.DataFrame) -> None:
+            seen.append(df)
+
+        def close(self) -> None:
+            return None
+
+    frame = _recs_frame()
+    publish_recommendations(_Legacy(), frame, user_ids=["u1", "u2"])
+    assert seen == [frame]
+
+
+def test_publish_recommendations_rejects_legacy_when_tombstones_required() -> None:
+    class _Legacy:
+        def connect(self) -> None:
+            return None
+
+        def publish(self, df: pd.DataFrame) -> None:
+            raise AssertionError("legacy publish must not drop tombstones")
+
+        def close(self) -> None:
+            return None
+
+    with pytest.raises(PublishError, match="user_ids"):
+        publish_recommendations(_Legacy(), pd.DataFrame(), user_ids=["u1"])
+
+
+def test_publish_recommendations_publishes_nonempty_before_legacy_tombstone_error() -> None:
+    seen: list[pd.DataFrame] = []
+
+    class _Legacy:
+        def connect(self) -> None:
+            return None
+
+        def publish(self, df: pd.DataFrame) -> None:
+            seen.append(df.copy())
+
+        def close(self) -> None:
+            return None
+
+    frame = _recs_frame()
+    with pytest.raises(PublishError, match="user_ids"):
+        publish_recommendations(_Legacy(), frame, user_ids=["u1", "u2", "u3"])
+    assert len(seen) == 1
+    assert set(seen[0]["user_id"].astype(str)) == {"u1", "u2"}
+
+
+def test_publish_recommendations_does_not_retry_uninspectable_typeerror(monkeypatch) -> None:
+    calls: list[tuple[pd.DataFrame, object]] = []
+
+    class _Uninspectable:
+        def connect(self) -> None:
+            return None
+
+        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
+            calls.append((df, user_ids))
+            raise TypeError("payload invalid after send")
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr("cicerone.publish.base.inspect.signature", lambda _fn: None)
+    frame = _recs_frame()
+    with pytest.raises(PublishError, match="payload invalid after send") as raised:
+        publish_recommendations(_Uninspectable(), frame, user_ids=["u1", "u2"])
+    assert isinstance(raised.value.__cause__, TypeError)
+    assert len(calls) == 1
+    published, user_ids = calls[0]
+    assert published is frame
+    assert user_ids == ["u1", "u2"]
+
+
+def test_publish_recommendations_treats_positional_only_user_ids_as_legacy() -> None:
+    seen: list[pd.DataFrame] = []
+
+    class _Positional:
+        def connect(self) -> None:
+            return None
+
+        def publish(self, df: pd.DataFrame, user_ids=None, /) -> None:
+            seen.append(df)
+
+        def close(self) -> None:
+            return None
+
+    frame = _recs_frame()
+    publish_recommendations(_Positional(), frame, user_ids=["u1", "u2"])
+    assert seen == [frame]
+
+
+def test_incremental_updater_rejects_positional_only_user_ids(
+    tmp_path, feature_config: FeatureConfig
+) -> None:
+    class _Positional:
+        def connect(self) -> None:
+            return None
+
+        def publish(self, df: pd.DataFrame, user_ids=None, /) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        top_k=5,
+    )
+    with pytest.raises(TypeError, match="user_ids"):
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=5,
+            publisher=_Positional(),
+        )
+
+
+def test_user_recommendation_messages_user_ids_emit_empty_lists():
+    messages = user_recommendation_messages(pd.DataFrame(), user_ids=["u1", "u2"])
+    assert [user_id for user_id, _body, _message_id in messages] == ["u1", "u2"]
+    for user_id, body, message_id in messages:
+        payload = json.loads(body)
+        assert payload["user_id"] == user_id
+        assert payload["recommendations"] == []
+        assert payload["message_id"] == message_id
 
 
 def test_user_recommendation_messages_rejects_nan():
@@ -300,7 +434,7 @@ def test_updater_publishes_after_replace(tmp_path, feature_config: FeatureConfig
         def connect(self) -> None:
             return None
 
-        def publish(self, df: pd.DataFrame) -> None:
+        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
             captured.append(df.copy())
 
         def close(self) -> None:
@@ -317,6 +451,43 @@ def test_updater_publishes_after_replace(tmp_path, feature_config: FeatureConfig
     assert updater.apply(events) == 1
     assert len(captured) == 1
     assert "u1" in set(captured[0]["user_id"].astype(str))
+
+
+def test_updater_does_not_nack_after_publish_typeerror(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    calls: list[object] = []
+
+    class _Pub:
+        def connect(self) -> None:
+            return None
+
+        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
+            calls.append((df.copy(), user_ids))
+            raise TypeError("payload invalid after send")
+
+        def close(self) -> None:
+            return None
+
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        publisher=_Pub(),
+    )
+    events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
+    assert updater.apply(events) == 1
+    assert len(calls) == 1
+    written = load_recommendations_frame(settings.output)
+    assert "i9" in set(written[written["user_id"] == "u1"]["item_id"].astype(str))
 
 
 def test_kafka_publisher_not_connected():
@@ -462,6 +633,20 @@ def test_publish_empty_frame_is_noop(monkeypatch):
     publisher.close()
 
 
+def test_kafka_publisher_user_ids_emit_empty_lists(monkeypatch):
+    broker = install_fake_kafka(monkeypatch)
+    publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "t"})
+    publisher.connect()
+    publisher.publish(pd.DataFrame(), user_ids=["u1"])
+    assert len(broker.produced) == 1
+    _topic, key, value = broker.produced[0]
+    assert key == b"u1"
+    payload = json.loads(value)
+    assert payload["user_id"] == "u1"
+    assert payload["recommendations"] == []
+    publisher.close()
+
+
 def test_updater_publish_failure_does_not_unsucceed(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()
@@ -477,7 +662,7 @@ def test_updater_publish_failure_does_not_unsucceed(tmp_path, feature_config: Fe
         def connect(self) -> None:
             return None
 
-        def publish(self, df: pd.DataFrame) -> None:
+        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
             raise PublishError("broker down")
 
     updater = IncrementalUpdater(

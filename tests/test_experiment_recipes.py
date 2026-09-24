@@ -15,11 +15,13 @@ from cicerone.experiment.recipes import (
     CONTROL_NAME,
     TREATMENT_NAME,
     apply_recipe,
+    automl_challenger_pair,
     inherit_combiner,
     recipes_manifest_json,
     resolve_boost_policy,
     resolve_eligibility_policy,
     resolve_recipes,
+    resolve_variant_policy_configs,
     union_models,
 )
 from cicerone.feature_config import BlendingConfig, BoostRule, EligibilityRule, FeatureConfig
@@ -104,6 +106,55 @@ def test_automl_challenger_uses_last_manifest_as_control() -> None:
     assert [recipe.name for recipe in recipes] == [CONTROL_NAME, TREATMENT_NAME]
     assert list(recipes[0].models) == ["collaborative", "popular"]
     assert recipes[0].weights == {"collaborative": 2.0, "popular": 1.0}
+    assert list(recipes[1].models) == ["item_based", "popular"]
+
+
+def test_automl_challenger_pair_keeps_mixed_custom_names() -> None:
+    control, challenger = automl_challenger_pair(
+        (
+            VariantSettings(name="control", traffic=0.5),
+            VariantSettings(name="challenger", traffic=0.5),
+        )
+    )
+    assert (control.name, challenger.name) == ("control", "challenger")
+    champion, treatment = automl_challenger_pair(
+        (
+            VariantSettings(name="champion", traffic=0.4),
+            VariantSettings(name="treatment", traffic=0.6),
+        )
+    )
+    assert (champion.name, treatment.name) == ("champion", "treatment")
+    both = automl_challenger_pair(
+        (
+            VariantSettings(name="control", traffic=0.5),
+            VariantSettings(name="treatment", traffic=0.4),
+            VariantSettings(name="extra", traffic=0.1),
+        )
+    )
+    assert (both[0].name, both[1].name) == ("control", "treatment")
+
+
+def test_automl_challenger_keeps_configured_variant_names() -> None:
+    settings = make_settings(
+        models=["popular"],
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="auto",
+            automl_challenger=True,
+            variants=(
+                VariantSettings(name="champion", traffic=0.5),
+                VariantSettings(name="challenger", traffic=0.5),
+            ),
+        ),
+    )
+    recipes = resolve_recipes(
+        settings,
+        _features(),
+        automl_models=["item_based", "popular"],
+        automl_weights={"item_based": 1.0, "popular": 1.0},
+        automl_rrf_k=50.0,
+    )
+    assert [recipe.name for recipe in recipes] == ["champion", "challenger"]
     assert list(recipes[1].models) == ["item_based", "popular"]
 
 
@@ -212,6 +263,71 @@ def test_automl_challenger_requires_automl_pick() -> None:
     )
     with pytest.raises(ConfigError, match="AutoML"):
         resolve_recipes(settings, _features())
+
+
+def test_resolve_variant_policy_configs_without_automl_models() -> None:
+    features = _features()
+    synthesized = resolve_variant_policy_configs(
+        make_settings(experiment=ExperimentSettings(enabled=True, id="auto", automl_challenger=True)),
+        features,
+    )
+    assert set(synthesized) == {CONTROL_NAME, TREATMENT_NAME}
+    assert [rule.name for rule in synthesized[TREATMENT_NAME].eligibility] == ["in_stock"]
+    configs = resolve_variant_policy_configs(
+        make_settings(
+            experiment=ExperimentSettings(
+                enabled=True,
+                id="auto",
+                automl_challenger=True,
+                variants=(
+                    VariantSettings(name="control", traffic=0.5, eligibility=False),
+                    VariantSettings(name="treatment", traffic=0.5),
+                ),
+            ),
+        ),
+        features,
+    )
+    assert configs["control"].eligibility == []
+    assert configs["control"].merge_item_availability is False
+    assert [rule.name for rule in configs["treatment"].eligibility] == ["in_stock"]
+    rrf = resolve_variant_policy_configs(
+        make_settings(
+            experiment=ExperimentSettings(
+                enabled=True,
+                id="auto",
+                automl_challenger=True,
+                variants=(
+                    VariantSettings(name="control", traffic=0.5),
+                    VariantSettings(
+                        name="treatment",
+                        traffic=0.5,
+                        combiner="rrf",
+                        model_weights={"latest": 1.0},
+                    ),
+                ),
+            ),
+        ),
+        features,
+    )
+    assert [rule.name for rule in rrf["treatment"].eligibility] == ["in_stock"]
+    custom = resolve_variant_policy_configs(
+        make_settings(
+            experiment=ExperimentSettings(
+                enabled=True,
+                id="auto",
+                automl_challenger=True,
+                variants=(
+                    VariantSettings(name="champion", traffic=0.5, eligibility=False),
+                    VariantSettings(name="challenger", traffic=0.5),
+                ),
+            ),
+        ),
+        features,
+    )
+    assert set(custom) == {"champion", "challenger"}
+    assert custom["champion"].eligibility == []
+    assert custom["champion"].merge_item_availability is False
+    assert [rule.name for rule in custom["challenger"].eligibility] == ["in_stock"]
 
 
 def test_resolve_recipes_named_and_replacement_policy() -> None:

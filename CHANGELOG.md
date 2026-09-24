@@ -8,6 +8,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Incremental write-through applies the items-snapshot eligibility allowlist
+  per experiment recipe (user-scoped rules use the serve-start users snapshot;
+  an empty users table still applies missing-user handling). Serve takes that
+  snapshot only when an applied recipe is user-scoped (experiment arms when
+  an experiment is on). Lists that filter to empty are
+  deleted and empty sidecar lists are published for those users (users with
+  no prior list and no ranking signal stay a no-op; a new user whose
+  ranking signal is fully filtered still gets an empty sidecar list).
+  Incremental sidecar publish requires a keyword ``user_ids=`` parameter; batch
+  job publish is unchanged. A flush with no ranking signal keeps the prior
+  list, including ``incremental`` rows (eligibility still trims). Batch popular/latest and
+  `__cold_start__` stay instead of being replaced by the current flush.
+  AutoML challenger arms resolve eligibility and batch recipes under the two
+  configured names (or ``control``/``treatment`` when those both exist),
+  without a model pick.
+- Incremental sidecar must not retry publish after an ambiguous TypeError.
+  A post-write publisher TypeError is a sidecar failure and does not nack
+  the already-applied flush.
 - Postgres and Redis lock probes only treat SQL or Redis errors as a
   lost or busy lock. Unexpected exceptions still raise.
 - Production replay scores impression lists when track rows exist, and

@@ -221,6 +221,59 @@ def resolve_recipes(
     return tuple(recipes)
 
 
+def resolve_variant_policy_configs(
+    settings: Settings,
+    feature_config: FeatureConfig,
+) -> dict[str, FeatureConfig]:
+    """Per-variant eligibility and boosts without AutoML model selection."""
+    if not settings.experiment.enabled:
+        return {}
+    configs: dict[str, FeatureConfig] = {}
+    for variant in _policy_variants(settings):
+        configs[variant.name] = replace(
+            feature_config,
+            boosts=list(
+                resolve_boost_policy(
+                    variant.boosts,
+                    feature_config.boosts,
+                    label=f"experiment.variants[{variant.name}].boosts",
+                )
+            ),
+            eligibility=list(
+                resolve_eligibility_policy(
+                    variant.eligibility,
+                    feature_config.eligibility,
+                    label=f"experiment.variants[{variant.name}].eligibility",
+                )
+            ),
+            merge_item_availability=variant.eligibility is True,
+        )
+    return configs
+
+
+def automl_challenger_pair(variants: Sequence[VariantSettings]) -> tuple[VariantSettings, VariantSettings]:
+    """Control/treatment arms for AutoML, keeping configured names when present."""
+    items = list(variants)
+    by_name = {item.name: item for item in items}
+    if CONTROL_NAME in by_name and TREATMENT_NAME in by_name:
+        return by_name[CONTROL_NAME], by_name[TREATMENT_NAME]
+    if len(items) >= 2:
+        return items[0], items[1]
+    return (
+        by_name.get(CONTROL_NAME) or VariantSettings(name=CONTROL_NAME, traffic=0.5),
+        by_name.get(TREATMENT_NAME) or VariantSettings(name=TREATMENT_NAME, traffic=0.5),
+    )
+
+
+def _policy_variants(settings: Settings) -> list[VariantSettings]:
+    experiment = settings.experiment
+    variants = list(experiment.variants)
+    if experiment.automl_challenger:
+        control, treatment = automl_challenger_pair(variants)
+        return [control, treatment]
+    return variants
+
+
 def _challenger_variants(
     variants: list[VariantSettings],
     *,
@@ -236,9 +289,7 @@ def _challenger_variants(
     control_models = list(prior["models"]) if prior else default_models(settings)
     control_weights = prior["weights"] if prior else settings.model_weights
     control_rrf_k = prior["rrf_k"] if prior else settings.rrf_k
-    by_name = {variant.name: variant for variant in variants}
-    control = by_name.get(CONTROL_NAME) or VariantSettings(name=CONTROL_NAME, traffic=0.5)
-    treatment = by_name.get(TREATMENT_NAME) or VariantSettings(name=TREATMENT_NAME, traffic=0.5)
+    control, treatment = automl_challenger_pair(variants)
     control_combiner = COMBINER_RRF if control_weights else control.combiner
     treatment_combiner = COMBINER_RRF if automl_weights is not None else treatment.combiner
     control = replace(

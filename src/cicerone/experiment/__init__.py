@@ -23,6 +23,7 @@ from cicerone.experiment.recipes import (
     inherit_combiner,
     recipes_manifest_json,
     resolve_recipes,
+    resolve_variant_policy_configs,
     union_models,
     validate_variant_models,
 )
@@ -55,6 +56,7 @@ __all__ = [
     "recipes_manifest_json",
     "resolve_assignment",
     "resolve_recipes",
+    "resolve_variant_policy_configs",
     "union_models",
     "user_outcome",
     "validate_variant_models",

@@ -7,6 +7,8 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
+import pandas as pd
+
 from cicerone.config import Settings
 from cicerone.config.constants import (
     DEFAULT_EVENTS_APPLY_LOCK_TTL_SECONDS,
@@ -16,13 +18,15 @@ from cicerone.events.buffer import MicroBatchBuffer
 from cicerone.events.ha import poll_without_apply_lock
 from cicerone.events.registry import build_event_source
 from cicerone.events.updater import IncrementalUpdater
+from cicerone.events.updater_policy import incremental_needs_users_frame
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
 from cicerone.experiment.assignment import experiment_variant_names, resolve_assignment
+from cicerone.experiment.recipes import resolve_variant_policy_configs
 from cicerone.experiment.store import ExperimentStore
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.base import RecommendationReader
-from cicerone.io.factory import build_output_sink
+from cicerone.io.factory import build_input_source, build_output_sink
 from cicerone.locks import (
     LockBackend,
     build_lock_backend,
@@ -125,6 +129,23 @@ def _assign_incremental_variant(
     return assigned
 
 
+def _variant_feature_configs(
+    settings: Settings, feature_config: FeatureConfig | None
+) -> dict[str, FeatureConfig]:
+    if feature_config is None or not settings.experiment.enabled:
+        return {}
+    return resolve_variant_policy_configs(settings, feature_config)
+
+
+def _input_users_provider(settings: Settings) -> Callable[[], pd.DataFrame | None]:
+    snapshot = build_input_source(settings.input).read_users()
+
+    def read_users() -> pd.DataFrame | None:
+        return snapshot
+
+    return read_users
+
+
 def _close_publisher(publisher: RecommendationPublisher | None) -> None:
     if publisher is None:
         return
@@ -210,6 +231,12 @@ def start_events_runtime(
                 settings.events.online.fit_partial_epochs,
                 settings.events.online.fit_min_events,
             )
+        variant_feature_configs = _variant_feature_configs(settings, feature_config)
+        users_provider = (
+            _input_users_provider(settings)
+            if incremental_needs_users_frame(feature_config, variant_feature_configs)
+            else None
+        )
         updater = IncrementalUpdater(
             sink=sink,
             output_settings=settings.output,
@@ -227,6 +254,9 @@ def start_events_runtime(
             assign_variant=_assign_incremental_variant(settings),
             explain_enabled=settings.explain.enabled,
             publisher=publisher,
+            items_provider=getattr(reader, "get_items", None),
+            users_provider=users_provider,
+            variant_feature_configs=variant_feature_configs,
         )
         buffer = MicroBatchBuffer(
             batch_size=settings.events.incremental.batch_size,
