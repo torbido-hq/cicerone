@@ -619,6 +619,78 @@ def test_incremental_updater_unknown_event_skips_new_user_without_prior(
     assert load_recommendations_frame(settings.output).empty
 
 
+def test_incremental_updater_tombstones_new_user_when_signal_is_ineligible(
+    tmp_path, feature_config: FeatureConfig
+) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+    items = pd.DataFrame([{"item_id": "oos", "published": True, "in_stock": False}])
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    published: list[tuple[pd.DataFrame, list[str] | None]] = []
+
+    class _Pub:
+        def connect(self) -> None:
+            return None
+
+        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
+            published.append((df.copy(), None if user_ids is None else list(user_ids)))
+
+        def close(self) -> None:
+            return None
+
+    IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        items_provider=lambda: items,
+        publisher=_Pub(),
+    ).apply([normalize_event(event_payload(user_id="u1", item_id="oos", event_id="new-oos"))])
+    assert load_recommendations_frame(settings.output).empty
+    assert len(published) == 1
+    merged, user_ids = published[0]
+    assert user_ids == ["u1"]
+    assert merged.empty
+
+
+def test_incremental_updater_legacy_publisher_without_user_ids(
+    tmp_path, feature_config: FeatureConfig
+) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    published: list[pd.DataFrame] = []
+
+    class _Legacy:
+        def connect(self) -> None:
+            return None
+
+        def publish(self, df: pd.DataFrame) -> None:
+            published.append(df.copy())
+
+        def close(self) -> None:
+            return None
+
+    IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        publisher=_Legacy(),
+    ).apply([normalize_event(event_payload(user_id="u1", item_id="i9", event_id="legacy-pub"))])
+    assert len(published) == 1
+    assert "i9" in set(load_recommendations_frame(settings.output)["item_id"].astype(str))
+
+
 def test_incremental_updater_unknown_event_keeps_popular_only_user(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()

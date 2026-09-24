@@ -13,8 +13,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   empty users table still applies missing-user handling). Serve reads that
   frame only when a recipe is user-scoped. Lists that filter to empty are
   deleted and empty sidecar lists are published for those users (users with
-  no prior list and no ranking signal stay a no-op). Batch popular/latest
-  and `__cold_start__` stay instead of being replaced by the current flush.
+  no prior list and no ranking signal stay a no-op; a new user whose
+  ranking signal is fully filtered still gets an empty sidecar list).
+  One-argument publishers still work. Batch popular/latest and
+  `__cold_start__` stay instead of being replaced by the current flush.
   AutoML challenger arms (including custom-named variants) resolve eligibility
   without a model pick.
 - Postgres and Redis lock probes only treat SQL or Redis errors as a

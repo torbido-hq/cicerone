@@ -30,7 +30,7 @@ from cicerone.io.recommendation_reader import SOURCE_COLUMN, USER_COLUMN
 from cicerone.io.recommendation_schema import recommendation_output_columns
 from cicerone.job_eval import PUBLISH_ERRORS, log_caught
 from cicerone.locks import LockLostError, WriterLockBusyError
-from cicerone.publish.base import RecommendationPublisher
+from cicerone.publish.base import RecommendationPublisher, publish_recommendations
 from cicerone.publish.sidecar import log_sidecar_generation_skip, sidecar_generation_current
 
 logger = logging.getLogger(__name__)
@@ -247,7 +247,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             self._ensure_fence()
             current = sidecar_generation_current(self._output_settings, generated_at)
             if current:
-                self._publisher.publish(merged, user_ids=replace_ids)
+                publish_recommendations(self._publisher, merged, user_ids=replace_ids)
             else:
                 log_sidecar_generation_skip(current, incremental=True)
         except (LockLostError, WriterLockBusyError):
@@ -339,7 +339,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             if not merged_user.empty:
                 frames.append(merged_user)
                 replace_ids.append(user_id)
-            elif not prior.empty:
+            elif not prior.empty or not self._signal_rows(user_batch, weights).empty:
                 replace_ids.append(user_id)
         prior_cold = by_user.get(COLD_START_USER_ID, empty_recommendations_frame())
         cold = self._cold_start_rows(
