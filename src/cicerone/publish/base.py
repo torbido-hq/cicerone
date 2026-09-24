@@ -38,9 +38,12 @@ def require_incremental_publisher(
 
 def _publisher_accepts_user_ids(publish: object) -> bool | None:
     try:
-        params = inspect.signature(publish).parameters  # type: ignore[arg-type]
+        signature = inspect.signature(publish)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return None
+    if signature is None:
+        return None
+    params = signature.parameters
     return "user_ids" in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
 
 
@@ -57,16 +60,11 @@ def _publish_without_user_ids(
     publish: Callable[..., None],
     df: pd.DataFrame,
     tombstones: list[str],
-    *,
-    hide_cause: bool = False,
 ) -> None:
     if tombstones:
         if df is not None and not df.empty:
             publish(df)
-        error = PublishError(_TOMBSTONE_PUBLISH_ERROR)
-        if hide_cause:
-            raise error from None
-        raise error
+        raise PublishError(_TOMBSTONE_PUBLISH_ERROR)
     publish(df)
 
 
@@ -76,22 +74,17 @@ def publish_recommendations(
     *,
     user_ids: Sequence[str] | None = None,
 ) -> None:
-    """Call ``publish``, passing ``user_ids`` only when the implementation accepts it.
+    """Call ``publish``, passing ``user_ids`` unless the signature is legacy.
 
-    Empty-list tombstones need ``user_ids``. A one-argument publisher still
-    receives any non-empty frame, then this raises ``PublishError`` so mixed
-    flushes do not drop live lists.
+    Empty-list tombstones need ``user_ids``. A one-argument publisher whose
+    signature is inspectable as legacy still receives any non-empty frame, then
+    this raises ``PublishError`` so mixed flushes do not drop live lists.
+    When the signature cannot be inspected, ``user_ids`` is passed once; a
+    ``TypeError`` from that call is not retried as a one-argument fallback.
     """
     publish = publisher.publish
     accepts = _publisher_accepts_user_ids(publish)
-    tombstones = _tombstone_user_ids(df, user_ids)
-    if accepts is True:
-        publish(df, user_ids=user_ids)
-        return
     if accepts is False:
-        _publish_without_user_ids(publish, df, tombstones)
+        _publish_without_user_ids(publish, df, _tombstone_user_ids(df, user_ids))
         return
-    try:
-        publish(df, user_ids=user_ids)
-    except TypeError:
-        _publish_without_user_ids(publish, df, tombstones, hide_cause=True)
+    publish(df, user_ids=user_ids)
