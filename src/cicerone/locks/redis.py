@@ -105,24 +105,30 @@ class RedisLock:
             self._stop_refresh.clear()
 
             def _run() -> None:
-                while not self._stop_refresh.wait(self._refresh_interval_ms / 1000.0):
-                    with self._mutex:
-                        if not self._held or self._hold_generation != generation:
-                            break
-                        token = self._token
-                    try:
-                        if not self._refresh_script(keys=[self._key], args=[token, self._ttl_ms]):
-                            # Intentional release sets stop before clearing hold; skip _mark_lost.
+                try:
+                    while not self._stop_refresh.wait(self._refresh_interval_ms / 1000.0):
+                        with self._mutex:
+                            if not self._held or self._hold_generation != generation:
+                                break
+                            token = self._token
+                        try:
+                            if not self._refresh_script(keys=[self._key], args=[token, self._ttl_ms]):
+                                # Intentional release sets stop before clearing hold; skip _mark_lost.
+                                if self._stop_refresh.is_set():
+                                    break
+                                self._mark_lost(generation)
+                                break
+                        except RedisError:
                             if self._stop_refresh.is_set():
                                 break
+                            logger.exception("Failed to refresh Redis lock TTL")
                             self._mark_lost(generation)
                             break
-                    except RedisError:
-                        if self._stop_refresh.is_set():
-                            break
-                        logger.exception("Failed to refresh Redis lock TTL")
+                except Exception:
+                    logger.exception("Unexpected Redis lock refresh failure")
+                finally:
+                    if not self._stop_refresh.is_set():
                         self._mark_lost(generation)
-                        break
 
             self._refresh_thread = threading.Thread(
                 target=_run,
