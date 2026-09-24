@@ -22,7 +22,8 @@ allowlist (availability always; user-scoped rules from the input users
 frame — an empty users table still applies missing-user handling, and
 serve reads that frame only when a recipe is user-scoped). A list that
 filters to empty is deleted, and the publish sidecar
-emits an empty-list message for each cleared user. Batch popular / latest
+emits an empty-list message for each cleared user (the publisher must
+accept `user_ids=`). Batch popular / latest
 rows stay; a flush does not rebuild `__cold_start__`. When `[experiment]` is
 on, that popular/latest refresh runs only on the **assigned** (or promoted)
 variant; other variants keep their last batch lists. AutoML challenger arms

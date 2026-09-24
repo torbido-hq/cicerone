@@ -691,6 +691,43 @@ def test_incremental_updater_legacy_publisher_without_user_ids(
     assert "i9" in set(load_recommendations_frame(settings.output)["item_id"].astype(str))
 
 
+def test_incremental_updater_legacy_publisher_does_not_retry_after_tombstone(
+    tmp_path, feature_config: FeatureConfig
+) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "oos", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    items = pd.DataFrame([{"item_id": "oos", "published": True, "in_stock": False}])
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+
+    class _Legacy:
+        def connect(self) -> None:
+            return None
+
+        def publish(self, df: pd.DataFrame) -> None:
+            raise AssertionError("legacy publish must not drop tombstones")
+
+        def close(self) -> None:
+            return None
+
+    applied = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        items_provider=lambda: items,
+        publisher=_Legacy(),
+    ).apply([normalize_event(event_payload(user_id="u1", item_id="oos", event_id="legacy-tomb"))])
+    assert applied == 1
+    frame = load_recommendations_frame(settings.output)
+    assert frame[frame["user_id"] == "u1"].empty
+
+
 def test_incremental_updater_unknown_event_keeps_popular_only_user(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()

@@ -8,6 +8,8 @@ from typing import Protocol
 
 import pandas as pd
 
+from cicerone.io.recommendation_schema import USER_COLUMN
+
 
 class PublishError(RuntimeError):
     """Sidecar publish, connect, or close failed."""
@@ -21,24 +23,50 @@ class RecommendationPublisher(Protocol):
     def close(self) -> None: ...
 
 
+def _publisher_accepts_user_ids(publish: object) -> bool | None:
+    try:
+        params = inspect.signature(publish).parameters  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return "user_ids" in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
+def _tombstone_user_ids(df: pd.DataFrame | None, user_ids: Sequence[str] | None) -> list[str]:
+    if not user_ids:
+        return []
+    present: set[str] = set()
+    if df is not None and not df.empty and USER_COLUMN in df.columns:
+        present = set(df[USER_COLUMN].astype(str))
+    return [str(user_id) for user_id in dict.fromkeys(user_ids) if str(user_id) not in present]
+
+
 def publish_recommendations(
     publisher: RecommendationPublisher,
     df: pd.DataFrame,
     *,
     user_ids: Sequence[str] | None = None,
 ) -> None:
-    """Call ``publish``, passing ``user_ids`` only when the implementation accepts it."""
+    """Call ``publish``, passing ``user_ids`` only when the implementation accepts it.
+
+    Empty-list tombstones need ``user_ids``. A one-argument publisher cannot emit
+    them; this raises ``PublishError`` instead of publishing a no-op empty frame.
+    """
     publish = publisher.publish
-    try:
-        params = inspect.signature(publish).parameters
-    except (TypeError, ValueError):
-        try:
-            publish(df, user_ids=user_ids)
-            return
-        except TypeError:
-            publish(df)
-            return
-    if "user_ids" in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+    accepts = _publisher_accepts_user_ids(publish)
+    tombstones = _tombstone_user_ids(df, user_ids)
+    if accepts is True:
         publish(df, user_ids=user_ids)
         return
-    publish(df)
+    if accepts is False:
+        if tombstones:
+            raise PublishError("publisher.publish must accept user_ids= to emit empty recommendation lists")
+        publish(df)
+        return
+    try:
+        publish(df, user_ids=user_ids)
+    except TypeError:
+        if tombstones:
+            raise PublishError(
+                "publisher.publish must accept user_ids= to emit empty recommendation lists"
+            ) from None
+        publish(df)
