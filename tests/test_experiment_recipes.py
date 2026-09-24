@@ -260,6 +260,24 @@ def test_resolve_variant_policy_configs_without_automl_models() -> None:
         features,
     )
     assert [rule.name for rule in rrf["treatment"].eligibility] == ["in_stock"]
+    custom = resolve_variant_policy_configs(
+        make_settings(
+            experiment=ExperimentSettings(
+                enabled=True,
+                id="auto",
+                automl_challenger=True,
+                variants=(
+                    VariantSettings(name="champion", traffic=0.5, eligibility=False),
+                    VariantSettings(name="challenger", traffic=0.5),
+                ),
+            ),
+        ),
+        features,
+    )
+    assert set(custom) == {"champion", "challenger"}
+    assert custom["champion"].eligibility == []
+    assert custom["champion"].merge_item_availability is False
+    assert [rule.name for rule in custom["challenger"].eligibility] == ["in_stock"]
 
 
 def test_resolve_recipes_named_and_replacement_policy() -> None:

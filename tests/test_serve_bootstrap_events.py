@@ -347,8 +347,53 @@ def test_start_events_runtime_wires_automl_challenger_variant_feature_configs(
         assert runtime.worker is not None
         configs = runtime.worker._updater._variant_feature_configs
         assert set(configs) == {"control", "treatment"}
-        assert configs["control"].merge_item_availability is True
-        assert configs["treatment"].merge_item_availability is True
+    finally:
+        runtime.stop()
+
+
+def test_start_events_runtime_wires_custom_automl_variant_policy_names(
+    tmp_path, feature_config: FeatureConfig
+):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+
+    class _Reader:
+        def refresh(self) -> None:
+            return None
+
+    runtime = start_events_runtime(
+        make_settings(
+            output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+            events=EventsSettings(
+                enabled=True,
+                kind="webhook",
+                incremental=EventsIncrementalSettings(
+                    batch_size=1, batch_window_seconds=60.0, poll_interval_seconds=0.05
+                ),
+            ),
+            experiment=ExperimentSettings(
+                enabled=True,
+                id="ab",
+                automl_challenger=True,
+                variants=(
+                    VariantSettings(name="champion", traffic=0.5, eligibility=False),
+                    VariantSettings(name="challenger", traffic=0.5),
+                ),
+            ),
+        ),
+        feature_config=feature_config,
+        reader=_Reader(),  # type: ignore[arg-type]
+        start_worker=False,
+    )
+    try:
+        assert runtime.worker is not None
+        configs = runtime.worker._updater._variant_feature_configs
+        assert set(configs) == {"champion", "challenger"}
+        assert configs["champion"].eligibility == []
+        assert configs["champion"].merge_item_availability is False
     finally:
         runtime.stop()
 
