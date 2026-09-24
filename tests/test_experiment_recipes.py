@@ -108,6 +108,30 @@ def test_automl_challenger_uses_last_manifest_as_control() -> None:
     assert list(recipes[1].models) == ["item_based", "popular"]
 
 
+def test_automl_challenger_keeps_configured_variant_names() -> None:
+    settings = make_settings(
+        models=["popular"],
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="auto",
+            automl_challenger=True,
+            variants=(
+                VariantSettings(name="champion", traffic=0.5),
+                VariantSettings(name="challenger", traffic=0.5),
+            ),
+        ),
+    )
+    recipes = resolve_recipes(
+        settings,
+        _features(),
+        automl_models=["item_based", "popular"],
+        automl_weights={"item_based": 1.0, "popular": 1.0},
+        automl_rrf_k=50.0,
+    )
+    assert [recipe.name for recipe in recipes] == ["champion", "challenger"]
+    assert list(recipes[1].models) == ["item_based", "popular"]
+
+
 def test_automl_challenger_prefers_control_recipe_from_experiment_variants() -> None:
     settings = make_settings(
         models=["popular"],

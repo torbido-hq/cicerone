@@ -93,6 +93,21 @@ def test_experiment_variant_names_challenger_defaults() -> None:
     assert experiment_variant_names(named) == ("control", "treatment")
     challenger = make_settings(experiment=ExperimentSettings(enabled=True, id="auto", automl_challenger=True))
     assert experiment_variant_names(challenger) == ("control", "treatment")
+    custom = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="auto",
+            automl_challenger=True,
+            variants=(
+                VariantSettings(name="champion", traffic=0.5),
+                VariantSettings(name="challenger", traffic=0.5),
+            ),
+        )
+    )
+    assert experiment_variant_names(custom) == ("champion", "challenger")
+    experiment_id, variant = resolve_assignment(custom, "u1")
+    assert experiment_id == "auto"
+    assert variant in {"champion", "challenger"}
     enabled_empty = make_settings(experiment=ExperimentSettings(enabled=True, id="exp"))
     assert experiment_variant_names(enabled_empty) == ()
 

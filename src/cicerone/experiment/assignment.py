@@ -7,7 +7,7 @@ from collections.abc import Sequence
 
 from cicerone.config.constants import ALLOCATION_THOMPSON
 from cicerone.config.settings import Settings
-from cicerone.experiment.recipes import CONTROL_NAME, TREATMENT_NAME
+from cicerone.experiment.recipes import automl_challenger_pair
 
 _DIGEST_BYTES = 8
 _DIGEST_SPAN = float(1 << (8 * _DIGEST_BYTES))
@@ -67,9 +67,11 @@ def resolve_assignment(
     experiment = settings.experiment
     if not experiment.enabled:
         return None, None
-    variants = [(item.name, item.traffic) for item in experiment.variants]
-    if not variants and experiment.automl_challenger:
-        variants = [(CONTROL_NAME, 0.5), (TREATMENT_NAME, 0.5)]
+    if experiment.automl_challenger:
+        control, treatment = automl_challenger_pair(experiment.variants)
+        variants = [(control.name, float(control.traffic)), (treatment.name, float(treatment.traffic))]
+    else:
+        variants = [(item.name, item.traffic) for item in experiment.variants]
     if not variants:
         return None, None
     names = {name for name, _traffic in variants}
@@ -105,9 +107,11 @@ def assignment_needs_snapshot(
         return False
     if promoted_variant is not None:
         return False
-    names = {item.name for item in experiment.variants}
-    if not names and experiment.automl_challenger:
-        names = {CONTROL_NAME, TREATMENT_NAME}
+    if experiment.automl_challenger:
+        control, treatment = automl_challenger_pair(experiment.variants)
+        names = {control.name, treatment.name}
+    else:
+        names = {item.name for item in experiment.variants}
     return not (active_pair is not None and active_pair[0] in names and active_pair[1] in names)
 
 
@@ -126,9 +130,7 @@ def experiment_variant_names(settings: Settings) -> tuple[str, ...]:
     experiment = settings.experiment
     if not experiment.enabled:
         return ()
-    names = tuple(variant.name for variant in experiment.variants)
-    if names:
-        return names
     if experiment.automl_challenger:
-        return (CONTROL_NAME, TREATMENT_NAME)
-    return ()
+        control, treatment = automl_challenger_pair(experiment.variants)
+        return (control.name, treatment.name)
+    return tuple(variant.name for variant in experiment.variants)
