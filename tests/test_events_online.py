@@ -983,6 +983,9 @@ def test_incremental_updater_online_error_keeps_preserved(tmp_path, feature_conf
     )
 
     class _BoomOnline:
+        def __init__(self) -> None:
+            self.aborts = 0
+
         def refresh(self, events):
             del events
             raise RuntimeError("online boom")
@@ -990,14 +993,62 @@ def test_incremental_updater_online_error_keeps_preserved(tmp_path, feature_conf
         def invalidate(self) -> None:
             return None
 
+        def abort(self) -> None:
+            self.aborts += 1
+
+    online = _BoomOnline()
     updater = IncrementalUpdater(
         sink=build_output_sink(settings.output),
         output_settings=settings.output,
         feature_config=feature_config,
         top_k=5,
-        online=_BoomOnline(),
+        online=online,
     )
     with pytest.raises(RuntimeError, match="online boom"):
         updater.apply([normalize_event(event_payload(user_id="u1", item_id="i1", event_id="boom"))])
+    assert online.aborts == 1
     frame = load_recommendations_frame(settings.output)
     assert "old" in set(frame[frame["user_id"] == "u1"]["item_id"].astype(str))
+
+
+def test_incremental_updater_online_named_error_logs_and_aborts(
+    tmp_path, feature_config: FeatureConfig, caplog
+):
+    import logging
+
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+
+    class _BoomOnline:
+        def __init__(self) -> None:
+            self.aborts = 0
+
+        def refresh(self, events):
+            del events
+            raise OSError("online io")
+
+        def invalidate(self) -> None:
+            return None
+
+        def abort(self) -> None:
+            self.aborts += 1
+
+    online = _BoomOnline()
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        online=online,
+    )
+    with caplog.at_level(logging.ERROR), pytest.raises(OSError, match="online io"):
+        updater.apply([normalize_event(event_payload(user_id="u1", item_id="i1", event_id="io"))])
+    assert online.aborts == 1
+    assert "Online collaborative refresh failed" in caplog.text

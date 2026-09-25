@@ -28,7 +28,7 @@ from cicerone.feature_config import FeatureConfig
 from cicerone.io.base import OutputSink
 from cicerone.io.recommendation_reader import SOURCE_COLUMN, USER_COLUMN
 from cicerone.io.recommendation_schema import recommendation_output_columns
-from cicerone.job_eval import PUBLISH_ERRORS, log_caught
+from cicerone.job_eval import OPTIONAL_IO_ERRORS, PUBLISH_ERRORS, log_caught
 from cicerone.locks import LockLostError, WriterLockBusyError
 from cicerone.publish.base import (
     RecommendationPublisher,
@@ -40,6 +40,11 @@ from cicerone.publish.sidecar import log_sidecar_generation_skip, sidecar_genera
 logger = logging.getLogger(__name__)
 
 _SIDECAR_PUBLISH_ERRORS: tuple[type[BaseException], ...] = (*PUBLISH_ERRORS, TypeError)
+_ONLINE_REFRESH_ERRORS: tuple[type[BaseException], ...] = (
+    *OPTIONAL_IO_ERRORS,
+    *PUBLISH_ERRORS,
+    WriterLockBusyError,
+)
 
 # Bound in-process per-user frames for long-lived serve workers.
 DEFAULT_USER_CACHE_MAX_SIZE = 2048
@@ -387,9 +392,12 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         except LockLostError:
             self._abort_online()
             raise
-        except Exception:
+        except _ONLINE_REFRESH_ERRORS:
             self._abort_online()
             logger.exception("Online collaborative refresh failed; nacking incremental batch")
+            raise
+        except Exception:
+            self._abort_online()
             raise
 
     def _online_rows_by_user(self, result: OnlineRefreshResult) -> dict[str, pd.DataFrame]:

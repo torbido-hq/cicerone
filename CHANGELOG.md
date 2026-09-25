@@ -29,6 +29,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Incremental recommendation loads only treat missing objects, missing
   tables or columns, and parquet projection or schema errors as empty.
   Hard S3, local I/O, and unexpected exceptions still raise.
+- Incremental online refresh only logs named I/O and publish errors
+  before aborting the pending fit. Unexpected exceptions still abort
+  and raise.
 - Postgres and Redis lock probes only treat SQL or Redis errors as a
   lost or busy lock. Unexpected exceptions still raise.
 - Production replay scores impression lists when track rows exist, and
