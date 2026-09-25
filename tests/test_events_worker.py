@@ -6,7 +6,7 @@ from support.events import event_payload
 from support.prometheus_metrics import registry_metric_value
 
 from cicerone.config import EventsSettings, IOSettings, make_settings
-from cicerone.events.base import EventSourceHealth
+from cicerone.events.base import EventSourceError, EventSourceHealth
 from cicerone.events.buffer import MicroBatchBuffer
 from cicerone.events.normalize import event_fingerprint, normalize_event
 from cicerone.events.updater import IncrementalUpdater
@@ -237,6 +237,43 @@ def test_event_worker_health_runtime_error_raises(tmp_path, feature_config: Feat
     )
     with pytest.raises(RuntimeError, match="health boom"):
         worker.tick()
+
+
+def test_event_worker_loop_survives_source_error(tmp_path, feature_config: FeatureConfig):
+    import time
+
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        top_k=3,
+    )
+    polls = {"n": 0}
+
+    class _BoomPoll(WebhookEventSource):
+        def poll(self, max_events: int = 100):  # type: ignore[override]
+            polls["n"] += 1
+            if polls["n"] == 1:
+                raise EventSourceError("connect() required before poll")
+            return super().poll(max_events)
+
+    worker = EventWorker(
+        _BoomPoll({}),
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+        poll_interval_seconds=0.01,
+    )
+    worker.start()
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and polls["n"] < 2:
+        time.sleep(0.01)
+    thread = worker._thread
+    assert thread is not None and thread.is_alive()
+    assert polls["n"] >= 2
+    assert worker.stop(join_timeout_seconds=2.0) is True
 
 
 def test_event_worker_persist_unexpected_raises(tmp_path, feature_config: FeatureConfig, monkeypatch):
