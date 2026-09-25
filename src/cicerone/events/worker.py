@@ -282,11 +282,13 @@ class EventWorker:
                 to_ack.append(event)
         if not to_ack:
             return
+        completed = False
         try:
             live_ids = self._ack_live_ids([event.event_id for event in to_ack])
-        except EVENT_SOURCE_ERRORS:
-            self._retry_acks.extend(to_ack)
-            raise
+            completed = True
+        finally:
+            if not completed:
+                self._retry_acks.extend(to_ack)
         live = [event for event in to_ack if event.event_id in live_ids]
         missing = [event for event in to_ack if event.event_id not in live_ids]
         self._retry_acks.extend(missing)
@@ -309,11 +311,13 @@ class EventWorker:
         self._deferred_acks = keep
         if not matched:
             return
+        completed = False
         try:
             live_ids = self._ack_live_ids([event.event_id for event in matched])
-        except EVENT_SOURCE_ERRORS:
-            self._retry_acks.extend(matched)
-            raise
+            completed = True
+        finally:
+            if not completed:
+                self._retry_acks.extend(matched)
         live = [event for event in matched if event.event_id in live_ids]
         self._retry_acks.extend(event for event in matched if event.event_id not in live_ids)
         self._drop_retry_acks(live)
@@ -323,11 +327,13 @@ class EventWorker:
             return
         batch = self._retry_acks
         self._retry_acks = []
+        completed = False
         try:
             live_ids = self._ack_live_ids([event.event_id for event in batch])
-        except EVENT_SOURCE_ERRORS:
-            self._retry_acks.extend(batch)
-            raise
+            completed = True
+        finally:
+            if not completed:
+                self._retry_acks.extend(batch)
         live = [event for event in batch if event.event_id in live_ids]
         self._retry_acks.extend(event for event in batch if event.event_id not in live_ids)
         if live:

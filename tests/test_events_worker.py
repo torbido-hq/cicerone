@@ -8,6 +8,7 @@ from support.prometheus_metrics import registry_metric_value
 from cicerone.config import ConfigError, EventsSettings, IOSettings, make_settings
 from cicerone.events.base import EventSourceError, EventSourceHealth
 from cicerone.events.buffer import MicroBatchBuffer
+from cicerone.events.errors import EVENT_APPLY_ERRORS
 from cicerone.events.normalize import event_fingerprint, normalize_event
 from cicerone.events.updater import IncrementalUpdater
 from cicerone.events.webhook import WebhookEventSource
@@ -1292,6 +1293,50 @@ def test_event_worker_retries_failed_unbuffered_ack(tmp_path, feature_config: Fe
         worker._poll_into_buffer()
     worker._flush_retry_acks()
     assert acked == ["already-1", "already-1"]
+
+
+def test_event_worker_preserves_retry_acks_on_unexpected_ack_errors(
+    tmp_path, feature_config: FeatureConfig, monkeypatch
+):
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    event = normalize_event(event_payload(event_id="unexpected-ack"))
+    worker = EventWorker(
+        WebhookEventSource({}),
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+
+    def _boom(_event_ids):  # type: ignore[no-untyped-def]
+        raise LookupError("ack bug")
+
+    monkeypatch.setattr(worker, "_ack_live_ids", _boom)
+
+    with pytest.raises(LookupError, match="ack bug"):
+        worker._ack_unbuffered([event])
+    assert worker._retry_acks == [event]
+
+    worker._retry_acks = []
+    worker._deferred_acks = [event]
+    with pytest.raises(LookupError, match="ack bug"):
+        worker._ack_deferred_matching([event])
+    assert worker._retry_acks == [event]
+
+    with pytest.raises(LookupError, match="ack bug"):
+        worker._flush_retry_acks()
+    assert worker._retry_acks == [event]
+
+
+def test_event_apply_errors_exclude_broad_programming_errors():
+    assert RuntimeError not in EVENT_APPLY_ERRORS
+    assert ValueError not in EVENT_APPLY_ERRORS
+    assert TypeError not in EVENT_APPLY_ERRORS
 
 
 def test_event_worker_retry_acks_deferred_duplicates(tmp_path, feature_config: FeatureConfig):
