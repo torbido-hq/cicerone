@@ -412,6 +412,134 @@ def test_load_recommendation_guardrail_rows_sqlite_missing_table(tmp_path):
     assert frame.empty
 
 
+def test_load_recommendation_guardrail_rows_raises_hard_sql(tmp_path, monkeypatch):
+    from sqlalchemy.exc import OperationalError
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'guard_busy.db'}"
+    sqlite3.connect(tmp_path / "guard_busy.db").close()
+    settings = make_settings(output=IOSettings(kind="db", options={"database_url": url}))
+
+    def _boom(*_args, **_kwargs):
+        raise OperationalError("SELECT 1", {}, Exception("connection refused"))
+
+    monkeypatch.setattr("cicerone.events.store.pd.read_sql_query", _boom)
+    with pytest.raises(OperationalError, match="connection refused"):
+        load_recommendation_guardrail_rows(settings.output)
+
+
+def test_load_recommendation_guardrail_rows_pandas_missing_table(tmp_path, monkeypatch):
+    from pandas.errors import DatabaseError
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'guard_pandas.db'}"
+    sqlite3.connect(tmp_path / "guard_pandas.db").close()
+    settings = make_settings(output=IOSettings(kind="db", options={"database_url": url}))
+
+    def _boom(*_args, **_kwargs):
+        raise DatabaseError("no such table: recommendations")
+
+    monkeypatch.setattr("cicerone.events.store.pd.read_sql_query", _boom)
+    frame = load_recommendation_guardrail_rows(settings.output)
+    assert frame is not None
+    assert frame.empty
+
+
+def test_load_recommendation_guardrail_rows_pandas_hard_sql(tmp_path, monkeypatch):
+    from pandas.errors import DatabaseError
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'guard_pandas_hard.db'}"
+    sqlite3.connect(tmp_path / "guard_pandas_hard.db").close()
+    settings = make_settings(output=IOSettings(kind="db", options={"database_url": url}))
+
+    def _boom(*_args, **_kwargs):
+        raise DatabaseError("connection refused")
+
+    monkeypatch.setattr("cicerone.events.store.pd.read_sql_query", _boom)
+    with pytest.raises(DatabaseError, match="connection refused"):
+        load_recommendation_guardrail_rows(settings.output)
+
+
+def test_load_recommendations_frame_pandas_missing_table(tmp_path, monkeypatch):
+    from pandas.errors import DatabaseError
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'frame_pandas.db'}"
+    sqlite3.connect(tmp_path / "frame_pandas.db").close()
+    settings = make_settings(output=IOSettings(kind="db", options={"database_url": url}))
+
+    def _boom(*_args, **_kwargs):
+        raise DatabaseError("no such table: recommendations")
+
+    monkeypatch.setattr("cicerone.events.store.pd.read_sql_query", _boom)
+    frame = load_recommendations_frame(settings.output)
+    assert frame.empty
+    assert list(frame.columns) == list(empty_recommendations_frame().columns)
+
+
+def test_load_recommendations_frame_pandas_hard_sql(tmp_path, monkeypatch):
+    from pandas.errors import DatabaseError
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'frame_pandas_hard.db'}"
+    sqlite3.connect(tmp_path / "frame_pandas_hard.db").close()
+    settings = make_settings(output=IOSettings(kind="db", options={"database_url": url}))
+
+    def _boom(*_args, **_kwargs):
+        raise DatabaseError("connection refused")
+
+    monkeypatch.setattr("cicerone.events.store.pd.read_sql_query", _boom)
+    with pytest.raises(DatabaseError, match="connection refused"):
+        load_recommendations_frame(settings.output)
+
+
+def test_count_recommendation_users_pandas_missing_table(tmp_path, monkeypatch):
+    from pandas.errors import DatabaseError
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'count_pandas.db'}"
+    sqlite3.connect(tmp_path / "count_pandas.db").close()
+    settings = make_settings(output=IOSettings(kind="db", options={"database_url": url}))
+
+    class _Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, *_args, **_kwargs):
+            raise DatabaseError("no such table: recommendations")
+
+    class _Engine:
+        def connect(self):
+            return _Conn()
+
+    monkeypatch.setattr("cicerone.events.store._engine_for", lambda _url: _Engine())
+    assert count_recommendation_users(settings.output) == 0
+
+
+def test_count_recommendation_users_pandas_hard_sql(tmp_path, monkeypatch):
+    from pandas.errors import DatabaseError
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'count_pandas_hard.db'}"
+    sqlite3.connect(tmp_path / "count_pandas_hard.db").close()
+    settings = make_settings(output=IOSettings(kind="db", options={"database_url": url}))
+
+    class _Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, *_args, **_kwargs):
+            raise DatabaseError("connection refused")
+
+    class _Engine:
+        def connect(self):
+            return _Conn()
+
+    monkeypatch.setattr("cicerone.events.store._engine_for", lambda _url: _Engine())
+    with pytest.raises(DatabaseError, match="connection refused"):
+        count_recommendation_users(settings.output)
+
+
 def test_recommendation_engine_cache_keeps_all_urls(tmp_path):
     from cicerone.events import store as events_store
 
@@ -441,7 +569,14 @@ def test_load_items_catalog_size_empty_and_read_errors(tmp_path, monkeypatch):
         lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("boom")),
     )
     monkeypatch.setattr("cicerone.events.store.is_s3_not_found", lambda _exc: False)
-    assert load_items_catalog_size(settings.output) is None
+    with pytest.raises(OSError, match="boom"):
+        load_items_catalog_size(settings.output)
+    monkeypatch.setattr(
+        "cicerone.events.store._read_parquet_columns",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("Stored object is 9 bytes; max is 8")),
+    )
+    with pytest.raises(ValueError, match="Stored object"):
+        load_items_catalog_size(settings.output)
     monkeypatch.setattr(
         "cicerone.events.store._read_parquet_columns",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
@@ -463,12 +598,51 @@ def test_read_parquet_columns_falls_back_without_projection(tmp_path, monkeypatc
 
     def _maybe_fail(options, filename, *, s3_client=None, columns=None, filters=None):
         if columns is not None:
-            raise RuntimeError("no projection")
+            raise ValueError("no projection")
         return real(options, filename, s3_client=s3_client, columns=columns, filters=filters)
 
     monkeypatch.setattr("cicerone.events.store.read_parquet", _maybe_fail)
     frame = _read_parquet_columns(settings.output, "items_snapshot.parquet", ("item_id",))
     assert list(frame["item_id"]) == ["a"]
+
+
+def test_read_parquet_columns_raises_hard_value_error(tmp_path, monkeypatch):
+    from cicerone.events.store import _read_parquet_columns
+
+    pd.DataFrame({"item_id": ["a"]}).to_parquet(tmp_path / "items_snapshot.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    )
+
+    def _boom(*_args, **_kwargs):
+        raise ValueError("file too large")
+
+    monkeypatch.setattr("cicerone.events.store.read_parquet", _boom)
+    with pytest.raises(ValueError, match="file too large"):
+        _read_parquet_columns(settings.output, "items_snapshot.parquet", ("item_id",))
+
+
+def test_count_recommendation_users_arrow_not_implemented_fallback(tmp_path, monkeypatch):
+    from pyarrow.lib import ArrowNotImplementedError
+
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"},
+            {"user_id": "u2", "item_id": "i2", "rank": 1, "score": 0.5, "source": "personalized"},
+        ]
+    ).to_parquet(tmp_path / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    )
+    real = __import__("cicerone.io.options", fromlist=["read_parquet"]).read_parquet
+
+    def _fail_columns(options, filename, *, s3_client=None, columns=None, filters=None):
+        if columns is not None:
+            raise ArrowNotImplementedError("column projection")
+        return real(options, filename, s3_client=s3_client, columns=columns, filters=filters)
+
+    monkeypatch.setattr("cicerone.events.store.read_parquet", _fail_columns)
+    assert count_recommendation_users(settings.output) == 2
 
 
 def test_load_recommendations_empty_existing_file(tmp_path):
@@ -499,7 +673,7 @@ def test_load_recommendations_for_users_filter_fallback(tmp_path, monkeypatch):
 
     def _fail_filters(options, filename, *, s3_client=None, columns=None, filters=None):
         if filters is not None:
-            raise RuntimeError("user_id filter unsupported")
+            raise ValueError("user_id filter unsupported")
         return real(options, filename, s3_client=s3_client, columns=columns, filters=filters)
 
     monkeypatch.setattr("cicerone.events.store.read_parquet", _fail_filters)
@@ -544,7 +718,8 @@ def test_load_items_catalog_size_backend_io_errors(tmp_path, monkeypatch):
         lambda *_args, **_kwargs: (_ for _ in ()).throw(BotoCoreError()),
     )
     monkeypatch.setattr("cicerone.events.store.is_s3_not_found", lambda _exc: False)
-    assert load_items_catalog_size(settings.output) is None
+    with pytest.raises(BotoCoreError):
+        load_items_catalog_size(settings.output)
     monkeypatch.setattr(
         "cicerone.events.store._read_parquet_columns",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(ArrowInvalid("corrupt parquet")),
@@ -561,11 +736,86 @@ def test_load_items_catalog_size_backend_io_errors(tmp_path, monkeypatch):
     monkeypatch.setattr("cicerone.events.store._engine_for", lambda _url: _Engine())
     monkeypatch.setattr("cicerone.events.store.is_missing_table_error", lambda _exc: False)
     monkeypatch.setattr("cicerone.events.store.is_missing_column_error", lambda _exc: False)
-    assert load_items_catalog_size(output) is None
+    with pytest.raises(SQLAlchemyError, match="engine"):
+        load_items_catalog_size(output)
 
     class _Busy:
         def connect(self):
             raise OperationalError("SELECT 1", {}, Exception("connection refused"))
 
     monkeypatch.setattr("cicerone.events.store._engine_for", lambda _url: _Busy())
-    assert load_items_catalog_size(output) is None
+    with pytest.raises(OperationalError, match="connection refused"):
+        load_items_catalog_size(output)
+
+
+def test_event_store_raises_unexpected_and_hard_s3(tmp_path, monkeypatch):
+    from botocore.exceptions import BotoCoreError, ClientError
+
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    )
+    pd.DataFrame({"item_id": ["a"]}).to_parquet(tmp_path / "items_snapshot.parquet", index=False)
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(tmp_path / "recommendations.parquet", index=False)
+
+    denied = ClientError({"Error": {"Code": "AccessDenied", "Message": "no"}}, "GetObject")
+    monkeypatch.setattr(
+        "cicerone.events.store._read_parquet_columns",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(denied),
+    )
+    with pytest.raises(ClientError):
+        load_items_catalog_size(settings.output)
+    monkeypatch.setattr(
+        "cicerone.events.store._read_parquet_columns",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(BotoCoreError()),
+    )
+    monkeypatch.setattr("cicerone.events.store.is_s3_not_found", lambda _exc: False)
+    with pytest.raises(BotoCoreError):
+        load_items_catalog_size(settings.output)
+    monkeypatch.undo()
+
+    monkeypatch.setattr(
+        "cicerone.events.store.read_parquet",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    with pytest.raises(RuntimeError, match="boom"):
+        load_recommendations_frame(settings.output)
+    with pytest.raises(RuntimeError, match="boom"):
+        load_recommendation_guardrail_rows(settings.output)
+    with pytest.raises(RuntimeError, match="boom"):
+        count_recommendation_users(settings.output)
+
+    def _fail_filters(*_args, **kwargs):
+        if kwargs.get("filters") is not None:
+            raise RuntimeError("filter boom")
+        raise RuntimeError("full boom")
+
+    monkeypatch.setattr("cicerone.events.store.read_parquet", _fail_filters)
+
+    with pytest.raises(RuntimeError, match="filter boom"):
+        load_recommendations_for_users(settings.output, ["u1"])
+
+
+def test_load_recommendations_for_users_arrow_not_implemented_fallback(tmp_path, monkeypatch):
+    from pyarrow.lib import ArrowNotImplementedError
+
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"},
+            {"user_id": "u2", "item_id": "i2", "rank": 1, "score": 0.5, "source": "personalized"},
+        ]
+    ).to_parquet(tmp_path / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    )
+    real = __import__("cicerone.io.options", fromlist=["read_parquet"]).read_parquet
+
+    def _fail_filters(options, filename, *, s3_client=None, columns=None, filters=None):
+        if filters is not None:
+            raise ArrowNotImplementedError("filter kernel")
+        return real(options, filename, s3_client=s3_client, columns=columns, filters=filters)
+
+    monkeypatch.setattr("cicerone.events.store.read_parquet", _fail_filters)
+    frame = load_recommendations_for_users(settings.output, ["u2"])
+    assert list(frame["user_id"]) == ["u2"]
