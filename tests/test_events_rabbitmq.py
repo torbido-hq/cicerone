@@ -10,6 +10,7 @@ from support.events import event_payload
 from support.fake_rabbitmq import install_fake_rabbitmq
 
 from cicerone.config import ConfigError
+from cicerone.events.base import EventSourceError
 from cicerone.events.ha import ingest_is_fanout, poll_without_apply_lock
 from cicerone.events.rabbitmq import RabbitMQEventSource, validate_rabbitmq_event_options
 from cicerone.events.registry import build_event_source, registered_event_source_kinds
@@ -142,7 +143,7 @@ def test_abandoned_io_does_not_return_late_ok():
         release.set()
         waiter.join(timeout=2)
         assert result["value"] is None
-        assert result["err"] is not None
+        assert isinstance(result["err"], EventSourceError)
         assert "abandoned" in str(result["err"])
     finally:
         release.set()

@@ -244,17 +244,17 @@ class _PikaIo:
                 return
             if not self._take_job(job):
                 with suppress(queue.Full):
-                    job.reply.put_nowait(("err", RuntimeError("RabbitMQ I/O worker abandoned")))
+                    job.reply.put_nowait(("err", EventSourceError("RabbitMQ I/O worker abandoned")))
                 self._exit_failed()
                 return
             if not self._enter_job(job):
                 with suppress(queue.Full):
-                    job.reply.put_nowait(("err", RuntimeError("RabbitMQ I/O worker abandoned")))
+                    job.reply.put_nowait(("err", EventSourceError("RabbitMQ I/O worker abandoned")))
                 self._exit_failed()
                 return
             if not self._should_run(job):
                 with suppress(queue.Full):
-                    job.reply.put_nowait(("err", RuntimeError("RabbitMQ I/O worker abandoned")))
+                    job.reply.put_nowait(("err", EventSourceError("RabbitMQ I/O worker abandoned")))
                 self._exit_failed()
                 return
             try:
@@ -264,7 +264,7 @@ class _PikaIo:
             else:
                 payload = ("ok", result)
             if self._failed:
-                payload = ("err", RuntimeError("RabbitMQ I/O worker abandoned"))
+                payload = ("err", EventSourceError("RabbitMQ I/O worker abandoned"))
             with suppress(queue.Full):
                 job.reply.put_nowait(payload)
             if self._failed:
@@ -293,7 +293,7 @@ class _PikaIo:
                 job.reply.put_nowait(("err", exc))
 
     def _exit_failed(self) -> None:
-        self._fail_pending(RuntimeError("RabbitMQ I/O worker abandoned"))
+        self._fail_pending(EventSourceError("RabbitMQ I/O worker abandoned"))
         self._cleanup_abandoned()
 
 
