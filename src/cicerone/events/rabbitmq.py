@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from contextlib import suppress
 from functools import partial
 from typing import Any
 
@@ -211,33 +210,43 @@ class RabbitMQEventSource(QueuedEventSource):
             io = self._io
             if io is None or io.failed or io.closing:
                 return tuple(events)
-            retained: list[NormalizedEvent] = []
-            for event in reversed(list(events)):
+            owned: list[tuple[NormalizedEvent, int]] = []
+            seen_tags: set[int] = set()
+            for event in events:
                 owner = self._event_io.get(id(event))
                 if owner is None or owner[0] is not io:
                     continue
-                if event.event_id not in self._delivery_tags:
+                tag = self._delivery_tags.get(event.event_id)
+                if tag is None or tag in seen_tags:
                     continue
-                retained.append(event)
+                seen_tags.add(tag)
+                owned.append((event, tag))
             if self._io is not io or io.failed or io.closing:
                 return tuple(events)
-            kept: set[int] = set()
-            added: list[NormalizedEvent] = []
-            for event in retained:
+        if not owned:
+            return tuple(events)
+        nacked: set[int] = set()
+        for event, tag in owned:
+            if not self._owns_io(io):
+                break
+            try:
+                io.submit(partial(self._basic_nack, io, tag))
+            except Exception:
+                logger.exception("RabbitMQ basic_nack failed")
+                io._mark_failed()
+                break
+            with self._lock:
+                if self._io is not io or self._delivery_tags.get(event.event_id) != tag:
+                    continue
+                self._delivery_tags.pop(event.event_id, None)
+                self._held_tags.discard(tag)
                 self._in_flight.discard(event.event_id)
-                kept.add(id(event))
-                if event.event_id in self._pending_ids:
-                    continue
-                self._pending.appendleft(event)
-                self._pending_ids.add(event.event_id)
-                added.append(event)
-            if self._io is not io or io.failed or io.closing:
-                for event in added:
-                    with suppress(ValueError):
-                        self._pending.remove(event)
-                    self._pending_ids.discard(event.event_id)
-                return tuple(events)
-        return tuple(event for event in events if id(event) not in kept)
+                self._forget_event(event.event_id)
+                nacked.add(id(event))
+        nacked_ids = {event.event_id for event in events if id(event) in nacked}
+        return tuple(
+            event for event in events if id(event) not in nacked and event.event_id not in nacked_ids
+        )
 
     def heartbeat(self, events: Sequence[NormalizedEvent]) -> None:
         del events
@@ -283,6 +292,9 @@ class RabbitMQEventSource(QueuedEventSource):
 
     def _basic_ack(self, io: _PikaIo, tag: int) -> None:
         io.broker_channel().basic_ack(delivery_tag=tag)
+
+    def _basic_nack(self, io: _PikaIo, tag: int) -> None:
+        io.broker_channel().basic_nack(delivery_tag=tag, requeue=True)
 
     def _passive_declare(self, io: _PikaIo) -> Any:
         return io.broker_channel().queue_declare(queue=self._queue, durable=True, passive=True)

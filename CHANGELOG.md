@@ -42,6 +42,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Kafka publish enables idempotent producer delivery (`enable.idempotence` and `acks=all`).
 - Kafka ingest reads with `consume()` instead of a one-message `poll(0)` loop.
+- RabbitMQ ingest `nack` uses `basic_nack(requeue=True)` instead of holding an unacked local deque.
 - Dashboard user lookup applies the same item availability filters as serve.
 - Job-time Thompson samples Beta(1+s, 1+f) in-process instead of writing MABWiser's private `_imp` counts.
 - Online refresh still rewrites LightFM / popular lists when the sequential extra is missing. Only the sequential model is skipped.

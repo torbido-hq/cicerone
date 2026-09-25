@@ -1036,12 +1036,44 @@ def test_nack_allows_repoll(monkeypatch):
     first = list(source.poll(10))
     assert len(first) == 1
     assert source.nack(first) == ()
-    assert source.nack(first) == ()
+    assert broker.connection.channel_obj.nacked == [(1, True)]
     again = list(source.poll(10))
     assert [event.event_id for event in again] == ["e1"]
     source.ack(["missing", again[0].event_id])
     assert list(source.poll(10)) == []
-    assert broker.connection.channel_obj.nacked == []
+
+
+def test_nack_dedupes_duplicate_events(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.enqueue("cicerone.events", event_payload(event_id="e1"))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    first = list(source.poll(10))
+    assert len(first) == 1
+    assert source.nack([first[0], first[0]]) == ()
+    assert broker.connection.channel_obj.nacked == [(1, True)]
+    again = list(source.poll(10))
+    assert [event.event_id for event in again] == ["e1"]
+    source.close()
+
+
+def test_nack_marks_io_failed_when_basic_nack_raises(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.enqueue("cicerone.events", event_payload(event_id="e1"))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    first = list(source.poll(1))
+
+    def _boom(*, delivery_tag: int, requeue: bool = True) -> None:
+        del delivery_tag, requeue
+        raise RuntimeError("nack fail")
+
+    broker.connection.channel_obj.basic_nack = _boom  # type: ignore[method-assign]
+    rejected = source.nack(first)
+    assert [event.event_id for event in rejected] == ["e1"]
+    assert source._io is not None and source._io.failed is True
+    assert source.health().connected is False
+    source.close()
 
 
 def test_nack_rejects_if_io_fails_during_requeue(monkeypatch):
@@ -1055,9 +1087,9 @@ def test_nack_rejects_if_io_fails_during_requeue(monkeypatch):
     assert io is not None
 
     class _FailingTags(dict):
-        def __contains__(self, key: object) -> bool:
+        def get(self, key: object, default: object = None) -> object:
             io._failed = True
-            return super().__contains__(key)
+            return super().get(key, default)
 
     source._delivery_tags = _FailingTags(source._delivery_tags)
     rejected = source.nack(first)
@@ -1341,7 +1373,7 @@ def test_basic_get_failure_returns_partial(monkeypatch):
 
     broker.connection.channel_obj.basic_get = _boom  # type: ignore[method-assign]
     again = list(source.poll(10))
-    assert [event.event_id for event in again] == ["e1"]
+    assert again == []
     assert source._io is not None and source._io.failed is True
     assert source.health().connected is False
     source.close()
@@ -1580,8 +1612,9 @@ def test_poll_drops_stale_pending_when_tag_reborn(monkeypatch):
     source.connect()
     first = list(source.poll(1))
     assert [event.event_id for event in first] == ["e1"]
-    source.nack(first)
     old_tag = source._delivery_tags["e1"]
+    source._pending.appendleft(first[0])
+    source._pending_ids.add(first[0].event_id)
 
     def _reborn(_io: object) -> tuple[None, None, None]:
         source._delivery_tags["e1"] = old_tag + 99
@@ -1602,8 +1635,9 @@ def test_poll_drops_stale_pending_when_io_replaced_with_same_tag(monkeypatch):
     source.connect()
     first = list(source.poll(1))
     assert [event.event_id for event in first] == ["e1"]
-    source.nack(first)
     old_tag = source._delivery_tags["e1"]
+    source._pending.appendleft(first[0])
+    source._pending_ids.add(first[0].event_id)
     old_io = source._io
 
     def _reborn(_io: object) -> tuple[None, None, None]:
