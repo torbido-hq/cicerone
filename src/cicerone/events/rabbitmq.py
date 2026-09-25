@@ -211,13 +211,16 @@ class RabbitMQEventSource(QueuedEventSource):
             if io is None or io.failed or io.closing:
                 return tuple(events)
             owned: list[tuple[NormalizedEvent, int]] = []
+            seen_tags: set[int] = set()
             for event in events:
                 owner = self._event_io.get(id(event))
                 if owner is None or owner[0] is not io:
                     continue
-                if event.event_id not in self._delivery_tags:
+                tag = self._delivery_tags.get(event.event_id)
+                if tag is None or tag in seen_tags:
                     continue
-                owned.append((event, self._delivery_tags[event.event_id]))
+                seen_tags.add(tag)
+                owned.append((event, tag))
             if self._io is not io or io.failed or io.closing:
                 return tuple(events)
         if not owned:
@@ -230,6 +233,7 @@ class RabbitMQEventSource(QueuedEventSource):
                 io.submit(partial(self._basic_nack, io, tag))
             except Exception:
                 logger.exception("RabbitMQ basic_nack failed")
+                io._mark_failed()
                 break
             with self._lock:
                 if self._io is not io or self._delivery_tags.get(event.event_id) != tag:
@@ -239,7 +243,10 @@ class RabbitMQEventSource(QueuedEventSource):
                 self._in_flight.discard(event.event_id)
                 self._forget_event(event.event_id)
                 nacked.add(id(event))
-        return tuple(event for event in events if id(event) not in nacked)
+        nacked_ids = {event.event_id for event in events if id(event) in nacked}
+        return tuple(
+            event for event in events if id(event) not in nacked and event.event_id not in nacked_ids
+        )
 
     def heartbeat(self, events: Sequence[NormalizedEvent]) -> None:
         del events
