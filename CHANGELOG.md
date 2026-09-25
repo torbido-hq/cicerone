@@ -116,7 +116,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `DELETE /items/{id}` also removes that item's events so leftover interactions cannot resurrect it.
 - DB catalog PUT→GET keeps extra user/item fields and returns structured values as objects, not JSON strings.
 
-## [0.8.4] - 2026-09-21
+## [0.8.4] - 2026-09-25
 
 ### Fixed
 
