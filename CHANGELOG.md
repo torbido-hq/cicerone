@@ -31,7 +31,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Hard S3, local I/O, and unexpected exceptions still raise.
 - Event worker source I/O, apply, and persist only treat named source,
   SQL, S3, broker, and sink errors as recoverable. Unexpected exceptions
-  still raise after a failed apply is nacked.
+  still raise after a failed apply is nacked. A failed post-apply ack
+  keeps the event on the retry-ack list. Unexpected persist errors abort
+  the pending fit before raising. `ConfigError` is not a recoverable
+  apply or persist failure.
 - Incremental online refresh logs lock loss, lock busy, and named I/O
   or publish errors before aborting the pending fit. Unexpected
   exceptions still abort and raise.

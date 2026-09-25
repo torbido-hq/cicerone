@@ -192,6 +192,36 @@ def test_event_worker_apply_runtime_error_nacks_and_raises(tmp_path, feature_con
     assert source.health().lag == 1
 
 
+def test_event_worker_apply_config_error_nacks_and_raises(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="fail-config"))
+
+    class _ConfigBoom(IncrementalUpdater):
+        def apply(self, events, *, persist_online: bool = True):  # type: ignore[no-untyped-def]
+            del persist_online
+            raise ConfigError("bad output")
+
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        _ConfigBoom(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    with pytest.raises(ConfigError, match="bad output"):
+        worker.tick()
+    assert source.health().lag == 1
+
+
 def test_event_worker_health_unexpected_raises(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
@@ -375,9 +405,55 @@ def test_event_worker_persist_unexpected_raises(tmp_path, feature_config: Featur
     def _boom() -> None:
         raise LookupError("persist boom")
 
+    aborted = {"n": 0}
+
+    def _abort() -> None:
+        aborted["n"] += 1
+
     monkeypatch.setattr(worker._updater, "persist_online", _boom)
+    monkeypatch.setattr(worker._updater, "abort_online", _abort)
     with pytest.raises(LookupError, match="persist boom"):
         worker.tick()
+    assert aborted["n"] == 1
+
+
+def test_event_worker_persist_config_error_aborts_and_raises(
+    tmp_path, feature_config: FeatureConfig, monkeypatch
+):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="persist-config"))
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    aborted = {"n": 0}
+
+    def _boom() -> None:
+        raise ConfigError("bad persist")
+
+    def _abort() -> None:
+        aborted["n"] += 1
+
+    monkeypatch.setattr(worker._updater, "persist_online", _boom)
+    monkeypatch.setattr(worker._updater, "abort_online", _abort)
+    with pytest.raises(ConfigError, match="bad persist"):
+        worker.tick()
+    assert aborted["n"] == 1
 
 
 def test_event_worker_persist_writer_lock_busy_is_dropped(
@@ -1333,10 +1409,90 @@ def test_event_worker_preserves_retry_acks_on_unexpected_ack_errors(
     assert worker._retry_acks == [event]
 
 
+def test_event_worker_flush_preserves_retry_acks_on_unexpected_ack(
+    tmp_path, feature_config: FeatureConfig, monkeypatch
+):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="flush-unexpected-ack", item_id="i7"))
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+
+    def _boom(_event_ids):  # type: ignore[no-untyped-def]
+        raise LookupError("flush ack bug")
+
+    monkeypatch.setattr(worker, "_ack_live_ids", _boom)
+    monkeypatch.setattr(worker._updater, "persist_online", lambda: None)
+    with pytest.raises(LookupError, match="flush ack bug"):
+        worker.tick()
+    assert [event.event_id for event in worker._retry_acks] == ["flush-unexpected-ack"]
+
+
+def test_event_worker_flush_persists_when_deferred_ack_is_unexpected(
+    tmp_path, feature_config: FeatureConfig, monkeypatch
+):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="flush-deferred-ack", item_id="i8"))
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    persisted = {"n": 0}
+
+    def _ack(event_ids):  # type: ignore[no-untyped-def]
+        return set(event_ids)
+
+    def _deferred(applied) -> None:  # type: ignore[no-untyped-def]
+        del applied
+        raise LookupError("deferred ack bug")
+
+    def _persist() -> None:
+        persisted["n"] += 1
+
+    monkeypatch.setattr(worker, "_ack_live_ids", _ack)
+    monkeypatch.setattr(worker, "_ack_deferred_matching", _deferred)
+    monkeypatch.setattr(worker._updater, "persist_online", _persist)
+    with pytest.raises(LookupError, match="deferred ack bug"):
+        worker.tick()
+    assert persisted["n"] == 1
+
+
 def test_event_apply_errors_exclude_broad_programming_errors():
     assert RuntimeError not in EVENT_APPLY_ERRORS
     assert ValueError not in EVENT_APPLY_ERRORS
     assert TypeError not in EVENT_APPLY_ERRORS
+    assert ConfigError not in EVENT_APPLY_ERRORS
 
 
 def test_event_worker_retry_acks_deferred_duplicates(tmp_path, feature_config: FeatureConfig):
