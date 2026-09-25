@@ -971,7 +971,7 @@ def test_incremental_updater_preserves_sequential_without_torch(
     assert "personalized" in set(u2["source"].astype(str))
 
 
-def test_incremental_updater_online_error_keeps_preserved(tmp_path, feature_config: FeatureConfig):
+def _failing_online_updater(tmp_path, feature_config: FeatureConfig, error: BaseException):
     out = tmp_path / "out"
     out.mkdir()
     pd.DataFrame(
@@ -988,7 +988,7 @@ def test_incremental_updater_online_error_keeps_preserved(tmp_path, feature_conf
 
         def refresh(self, events):
             del events
-            raise RuntimeError("online boom")
+            raise error
 
         def invalidate(self) -> None:
             return None
@@ -1004,9 +1004,18 @@ def test_incremental_updater_online_error_keeps_preserved(tmp_path, feature_conf
         top_k=5,
         online=online,
     )
-    with pytest.raises(RuntimeError, match="online boom"):
+    return updater, online, settings
+
+
+def test_incremental_updater_online_error_keeps_preserved(tmp_path, feature_config: FeatureConfig, caplog):
+    import logging
+
+    updater, online, settings = _failing_online_updater(tmp_path, feature_config, RuntimeError("online boom"))
+    with caplog.at_level(logging.ERROR), pytest.raises(RuntimeError, match="online boom"):
         updater.apply([normalize_event(event_payload(user_id="u1", item_id="i1", event_id="boom"))])
     assert online.aborts == 1
+    assert "Online collaborative refresh failed" not in caplog.text
+    assert "aborting pending online fit" not in caplog.text
     frame = load_recommendations_frame(settings.output)
     assert "old" in set(frame[frame["user_id"] == "u1"]["item_id"].astype(str))
 
@@ -1016,39 +1025,52 @@ def test_incremental_updater_online_named_error_logs_and_aborts(
 ):
     import logging
 
-    out = tmp_path / "out"
-    out.mkdir()
-    pd.DataFrame(
-        [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
-    ).to_parquet(out / "recommendations.parquet", index=False)
-    settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
-        top_k=5,
-    )
-
-    class _BoomOnline:
-        def __init__(self) -> None:
-            self.aborts = 0
-
-        def refresh(self, events):
-            del events
-            raise OSError("online io")
-
-        def invalidate(self) -> None:
-            return None
-
-        def abort(self) -> None:
-            self.aborts += 1
-
-    online = _BoomOnline()
-    updater = IncrementalUpdater(
-        sink=build_output_sink(settings.output),
-        output_settings=settings.output,
-        feature_config=feature_config,
-        top_k=5,
-        online=online,
-    )
+    updater, online, _settings = _failing_online_updater(tmp_path, feature_config, OSError("online io"))
     with caplog.at_level(logging.ERROR), pytest.raises(OSError, match="online io"):
         updater.apply([normalize_event(event_payload(user_id="u1", item_id="i1", event_id="io"))])
     assert online.aborts == 1
     assert "Online collaborative refresh failed" in caplog.text
+
+
+def test_incremental_updater_online_lock_lost_logs_and_aborts(
+    tmp_path, feature_config: FeatureConfig, caplog
+):
+    import logging
+
+    from cicerone.locks import LockLostError
+
+    updater, online, _settings = _failing_online_updater(
+        tmp_path,
+        feature_config,
+        LockLostError("events apply lock lost before online write", kind="apply"),
+    )
+    with (
+        caplog.at_level(logging.ERROR),
+        pytest.raises(LockLostError, match="events apply lock lost"),
+    ):
+        updater.apply([normalize_event(event_payload(user_id="u1", item_id="i1", event_id="lost"))])
+    assert online.aborts == 1
+    assert "events apply lock lost before online write" in caplog.text
+    assert "aborting pending online fit" in caplog.text
+    assert "Online collaborative refresh failed" not in caplog.text
+
+
+def test_incremental_updater_online_lock_busy_logs_and_aborts(
+    tmp_path, feature_config: FeatureConfig, caplog
+):
+    import logging
+
+    from cicerone.locks import WriterLockBusyError
+
+    updater, online, _settings = _failing_online_updater(
+        tmp_path, feature_config, WriterLockBusyError("dataset writer lock busy")
+    )
+    with (
+        caplog.at_level(logging.INFO),
+        pytest.raises(WriterLockBusyError, match="dataset writer lock busy"),
+    ):
+        updater.apply([normalize_event(event_payload(user_id="u1", item_id="i1", event_id="busy"))])
+    assert online.aborts == 1
+    assert "dataset writer lock busy" in caplog.text
+    assert "aborting pending online fit" in caplog.text
+    assert "Online collaborative refresh failed" not in caplog.text

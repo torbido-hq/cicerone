@@ -43,7 +43,6 @@ _SIDECAR_PUBLISH_ERRORS: tuple[type[BaseException], ...] = (*PUBLISH_ERRORS, Typ
 _ONLINE_REFRESH_ERRORS: tuple[type[BaseException], ...] = (
     *OPTIONAL_IO_ERRORS,
     *PUBLISH_ERRORS,
-    WriterLockBusyError,
 )
 
 # Bound in-process per-user frames for long-lived serve workers.
@@ -389,12 +388,17 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             return OnlineRefreshResult(rows=empty_online_rows())
         try:
             return self._online.refresh(events)
-        except LockLostError:
+        except LockLostError as exc:
             self._abort_online()
+            logger.error("%s; aborting pending online fit", exc)
+            raise
+        except WriterLockBusyError as exc:
+            self._abort_online()
+            logger.info("%s; aborting pending online fit", exc)
             raise
         except _ONLINE_REFRESH_ERRORS:
             self._abort_online()
-            logger.exception("Online collaborative refresh failed; nacking incremental batch")
+            logger.exception("Online collaborative refresh failed; aborting pending fit")
             raise
         except Exception:
             self._abort_online()
