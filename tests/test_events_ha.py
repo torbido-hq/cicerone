@@ -624,7 +624,7 @@ class _FakeOnline:
             raise LockLostError("lease lost")
         if self._fail_commits > 0:
             self._fail_commits -= 1
-            raise RuntimeError("persist boom")
+            raise OSError("persist boom")
         self.commits += 1
 
     def abort(self) -> None:

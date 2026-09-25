@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy.exc import SQLAlchemyError
 
-from cicerone.events.base import EventBackpressureError
+from cicerone.events.base import EventBackpressureError, EventSourceError
 from cicerone.io.blob import S3_READ_ERRORS
 from cicerone.job_eval import PUBLISH_ERRORS, SINK_WRITE_ERRORS
 
@@ -40,19 +40,17 @@ else:
 EVENT_SOURCE_ERRORS: tuple[type[BaseException], ...] = (
     OSError,
     TimeoutError,
-    RuntimeError,
     ValueError,
     TypeError,
     EventBackpressureError,
+    EventSourceError,
     SQLAlchemyError,
     KafkaException,
     AMQPError,
     RedisError,
     *S3_READ_ERRORS,
 )
-EVENT_APPLY_ERRORS: tuple[type[BaseException], ...] = (
-    *SINK_WRITE_ERRORS,
-    *PUBLISH_ERRORS,
-    *S3_READ_ERRORS,
+EVENT_APPLY_ERRORS: tuple[type[BaseException], ...] = tuple(
+    error for error in (*SINK_WRITE_ERRORS, *PUBLISH_ERRORS, *S3_READ_ERRORS) if error is not RuntimeError
 )
 EVENT_WORKER_ERRORS: tuple[type[BaseException], ...] = (*EVENT_SOURCE_ERRORS, *EVENT_APPLY_ERRORS)

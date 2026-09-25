@@ -33,6 +33,10 @@ class EventBackpressureError(Exception):
     """Source queue is full; caller should retry later (HTTP 429)."""
 
 
+class EventSourceError(RuntimeError):
+    """Source is disconnected or a named backend call failed."""
+
+
 class EventSource(Protocol):
     def connect(self) -> None:
         """Establish connections / start accepting work."""
@@ -106,7 +110,7 @@ class QueuedEventSource:
         with self._lock:
             backend = self._backend()
             if not self._connected or backend is None:
-                raise RuntimeError(f"{type(self).__name__} is not connected")
+                raise EventSourceError(f"{type(self).__name__} is not connected")
             return backend
 
     def _backend(self) -> Any:
