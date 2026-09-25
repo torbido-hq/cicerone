@@ -111,7 +111,7 @@ def test_event_worker_apply_failure_nacks(tmp_path, feature_config: FeatureConfi
     class _Boom(IncrementalUpdater):
         def apply(self, events, *, persist_online: bool = True):  # type: ignore[no-untyped-def]
             del persist_online
-            raise RuntimeError("boom")
+            raise OSError("boom")
 
     worker = EventWorker(
         source,
@@ -161,6 +161,36 @@ def test_event_worker_apply_unexpected_nacks_and_raises(tmp_path, feature_config
     assert source.health().lag == 1
 
 
+def test_event_worker_apply_runtime_error_nacks_and_raises(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="fail-runtime"))
+
+    class _RuntimeBoom(IncrementalUpdater):
+        def apply(self, events, *, persist_online: bool = True):  # type: ignore[no-untyped-def]
+            del persist_online
+            raise RuntimeError("boom")
+
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        _RuntimeBoom(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    with pytest.raises(RuntimeError, match="boom"):
+        worker.tick()
+    assert source.health().lag == 1
+
+
 def test_event_worker_health_unexpected_raises(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
@@ -182,6 +212,30 @@ def test_event_worker_health_unexpected_raises(tmp_path, feature_config: Feature
         ),
     )
     with pytest.raises(LookupError, match="health boom"):
+        worker.tick()
+
+
+def test_event_worker_health_runtime_error_raises(tmp_path, feature_config: FeatureConfig):
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        top_k=3,
+    )
+
+    class _BoomHealth(WebhookEventSource):
+        def health(self) -> EventSourceHealth:
+            raise RuntimeError("health boom")
+
+    worker = EventWorker(
+        _BoomHealth({}),
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    with pytest.raises(RuntimeError, match="health boom"):
         worker.tick()
 
 
@@ -612,7 +666,7 @@ def test_event_worker_reconnect_restores_buffer_when_nack_fails(tmp_path, featur
 
     class _NackBoom(WebhookEventSource):
         def nack(self, events):  # type: ignore[no-untyped-def,override]
-            raise RuntimeError("nack unavailable")
+            raise OSError("nack unavailable")
 
     source = _NackBoom({})
     source.connect()
@@ -678,7 +732,7 @@ def test_event_worker_reconnect_restores_buffer_when_connect_fails(tmp_path, fea
         def connect(self) -> None:
             connects["n"] += 1
             if connects["n"] > 1:
-                raise RuntimeError("reconnect refused")
+                raise OSError("reconnect refused")
             super().connect()
 
     source = _ConnectBoom({})
@@ -941,7 +995,7 @@ def test_event_worker_retries_failed_post_apply_ack(tmp_path, feature_config: Fe
         def ack(self, event_ids):  # type: ignore[no-untyped-def]
             self.acked.extend(str(event_id) for event_id in event_ids)
             if len(self.acked) == 1:
-                raise RuntimeError("commit failed")
+                raise OSError("commit failed")
             self._pending = []
 
         def nack(self, events):  # type: ignore[no-untyped-def]
@@ -966,7 +1020,7 @@ def test_event_worker_retries_failed_post_apply_ack(tmp_path, feature_config: Fe
             top_k=3,
         ),
     )
-    with pytest.raises(RuntimeError, match="commit failed"):
+    with pytest.raises(OSError, match="commit failed"):
         worker.tick()
     assert applies == ["ack-retry"]
     assert worker.tick() == 0
@@ -993,7 +1047,7 @@ def test_event_worker_retries_failed_unbuffered_ack(tmp_path, feature_config: Fe
         def ack(self, event_ids):  # type: ignore[no-untyped-def]
             acked.extend(str(event_id) for event_id in event_ids)
             if len(acked) == 1:
-                raise RuntimeError("unbuffered ack failed")
+                raise OSError("unbuffered ack failed")
 
         def nack(self, events):  # type: ignore[no-untyped-def]
             return list(events)
@@ -1012,7 +1066,7 @@ def test_event_worker_retries_failed_unbuffered_ack(tmp_path, feature_config: Fe
         ),
     )
     worker._remember_applied([event])
-    with pytest.raises(RuntimeError, match="unbuffered ack failed"):
+    with pytest.raises(OSError, match="unbuffered ack failed"):
         worker._poll_into_buffer()
     worker._flush_retry_acks()
     assert acked == ["already-1", "already-1"]
@@ -1052,7 +1106,7 @@ def test_event_worker_retry_acks_deferred_duplicates(tmp_path, feature_config: F
         def ack(self, event_ids):  # type: ignore[no-untyped-def]
             acked.extend(str(event_id) for event_id in event_ids)
             if acked == [original.event_id]:
-                raise RuntimeError("apply ack failed")
+                raise OSError("apply ack failed")
 
         def nack(self, events):  # type: ignore[no-untyped-def]
             return list(events)
@@ -1070,7 +1124,7 @@ def test_event_worker_retry_acks_deferred_duplicates(tmp_path, feature_config: F
             top_k=3,
         ),
     )
-    with pytest.raises(RuntimeError, match="apply ack failed"):
+    with pytest.raises(OSError, match="apply ack failed"):
         worker.tick()
     assert duplicate.event_id not in acked
     worker.tick()
@@ -1548,7 +1602,7 @@ def test_event_worker_start_abort_drains_when_connect_raises(tmp_path, feature_c
         def connect(self) -> None:
             started.set()
             release.wait(timeout=2)
-            raise RuntimeError("connect failed")
+            raise OSError("connect failed")
 
         def close(self) -> None:
             closes["n"] += 1
@@ -1607,7 +1661,7 @@ def test_event_worker_reconnect_closes_after_failed_connect(tmp_path, feature_co
             if connects["n"] >= 2:
                 reconnect_started.set()
                 time.sleep(0.2)
-                raise RuntimeError("broker down")
+                raise OSError("broker down")
             super().connect()
 
         def close(self) -> None:
@@ -1651,7 +1705,7 @@ def test_event_worker_skips_tick_after_failed_reconnect(tmp_path, feature_config
         def connect(self) -> None:
             if polls["n"] > 0:
                 reconnect_started.set()
-                raise RuntimeError("broker down")
+                raise OSError("broker down")
             super().connect()
 
         def poll(self, max_events: int = 100):  # type: ignore[override]
@@ -1850,7 +1904,7 @@ def test_event_worker_stop_swallows_source_close_errors(tmp_path, feature_config
 
     class _BoomClose(WebhookEventSource):
         def close(self) -> None:
-            raise RuntimeError("close failed")
+            raise OSError("close failed")
 
     worker = EventWorker(
         _BoomClose({}),
@@ -2689,7 +2743,7 @@ def test_event_worker_stop_returns_retry_acks_when_drain_ack_fails(tmp_path, fea
     class _AckBoom(WebhookEventSource):
         def ack(self, event_ids):  # type: ignore[no-untyped-def]
             del event_ids
-            raise RuntimeError("ack failed")
+            raise OSError("ack failed")
 
     source = _AckBoom({})
     worker = EventWorker(
