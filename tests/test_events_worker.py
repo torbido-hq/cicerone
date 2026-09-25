@@ -986,6 +986,39 @@ def test_event_worker_reconnect_restores_buffer_when_nack_fails(tmp_path, featur
     assert [event.event_id for event in worker._buffer.flush()] == ["buf-2"]
 
 
+def test_event_worker_reconnect_restores_buffer_when_nack_is_unexpected(
+    tmp_path, feature_config: FeatureConfig
+):
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+
+    class _UnexpectedNack(WebhookEventSource):
+        def nack(self, events):  # type: ignore[no-untyped-def,override]
+            raise LookupError("nack bug")
+
+    source = _UnexpectedNack({})
+    source.connect()
+    source.ingest(event_payload(event_id="buf-unexpected", item_id="i8"))
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    kept = worker._buffer.extend(source.poll(1))
+    assert kept.kept_count == 1
+
+    with pytest.raises(LookupError, match="nack bug"):
+        worker._reconnect_source()
+
+    assert [event.event_id for event in worker._buffer.flush()] == ["buf-unexpected"]
+
+
 def test_event_worker_reconnect_keeps_buffer_when_nack_is_noop(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
