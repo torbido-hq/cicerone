@@ -190,7 +190,8 @@ class EventWorker:
             self._drain_buffer_on_stop()
         except EVENT_WORKER_ERRORS:
             logger.exception("Event worker drain on stop failed")
-        self._close_source()
+        finally:
+            self._close_source()
 
     def _restore_buffer(self, events: list[NormalizedEvent]) -> None:
         events = [event for event in events if not self._is_applied(event)]
