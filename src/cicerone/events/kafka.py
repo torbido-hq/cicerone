@@ -77,7 +77,7 @@ class KafkaEventSource(QueuedEventSource):
                 consumer.close()
             except Exception:
                 logger.exception("Failed to close Kafka consumer after connect error")
-            raise ConfigError(f"events.options.bootstrap_servers is unreachable: {exc}") from exc
+            raise EventSourceError(f"events.options.bootstrap_servers is unreachable: {exc}") from exc
         consumer.subscribe([self._topic])
 
         with self._lock:

@@ -8,6 +8,7 @@ from support.events import event_payload
 from support.fake_kafka import install_fake_kafka
 
 from cicerone.config import ConfigError
+from cicerone.events.base import EventSourceError
 from cicerone.events.ha import ingest_is_fanout
 from cicerone.events.kafka import KafkaEventSource, validate_kafka_event_options
 from cicerone.events.registry import build_event_source, registered_event_source_kinds
@@ -393,7 +394,7 @@ def test_connect_list_topics_failure(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
     broker.list_topics_error = RuntimeError("down")
     source = KafkaEventSource(_options())
-    with pytest.raises(ConfigError, match="unreachable"):
+    with pytest.raises(EventSourceError, match="unreachable"):
         source.connect()
 
 

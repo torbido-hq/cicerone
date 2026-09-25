@@ -379,6 +379,82 @@ def test_event_worker_persist_unexpected_raises(tmp_path, feature_config: Featur
         worker.tick()
 
 
+def test_event_worker_persist_writer_lock_busy_is_dropped(
+    tmp_path, feature_config: FeatureConfig, monkeypatch
+):
+    from cicerone.locks import WriterLockBusyError
+
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="persist-busy", item_id="ib"))
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+
+    def _busy() -> None:
+        raise WriterLockBusyError("dataset writer lock busy")
+
+    monkeypatch.setattr(worker._updater, "persist_online", _busy)
+    assert worker.tick() == 1
+
+
+def test_event_worker_loop_survives_unreachable_reconnect(tmp_path, feature_config: FeatureConfig):
+    import time
+
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        top_k=3,
+    )
+    connects = {"n": 0}
+
+    class _FlakyConnect(WebhookEventSource):
+        def connect(self) -> None:
+            connects["n"] += 1
+            if connects["n"] == 2:
+                raise EventSourceError("events.options.amqp_url is unreachable: down")
+            super().connect()
+
+        def health(self) -> EventSourceHealth:
+            if connects["n"] == 1:
+                return EventSourceHealth(connected=False, lag=None)
+            return super().health()
+
+    worker = EventWorker(
+        _FlakyConnect({}),
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+        poll_interval_seconds=0.01,
+    )
+    worker.start()
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and connects["n"] < 3:
+        time.sleep(0.01)
+    thread = worker._thread
+    assert thread is not None and thread.is_alive()
+    assert connects["n"] >= 3
+    assert worker.stop(join_timeout_seconds=2.0) is True
+
+
 def test_event_worker_partial_apply_nacks(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()

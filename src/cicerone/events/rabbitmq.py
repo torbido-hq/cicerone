@@ -76,7 +76,7 @@ class RabbitMQEventSource(QueuedEventSource):
             connection, channel = io.submit(partial(self._open, pika, io))
         except Exception as exc:
             io.abandon(None, io._connection)
-            raise ConfigError(f"events.options.amqp_url is unreachable: {exc}") from exc
+            raise EventSourceError(f"events.options.amqp_url is unreachable: {exc}") from exc
 
         with self._lock:
             previous_io = self._io

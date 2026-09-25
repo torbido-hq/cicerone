@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from cicerone.config import ConfigError
-from cicerone.events.base import EventSourceHealth, NormalizedEvent, QueuedEventSource
+from cicerone.events.base import EventSourceError, EventSourceHealth, NormalizedEvent, QueuedEventSource
 from cicerone.events.normalize import EventNormalizeError, normalize_event
 
 logger = logging.getLogger(__name__)
@@ -89,7 +89,7 @@ class RedisStreamsEventSource(QueuedEventSource):
         try:
             client.ping()
         except Exception as exc:
-            raise ConfigError(f"events.options.redis_url is unreachable: {exc}") from exc
+            raise EventSourceError(f"events.options.redis_url is unreachable: {exc}") from exc
 
         try:
             client.xgroup_create(

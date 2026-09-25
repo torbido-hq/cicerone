@@ -614,6 +614,14 @@ class EventWorker:
                 logger.error("%s; dropping pending artifact", exc)
                 self._updater.abort_online()
                 return
+            except WriterLockBusyError as exc:
+                last_error = exc
+                logger.info(
+                    "%s; online persist after ack (attempt %d/%d)",
+                    exc,
+                    attempt,
+                    _ONLINE_PERSIST_ATTEMPTS,
+                )
             except EVENT_APPLY_ERRORS as exc:
                 last_error = exc
                 logger.exception(
