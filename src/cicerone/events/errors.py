@@ -48,7 +48,10 @@ EVENT_SOURCE_ERRORS: tuple[type[BaseException], ...] = (
     RedisError,
     *S3_READ_ERRORS,
 )
+_BROAD_PROGRAMMING_ERRORS = (RuntimeError, ValueError, TypeError)
 EVENT_APPLY_ERRORS: tuple[type[BaseException], ...] = tuple(
-    error for error in (*SINK_WRITE_ERRORS, *PUBLISH_ERRORS, *S3_READ_ERRORS) if error is not RuntimeError
+    error
+    for error in (*SINK_WRITE_ERRORS, *PUBLISH_ERRORS, *S3_READ_ERRORS)
+    if error not in _BROAD_PROGRAMMING_ERRORS
 )
 EVENT_WORKER_ERRORS: tuple[type[BaseException], ...] = (*EVENT_SOURCE_ERRORS, *EVENT_APPLY_ERRORS)
