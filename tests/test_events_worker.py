@@ -428,6 +428,43 @@ def test_event_worker_tick_noop_when_empty(tmp_path, feature_config: FeatureConf
     assert worker.tick() == 0
 
 
+def test_event_worker_stop_closes_source_when_drain_raises_unexpected(
+    tmp_path, feature_config: FeatureConfig
+):
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        top_k=3,
+    )
+    closed = {"n": 0}
+
+    class _CloseCount(WebhookEventSource):
+        def close(self) -> None:
+            closed["n"] += 1
+            super().close()
+
+    class _Boom(IncrementalUpdater):
+        def apply(self, events, *, persist_online: bool = True):  # type: ignore[no-untyped-def]
+            del persist_online
+            raise LookupError("drain boom")
+
+    source = _CloseCount({})
+    source.ingest(event_payload(event_id="drain-boom"))
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        _Boom(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    assert worker.tick() == 0
+    with pytest.raises(LookupError, match="drain boom"):
+        worker.stop()
+    assert closed["n"] == 1
+
+
 def test_event_worker_stop_returns_false_when_join_times_out(tmp_path, feature_config, caplog):
     import logging
 
