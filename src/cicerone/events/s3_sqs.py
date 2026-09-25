@@ -8,7 +8,7 @@ from collections import OrderedDict, deque
 from collections.abc import Callable, Sequence
 from typing import Any
 
-from cicerone.events.base import NormalizedEvent
+from cicerone.events.base import EventSourceError, NormalizedEvent
 from cicerone.events.s3_parse import (
     _SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS,
     _SQS_NACK_VISIBILITY_TIMEOUT_SECONDS,
@@ -53,7 +53,7 @@ class S3SqsPoll:
             queue_url = self._queue_url
             held_ids = set(self._in_flight) | {event.event_id for event in self._pending}
             if s3 is None or sqs is None or queue_url is None:
-                raise RuntimeError("S3EventSource.connect() required before poll")
+                raise EventSourceError("S3EventSource.connect() required before poll")
         loaded = 0
         while loaded < need:
             response = sqs.receive_message(

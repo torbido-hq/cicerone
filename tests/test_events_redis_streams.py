@@ -7,6 +7,7 @@ import pytest
 from support.events import event_payload
 
 from cicerone.config import ConfigError
+from cicerone.events.base import EventSourceError
 from cicerone.events.redis_streams import RedisStreamsEventSource, validate_redis_stream_options
 from cicerone.events.registry import build_event_source, registered_event_source_kinds
 
@@ -348,7 +349,7 @@ def test_connect_ping_failure(monkeypatch):
     client.ping = lambda: (_ for _ in ()).throw(RuntimeError("down"))  # type: ignore[method-assign]
     _install_fake_redis(monkeypatch, client)
     source = RedisStreamsEventSource(_options())
-    with pytest.raises(ConfigError, match="unreachable"):
+    with pytest.raises(EventSourceError, match="unreachable"):
         source.connect()
 
 

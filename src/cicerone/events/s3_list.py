@@ -11,7 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from cicerone.events.base import NormalizedEvent
+from cicerone.events.base import EventSourceError, NormalizedEvent
 from cicerone.events.s3_parse import _LOAD_FAILURE_SKIP_AFTER, _Batch
 
 logger = logging.getLogger("cicerone.events.s3")
@@ -44,7 +44,7 @@ class S3ListPoll:
             held_ids = set(self._in_flight) | {event.event_id for event in self._pending}
             held_keys = {batch.object_key for batch in self._batches.values() if batch.object_key}
             if s3 is None:
-                raise RuntimeError("S3EventSource.connect() required before poll")
+                raise EventSourceError("S3EventSource.connect() required before poll")
         kwargs: dict[str, Any] = {
             "Bucket": bucket,
             "MaxKeys": min(page_size, max(need, 1)),

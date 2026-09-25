@@ -8,7 +8,7 @@ from collections.abc import Sequence, Set
 from typing import Any
 
 from cicerone.config.constants import ConfigError
-from cicerone.events.base import EventSourceHealth, NormalizedEvent, QueuedEventSource
+from cicerone.events.base import EventSourceError, EventSourceHealth, NormalizedEvent, QueuedEventSource
 from cicerone.events.json_payload import decode_json_object
 from cicerone.events.normalize import EventNormalizeError, normalize_event
 from cicerone.kafka_options import (
@@ -77,7 +77,7 @@ class KafkaEventSource(QueuedEventSource):
                 consumer.close()
             except Exception:
                 logger.exception("Failed to close Kafka consumer after connect error")
-            raise ConfigError(f"events.options.bootstrap_servers is unreachable: {exc}") from exc
+            raise EventSourceError(f"events.options.bootstrap_servers is unreachable: {exc}") from exc
         consumer.subscribe([self._topic])
 
         with self._lock:
@@ -257,7 +257,7 @@ class KafkaEventSource(QueuedEventSource):
     def _commit_watermarks(self, consumer: Any, watermarks: dict[int, int | None]) -> None:
         ctor = self._topic_partition
         if ctor is None:
-            raise RuntimeError("KafkaEventSource is not connected")
+            raise EventSourceError("KafkaEventSource is not connected")
         for partition, nxt in watermarks.items():
             if nxt is None:
                 continue
