@@ -40,8 +40,6 @@ else:
 EVENT_SOURCE_ERRORS: tuple[type[BaseException], ...] = (
     OSError,
     TimeoutError,
-    ValueError,
-    TypeError,
     EventBackpressureError,
     EventSourceError,
     SQLAlchemyError,

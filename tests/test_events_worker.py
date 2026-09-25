@@ -5,7 +5,7 @@ import pytest
 from support.events import event_payload
 from support.prometheus_metrics import registry_metric_value
 
-from cicerone.config import EventsSettings, IOSettings, make_settings
+from cicerone.config import ConfigError, EventsSettings, IOSettings, make_settings
 from cicerone.events.base import EventSourceError, EventSourceHealth
 from cicerone.events.buffer import MicroBatchBuffer
 from cicerone.events.normalize import event_fingerprint, normalize_event
@@ -236,6 +236,78 @@ def test_event_worker_health_runtime_error_raises(tmp_path, feature_config: Feat
         ),
     )
     with pytest.raises(RuntimeError, match="health boom"):
+        worker.tick()
+
+
+def test_event_worker_health_value_error_raises(tmp_path, feature_config: FeatureConfig):
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        top_k=3,
+    )
+
+    class _BoomHealth(WebhookEventSource):
+        def health(self) -> EventSourceHealth:
+            raise ValueError("health boom")
+
+    worker = EventWorker(
+        _BoomHealth({}),
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    with pytest.raises(ValueError, match="health boom"):
+        worker.tick()
+
+
+def test_event_worker_health_type_error_raises(tmp_path, feature_config: FeatureConfig):
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        top_k=3,
+    )
+
+    class _BoomHealth(WebhookEventSource):
+        def health(self) -> EventSourceHealth:
+            raise TypeError("health boom")
+
+    worker = EventWorker(
+        _BoomHealth({}),
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    with pytest.raises(TypeError, match="health boom"):
+        worker.tick()
+
+
+def test_event_worker_health_config_error_raises(tmp_path, feature_config: FeatureConfig):
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        top_k=3,
+    )
+
+    class _BoomHealth(WebhookEventSource):
+        def health(self) -> EventSourceHealth:
+            raise ConfigError("missing occurred_at")
+
+    worker = EventWorker(
+        _BoomHealth({}),
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    with pytest.raises(ConfigError, match="missing occurred_at"):
         worker.tick()
 
 
