@@ -585,7 +585,7 @@ class EventWorker:
             self._retry_acks.extend(ready)
             self._persist_online_after_ack()
             return applied
-        except EVENT_SOURCE_ERRORS:
+        except Exception:
             record_events_flush(status="error")
             logger.exception("Event source ack failed after successful apply; persisting without nack")
             self._retry_acks.extend(ready)
@@ -599,7 +599,7 @@ class EventWorker:
             if live:
                 self._ack_deferred_matching(live)
                 self._drop_retry_acks(live)
-        except EVENT_SOURCE_ERRORS:
+        except Exception:
             record_events_flush(status="error")
             logger.exception(
                 "Event source deferred ack failed after successful apply; persisting without nack"
@@ -612,29 +612,33 @@ class EventWorker:
 
     def _persist_online_after_ack(self) -> None:
         last_error: BaseException | None = None
-        for attempt in range(1, _ONLINE_PERSIST_ATTEMPTS + 1):
-            try:
-                self._updater.persist_online()
-                return
-            except LockLostError as exc:
-                logger.error("%s; dropping pending artifact", exc)
-                self._updater.abort_online()
-                return
-            except WriterLockBusyError as exc:
-                last_error = exc
-                logger.info(
-                    "%s; online persist after ack (attempt %d/%d)",
-                    exc,
-                    attempt,
-                    _ONLINE_PERSIST_ATTEMPTS,
-                )
-            except EVENT_APPLY_ERRORS as exc:
-                last_error = exc
-                logger.exception(
-                    "Online artifact persist failed after ack (attempt %d/%d)",
-                    attempt,
-                    _ONLINE_PERSIST_ATTEMPTS,
-                )
-        self._updater.abort_online()
-        if last_error is not None:
-            logger.error("Online artifact persist gave up after ack; pending fit dropped")
+        try:
+            for attempt in range(1, _ONLINE_PERSIST_ATTEMPTS + 1):
+                try:
+                    self._updater.persist_online()
+                    return
+                except LockLostError as exc:
+                    logger.error("%s; dropping pending artifact", exc)
+                    self._updater.abort_online()
+                    return
+                except WriterLockBusyError as exc:
+                    last_error = exc
+                    logger.info(
+                        "%s; online persist after ack (attempt %d/%d)",
+                        exc,
+                        attempt,
+                        _ONLINE_PERSIST_ATTEMPTS,
+                    )
+                except EVENT_APPLY_ERRORS as exc:
+                    last_error = exc
+                    logger.exception(
+                        "Online artifact persist failed after ack (attempt %d/%d)",
+                        attempt,
+                        _ONLINE_PERSIST_ATTEMPTS,
+                    )
+            self._updater.abort_online()
+            if last_error is not None:
+                logger.error("Online artifact persist gave up after ack; pending fit dropped")
+        except Exception:
+            self._updater.abort_online()
+            raise
