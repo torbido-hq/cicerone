@@ -126,6 +126,31 @@
         </tbody>
       </table>
       </div>
+      {% if report.intersections %}
+      <h3 class="text-sm font-medium text-slate-800 mb-2">List overlap</h3>
+      <p class="mb-2 text-xs text-slate-600">Share of treatment items that also appear on the control list for the same users (RecTools Intersection).</p>
+      <div class="overflow-x-auto mb-4">
+      <table class="w-full text-sm border-collapse">
+        <caption class="sr-only">Variant list overlap</caption>
+        <thead>
+          <tr class="text-left text-slate-600 border-b border-slate-200">
+            <th scope="col" class="py-2 px-2">Comparison</th>
+            <th scope="col" class="py-2 px-2">Metric</th>
+            <th scope="col" class="py-2 px-2">Value</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in report.intersections %}
+          <tr class="border-b border-slate-100">
+            <th scope="row" class="py-2 px-2 text-left font-medium text-slate-800">{{ item.treatment }} vs {{ item.control }}</th>
+            <td class="py-2 px-2 text-slate-700">{{ item.name }}</td>
+            <td class="py-2 px-2 text-slate-700">{{ "%.4f"|format(item.value) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      </div>
+      {% endif %}
       {% if report.guardrails %}
       <h3 class="text-sm font-medium text-slate-800 mb-2">Guardrails</h3>
       <div class="overflow-x-auto mb-4">

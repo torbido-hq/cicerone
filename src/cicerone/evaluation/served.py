@@ -15,11 +15,14 @@ from rectools.metrics import (
     AvgRecPopularity,
     CatalogCoverage,
     HitRate,
+    IntraListDiversity,
     MeanInvUserFreq,
     Precision,
     Recall,
+    Serendipity,
     calc_metrics,
 )
+from rectools.metrics.distances import PairwiseHammingDistanceCalculator
 
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.evaluation.metrics import OCCURRED_AT, _frame, _ratio
@@ -125,6 +128,116 @@ def _catalog_metric_defs(k: int, *, with_prev: bool) -> dict[str, object]:
     return metrics
 
 
+def _discrete_feature(value: object) -> str | None:
+    if value is None:
+        return None
+    try:
+        missing = bool(pd.isna(value))
+    except (TypeError, ValueError):
+        missing = False
+    if missing:
+        return None
+    return str(value)
+
+
+def _list_tokens(value: object) -> list[str]:
+    if value is None:
+        return []
+    try:
+        if bool(pd.isna(value)):
+            return []
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, (list, tuple, set)):
+        tokens = [_discrete_feature(item) for item in value]
+        return [token for token in tokens if token]
+    text = str(value).strip()
+    if not text:
+        return []
+    return [part.strip() for part in text.split(",") if part.strip()]
+
+
+def _dummies_for_column(series: pd.Series, *, column: str, kind: str) -> pd.DataFrame:
+    if kind == "list":
+        exploded = series.map(_list_tokens).explode()
+        exploded = exploded[exploded.notna() & exploded.astype(str).ne("")]
+        if exploded.empty:
+            return pd.DataFrame(index=series.index)
+        encoded = pd.get_dummies(exploded.astype(str), prefix=column)
+        return encoded.groupby(level=0).max().reindex(series.index, fill_value=0)
+    mapped = series.map(_discrete_feature)
+    if mapped.notna().sum() == 0:
+        return pd.DataFrame(index=series.index)
+    encoded = pd.get_dummies(mapped.astype("string"), prefix=column, dummy_na=False)
+    return encoded.reindex(series.index, fill_value=0)
+
+
+def _item_features(
+    catalog: pd.DataFrame | Sequence[object] | None,
+    item_features: Sequence[tuple[str, str]] | None = None,
+) -> pd.DataFrame | None:
+    if not isinstance(catalog, pd.DataFrame) or catalog.empty or ITEM_COLUMN not in catalog.columns:
+        return None
+    specs = [(name, kind) for name, kind in (item_features or ()) if name in catalog.columns]
+    if not specs:
+        return None
+    columns = [name for name, _kind in specs]
+    frame = catalog.loc[:, [ITEM_COLUMN, *columns]].copy()
+    frame[ITEM_COLUMN] = frame[ITEM_COLUMN].astype(str)
+    frame = frame.drop_duplicates(subset=[ITEM_COLUMN], keep="last")
+    indexed = frame.set_index(ITEM_COLUMN)
+    parts = [_dummies_for_column(indexed[name], column=name, kind=kind) for name, kind in specs]
+    encoded = pd.concat(parts, axis=1)
+    if encoded.empty or encoded.shape[1] == 0:
+        return None
+    return encoded.astype(float)
+
+
+def _reco_with_known_features(reco: pd.DataFrame, features: pd.DataFrame) -> pd.DataFrame:
+    known = set(features.index.astype(str))
+    frame = reco.copy()
+    frame[ITEM_COLUMN] = frame[ITEM_COLUMN].astype(str)
+    missing = ~frame[ITEM_COLUMN].isin(known)
+    bad_users = set(frame.loc[missing, USER_COLUMN].astype(str))
+    if not bad_users:
+        return frame
+    return frame.loc[~frame[USER_COLUMN].astype(str).isin(bad_users)]
+
+
+def _ild_metrics(
+    recs: pd.DataFrame,
+    ks: Sequence[int],
+    *,
+    catalog: pd.DataFrame | Sequence[object] | None,
+    item_features: Sequence[tuple[str, str]] | None,
+) -> dict[str, float]:
+    if recs.empty or RANK_COLUMN not in recs.columns:
+        return {}
+    features = _item_features(catalog, item_features)
+    if features is None:
+        return {}
+    try:
+        calculator = PairwiseHammingDistanceCalculator(features)
+    except (ValueError, TypeError, KeyError):
+        logger.exception("RecTools PairwiseHammingDistanceCalculator failed")
+        return {}
+    metrics: dict[str, float] = {}
+    for k in ks:
+        reco_k = recs[recs[RANK_COLUMN] <= k]
+        reco_k = _reco_with_known_features(reco_k, features)
+        if reco_k.empty:
+            continue
+        try:
+            computed = calc_metrics(
+                {f"IntraListDiversity@{k}": IntraListDiversity(k=k, distance_calculator=calculator)},
+                reco=reco_k,
+            )
+            metrics.update({key: float(value) for key, value in computed.items()})
+        except (ValueError, TypeError, KeyError):
+            logger.exception("RecTools IntraListDiversity failed for k=%s", k)
+    return metrics
+
+
 def _prev_interactions(events: pd.DataFrame, generated_at: str | None) -> pd.DataFrame:
     if events.empty or generated_at is None or OCCURRED_AT not in events.columns:
         return events.iloc[0:0]
@@ -165,6 +278,7 @@ def evaluate_served(
     history: pd.DataFrame | None = None,
     catalog: pd.DataFrame | Sequence[object] | None = None,
     assigned: Mapping[str, str] | None = None,
+    item_features: Sequence[tuple[str, str]] | None = None,
 ) -> ServedEvalReport | None:
     if recommendations is None or recommendations.empty:
         return None
@@ -180,7 +294,7 @@ def evaluate_served(
         return ServedEvalReport(
             n_users=int(recs[USER_COLUMN].nunique()),
             n_users_with_events=0,
-            metrics={},
+            metrics=_ild_metrics(recs, ks, catalog=catalog, item_features=item_features),
             by_source={},
             generated_at=generated_at,
         )
@@ -211,8 +325,8 @@ def evaluate_served(
     catalog_ids = _served_catalog(catalog, recs, all_events)
     metrics: dict[str, float] = {}
     for k in ks:
+        reco_k = recs[recs[RANK_COLUMN] <= k] if RANK_COLUMN in recs.columns else recs
         if not relevant.empty and not recs.empty:
-            reco_k = recs[recs[RANK_COLUMN] <= k] if RANK_COLUMN in recs.columns else recs
             interactions = relevant.copy()
             interactions["weight"] = 1.0
             extra: dict[str, object] = {}
@@ -229,8 +343,21 @@ def evaluate_served(
             except Exception:
                 logger.exception("RecTools calc_metrics failed for k=%s", k)
                 metrics[f"HitRate@{k}"] = _hit_rate(recs, relevant, k=k)
+            if not prev.empty and catalog_ids:
+                try:
+                    surprise = calc_metrics(
+                        {f"Serendipity@{k}": Serendipity(k=k)},
+                        reco=reco_k,
+                        interactions=interactions,
+                        catalog=catalog_ids,
+                        prev_interactions=prev,
+                    )
+                    metrics.update({key: float(value) for key, value in surprise.items()})
+                except (ValueError, TypeError, KeyError):
+                    logger.exception("RecTools Serendipity failed for k=%s", k)
         else:
             metrics[f"HitRate@{k}"] = _hit_rate(recs, relevant, k=k)
+    metrics.update(_ild_metrics(recs, ks, catalog=catalog, item_features=item_features))
     by_source: dict[str, dict[str, float]] = {}
     if SOURCE_COLUMN in recs.columns:
         for source, group in recs.groupby(SOURCE_COLUMN, dropna=True):

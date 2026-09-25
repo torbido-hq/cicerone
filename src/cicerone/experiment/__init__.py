@@ -6,6 +6,7 @@ from cicerone.experiment.assignment import assign_variant, assignment_bucket, re
 from cicerone.experiment.evaluate import (
     PRIMARY_METRIC_WEIGHTED,
     ExperimentReport,
+    IntersectionScore,
     evaluate_experiment,
     exposure_row,
     user_outcome,
@@ -39,6 +40,7 @@ __all__ = [
     "ExperimentReport",
     "ExperimentStore",
     "GuardrailReport",
+    "IntersectionScore",
     "PRIMARY_METRIC_WEIGHTED",
     "ResolvedRecipe",
     "TREATMENT_NAME",

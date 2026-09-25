@@ -208,6 +208,9 @@ The dashboard **Experiments** page (`GET /dashboard/experiments`) shows:
   Intention-to-treat on users who appear in the event window, or
   exposure-conditional when `log_exposures` is on (rows must match this
   `experiment_id`).
+- RecTools Intersection@k: the share of each treatment list that also
+  appears on the control list for the same users, using persisted `rank`
+  (the metric is omitted when rank is missing).
 - Guardrails (fail closed): fallback rate, top-item share, distinct-item
   coverage against the **items snapshot** size (not recommended-item
   diversity). Missing recommendations or a `variant` column also block

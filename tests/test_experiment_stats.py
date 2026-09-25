@@ -995,3 +995,102 @@ def test_evaluate_experiment_hashes_active_pair_not_toml_traffic() -> None:
     assert report.n_assigned == 20
     assert {item.variant for item in report.guardrails} == {"control", "blend"}
     assert all(item.control.name in {"control", "blend"} for item in report.comparisons)
+
+
+def test_evaluate_experiment_intersection_for_shared_users() -> None:
+    experiment = ExperimentSettings(
+        enabled=True,
+        id="exp",
+        primary_metric="purchase",
+        variants=(
+            VariantSettings(name="control", traffic=0.5),
+            VariantSettings(name="treatment", traffic=0.5),
+        ),
+    )
+    recs = pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "ipa",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                "variant": "control",
+            },
+            {
+                "user_id": "u1",
+                "item_id": "stout",
+                "rank": 2,
+                "score": 0.9,
+                "source": "personalized",
+                "variant": "control",
+            },
+            {
+                "user_id": "u1",
+                "item_id": "ipa",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                "variant": "treatment",
+            },
+            {
+                "user_id": "u1",
+                "item_id": "lager",
+                "rank": 2,
+                "score": 0.8,
+                "source": "personalized",
+                "variant": "treatment",
+            },
+        ]
+    )
+    events = pd.DataFrame([{"user_id": "u1", "event_type": "purchase", "quantity": 1}])
+    report = evaluate_experiment(
+        experiment=experiment,
+        recipes=(_recipe("control"), _recipe("treatment")),
+        events=events,
+        event_weights={"purchase": 1.0},
+        recommendations=recs,
+    )
+    assert len(report.intersections) == 1
+    score = report.intersections[0]
+    assert score.treatment == "treatment"
+    assert score.control == "control"
+    assert score.name == "Intersection@2"
+    assert score.value == pytest.approx(0.5)
+
+
+def test_list_intersections_skips_empty_or_disjoint_variants() -> None:
+    from cicerone.experiment.evaluate import _list_intersections
+
+    assert _list_intersections(pd.DataFrame(), ["control"], "control") == ()
+    disjoint = pd.DataFrame(
+        [
+            {"user_id": "a", "item_id": "ipa", "rank": 1, "variant": "control"},
+            {"user_id": "b", "item_id": "stout", "rank": 1, "variant": "treatment"},
+        ]
+    )
+    assert _list_intersections(disjoint, ["control", "treatment"], "control") == ()
+    missing_rank = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "ipa", "variant": "control"},
+            {"user_id": "u1", "item_id": "stout", "variant": "treatment"},
+        ]
+    )
+    assert _list_intersections(missing_rank, ["control", "treatment"], "control") == ()
+
+
+def test_list_intersections_swallows_rectools_errors(monkeypatch) -> None:
+    from cicerone.experiment import evaluate as evaluate_mod
+
+    monkeypatch.setattr(
+        evaluate_mod.Intersection,
+        "calc",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("intersection")),
+    )
+    recs = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "ipa", "rank": 1, "variant": "control"},
+            {"user_id": "u1", "item_id": "stout", "rank": 1, "variant": "treatment"},
+        ]
+    )
+    assert evaluate_mod._list_intersections(recs, ["control", "treatment"], "control") == ()

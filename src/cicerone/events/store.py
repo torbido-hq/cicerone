@@ -24,6 +24,7 @@ from cicerone.io.options import is_s3_not_found, read_parquet, require_option, s
 from cicerone.io.recommendation_reader import ITEMS_SNAPSHOT_FILENAME
 from cicerone.io.recommendation_schema import (
     ITEM_COLUMN,
+    RANK_COLUMN,
     RECOMMENDATION_COLUMNS,
     SOURCE_COLUMN,
     USER_COLUMN,
@@ -36,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 _CATALOG_READ_ERRORS = (OSError, ValueError, TypeError, SQLAlchemyError, BotoCoreError, ArrowInvalid)
 
-GUARDRAIL_COLUMNS: tuple[str, ...] = (USER_COLUMN, ITEM_COLUMN, SOURCE_COLUMN, VARIANT_COLUMN)
+GUARDRAIL_COLUMNS: tuple[str, ...] = (USER_COLUMN, ITEM_COLUMN, RANK_COLUMN, SOURCE_COLUMN, VARIANT_COLUMN)
 
 _MAX_CACHED_ENGINES = 8
 _engines: OrderedDict[str, Engine] = OrderedDict()
@@ -159,7 +160,12 @@ def load_recommendation_guardrail_rows(output: IOSettings) -> pd.DataFrame | Non
     if output.kind == "db":
         table, _required, _user = _db_table_and_columns(output)
         engine = _engine_for(require_option(output.options, "database_url", "db"))
-        column_sets = (GUARDRAIL_COLUMNS, (USER_COLUMN, ITEM_COLUMN, SOURCE_COLUMN))
+        column_sets = (
+            GUARDRAIL_COLUMNS,
+            (USER_COLUMN, ITEM_COLUMN, RANK_COLUMN, SOURCE_COLUMN),
+            (USER_COLUMN, ITEM_COLUMN, SOURCE_COLUMN, VARIANT_COLUMN),
+            (USER_COLUMN, ITEM_COLUMN, SOURCE_COLUMN),
+        )
         loaded: pd.DataFrame | None = None
         last_exc: BaseException | None = None
         for columns in column_sets:

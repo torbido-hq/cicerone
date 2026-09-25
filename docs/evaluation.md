@@ -158,5 +158,10 @@ enabled = true
 At the start of the next job, previous recommendation rows are scored against
 later events (`HitRate` / `MAP` / `NDCG` / `Recall` / `MRR` / `Precision` @K,
 plus catalog coverage against the item table and novelty when prior
-interactions exist, and hit rate by `source`). This is not CTR. Recommendation
-snapshots (`recommendation_history`) let the window span more than one job.
+interactions exist, intra-list diversity from configured `[[item_features]]`
+in `features.toml` (availability columns such as `published` / `in_stock` are
+not features; users with an out-of-catalog item in the cutoff are omitted),
+serendipity when prior interactions exist, and hit rate by `source`). Intra-list
+diversity is a list-only metric: it is still computed when the later-event
+window is empty. This is not CTR. Recommendation snapshots
+(`recommendation_history`) let the window span more than one job.

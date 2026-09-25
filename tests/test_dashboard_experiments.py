@@ -64,6 +64,122 @@ def test_experiment_context_disabled(tmp_path):
     assert context["report"] is None
 
 
+def test_experiment_context_includes_intersection(tmp_path):
+    settings = _settings(tmp_path, log_exposures=False)
+    _write_frames(
+        settings,
+        events=[{"user_id": "u1", "event_type": "purchase", "quantity": 1}],
+        recs=[
+            {
+                "user_id": "u1",
+                "item_id": "ipa",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                VARIANT_COLUMN: "control",
+            },
+            {
+                "user_id": "u1",
+                "item_id": "stout",
+                "rank": 2,
+                "score": 0.9,
+                "source": "personalized",
+                VARIANT_COLUMN: "control",
+            },
+            {
+                "user_id": "u1",
+                "item_id": "ipa",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                VARIANT_COLUMN: "treatment",
+            },
+            {
+                "user_id": "u1",
+                "item_id": "lager",
+                "rank": 2,
+                "score": 0.8,
+                "source": "personalized",
+                VARIANT_COLUMN: "treatment",
+            },
+        ],
+    )
+    report = experiment_context(settings)["report"]
+    assert report is not None
+    assert len(report.intersections) == 1
+    assert report.intersections[0].name == "Intersection@2"
+    assert report.intersections[0].value == pytest.approx(0.5)
+
+
+def test_experiments_page_shows_list_overlap(tmp_path):
+    import bcrypt
+    from fastapi.testclient import TestClient
+
+    from cicerone.dashboard import create_app
+
+    settings = _settings(tmp_path, log_exposures=False)
+    settings = make_settings(
+        feature_config_path=str(REPO_FEATURES),
+        dashboard_enabled=True,
+        input=settings.input,
+        output=settings.output,
+        experiment=settings.experiment,
+    )
+    _write_frames(
+        settings,
+        events=[{"user_id": "u1", "event_type": "purchase", "quantity": 1}],
+        recs=[
+            {
+                "user_id": "u1",
+                "item_id": "ipa",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                VARIANT_COLUMN: "control",
+            },
+            {
+                "user_id": "u1",
+                "item_id": "stout",
+                "rank": 2,
+                "score": 0.9,
+                "source": "personalized",
+                VARIANT_COLUMN: "control",
+            },
+            {
+                "user_id": "u1",
+                "item_id": "ipa",
+                "rank": 1,
+                "score": 1.0,
+                "source": "personalized",
+                VARIANT_COLUMN: "treatment",
+            },
+            {
+                "user_id": "u1",
+                "item_id": "lager",
+                "rank": 2,
+                "score": 0.8,
+                "source": "personalized",
+                VARIANT_COLUMN: "treatment",
+            },
+        ],
+    )
+    users = {"alice": bcrypt.hashpw(b"s3cret", bcrypt.gensalt()).decode("ascii")}
+
+    class _FakeReader:
+        def read_latest(self):
+            return None
+
+        def read_recent(self, limit: int):
+            return []
+
+    app = create_app(settings, _FakeReader(), users)
+    response = TestClient(app).get("/dashboard/experiments", auth=("alice", "s3cret"))
+    assert response.status_code == 200
+    assert "Variant list overlap" in response.text
+    assert "Intersection@2" in response.text
+    assert "0.5000" in response.text
+
+
 def test_promote_winner_when_undecided(tmp_path):
     settings = _settings(tmp_path)
     _write_frames(
