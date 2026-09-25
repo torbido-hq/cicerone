@@ -359,15 +359,19 @@ class EventWorker:
         leftover = list(events)
         if not leftover:
             return
+        completed = False
         try:
             rejected = self._rejected_nacks(leftover, self._source.nack(leftover))
+            completed = True
         except EVENT_SOURCE_ERRORS:
             logger.exception(
                 "Event worker failed to return %d event(s) to the source",
                 len(leftover),
             )
-            self._restore_buffer(leftover)
             return
+        finally:
+            if not completed:
+                self._restore_buffer(leftover)
         if rejected:
             self._restore_buffer(rejected)
 
