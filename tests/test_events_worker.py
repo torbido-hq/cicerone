@@ -1489,10 +1489,15 @@ def test_event_worker_flush_persists_when_deferred_ack_is_unexpected(
 
 
 def test_event_apply_errors_exclude_broad_programming_errors():
+    from pandas.errors import DatabaseError
+    from pyarrow.lib import ArrowInvalid
+
     assert RuntimeError not in EVENT_APPLY_ERRORS
     assert ValueError not in EVENT_APPLY_ERRORS
     assert TypeError not in EVENT_APPLY_ERRORS
     assert ConfigError not in EVENT_APPLY_ERRORS
+    assert isinstance(DatabaseError("sql write failed"), EVENT_APPLY_ERRORS)
+    assert isinstance(ArrowInvalid("parquet write failed"), EVENT_APPLY_ERRORS)
 
 
 def test_event_worker_retry_acks_deferred_duplicates(tmp_path, feature_config: FeatureConfig):
@@ -2065,6 +2070,95 @@ def test_event_worker_start_abort_drains_when_connect_raises(tmp_path, feature_c
     assert worker._finalized is True
     frame = pd.read_parquet(out / "recommendations.parquet")
     assert "idrain" in set(frame["item_id"].astype(str))
+
+
+def test_event_worker_unexpected_start_failure_drains_and_closes(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    closes = {"n": 0}
+
+    class _UnexpectedStart(WebhookEventSource):
+        def connect(self) -> None:
+            super().connect()
+            raise LookupError("start bug")
+
+        def close(self) -> None:
+            closes["n"] += 1
+            super().close()
+
+    worker = EventWorker(
+        _UnexpectedStart({}),
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    worker._buffer.extend([normalize_event(event_payload(event_id="start-bug", item_id="istart"))])
+
+    with pytest.raises(LookupError, match="start bug"):
+        worker.start()
+
+    assert closes["n"] == 1
+    assert worker._finalized is True
+    frame = pd.read_parquet(out / "recommendations.parquet")
+    assert "istart" in set(frame["item_id"].astype(str))
+
+
+def test_event_worker_unexpected_loop_failure_drains_and_closes(tmp_path, feature_config: FeatureConfig):
+    import threading
+
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    closes = {"n": 0}
+
+    class _UnexpectedPoll(WebhookEventSource):
+        def poll(self, max_events: int = 100):  # type: ignore[override]
+            del max_events
+            raise LookupError("poll bug")
+
+        def close(self) -> None:
+            closes["n"] += 1
+            super().close()
+
+    source = _UnexpectedPoll({})
+    source.connect()
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    worker._buffer.extend([normalize_event(event_payload(event_id="loop-bug", item_id="iloop"))])
+    worker._thread = threading.current_thread()
+
+    with pytest.raises(LookupError, match="poll bug"):
+        worker._loop()
+
+    assert closes["n"] == 1
+    assert worker._finalized is True
+    frame = pd.read_parquet(out / "recommendations.parquet")
+    assert "iloop" in set(frame["item_id"].astype(str))
 
 
 def test_event_worker_reconnect_closes_after_failed_connect(tmp_path, feature_config: FeatureConfig):
