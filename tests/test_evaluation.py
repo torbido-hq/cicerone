@@ -2074,6 +2074,7 @@ def test_evaluate_served_adds_ild_and_serendipity() -> None:
         ks=(2,),
         event_types=("purchase",),
         catalog=catalog,
+        item_features=(("category", "categorical"),),
     )
     assert report is not None
     assert report.metrics["IntraListDiversity@2"] > 0
@@ -2104,6 +2105,7 @@ def test_evaluate_served_skips_ild_without_item_features() -> None:
         ks=(2,),
         event_types=("purchase",),
         catalog=pd.DataFrame([{"item_id": "ipa"}, {"item_id": "stout"}]),
+        item_features=(("category", "categorical"),),
     )
     assert report is not None
     assert "IntraListDiversity@2" not in report.metrics
@@ -2115,7 +2117,21 @@ def test_item_features_skip_blank_columns() -> None:
 
     assert _discrete_feature(None) is None
     assert _item_features(pd.DataFrame({"item_id": ["ipa"], "category": [None]})) is None
-    assert _item_features(["ipa", "stout"]) is None
+    assert (
+        _item_features(
+            pd.DataFrame({"item_id": ["ipa"], "category": [None]}),
+            (("category", "categorical"),),
+        )
+        is None
+    )
+    assert _item_features(["ipa", "stout"], (("category", "categorical"),)) is None
+    assert (
+        _item_features(
+            pd.DataFrame({"item_id": ["ipa"], "published": [True], "in_stock": [True]}),
+            (("category", "categorical"),),
+        )
+        is None
+    )
 
 
 def test_evaluate_served_swallows_ild_and_serendipity_errors(monkeypatch) -> None:
@@ -2168,8 +2184,169 @@ def test_evaluate_served_swallows_ild_and_serendipity_errors(monkeypatch) -> Non
         ks=(2,),
         event_types=("purchase",),
         catalog=catalog,
+        item_features=(("category", "categorical"),),
     )
     assert report is not None
     assert "HitRate@2" in report.metrics
     assert "IntraListDiversity@2" not in report.metrics
     assert "Serendipity@2" not in report.metrics
+
+
+def test_evaluate_served_ild_ignores_availability_columns() -> None:
+    recs = pd.DataFrame(
+        [
+            {"user_id": "alice", "item_id": "ipa", "rank": 1, "source": "personalized"},
+            {"user_id": "alice", "item_id": "stout", "rank": 2, "source": "personalized"},
+        ]
+    )
+    events = pd.DataFrame(
+        [
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "event_type": "purchase",
+                "occurred_at": "2026-08-28T12:00:00Z",
+            }
+        ]
+    )
+    catalog = pd.DataFrame(
+        [
+            {"item_id": "ipa", "published": True, "in_stock": True},
+            {"item_id": "stout", "published": True, "in_stock": False},
+        ]
+    )
+    report = evaluate_served(
+        recs,
+        events,
+        generated_at="2026-08-28T03:00:00+00:00",
+        ks=(2,),
+        event_types=("purchase",),
+        catalog=catalog,
+        item_features=(("category", "categorical"),),
+    )
+    assert report is not None
+    assert "IntraListDiversity@2" not in report.metrics
+
+
+def test_evaluate_served_ild_without_later_events() -> None:
+    recs = pd.DataFrame(
+        [
+            {"user_id": "alice", "item_id": "ipa", "rank": 1, "source": "personalized"},
+            {"user_id": "alice", "item_id": "stout", "rank": 2, "source": "personalized"},
+        ]
+    )
+    catalog = pd.DataFrame(
+        [
+            {"item_id": "ipa", "category": "ale"},
+            {"item_id": "stout", "category": "stout"},
+        ]
+    )
+    report = evaluate_served(
+        recs,
+        pd.DataFrame(),
+        generated_at="2026-08-28T03:00:00+00:00",
+        ks=(2,),
+        event_types=("purchase",),
+        catalog=catalog,
+        item_features=(("category", "categorical"),),
+    )
+    assert report is not None
+    assert report.n_users_with_events == 0
+    assert report.metrics["IntraListDiversity@2"] > 0
+    assert "Serendipity@2" not in report.metrics
+
+
+def test_evaluate_served_ild_skips_users_missing_catalog_features() -> None:
+    recs = pd.DataFrame(
+        [
+            {"user_id": "alice", "item_id": "ipa", "rank": 1, "source": "personalized"},
+            {"user_id": "alice", "item_id": "stout", "rank": 2, "source": "personalized"},
+            {"user_id": "bob", "item_id": "ipa", "rank": 1, "source": "personalized"},
+            {"user_id": "bob", "item_id": "ghost", "rank": 2, "source": "personalized"},
+        ]
+    )
+    catalog = pd.DataFrame(
+        [
+            {"item_id": "ipa", "category": "ale"},
+            {"item_id": "stout", "category": "stout"},
+        ]
+    )
+    report = evaluate_served(
+        recs,
+        pd.DataFrame(),
+        generated_at="2026-08-28T03:00:00+00:00",
+        ks=(2,),
+        event_types=("purchase",),
+        catalog=catalog,
+        item_features=(("category", "categorical"),),
+    )
+    assert report is not None
+    assert report.metrics["IntraListDiversity@2"] > 0
+
+
+def test_item_features_encode_list_columns() -> None:
+    from cicerone.evaluation.served import _item_features, _list_tokens
+
+    assert _list_tokens(None) == []
+    assert _list_tokens(["ipa", None, "stout"]) == ["ipa", "stout"]
+    encoded = _item_features(
+        pd.DataFrame(
+            [
+                {"item_id": "ipa", "styles": ["hoppy", "bitter"]},
+                {"item_id": "stout", "styles": "roasty,dark"},
+            ]
+        ),
+        (("styles", "list"),),
+    )
+    assert encoded is not None
+    assert encoded.loc["ipa"].sum() == 2
+    assert encoded.loc["stout"].sum() == 2
+
+
+def test_evaluate_served_swallows_ild_calculator_errors(monkeypatch) -> None:
+    from cicerone.evaluation import served as served_mod
+
+    recs = pd.DataFrame(
+        [
+            {"user_id": "alice", "item_id": "ipa", "rank": 1, "source": "personalized"},
+            {"user_id": "alice", "item_id": "stout", "rank": 2, "source": "personalized"},
+        ]
+    )
+    catalog = pd.DataFrame(
+        [
+            {"item_id": "ipa", "category": "ale"},
+            {"item_id": "stout", "category": "stout"},
+        ]
+    )
+    monkeypatch.setattr(
+        served_mod,
+        "PairwiseHammingDistanceCalculator",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("calculator")),
+    )
+    report = evaluate_served(
+        recs,
+        pd.DataFrame(),
+        generated_at="2026-08-28T03:00:00+00:00",
+        ks=(2,),
+        event_types=("purchase",),
+        catalog=catalog,
+        item_features=(("category", "categorical"),),
+    )
+    assert report is not None
+    assert "IntraListDiversity@2" not in report.metrics
+
+
+def test_item_feature_specs_from_features_toml(tmp_path) -> None:
+    from cicerone.config import IOSettings, make_settings
+    from cicerone.job_eval import _item_feature_specs
+
+    path = tmp_path / "features.toml"
+    path.write_text(
+        '[event_weights]\npurchase = 1.0\n\n[[item_features]]\ncolumn = "category"\ntype = "categorical"\n',
+        encoding="utf-8",
+    )
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    settings = make_settings(output=output, feature_config_path=str(path))
+    assert _item_feature_specs(settings) == (("category", "categorical"),)
+    settings = make_settings(output=output, feature_config_path=str(tmp_path / "missing.toml"))
+    assert _item_feature_specs(settings) == ()

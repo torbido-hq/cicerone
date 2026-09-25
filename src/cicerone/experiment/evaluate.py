@@ -230,13 +230,14 @@ def _max_rank(frame: pd.DataFrame) -> int:
 
 
 def _ensure_rank(frame: pd.DataFrame) -> pd.DataFrame:
-    if RANK_COLUMN in frame.columns:
-        out = frame.copy()
-        out[RANK_COLUMN] = pd.to_numeric(out[RANK_COLUMN], errors="coerce")
-        return out.dropna(subset=[RANK_COLUMN])
+    if RANK_COLUMN not in frame.columns:
+        return frame.iloc[0:0].copy()
     out = frame.copy()
-    out[RANK_COLUMN] = out.groupby(USER_COLUMN, sort=False).cumcount() + 1
-    return out
+    out[RANK_COLUMN] = pd.to_numeric(out[RANK_COLUMN], errors="coerce")
+    out = out.dropna(subset=[RANK_COLUMN])
+    if out.empty:
+        return out
+    return out.sort_values([USER_COLUMN, RANK_COLUMN], kind="mergesort")
 
 
 def _intersection_value(reco: pd.DataFrame, ref: pd.DataFrame, *, k: int) -> float | None:

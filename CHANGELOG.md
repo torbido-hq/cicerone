@@ -37,10 +37,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   unknown-id event drops.
 - Quality splits production replay into ranking vs catalog metrics, shows
   run-over-run deltas from job manifests, and warns when rank CTR rises.
-- Production replay adds RecTools IntraListDiversity when item features exist
-  and Serendipity when prior interactions exist.
+- Production replay adds RecTools IntraListDiversity from configured
+  `[[item_features]]` (including when the later-event window is empty) and
+  Serendipity when prior interactions exist.
 - Experiments report RecTools Intersection between variant lists for the same
-  users.
+  users using persisted recommendation rank.
 
 ### Changed
 

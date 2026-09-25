@@ -363,6 +363,7 @@ def test_load_recommendation_guardrail_rows_dataset(tmp_path):
     assert frame is not None
     assert list(frame["item_id"]) == ["i1"]
     assert list(frame["variant"]) == ["control"]
+    assert list(frame["rank"]) == [1]
     with pytest.raises(ValueError, match="Unsupported output kind"):
         load_recommendation_guardrail_rows(IOSettings(kind="other", options={}))
 
@@ -386,6 +387,28 @@ def test_load_recommendation_guardrail_rows_sqlite(tmp_path):
     frame = load_recommendation_guardrail_rows(settings.output)
     assert frame is not None
     assert list(frame["variant"]) == ["treatment"]
+    assert list(frame["rank"]) == [1]
+
+
+def test_load_recommendation_guardrail_rows_sqlite_without_rank(tmp_path):
+    url = f"sqlite+pysqlite:///{tmp_path / 'guard_norank.db'}"
+    engine = create_engine(url)
+    pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "score": 1.0,
+                "source": "personalized",
+                "variant": "control",
+            }
+        ]
+    ).to_sql("recommendations", engine, index=False)
+    settings = make_settings(output=IOSettings(kind="db", options={"database_url": url}))
+    frame = load_recommendation_guardrail_rows(settings.output)
+    assert frame is not None
+    assert list(frame["item_id"]) == ["i1"]
+    assert "rank" not in frame.columns
 
 
 def test_load_recommendation_guardrail_rows_sqlite_without_variant(tmp_path):

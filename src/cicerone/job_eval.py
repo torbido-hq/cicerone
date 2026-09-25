@@ -27,6 +27,7 @@ from cicerone.evaluation.context import concat_history, stamp_recommendations
 from cicerone.events.store import load_recommendations_frame
 from cicerone.experiment.assignment import resolve_assignment
 from cicerone.experiment.store import ExperimentStore
+from cicerone.feature_config import load_feature_config
 from cicerone.io.base import InputSource
 from cicerone.io.factory import build_manifest_reader
 from cicerone.io.recommendation_schema import USER_COLUMN, VARIANT_COLUMN, pick_fallback_variant
@@ -52,6 +53,14 @@ OPTIONAL_IO_ERRORS: tuple[type[BaseException], ...] = (
 OPTIONAL_EVAL_ERRORS: tuple[type[BaseException], ...] = (ValueError, TypeError, LookupError)
 PUBLISH_ERRORS: tuple[type[BaseException], ...] = (OSError, ValueError, PublishError)
 SINK_WRITE_ERRORS: tuple[type[BaseException], ...] = (*OPTIONAL_IO_ERRORS, RuntimeError)
+
+
+def _item_feature_specs(settings: Settings) -> tuple[tuple[str, str], ...]:
+    try:
+        config = load_feature_config(settings.feature_config_path)
+    except (OSError, ValueError, TypeError, KeyError):
+        return ()
+    return tuple((column.column, column.type) for column in config.item_features)
 
 
 def log_caught(message: str, exc: BaseException, *, log: logging.Logger | None = None) -> None:
@@ -297,6 +306,7 @@ def score_previous_run(
                 history=history,
                 catalog=items,
                 assigned=assigned,
+                item_features=_item_feature_specs(settings),
             )
             return report.as_dict() if report is not None else None
 

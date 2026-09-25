@@ -1070,6 +1070,13 @@ def test_list_intersections_skips_empty_or_disjoint_variants() -> None:
         ]
     )
     assert _list_intersections(disjoint, ["control", "treatment"], "control") == ()
+    missing_rank = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "ipa", "variant": "control"},
+            {"user_id": "u1", "item_id": "stout", "variant": "treatment"},
+        ]
+    )
+    assert _list_intersections(missing_rank, ["control", "treatment"], "control") == ()
 
 
 def test_list_intersections_swallows_rectools_errors(monkeypatch) -> None:
