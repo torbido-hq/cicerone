@@ -181,7 +181,7 @@ static async Task ApplyAsync(string sql, RecommendationMessage message, Cancella
             VALUES (@user_id, @item_id, @rank, @score, @source)
             """,
             connection, tx);
-        insert.Parameters.AddWithValue("@user_id", row.UserId);
+        insert.Parameters.AddWithValue("@user_id", message.UserId);
         insert.Parameters.AddWithValue("@item_id", row.ItemId);
         insert.Parameters.AddWithValue("@rank", row.Rank);
         insert.Parameters.AddWithValue("@score", row.Score);
@@ -239,18 +239,22 @@ CREATE TABLE cicerone_recommendation_messages (
 );
 ```
 
-The page:
+The page checks `cicerone_recommendation_messages` as well.
 
 ```sql
+SELECT message_id
+FROM cicerone_recommendation_messages
+WHERE user_id = @userId;
+
 SELECT item_id, rank, score, source
 FROM cicerone_recommendations
 WHERE user_id = @userId
 ORDER BY rank;
 ```
 
-Zero rows in `cicerone_recommendations` is two cases. No row in `cicerone_recommendation_messages` means you have never applied a message for that user. Read `__cold_start__`. A message row and zero recommendation rows is an empty clear. Those rows were deleted on purpose.
+No marker row means you have never applied a message for that user, so read `__cold_start__`. A marker row with zero recommendation rows means the latest applied message was an explicit clear, so read no recommendations. Rows from last night mean the topic has not said otherwise.
 
-`GET /recommendations/{user_id}` still substitutes `__cold_start__` when the user has no rows. If the sentinel is empty too, the status is 404. Rows left from last night mean the topic has not said otherwise. They can be older than the table you cannot see.
+`GET /recommendations/{user_id}` still substitutes `__cold_start__` when the user has no rows. If the sentinel is empty too, the status is 404. They can be older than the table you cannot see.
 
 ## After the write
 
