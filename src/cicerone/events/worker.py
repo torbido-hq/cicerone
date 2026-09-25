@@ -79,19 +79,21 @@ class EventWorker:
             return
         epoch = self._stop_epoch
         connect_error: BaseException | None = None
-        with self._source_guard:
-            if self._thread is not None and self._thread.is_alive():
-                return
-            if self._starting or self._stop_epoch != epoch:
-                return
-            self._starting = True
-            self._stop.clear()
-            self._finalized = False
-            try:
-                self._source.connect()
-            except EVENT_SOURCE_ERRORS as exc:
-                connect_error = exc
+        starting = False
         try:
+            with self._source_guard:
+                if self._thread is not None and self._thread.is_alive():
+                    return
+                if self._starting or self._stop_epoch != epoch:
+                    return
+                self._starting = True
+                starting = True
+                self._stop.clear()
+                self._finalized = False
+                try:
+                    self._source.connect()
+                except EVENT_SOURCE_ERRORS as exc:
+                    connect_error = exc
             if self._start_aborted(epoch):
                 self._drain_stopped_start()
                 if connect_error is not None:
@@ -115,8 +117,13 @@ class EventWorker:
                         return
                     return
             self._drain_stopped_start()
+        except Exception:
+            if starting and not self._finalized:
+                self._drain_stopped_start()
+            raise
         finally:
-            self._starting = False
+            if starting:
+                self._starting = False
 
     def _start_aborted(self, epoch: int) -> bool:
         return self._stop.is_set() or self._stop_epoch != epoch
@@ -411,10 +418,9 @@ class EventWorker:
                 disconnected = self._source_unhealthy
                 self._stop.wait(self._poll_interval_seconds)
         finally:
-            if self._stop.is_set():
-                with self._tick_guard, self._source_guard:
-                    if self._thread is current:
-                        self._drain_and_close()
+            with self._tick_guard, self._source_guard:
+                if self._thread is current:
+                    self._drain_and_close()
 
     def tick(self) -> int:
         """One poll/flush cycle; returns events successfully applied."""

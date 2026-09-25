@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from pyarrow.lib import ArrowInvalid
+from pandas.errors import DatabaseError
+from pyarrow.lib import ArrowException
 from sqlalchemy.exc import SQLAlchemyError
 
 from cicerone.events.base import EventBackpressureError, EventSourceError
@@ -53,7 +54,8 @@ EVENT_SOURCE_ERRORS: tuple[type[BaseException], ...] = (
 EVENT_APPLY_ERRORS: tuple[type[BaseException], ...] = (
     OSError,
     SQLAlchemyError,
-    ArrowInvalid,
+    DatabaseError,
+    ArrowException,
     RecommendationSchemaError,
     PublishError,
     *S3_READ_ERRORS,
