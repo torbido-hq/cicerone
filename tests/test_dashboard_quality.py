@@ -379,6 +379,7 @@ def test_quality_as_of_falls_back_to_served_eval(tmp_path):
     assert context["replay_metric_names"] == []
     assert context["ranking_metrics"] == {"HitRate@10": 0.1}
     assert context["catalog_metrics"] == {}
+    assert context["diversity_metrics"] == {}
 
 
 def test_replay_metric_names_are_source_keys_only():
@@ -1221,3 +1222,94 @@ def test_quality_history_parses_json_strings_and_skips_failures():
     assert rows[0]["ndcg"] == 0.2
     assert rows[0]["ndcg_name"] == "NDCG@10"
     assert rows[0]["coverage"] == 0.3
+
+
+def test_split_replay_metrics_separates_diversity():
+    from cicerone.dashboard_quality import _split_replay_metrics
+
+    ranking, catalog, diversity = _split_replay_metrics(
+        {
+            "metrics": {
+                "NDCG@10": 0.4,
+                "CatalogCoverage@10": 0.2,
+                "IntraListDiversity@10": 0.5,
+                "Serendipity@10": 0.1,
+            }
+        }
+    )
+    assert ranking == {"NDCG@10": 0.4}
+    assert catalog == {"CatalogCoverage@10": 0.2}
+    assert diversity == {"IntraListDiversity@10": 0.5, "Serendipity@10": 0.1}
+
+
+def test_quality_deltas_include_diversity():
+    from cicerone.dashboard_quality import _quality_deltas
+
+    deltas = _quality_deltas(
+        None,
+        {"metrics": {"IntraListDiversity@10": 0.4, "Serendipity@10": 0.2}},
+        [
+            {"served_eval": {"metrics": {"IntraListDiversity@10": 0.4, "Serendipity@10": 0.2}}},
+            {"served_eval": {"metrics": {"IntraListDiversity@10": 0.3, "Serendipity@10": 0.1}}},
+        ],
+        skip_first_track=True,
+        skip_first_replay=True,
+    )
+    assert deltas["ild"] == "+0.1000"
+    assert deltas["serendipity"] == "+0.1000"
+    assert deltas["ild_name"] == "IntraListDiversity@10"
+    assert deltas["serendipity_name"] == "Serendipity@10"
+
+
+def test_quality_page_shows_diversity_metrics(tmp_path):
+    settings = _settings(tmp_path, track={"enabled": True}, eval={"enabled": True})
+    TrackStore(settings.output).write_eval(
+        {
+            "track_eval": {
+                "overall": {
+                    "n_impressions": 10,
+                    "n_clicks": 2,
+                    "n_conversions_click": 0,
+                    "n_conversions_view": 0,
+                    "ctr": 0.2,
+                    "cvr_click": 0.0,
+                    "cvr_view": 0.0,
+                    "n_users": 2,
+                }
+            },
+            "served_eval": {
+                "n_users": 3,
+                "n_users_with_events": 1,
+                "metrics": {
+                    "IntraListDiversity@5": 0.2,
+                    "IntraListDiversity@10": 0.4,
+                    "Serendipity@10": 0.25,
+                },
+                "by_source": {},
+            },
+        }
+    )
+    history = [
+        {
+            "status": "success",
+            "triggered_by": "cron",
+            "generated_at": "2026-09-08T12:00:00+00:00",
+            "served_eval": {"metrics": {"IntraListDiversity@10": 0.4, "Serendipity@10": 0.25}},
+        },
+        {
+            "status": "success",
+            "triggered_by": "cron",
+            "generated_at": "2026-09-07T12:00:00+00:00",
+            "served_eval": {"metrics": {"IntraListDiversity@10": 0.3, "Serendipity@10": 0.15}},
+        },
+    ]
+    app = create_app(settings, _FakeReader(history), _users_with("alice", "s3cret"))
+    response = TestClient(app).get("/dashboard/quality", auth=("alice", "s3cret"))
+    _assert_quality_chrome(response)
+    diversity = response.text.split("Production replay diversity metrics", 1)[1]
+    ild_five = diversity.split("IntraListDiversity@5", 1)[1].split("</tr>", 1)[0]
+    ild_ten = diversity.split("IntraListDiversity@10", 1)[1].split("</tr>", 1)[0]
+    assert "+0.1000" not in ild_five
+    assert "+0.1000" in ild_ten
+    assert "Serendipity@10" in diversity
+    assert "+0.1000" in diversity.split("Serendipity@10", 1)[1].split("</tr>", 1)[0]

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
 import pandas as pd
+from rectools.metrics import Intersection
 
 from cicerone.config.constants import (
     ALLOCATION_THOMPSON,
@@ -23,7 +25,23 @@ from cicerone.experiment.assignment import _active_pair_traffic, assign_variant
 from cicerone.experiment.guardrails import GuardrailReport, evaluate_guardrails
 from cicerone.experiment.recipes import ResolvedRecipe
 from cicerone.experiment.stats import ComparisonResult, compare_variants, pick_control_name, variant_metric
-from cicerone.io.recommendation_schema import USER_COLUMN, VARIANT_COLUMN, filter_variant_rows
+from cicerone.io.recommendation_schema import (
+    ITEM_COLUMN,
+    RANK_COLUMN,
+    USER_COLUMN,
+    VARIANT_COLUMN,
+    filter_variant_rows,
+)
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class IntersectionScore:
+    treatment: str
+    control: str
+    name: str
+    value: float
 
 
 @dataclass(frozen=True)
@@ -37,6 +55,7 @@ class ExperimentReport:
     exposure_conditional: bool
     can_promote: bool
     promote_blocked_by: tuple[str, ...] = field(default_factory=tuple)
+    intersections: tuple[IntersectionScore, ...] = field(default_factory=tuple)
 
     @property
     def winner(self) -> str | None:
@@ -184,6 +203,9 @@ def evaluate_experiment(
         blocked.append("undecided")
     elif _unique_best_mean(comparisons) is None:
         blocked.append("split_winners")
+    intersections = (
+        _list_intersections(recommendations, names, control_name) if recommendations is not None else ()
+    )
     return ExperimentReport(
         experiment_id=experiment.id,
         primary_metric=experiment.primary_metric,
@@ -194,7 +216,83 @@ def evaluate_experiment(
         exposure_conditional=exposure_conditional,
         can_promote=not blocked,
         promote_blocked_by=tuple(blocked),
+        intersections=intersections,
     )
+
+
+def _max_rank(frame: pd.DataFrame) -> int:
+    if frame.empty or RANK_COLUMN not in frame.columns:
+        return 0
+    ranks = pd.to_numeric(frame[RANK_COLUMN], errors="coerce")
+    if ranks.isna().all():
+        return 0
+    return int(ranks.max())
+
+
+def _ensure_rank(frame: pd.DataFrame) -> pd.DataFrame:
+    if RANK_COLUMN in frame.columns:
+        out = frame.copy()
+        out[RANK_COLUMN] = pd.to_numeric(out[RANK_COLUMN], errors="coerce")
+        return out.dropna(subset=[RANK_COLUMN])
+    out = frame.copy()
+    out[RANK_COLUMN] = out.groupby(USER_COLUMN, sort=False).cumcount() + 1
+    return out
+
+
+def _intersection_value(reco: pd.DataFrame, ref: pd.DataFrame, *, k: int) -> float | None:
+    if k < 1 or reco.empty or ref.empty:
+        return None
+    left = reco.loc[:, [USER_COLUMN, ITEM_COLUMN, RANK_COLUMN]].copy()
+    right = ref.loc[:, [USER_COLUMN, ITEM_COLUMN, RANK_COLUMN]].copy()
+    left[USER_COLUMN] = left[USER_COLUMN].astype(str)
+    right[USER_COLUMN] = right[USER_COLUMN].astype(str)
+    left[ITEM_COLUMN] = left[ITEM_COLUMN].astype(str)
+    right[ITEM_COLUMN] = right[ITEM_COLUMN].astype(str)
+    shared = set(left[USER_COLUMN]) & set(right[USER_COLUMN])
+    if not shared:
+        return None
+    left = left.loc[left[USER_COLUMN].isin(shared)]
+    right = right.loc[right[USER_COLUMN].isin(shared)]
+    try:
+        value = float(Intersection(k=k).calc(left, right))
+    except (ValueError, TypeError, KeyError):
+        logger.exception("RecTools Intersection failed for k=%s", k)
+        return None
+    if pd.isna(value):
+        return None
+    return value
+
+
+def _list_intersections(
+    recommendations: pd.DataFrame,
+    names: list[str],
+    control_name: str,
+) -> tuple[IntersectionScore, ...]:
+    if recommendations.empty or VARIANT_COLUMN not in recommendations.columns:
+        return ()
+    control = _ensure_rank(filter_variant_rows(recommendations, control_name))
+    if control.empty:
+        return ()
+    scores: list[IntersectionScore] = []
+    for name in names:
+        if name == control_name:
+            continue
+        treatment = _ensure_rank(filter_variant_rows(recommendations, name))
+        if treatment.empty:
+            continue
+        k = max(_max_rank(control), _max_rank(treatment))
+        value = _intersection_value(treatment, control, k=k)
+        if value is None:
+            continue
+        scores.append(
+            IntersectionScore(
+                treatment=name,
+                control=control_name,
+                name=f"Intersection@{k}",
+                value=value,
+            )
+        )
+    return tuple(scores)
 
 
 def _parse_cutoff(value: object) -> tuple[pd.Timestamp | None, bool]:

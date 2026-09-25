@@ -25,6 +25,7 @@ from cicerone.track.store_common import DASHBOARD_TRACK_FLOOR_HOURS, lookback_si
 logger = logging.getLogger(__name__)
 _T = TypeVar("_T")
 _CATALOG_PREFIXES = ("CatalogCoverage", "MeanInvUserFreq", "AvgRecPopularity")
+_DIVERSITY_PREFIXES = ("IntraListDiversity", "Serendipity")
 
 
 def quality_context(settings: Settings, reader: ManifestReader | None = None) -> dict[str, Any]:
@@ -61,7 +62,7 @@ def quality_context(settings: Settings, reader: ManifestReader | None = None) ->
             raw_served_at = served_eval.get("generated_at")
             if isinstance(raw_served_at, str) and raw_served_at:
                 track_as_of = raw_served_at
-    ranking_metrics, catalog_metrics = _split_replay_metrics(served_eval)
+    ranking_metrics, catalog_metrics, diversity_metrics = _split_replay_metrics(served_eval)
     recent_runs: list[dict[str, Any]] = []
     history_single = False
     if reader is not None:
@@ -83,6 +84,7 @@ def quality_context(settings: Settings, reader: ManifestReader | None = None) ->
         "served_eval": served_eval,
         "ranking_metrics": ranking_metrics,
         "catalog_metrics": catalog_metrics,
+        "diversity_metrics": diversity_metrics,
         "track_as_of": track_as_of,
         "track_live": track_live,
         "replay_metric_names": _source_metric_names(served_eval),
@@ -127,14 +129,21 @@ def _is_catalog_metric(name: str) -> bool:
     return name.startswith(_CATALOG_PREFIXES)
 
 
-def _split_replay_metrics(served_eval: dict[str, Any] | None) -> tuple[dict[str, float], dict[str, float]]:
+def _is_diversity_metric(name: str) -> bool:
+    return name.startswith(_DIVERSITY_PREFIXES)
+
+
+def _split_replay_metrics(
+    served_eval: dict[str, Any] | None,
+) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
     ranking: dict[str, float] = {}
     catalog: dict[str, float] = {}
+    diversity: dict[str, float] = {}
     if not served_eval:
-        return ranking, catalog
+        return ranking, catalog, diversity
     metrics = served_eval.get("metrics")
     if not isinstance(metrics, dict):
-        return ranking, catalog
+        return ranking, catalog, diversity
     for name, raw in metrics.items():
         try:
             value = float(raw)
@@ -143,9 +152,11 @@ def _split_replay_metrics(served_eval: dict[str, Any] | None) -> tuple[dict[str,
         key = str(name)
         if _is_catalog_metric(key):
             catalog[key] = value
+        elif _is_diversity_metric(key):
+            diversity[key] = value
         else:
             ranking[key] = value
-    return ranking, catalog
+    return ranking, catalog, diversity
 
 
 def _parse_eval_blob(raw: object) -> dict[str, Any] | None:
@@ -296,6 +307,10 @@ def _empty_quality_deltas() -> dict[str, str | None]:
         "miuf_name": None,
         "popularity": "—",
         "popularity_name": None,
+        "ild": "—",
+        "ild_name": None,
+        "serendipity": "—",
+        "serendipity_name": None,
     }
 
 
@@ -324,10 +339,14 @@ def _quality_deltas(
     coverage_name, coverage = _metric_at_largest_k(served_eval, "CatalogCoverage")
     miuf_name, miuf = _metric_at_largest_k(served_eval, "MeanInvUserFreq")
     popularity_name, popularity = _metric_at_largest_k(served_eval, "AvgRecPopularity")
+    ild_name, ild = _metric_at_largest_k(served_eval, "IntraListDiversity")
+    serendipity_name, serendipity = _metric_at_largest_k(served_eval, "Serendipity")
     out["ndcg_name"] = ndcg_name
     out["coverage_name"] = coverage_name
     out["miuf_name"] = miuf_name
     out["popularity_name"] = popularity_name
+    out["ild_name"] = ild_name
+    out["serendipity_name"] = serendipity_name
     track_previous = _previous_quality_row(
         history,
         skip_current=skip_first_track,
@@ -354,11 +373,17 @@ def _quality_deltas(
     prev_coverage_name, prev_coverage = _metric_at_largest_k(prev_served, "CatalogCoverage")
     prev_miuf_name, prev_miuf = _metric_at_largest_k(prev_served, "MeanInvUserFreq")
     prev_popularity_name, prev_popularity = _metric_at_largest_k(prev_served, "AvgRecPopularity")
+    prev_ild_name, prev_ild = _metric_at_largest_k(prev_served, "IntraListDiversity")
+    prev_serendipity_name, prev_serendipity = _metric_at_largest_k(prev_served, "Serendipity")
     out["ndcg"] = _named_cutoff_delta(ndcg_name, ndcg, prev_ndcg_name, prev_ndcg)
     out["coverage"] = _named_cutoff_delta(coverage_name, coverage, prev_coverage_name, prev_coverage)
     out["miuf"] = _named_cutoff_delta(miuf_name, miuf, prev_miuf_name, prev_miuf)
     out["popularity"] = _named_cutoff_delta(
         popularity_name, popularity, prev_popularity_name, prev_popularity
+    )
+    out["ild"] = _named_cutoff_delta(ild_name, ild, prev_ild_name, prev_ild)
+    out["serendipity"] = _named_cutoff_delta(
+        serendipity_name, serendipity, prev_serendipity_name, prev_serendipity
     )
     return out
 

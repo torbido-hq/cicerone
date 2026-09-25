@@ -15,11 +15,14 @@ from rectools.metrics import (
     AvgRecPopularity,
     CatalogCoverage,
     HitRate,
+    IntraListDiversity,
     MeanInvUserFreq,
     Precision,
     Recall,
+    Serendipity,
     calc_metrics,
 )
+from rectools.metrics.distances import PairwiseHammingDistanceCalculator
 
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.evaluation.metrics import OCCURRED_AT, _frame, _ratio
@@ -125,6 +128,39 @@ def _catalog_metric_defs(k: int, *, with_prev: bool) -> dict[str, object]:
     return metrics
 
 
+def _discrete_feature(value: object) -> str | None:
+    if value is None:
+        return None
+    try:
+        missing = bool(pd.isna(value))
+    except (TypeError, ValueError):
+        missing = False
+    if missing:
+        return None
+    return str(value)
+
+
+def _item_features(catalog: pd.DataFrame | Sequence[object] | None) -> pd.DataFrame | None:
+    if not isinstance(catalog, pd.DataFrame) or catalog.empty or ITEM_COLUMN not in catalog.columns:
+        return None
+    extra = [column for column in catalog.columns if column != ITEM_COLUMN]
+    if not extra:
+        return None
+    frame = catalog.loc[:, [ITEM_COLUMN, *extra]].copy()
+    frame[ITEM_COLUMN] = frame[ITEM_COLUMN].astype(str)
+    frame = frame.drop_duplicates(subset=[ITEM_COLUMN], keep="last")
+    for column in extra:
+        frame[column] = frame[column].map(_discrete_feature)
+    usable = [column for column in extra if frame[column].notna().any()]
+    if not usable:
+        return None
+    indexed = frame.set_index(ITEM_COLUMN).loc[:, usable]
+    encoded = pd.get_dummies(indexed.astype("string"), dummy_na=False)
+    if encoded.empty or encoded.shape[1] == 0:
+        return None
+    return encoded.astype(float)
+
+
 def _prev_interactions(events: pd.DataFrame, generated_at: str | None) -> pd.DataFrame:
     if events.empty or generated_at is None or OCCURRED_AT not in events.columns:
         return events.iloc[0:0]
@@ -209,10 +245,17 @@ def evaluate_served(
     n_with_events = int(relevant[USER_COLUMN].nunique()) if not relevant.empty else 0
     prev = _prev_interactions(all_events, generated_at)
     catalog_ids = _served_catalog(catalog, recs, all_events)
+    features = _item_features(catalog)
+    ild_calculator = None
+    if features is not None:
+        try:
+            ild_calculator = PairwiseHammingDistanceCalculator(features)
+        except (ValueError, TypeError, KeyError):
+            logger.exception("RecTools PairwiseHammingDistanceCalculator failed")
     metrics: dict[str, float] = {}
     for k in ks:
+        reco_k = recs[recs[RANK_COLUMN] <= k] if RANK_COLUMN in recs.columns else recs
         if not relevant.empty and not recs.empty:
-            reco_k = recs[recs[RANK_COLUMN] <= k] if RANK_COLUMN in recs.columns else recs
             interactions = relevant.copy()
             interactions["weight"] = 1.0
             extra: dict[str, object] = {}
@@ -229,8 +272,29 @@ def evaluate_served(
             except Exception:
                 logger.exception("RecTools calc_metrics failed for k=%s", k)
                 metrics[f"HitRate@{k}"] = _hit_rate(recs, relevant, k=k)
+            if not prev.empty and catalog_ids:
+                try:
+                    surprise = calc_metrics(
+                        {f"Serendipity@{k}": Serendipity(k=k)},
+                        reco=reco_k,
+                        interactions=interactions,
+                        catalog=catalog_ids,
+                        prev_interactions=prev,
+                    )
+                    metrics.update({key: float(value) for key, value in surprise.items()})
+                except (ValueError, TypeError, KeyError):
+                    logger.exception("RecTools Serendipity failed for k=%s", k)
         else:
             metrics[f"HitRate@{k}"] = _hit_rate(recs, relevant, k=k)
+        if ild_calculator is not None and not reco_k.empty and RANK_COLUMN in reco_k.columns:
+            try:
+                ild = calc_metrics(
+                    {f"IntraListDiversity@{k}": IntraListDiversity(k=k, distance_calculator=ild_calculator)},
+                    reco=reco_k,
+                )
+                metrics.update({key: float(value) for key, value in ild.items()})
+            except (ValueError, TypeError, KeyError):
+                logger.exception("RecTools IntraListDiversity failed for k=%s", k)
     by_source: dict[str, dict[str, float]] = {}
     if SOURCE_COLUMN in recs.columns:
         for source, group in recs.groupby(SOURCE_COLUMN, dropna=True):
