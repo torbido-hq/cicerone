@@ -131,6 +131,91 @@ def test_event_worker_apply_failure_nacks(tmp_path, feature_config: FeatureConfi
     assert registry_metric_value("cicerone_events_tick_errors_total") == before_tick
 
 
+def test_event_worker_apply_unexpected_nacks_and_raises(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="fail-unexpected"))
+
+    class _Unexpected(IncrementalUpdater):
+        def apply(self, events, *, persist_online: bool = True):  # type: ignore[no-untyped-def]
+            del persist_online
+            raise LookupError("boom")
+
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        _Unexpected(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    with pytest.raises(LookupError, match="boom"):
+        worker.tick()
+    assert source.health().lag == 1
+
+
+def test_event_worker_health_unexpected_raises(tmp_path, feature_config: FeatureConfig):
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        top_k=3,
+    )
+
+    class _BoomHealth(WebhookEventSource):
+        def health(self) -> EventSourceHealth:
+            raise LookupError("health boom")
+
+    worker = EventWorker(
+        _BoomHealth({}),
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    with pytest.raises(LookupError, match="health boom"):
+        worker.tick()
+
+
+def test_event_worker_persist_unexpected_raises(tmp_path, feature_config: FeatureConfig, monkeypatch):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="persist-unexpected"))
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+
+    def _boom() -> None:
+        raise LookupError("persist boom")
+
+    monkeypatch.setattr(worker._updater, "persist_online", _boom)
+    with pytest.raises(LookupError, match="persist boom"):
+        worker.tick()
+
+
 def test_event_worker_partial_apply_nacks(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()
