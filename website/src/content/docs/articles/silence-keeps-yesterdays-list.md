@@ -44,7 +44,7 @@ topic = "cicerone.recommendations"
 
 That needs `pip install 'cicerone-recommender[kafka]'`. `bootstrap_servers` and `topic` are required.
 
-After a successful write, the producer sends one message per user. The key is the UTF-8 `user_id`. The body looks like this:
+After a successful write, the producer sends one JSON document per user it is publishing. The key is the UTF-8 `user_id`. Who is in that set depends on the write. The body looks like this:
 
 ```json
 {
@@ -62,9 +62,9 @@ After a successful write, the producer sends one message per user. The key is th
 }
 ```
 
-`message_id` is a SHA-256 of `{user_id, recommendations}`. The same list hashes to the same id. `reasons` and `variant` appear on a row only when the job wrote those columns. A NaN `score` is refused before produce: the flush publishes nothing, and the log line is `Publish failed after successful write`.
+`message_id` is a SHA-256 of `{user_id, recommendations}`. The same list hashes to the same id. A different list is a different id, including an older one. `reasons` and `variant` appear on a row only when the job wrote those columns. A NaN `score` is refused before produce, so that call publishes nothing. Nightly logs `Publish failed after successful write`. Incremental logs `Incremental publish failed after successful write`.
 
-Store `message_id`. Do not recompute it.
+Store `message_id`. Do not recompute it. It does not order generations.
 
 ## Two publishes
 
@@ -73,23 +73,26 @@ The nightly job and an incremental flush do not mean the same thing when a user 
 | Write | Who gets a message | `"recommendations": []` |
 | --- | --- | --- |
 | Nightly `job.run()` | Users who have rows in that write | Not sent. A user who dropped out of the table is silence. |
-| Incremental replace | Users in that replace set | That user has no rows left. Delete those SQL Server rows. |
+| Incremental replace | Users in that replace set | Only when that user has no rows left. Delete those SQL Server rows. A replaced user who still has rows gets a non-empty list. |
 
 A flush that does not replace anyone publishes nothing. The prior list stays in Cicerone's table, and it stays in yours.
 
-`__cold_start__` is a `user_id` like any other. If that sentinel is in the write, you get a message. Store it. The page reads it when the signed-in user has no rows yet. Silence is not that case. Silence means you already stored them.
+`__cold_start__` is a `user_id` like any other. If that sentinel has rows in the write, you get a message. Store it. An incremental clear of the sentinel is `"recommendations": []`. Silence is a user you already stored and the topic did not mention. That is not cold start.
 
-Leave `[experiment]` off for this worker. With it on, one message can hold every recipe's rows for that user, and `variant` is how you tell them apart. The worker does not know which list Alice was assigned. [Serve](/articles/the-same-customer-keeps-the-same-list/) does. If any row has `variant`, stop.
+Leave `[experiment]` off for this worker. With it on, one message holds every variant row that write contained. Fixed allocation is every named recipe. Thompson is the current pair. `variant` is the recipe name. The worker does not know which list Alice was assigned. [Serve](/articles/the-same-customer-keeps-the-same-list/) does. If any row has `variant`, log it, commit the offset, and do not insert.
 
 ## The worker
 
-One consumer group owns the SQL table. The group id is yours. Cicerone does not set one. A second group writing the same table will race. Members of this group are fine: a user's key stays on one partition.
+One consumer group owns the SQL table. The group id is yours. Cicerone does not set one. A second group writing the same table will race. The key keeps one user on one partition, so this group sees that user in offset order.
 
-Commit the offset after the SQL transaction commits. `EnableAutoCommit` stays false. The same `message_id` is a no-op, then you still commit the offset. A body that does not deserialize is poison: park it, then commit. This sample throws and leaves the offset uncommitted.
+The nightly job and the serve process are two producers. The default `job.trigger.lock_backend` is `in_process`. Serve does not see that lock, so the two publishes of one user can land in either order. Whichever body you apply last wins, even when it is the older list. A postgres or redis lock makes serve skip writes while the job holds it, and the job publishes before it releases that lock. Rewinding this group can still replay an older body. `message_id` will not refuse it.
+
+Commit the offset after the SQL transaction commits. `EnableAutoCommit` stays false. The same `message_id` is a no-op, then you still commit the offset. A body that does not deserialize, a missing `recommendations` array, or any row with `variant` is parked: log it and commit the offset. Do not insert those rows.
 
 `Confluent.Kafka` and `Microsoft.Data.SqlClient`. .NET 8.
 
 ```csharp
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Confluent.Kafka;
 using Microsoft.Data.SqlClient;
@@ -116,10 +119,29 @@ Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 while (!cts.IsCancellationRequested)
 {
     var record = consumer.Consume(cts.Token);
-    var message = System.Text.Json.JsonSerializer.Deserialize<RecommendationMessage>(record.Message.Value)
-        ?? throw new InvalidOperationException("empty recommendation message");
+    RecommendationMessage? message;
+    try
+    {
+        message = JsonSerializer.Deserialize<RecommendationMessage>(record.Message.Value);
+    }
+    catch (JsonException ex)
+    {
+        Console.Error.WriteLine($"park {record.TopicPartitionOffset}: {ex.Message}");
+        consumer.Commit(record);
+        continue;
+    }
+    if (message is null || message.Recommendations is null)
+    {
+        Console.Error.WriteLine($"park {record.TopicPartitionOffset}: missing recommendations");
+        consumer.Commit(record);
+        continue;
+    }
     if (message.Recommendations.Exists(row => row.Variant is not null))
-        throw new InvalidOperationException("variant rows belong to serve assignment");
+    {
+        Console.Error.WriteLine($"park {message.UserId}: variant rows belong to serve assignment");
+        consumer.Commit(record);
+        continue;
+    }
     await ApplyAsync(sql, message, cts.Token);
     consumer.Commit(record);
 }
@@ -226,11 +248,13 @@ WHERE user_id = @userId
 ORDER BY rank;
 ```
 
-Zero rows means you have never applied a message for that user. Read `__cold_start__`. Rows from last night mean the topic has not said otherwise.
+Zero rows in `cicerone_recommendations` is two cases. No row in `cicerone_recommendation_messages` means you have never applied a message for that user. Read `__cold_start__`. A message row and zero recommendation rows is an empty clear. Those rows were deleted on purpose.
+
+`GET /recommendations/{user_id}` still substitutes `__cold_start__` when the user has no rows. If the sentinel is empty too, the status is 404. Rows left from last night mean the topic has not said otherwise. They can be older than the table you cannot see.
 
 ## After the write
 
-Publish runs only when the recommendations write succeeded and this run is still the latest manifest. A newer `generated_at` logs `Skipping publish: recommendations were superseded` (incremental: `Skipping incremental publish: recommendations were superseded`). If the manifest cannot be confirmed, the log is `Skipping publish: could not confirm sidecar generation` and nothing is produced.
+Publish runs only when the recommendations write succeeded and this run is still the latest manifest. A newer `generated_at` logs `Skipping publish: recommendations were superseded` (incremental: `Skipping incremental publish: recommendations were superseded`). If the manifest cannot be confirmed, nothing is produced. Nightly logs `Skipping publish: could not confirm sidecar generation`. Incremental logs `Skipping incremental publish: could not confirm sidecar generation`.
 
 Connect, delivery, timeout, and a non-JSON score are logged and left there:
 
@@ -239,7 +263,7 @@ Publish failed after successful write
 Incremental publish failed after successful write
 ```
 
-The job stays successful. The incremental flush is already applied. SQL Server can sit on the previous message until a later publish lands. A lost retrain or apply fence still fails the run. That log line is not the fence.
+The job stays successful. The incremental flush is already applied: publish runs after the write, and the event ack is after `apply` returns. A timeout or a delivery error can leave earlier users from that flush on the topic. A NaN score cannot. SQL Server can sit on the previous message for anyone this flush did not land. A lost retrain or apply fence still fails the run. That log line is not the fence.
 
 Operator detail is in [incremental events](/incremental-events/).
 
@@ -247,11 +271,11 @@ Operator detail is in [incremental events](/incremental-events/).
 
 You share Cicerone's database. Join it. A nightly replace drops the user in the same write. This topic will not.
 
-The storefront can call `GET /recommendations/{user_id}`. That response is the current list. An unknown user comes back empty. You do not keep a second copy, and you do not invent a delete rule.
+The storefront can call `GET /recommendations/{user_id}`. That response is the current list, or `__cold_start__` when the user has no rows. If the sentinel is empty too, the status is 404. You do not keep a second copy, and you do not invent a delete rule.
 
-You turned `[experiment]` on. Assignment is a hash in serve. This JSON is the rows the job wrote, recipes included.
+You turned `[experiment]` on. Assignment is a hash in serve. This JSON is every variant row that write contained.
 
-You wanted the topic to be the source of truth. It is a copy, produced after the table, skipped when the generation is stale, and omitted when produce fails.
+You wanted the topic to be the source of truth. It is a copy, produced after the table, skipped when the generation is stale, and incomplete when produce fails.
 
 ## In the morning
 
