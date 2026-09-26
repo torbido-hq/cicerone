@@ -1,0 +1,290 @@
+---
+title: Silence keeps yesterday's list
+description: A .NET worker upserts Cicerone's Kafka publish messages into SQL Server. A missing user is not a delete. An empty recommendations array is.
+date: 2026-09-25
+excerpt: The nightly job publishes one JSON message per user who still has rows. SQL Server keeps anyone the topic did not mention.
+authors:
+  - nicholas
+---
+
+You have a .NET storefront and SQL Server. Cicerone's database is on another network, and you do not want `HttpClient` on the homepage. You subscribe to `cicerone.recommendations` and treat a user who sent nothing tonight as a user with no recommendations. You deleted nobody. You kept yesterday's rows.
+
+[Cicerone](https://cicerone.dev) 0.8 can publish after it writes the recommendations table. The Kafka key is `user_id`. The value is one JSON document. Your worker replaces that user's rows in SQL Server. The page only `SELECT`s. There is no recommendations SDK, and there is no Python in the request.
+
+The [nightly table](/articles/a-nightly-table-next-to-your-orders/) post is the other shape: the app joins the table Cicerone just replaced. This post is the shop that cannot see that table.
+
+```text
+job.run()
+  │
+  ├─ write the recommendations table
+  └─ produce one Kafka message per user in that write
+        │  key = user_id
+        ▼
+   .NET worker
+        │  delete + insert that user, then commit the offset
+        ▼
+   SQL Server
+        │
+        └─ the page: SELECT … ORDER BY rank
+```
+
+## What arrives
+
+Turn the sidecar on. The batch job can publish with `[events]` off. Serve, if you run it, still reads `[output]`.
+
+```toml
+[publish]
+enabled = true
+kind = "kafka"
+
+[publish.options]
+bootstrap_servers = "${KAFKA_BOOTSTRAP_SERVERS}"
+topic = "cicerone.recommendations"
+```
+
+That needs `pip install 'cicerone-recommender[kafka]'`. `bootstrap_servers` and `topic` are required.
+
+After a successful write, the producer sends one JSON document per user it is publishing. The key is the UTF-8 `user_id`. Who is in that set depends on the write. The body looks like this:
+
+```json
+{
+  "user_id": "alice",
+  "message_id": "…",
+  "recommendations": [
+    {
+      "user_id": "alice",
+      "item_id": "sku-42",
+      "rank": 1,
+      "score": 0.91,
+      "source": "popular"
+    }
+  ]
+}
+```
+
+`message_id` is a SHA-256 of `{user_id, recommendations}`. The same list hashes to the same id. A different list is a different id, including an older one. `reasons` and `variant` appear on a row only when the job wrote those columns. A NaN `score` is refused before produce, so that call publishes nothing. Nightly logs `Publish failed after successful write`. Incremental logs `Incremental publish failed after successful write`.
+
+Store `message_id`. Do not recompute it. It does not order generations.
+
+## Two publishes
+
+The nightly job and an incremental flush do not mean the same thing when a user is missing.
+
+| Write | Who gets a message | `"recommendations": []` |
+| --- | --- | --- |
+| Nightly `job.run()` | Users who have rows in that write | Not sent. A user who dropped out of the table is silence. |
+| Incremental replace | Users in that replace set | Only when that user has no rows left. Delete those SQL Server rows. A replaced user who still has rows gets a non-empty list. |
+
+A flush that does not replace anyone publishes nothing. The prior list stays in Cicerone's table, and it stays in yours.
+
+`__cold_start__` is a `user_id` like any other. If that sentinel has rows in the write, you get a message. Store it. An incremental clear of the sentinel is `"recommendations": []`. Silence is a user you already stored and the topic did not mention. That is not cold start.
+
+Leave `[experiment]` off for this worker. With it on, one message holds every variant row that write contained. Fixed allocation is every named recipe. Thompson is the current pair. `variant` is the recipe name. The worker does not know which list Alice was assigned. [Serve](/articles/the-same-customer-keeps-the-same-list/) does. If any row has `variant`, log it, commit the offset, and do not insert.
+
+## The worker
+
+One consumer group owns the SQL table. The group id is yours. Cicerone does not set one. A second group writing the same table will race. The key keeps one user on one partition, so this group sees that user in offset order.
+
+The nightly job and the serve process are two producers. The default `job.trigger.lock_backend` is `in_process`. Serve does not see that lock, so the two publishes of one user can land in either order. Whichever body you apply last wins, even when it is the older list. A postgres or redis lock makes serve skip writes while the job holds it, and the job publishes before it releases that lock. Rewinding this group can still replay an older body. `message_id` will not refuse it.
+
+Commit the offset after the SQL transaction commits. `EnableAutoCommit` stays false. The same `message_id` is a no-op, then you still commit the offset. A body that does not deserialize, a missing `recommendations` array, or any row with `variant` is parked: log it and commit the offset. Do not insert those rows.
+
+`Confluent.Kafka` and `Microsoft.Data.SqlClient`. .NET 8.
+
+```csharp
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Confluent.Kafka;
+using Microsoft.Data.SqlClient;
+
+var bootstrap = Environment.GetEnvironmentVariable("KAFKA_BOOTSTRAP_SERVERS")
+    ?? throw new InvalidOperationException("KAFKA_BOOTSTRAP_SERVERS");
+var topic = Environment.GetEnvironmentVariable("CICERONE_RECOMMENDATIONS_TOPIC")
+    ?? "cicerone.recommendations";
+var sql = Environment.GetEnvironmentVariable("STOREFRONT_SQL")
+    ?? throw new InvalidOperationException("STOREFRONT_SQL");
+
+using var consumer = new ConsumerBuilder<string, string>(new ConsumerConfig
+{
+    BootstrapServers = bootstrap,
+    GroupId = "storefront-recommendations",
+    AutoOffsetReset = AutoOffsetReset.Earliest,
+    EnableAutoCommit = false,
+}).Build();
+consumer.Subscribe(topic);
+
+using var cts = new CancellationTokenSource();
+Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+
+while (!cts.IsCancellationRequested)
+{
+    var record = consumer.Consume(cts.Token);
+    RecommendationMessage? message;
+    try
+    {
+        message = JsonSerializer.Deserialize<RecommendationMessage>(record.Message.Value);
+    }
+    catch (JsonException ex)
+    {
+        Console.Error.WriteLine($"park {record.TopicPartitionOffset}: {ex.Message}");
+        consumer.Commit(record);
+        continue;
+    }
+    if (message is null || message.Recommendations is null)
+    {
+        Console.Error.WriteLine($"park {record.TopicPartitionOffset}: missing recommendations");
+        consumer.Commit(record);
+        continue;
+    }
+    if (message.Recommendations.Exists(row => row.Variant is not null))
+    {
+        Console.Error.WriteLine($"park {message.UserId}: variant rows belong to serve assignment");
+        consumer.Commit(record);
+        continue;
+    }
+    await ApplyAsync(sql, message, cts.Token);
+    consumer.Commit(record);
+}
+
+static async Task ApplyAsync(string sql, RecommendationMessage message, CancellationToken ct)
+{
+    await using var connection = new SqlConnection(sql);
+    await connection.OpenAsync(ct);
+    await using var tx = (SqlTransaction)await connection.BeginTransactionAsync(ct);
+
+    await using (var current = new SqlCommand(
+        "SELECT message_id FROM cicerone_recommendation_messages WHERE user_id = @user_id",
+        connection, tx))
+    {
+        current.Parameters.AddWithValue("@user_id", message.UserId);
+        var applied = (string?)await current.ExecuteScalarAsync(ct);
+        if (applied == message.MessageId)
+        {
+            await tx.CommitAsync(ct);
+            return;
+        }
+    }
+
+    await using (var delete = new SqlCommand(
+        "DELETE FROM cicerone_recommendations WHERE user_id = @user_id",
+        connection, tx))
+    {
+        delete.Parameters.AddWithValue("@user_id", message.UserId);
+        await delete.ExecuteNonQueryAsync(ct);
+    }
+
+    foreach (var row in message.Recommendations)
+    {
+        await using var insert = new SqlCommand(
+            """
+            INSERT INTO cicerone_recommendations (user_id, item_id, rank, score, source)
+            VALUES (@user_id, @item_id, @rank, @score, @source)
+            """,
+            connection, tx);
+        insert.Parameters.AddWithValue("@user_id", message.UserId);
+        insert.Parameters.AddWithValue("@item_id", row.ItemId);
+        insert.Parameters.AddWithValue("@rank", row.Rank);
+        insert.Parameters.AddWithValue("@score", row.Score);
+        insert.Parameters.AddWithValue("@source", row.Source);
+        await insert.ExecuteNonQueryAsync(ct);
+    }
+
+    await using (var mark = new SqlCommand(
+        """
+        MERGE cicerone_recommendation_messages AS t
+        USING (SELECT @user_id AS user_id) AS s
+        ON t.user_id = s.user_id
+        WHEN MATCHED THEN UPDATE SET message_id = @message_id
+        WHEN NOT MATCHED THEN INSERT (user_id, message_id) VALUES (@user_id, @message_id);
+        """,
+        connection, tx))
+    {
+        mark.Parameters.AddWithValue("@user_id", message.UserId);
+        mark.Parameters.AddWithValue("@message_id", message.MessageId);
+        await mark.ExecuteNonQueryAsync(ct);
+    }
+
+    await tx.CommitAsync(ct);
+}
+
+sealed record RecommendationMessage(
+    [property: JsonPropertyName("user_id")] string UserId,
+    [property: JsonPropertyName("message_id")] string MessageId,
+    [property: JsonPropertyName("recommendations")] List<RecommendationRow> Recommendations);
+
+sealed record RecommendationRow(
+    [property: JsonPropertyName("user_id")] string UserId,
+    [property: JsonPropertyName("item_id")] string ItemId,
+    [property: JsonPropertyName("rank")] int Rank,
+    [property: JsonPropertyName("score")] double Score,
+    [property: JsonPropertyName("source")] string Source,
+    [property: JsonPropertyName("variant")] string? Variant);
+```
+
+An empty `recommendations` array takes the delete branch and writes no items. That is the incremental clear. The nightly job does not send that array for a user it dropped.
+
+```sql
+CREATE TABLE cicerone_recommendations (
+    user_id nvarchar(128) NOT NULL,
+    item_id nvarchar(128) NOT NULL,
+    rank int NOT NULL,
+    score float NOT NULL,
+    source nvarchar(64) NOT NULL,
+    CONSTRAINT pk_cicerone_recommendations PRIMARY KEY (user_id, item_id)
+);
+
+CREATE TABLE cicerone_recommendation_messages (
+    user_id nvarchar(128) NOT NULL PRIMARY KEY,
+    message_id char(64) NOT NULL
+);
+```
+
+The page checks `cicerone_recommendation_messages` as well.
+
+```sql
+SELECT message_id
+FROM cicerone_recommendation_messages
+WHERE user_id = @userId;
+
+SELECT item_id, rank, score, source
+FROM cicerone_recommendations
+WHERE user_id = @userId
+ORDER BY rank;
+```
+
+No marker row means you have never applied a message for that user, so read `__cold_start__`. A marker row with zero recommendation rows means the latest applied message was an explicit clear, so read no recommendations. Rows from last night mean the topic has not said otherwise.
+
+`GET /recommendations/{user_id}` still substitutes `__cold_start__` when the user has no rows. If the sentinel is empty too, the status is 404. They can be older than the table you cannot see.
+
+## After the write
+
+Publish runs only when the recommendations write succeeded and this run is still the latest manifest. A newer `generated_at` logs `Skipping publish: recommendations were superseded` (incremental: `Skipping incremental publish: recommendations were superseded`). If the manifest cannot be confirmed, nothing is produced. Nightly logs `Skipping publish: could not confirm sidecar generation`. Incremental logs `Skipping incremental publish: could not confirm sidecar generation`.
+
+Connect, delivery, timeout, and a non-JSON score are logged and left there:
+
+```text
+Publish failed after successful write
+Incremental publish failed after successful write
+```
+
+The job stays successful. The incremental flush is already applied: publish runs after the write, and the event ack is after `apply` returns. A timeout or a delivery error can leave earlier users from that flush on the topic. A NaN score cannot. SQL Server can sit on the previous message for anyone this flush did not land. A lost retrain or apply fence still fails the run. That log line is not the fence.
+
+Operator detail is in [incremental events](/incremental-events/).
+
+## When you should not do this
+
+You share Cicerone's database. Join it. A nightly replace drops the user in the same write. This topic will not.
+
+The storefront can call `GET /recommendations/{user_id}`. That response is the current list, or `__cold_start__` when the user has no rows. If the sentinel is empty too, the status is 404. You do not keep a second copy, and you do not invent a delete rule.
+
+You turned `[experiment]` on. Assignment is a hash in serve. This JSON is every variant row that write contained.
+
+You wanted the topic to be the source of truth. It is a copy, produced after the table, skipped when the generation is stale, and incomplete when produce fails.
+
+## In the morning
+
+Alice had twenty rows last night. Tonight's job did not put her in the frame. Kafka said nothing. SQL Server still has the twenty.
+
+Bob's incremental flush cleared him. His message has `"recommendations": []`. Those rows are gone.
+
+Silence keeps yesterday's list. The empty array is the clear, and the nightly publish does not send it for someone who disappeared.
