@@ -60,6 +60,16 @@ class TrackDbBackend:
                 ")"
             )
         )
+        self._ensure_track_indexes(conn, table)
+
+    def _ensure_track_indexes(self, conn: Any, table: str) -> None:
+        conn.execute(text(f'CREATE INDEX IF NOT EXISTS "{table}_occurred_at_idx" ON "{table}" (occurred_at)'))
+        conn.execute(
+            text(
+                f'CREATE INDEX IF NOT EXISTS "{table}_experiment_occurred_at_idx" '
+                f'ON "{table}" (experiment_id, occurred_at)'
+            )
+        )
 
     def _append_rows_db(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         table = sql_identifier(
@@ -120,6 +130,8 @@ class TrackDbBackend:
         engine = self._db_engine()
         clause, params = _track_row_sql_filter(kind=kind, experiment_id=experiment_id, since=since)
         try:
+            with engine.begin() as conn:
+                self._ensure_track_indexes(conn, table)
             frame = pd.read_sql(text(f'SELECT * FROM "{table}"{clause}'), engine, params=params)
         except SQL_READ_ERRORS as exc:
             if is_missing_table_error(exc):
