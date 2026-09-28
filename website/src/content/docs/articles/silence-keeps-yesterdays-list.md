@@ -1,6 +1,6 @@
 ---
 title: Silence keeps yesterday's list
-description: A .NET worker upserts Cicerone's Kafka publish messages into SQL Server. A missing user is not a delete. An empty recommendations array is.
+description: A .NET worker replaces each user's SQL Server rows from Cicerone's Kafka publish. A missing user is not a delete. An empty recommendations array is.
 date: 2026-09-25
 excerpt: The nightly job publishes one JSON message per user who still has rows. SQL Server keeps anyone the topic did not mention.
 authors:
@@ -62,7 +62,7 @@ After a successful write, the producer sends one JSON document per user it is pu
 }
 ```
 
-`message_id` is a SHA-256 hex digest of the UTF-8 bytes from `json.dumps({"user_id", "recommendations"}, separators=(",", ":"), sort_keys=True, allow_nan=False)`. `sort_keys` sorts object keys, not recommendation rows. Row order is the frame order. `reasons` and `variant` are inside that hash when the job wrote those columns, and they appear on a row only then. The same serialized list is the same id, including an older generation that happens to contain it. A different list is a different id. A NaN `score` is refused before produce, so that call publishes nothing. Nightly logs `Publish failed after successful write`. Incremental logs `Incremental publish failed after successful write`.
+`message_id` is the SHA-256 hex digest of `json.dumps({"user_id": user_id, "recommendations": recommendations}, separators=(",", ":"), sort_keys=True, allow_nan=False).encode()`. That encode is UTF-8. `ensure_ascii` stays at its default, true. `sort_keys` sorts keys inside every object, including each recommendation. It does not sort the list. Row order is the frame order. `reasons` and `variant` are inside that hash when the job wrote those columns, and they appear on a row only then. The Kafka value is a second dump of that object plus `message_id`, with default separators and no `sort_keys`. Do not hash the raw value. The same serialized list is the same id, including an older generation that happens to contain it. A different list is a different id. A non-finite `score` (NaN or an infinity) is refused before any produce, so that call publishes nothing. Nightly logs `Publish failed after successful write`. Incremental logs `Incremental publish failed after successful write`.
 
 Store `message_id`. Do not recompute it. The same id is a duplicate body. It does not order generations.
 
@@ -85,9 +85,17 @@ Leave `[experiment]` off for this worker. With it on, one message holds every va
 
 One consumer group owns the SQL table. The group id is yours. Cicerone does not set one. A second group writing the same table will race. The key keeps one user on one partition, so this group sees that user in offset order.
 
-The nightly job and the serve process are two producers. Set `job.trigger.lock_backend` to `postgres` or `redis`. The default `in_process` is not visible to serve, so an incremental clear and a delayed nightly list for the same user can be appended in either order. `ApplyAsync` treats any new `message_id` as the latest body, so a clear followed by an older non-empty list puts the rows back. With postgres or redis, serve skips writes while the job holds the lock, and the job publishes before it releases it. A consumer that does not rewind then sees the nightly messages first. A rewind can still replay an older body and undo a clear. This payload has no generation timestamp, so the worker cannot reject that replay.
+The nightly job and the serve process are two producers. Set `job.trigger.lock_backend` to `postgres` or `redis`. The default `in_process` is not visible to serve, so an incremental clear and a delayed nightly list for the same user can be appended in either order. `ApplyAsync` treats any new `message_id` as the latest body, so a clear followed by an older non-empty list puts the rows back.
 
-Commit the offset after the SQL transaction commits. `EnableAutoCommit` stays false. The same `message_id` is a no-op, then you still commit the offset. A body that does not deserialize, a missing `recommendations` array, or any row with `variant` is parked: log it and commit the offset. Do not insert those rows. A truncation, a null, or a duplicate `(user_id, item_id)` is the same park. A deadlock or a dropped connection is not. That offset stays uncommitted, the process exits, and the next start reads the record again. Shutdown cancels `Consume`. The in-flight SQL transaction rolls back, and that offset is not committed.
+```toml
+[job.trigger]
+lock_backend = "redis"
+redis_url = "${CICERONE_LOCK_REDIS_URL}"
+```
+
+`redis_url` is required for that backend. Postgres is the other shared lock: `lock_backend = "postgres"` needs `postgres_url`, unless `[output].kind = "db"` and `[output.options].database_url` is set. With either shared lock, serve skips writes while the job holds it, and the job publishes before it releases it. An incremental publish that waited for the lock is appended after that job's messages. A consumer that does not rewind applies them in that order. A rewind can still replay an older body and undo a clear. This payload has no generation timestamp, so the worker cannot reject that replay.
+
+Commit the offset after the SQL transaction commits. `EnableAutoCommit` stays false. The same `message_id` is a no-op, then you still commit the offset. That includes a second copy of an empty array. A crash after the SQL commit and before the offset commit redelivers the body. The id matches, the transaction writes nothing, and then you commit the offset. A null or empty Kafka value, a body that does not deserialize, a missing `user_id`, `message_id`, or `recommendations` array, a null row, or any row with `variant` is parked: log it and commit the offset. Do not insert those rows. A truncation, a null column, or a duplicate `(user_id, item_id)` is the same park. A deadlock or a dropped connection is not. That offset stays uncommitted, the process exits, and the next start reads the record again. Shutdown cancels `Consume` or the in-flight SQL call. That transaction rolls back, and that offset is not committed.
 
 `Confluent.Kafka` and `Microsoft.Data.SqlClient`. .NET 8.
 
@@ -127,10 +135,16 @@ while (!cts.IsCancellationRequested)
     {
         break;
     }
+    if (record.Message?.Value is not string json || json.Length == 0)
+    {
+        Console.Error.WriteLine($"park {record.TopicPartitionOffset}: empty message");
+        consumer.Commit(record);
+        continue;
+    }
     RecommendationMessage? message;
     try
     {
-        message = JsonSerializer.Deserialize<RecommendationMessage>(record.Message.Value);
+        message = JsonSerializer.Deserialize<RecommendationMessage>(json);
     }
     catch (JsonException ex)
     {
@@ -141,6 +155,18 @@ while (!cts.IsCancellationRequested)
     if (message is null || message.Recommendations is null)
     {
         Console.Error.WriteLine($"park {record.TopicPartitionOffset}: missing recommendations");
+        consumer.Commit(record);
+        continue;
+    }
+    if (string.IsNullOrEmpty(message.UserId) || string.IsNullOrEmpty(message.MessageId))
+    {
+        Console.Error.WriteLine($"park {record.TopicPartitionOffset}: missing user_id or message_id");
+        consumer.Commit(record);
+        continue;
+    }
+    if (message.Recommendations.Exists(row => row is null))
+    {
+        Console.Error.WriteLine($"park {message.UserId}: null recommendation row");
         consumer.Commit(record);
         continue;
     }
@@ -177,6 +203,7 @@ static async Task<bool> ApplyAsync(string sql, RecommendationMessage message, Ca
     catch (SqlException ex) when (ex.Number is 515 or 2601 or 2627 or 8152)
     {
         Console.Error.WriteLine($"park {message.UserId}: SQL {ex.Number} {ex.Message}");
+        await tx.RollbackAsync(ct);
         return false;
     }
 }
@@ -257,7 +284,7 @@ sealed record RecommendationRow(
     [property: JsonPropertyName("variant")] string? Variant);
 ```
 
-An empty `recommendations` array takes the delete branch and writes no items. That is the incremental clear. The nightly job does not send that array for a user it dropped. A truncation, a null, or a duplicate key returns before `CommitAsync`. Disposing that transaction rolls the delete and the inserts back. The offset is what gets committed.
+An empty `recommendations` array passes those checks, deletes that user's rows, inserts nothing, writes the marker, and commits. Then the offset is committed. That is the incremental clear. The nightly job does not send that array for a user it dropped. The same id delivered again commits no row changes. A truncation, a null column, or a duplicate key calls `RollbackAsync` before `CommitAsync`, so a failed clear does not leave the user half-deleted. The offset is what gets committed.
 
 ```sql
 CREATE TABLE cicerone_recommendations (
@@ -287,24 +314,24 @@ WHERE m.user_id = @userId
 ORDER BY r.rank;
 ```
 
-No result means you have never applied a message for that user, so read `__cold_start__`. If the sentinel itself has no marker, or its marker is a clear, show nothing. A result whose `item_id` is null means the latest applied message was an explicit clear, so show nothing. Rows in the result are the last body this worker applied. They are yesterday's list only when no later offset has been applied. They can be older than Cicerone's table.
+No result means no message has ever been applied for that user, so run this same statement for `__cold_start__`. If the sentinel has no result, or its `item_id` is null, show nothing. Do not treat that as silence. A result whose `item_id` is null means an explicit clear was applied, so show nothing. That is not cold start, and it is not silence. Rows in the result are a non-empty message this worker applied. Silence is not a separate result. It is those same rows, because the topic sent nothing later. They are yesterday's list only when no later offset has been applied. They can be older than Cicerone's table.
 
 This page does not copy Serve. A clear stays empty. `GET /recommendations/{user_id}` substitutes `__cold_start__` when the user has no rows, and returns 404 if the sentinel is empty too.
 
 ## After the write
 
-Publish runs only when the recommendations write succeeded and this run is still the latest manifest. A newer `generated_at` logs `Skipping publish: recommendations were superseded` (incremental: `Skipping incremental publish: recommendations were superseded`). If the manifest cannot be confirmed, nothing is produced. Nightly logs `Skipping publish: could not confirm sidecar generation`. Incremental logs `Skipping incremental publish: could not confirm sidecar generation`.
+Publish runs only when the recommendations write succeeded and this run's `generated_at` equals the latest manifest's. Any other latest manifest logs `Skipping publish: recommendations were superseded`, including a manifest that has no `generated_at`. Incremental logs `Skipping incremental publish: recommendations were superseded`. If the manifest is missing or the read fails, nothing is produced. Nightly logs `Skipping publish: could not confirm sidecar generation`. Incremental logs `Skipping incremental publish: could not confirm sidecar generation`.
 
-Connect, delivery, timeout, and a non-JSON score are logged and left there:
+Connect, delivery, timeout, and a non-finite score are logged and left there:
 
 ```text
 Publish failed after successful write
 Incremental publish failed after successful write
 ```
 
-The job stays successful when publish logs one of those lines. `apply` returns, and the incremental worker acks the flush. The recommendation write is already done. A timeout or a delivery error can leave earlier users from that flush on the topic. A NaN score cannot. SQL Server can sit on the previous message for anyone this flush did not land.
+The job stays successful when publish logs one of those lines. `apply` returns, and the incremental worker acks the flush. The recommendation write is already done. Kafka and SQL Server are not one transaction. A timeout or a delivery error can leave some users from that flush on the topic and not others. A non-finite score cannot: that call produces nothing. SQL Server can sit on the previous message for anyone this flush did not land. Cicerone's table already has the write.
 
-`LockLostError` and `WriterLockBusyError` during publish are not those log lines. They leave `apply`, and the incremental worker nacks the batch. The recommendation write is not rolled back. On the nightly job, `LockLostError` during publish is re-raised, the manifest is marked failed, and the table write stands.
+`LockLostError` and `WriterLockBusyError` during publish are not those log lines. They leave `apply`, and the incremental worker nacks the batch. The recommendation write is not rolled back. On the nightly job both are re-raised, the manifest is marked failed, and the table write stands.
 
 Operator detail is in [incremental events](/incremental-events/).
 
@@ -320,8 +347,8 @@ You wanted the topic to be the source of truth. It is a copy, produced after the
 
 ## In the morning
 
-Alice had twenty rows last night. Tonight's job did not put her in the frame. Kafka said nothing. SQL Server still has the twenty.
+Alice had twenty rows last night. Tonight's job did not put her in the frame. Kafka said nothing. Her marker and her twenty rows stay. The page shows the twenty.
 
-Bob's incremental flush cleared him. His message has `"recommendations": []`. Those rows are gone.
+Bob's incremental flush cleared him. His message has `"recommendations": []`. The rows are gone. The marker stays, so the page shows nothing. It does not read `__cold_start__`.
 
 Silence keeps yesterday's list. The empty array is the clear, and the nightly publish does not send it for someone who disappeared.
