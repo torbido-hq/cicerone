@@ -3413,7 +3413,7 @@ def test_load_shared_eval_inputs_loads_db_serially(tmp_path, monkeypatch):
     assert seen["parallel"] is False
 
 
-def test_load_shared_eval_inputs_does_not_bound_to_thompson_window(tmp_path, monkeypatch):
+def test_load_shared_eval_inputs_bounds_track_lookback(tmp_path, monkeypatch):
     from conftest import make_settings
 
     from cicerone.config import IOSettings
@@ -3453,7 +3453,13 @@ def test_load_shared_eval_inputs_does_not_bound_to_thompson_window(tmp_path, mon
     monkeypatch.setattr("cicerone.job.TrackStore.read_rows", _read)
     monkeypatch.setattr("cicerone.job.load_recommendations_frame", lambda _output: recs)
     track, loaded = _load_shared_eval_inputs(settings)
-    assert seen.get("since") is None
+    since = seen.get("since")
+    assert isinstance(since, str)
+    bound = pd.Timestamp(since)
+    window = pd.Timestamp("2026-09-04T00:00:00+00:00")
+    floor = pd.Timestamp.now(tz="UTC") - pd.Timedelta(hours=24 * 90)
+    assert bound <= window - pd.Timedelta(hours=24)
+    assert abs(bound - floor) < pd.Timedelta(minutes=1)
     assert seen.get("experiment_id") is None
     assert track == [{"event_id": "old"}]
     assert loaded is recs
@@ -3497,3 +3503,65 @@ def test_load_shared_eval_inputs_scopes_track_when_eval_disabled(tmp_path, monke
     assert seen.get("experiment_id") == "ranking-cvr"
     assert track == [{"event_id": "a", "experiment_id": "ranking-cvr"}]
     assert loaded is recs
+
+
+def test_job_track_since_stays_open_without_thompson_window(tmp_path, monkeypatch):
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+    from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
+    from cicerone.experiment.store import ExperimentStore
+    from cicerone.job_eval import job_track_since
+
+    settings = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="ranking-cvr",
+            allocation="thompson",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        track=TrackSettings(enabled=True),
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    monkeypatch.setattr(ExperimentStore, "read_state", lambda self: {})
+    assert job_track_since(settings) is None
+
+    def _broken(self):
+        raise OSError("state")
+
+    monkeypatch.setattr(ExperimentStore, "read_state", _broken)
+    assert job_track_since(settings) is None
+
+
+def test_job_track_since_reaches_back_to_an_old_thompson_window(tmp_path, monkeypatch):
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+    from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
+    from cicerone.experiment.store import ExperimentStore
+    from cicerone.job_eval import job_track_since
+
+    settings = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="ranking-cvr",
+            allocation="thompson",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(name="treatment", traffic=0.5),
+            ),
+        ),
+        track=TrackSettings(enabled=True),
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    monkeypatch.setattr(
+        ExperimentStore,
+        "read_state",
+        lambda self: {"window_started_at": "2020-01-01T00:00:00+00:00"},
+    )
+    since = job_track_since(settings)
+    assert since is not None
+    assert pd.Timestamp(since) == pd.Timestamp("2019-12-31T00:00:00+00:00")
