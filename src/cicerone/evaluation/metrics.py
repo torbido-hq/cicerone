@@ -9,7 +9,7 @@ from typing import Any
 
 import pandas as pd
 
-from cicerone.io.recommendation_schema import ITEM_COLUMN, USER_COLUMN
+from cicerone.io.recommendation_schema import ITEM_COLUMN, RANK_COLUMN, USER_COLUMN
 
 OCCURRED_AT = "occurred_at"
 
@@ -202,3 +202,126 @@ def _metrics_for_impression_slice(
     views = _slice_later_events(view_conv, impressions, impression_ids)
     attributed = _slice_later_events(click_conv, clicks, _column_ids(clicks, "event_id"))
     return _slice_metrics(impressions, clicks, views, attributed)
+
+
+_DIMENSION = "__dimension"
+_DIMENSION_VALUE = "__dimension_value"
+_EVENT_KEY = "__event_key"
+_PRIOR_EVENT_KEY = "__prior_event_key"
+
+
+def _event_memberships(
+    events: pd.DataFrame,
+    memberships: pd.DataFrame,
+    *,
+    event_column: str,
+) -> pd.DataFrame:
+    if events.empty or event_column not in events.columns or memberships.empty:
+        return memberships.iloc[0:0].copy()
+    keyed = events.copy()
+    keyed[_PRIOR_EVENT_KEY] = keyed[event_column].astype(str)
+    return keyed.merge(
+        memberships,
+        left_on=_PRIOR_EVENT_KEY,
+        right_on=_EVENT_KEY,
+        how="inner",
+    )
+
+
+def _group_sizes(frame: pd.DataFrame) -> pd.Series:
+    if frame.empty:
+        return pd.Series(dtype=int)
+    return frame.groupby([_DIMENSION, _DIMENSION_VALUE], dropna=True).size()
+
+
+def _dimension_value_key(dimension: str, value: Any) -> str:
+    if dimension == RANK_COLUMN:
+        number = pd.to_numeric(value, errors="coerce")
+        if pd.notna(number):
+            as_float = float(number)
+            if as_float.is_integer():
+                return str(int(as_float))
+    return str(value)
+
+
+def _metrics_by_impression_dimensions(
+    impressions: pd.DataFrame,
+    matched_clicks: pd.DataFrame,
+    view_conv: pd.DataFrame,
+    click_conv: pd.DataFrame,
+    dimensions: Sequence[str],
+) -> dict[str, dict[Any, SliceMetrics]]:
+    present = [dimension for dimension in dimensions if dimension in impressions.columns]
+    if not present:
+        return {}
+
+    dimension_rows = []
+    for dimension in present:
+        rows = impressions.loc[
+            impressions[dimension].notna(),
+            ["event_id", USER_COLUMN, dimension],
+        ].copy()
+        rows[_DIMENSION] = dimension
+        rows = rows.rename(columns={"event_id": _EVENT_KEY, dimension: _DIMENSION_VALUE})
+        rows[_EVENT_KEY] = rows[_EVENT_KEY].astype(str)
+        if USER_COLUMN in rows.columns:
+            rows[USER_COLUMN] = rows[USER_COLUMN].astype(str)
+        dimension_rows.append(rows)
+    memberships = pd.concat(dimension_rows, ignore_index=True)
+    impression_counts = _group_sizes(memberships)
+    user_counts = memberships.groupby([_DIMENSION, _DIMENSION_VALUE], dropna=True)[USER_COLUMN].nunique()
+
+    attribution_memberships = memberships[[_EVENT_KEY, _DIMENSION, _DIMENSION_VALUE]].drop_duplicates()
+    clicks = _event_memberships(
+        matched_clicks,
+        attribution_memberships,
+        event_column="prior_event_id",
+    )
+    click_counts = (
+        clicks.groupby([_DIMENSION, _DIMENSION_VALUE], dropna=True)[_PRIOR_EVENT_KEY].nunique()
+        if not clicks.empty
+        else pd.Series(dtype=int)
+    )
+    view_counts = _group_sizes(
+        _event_memberships(
+            view_conv,
+            attribution_memberships,
+            event_column="prior_event_id",
+        )
+    )
+
+    if not clicks.empty and "event_id" in clicks.columns:
+        click_memberships = clicks.loc[
+            :,
+            ["event_id", _DIMENSION, _DIMENSION_VALUE],
+        ].copy()
+        click_memberships[_EVENT_KEY] = click_memberships["event_id"].astype(str)
+        click_memberships = click_memberships[[_EVENT_KEY, _DIMENSION, _DIMENSION_VALUE]].drop_duplicates()
+    else:
+        click_memberships = attribution_memberships.iloc[0:0]
+    click_conversion_counts = _group_sizes(
+        _event_memberships(
+            click_conv,
+            click_memberships,
+            event_column="prior_event_id",
+        )
+    )
+
+    result: dict[str, dict[Any, SliceMetrics]] = {dimension: {} for dimension in present}
+    for (dimension, value), raw_impressions in impression_counts.items():
+        index = (dimension, value)
+        n_impressions = int(raw_impressions)
+        n_clicks = min(int(click_counts.get(index, 0)), n_impressions)
+        n_view = min(int(view_counts.get(index, 0)), n_impressions)
+        n_click = min(int(click_conversion_counts.get(index, 0)), n_impressions)
+        result[str(dimension)][_dimension_value_key(str(dimension), value)] = SliceMetrics(
+            n_impressions=n_impressions,
+            n_clicks=n_clicks,
+            n_conversions_click=n_click,
+            n_conversions_view=n_view,
+            ctr=_ratio(n_clicks, n_impressions),
+            cvr_click=_ratio(n_click, n_impressions),
+            cvr_view=_ratio(n_view, n_impressions),
+            n_users=int(user_counts.get(index, 0)),
+        )
+    return result
