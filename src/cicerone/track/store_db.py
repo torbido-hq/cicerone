@@ -132,6 +132,11 @@ class TrackDbBackend:
         try:
             with engine.begin() as conn:
                 self._ensure_track_indexes(conn, table)
+        except SQL_READ_ERRORS as exc:
+            if is_missing_table_error(exc):
+                return []
+            logger.warning("Skipped track indexes on %s: %s", table, exc)
+        try:
             frame = pd.read_sql(text(f'SELECT * FROM "{table}"{clause}'), engine, params=params)
         except SQL_READ_ERRORS as exc:
             if is_missing_table_error(exc):
