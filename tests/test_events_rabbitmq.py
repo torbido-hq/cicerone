@@ -11,6 +11,7 @@ from support.fake_rabbitmq import install_fake_rabbitmq
 
 from cicerone.config import ConfigError
 from cicerone.events.base import EventSourceError
+from cicerone.events.errors import AMQPError
 from cicerone.events.ha import ingest_is_fanout, poll_without_apply_lock
 from cicerone.events.rabbitmq import RabbitMQEventSource, validate_rabbitmq_event_options
 from cicerone.events.registry import build_event_source, registered_event_source_kinds
@@ -1161,11 +1162,25 @@ def test_ack_discard_tolerates_ack_failure(monkeypatch):
     source.connect()
 
     def _boom(**_kwargs):
-        raise RuntimeError("ack fail")
+        raise AMQPError("ack fail")
 
     broker.connection.channel_obj.basic_ack = _boom  # type: ignore[method-assign]
     events = list(source.poll(10))
     assert [event.event_id for event in events] == ["ok"]
+
+
+def test_ack_discard_propagates_unexpected_failure(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.enqueue("cicerone.events", b"not-json")
+    source = RabbitMQEventSource(_options())
+    source.connect()
+
+    def _boom(**_kwargs):
+        raise RuntimeError("bug")
+
+    broker.connection.channel_obj.basic_ack = _boom  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="bug"):
+        source.poll(10)
 
 
 def test_bytes_json_payload(monkeypatch):
@@ -1297,11 +1312,24 @@ def test_health_tolerates_queue_probe_failure(monkeypatch):
     source.connect()
 
     def _boom(**_kwargs):
-        raise RuntimeError("no queue")
+        raise AMQPError("no queue")
 
     broker.connection.channel_obj.queue_declare = _boom  # type: ignore[method-assign]
     health = source.health()
     assert health.connected is True
+
+
+def test_health_propagates_unexpected_probe_failure(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options())
+    source.connect()
+
+    def _boom(**_kwargs):
+        raise RuntimeError("bug")
+
+    broker.connection.channel_obj.queue_declare = _boom  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="bug"):
+        source.health()
 
 
 def test_health_disconnected_when_io_closing(monkeypatch):
@@ -1338,7 +1366,7 @@ def test_basic_get_failure_returns_partial(monkeypatch):
     source.nack(first)
 
     def _boom(*_args, **_kwargs):
-        raise RuntimeError("get fail")
+        raise AMQPError("get fail")
 
     broker.connection.channel_obj.basic_get = _boom  # type: ignore[method-assign]
     again = list(source.poll(10))
@@ -1346,6 +1374,19 @@ def test_basic_get_failure_returns_partial(monkeypatch):
     assert source._io is not None and source._io.failed is True
     assert source.health().connected is False
     source.close()
+
+
+def test_basic_get_unexpected_failure_propagates(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options())
+    source.connect()
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("bug")
+
+    broker.connection.channel_obj.basic_get = _boom  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="bug"):
+        source.poll(10)
 
 
 def test_connect_preserves_nacked_pending(monkeypatch):
@@ -1383,10 +1424,19 @@ def test_ack_clears_event_io_for_carried_events(monkeypatch):
 
 def test_connect_failure(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
-    broker.connect_error = RuntimeError("down")
+    broker.connect_error = AMQPError("down")
     source = RabbitMQEventSource(_options())
     with pytest.raises(EventSourceError, match="unreachable"):
         source.connect()
+
+
+def test_connect_unexpected_error_propagates(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.connect_error = RuntimeError("bug")
+    source = RabbitMQEventSource(_options())
+    with pytest.raises(RuntimeError, match="bug"):
+        source.connect()
+    assert source._io is None
 
 
 def test_connect_timeout_during_open_closes_connection(monkeypatch):
@@ -1408,9 +1458,18 @@ def test_connect_timeout_during_open_closes_connection(monkeypatch):
 
 def test_connect_closes_connection_when_declare_fails(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
-    broker.queue_declare_error = RuntimeError("no queue")
+    broker.queue_declare_error = AMQPError("no queue")
     source = RabbitMQEventSource(_options())
     with pytest.raises(EventSourceError, match="unreachable"):
+        source.connect()
+    assert broker.connection.closed is True
+
+
+def test_connect_closes_connection_when_declare_fails_unexpectedly(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.queue_declare_error = RuntimeError("bug")
+    source = RabbitMQEventSource(_options())
+    with pytest.raises(RuntimeError, match="bug"):
         source.connect()
     assert broker.connection.closed is True
 

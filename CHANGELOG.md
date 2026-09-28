@@ -13,6 +13,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Kafka consumption only recovers from Kafka client errors while polling,
   discarding invalid messages, and closing the consumer. Unexpected
   exceptions now propagate.
+- RabbitMQ consumption only recovers from AMQP, socket, and timeout
+  errors while connecting, polling, probing queue depth, and closing.
+  Unexpected exceptions now propagate.
 
 ## [0.8.4] - 2026-09-25
 
