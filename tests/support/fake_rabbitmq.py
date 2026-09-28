@@ -21,6 +21,7 @@ class FakeChannel:
         self.broker = broker
         self.prefetch: int | None = None
         self.acked: list[int] = []
+        self.ack_calls: list[tuple[int, bool]] = []
         self.nacked: list[tuple[int, bool]] = []
         self.closed = False
         self.confirm_delivery_calls = 0
@@ -51,9 +52,16 @@ class FakeChannel:
         method = SimpleNamespace(delivery_tag=message.delivery_tag)
         return method, None, message.body
 
-    def basic_ack(self, delivery_tag: int) -> None:
-        self.acked.append(delivery_tag)
-        self._unacked.pop(delivery_tag, None)
+    def basic_ack(self, delivery_tag: int, multiple: bool = False) -> None:
+        self.ack_calls.append((delivery_tag, multiple))
+        if not multiple:
+            self.acked.append(delivery_tag)
+            self._unacked.pop(delivery_tag, None)
+            return
+        tags = sorted(tag for tag in self._unacked if tag <= delivery_tag)
+        self.acked.extend(tags)
+        for tag in tags:
+            self._unacked.pop(tag, None)
 
     def basic_nack(self, delivery_tag: int, requeue: bool = True) -> None:
         self.nacked.append((delivery_tag, requeue))
