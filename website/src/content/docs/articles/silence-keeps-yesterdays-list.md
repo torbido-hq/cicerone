@@ -62,9 +62,9 @@ After a successful write, the producer sends one JSON document per user it is pu
 }
 ```
 
-`message_id` is a SHA-256 of `{user_id, recommendations}`. The same list hashes to the same id. A different list is a different id, including an older one. `reasons` and `variant` appear on a row only when the job wrote those columns. A NaN `score` is refused before produce, so that call publishes nothing. Nightly logs `Publish failed after successful write`. Incremental logs `Incremental publish failed after successful write`.
+`message_id` is a SHA-256 hex digest of the UTF-8 bytes from `json.dumps({"user_id", "recommendations"}, separators=(",", ":"), sort_keys=True, allow_nan=False)`. `sort_keys` sorts object keys, not recommendation rows. Row order is the frame order. `reasons` and `variant` are inside that hash when the job wrote those columns, and they appear on a row only then. The same serialized list is the same id, including an older generation that happens to contain it. A different list is a different id. A NaN `score` is refused before produce, so that call publishes nothing. Nightly logs `Publish failed after successful write`. Incremental logs `Incremental publish failed after successful write`.
 
-Store `message_id`. Do not recompute it. It does not order generations.
+Store `message_id`. Do not recompute it. The same id is a duplicate body. It does not order generations.
 
 ## Two publishes
 
@@ -85,9 +85,9 @@ Leave `[experiment]` off for this worker. With it on, one message holds every va
 
 One consumer group owns the SQL table. The group id is yours. Cicerone does not set one. A second group writing the same table will race. The key keeps one user on one partition, so this group sees that user in offset order.
 
-The nightly job and the serve process are two producers. The default `job.trigger.lock_backend` is `in_process`. Serve does not see that lock, so the two publishes of one user can land in either order. Whichever body you apply last wins, even when it is the older list. A postgres or redis lock makes serve skip writes while the job holds it, and the job publishes before it releases that lock. Rewinding this group can still replay an older body. `message_id` will not refuse it.
+The nightly job and the serve process are two producers. Set `job.trigger.lock_backend` to `postgres` or `redis`. The default `in_process` is not visible to serve, so an incremental clear and a delayed nightly list for the same user can be appended in either order. `ApplyAsync` treats any new `message_id` as the latest body, so a clear followed by an older non-empty list puts the rows back. With postgres or redis, serve skips writes while the job holds the lock, and the job publishes before it releases it. A consumer that does not rewind then sees the nightly messages first. A rewind can still replay an older body and undo a clear. This payload has no generation timestamp, so the worker cannot reject that replay.
 
-Commit the offset after the SQL transaction commits. `EnableAutoCommit` stays false. The same `message_id` is a no-op, then you still commit the offset. A body that does not deserialize, a missing `recommendations` array, or any row with `variant` is parked: log it and commit the offset. Do not insert those rows.
+Commit the offset after the SQL transaction commits. `EnableAutoCommit` stays false. The same `message_id` is a no-op, then you still commit the offset. A body that does not deserialize, a missing `recommendations` array, or any row with `variant` is parked: log it and commit the offset. Do not insert those rows. A truncation, a null, or a duplicate `(user_id, item_id)` is the same park. A deadlock or a dropped connection is not. That offset stays uncommitted, the process exits, and the next start reads the record again. Shutdown cancels `Consume`. The in-flight SQL transaction rolls back, and that offset is not committed.
 
 `Confluent.Kafka` and `Microsoft.Data.SqlClient`. .NET 8.
 
@@ -118,7 +118,15 @@ Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
 while (!cts.IsCancellationRequested)
 {
-    var record = consumer.Consume(cts.Token);
+    ConsumeResult<string, string> record;
+    try
+    {
+        record = consumer.Consume(cts.Token);
+    }
+    catch (OperationCanceledException)
+    {
+        break;
+    }
     RecommendationMessage? message;
     try
     {
@@ -142,16 +150,43 @@ while (!cts.IsCancellationRequested)
         consumer.Commit(record);
         continue;
     }
-    await ApplyAsync(sql, message, cts.Token);
+    try
+    {
+        if (!await ApplyAsync(sql, message, cts.Token))
+        {
+            consumer.Commit(record);
+            continue;
+        }
+    }
+    catch (OperationCanceledException)
+    {
+        break;
+    }
     consumer.Commit(record);
 }
 
-static async Task ApplyAsync(string sql, RecommendationMessage message, CancellationToken ct)
+static async Task<bool> ApplyAsync(string sql, RecommendationMessage message, CancellationToken ct)
 {
     await using var connection = new SqlConnection(sql);
     await connection.OpenAsync(ct);
     await using var tx = (SqlTransaction)await connection.BeginTransactionAsync(ct);
+    try
+    {
+        return await ApplyInTransactionAsync(connection, tx, message, ct);
+    }
+    catch (SqlException ex) when (ex.Number is 515 or 2601 or 2627 or 8152)
+    {
+        Console.Error.WriteLine($"park {message.UserId}: SQL {ex.Number} {ex.Message}");
+        return false;
+    }
+}
 
+static async Task<bool> ApplyInTransactionAsync(
+    SqlConnection connection,
+    SqlTransaction tx,
+    RecommendationMessage message,
+    CancellationToken ct)
+{
     await using (var current = new SqlCommand(
         "SELECT message_id FROM cicerone_recommendation_messages WHERE user_id = @user_id",
         connection, tx))
@@ -161,7 +196,7 @@ static async Task ApplyAsync(string sql, RecommendationMessage message, Cancella
         if (applied == message.MessageId)
         {
             await tx.CommitAsync(ct);
-            return;
+            return true;
         }
     }
 
@@ -205,6 +240,7 @@ static async Task ApplyAsync(string sql, RecommendationMessage message, Cancella
     }
 
     await tx.CommitAsync(ct);
+    return true;
 }
 
 sealed record RecommendationMessage(
@@ -221,7 +257,7 @@ sealed record RecommendationRow(
     [property: JsonPropertyName("variant")] string? Variant);
 ```
 
-An empty `recommendations` array takes the delete branch and writes no items. That is the incremental clear. The nightly job does not send that array for a user it dropped.
+An empty `recommendations` array takes the delete branch and writes no items. That is the incremental clear. The nightly job does not send that array for a user it dropped. A truncation, a null, or a duplicate key returns before `CommitAsync`. Disposing that transaction rolls the delete and the inserts back. The offset is what gets committed.
 
 ```sql
 CREATE TABLE cicerone_recommendations (
@@ -239,22 +275,21 @@ CREATE TABLE cicerone_recommendation_messages (
 );
 ```
 
-The page checks `cicerone_recommendation_messages` as well.
+Two `nvarchar(128)` key columns are 512 bytes, under SQL Server's 900-byte index limit. Do not widen them past that limit. A value that does not fit is SQL 8152. The worker parks that offset. SQL 515 is a null. SQL 2601 and 2627 are a duplicate key. SQL 1205, a timeout, or a dropped connection is not parked.
+
+The page reads the marker and the rows in one statement. Two selects can straddle a commit: the first can see no marker and the second can see zero rows, and the page would treat a clear as never seen.
 
 ```sql
-SELECT message_id
-FROM cicerone_recommendation_messages
-WHERE user_id = @userId;
-
-SELECT item_id, rank, score, source
-FROM cicerone_recommendations
-WHERE user_id = @userId
-ORDER BY rank;
+SELECT m.message_id, r.item_id, r.rank, r.score, r.source
+FROM cicerone_recommendation_messages AS m
+LEFT JOIN cicerone_recommendations AS r ON r.user_id = m.user_id
+WHERE m.user_id = @userId
+ORDER BY r.rank;
 ```
 
-No marker row means you have never applied a message for that user, so read `__cold_start__`. A marker row with zero recommendation rows means the latest applied message was an explicit clear, so read no recommendations. Rows from last night mean the topic has not said otherwise.
+No result means you have never applied a message for that user, so read `__cold_start__`. If the sentinel itself has no marker, or its marker is a clear, show nothing. A result whose `item_id` is null means the latest applied message was an explicit clear, so show nothing. Rows in the result are the last body this worker applied. They are yesterday's list only when no later offset has been applied. They can be older than Cicerone's table.
 
-`GET /recommendations/{user_id}` still substitutes `__cold_start__` when the user has no rows. If the sentinel is empty too, the status is 404. They can be older than the table you cannot see.
+This page does not copy Serve. A clear stays empty. `GET /recommendations/{user_id}` substitutes `__cold_start__` when the user has no rows, and returns 404 if the sentinel is empty too.
 
 ## After the write
 
@@ -267,7 +302,9 @@ Publish failed after successful write
 Incremental publish failed after successful write
 ```
 
-The job stays successful. The incremental flush is already applied: publish runs after the write, and the event ack is after `apply` returns. A timeout or a delivery error can leave earlier users from that flush on the topic. A NaN score cannot. SQL Server can sit on the previous message for anyone this flush did not land. A lost retrain or apply fence still fails the run. That log line is not the fence.
+The job stays successful when publish logs one of those lines. `apply` returns, and the incremental worker acks the flush. The recommendation write is already done. A timeout or a delivery error can leave earlier users from that flush on the topic. A NaN score cannot. SQL Server can sit on the previous message for anyone this flush did not land.
+
+`LockLostError` and `WriterLockBusyError` during publish are not those log lines. They leave `apply`, and the incremental worker nacks the batch. The recommendation write is not rolled back. On the nightly job, `LockLostError` during publish is re-raised, the manifest is marked failed, and the table write stands.
 
 Operator detail is in [incremental events](/incremental-events/).
 
@@ -275,7 +312,7 @@ Operator detail is in [incremental events](/incremental-events/).
 
 You share Cicerone's database. Join it. A nightly replace drops the user in the same write. This topic will not.
 
-The storefront can call `GET /recommendations/{user_id}`. That response is the current list, or `__cold_start__` when the user has no rows. If the sentinel is empty too, the status is 404. You do not keep a second copy, and you do not invent a delete rule.
+The storefront can call `GET /recommendations/{user_id}`. That response is the current list, or `__cold_start__` when the user has no rows. If the sentinel is empty too, the status is 404. That fallback is Serve. The SQL page above stays empty after a clear. You do not keep a second copy, and you do not invent a delete rule.
 
 You turned `[experiment]` on. Assignment is a hash in serve. This JSON is every variant row that write contained.
 
