@@ -139,6 +139,42 @@ def _impression_matches_generated_at(stamp: object, generated_at: str) -> bool:
     return bool(left == right)
 
 
+def _attach_recommendation_fields(
+    frame: pd.DataFrame,
+    recommendations: pd.DataFrame | None,
+    *,
+    on_variant: bool,
+) -> pd.DataFrame:
+    if frame.empty or recommendations is None or recommendations.empty:
+        return frame
+    keys = [USER_COLUMN, ITEM_COLUMN]
+    extra = [
+        column
+        for column in (SOURCE_COLUMN, SCORE_COLUMN, VARIANT_COLUMN)
+        if column in recommendations.columns
+    ]
+    if on_variant and VARIANT_COLUMN in extra:
+        keys.append(VARIANT_COLUMN)
+    elif VARIANT_COLUMN in extra:
+        extra = [column for column in extra if column != VARIANT_COLUMN]
+    if not extra:
+        return frame
+    lookup = recommendations.loc[:, [*keys, *[column for column in extra if column not in keys]]].copy()
+    lookup[USER_COLUMN] = lookup[USER_COLUMN].astype(str)
+    lookup[ITEM_COLUMN] = lookup[ITEM_COLUMN].astype(str)
+    if on_variant and VARIANT_COLUMN in lookup.columns:
+        blank = lookup[VARIANT_COLUMN].isna() | lookup[VARIANT_COLUMN].astype(str).str.strip().eq("")
+        lookup = lookup.loc[~blank]
+    lookup = lookup.drop_duplicates(subset=keys, keep="first")
+    frame = frame.merge(lookup, on=keys, how="left", suffixes=("", "_job"))
+    for column in extra:
+        job_column = f"{column}_job"
+        if job_column in frame.columns:
+            frame[column] = frame[column].where(frame[column].notna(), frame[job_column])
+            frame = frame.drop(columns=[job_column])
+    return frame
+
+
 def recs_from_impressions(
     track_rows: Sequence[Mapping[str, Any]],
     *,
@@ -180,42 +216,18 @@ def recs_from_impressions(
         return pd.DataFrame()
     frame = pd.DataFrame(rows)
     frame = frame.sort_values([USER_COLUMN, RANK_COLUMN], kind="mergesort")
-    identity = [USER_COLUMN, ITEM_COLUMN]
-    if VARIANT_COLUMN in frame.columns:
-        identity.append(VARIANT_COLUMN)
-    frame = frame.drop_duplicates(subset=identity, keep="first")
-    if recommendations is not None and not recommendations.empty:
-        keys = [USER_COLUMN, ITEM_COLUMN]
-        extra = [
-            column
-            for column in (SOURCE_COLUMN, SCORE_COLUMN, VARIANT_COLUMN)
-            if column in recommendations.columns
-        ]
-        if extra:
-            lookup = recommendations.loc[:, [*keys, *extra]].copy()
-            lookup[USER_COLUMN] = lookup[USER_COLUMN].astype(str)
-            lookup[ITEM_COLUMN] = lookup[ITEM_COLUMN].astype(str)
-            if VARIANT_COLUMN in frame.columns and VARIANT_COLUMN in lookup.columns:
-                blank = lookup[VARIANT_COLUMN].isna() | lookup[VARIANT_COLUMN].astype(str).str.strip().eq("")
-                lookup[VARIANT_COLUMN] = lookup[VARIANT_COLUMN].mask(blank, "\x00")
-                frame = frame.copy()
-                frame_blank = frame[VARIANT_COLUMN].isna() | frame[VARIANT_COLUMN].astype(str).str.strip().eq(
-                    ""
-                )
-                frame[VARIANT_COLUMN] = frame[VARIANT_COLUMN].mask(frame_blank, "\x00")
-                legacy = lookup.copy()
-                legacy[VARIANT_COLUMN] = "\x00"
-                lookup = pd.concat([lookup, legacy], ignore_index=True)
-                keys.append(VARIANT_COLUMN)
-            lookup = lookup.drop_duplicates(subset=keys, keep="first")
-            frame = frame.merge(lookup, on=keys, how="left", suffixes=("", "_job"))
-            for column in extra:
-                job_column = f"{column}_job"
-                if job_column in frame.columns:
-                    frame[column] = frame[column].where(frame[column].notna(), frame[job_column])
-                    frame = frame.drop(columns=[job_column])
-            if VARIANT_COLUMN in frame.columns:
-                frame[VARIANT_COLUMN] = frame[VARIANT_COLUMN].mask(frame[VARIANT_COLUMN].eq("\x00"), pd.NA)
+    if recommendations is not None and not recommendations.empty and VARIANT_COLUMN in frame.columns:
+        blank = frame[VARIANT_COLUMN].isna() | frame[VARIANT_COLUMN].astype(str).str.strip().eq("")
+        stamped = frame.loc[~blank].drop_duplicates(
+            subset=[USER_COLUMN, ITEM_COLUMN, VARIANT_COLUMN], keep="first"
+        )
+        unstamped = frame.loc[blank].drop_duplicates(subset=[USER_COLUMN, ITEM_COLUMN], keep="first")
+        stamped = _attach_recommendation_fields(stamped, recommendations, on_variant=True)
+        unstamped = _attach_recommendation_fields(unstamped, recommendations, on_variant=False)
+        frame = pd.concat([stamped, unstamped], ignore_index=True)
+    else:
+        frame = frame.drop_duplicates(subset=[USER_COLUMN, ITEM_COLUMN], keep="first")
+        frame = _attach_recommendation_fields(frame, recommendations, on_variant=False)
     if SCORE_COLUMN not in frame.columns:
         top = int(frame[RANK_COLUMN].max()) if RANK_COLUMN in frame.columns and not frame.empty else 1
         frame[SCORE_COLUMN] = (top + 1 - frame[RANK_COLUMN]).astype(float)

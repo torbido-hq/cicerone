@@ -74,6 +74,10 @@ def conversion_events(
     return filter_events_by_types(events, conversion_event_types(configured, primary_metric=primary_metric))
 
 
+def _variant_blank(values: pd.Series) -> pd.Series:
+    return values.isna() | values.astype(str).str.strip().eq("")
+
+
 def _annotate_source(impressions: pd.DataFrame, recommendations: pd.DataFrame | None) -> pd.DataFrame:
     if impressions.empty:
         return impressions
@@ -86,27 +90,24 @@ def _annotate_source(impressions: pd.DataFrame, recommendations: pd.DataFrame | 
     recs[USER_COLUMN] = recs[USER_COLUMN].astype(str)
     recs[ITEM_COLUMN] = recs[ITEM_COLUMN].astype(str)
     join_keys = [USER_COLUMN, ITEM_COLUMN]
-    variant_key: str | None = None
     if VARIANT_COLUMN in frame.columns and VARIANT_COLUMN in recs.columns:
-        variant_key = "_source_variant"
-        legacy_variant = "\x00"
-        frame[variant_key] = frame[VARIANT_COLUMN].where(
-            frame[VARIANT_COLUMN].notna() & frame[VARIANT_COLUMN].astype(str).str.strip().ne(""),
-            legacy_variant,
-        )
-        recs[variant_key] = recs[VARIANT_COLUMN].where(
-            recs[VARIANT_COLUMN].notna() & recs[VARIANT_COLUMN].astype(str).str.strip().ne(""),
-            legacy_variant,
-        )
-        legacy_recs = recs.copy()
-        legacy_recs[variant_key] = legacy_variant
-        recs = pd.concat([recs, legacy_recs], ignore_index=True)
-        join_keys.append(variant_key)
+        blank = _variant_blank(frame[VARIANT_COLUMN])
+        rec_blank = _variant_blank(recs[VARIANT_COLUMN])
+        if bool(blank.any()):
+            parts: list[pd.DataFrame] = []
+            if bool((~blank).any()):
+                parts.append(_annotate_source(frame.loc[~blank].copy(), recs.loc[~rec_blank].copy()))
+            parts.append(_annotate_source(frame.loc[blank].copy(), recs.drop(columns=[VARIANT_COLUMN])))
+            return pd.concat(parts, ignore_index=True)
+        recs = recs.loc[~rec_blank].copy()
+        if recs.empty:
+            if SOURCE_COLUMN not in frame.columns:
+                frame[SOURCE_COLUMN] = None
+            return frame
+        join_keys.append(VARIANT_COLUMN)
     keep = [USER_COLUMN, ITEM_COLUMN, SOURCE_COLUMN]
     if VARIANT_COLUMN in recs.columns:
         keep.append(VARIANT_COLUMN)
-    if variant_key is not None:
-        keep.append(variant_key)
     if "generated_at" in recs.columns:
         keep.append("generated_at")
         recs["generated_at"] = pd.to_datetime(recs["generated_at"], utc=True, errors="coerce")
@@ -136,15 +137,15 @@ def _annotate_source(impressions: pd.DataFrame, recommendations: pd.DataFrame | 
                 existing = merged.loc[missing, SOURCE_COLUMN]
                 incoming = pd.Series(filled[SOURCE_COLUMN].to_numpy(), index=existing.index)
                 merged.loc[missing, SOURCE_COLUMN] = existing.where(existing.notna(), incoming)
-        return merged.drop(columns=[variant_key] if variant_key is not None else [])
+        return merged
     if "generated_at" not in recs.columns:
         merged = frame.merge(latest, on=join_keys, how="left", suffixes=("", "_rec"))
         _coalesce_column(merged, SOURCE_COLUMN)
         _coalesce_column(merged, VARIANT_COLUMN)
-        return merged.drop(columns=[variant_key] if variant_key is not None else [])
+        return merged
     merged = frame.merge(latest_source, on=join_keys, how="left", suffixes=("", "_rec"))
     _coalesce_column(merged, SOURCE_COLUMN)
-    return merged.drop(columns=[variant_key] if variant_key is not None else [])
+    return merged
 
 
 @dataclass(frozen=True)
