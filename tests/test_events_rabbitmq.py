@@ -1197,7 +1197,7 @@ def test_nack_rejects_when_io_failed(monkeypatch):
     source.close()
 
 
-def test_ack_forgets_succeeded_tags_when_later_ack_fails(monkeypatch):
+def test_failed_batch_ack_forgets_nothing(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     broker.enqueue("cicerone.events", event_payload(event_id="e1"))
     broker.enqueue("cicerone.events", event_payload(event_id="e2"))
@@ -1207,8 +1207,8 @@ def test_ack_forgets_succeeded_tags_when_later_ack_fails(monkeypatch):
     assert [event.event_id for event in events] == ["e1", "e2"]
     original = broker.connection.channel_obj.basic_ack
 
-    def _ack(*, delivery_tag: int) -> None:
-        if delivery_tag == 2:
+    def _ack(*, delivery_tag: int, multiple: bool = False) -> None:
+        if multiple:
             raise RuntimeError("ack 2")
         original(delivery_tag=delivery_tag)
 
@@ -1217,7 +1217,7 @@ def test_ack_forgets_succeeded_tags_when_later_ack_fails(monkeypatch):
         source.ack([event.event_id for event in events])
     source.nack(events)
     again = list(source.poll(10))
-    assert [event.event_id for event in again] == ["e2"]
+    assert [event.event_id for event in again] == ["e1", "e2"]
     source.close()
 
 
