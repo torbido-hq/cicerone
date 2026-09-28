@@ -7,7 +7,7 @@ authors:
   - nicholas
 ---
 
-You have a .NET storefront and SQL Server. Cicerone's database is on another network, and you do not want `HttpClient` on the homepage. You subscribe to `cicerone.recommendations` and treat a user who sent nothing tonight as a user with no recommendations. You deleted nobody. You kept yesterday's rows.
+You have a .NET storefront and SQL Server. Cicerone's database is on another network, and you do not want `HttpClient` on the homepage. You subscribe to `cicerone.recommendations`. A user the topic did not mention tonight keeps yesterday's rows. Only an explicit empty `recommendations` array clears them.
 
 [Cicerone](https://cicerone.dev) 0.8 can publish after it writes the recommendations table. The Kafka key is `user_id`. The value is one JSON document. Your worker replaces that user's rows in SQL Server. The page only `SELECT`s. There is no recommendations SDK, and there is no Python in the request.
 
@@ -95,7 +95,7 @@ redis_url = "${CICERONE_LOCK_REDIS_URL}"
 
 `redis_url` is required for that backend. Postgres is the other shared lock: `lock_backend = "postgres"` needs `postgres_url`, unless `[output].kind = "db"` and `[output.options].database_url` is set. With either shared lock, serve skips writes while the job holds it, and the job publishes before it releases it. An incremental publish that waited for the lock is appended after that job's messages. A consumer that does not rewind applies them in that order. A rewind can still replay an older body and undo a clear. This payload has no generation timestamp, so the worker cannot reject that replay.
 
-Commit the offset after the SQL transaction commits. `EnableAutoCommit` stays false. The same `message_id` is a no-op, then you still commit the offset. That includes a second copy of an empty array. A crash after the SQL commit and before the offset commit redelivers the body. The id matches, the transaction writes nothing, and then you commit the offset. A null or empty Kafka value, a body that does not deserialize, a missing `user_id`, `message_id`, or `recommendations` array, a null row, or any row with `variant` is parked: log it and commit the offset. Do not insert those rows. A truncation, a null column, or a duplicate `(user_id, item_id)` is the same park. A deadlock or a dropped connection is not. That offset stays uncommitted, the process exits, and the next start reads the record again. Shutdown cancels `Consume` or the in-flight SQL call. That transaction rolls back, and that offset is not committed.
+Commit the offset after the SQL transaction commits. `EnableAutoCommit` stays false. The same `message_id` is a no-op, then you still commit the offset. That includes a second copy of an empty array. A crash after the SQL commit and before the offset commit redelivers the body. The id matches, the transaction writes nothing, and then you commit the offset. A null or empty Kafka value, a body that does not deserialize, a missing `user_id`, `message_id`, or `recommendations` array, a null row, a null column (`item_id`, `source`, `rank`, or `score`), or any row with `variant` is parked before any SQL: log it and commit the offset. Do not insert those rows. A truncation (SQL 8152 or 2628) or a duplicate `(user_id, item_id)` is the same park, from the SQL catch. SQL 515 stays there as a backstop. A deadlock or a dropped connection is not. That offset stays uncommitted, the process exits, and the next start reads the record again. Shutdown cancels `Consume` or the in-flight SQL call. That transaction rolls back, and that offset is not committed.
 
 `Confluent.Kafka` and `Microsoft.Data.SqlClient`. .NET 8.
 
@@ -170,6 +170,16 @@ while (!cts.IsCancellationRequested)
         consumer.Commit(record);
         continue;
     }
+    if (message.Recommendations.Exists(row =>
+            string.IsNullOrEmpty(row.ItemId)
+            || string.IsNullOrEmpty(row.Source)
+            || row.Rank is null
+            || row.Score is null))
+    {
+        Console.Error.WriteLine($"park {message.UserId}: null recommendation column");
+        consumer.Commit(record);
+        continue;
+    }
     if (message.Recommendations.Exists(row => row.Variant is not null))
     {
         Console.Error.WriteLine($"park {message.UserId}: variant rows belong to serve assignment");
@@ -178,11 +188,7 @@ while (!cts.IsCancellationRequested)
     }
     try
     {
-        if (!await ApplyAsync(sql, message, cts.Token))
-        {
-            consumer.Commit(record);
-            continue;
-        }
+        await ApplyAsync(sql, message, cts.Token);
     }
     catch (OperationCanceledException)
     {
@@ -191,24 +197,23 @@ while (!cts.IsCancellationRequested)
     consumer.Commit(record);
 }
 
-static async Task<bool> ApplyAsync(string sql, RecommendationMessage message, CancellationToken ct)
+static async Task ApplyAsync(string sql, RecommendationMessage message, CancellationToken ct)
 {
     await using var connection = new SqlConnection(sql);
     await connection.OpenAsync(ct);
     await using var tx = (SqlTransaction)await connection.BeginTransactionAsync(ct);
     try
     {
-        return await ApplyInTransactionAsync(connection, tx, message, ct);
+        await ApplyInTransactionAsync(connection, tx, message, ct);
     }
-    catch (SqlException ex) when (ex.Number is 515 or 2601 or 2627 or 8152)
+    catch (SqlException ex) when (ex.Number is 515 or 2601 or 2627 or 2628 or 8152)
     {
         Console.Error.WriteLine($"park {message.UserId}: SQL {ex.Number} {ex.Message}");
         await tx.RollbackAsync(ct);
-        return false;
     }
 }
 
-static async Task<bool> ApplyInTransactionAsync(
+static async Task ApplyInTransactionAsync(
     SqlConnection connection,
     SqlTransaction tx,
     RecommendationMessage message,
@@ -223,7 +228,7 @@ static async Task<bool> ApplyInTransactionAsync(
         if (applied == message.MessageId)
         {
             await tx.CommitAsync(ct);
-            return true;
+            return;
         }
     }
 
@@ -245,8 +250,8 @@ static async Task<bool> ApplyInTransactionAsync(
             connection, tx);
         insert.Parameters.AddWithValue("@user_id", message.UserId);
         insert.Parameters.AddWithValue("@item_id", row.ItemId);
-        insert.Parameters.AddWithValue("@rank", row.Rank);
-        insert.Parameters.AddWithValue("@score", row.Score);
+        insert.Parameters.AddWithValue("@rank", row.Rank.Value);
+        insert.Parameters.AddWithValue("@score", row.Score.Value);
         insert.Parameters.AddWithValue("@source", row.Source);
         await insert.ExecuteNonQueryAsync(ct);
     }
@@ -267,7 +272,6 @@ static async Task<bool> ApplyInTransactionAsync(
     }
 
     await tx.CommitAsync(ct);
-    return true;
 }
 
 sealed record RecommendationMessage(
@@ -278,13 +282,13 @@ sealed record RecommendationMessage(
 sealed record RecommendationRow(
     [property: JsonPropertyName("user_id")] string UserId,
     [property: JsonPropertyName("item_id")] string ItemId,
-    [property: JsonPropertyName("rank")] int Rank,
-    [property: JsonPropertyName("score")] double Score,
+    [property: JsonPropertyName("rank")] int? Rank,
+    [property: JsonPropertyName("score")] double? Score,
     [property: JsonPropertyName("source")] string Source,
     [property: JsonPropertyName("variant")] string? Variant);
 ```
 
-An empty `recommendations` array passes those checks, deletes that user's rows, inserts nothing, writes the marker, and commits. Then the offset is committed. That is the incremental clear. The nightly job does not send that array for a user it dropped. The same id delivered again commits no row changes. A truncation, a null column, or a duplicate key calls `RollbackAsync` before `CommitAsync`, so a failed clear does not leave the user half-deleted. The offset is what gets committed.
+An empty `recommendations` array passes those checks, deletes that user's rows, inserts nothing, writes the marker, and commits. Then the offset is committed. That is the incremental clear. The nightly job does not send that array for a user it dropped. The same id delivered again commits no row changes. A truncation (SQL 8152 or 2628) or a duplicate key calls `RollbackAsync` before `CommitAsync`, so a failed clear does not leave the user half-deleted. SQL 515 stays in that catch as a backstop. The offset is what gets committed.
 
 ```sql
 CREATE TABLE cicerone_recommendations (
@@ -302,7 +306,7 @@ CREATE TABLE cicerone_recommendation_messages (
 );
 ```
 
-Two `nvarchar(128)` key columns are 512 bytes, under SQL Server's 900-byte index limit. Do not widen them past that limit. A value that does not fit is SQL 8152. The worker parks that offset. SQL 515 is a null. SQL 2601 and 2627 are a duplicate key. SQL 1205, a timeout, or a dropped connection is not parked.
+Two `nvarchar(128)` key columns are 512 bytes, under SQL Server's 900-byte index limit. Do not widen them past that limit. A value that does not fit is SQL 8152 or 2628. The worker parks that offset. SQL 515 is a null, and it stays in the catch as a backstop. SQL 2601 and 2627 are a duplicate key. SQL 1205, a timeout, or a dropped connection is not parked.
 
 The page reads the marker and the rows in one statement. Two selects can straddle a commit: the first can see no marker and the second can see zero rows, and the page would treat a clear as never seen.
 
