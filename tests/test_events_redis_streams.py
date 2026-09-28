@@ -8,6 +8,7 @@ from support.events import event_payload
 
 from cicerone.config import ConfigError
 from cicerone.events.base import EventSourceError
+from cicerone.events.errors import RedisError
 from cicerone.events.redis_streams import RedisStreamsEventSource, validate_redis_stream_options
 from cicerone.events.registry import build_event_source, registered_event_source_kinds
 
@@ -346,10 +347,19 @@ def test_poll_zero_and_empty_ack_nack(monkeypatch):
 
 def test_connect_ping_failure(monkeypatch):
     client = FakeRedis()
-    client.ping = lambda: (_ for _ in ()).throw(RuntimeError("down"))  # type: ignore[method-assign]
+    client.ping = lambda: (_ for _ in ()).throw(RedisError("down"))  # type: ignore[method-assign]
     _install_fake_redis(monkeypatch, client)
     source = RedisStreamsEventSource(_options())
     with pytest.raises(EventSourceError, match="unreachable"):
+        source.connect()
+
+
+def test_connect_ping_unexpected_error_propagates(monkeypatch):
+    client = FakeRedis()
+    client.ping = lambda: (_ for _ in ()).throw(RuntimeError("bug"))  # type: ignore[method-assign]
+    _install_fake_redis(monkeypatch, client)
+    source = RedisStreamsEventSource(_options())
+    with pytest.raises(RuntimeError, match="bug"):
         source.connect()
 
 
@@ -361,7 +371,7 @@ def test_health_tolerates_lag_probe_failures(monkeypatch):
     list(source.poll(10))
 
     def boom(*_a, **_k):
-        raise RuntimeError("nope")
+        raise RedisError("nope")
 
     client.xpending = boom  # type: ignore[method-assign]
     client.xinfo_groups = boom  # type: ignore[method-assign]
@@ -370,17 +380,45 @@ def test_health_tolerates_lag_probe_failures(monkeypatch):
     assert health.lag == 1
 
 
+@pytest.mark.parametrize("method", ["xpending", "xinfo_groups"])
+def test_health_propagates_unexpected_probe_failures(monkeypatch, method):
+    client = _install_fake_redis(monkeypatch, FakeRedis())
+    source = RedisStreamsEventSource(_options())
+    source.connect()
+
+    def boom(*_a, **_k):
+        raise RuntimeError("bug")
+
+    setattr(client, method, boom)
+    with pytest.raises(RuntimeError, match="bug"):
+        source.health()
+
+
 def test_read_failures_return_empty(monkeypatch):
     client = _install_fake_redis(monkeypatch, FakeRedis())
     source = RedisStreamsEventSource(_options())
     source.connect()
 
     def boom(*_a, **_k):
-        raise RuntimeError("nope")
+        raise RedisError("nope")
 
     client.xreadgroup = boom  # type: ignore[method-assign]
     client.xautoclaim = boom  # type: ignore[method-assign]
     assert list(source.poll(10)) == []
+
+
+@pytest.mark.parametrize("method", ["xreadgroup", "xautoclaim"])
+def test_read_propagates_unexpected_failures(monkeypatch, method):
+    client = _install_fake_redis(monkeypatch, FakeRedis())
+    source = RedisStreamsEventSource(_options())
+    source.connect()
+
+    def boom(*_a, **_k):
+        raise RuntimeError("bug")
+
+    setattr(client, method, boom)
+    with pytest.raises(RuntimeError, match="bug"):
+        source.poll(10)
 
 
 def test_failed_ack_still_allows_nack(monkeypatch):
@@ -427,11 +465,77 @@ def test_heartbeat_reraises_when_xclaim_fails(monkeypatch):
     events = list(source.poll(10))
 
     def _boom(*_args, **_kwargs):
-        raise RuntimeError("xclaim down")
+        raise RedisError("xclaim down")
 
     client.xclaim = _boom  # type: ignore[method-assign]
-    with pytest.raises(RuntimeError, match="xclaim down"):
+    with pytest.raises(RedisError, match="xclaim down"):
         source.heartbeat(events)
+
+
+def test_heartbeat_propagates_unexpected_xclaim_failure(monkeypatch):
+    client = _install_fake_redis(monkeypatch, FakeRedis())
+    source = RedisStreamsEventSource(_options())
+    source.connect()
+    client.xadd("cicerone:events", event_payload(event_id="e1"))
+    events = list(source.poll(10))
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("bug")
+
+    client.xclaim = _boom  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="bug"):
+        source.heartbeat(events)
+
+
+def test_close_only_absorbs_redis_errors(monkeypatch, caplog):
+    client = _install_fake_redis(monkeypatch, FakeRedis())
+    source = RedisStreamsEventSource(_options())
+    source.connect()
+    client.close = lambda: (_ for _ in ()).throw(RedisError("close down"))  # type: ignore[method-assign]
+    source.close()
+    assert "Redis Streams client close failed" in caplog.text
+
+    client = _install_fake_redis(monkeypatch, FakeRedis())
+    source = RedisStreamsEventSource(_options())
+    source.connect()
+    client.close = lambda: (_ for _ in ()).throw(RuntimeError("bug"))  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="bug"):
+        source.close()
+
+
+def test_reconnect_only_absorbs_redis_close_errors(monkeypatch):
+    import cicerone.redis_client as redis_client
+
+    first = FakeRedis()
+    second = FakeRedis()
+    _install_fake_redis(monkeypatch, first)
+    clients = iter((first, second))
+    monkeypatch.setattr(redis_client, "redis_from_url", lambda *_args, **_kwargs: next(clients))
+    source = RedisStreamsEventSource(_options())
+    source.connect()
+    first.close = lambda: (_ for _ in ()).throw(RedisError("close down"))  # type: ignore[method-assign]
+    source.connect()
+
+    third = FakeRedis()
+    monkeypatch.setattr(redis_client, "redis_from_url", lambda *_args, **_kwargs: third)
+    second.close = lambda: (_ for _ in ()).throw(RuntimeError("bug"))  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="bug"):
+        source.connect()
+
+
+def test_discard_xack_only_absorbs_redis_errors(monkeypatch, caplog):
+    client = _install_fake_redis(monkeypatch, FakeRedis())
+    source = RedisStreamsEventSource(_options())
+    source.connect()
+    client.xack = lambda *_args, **_kwargs: (_ for _ in ()).throw(RedisError("xack down"))  # type: ignore[method-assign]
+    client.xadd("cicerone:events", {"user_id": "u1"})
+    assert list(source.poll(10)) == []
+    assert "Failed to XACK discarded Redis Streams entries" in caplog.text
+
+    client.xack = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("bug"))  # type: ignore[method-assign]
+    client.xadd("cicerone:events", {"user_id": "u2"})
+    with pytest.raises(RuntimeError, match="bug"):
+        source.poll(10)
 
 
 def test_repeated_nack_does_not_duplicate(monkeypatch):

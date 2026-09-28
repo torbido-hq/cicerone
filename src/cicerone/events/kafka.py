@@ -9,6 +9,7 @@ from typing import Any
 
 from cicerone.config.constants import ConfigError
 from cicerone.events.base import EventSourceError, EventSourceHealth, NormalizedEvent, QueuedEventSource
+from cicerone.events.errors import KafkaException
 from cicerone.events.json_payload import decode_json_object
 from cicerone.events.normalize import EventNormalizeError, normalize_event
 from cicerone.kafka_options import (
@@ -28,6 +29,13 @@ def validate_kafka_event_options(options: dict[str, Any]) -> None:
     require_nonempty_str(options, "topic", prefix=_EVENTS_PREFIX)
     require_nonempty_str(options, "group_id", prefix=_EVENTS_PREFIX)
     optional_nonempty_str(options, "consumer_name", prefix=_EVENTS_PREFIX)
+
+
+def _close_quietly(consumer: Any, message: str) -> None:
+    try:
+        consumer.close()
+    except KafkaException:
+        logger.exception(message)
 
 
 def _missing_extra() -> ConfigError:
@@ -70,14 +78,15 @@ class KafkaEventSource(QueuedEventSource):
             "auto.offset.reset": "earliest",
         }
         consumer = Consumer(conf)
+        connected = False
         try:
             consumer.list_topics(topic=self._topic, timeout=self._timeout_seconds)
-        except Exception as exc:
-            try:
-                consumer.close()
-            except Exception:
-                logger.exception("Failed to close Kafka consumer after connect error")
+            connected = True
+        except KafkaException as exc:
             raise EventSourceError(f"events.options.bootstrap_servers is unreachable: {exc}") from exc
+        finally:
+            if not connected:
+                _close_quietly(consumer, "Failed to close Kafka consumer after connect error")
         consumer.subscribe([self._topic])
 
         with self._lock:
@@ -90,10 +99,7 @@ class KafkaEventSource(QueuedEventSource):
             self._held_offsets.clear()
             self._max_offset.clear()
         if previous is not None and previous is not consumer:
-            try:
-                previous.close()
-            except Exception:
-                logger.exception("Failed to close previous Kafka consumer")
+            _close_quietly(previous, "Failed to close previous Kafka consumer")
 
     def close(self) -> None:
         with self._lock:
@@ -106,10 +112,7 @@ class KafkaEventSource(QueuedEventSource):
             self._max_offset.clear()
             self._topic_partition = None
         if consumer is not None:
-            try:
-                consumer.close()
-            except Exception:
-                logger.exception("Kafka consumer close failed")
+            _close_quietly(consumer, "Kafka consumer close failed")
 
     def ack(self, event_ids: Sequence[str]) -> Sequence[str]:
         if not event_ids:
@@ -184,7 +187,7 @@ class KafkaEventSource(QueuedEventSource):
         while remaining > 0:
             try:
                 message = consumer.poll(0.0)
-            except Exception:
+            except KafkaException:
                 logger.exception("Kafka poll failed")
                 break
             if message is None:
@@ -270,5 +273,5 @@ class KafkaEventSource(QueuedEventSource):
             nxt = self._next_commit_offset(partition, extra_done={offset})
         try:
             self._commit_watermarks(consumer, {partition: nxt})
-        except Exception:
+        except KafkaException:
             logger.exception("Failed to commit discarded Kafka message")

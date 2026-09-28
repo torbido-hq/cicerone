@@ -9,6 +9,7 @@ from typing import Any
 
 from cicerone.config import ConfigError
 from cicerone.events.base import EventSourceError, EventSourceHealth, NormalizedEvent, QueuedEventSource
+from cicerone.events.errors import RedisError
 from cicerone.events.normalize import EventNormalizeError, normalize_event
 
 logger = logging.getLogger(__name__)
@@ -88,7 +89,7 @@ class RedisStreamsEventSource(QueuedEventSource):
         client = redis_from_url(self._redis_url, decode_responses=True)
         try:
             client.ping()
-        except Exception as exc:
+        except RedisError as exc:
             raise EventSourceError(f"events.options.redis_url is unreachable: {exc}") from exc
 
         try:
@@ -110,7 +111,7 @@ class RedisStreamsEventSource(QueuedEventSource):
         if previous is not None and previous is not client:
             try:
                 previous.close()
-            except Exception:
+            except RedisError:
                 logger.exception("Failed to close previous Redis Streams client")
 
     def close(self) -> None:
@@ -124,7 +125,7 @@ class RedisStreamsEventSource(QueuedEventSource):
         if client is not None:
             try:
                 client.close()
-            except Exception:
+            except RedisError:
                 logger.exception("Redis Streams client close failed")
 
     def heartbeat(self, events: Sequence[NormalizedEvent]) -> None:
@@ -145,7 +146,7 @@ class RedisStreamsEventSource(QueuedEventSource):
                 min_idle_time=0,
                 message_ids=entry_ids,
             )
-        except Exception:
+        except RedisError:
             logger.exception("Redis Streams heartbeat XCLAIM failed")
             raise
 
@@ -162,12 +163,12 @@ class RedisStreamsEventSource(QueuedEventSource):
         group_lag: int | None
         try:
             pending_count = int(client.xpending(self._stream, self._group)["pending"])
-        except Exception:
+        except RedisError:
             logger.exception("Redis Streams XPENDING failed")
             pending_count = None
         try:
             group_lag = self._group_lag(client)
-        except Exception:
+        except RedisError:
             logger.exception("Redis Streams XINFO GROUPS lag failed")
             group_lag = None
 
@@ -234,7 +235,7 @@ class RedisStreamsEventSource(QueuedEventSource):
                 start_id=start_id,
                 count=max_events,
             )
-        except Exception:
+        except RedisError:
             logger.exception("Redis Streams XAUTOCLAIM failed")
             return []
 
@@ -253,7 +254,7 @@ class RedisStreamsEventSource(QueuedEventSource):
                 count=max_events,
                 block=self._block_ms,
             )
-        except Exception:
+        except RedisError:
             logger.exception("Redis Streams XREADGROUP failed")
             return []
         entries: list[tuple[str, dict[str, Any]]] = []
@@ -309,6 +310,6 @@ class RedisStreamsEventSource(QueuedEventSource):
         if drop_ids:
             try:
                 client.xack(self._stream, self._group, *drop_ids)
-            except Exception:
+            except RedisError:
                 logger.exception("Failed to XACK discarded Redis Streams entries")
         return events
