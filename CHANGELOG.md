@@ -10,6 +10,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Redis Streams polling, health, heartbeat, and close paths only recover
   from Redis client errors. Unexpected exceptions now propagate.
+- Kafka consumption only recovers from Kafka client errors while polling,
+  discarding invalid messages, and closing the consumer. Unexpected
+  exceptions now propagate.
 
 ## [0.8.4] - 2026-09-25
 
