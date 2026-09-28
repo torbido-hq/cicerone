@@ -335,7 +335,10 @@ class RabbitMQEventSource(QueuedEventSource):
         return io.broker_channel().basic_get(self._queue, auto_ack=False)
 
     def _basic_ack(self, io: _PikaIo, tag: int, *, multiple: bool = False) -> None:
-        io.broker_channel().basic_ack(delivery_tag=tag, multiple=multiple)
+        if multiple:
+            io.broker_channel().basic_ack(delivery_tag=tag, multiple=True)
+            return
+        io.broker_channel().basic_ack(delivery_tag=tag)
 
     def _passive_declare(self, io: _PikaIo) -> Any:
         return io.broker_channel().queue_declare(queue=self._queue, durable=True, passive=True)
