@@ -16,7 +16,7 @@ from cicerone.amqp_options import (
     require_queue,
 )
 from cicerone.config.constants import ConfigError
-from cicerone.events.base import EventSourceHealth, NormalizedEvent, QueuedEventSource
+from cicerone.events.base import EventSourceError, EventSourceHealth, NormalizedEvent, QueuedEventSource
 from cicerone.events.json_payload import decode_json_object
 from cicerone.events.normalize import EventNormalizeError, normalize_event
 from cicerone.events.rabbitmq_io import (
@@ -76,7 +76,7 @@ class RabbitMQEventSource(QueuedEventSource):
             connection, channel = io.submit(partial(self._open, pika, io))
         except Exception as exc:
             io.abandon(None, io._connection)
-            raise ConfigError(f"events.options.amqp_url is unreachable: {exc}") from exc
+            raise EventSourceError(f"events.options.amqp_url is unreachable: {exc}") from exc
 
         with self._lock:
             previous_io = self._io
@@ -289,7 +289,7 @@ class RabbitMQEventSource(QueuedEventSource):
 
     def _open(self, pika: Any, io: _PikaIo) -> tuple[Any, Any]:
         if io.failed:
-            raise RuntimeError("RabbitMQ I/O worker abandoned")
+            raise EventSourceError("RabbitMQ I/O worker abandoned")
         connection = pika.BlockingConnection(
             apply_amqp_timeouts(pika.URLParameters(self._amqp_url), self._timeout_seconds)
         )

@@ -5,9 +5,10 @@ import pytest
 from support.events import event_payload
 from support.prometheus_metrics import registry_metric_value
 
-from cicerone.config import EventsSettings, IOSettings, make_settings
-from cicerone.events.base import EventSourceHealth
+from cicerone.config import ConfigError, EventsSettings, IOSettings, make_settings
+from cicerone.events.base import EventSourceError, EventSourceHealth
 from cicerone.events.buffer import MicroBatchBuffer
+from cicerone.events.errors import EVENT_APPLY_ERRORS
 from cicerone.events.normalize import event_fingerprint, normalize_event
 from cicerone.events.updater import IncrementalUpdater
 from cicerone.events.webhook import WebhookEventSource
@@ -111,7 +112,7 @@ def test_event_worker_apply_failure_nacks(tmp_path, feature_config: FeatureConfi
     class _Boom(IncrementalUpdater):
         def apply(self, events, *, persist_online: bool = True):  # type: ignore[no-untyped-def]
             del persist_online
-            raise RuntimeError("boom")
+            raise OSError("boom")
 
     worker = EventWorker(
         source,
@@ -129,6 +130,406 @@ def test_event_worker_apply_failure_nacks(tmp_path, feature_config: FeatureConfi
     assert source.health().lag == 1
     assert registry_metric_value("cicerone_events_flush_total", {"status": "error"}) == before_error + 1
     assert registry_metric_value("cicerone_events_tick_errors_total") == before_tick
+
+
+def test_event_worker_apply_unexpected_nacks_and_raises(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="fail-unexpected"))
+
+    class _Unexpected(IncrementalUpdater):
+        def apply(self, events, *, persist_online: bool = True):  # type: ignore[no-untyped-def]
+            del persist_online
+            raise LookupError("boom")
+
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        _Unexpected(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    with pytest.raises(LookupError, match="boom"):
+        worker.tick()
+    assert source.health().lag == 1
+
+
+def test_event_worker_apply_runtime_error_nacks_and_raises(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="fail-runtime"))
+
+    class _RuntimeBoom(IncrementalUpdater):
+        def apply(self, events, *, persist_online: bool = True):  # type: ignore[no-untyped-def]
+            del persist_online
+            raise RuntimeError("boom")
+
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        _RuntimeBoom(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    with pytest.raises(RuntimeError, match="boom"):
+        worker.tick()
+    assert source.health().lag == 1
+
+
+def test_event_worker_apply_config_error_nacks_and_raises(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="fail-config"))
+
+    class _ConfigBoom(IncrementalUpdater):
+        def apply(self, events, *, persist_online: bool = True):  # type: ignore[no-untyped-def]
+            del persist_online
+            raise ConfigError("bad output")
+
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        _ConfigBoom(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    with pytest.raises(ConfigError, match="bad output"):
+        worker.tick()
+    assert source.health().lag == 1
+
+
+def test_event_worker_health_unexpected_raises(tmp_path, feature_config: FeatureConfig):
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        top_k=3,
+    )
+
+    class _BoomHealth(WebhookEventSource):
+        def health(self) -> EventSourceHealth:
+            raise LookupError("health boom")
+
+    worker = EventWorker(
+        _BoomHealth({}),
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    with pytest.raises(LookupError, match="health boom"):
+        worker.tick()
+
+
+def test_event_worker_health_runtime_error_raises(tmp_path, feature_config: FeatureConfig):
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        top_k=3,
+    )
+
+    class _BoomHealth(WebhookEventSource):
+        def health(self) -> EventSourceHealth:
+            raise RuntimeError("health boom")
+
+    worker = EventWorker(
+        _BoomHealth({}),
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    with pytest.raises(RuntimeError, match="health boom"):
+        worker.tick()
+
+
+def test_event_worker_health_value_error_raises(tmp_path, feature_config: FeatureConfig):
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        top_k=3,
+    )
+
+    class _BoomHealth(WebhookEventSource):
+        def health(self) -> EventSourceHealth:
+            raise ValueError("health boom")
+
+    worker = EventWorker(
+        _BoomHealth({}),
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    with pytest.raises(ValueError, match="health boom"):
+        worker.tick()
+
+
+def test_event_worker_health_type_error_raises(tmp_path, feature_config: FeatureConfig):
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        top_k=3,
+    )
+
+    class _BoomHealth(WebhookEventSource):
+        def health(self) -> EventSourceHealth:
+            raise TypeError("health boom")
+
+    worker = EventWorker(
+        _BoomHealth({}),
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    with pytest.raises(TypeError, match="health boom"):
+        worker.tick()
+
+
+def test_event_worker_health_config_error_raises(tmp_path, feature_config: FeatureConfig):
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        top_k=3,
+    )
+
+    class _BoomHealth(WebhookEventSource):
+        def health(self) -> EventSourceHealth:
+            raise ConfigError("missing occurred_at")
+
+    worker = EventWorker(
+        _BoomHealth({}),
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    with pytest.raises(ConfigError, match="missing occurred_at"):
+        worker.tick()
+
+
+def test_event_worker_loop_survives_source_error(tmp_path, feature_config: FeatureConfig):
+    import time
+
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        top_k=3,
+    )
+    polls = {"n": 0}
+
+    class _BoomPoll(WebhookEventSource):
+        def poll(self, max_events: int = 100):  # type: ignore[override]
+            polls["n"] += 1
+            if polls["n"] == 1:
+                raise EventSourceError("connect() required before poll")
+            return super().poll(max_events)
+
+    worker = EventWorker(
+        _BoomPoll({}),
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+        poll_interval_seconds=0.01,
+    )
+    worker.start()
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and polls["n"] < 2:
+        time.sleep(0.01)
+    thread = worker._thread
+    assert thread is not None and thread.is_alive()
+    assert polls["n"] >= 2
+    assert worker.stop(join_timeout_seconds=2.0) is True
+
+
+def test_event_worker_persist_unexpected_raises(tmp_path, feature_config: FeatureConfig, monkeypatch):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="persist-unexpected"))
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+
+    def _boom() -> None:
+        raise LookupError("persist boom")
+
+    aborted = {"n": 0}
+
+    def _abort() -> None:
+        aborted["n"] += 1
+
+    monkeypatch.setattr(worker._updater, "persist_online", _boom)
+    monkeypatch.setattr(worker._updater, "abort_online", _abort)
+    with pytest.raises(LookupError, match="persist boom"):
+        worker.tick()
+    assert aborted["n"] == 1
+
+
+def test_event_worker_persist_config_error_aborts_and_raises(
+    tmp_path, feature_config: FeatureConfig, monkeypatch
+):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="persist-config"))
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    aborted = {"n": 0}
+
+    def _boom() -> None:
+        raise ConfigError("bad persist")
+
+    def _abort() -> None:
+        aborted["n"] += 1
+
+    monkeypatch.setattr(worker._updater, "persist_online", _boom)
+    monkeypatch.setattr(worker._updater, "abort_online", _abort)
+    with pytest.raises(ConfigError, match="bad persist"):
+        worker.tick()
+    assert aborted["n"] == 1
+
+
+def test_event_worker_persist_writer_lock_busy_is_dropped(
+    tmp_path, feature_config: FeatureConfig, monkeypatch
+):
+    from cicerone.locks import WriterLockBusyError
+
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="persist-busy", item_id="ib"))
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+
+    def _busy() -> None:
+        raise WriterLockBusyError("dataset writer lock busy")
+
+    monkeypatch.setattr(worker._updater, "persist_online", _busy)
+    assert worker.tick() == 1
+
+
+def test_event_worker_loop_survives_unreachable_reconnect(tmp_path, feature_config: FeatureConfig):
+    import time
+
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        top_k=3,
+    )
+    connects = {"n": 0}
+
+    class _FlakyConnect(WebhookEventSource):
+        def connect(self) -> None:
+            connects["n"] += 1
+            if connects["n"] == 2:
+                raise EventSourceError("events.options.amqp_url is unreachable: down")
+            super().connect()
+
+        def health(self) -> EventSourceHealth:
+            if connects["n"] == 1:
+                return EventSourceHealth(connected=False, lag=None)
+            return super().health()
+
+    worker = EventWorker(
+        _FlakyConnect({}),
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+        poll_interval_seconds=0.01,
+    )
+    worker.start()
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and connects["n"] < 3:
+        time.sleep(0.01)
+    thread = worker._thread
+    assert thread is not None and thread.is_alive()
+    assert connects["n"] >= 3
+    assert worker.stop(join_timeout_seconds=2.0) is True
 
 
 def test_event_worker_partial_apply_nacks(tmp_path, feature_config: FeatureConfig):
@@ -178,6 +579,43 @@ def test_event_worker_tick_noop_when_empty(tmp_path, feature_config: FeatureConf
         ),
     )
     assert worker.tick() == 0
+
+
+def test_event_worker_stop_closes_source_when_drain_raises_unexpected(
+    tmp_path, feature_config: FeatureConfig
+):
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        top_k=3,
+    )
+    closed = {"n": 0}
+
+    class _CloseCount(WebhookEventSource):
+        def close(self) -> None:
+            closed["n"] += 1
+            super().close()
+
+    class _Boom(IncrementalUpdater):
+        def apply(self, events, *, persist_online: bool = True):  # type: ignore[no-untyped-def]
+            del persist_online
+            raise LookupError("drain boom")
+
+    source = _CloseCount({})
+    source.ingest(event_payload(event_id="drain-boom"))
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        _Boom(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    assert worker.tick() == 0
+    with pytest.raises(LookupError, match="drain boom"):
+        worker.stop()
+    assert closed["n"] == 1
 
 
 def test_event_worker_stop_returns_false_when_join_times_out(tmp_path, feature_config, caplog):
@@ -527,7 +965,7 @@ def test_event_worker_reconnect_restores_buffer_when_nack_fails(tmp_path, featur
 
     class _NackBoom(WebhookEventSource):
         def nack(self, events):  # type: ignore[no-untyped-def,override]
-            raise RuntimeError("nack unavailable")
+            raise OSError("nack unavailable")
 
     source = _NackBoom({})
     source.connect()
@@ -546,6 +984,39 @@ def test_event_worker_reconnect_restores_buffer_when_nack_fails(tmp_path, featur
     assert kept.kept_count == 1
     assert worker._reconnect_source() is True
     assert [event.event_id for event in worker._buffer.flush()] == ["buf-2"]
+
+
+def test_event_worker_reconnect_restores_buffer_when_nack_is_unexpected(
+    tmp_path, feature_config: FeatureConfig
+):
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+
+    class _UnexpectedNack(WebhookEventSource):
+        def nack(self, events):  # type: ignore[no-untyped-def,override]
+            raise LookupError("nack bug")
+
+    source = _UnexpectedNack({})
+    source.connect()
+    source.ingest(event_payload(event_id="buf-unexpected", item_id="i8"))
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    kept = worker._buffer.extend(source.poll(1))
+    assert kept.kept_count == 1
+
+    with pytest.raises(LookupError, match="nack bug"):
+        worker._reconnect_source()
+
+    assert [event.event_id for event in worker._buffer.flush()] == ["buf-unexpected"]
 
 
 def test_event_worker_reconnect_keeps_buffer_when_nack_is_noop(tmp_path, feature_config: FeatureConfig):
@@ -593,7 +1064,7 @@ def test_event_worker_reconnect_restores_buffer_when_connect_fails(tmp_path, fea
         def connect(self) -> None:
             connects["n"] += 1
             if connects["n"] > 1:
-                raise RuntimeError("reconnect refused")
+                raise OSError("reconnect refused")
             super().connect()
 
     source = _ConnectBoom({})
@@ -856,7 +1327,7 @@ def test_event_worker_retries_failed_post_apply_ack(tmp_path, feature_config: Fe
         def ack(self, event_ids):  # type: ignore[no-untyped-def]
             self.acked.extend(str(event_id) for event_id in event_ids)
             if len(self.acked) == 1:
-                raise RuntimeError("commit failed")
+                raise OSError("commit failed")
             self._pending = []
 
         def nack(self, events):  # type: ignore[no-untyped-def]
@@ -881,7 +1352,7 @@ def test_event_worker_retries_failed_post_apply_ack(tmp_path, feature_config: Fe
             top_k=3,
         ),
     )
-    with pytest.raises(RuntimeError, match="commit failed"):
+    with pytest.raises(OSError, match="commit failed"):
         worker.tick()
     assert applies == ["ack-retry"]
     assert worker.tick() == 0
@@ -908,7 +1379,7 @@ def test_event_worker_retries_failed_unbuffered_ack(tmp_path, feature_config: Fe
         def ack(self, event_ids):  # type: ignore[no-untyped-def]
             acked.extend(str(event_id) for event_id in event_ids)
             if len(acked) == 1:
-                raise RuntimeError("unbuffered ack failed")
+                raise OSError("unbuffered ack failed")
 
         def nack(self, events):  # type: ignore[no-untyped-def]
             return list(events)
@@ -927,10 +1398,139 @@ def test_event_worker_retries_failed_unbuffered_ack(tmp_path, feature_config: Fe
         ),
     )
     worker._remember_applied([event])
-    with pytest.raises(RuntimeError, match="unbuffered ack failed"):
+    with pytest.raises(OSError, match="unbuffered ack failed"):
         worker._poll_into_buffer()
     worker._flush_retry_acks()
     assert acked == ["already-1", "already-1"]
+
+
+def test_event_worker_preserves_retry_acks_on_unexpected_ack_errors(
+    tmp_path, feature_config: FeatureConfig, monkeypatch
+):
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    event = normalize_event(event_payload(event_id="unexpected-ack"))
+    worker = EventWorker(
+        WebhookEventSource({}),
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+
+    def _boom(_event_ids):  # type: ignore[no-untyped-def]
+        raise LookupError("ack bug")
+
+    monkeypatch.setattr(worker, "_ack_live_ids", _boom)
+
+    with pytest.raises(LookupError, match="ack bug"):
+        worker._ack_unbuffered([event])
+    assert worker._retry_acks == [event]
+
+    worker._retry_acks = []
+    worker._deferred_acks = [event]
+    with pytest.raises(LookupError, match="ack bug"):
+        worker._ack_deferred_matching([event])
+    assert worker._retry_acks == [event]
+
+    with pytest.raises(LookupError, match="ack bug"):
+        worker._flush_retry_acks()
+    assert worker._retry_acks == [event]
+
+
+def test_event_worker_flush_preserves_retry_acks_on_unexpected_ack(
+    tmp_path, feature_config: FeatureConfig, monkeypatch
+):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="flush-unexpected-ack", item_id="i7"))
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+
+    def _boom(_event_ids):  # type: ignore[no-untyped-def]
+        raise LookupError("flush ack bug")
+
+    monkeypatch.setattr(worker, "_ack_live_ids", _boom)
+    monkeypatch.setattr(worker._updater, "persist_online", lambda: None)
+    with pytest.raises(LookupError, match="flush ack bug"):
+        worker.tick()
+    assert [event.event_id for event in worker._retry_acks] == ["flush-unexpected-ack"]
+
+
+def test_event_worker_flush_persists_when_deferred_ack_is_unexpected(
+    tmp_path, feature_config: FeatureConfig, monkeypatch
+):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="flush-deferred-ack", item_id="i8"))
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    persisted = {"n": 0}
+
+    def _ack(event_ids):  # type: ignore[no-untyped-def]
+        return set(event_ids)
+
+    def _deferred(applied) -> None:  # type: ignore[no-untyped-def]
+        del applied
+        raise LookupError("deferred ack bug")
+
+    def _persist() -> None:
+        persisted["n"] += 1
+
+    monkeypatch.setattr(worker, "_ack_live_ids", _ack)
+    monkeypatch.setattr(worker, "_ack_deferred_matching", _deferred)
+    monkeypatch.setattr(worker._updater, "persist_online", _persist)
+    with pytest.raises(LookupError, match="deferred ack bug"):
+        worker.tick()
+    assert persisted["n"] == 1
+
+
+def test_event_apply_errors_exclude_broad_programming_errors():
+    from pandas.errors import DatabaseError
+    from pyarrow.lib import ArrowInvalid
+
+    assert RuntimeError not in EVENT_APPLY_ERRORS
+    assert ValueError not in EVENT_APPLY_ERRORS
+    assert TypeError not in EVENT_APPLY_ERRORS
+    assert ConfigError not in EVENT_APPLY_ERRORS
+    assert isinstance(DatabaseError("sql write failed"), EVENT_APPLY_ERRORS)
+    assert isinstance(ArrowInvalid("parquet write failed"), EVENT_APPLY_ERRORS)
 
 
 def test_event_worker_retry_acks_deferred_duplicates(tmp_path, feature_config: FeatureConfig):
@@ -967,7 +1567,7 @@ def test_event_worker_retry_acks_deferred_duplicates(tmp_path, feature_config: F
         def ack(self, event_ids):  # type: ignore[no-untyped-def]
             acked.extend(str(event_id) for event_id in event_ids)
             if acked == [original.event_id]:
-                raise RuntimeError("apply ack failed")
+                raise OSError("apply ack failed")
 
         def nack(self, events):  # type: ignore[no-untyped-def]
             return list(events)
@@ -985,7 +1585,7 @@ def test_event_worker_retry_acks_deferred_duplicates(tmp_path, feature_config: F
             top_k=3,
         ),
     )
-    with pytest.raises(RuntimeError, match="apply ack failed"):
+    with pytest.raises(OSError, match="apply ack failed"):
         worker.tick()
     assert duplicate.event_id not in acked
     worker.tick()
@@ -1463,7 +2063,7 @@ def test_event_worker_start_abort_drains_when_connect_raises(tmp_path, feature_c
         def connect(self) -> None:
             started.set()
             release.wait(timeout=2)
-            raise RuntimeError("connect failed")
+            raise OSError("connect failed")
 
         def close(self) -> None:
             closes["n"] += 1
@@ -1505,6 +2105,95 @@ def test_event_worker_start_abort_drains_when_connect_raises(tmp_path, feature_c
     assert "idrain" in set(frame["item_id"].astype(str))
 
 
+def test_event_worker_unexpected_start_failure_drains_and_closes(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    closes = {"n": 0}
+
+    class _UnexpectedStart(WebhookEventSource):
+        def connect(self) -> None:
+            super().connect()
+            raise LookupError("start bug")
+
+        def close(self) -> None:
+            closes["n"] += 1
+            super().close()
+
+    worker = EventWorker(
+        _UnexpectedStart({}),
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    worker._buffer.extend([normalize_event(event_payload(event_id="start-bug", item_id="istart"))])
+
+    with pytest.raises(LookupError, match="start bug"):
+        worker.start()
+
+    assert closes["n"] == 1
+    assert worker._finalized is True
+    frame = pd.read_parquet(out / "recommendations.parquet")
+    assert "istart" in set(frame["item_id"].astype(str))
+
+
+def test_event_worker_unexpected_loop_failure_drains_and_closes(tmp_path, feature_config: FeatureConfig):
+    import threading
+
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    closes = {"n": 0}
+
+    class _UnexpectedPoll(WebhookEventSource):
+        def poll(self, max_events: int = 100):  # type: ignore[override]
+            del max_events
+            raise LookupError("poll bug")
+
+        def close(self) -> None:
+            closes["n"] += 1
+            super().close()
+
+    source = _UnexpectedPoll({})
+    source.connect()
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    worker._buffer.extend([normalize_event(event_payload(event_id="loop-bug", item_id="iloop"))])
+    worker._thread = threading.current_thread()
+
+    with pytest.raises(LookupError, match="poll bug"):
+        worker._loop()
+
+    assert closes["n"] == 1
+    assert worker._finalized is True
+    frame = pd.read_parquet(out / "recommendations.parquet")
+    assert "iloop" in set(frame["item_id"].astype(str))
+
+
 def test_event_worker_reconnect_closes_after_failed_connect(tmp_path, feature_config: FeatureConfig):
     import threading
     import time
@@ -1522,7 +2211,7 @@ def test_event_worker_reconnect_closes_after_failed_connect(tmp_path, feature_co
             if connects["n"] >= 2:
                 reconnect_started.set()
                 time.sleep(0.2)
-                raise RuntimeError("broker down")
+                raise OSError("broker down")
             super().connect()
 
         def close(self) -> None:
@@ -1566,7 +2255,7 @@ def test_event_worker_skips_tick_after_failed_reconnect(tmp_path, feature_config
         def connect(self) -> None:
             if polls["n"] > 0:
                 reconnect_started.set()
-                raise RuntimeError("broker down")
+                raise OSError("broker down")
             super().connect()
 
         def poll(self, max_events: int = 100):  # type: ignore[override]
@@ -1765,7 +2454,7 @@ def test_event_worker_stop_swallows_source_close_errors(tmp_path, feature_config
 
     class _BoomClose(WebhookEventSource):
         def close(self) -> None:
-            raise RuntimeError("close failed")
+            raise OSError("close failed")
 
     worker = EventWorker(
         _BoomClose({}),
@@ -2604,7 +3293,7 @@ def test_event_worker_stop_returns_retry_acks_when_drain_ack_fails(tmp_path, fea
     class _AckBoom(WebhookEventSource):
         def ack(self, event_ids):  # type: ignore[no-untyped-def]
             del event_ids
-            raise RuntimeError("ack failed")
+            raise OSError("ack failed")
 
     source = _AckBoom({})
     worker = EventWorker(

@@ -15,7 +15,7 @@ import boto3
 from botocore.config import Config
 
 from cicerone.config.constants import DEFAULT_MAX_STORAGE_READ_BYTES
-from cicerone.events.base import EventSource, EventSourceHealth, NormalizedEvent
+from cicerone.events.base import EventSource, EventSourceError, EventSourceHealth, NormalizedEvent
 from cicerone.events.s3_list import S3ListPoll
 from cicerone.events.s3_parse import (
     _DEFAULT_LIST_PAGE_SIZE,
@@ -108,7 +108,7 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
             return []
         with self._lock:
             if self._s3 is None:
-                raise RuntimeError("S3EventSource.connect() required before poll")
+                raise EventSourceError("S3EventSource.connect() required before poll")
         out = self._drain_pending(max_events)
         if len(out) >= max_events:
             return out

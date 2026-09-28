@@ -5,12 +5,19 @@ from __future__ import annotations
 import importlib
 from typing import Any
 
-from cicerone.events.base import EventBackpressureError, EventSource, EventSourceHealth, NormalizedEvent
+from cicerone.events.base import (
+    EventBackpressureError,
+    EventSource,
+    EventSourceError,
+    EventSourceHealth,
+    NormalizedEvent,
+)
 
 __all__ = [
     "DbEventSource",
     "EventBackpressureError",
     "EventSource",
+    "EventSourceError",
     "EventSourceHealth",
     "KafkaEventSource",
     "NormalizedEvent",

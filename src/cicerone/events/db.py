@@ -15,7 +15,7 @@ from typing import Any
 from sqlalchemy import Engine, text
 
 from cicerone.config import ConfigError
-from cicerone.events.base import EventSource, EventSourceHealth, NormalizedEvent
+from cicerone.events.base import EventSource, EventSourceError, EventSourceHealth, NormalizedEvent
 from cicerone.events.db_identity import (
     _SQLITE_IDENTITY_SORT,  # noqa: F401
     _cursor_key,
@@ -113,7 +113,7 @@ class DbEventSource(EventSource):
             return []
         with self._lock:
             if self._engine is None:
-                raise RuntimeError("DbEventSource.connect() required before poll")
+                raise EventSourceError("DbEventSource.connect() required before poll")
             watermark_at = self._watermark_at
             watermark_event_id = self._watermark_event_id
             in_flight_count = len(self._in_flight)

@@ -13,6 +13,7 @@ from cicerone.config.constants import (
 )
 from cicerone.events.base import EventSource, NormalizedEvent
 from cicerone.events.buffer import MicroBatchBuffer
+from cicerone.events.errors import EVENT_APPLY_ERRORS, EVENT_SOURCE_ERRORS, EVENT_WORKER_ERRORS
 from cicerone.events.normalize import event_fingerprint
 from cicerone.events.updater import IncrementalUpdater
 from cicerone.events.worker_heartbeat import HeartbeatError, inflight_heartbeat
@@ -78,19 +79,21 @@ class EventWorker:
             return
         epoch = self._stop_epoch
         connect_error: BaseException | None = None
-        with self._source_guard:
-            if self._thread is not None and self._thread.is_alive():
-                return
-            if self._starting or self._stop_epoch != epoch:
-                return
-            self._starting = True
-            self._stop.clear()
-            self._finalized = False
-            try:
-                self._source.connect()
-            except Exception as exc:
-                connect_error = exc
+        starting = False
         try:
+            with self._source_guard:
+                if self._thread is not None and self._thread.is_alive():
+                    return
+                if self._starting or self._stop_epoch != epoch:
+                    return
+                self._starting = True
+                starting = True
+                self._stop.clear()
+                self._finalized = False
+                try:
+                    self._source.connect()
+                except EVENT_SOURCE_ERRORS as exc:
+                    connect_error = exc
             if self._start_aborted(epoch):
                 self._drain_stopped_start()
                 if connect_error is not None:
@@ -114,8 +117,13 @@ class EventWorker:
                         return
                     return
             self._drain_stopped_start()
+        except Exception:
+            if starting and not self._finalized:
+                self._drain_stopped_start()
+            raise
         finally:
-            self._starting = False
+            if starting:
+                self._starting = False
 
     def _start_aborted(self, epoch: int) -> bool:
         return self._stop.is_set() or self._stop_epoch != epoch
@@ -165,7 +173,7 @@ class EventWorker:
     def refresh_source_health_metrics(self) -> bool:
         try:
             health = self._source.health()
-        except Exception:
+        except EVENT_SOURCE_ERRORS:
             logger.exception("Failed to read event source health for metrics")
             update_events_source_health(connected=False, lag=None)
             return False
@@ -178,7 +186,7 @@ class EventWorker:
             return
         try:
             close()
-        except Exception:
+        except EVENT_SOURCE_ERRORS:
             logger.exception("Event source close() failed during worker stop")
 
     def _drain_and_close(self) -> None:
@@ -187,9 +195,10 @@ class EventWorker:
         self._finalized = True
         try:
             self._drain_buffer_on_stop()
-        except Exception:
+        except EVENT_WORKER_ERRORS:
             logger.exception("Event worker drain on stop failed")
-        self._close_source()
+        finally:
+            self._close_source()
 
     def _restore_buffer(self, events: list[NormalizedEvent]) -> None:
         events = [event for event in events if not self._is_applied(event)]
@@ -280,11 +289,13 @@ class EventWorker:
                 to_ack.append(event)
         if not to_ack:
             return
+        completed = False
         try:
             live_ids = self._ack_live_ids([event.event_id for event in to_ack])
-        except Exception:
-            self._retry_acks.extend(to_ack)
-            raise
+            completed = True
+        finally:
+            if not completed:
+                self._retry_acks.extend(to_ack)
         live = [event for event in to_ack if event.event_id in live_ids]
         missing = [event for event in to_ack if event.event_id not in live_ids]
         self._retry_acks.extend(missing)
@@ -307,11 +318,13 @@ class EventWorker:
         self._deferred_acks = keep
         if not matched:
             return
+        completed = False
         try:
             live_ids = self._ack_live_ids([event.event_id for event in matched])
-        except Exception:
-            self._retry_acks.extend(matched)
-            raise
+            completed = True
+        finally:
+            if not completed:
+                self._retry_acks.extend(matched)
         live = [event for event in matched if event.event_id in live_ids]
         self._retry_acks.extend(event for event in matched if event.event_id not in live_ids)
         self._drop_retry_acks(live)
@@ -321,11 +334,13 @@ class EventWorker:
             return
         batch = self._retry_acks
         self._retry_acks = []
+        completed = False
         try:
             live_ids = self._ack_live_ids([event.event_id for event in batch])
-        except Exception:
-            self._retry_acks.extend(batch)
-            raise
+            completed = True
+        finally:
+            if not completed:
+                self._retry_acks.extend(batch)
         live = [event for event in batch if event.event_id in live_ids]
         self._retry_acks.extend(event for event in batch if event.event_id not in live_ids)
         if live:
@@ -344,15 +359,19 @@ class EventWorker:
         leftover = list(events)
         if not leftover:
             return
+        completed = False
         try:
             rejected = self._rejected_nacks(leftover, self._source.nack(leftover))
-        except Exception:
+            completed = True
+        except EVENT_SOURCE_ERRORS:
             logger.exception(
                 "Event worker failed to return %d event(s) to the source",
                 len(leftover),
             )
-            self._restore_buffer(leftover)
             return
+        finally:
+            if not completed:
+                self._restore_buffer(leftover)
         if rejected:
             self._restore_buffer(rejected)
 
@@ -369,7 +388,7 @@ class EventWorker:
                 leftover.extend(self._take_deferred_acks())
                 try:
                     self._source.connect()
-                except Exception:
+                except EVENT_SOURCE_ERRORS:
                     logger.exception("Event source reconnect failed")
                     self._restore_buffer(leftover)
                     if self._stop.is_set():
@@ -397,16 +416,15 @@ class EventWorker:
                     continue
                 try:
                     self.tick()
-                except Exception:
+                except EVENT_WORKER_ERRORS:
                     record_events_tick_error()
                     logger.exception("Event worker tick failed")
                 disconnected = self._source_unhealthy
                 self._stop.wait(self._poll_interval_seconds)
         finally:
-            if self._stop.is_set():
-                with self._tick_guard, self._source_guard:
-                    if self._thread is current:
-                        self._drain_and_close()
+            with self._tick_guard, self._source_guard:
+                if self._thread is current:
+                    self._drain_and_close()
 
     def tick(self) -> int:
         """One poll/flush cycle; returns events successfully applied."""
@@ -540,12 +558,18 @@ class EventWorker:
             self._updater.abort_online()
             self._return_events(ready)
             return 0
-        except Exception:
+        except EVENT_APPLY_ERRORS:
             record_events_flush(status="error")
             logger.exception("Incremental apply failed; returning %d event(s) to source", len(ready))
             self._updater.abort_online()
             self._return_events(ready)
             return 0
+        except Exception:
+            record_events_flush(status="error")
+            logger.exception("Incremental apply failed; returning %d event(s) to source", len(ready))
+            self._updater.abort_online()
+            self._return_events(ready)
+            raise
         if applied == 0:
             record_events_flush(status="busy")
             record_events_apply_busy(reason="retrain")
@@ -598,21 +622,33 @@ class EventWorker:
 
     def _persist_online_after_ack(self) -> None:
         last_error: BaseException | None = None
-        for attempt in range(1, _ONLINE_PERSIST_ATTEMPTS + 1):
-            try:
-                self._updater.persist_online()
-                return
-            except LockLostError as exc:
-                logger.error("%s; dropping pending artifact", exc)
-                self._updater.abort_online()
-                return
-            except Exception as exc:
-                last_error = exc
-                logger.exception(
-                    "Online artifact persist failed after ack (attempt %d/%d)",
-                    attempt,
-                    _ONLINE_PERSIST_ATTEMPTS,
-                )
-        self._updater.abort_online()
-        if last_error is not None:
-            logger.error("Online artifact persist gave up after ack; pending fit dropped")
+        try:
+            for attempt in range(1, _ONLINE_PERSIST_ATTEMPTS + 1):
+                try:
+                    self._updater.persist_online()
+                    return
+                except LockLostError as exc:
+                    logger.error("%s; dropping pending artifact", exc)
+                    self._updater.abort_online()
+                    return
+                except WriterLockBusyError as exc:
+                    last_error = exc
+                    logger.info(
+                        "%s; online persist after ack (attempt %d/%d)",
+                        exc,
+                        attempt,
+                        _ONLINE_PERSIST_ATTEMPTS,
+                    )
+                except EVENT_APPLY_ERRORS as exc:
+                    last_error = exc
+                    logger.exception(
+                        "Online artifact persist failed after ack (attempt %d/%d)",
+                        attempt,
+                        _ONLINE_PERSIST_ATTEMPTS,
+                    )
+            self._updater.abort_online()
+            if last_error is not None:
+                logger.error("Online artifact persist gave up after ack; pending fit dropped")
+        except Exception:
+            self._updater.abort_online()
+            raise

@@ -10,6 +10,7 @@ from support.events import event_payload
 from support.fake_rabbitmq import install_fake_rabbitmq
 
 from cicerone.config import ConfigError
+from cicerone.events.base import EventSourceError
 from cicerone.events.ha import ingest_is_fanout, poll_without_apply_lock
 from cicerone.events.rabbitmq import RabbitMQEventSource, validate_rabbitmq_event_options
 from cicerone.events.registry import build_event_source, registered_event_source_kinds
@@ -142,7 +143,7 @@ def test_abandoned_io_does_not_return_late_ok():
         release.set()
         waiter.join(timeout=2)
         assert result["value"] is None
-        assert result["err"] is not None
+        assert isinstance(result["err"], EventSourceError)
         assert "abandoned" in str(result["err"])
     finally:
         release.set()
@@ -1384,7 +1385,7 @@ def test_connect_failure(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     broker.connect_error = RuntimeError("down")
     source = RabbitMQEventSource(_options())
-    with pytest.raises(ConfigError, match="unreachable"):
+    with pytest.raises(EventSourceError, match="unreachable"):
         source.connect()
 
 
@@ -1392,7 +1393,7 @@ def test_connect_timeout_during_open_closes_connection(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     broker.channel_hang_seconds = 0.3
     source = RabbitMQEventSource(_options(timeout_seconds=0.05))
-    with pytest.raises(ConfigError, match="unreachable"):
+    with pytest.raises(EventSourceError, match="unreachable"):
         source.connect()
     deadline = time.monotonic() + 1.0
     while time.monotonic() < deadline and not getattr(broker, "connection", None):
@@ -1409,7 +1410,7 @@ def test_connect_closes_connection_when_declare_fails(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     broker.queue_declare_error = RuntimeError("no queue")
     source = RabbitMQEventSource(_options())
-    with pytest.raises(ConfigError, match="unreachable"):
+    with pytest.raises(EventSourceError, match="unreachable"):
         source.connect()
     assert broker.connection.closed is True
 
