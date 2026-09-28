@@ -7,6 +7,7 @@ import math
 from collections.abc import Sequence
 from contextlib import suppress
 from hashlib import sha256
+from typing import overload
 
 import pandas as pd
 
@@ -68,7 +69,15 @@ class _RecommendationMessages(Sequence[RecommendationMessage]):
     def __len__(self) -> int:
         return len(self._order)
 
-    def __getitem__(self, index: int) -> RecommendationMessage:
+    @overload
+    def __getitem__(self, index: int) -> RecommendationMessage: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> list[RecommendationMessage]: ...
+
+    def __getitem__(self, index: int | slice) -> RecommendationMessage | list[RecommendationMessage]:
+        if isinstance(index, slice):
+            return [self[item] for item in range(*index.indices(len(self)))]
         user_id = self._order[index]
         group = None
         if self._grouped is not None and user_id in self._grouped.groups:
