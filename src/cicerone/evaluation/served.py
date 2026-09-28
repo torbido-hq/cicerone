@@ -180,7 +180,10 @@ def recs_from_impressions(
         return pd.DataFrame()
     frame = pd.DataFrame(rows)
     frame = frame.sort_values([USER_COLUMN, RANK_COLUMN], kind="mergesort")
-    frame = frame.drop_duplicates(subset=[USER_COLUMN, ITEM_COLUMN], keep="first")
+    identity = [USER_COLUMN, ITEM_COLUMN]
+    if VARIANT_COLUMN in frame.columns:
+        identity.append(VARIANT_COLUMN)
+    frame = frame.drop_duplicates(subset=identity, keep="first")
     if recommendations is not None and not recommendations.empty:
         keys = [USER_COLUMN, ITEM_COLUMN]
         extra = [
@@ -192,6 +195,18 @@ def recs_from_impressions(
             lookup = recommendations.loc[:, [*keys, *extra]].copy()
             lookup[USER_COLUMN] = lookup[USER_COLUMN].astype(str)
             lookup[ITEM_COLUMN] = lookup[ITEM_COLUMN].astype(str)
+            if VARIANT_COLUMN in frame.columns and VARIANT_COLUMN in lookup.columns:
+                blank = lookup[VARIANT_COLUMN].isna() | lookup[VARIANT_COLUMN].astype(str).str.strip().eq("")
+                lookup[VARIANT_COLUMN] = lookup[VARIANT_COLUMN].mask(blank, "\x00")
+                frame = frame.copy()
+                frame_blank = frame[VARIANT_COLUMN].isna() | frame[VARIANT_COLUMN].astype(str).str.strip().eq(
+                    ""
+                )
+                frame[VARIANT_COLUMN] = frame[VARIANT_COLUMN].mask(frame_blank, "\x00")
+                legacy = lookup.copy()
+                legacy[VARIANT_COLUMN] = "\x00"
+                lookup = pd.concat([lookup, legacy], ignore_index=True)
+                keys.append(VARIANT_COLUMN)
             lookup = lookup.drop_duplicates(subset=keys, keep="first")
             frame = frame.merge(lookup, on=keys, how="left", suffixes=("", "_job"))
             for column in extra:
@@ -199,6 +214,8 @@ def recs_from_impressions(
                 if job_column in frame.columns:
                     frame[column] = frame[column].where(frame[column].notna(), frame[job_column])
                     frame = frame.drop(columns=[job_column])
+            if VARIANT_COLUMN in frame.columns:
+                frame[VARIANT_COLUMN] = frame[VARIANT_COLUMN].mask(frame[VARIANT_COLUMN].eq("\x00"), pd.NA)
     if SCORE_COLUMN not in frame.columns:
         top = int(frame[RANK_COLUMN].max()) if RANK_COLUMN in frame.columns and not frame.empty else 1
         frame[SCORE_COLUMN] = (top + 1 - frame[RANK_COLUMN]).astype(float)

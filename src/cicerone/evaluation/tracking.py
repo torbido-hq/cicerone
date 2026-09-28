@@ -85,32 +85,49 @@ def _annotate_source(impressions: pd.DataFrame, recommendations: pd.DataFrame | 
     recs = recommendations.copy()
     recs[USER_COLUMN] = recs[USER_COLUMN].astype(str)
     recs[ITEM_COLUMN] = recs[ITEM_COLUMN].astype(str)
+    join_keys = [USER_COLUMN, ITEM_COLUMN]
+    variant_key: str | None = None
+    if VARIANT_COLUMN in frame.columns and VARIANT_COLUMN in recs.columns:
+        variant_key = "_source_variant"
+        legacy_variant = "\x00"
+        frame[variant_key] = frame[VARIANT_COLUMN].where(
+            frame[VARIANT_COLUMN].notna() & frame[VARIANT_COLUMN].astype(str).str.strip().ne(""),
+            legacy_variant,
+        )
+        recs[variant_key] = recs[VARIANT_COLUMN].where(
+            recs[VARIANT_COLUMN].notna() & recs[VARIANT_COLUMN].astype(str).str.strip().ne(""),
+            legacy_variant,
+        )
+        legacy_recs = recs.copy()
+        legacy_recs[variant_key] = legacy_variant
+        recs = pd.concat([recs, legacy_recs], ignore_index=True)
+        join_keys.append(variant_key)
     keep = [USER_COLUMN, ITEM_COLUMN, SOURCE_COLUMN]
     if VARIANT_COLUMN in recs.columns:
         keep.append(VARIANT_COLUMN)
+    if variant_key is not None:
+        keep.append(variant_key)
     if "generated_at" in recs.columns:
         keep.append("generated_at")
         recs["generated_at"] = pd.to_datetime(recs["generated_at"], utc=True, errors="coerce")
     recs = recs.loc[:, [column for column in keep if column in recs.columns]]
     if "generated_at" in recs.columns:
         recs = recs.sort_values("generated_at", kind="mergesort", na_position="first")
-    latest = recs.drop_duplicates(subset=[USER_COLUMN, ITEM_COLUMN], keep="last")
-    source_cols = [column for column in (USER_COLUMN, ITEM_COLUMN, SOURCE_COLUMN) if column in latest.columns]
+    latest = recs.drop_duplicates(subset=join_keys, keep="last")
+    source_cols = [*join_keys, SOURCE_COLUMN]
     latest_source = latest.loc[:, source_cols]
     if "generated_at" in recs.columns and "generated_at" in frame.columns:
         frame["generated_at"] = pd.to_datetime(frame["generated_at"], utc=True, errors="coerce")
         snap = recs.dropna(subset=["generated_at"]).drop_duplicates(
-            subset=[USER_COLUMN, ITEM_COLUMN, "generated_at"], keep="last"
+            subset=[*join_keys, "generated_at"], keep="last"
         )
-        merged = frame.merge(
-            snap, on=[USER_COLUMN, ITEM_COLUMN, "generated_at"], how="left", suffixes=("", "_rec")
-        )
+        merged = frame.merge(snap, on=[*join_keys, "generated_at"], how="left", suffixes=("", "_rec"))
         _coalesce_column(merged, SOURCE_COLUMN)
         _coalesce_column(merged, VARIANT_COLUMN)
         missing = merged["generated_at"].isna()
         if bool(missing.any()):
-            filled = merged.loc[missing, [USER_COLUMN, ITEM_COLUMN]].merge(
-                latest_source, on=[USER_COLUMN, ITEM_COLUMN], how="left", suffixes=("", "_latest")
+            filled = merged.loc[missing, join_keys].merge(
+                latest_source, on=join_keys, how="left", suffixes=("", "_latest")
             )
             _coalesce_column(filled, SOURCE_COLUMN)
             if SOURCE_COLUMN not in merged.columns:
@@ -119,15 +136,15 @@ def _annotate_source(impressions: pd.DataFrame, recommendations: pd.DataFrame | 
                 existing = merged.loc[missing, SOURCE_COLUMN]
                 incoming = pd.Series(filled[SOURCE_COLUMN].to_numpy(), index=existing.index)
                 merged.loc[missing, SOURCE_COLUMN] = existing.where(existing.notna(), incoming)
-        return merged
+        return merged.drop(columns=[variant_key] if variant_key is not None else [])
     if "generated_at" not in recs.columns:
-        merged = frame.merge(latest, on=[USER_COLUMN, ITEM_COLUMN], how="left", suffixes=("", "_rec"))
+        merged = frame.merge(latest, on=join_keys, how="left", suffixes=("", "_rec"))
         _coalesce_column(merged, SOURCE_COLUMN)
         _coalesce_column(merged, VARIANT_COLUMN)
-        return merged
-    merged = frame.merge(latest_source, on=[USER_COLUMN, ITEM_COLUMN], how="left", suffixes=("", "_rec"))
+        return merged.drop(columns=[variant_key] if variant_key is not None else [])
+    merged = frame.merge(latest_source, on=join_keys, how="left", suffixes=("", "_rec"))
     _coalesce_column(merged, SOURCE_COLUMN)
-    return merged
+    return merged.drop(columns=[variant_key] if variant_key is not None else [])
 
 
 @dataclass(frozen=True)
