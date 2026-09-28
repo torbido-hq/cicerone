@@ -344,7 +344,10 @@ class RabbitMQEventSource(QueuedEventSource):
         return io.broker_channel().basic_get(self._queue, auto_ack=False)
 
     def _basic_ack(self, io: _PikaIo, tag: int, *, multiple: bool = False) -> None:
-        io.broker_channel().basic_ack(delivery_tag=tag, multiple=multiple)
+        if multiple:
+            io.broker_channel().basic_ack(delivery_tag=tag, multiple=True)
+            return
+        io.broker_channel().basic_ack(delivery_tag=tag)
 
     def _basic_nack(self, io: _PikaIo, tag: int) -> None:
         io.broker_channel().basic_nack(delivery_tag=tag, requeue=True)
