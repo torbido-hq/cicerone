@@ -15,7 +15,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   exceptions now propagate.
 - RabbitMQ consumption only recovers from AMQP, socket, and timeout
   errors while connecting, polling, probing queue depth, and closing.
-  Unexpected exceptions now propagate.
+  Unexpected exceptions now propagate. An unexpected idle-pump error
+  marks the worker failed and closes the connection before that thread
+  stops.
 
 ## [0.8.4] - 2026-09-25
 

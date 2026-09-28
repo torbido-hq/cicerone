@@ -649,6 +649,41 @@ def test_pika_io_replies_abandoned_for_job_dequeued_after_fail():
         io.stop()
 
 
+def test_pika_io_cleans_up_when_idle_pump_raises_unexpected():
+    from cicerone.events.rabbitmq_io import _PikaIo
+
+    class _Conn:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def process_data_events(self, time_limit: float | int = 0) -> None:
+            del time_limit
+            raise RuntimeError("bug")
+
+        def close(self) -> None:
+            self.closed = True
+
+    connection = _Conn()
+    io = _PikaIo(timeout_seconds=1)
+    io._connection = connection
+    io.start()
+    try:
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and not io.failed:
+            time.sleep(0.01)
+        assert io.failed is True
+        while time.monotonic() < deadline and io._thread.is_alive():
+            time.sleep(0.01)
+        assert io._thread.is_alive() is False
+        assert connection.closed is True
+        began = time.monotonic()
+        with pytest.raises(RuntimeError, match="abandoned|not running"):
+            io.submit(lambda: "late")
+        assert time.monotonic() - began < 1.0
+    finally:
+        io.stop()
+
+
 def test_pika_io_wakes_queued_submit_when_pump_fails():
     from cicerone.events.rabbitmq_io import _PikaIo
 

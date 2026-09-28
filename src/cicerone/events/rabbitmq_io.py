@@ -234,6 +234,9 @@ class _PikaIo:
                     self._busy += 1
                 try:
                     self._pump()
+                except Exception:
+                    self._mark_failed()
+                    logger.exception("RabbitMQ I/O thread process_data_events failed")
                 finally:
                     if not self._failed:
                         self._clear_busy()
