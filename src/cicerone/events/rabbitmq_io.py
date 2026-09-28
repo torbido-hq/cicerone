@@ -269,9 +269,10 @@ class _PikaIo:
                 # The caller is blocked on this reply.
                 payload: tuple[str, Any] = ("err", exc)
             else:
-                payload = ("ok", result)
-            if self._failed:
-                payload = ("err", EventSourceError("RabbitMQ I/O worker abandoned"))
+                if self._failed:
+                    payload = ("err", EventSourceError("RabbitMQ I/O worker abandoned"))
+                else:
+                    payload = ("ok", result)
             with suppress(queue.Full):
                 job.reply.put_nowait(payload)
             if self._failed:
@@ -329,8 +330,17 @@ def _release_io(io: _PikaIo, channel: Any, connection: Any) -> None:
 
 
 def _close_handles(channel: Any, connection: Any) -> None:
-    _close_quietly(channel, "channel")
-    _close_quietly(connection, "connection")
+    first: BaseException | None = None
+    for handle, label in ((channel, "channel"), (connection, "connection")):
+        try:
+            _close_quietly(handle, label)
+        except Exception as exc:
+            if first is None:
+                first = exc
+                continue
+            logger.exception("Failed to close RabbitMQ %s", label)
+    if first is not None:
+        raise first
 
 
 def _close_quietly(handle: Any, label: str) -> None:

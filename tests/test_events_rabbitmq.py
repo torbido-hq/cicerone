@@ -546,6 +546,33 @@ def test_bind_handles_does_not_reborn_abandoned_io():
     assert io._channel is None
 
 
+def test_close_handles_closes_connection_when_channel_close_fails():
+    from cicerone.events.rabbitmq_io import _close_handles
+
+    class _Handle:
+        def __init__(self, error: BaseException | None = None) -> None:
+            self.error = error
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+            if self.error is not None:
+                raise self.error
+
+    channel = _Handle(RuntimeError("channel"))
+    connection = _Handle()
+    with pytest.raises(RuntimeError, match="channel"):
+        _close_handles(channel, connection)
+    assert channel.closed is True
+    assert connection.closed is True
+
+    channel = _Handle(RuntimeError("channel"))
+    connection = _Handle(RuntimeError("connection"))
+    with pytest.raises(RuntimeError, match="channel"):
+        _close_handles(channel, connection)
+    assert connection.closed is True
+
+
 def test_cleanup_abandoned_closes_abandon_handles_and_leftover_live():
     from types import SimpleNamespace
 
@@ -1243,8 +1270,9 @@ def test_heartbeat_reraises_and_marks_failed_on_pump_error(monkeypatch):
     source = RabbitMQEventSource(_options())
     source.connect()
     broker.connection.process_error = RuntimeError("hb")
-    with pytest.raises(RuntimeError, match="abandoned|hb"):
+    with pytest.raises(RuntimeError, match="hb") as captured:
         source.heartbeat([])
+    assert not isinstance(captured.value, EventSourceError)
     assert source._io is not None
     assert source._io.failed is True
 
