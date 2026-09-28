@@ -1117,6 +1117,32 @@ def test_poll_ack_and_health(monkeypatch):
     assert channel.acked == [1, 2]
 
 
+def test_poll_gets_a_batch_on_one_submit_and_acks_once(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    for event_id in ("e1", "e2", "e3"):
+        broker.enqueue("cicerone.events", event_payload(event_id=event_id, item_id=event_id))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    io = source._io
+    assert io is not None
+    submits = {"n": 0}
+    original_submit = io.submit
+
+    def _submit(fn):
+        submits["n"] += 1
+        return original_submit(fn)
+
+    io.submit = _submit  # type: ignore[method-assign]
+    events = list(source.poll(3))
+    assert [event.event_id for event in events] == ["e1", "e2", "e3"]
+    assert submits["n"] == 1
+    source.ack([event.event_id for event in events])
+    channel = broker.connection.channel_obj
+    assert channel.ack_calls == [(3, True)]
+    assert channel.acked == [1, 2, 3]
+    source.close()
+
+
 def test_nack_allows_repoll(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     broker.enqueue("cicerone.events", event_payload(event_id="e1"))
