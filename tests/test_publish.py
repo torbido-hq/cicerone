@@ -41,6 +41,7 @@ def test_user_recommendation_messages_one_per_user():
     assert first["message_id"] == user_recommendation_messages(_recs_frame())[0][2]
     assert len(first["recommendations"]) == 2
     assert first["recommendations"][0]["item_id"] == "i1"
+    assert b"message_id" not in repr(vars(messages)).encode()
 
 
 def test_user_recommendation_messages_empty():
