@@ -17,6 +17,7 @@ from cicerone.evaluation.metrics import (
     _fill_blank_ids,
     _frame,
     _merge_asof_events,
+    _metrics_by_impression_dimensions,
     _metrics_for_impression_slice,
     _with_join_keys,
 )
@@ -192,24 +193,19 @@ def evaluate_tracking(
     else:
         click_conv = conv.iloc[0:0]
     overall = _metrics_for_impression_slice(impressions, matched_clicks, view_conv, click_conv)
-    by_rank: dict[str, SliceMetrics] = {}
-    if RANK_COLUMN in impressions.columns:
-        for rank, group in impressions.groupby(RANK_COLUMN, dropna=True):
-            key = str(int(rank)) if float(rank).is_integer() else str(rank)
-            by_rank[key] = _metrics_for_impression_slice(group, matched_clicks, view_conv, click_conv)
-    by_source: dict[str, SliceMetrics] = {}
-    if SOURCE_COLUMN in impressions.columns:
-        for source, group in impressions.groupby(SOURCE_COLUMN, dropna=True):
-            by_source[str(source)] = _metrics_for_impression_slice(
-                group, matched_clicks, view_conv, click_conv
-            )
-    by_variant: dict[str, SliceMetrics] = {}
-    if VARIANT_COLUMN in impressions.columns:
-        for variant, group in impressions.groupby(VARIANT_COLUMN, dropna=True):
-            by_variant[str(variant)] = _metrics_for_impression_slice(
-                group, matched_clicks, view_conv, click_conv
-            )
-    return TrackEvalReport(overall=overall, by_rank=by_rank, by_source=by_source, by_variant=by_variant)
+    sliced = _metrics_by_impression_dimensions(
+        impressions,
+        matched_clicks,
+        view_conv,
+        click_conv,
+        (RANK_COLUMN, SOURCE_COLUMN, VARIANT_COLUMN),
+    )
+    return TrackEvalReport(
+        overall=overall,
+        by_rank=sliced.get(RANK_COLUMN, {}),
+        by_source=sliced.get(SOURCE_COLUMN, {}),
+        by_variant=sliced.get(VARIANT_COLUMN, {}),
+    )
 
 
 def user_track_outcomes(
