@@ -561,15 +561,14 @@ def test_close_handles_closes_connection_when_channel_close_fails():
 
     channel = _Handle(RuntimeError("channel"))
     connection = _Handle()
-    with pytest.raises(RuntimeError, match="channel"):
-        _close_handles(channel, connection)
+    _close_handles(channel, connection)
     assert channel.closed is True
     assert connection.closed is True
 
     channel = _Handle(RuntimeError("channel"))
     connection = _Handle(RuntimeError("connection"))
-    with pytest.raises(RuntimeError, match="channel"):
-        _close_handles(channel, connection)
+    _close_handles(channel, connection)
+    assert channel.closed is True
     assert connection.closed is True
 
 
@@ -605,6 +604,32 @@ def test_cleanup_abandoned_closes_abandon_handles_and_leftover_live():
     assert io._connection is None
     assert io._abandon_channel is None
     assert io._abandon_connection is None
+
+
+def test_cleanup_abandoned_closes_connection_when_channel_close_fails():
+    from types import SimpleNamespace
+
+    from cicerone.events.rabbitmq_io import _PikaIo
+
+    def _handle(error: BaseException | None = None) -> SimpleNamespace:
+        state = SimpleNamespace(closed=False, error=error)
+
+        def _close() -> None:
+            state.closed = True
+            if state.error is not None:
+                raise state.error
+
+        state.close = _close
+        return state
+
+    channel = _handle(RuntimeError("channel"))
+    connection = _handle()
+    io = _PikaIo(timeout_seconds=0.05)
+    io._abandon_channel = channel
+    io._abandon_connection = connection
+    io._cleanup_abandoned()
+    assert channel.closed is True
+    assert connection.closed is True
 
 
 def test_pika_io_timeout_does_not_run_after_enter_when_failed():

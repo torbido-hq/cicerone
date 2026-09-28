@@ -17,7 +17,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   errors while connecting, polling, probing queue depth, and closing.
   Unexpected exceptions now propagate, including a heartbeat pump
   error. An unexpected idle-pump error marks the worker failed and
-  closes both connection handles before that thread stops.
+  closes both connection handles before that thread stops. A failed
+  handle close is logged and does not skip the other handle.
 
 ## [0.8.4] - 2026-09-25
 

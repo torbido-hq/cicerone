@@ -330,17 +330,8 @@ def _release_io(io: _PikaIo, channel: Any, connection: Any) -> None:
 
 
 def _close_handles(channel: Any, connection: Any) -> None:
-    first: BaseException | None = None
-    for handle, label in ((channel, "channel"), (connection, "connection")):
-        try:
-            _close_quietly(handle, label)
-        except Exception as exc:
-            if first is None:
-                first = exc
-                continue
-            logger.exception("Failed to close RabbitMQ %s", label)
-    if first is not None:
-        raise first
+    _close_quietly(channel, "channel")
+    _close_quietly(connection, "connection")
 
 
 def _close_quietly(handle: Any, label: str) -> None:
@@ -351,5 +342,5 @@ def _close_quietly(handle: Any, label: str) -> None:
         return
     try:
         closer()
-    except RABBITMQ_IO_ERRORS:
+    except Exception:
         logger.exception("Failed to close RabbitMQ %s", label)
