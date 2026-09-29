@@ -558,6 +558,42 @@ def test_recs_from_impressions_keeps_each_variant_source() -> None:
     assert len(frame) == 3
 
 
+def test_recs_from_impressions_blank_variant_uses_latest_snapshot() -> None:
+    job = pd.DataFrame(
+        [
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "rank": 1,
+                "score": 1.0,
+                "source": "old_model",
+                "variant": "control",
+                "generated_at": "2026-08-20T00:00:00Z",
+            },
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "rank": 1,
+                "score": 0.4,
+                "source": "new_model",
+                "variant": "treatment",
+                "generated_at": "2026-08-28T00:00:00Z",
+            },
+        ]
+    )
+    frame = recs_from_impressions(
+        [
+            {"kind": "impression", "user_id": "alice", "item_id": "ipa", "rank": 1, "variant": "control"},
+            {"kind": "impression", "user_id": "alice", "item_id": "ipa", "rank": 2},
+        ],
+        recommendations=job,
+    )
+    blank = frame[frame["variant"].isna()]
+    assert list(blank["source"]) == ["new_model"]
+    stamped = frame.dropna(subset=["variant"])
+    assert list(stamped["source"]) == ["old_model"]
+
+
 def test_recs_from_impressions_matches_equivalent_utc_stamps() -> None:
     frame = recs_from_impressions(
         [
