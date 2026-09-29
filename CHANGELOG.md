@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Database `write_manifest` adds missing columns on an existing
+  `recommendation_runs` table so incremental flushes persist
+  `incremental_events_applied` and `last_incremental_at` after a
+  job-created schema.
 - Redis Streams polling, health, heartbeat, and close paths only recover
   from Redis client errors. Unexpected exceptions now propagate.
 - Kafka consumption only recovers from Kafka client errors while polling,
