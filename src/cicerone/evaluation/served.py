@@ -159,13 +159,21 @@ def _attach_recommendation_fields(
         extra = [column for column in extra if column != VARIANT_COLUMN]
     if not extra:
         return frame
-    lookup = recommendations.loc[:, [*keys, *[column for column in extra if column not in keys]]].copy()
+    columns = [*keys, *[column for column in extra if column not in keys]]
+    if "generated_at" in recommendations.columns:
+        columns.append("generated_at")
+    lookup = recommendations.loc[:, columns].copy()
     lookup[USER_COLUMN] = lookup[USER_COLUMN].astype(str)
     lookup[ITEM_COLUMN] = lookup[ITEM_COLUMN].astype(str)
     if on_variant and VARIANT_COLUMN in lookup.columns:
         blank = lookup[VARIANT_COLUMN].isna() | lookup[VARIANT_COLUMN].astype(str).str.strip().eq("")
         lookup = lookup.loc[~blank]
-    lookup = lookup.drop_duplicates(subset=keys, keep="first")
+    if "generated_at" in lookup.columns:
+        lookup["generated_at"] = pd.to_datetime(lookup["generated_at"], utc=True, errors="coerce")
+        lookup = lookup.sort_values("generated_at", kind="mergesort", na_position="first")
+        lookup = lookup.drop(columns=["generated_at"]).drop_duplicates(subset=keys, keep="last")
+    else:
+        lookup = lookup.drop_duplicates(subset=keys, keep="first")
     frame = frame.merge(lookup, on=keys, how="left", suffixes=("", "_job"))
     for column in extra:
         job_column = f"{column}_job"
