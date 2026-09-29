@@ -726,3 +726,131 @@ def test_db_missing_occurred_at_raises_config_error(tmp_path):
     source.connect()
     with pytest.raises(ConfigError, match="occurred_at"):
         source.poll(1)
+
+
+def test_db_health_sql_error_keeps_local_lag(tmp_path, monkeypatch):
+    from sqlalchemy.exc import OperationalError
+
+    url = _sqlite_url(tmp_path)
+    _seed_events(
+        url,
+        [
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": "2026-08-13T12:00:00Z",
+                "event_id": "e1",
+            }
+        ],
+    )
+    source = DbEventSource({"database_url": url, "initial_watermark": "2026-08-01T00:00:00Z"})
+    source.connect()
+    assert list(source.poll(1))
+
+    def boom(engine, watermark_at, watermark_event_id):
+        raise OperationalError("count", {}, Exception("down"))
+
+    monkeypatch.setattr(source, "_count_after", boom)
+    assert source.health().lag == 1
+
+
+def test_db_health_unexpected_error_propagates(tmp_path, monkeypatch):
+    url = _sqlite_url(tmp_path)
+    _seed_events(
+        url,
+        [
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": "2026-08-13T12:00:00Z",
+                "event_id": "e1",
+            }
+        ],
+    )
+    source = DbEventSource({"database_url": url})
+    source.connect()
+
+    def boom(engine, watermark_at, watermark_event_id):
+        raise RuntimeError("lag bug")
+
+    monkeypatch.setattr(source, "_count_after", boom)
+    with pytest.raises(RuntimeError, match="lag bug"):
+        source.health()
+
+
+def test_db_count_after_sql_error_scans_rows(tmp_path, monkeypatch):
+    from sqlalchemy.exc import OperationalError
+
+    url = _sqlite_url(tmp_path)
+    _seed_events(
+        url,
+        [
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": "2026-08-13T12:00:00Z",
+                "event_id": "e1",
+            }
+        ],
+    )
+    source = DbEventSource({"database_url": url, "initial_watermark": "2026-08-01T00:00:00Z"})
+    source.connect()
+    source.health()
+    monkeypatch.setattr(source._engine.dialect, "name", "postgresql")
+
+    def boom(engine, watermark_at, watermark_event_id):
+        raise OperationalError("count", {}, Exception("down"))
+
+    monkeypatch.setattr(source, "_count_after_sql", boom)
+    monkeypatch.setattr(source, "_count_after_rows", lambda engine, watermark_at, watermark_event_id: 4)
+    assert source._count_after(source._engine, source._watermark_at, source._watermark_event_id) == 4
+
+
+def test_db_count_after_unexpected_sql_error_propagates(tmp_path, monkeypatch):
+    url = _sqlite_url(tmp_path)
+    _seed_events(
+        url,
+        [
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": "2026-08-13T12:00:00Z",
+                "event_id": "e1",
+            }
+        ],
+    )
+    source = DbEventSource({"database_url": url})
+    source.connect()
+    source.health()
+    monkeypatch.setattr(source._engine.dialect, "name", "postgresql")
+
+    def boom(engine, watermark_at, watermark_event_id):
+        raise RuntimeError("count bug")
+
+    monkeypatch.setattr(source, "_count_after_sql", boom)
+    with pytest.raises(RuntimeError, match="count bug"):
+        source._count_after(source._engine, source._watermark_at, source._watermark_event_id)
+
+
+def test_db_unexpected_watermark_error_propagates(tmp_path, monkeypatch):
+    watermark = tmp_path / "wm.json"
+    watermark.write_text('{"occurred_at": "2026-08-01T00:00:00Z", "event_id": "e0"}\n')
+    source = DbEventSource({"database_url": _sqlite_url(tmp_path), "watermark_path": str(watermark)})
+    real = type(watermark).read_text
+
+    def boom(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if self == watermark:
+            raise RuntimeError("watermark bug")
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(type(watermark), "read_text", boom)
+    with pytest.raises(RuntimeError, match="watermark bug"):
+        source.connect()
