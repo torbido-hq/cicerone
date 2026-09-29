@@ -20,6 +20,7 @@ from cicerone.events.base import EventSourceError, EventSourceHealth, Normalized
 from cicerone.events.json_payload import decode_json_object
 from cicerone.events.normalize import EventNormalizeError, normalize_event
 from cicerone.events.rabbitmq_io import (
+    RABBITMQ_IO_ERRORS,
     _close_handles,
     _PikaIo,
     _release_io,
@@ -72,11 +73,15 @@ class RabbitMQEventSource(QueuedEventSource):
 
         io = _PikaIo(self._timeout_seconds)
         io.start()
+        opened = False
         try:
             connection, channel = io.submit(partial(self._open, pika, io))
-        except Exception as exc:
-            io.abandon(None, io._connection)
+            opened = True
+        except RABBITMQ_IO_ERRORS as exc:
             raise EventSourceError(f"events.options.amqp_url is unreachable: {exc}") from exc
+        finally:
+            if not opened:
+                io.abandon(None, io._connection)
 
         with self._lock:
             previous_io = self._io
@@ -133,7 +138,7 @@ class RabbitMQEventSource(QueuedEventSource):
                 break
             try:
                 method, _properties, body = io.submit(partial(self._basic_get, io))
-            except Exception:
+            except RABBITMQ_IO_ERRORS:
                 logger.exception("RabbitMQ basic_get failed")
                 io._mark_failed()
                 break
@@ -244,11 +249,7 @@ class RabbitMQEventSource(QueuedEventSource):
         io = self._io
         if io is None:
             return
-        try:
-            io.submit(partial(self._pump_connection, io))
-        except Exception:
-            logger.exception("RabbitMQ heartbeat process_data_events failed")
-            raise
+        io.submit(partial(self._pump_connection, io))
 
     def health(self) -> EventSourceHealth:
         with self._lock:
@@ -263,7 +264,7 @@ class RabbitMQEventSource(QueuedEventSource):
         try:
             declared = io.submit(partial(self._passive_declare, io))
             ready = int(declared.method.message_count)
-        except Exception:
+        except RABBITMQ_IO_ERRORS:
             logger.exception("RabbitMQ queue_declare (passive) failed")
             if io.failed or io.closing or not self._owns_io(io):
                 return EventSourceHealth(connected=False, lag=None, last_event_at=last_event_at)
@@ -294,17 +295,19 @@ class RabbitMQEventSource(QueuedEventSource):
             apply_amqp_timeouts(pika.URLParameters(self._amqp_url), self._timeout_seconds)
         )
         channel = None
+        opened = False
         try:
             io._bind_handles(connection=connection)
             channel = connection.channel()
             io._bind_handles(channel=channel)
             channel.basic_qos(prefetch_count=self._prefetch)
             channel.queue_declare(queue=self._queue, durable=True)
-        except Exception:
-            io._channel = None
-            io._connection = None
-            _close_handles(channel, connection)
-            raise
+            opened = True
+        finally:
+            if not opened:
+                io._channel = None
+                io._connection = None
+                _close_handles(channel, connection)
         return connection, channel
 
     def _pump_connection(self, io: _PikaIo) -> None:
@@ -365,5 +368,5 @@ class RabbitMQEventSource(QueuedEventSource):
     def _ack_discard(self, io: _PikaIo, tag: int) -> None:
         try:
             io.submit(partial(self._basic_ack, io, tag))
-        except Exception:
+        except RABBITMQ_IO_ERRORS:
             logger.exception("Failed to ack discarded RabbitMQ message")
