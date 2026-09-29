@@ -15,6 +15,7 @@ from cicerone.events.s3_parse import (
     _Batch,
     _s3_records_from_sqs_body,
 )
+from cicerone.io.blob import S3_READ_ERRORS
 
 logger = logging.getLogger("cicerone.events.s3")
 
@@ -72,7 +73,7 @@ class S3SqsPoll:
                 receipt = message["ReceiptHandle"]
                 try:
                     pairs = _s3_records_from_sqs_body(message["Body"])
-                except Exception:
+                except (ValueError, TypeError):
                     logger.exception("Invalid S3 notification on SQS; deleting poison message")
                     sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt)
                     made_progress = True
@@ -104,7 +105,7 @@ class S3SqsPoll:
                         )
                         poison = True
                         break
-                    except Exception:
+                    except S3_READ_ERRORS:
                         logger.exception(
                             "Failed to load s3://%s/%s from SQS notification; leaving message for retry",
                             bucket,
@@ -149,7 +150,7 @@ class S3SqsPoll:
                     ReceiptHandle=receipt,
                     VisibilityTimeout=timeout_seconds,
                 )
-            except Exception:
+            except S3_READ_ERRORS:
                 logger.exception("Failed to extend SQS visibility")
 
     def _adopt_sqs_receipt(self, receipt: str, event_ids: set[str]) -> None:
