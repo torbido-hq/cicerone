@@ -19,6 +19,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   error. An unexpected idle-pump error marks the worker failed and
   closes both connection handles before that thread stops. A failed
   handle close is logged and does not skip the other handle.
+- S3 event consumption only retries or skips objects on S3 client
+  errors, and only treats corrupt markers and invalid SQS bodies as
+  ignorable. Unexpected exceptions now propagate.
+- Malformed nested S3 notification fields are ignored like other invalid
+  SQS bodies, instead of aborting the poll.
 
 ## [0.8.4] - 2026-09-25
 
