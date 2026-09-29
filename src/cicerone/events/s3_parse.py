@@ -162,8 +162,12 @@ def _s3_records_from_sqs_body(body: str) -> list[tuple[str, str]]:
         s3 = record.get("s3") or {}
         if not isinstance(s3, dict):
             continue
-        bucket = (s3.get("bucket") or {}).get("name")
-        key = (s3.get("object") or {}).get("key")
+        bucket_info = s3.get("bucket") or {}
+        object_info = s3.get("object") or {}
+        if not isinstance(bucket_info, dict) or not isinstance(object_info, dict):
+            continue
+        bucket = bucket_info.get("name")
+        key = object_info.get("key")
         if bucket and key:
             out.append((str(bucket), unquote_plus(str(key))))
     return out

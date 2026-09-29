@@ -519,6 +519,14 @@ def test_events_from_body_validation():
                     {"eventName": "ObjectCreated:Put", "s3": "bad"},
                     {
                         "eventName": "ObjectCreated:Put",
+                        "s3": {"bucket": "events-bucket", "object": {"key": "nested-bad"}},
+                    },
+                    {
+                        "eventName": "ObjectCreated:Put",
+                        "s3": {"bucket": {"name": "b"}, "object": "not-an-object"},
+                    },
+                    {
+                        "eventName": "ObjectCreated:Put",
                         "s3": {"bucket": {"name": "b"}, "object": {"key": "a%2Fb.json"}},
                     },
                 ]
@@ -604,6 +612,40 @@ def test_s3_sqs_poison_and_missing_object_and_health():
     assert [event.event_id for event in events] == ["ok-sqs"]
     assert source.health().lag is not None and source.health().lag >= 1
     source.ack(["unknown-id", events[0].event_id])
+
+
+@mock_aws
+def test_s3_sqs_malformed_nested_notification_is_deleted():
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-nested-poison")["QueueUrl"]
+    sqs.send_message(
+        QueueUrl=queue_url,
+        MessageBody=json.dumps(
+            {
+                "Records": [
+                    {
+                        "eventName": "ObjectCreated:Put",
+                        "s3": {"bucket": "events-bucket", "object": {"key": "nested-bad"}},
+                    }
+                ]
+            }
+        ),
+    )
+    _put_event(s3, "ok.json", event_payload(event_id="ok-nested"))
+    sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification("ok.json"))
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+    events = list(source.poll(10))
+    assert [event.event_id for event in events] == ["ok-nested"]
+    source.ack([events[0].event_id])
+    attrs = sqs.get_queue_attributes(
+        QueueUrl=queue_url,
+        AttributeNames=["ApproximateNumberOfMessages", "ApproximateNumberOfMessagesNotVisible"],
+    )["Attributes"]
+    held = int(attrs["ApproximateNumberOfMessages"]) + int(attrs["ApproximateNumberOfMessagesNotVisible"])
+    assert held == 0
 
 
 @mock_aws
