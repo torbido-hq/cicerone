@@ -841,9 +841,20 @@ def test_db_count_after_unexpected_sql_error_propagates(tmp_path, monkeypatch):
 
 
 def test_db_unexpected_watermark_error_propagates(tmp_path, monkeypatch):
+    from cicerone.io.engines import release_engine
+
     watermark = tmp_path / "wm.json"
     watermark.write_text('{"occurred_at": "2026-08-01T00:00:00Z", "event_id": "e0"}\n')
-    source = DbEventSource({"database_url": _sqlite_url(tmp_path), "watermark_path": str(watermark)})
+    url = _sqlite_url(tmp_path)
+    source = DbEventSource({"database_url": url, "watermark_path": str(watermark)})
+    released: list[str] = []
+    real_release = release_engine
+
+    def spy(database_url: str) -> None:
+        released.append(database_url)
+        real_release(database_url)
+
+    monkeypatch.setattr("cicerone.events.db.release_engine", spy)
     real = type(watermark).read_text
 
     def boom(self, *args, **kwargs):  # type: ignore[no-untyped-def]
@@ -854,3 +865,36 @@ def test_db_unexpected_watermark_error_propagates(tmp_path, monkeypatch):
     monkeypatch.setattr(type(watermark), "read_text", boom)
     with pytest.raises(RuntimeError, match="watermark bug"):
         source.connect()
+    assert source._engine is None
+    assert source._connected is False
+    assert released == [url]
+    source.close()
+    assert released == [url]
+
+
+def test_db_connect_keeps_existing_engine_when_watermark_fails(tmp_path, monkeypatch):
+    from cicerone.io.engines import release_engine
+
+    url = _sqlite_url(tmp_path)
+    source = DbEventSource({"database_url": url})
+    source.connect()
+    engine = source._engine
+    released: list[str] = []
+    real_release = release_engine
+
+    def spy(database_url: str) -> None:
+        released.append(database_url)
+        real_release(database_url)
+
+    monkeypatch.setattr("cicerone.events.db.release_engine", spy)
+
+    def boom() -> None:
+        raise RuntimeError("watermark bug")
+
+    monkeypatch.setattr(source, "_load_watermark_unlocked", boom)
+    with pytest.raises(RuntimeError, match="watermark bug"):
+        source.connect()
+    assert source._engine is engine
+    assert released == []
+    source.close()
+    assert released == [url]
