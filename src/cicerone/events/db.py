@@ -92,11 +92,22 @@ class DbEventSource(EventSource):
         self._has_event_id_column: bool | None = None
 
     def connect(self) -> None:
-        with self._lock:
-            if self._engine is None:
-                self._engine = engine_for(self._database_url)
-            self._load_watermark_unlocked()
-            self._connected = True
+        created = False
+        connected = False
+        try:
+            with self._lock:
+                if self._engine is None:
+                    self._engine = engine_for(self._database_url)
+                    created = True
+                self._load_watermark_unlocked()
+                self._connected = True
+                connected = True
+        finally:
+            if created and not connected:
+                with self._lock:
+                    self._engine = None
+                    self._connected = False
+                release_engine(self._database_url)
 
     def close(self) -> None:
         with self._lock:
