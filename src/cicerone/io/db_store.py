@@ -7,6 +7,7 @@ deploy-time config only.
 NOTE: upgrading an existing recommendations table for optional ``reasons``
 needs ``ALTER TABLE … ADD COLUMN reasons TEXT``; pandas to_sql(append) will
 not add the column. Experiments similarly need ``ALTER TABLE … ADD COLUMN variant TEXT``.
+``write_manifest`` adds missing columns before append.
 """
 
 from __future__ import annotations
@@ -84,6 +85,29 @@ DEFAULT_DB_TABLES = frozenset(
         DEFAULT_HISTORY_TABLE,
     }
 )
+
+
+def _manifest_column_type(value: Any) -> str:
+    if isinstance(value, bool):
+        return "BOOLEAN"
+    if isinstance(value, int):
+        return "BIGINT"
+    if isinstance(value, float):
+        return "FLOAT"
+    return "TEXT"
+
+
+def _ensure_manifest_columns(conn, table: str, manifest: dict) -> None:
+    named = [(sql_identifier(key, option="manifest_column"), value) for key, value in manifest.items()]
+    inspector = inspect(conn)
+    if not inspector.has_table(table):
+        return
+    existing = {column["name"] for column in inspector.get_columns(table)}
+    for column, value in named:
+        if column in existing:
+            continue
+        conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {_manifest_column_type(value)}'))
+        existing.add(column)
 
 
 def _db_manifest_newer(conn, table: str, started_at: str) -> bool:
@@ -385,6 +409,8 @@ class DatabaseOutputSink:
         with self.recommendations_write(), self._engine.begin() as conn:
             if skip_if_newer_than is not None and _db_manifest_newer(conn, table, skip_if_newer_than):
                 return False
+            self._ensure_fence()
+            _ensure_manifest_columns(conn, table, manifest)
             self._ensure_fence()
             pd.DataFrame([manifest]).to_sql(table, conn, if_exists="append", index=False)
             self._ensure_fence()
