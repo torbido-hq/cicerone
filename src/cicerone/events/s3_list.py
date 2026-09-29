@@ -13,6 +13,7 @@ from typing import Any
 
 from cicerone.events.base import EventSourceError, NormalizedEvent
 from cicerone.events.s3_parse import _LOAD_FAILURE_SKIP_AFTER, _Batch
+from cicerone.io.blob import S3_READ_ERRORS
 
 logger = logging.getLogger("cicerone.events.s3")
 
@@ -69,7 +70,7 @@ class S3ListPoll:
                 self._register_batch([], object_key=key, object_etag=etag)
                 self._load_failures.pop(key, None)
                 continue
-            except Exception:
+            except S3_READ_ERRORS:
                 failures = self._load_failures.get(key, 0) + 1
                 self._load_failures[key] = failures
                 logger.exception(
@@ -110,7 +111,7 @@ class S3ListPoll:
             key = raw.get("key")
             if key:
                 self._marker_key = str(key)
-        except Exception:
+        except (OSError, ValueError):
             logger.exception(
                 "Ignoring corrupt marker file %s; keeping marker %r",
                 self._marker_path,
