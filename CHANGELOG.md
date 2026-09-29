@@ -19,6 +19,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   error. An unexpected idle-pump error marks the worker failed and
   closes both connection handles before that thread stops. A failed
   handle close is logged and does not skip the other handle.
+- DB event consumption only recovers from SQL errors while estimating
+  lag, and only treats corrupt watermark files as ignorable. Unexpected
+  exceptions now propagate.
 
 ## [0.8.4] - 2026-09-25
 

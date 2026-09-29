@@ -31,6 +31,7 @@ from cicerone.events.db_identity import (
     _row_to_event,
     _stable_event_id,  # noqa: F401
 )
+from cicerone.io.db_errors import SQL_READ_ERRORS
 from cicerone.io.db_store import DEFAULT_EVENTS_TABLE
 from cicerone.io.engines import engine_for, release_engine
 from cicerone.io.options import readonly_select, require_option, sql_identifier
@@ -180,7 +181,7 @@ class DbEventSource(EventSource):
         if engine is not None:
             try:
                 lag = self._count_after(engine, watermark_at, watermark_event_id)
-            except Exception:
+            except SQL_READ_ERRORS:
                 logger.exception("Failed to estimate DB event lag")
         return EventSourceHealth(
             connected=connected,
@@ -286,7 +287,7 @@ class DbEventSource(EventSource):
         if has_event_id and engine.dialect.name != "sqlite":
             try:
                 return self._count_after_sql(engine, watermark_at, watermark_event_id)
-            except Exception:
+            except SQL_READ_ERRORS:
                 logger.debug("SQL lag COUNT unavailable; scanning event rows", exc_info=True)
         return self._count_after_rows(engine, watermark_at, watermark_event_id)
 
@@ -337,7 +338,7 @@ class DbEventSource(EventSource):
             if occurred_at:
                 watermark_at = _db_occurred_at(occurred_at)
             watermark_event_id = str(raw.get("event_id") or "")
-        except Exception:
+        except (OSError, ValueError):
             logger.exception(
                 "Ignoring corrupt watermark file %s; keeping watermark %s",
                 self._watermark_path,
