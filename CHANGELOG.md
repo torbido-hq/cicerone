@@ -23,6 +23,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   lag, and only treats corrupt watermark files as ignorable. Unexpected
   exceptions now propagate. A failed connect releases the engine it
   just opened.
+- In-flight event heartbeats only treat source errors as a failed beat.
+  Unexpected exceptions now propagate after the beat is recorded, so
+  the apply is not acknowledged.
 
 ## [0.8.4] - 2026-09-25
 
