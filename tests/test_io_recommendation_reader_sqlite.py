@@ -85,6 +85,29 @@ def test_sqlite_db_reader_get_recommendations_and_items(tmp_path):
     assert list(items["item_id"]) == ["i1"]
 
 
+def test_sqlite_db_reader_projects_configured_item_columns(tmp_path):
+    url = _sqlite_url(tmp_path)
+    sink = DatabaseOutputSink({"database_url": url})
+    sink.write_items_snapshot(
+        pd.DataFrame(
+            [
+                {
+                    "item_id": "i1",
+                    "category": "beer",
+                    "published": True,
+                    "in_stock": True,
+                    "note": "keep off the cache",
+                }
+            ]
+        )
+    )
+    reader = DbRecommendationReader({"database_url": url})
+    reader.configure_item_filters(category_column="category", availability_filters=["published"])
+    items = reader.get_items()
+    assert items is not None
+    assert set(items.columns) == {"item_id", "category", "published"}
+
+
 def test_sqlite_db_reader_keeps_items_on_pandas_database_error(tmp_path, monkeypatch):
     from pandas.errors import DatabaseError
 

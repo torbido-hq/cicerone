@@ -26,6 +26,38 @@ _FALLBACK_SOURCES = frozenset({POPULAR_SOURCE, LATEST_SOURCE})
 _FALLBACK_SOURCE_PRIORITY = {POPULAR_SOURCE: 0, LATEST_SOURCE: 1}
 
 
+def item_snapshot_columns(
+    *,
+    category_column: str | None,
+    availability_filters: Sequence[str],
+) -> list[str] | None:
+    if not category_column and not availability_filters:
+        return None
+    columns = [ITEM_COLUMN]
+    if category_column:
+        columns.append(category_column)
+    columns.extend(availability_filters)
+    unique: list[str] = []
+    seen: set[str] = set()
+    for name in columns:
+        if name not in seen:
+            seen.add(name)
+            unique.append(name)
+    return unique
+
+
+def narrow_items_frame(
+    items: pd.DataFrame | None,
+    columns: Sequence[str] | None,
+) -> pd.DataFrame | None:
+    if items is None or columns is None or items.empty:
+        return items
+    keep = [name for name in columns if name in items.columns]
+    if not keep:
+        return items
+    return items.loc[:, keep]
+
+
 def normalize_items_snapshot(
     items: pd.DataFrame | None,
     *,
