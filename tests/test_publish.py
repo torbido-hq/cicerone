@@ -42,6 +42,7 @@ def test_user_recommendation_messages_one_per_user():
     assert first["message_id"] == user_recommendation_messages(_recs_frame())[0][2]
     assert len(first["recommendations"]) == 2
     assert first["recommendations"][0]["item_id"] == "i1"
+    assert b"message_id" not in repr(vars(messages)).encode()
 
 
 def test_user_recommendation_messages_empty():
@@ -187,7 +188,7 @@ def test_user_recommendation_messages_rejects_nan():
         [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": float("nan"), "source": "popular"}]
     )
     with pytest.raises(ValueError, match="not JSON compliant"):
-        user_recommendation_messages(frame)
+        list(user_recommendation_messages(frame))
 
 
 def test_user_recommendation_messages_rejects_numpy_nan():
@@ -199,7 +200,7 @@ def test_user_recommendation_messages_rejects_numpy_nan():
     frame["score"] = frame["score"].astype(object)
     frame.at[0, "score"] = np.float64("nan")
     with pytest.raises(ValueError, match="not JSON compliant"):
-        user_recommendation_messages(frame)
+        list(user_recommendation_messages(frame))
 
 
 def test_user_recommendation_messages_encodes_optional_missing_as_null():
