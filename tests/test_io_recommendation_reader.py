@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import threading
 
 import boto3
 import pandas as pd
@@ -13,6 +14,7 @@ from cicerone.io.recommendation_reader import (
     normalize_items_snapshot,
     select_cold_start_fallback,
 )
+from cicerone.io.recommendation_reader_common import narrow_items_frame
 
 
 def _write_recommendations(path, rows) -> None:
@@ -148,6 +150,50 @@ def test_dataset_reader_configure_item_filters_and_refresh(tmp_path):
     assert refreshed is not None
     assert list(refreshed["item_id"]) == ["9"]
     assert list(refreshed["published"]) == [False]
+
+
+def test_narrow_items_frame_projects_an_empty_frame() -> None:
+    items = pd.DataFrame(columns=["item_id", "category", "extra"])
+    narrowed = narrow_items_frame(items, ["item_id", "category"])
+    assert narrowed is not None
+    assert list(narrowed.columns) == ["item_id", "category"]
+    assert narrowed.empty
+    assert list(narrowed.index) == []
+
+
+def test_configure_discards_snapshot_loaded_under_a_replaced_filter(tmp_path) -> None:
+    _write_recommendations(
+        tmp_path,
+        [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"}],
+    )
+    pd.DataFrame([{"item_id": "1", "category": "beer", "genre": "lager", "published": 1}]).to_parquet(
+        tmp_path / "items_snapshot.parquet", index=False
+    )
+    reader = DatasetRecommendationReader({"storage_backend": "local", "path": str(tmp_path)})
+    started = threading.Event()
+    release = threading.Event()
+    original = reader._read_items_snapshot
+
+    def _gated(*, category_column, availability_filters):
+        if category_column == "category":
+            started.set()
+            assert release.wait(timeout=2)
+        return original(category_column=category_column, availability_filters=availability_filters)
+
+    reader._read_items_snapshot = _gated  # type: ignore[method-assign]
+    worker = threading.Thread(
+        target=reader.configure_item_filters,
+        kwargs={"category_column": "category", "availability_filters": ["published"]},
+    )
+    worker.start()
+    assert started.wait(timeout=2)
+    reader.configure_item_filters(category_column="genre", availability_filters=[])
+    release.set()
+    worker.join(timeout=2)
+    assert not worker.is_alive()
+    items = reader.get_items()
+    assert items is not None
+    assert list(items.columns) == ["item_id", "genre"]
 
 
 def test_dataset_reader_returns_top_k_sorted_by_rank(tmp_path):
