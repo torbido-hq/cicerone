@@ -1143,6 +1143,44 @@ def test_poll_gets_a_batch_on_one_submit_and_acks_once(monkeypatch):
     source.close()
 
 
+def test_ack_leaves_an_unrequested_lower_tag(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    for event_id in ("e1", "e2", "e3"):
+        broker.enqueue("cicerone.events", event_payload(event_id=event_id, item_id=event_id))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    events = list(source.poll(3))
+    by_id = {event.event_id: event for event in events}
+    source.ack([by_id["e2"].event_id, by_id["e3"].event_id])
+    channel = broker.connection.channel_obj
+    assert channel.ack_calls == [(2, False), (3, False)]
+    assert 1 in channel._unacked
+    source.close()
+
+
+def test_ack_skips_batch_when_outstanding_set_grows(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    for event_id in ("e1", "e2", "e3"):
+        broker.enqueue("cicerone.events", event_payload(event_id=event_id, item_id=event_id))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    events = list(source.poll(3))
+    io = source._io
+    assert io is not None
+    original_submit = io.submit
+
+    def _submit(fn, **kwargs):
+        source._outstanding_tags.add(0)
+        return original_submit(fn, **kwargs)
+
+    io.submit = _submit  # type: ignore[method-assign]
+    source.ack([event.event_id for event in events])
+    channel = broker.connection.channel_obj
+    assert [flag for _tag, flag in channel.ack_calls] == [False, False, False]
+    assert channel.acked == [1, 2, 3]
+    source.close()
+
+
 def test_nack_allows_repoll(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     broker.enqueue("cicerone.events", event_payload(event_id="e1"))
