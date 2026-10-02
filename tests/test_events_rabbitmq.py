@@ -1117,6 +1117,47 @@ def test_poll_ack_and_health(monkeypatch):
     assert channel.acked == [1, 2]
 
 
+def test_poll_gets_a_batch_on_one_submit(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    for event_id in ("e1", "e2", "e3"):
+        broker.enqueue("cicerone.events", event_payload(event_id=event_id, item_id=event_id))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    io = source._io
+    assert io is not None
+    submits = {"n": 0}
+    original_submit = io.submit
+
+    def _submit(fn, **kwargs):
+        submits["n"] += 1
+        return original_submit(fn, **kwargs)
+
+    io.submit = _submit  # type: ignore[method-assign]
+    events = list(source.poll(3))
+    assert [event.event_id for event in events] == ["e1", "e2", "e3"]
+    assert submits["n"] == 1
+    source.ack([event.event_id for event in events])
+    channel = broker.connection.channel_obj
+    assert channel.ack_calls == [(1, False), (2, False), (3, False)]
+    assert channel.acked == [1, 2, 3]
+    source.close()
+
+
+def test_ack_leaves_an_unrequested_lower_tag(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    for event_id in ("e1", "e2", "e3"):
+        broker.enqueue("cicerone.events", event_payload(event_id=event_id, item_id=event_id))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    events = list(source.poll(3))
+    by_id = {event.event_id: event for event in events}
+    source.ack([by_id["e2"].event_id, by_id["e3"].event_id])
+    channel = broker.connection.channel_obj
+    assert channel.ack_calls == [(2, False), (3, False)]
+    assert 1 in channel._unacked
+    source.close()
+
+
 def test_nack_allows_repoll(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     broker.enqueue("cicerone.events", event_payload(event_id="e1"))
@@ -1171,7 +1212,7 @@ def test_nack_rejects_when_io_failed(monkeypatch):
     source.close()
 
 
-def test_ack_forgets_succeeded_tags_when_later_ack_fails(monkeypatch):
+def test_ack_keeps_later_tag_when_an_earlier_ack_fails(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     broker.enqueue("cicerone.events", event_payload(event_id="e1"))
     broker.enqueue("cicerone.events", event_payload(event_id="e2"))
@@ -1182,16 +1223,16 @@ def test_ack_forgets_succeeded_tags_when_later_ack_fails(monkeypatch):
     original = broker.connection.channel_obj.basic_ack
 
     def _ack(*, delivery_tag: int) -> None:
-        if delivery_tag == 2:
-            raise RuntimeError("ack 2")
+        if delivery_tag == 1:
+            raise RuntimeError("ack 1")
         original(delivery_tag=delivery_tag)
 
     broker.connection.channel_obj.basic_ack = _ack  # type: ignore[method-assign]
-    with pytest.raises(RuntimeError, match="ack 2"):
+    with pytest.raises(RuntimeError, match="ack 1"):
         source.ack([event.event_id for event in events])
     source.nack(events)
     again = list(source.poll(10))
-    assert [event.event_id for event in again] == ["e2"]
+    assert [event.event_id for event in again] == ["e1", "e2"]
     source.close()
 
 
@@ -1445,7 +1486,7 @@ def test_health_disconnected_when_probe_times_out(monkeypatch):
     source.close()
 
 
-def test_basic_get_failure_returns_partial(monkeypatch):
+def test_basic_get_failure_returns_partial(monkeypatch, caplog):
     broker = install_fake_rabbitmq(monkeypatch)
     broker.enqueue("cicerone.events", event_payload(event_id="e1"))
     source = RabbitMQEventSource(_options())
@@ -1457,8 +1498,12 @@ def test_basic_get_failure_returns_partial(monkeypatch):
         raise AMQPError("get fail")
 
     broker.connection.channel_obj.basic_get = _boom  # type: ignore[method-assign]
-    again = list(source.poll(10))
+    with caplog.at_level("ERROR", logger="cicerone.events.rabbitmq"):
+        again = list(source.poll(10))
     assert [event.event_id for event in again] == ["e1"]
+    logged = [record.exc_info for record in caplog.records if record.exc_info]
+    assert logged and logged[0][0] is AMQPError
+    assert "get fail" in str(logged[0][1])
     assert source._io is not None and source._io.failed is True
     assert source.health().connected is False
     source.close()
