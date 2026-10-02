@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.8.5] - 2026-09-28
 
+### Changed
+
+- Quality live metrics load recommendations for users in the lookback window.
+
 ### Fixed
 
 - Redis Streams polling, health, heartbeat, and close paths only recover
