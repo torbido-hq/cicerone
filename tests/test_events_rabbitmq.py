@@ -1128,9 +1128,9 @@ def test_poll_gets_a_batch_on_one_submit_and_acks_once(monkeypatch):
     submits = {"n": 0}
     original_submit = io.submit
 
-    def _submit(fn):
+    def _submit(fn, **kwargs):
         submits["n"] += 1
-        return original_submit(fn)
+        return original_submit(fn, **kwargs)
 
     io.submit = _submit  # type: ignore[method-assign]
     events = list(source.poll(3))
