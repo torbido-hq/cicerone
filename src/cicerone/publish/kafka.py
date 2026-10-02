@@ -88,6 +88,7 @@ class KafkaPublisher:
                 errors.append(str(err))
 
         messages = user_recommendation_messages(df, user_ids=user_ids)
+        produced = False
         try:
             for user_id, body, _message_id in messages:
                 producer.produce(
@@ -96,8 +97,14 @@ class KafkaPublisher:
                     key=user_id.encode("utf-8"),
                     on_delivery=on_delivery,
                 )
+                produced = True
             remaining = producer.flush(self._timeout_seconds)
         except _kafka_publish_errors() as exc:
+            raise PublishError(f"Kafka publish failed: {exc}") from exc
+        except Exception as exc:
+            if not produced:
+                raise
+            # The broker may already have these records. Callers must not retry them.
             raise PublishError(f"Kafka publish failed: {exc}") from exc
         if remaining:
             raise PublishError(f"Kafka publish timed out with {remaining} message(s) in queue")
@@ -112,6 +119,10 @@ class KafkaPublisher:
         try:
             producer.flush(self._timeout_seconds)
         except _kafka_publish_errors() as exc:
+            raise PublishError(f"Kafka publisher flush on close failed: {exc}") from exc
+        except Exception as exc:
+            if isinstance(exc, RuntimeError) and not isinstance(exc, PublishError):
+                raise
             raise PublishError(f"Kafka publisher flush on close failed: {exc}") from exc
 
     def _require(self) -> Any:
