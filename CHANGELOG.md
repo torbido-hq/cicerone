@@ -23,6 +23,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   lag, and only treats corrupt watermark files as ignorable. Unexpected
   exceptions now propagate. A failed connect releases the engine it
   just opened.
+- Quality and Experiments error banners use an alert live region.
 
 ## [0.8.4] - 2026-09-25
 
