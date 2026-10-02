@@ -10,8 +10,11 @@ from contextlib import suppress
 from typing import Any
 
 from cicerone.events.base import EventSourceError
+from cicerone.events.errors import AMQPError
 
 logger = logging.getLogger(__name__)
+
+RABBITMQ_IO_ERRORS: tuple[type[BaseException], ...] = (AMQPError, OSError, TimeoutError)
 
 _IO_STOP = object()
 _IO_IDLE_SECONDS = 0.5
@@ -231,6 +234,9 @@ class _PikaIo:
                     self._busy += 1
                 try:
                     self._pump()
+                except Exception:
+                    self._mark_failed()
+                    logger.exception("RabbitMQ I/O thread process_data_events failed")
                 finally:
                     if not self._failed:
                         self._clear_busy()
@@ -260,11 +266,13 @@ class _PikaIo:
             try:
                 result = job.fn()
             except Exception as exc:
+                # The caller is blocked on this reply.
                 payload: tuple[str, Any] = ("err", exc)
             else:
-                payload = ("ok", result)
-            if self._failed:
-                payload = ("err", EventSourceError("RabbitMQ I/O worker abandoned"))
+                if self._failed:
+                    payload = ("err", EventSourceError("RabbitMQ I/O worker abandoned"))
+                else:
+                    payload = ("ok", result)
             with suppress(queue.Full):
                 job.reply.put_nowait(payload)
             if self._failed:
@@ -277,7 +285,7 @@ class _PikaIo:
             return
         try:
             connection.process_data_events(time_limit=0)
-        except Exception:
+        except RABBITMQ_IO_ERRORS:
             self._mark_failed()
             logger.exception("RabbitMQ I/O thread process_data_events failed")
 
@@ -303,6 +311,7 @@ def _release_io(io: _PikaIo, channel: Any, connection: Any) -> None:
         if not io._thread.is_alive():
             _close_handles(channel, connection)
         return
+    closed = False
     try:
 
         def _shutdown() -> None:
@@ -310,11 +319,14 @@ def _release_io(io: _PikaIo, channel: Any, connection: Any) -> None:
             _close_handles(channel, connection)
 
         io.submit(_shutdown, allow_closing=True)
-    except Exception:
+        closed = True
+    except RABBITMQ_IO_ERRORS:
         logger.exception("Failed to close RabbitMQ connection on I/O thread")
-        io.abandon(channel, connection)
-        return
-    io.stop()
+    finally:
+        if not closed:
+            io.abandon(channel, connection)
+    if closed:
+        io.stop()
 
 
 def _close_handles(channel: Any, connection: Any) -> None:

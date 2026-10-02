@@ -42,6 +42,7 @@ from cicerone.io.recommendation_schema import USER_COLUMN, VARIANT_COLUMN, filte
 from cicerone.job_eval import OPTIONAL_EVAL_ERRORS as _OPTIONAL_EVAL_ERRORS
 from cicerone.job_eval import PUBLISH_ERRORS as _PUBLISH_ERRORS
 from cicerone.job_eval import SINK_WRITE_ERRORS as _SINK_WRITE_ERRORS
+from cicerone.job_eval import job_track_since as _job_track_since
 from cicerone.job_eval import log_caught as _log_caught
 from cicerone.job_eval import persist_track_outputs as _persist_track_outputs
 from cicerone.job_eval import read_input as _read_input
@@ -151,7 +152,10 @@ def _load_shared_eval_inputs(
     experiment_id = None if settings.track.enabled else settings.experiment.id
     raw_track, recs = _try_load_pair(
         "read track rows",
-        lambda: TrackStore(settings.output).read_rows(experiment_id=experiment_id),
+        lambda: TrackStore(settings.output).read_rows(
+            experiment_id=experiment_id,
+            since=_job_track_since(settings),
+        ),
         None,
         "load recommendations for eval",
         lambda: load_recommendations_frame(settings.output),
@@ -179,7 +183,10 @@ def _select_thompson_recipes(
     if preloaded_track is None:
         raw_track = _try_load(
             "read track rows",
-            lambda: TrackStore(settings.output).read_rows(experiment_id=experiment.id),
+            lambda: TrackStore(settings.output).read_rows(
+                experiment_id=experiment.id,
+                since=_job_track_since(settings),
+            ),
             failed,
         )
     else:

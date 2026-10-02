@@ -4,6 +4,29 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.5] - 2026-09-28
+
+### Fixed
+
+- Redis Streams polling, health, heartbeat, and close paths only recover
+  from Redis client errors. Unexpected exceptions now propagate.
+- Kafka consumption only recovers from Kafka client errors while polling,
+  discarding invalid messages, and closing the consumer. Unexpected
+  exceptions now propagate.
+- RabbitMQ consumption only recovers from AMQP, socket, and timeout
+  errors while connecting, polling, probing queue depth, and closing.
+  Unexpected exceptions now propagate, including a heartbeat pump
+  error. An unexpected idle-pump error marks the worker failed and
+  closes both connection handles before that thread stops. A failed
+  handle close is logged and does not skip the other handle.
+- DB event consumption only recovers from SQL errors while estimating
+  lag, and only treats corrupt watermark files as ignorable. Unexpected
+  exceptions now propagate. A failed connect releases the engine it
+  just opened.
+- In-flight event heartbeats only treat source errors as a failed beat.
+  Unexpected exceptions now propagate after the beat is recorded, so
+  the apply is not acknowledged.
+
 ## [0.8.4] - 2026-09-25
 
 ### Fixed
