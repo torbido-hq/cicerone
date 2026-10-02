@@ -1094,7 +1094,7 @@ def test_event_worker_flush_restores_rejected_nack(tmp_path, feature_config: Fea
     class _RejectNack(WebhookEventSource):
         def heartbeat(self, events):  # type: ignore[no-untyped-def]
             del events
-            raise RuntimeError("heartbeat failed")
+            raise EventSourceError("heartbeat failed")
 
         def nack(self, events):  # type: ignore[no-untyped-def,override]
             return list(events)

@@ -521,6 +521,79 @@ def test_recs_from_impressions_drops_undated_when_job_stamped() -> None:
     assert list(frame["user_id"]) == ["bob"]
 
 
+def test_recs_from_impressions_keeps_each_variant_source() -> None:
+    job = pd.DataFrame(
+        [
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "rank": 1,
+                "score": 1.0,
+                "source": "control_model",
+                "variant": "control",
+            },
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "rank": 1,
+                "score": 0.4,
+                "source": "treatment_model",
+                "variant": "treatment",
+            },
+        ]
+    )
+    frame = recs_from_impressions(
+        [
+            {"kind": "impression", "user_id": "alice", "item_id": "ipa", "rank": 1, "variant": "control"},
+            {"kind": "impression", "user_id": "alice", "item_id": "ipa", "rank": 1, "variant": "treatment"},
+            {"kind": "impression", "user_id": "alice", "item_id": "ipa", "rank": 2},
+        ],
+        recommendations=job,
+    )
+    stamped = frame.dropna(subset=["variant"]).set_index("variant")
+    assert stamped.loc["control", "source"] == "control_model"
+    assert stamped.loc["treatment", "source"] == "treatment_model"
+    blank = frame[frame["variant"].isna()]
+    assert list(blank["source"]) == ["control_model"]
+    assert len(frame) == 3
+
+
+def test_recs_from_impressions_blank_variant_uses_latest_snapshot() -> None:
+    job = pd.DataFrame(
+        [
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "rank": 1,
+                "score": 1.0,
+                "source": "old_model",
+                "variant": "control",
+                "generated_at": "2026-08-20T00:00:00Z",
+            },
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "rank": 1,
+                "score": 0.4,
+                "source": "new_model",
+                "variant": "treatment",
+                "generated_at": "2026-08-28T00:00:00Z",
+            },
+        ]
+    )
+    frame = recs_from_impressions(
+        [
+            {"kind": "impression", "user_id": "alice", "item_id": "ipa", "rank": 1, "variant": "control"},
+            {"kind": "impression", "user_id": "alice", "item_id": "ipa", "rank": 2},
+        ],
+        recommendations=job,
+    )
+    blank = frame[frame["variant"].isna()]
+    assert list(blank["source"]) == ["new_model"]
+    stamped = frame.dropna(subset=["variant"])
+    assert list(stamped["source"]) == ["old_model"]
+
+
 def test_recs_from_impressions_matches_equivalent_utc_stamps() -> None:
     frame = recs_from_impressions(
         [
@@ -1680,6 +1753,108 @@ def test_annotate_source_untimestamped_does_not_clear_source_without_match() -> 
     )
     annotated = _annotate_source(impressions, snapshots)
     assert annotated.iloc[0]["source"] == "logged"
+
+
+def test_annotate_source_matches_shared_item_by_variant() -> None:
+    from cicerone.evaluation import _annotate_source
+
+    recs = pd.DataFrame(
+        [
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "source": "control_model",
+                "variant": "control",
+                "generated_at": "2026-08-28T00:00:00Z",
+            },
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "source": "treatment_model",
+                "variant": "treatment",
+                "generated_at": "2026-08-28T00:00:00Z",
+            },
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "source": "later_control",
+                "variant": "control",
+                "generated_at": "2026-08-29T00:00:00Z",
+            },
+        ]
+    )
+    impressions = pd.DataFrame(
+        [
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "variant": "control",
+                "generated_at": "2026-08-28T00:00:00Z",
+            },
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "variant": "treatment",
+                "generated_at": "2026-08-28T00:00:00Z",
+            },
+            {"user_id": "alice", "item_id": "ipa", "variant": None, "generated_at": None},
+        ]
+    )
+    annotated = _annotate_source(impressions, recs)
+    stamped = annotated.dropna(subset=["variant"]).set_index("variant")
+    assert stamped.loc["control", "source"] == "control_model"
+    assert stamped.loc["treatment", "source"] == "treatment_model"
+    blank = annotated[annotated["variant"].isna()]
+    assert list(blank["source"]) == ["later_control"]
+
+
+def test_evaluate_tracking_attributes_shared_item_by_variant() -> None:
+    recs = pd.DataFrame(
+        [
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "source": "control_model",
+                "variant": "control",
+                "generated_at": "2026-08-28T00:00:00Z",
+            },
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "source": "treatment_model",
+                "variant": "treatment",
+                "generated_at": "2026-08-28T00:00:00Z",
+            },
+        ]
+    )
+    report = evaluate_tracking(
+        track_rows=[
+            {
+                "kind": "impression",
+                "user_id": "alice",
+                "item_id": "ipa",
+                "variant": "control",
+                "rank": 1,
+                "occurred_at": "2026-08-28T01:00:00Z",
+                "event_id": "imp-control",
+                "generated_at": "2026-08-28T00:00:00Z",
+            },
+            {
+                "kind": "impression",
+                "user_id": "alice",
+                "item_id": "ipa",
+                "variant": "treatment",
+                "rank": 1,
+                "occurred_at": "2026-08-28T01:00:00Z",
+                "event_id": "imp-treatment",
+                "generated_at": "2026-08-28T00:00:00Z",
+            },
+        ],
+        conversions=pd.DataFrame(),
+        recommendations=recs,
+    )
+    assert report.by_source["control_model"].n_impressions == 1
+    assert report.by_source["treatment_model"].n_impressions == 1
 
 
 def test_annotate_source_without_generated_at_keeps_variant() -> None:

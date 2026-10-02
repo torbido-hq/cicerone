@@ -9,6 +9,7 @@ from support.fake_kafka import install_fake_kafka
 
 from cicerone.config import ConfigError
 from cicerone.events.base import EventSourceError
+from cicerone.events.errors import KafkaException
 from cicerone.events.ha import ingest_is_fanout
 from cicerone.events.kafka import KafkaEventSource, validate_kafka_event_options
 from cicerone.events.registry import build_event_source, registered_event_source_kinds
@@ -383,19 +384,45 @@ def test_poll_exception_returns_partial(monkeypatch):
     source.nack(first)
 
     def _boom(_timeout):
-        raise RuntimeError("poll fail")
+        raise KafkaException("poll fail")
 
     source._consumer.poll = _boom  # type: ignore[method-assign]
     again = list(source.poll(10))
     assert [event.event_id for event in again] == ["e1"]
 
 
+def test_poll_unexpected_error_propagates(monkeypatch):
+    broker = install_fake_kafka(monkeypatch)
+    broker.add("cicerone.events", event_payload(event_id="e1"))
+    source = KafkaEventSource(_options())
+    source.connect()
+
+    def _boom(_timeout):
+        raise RuntimeError("bug")
+
+    source._consumer.poll = _boom  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="bug"):
+        source.poll(10)
+
+
 def test_connect_list_topics_failure(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
-    broker.list_topics_error = RuntimeError("down")
+    created = _capture_consumers(monkeypatch)
+    broker.list_topics_error = KafkaException("down")
     source = KafkaEventSource(_options())
     with pytest.raises(EventSourceError, match="unreachable"):
         source.connect()
+    assert created[0].closed is True
+
+
+def test_connect_list_topics_unexpected_error_propagates(monkeypatch):
+    broker = install_fake_kafka(monkeypatch)
+    created = _capture_consumers(monkeypatch)
+    broker.list_topics_error = RuntimeError("bug")
+    source = KafkaEventSource(_options())
+    with pytest.raises(RuntimeError, match="bug"):
+        source.connect()
+    assert created[0].closed is True
 
 
 def test_commit_discard_tolerates_commit_failure(monkeypatch):
@@ -406,8 +433,64 @@ def test_commit_discard_tolerates_commit_failure(monkeypatch):
     source.connect()
 
     def _boom(**_kwargs):
-        raise RuntimeError("commit fail")
+        raise KafkaException("commit fail")
 
     source._consumer.commit = _boom  # type: ignore[method-assign]
     events = list(source.poll(10))
     assert [event.event_id for event in events] == ["ok"]
+
+
+def test_commit_discard_propagates_unexpected_failure(monkeypatch):
+    broker = install_fake_kafka(monkeypatch)
+    broker.add("cicerone.events", b"not-json")
+    source = KafkaEventSource(_options())
+    source.connect()
+
+    def _boom(**_kwargs):
+        raise RuntimeError("bug")
+
+    source._consumer.commit = _boom  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="bug"):
+        source.poll(10)
+
+
+def test_close_only_absorbs_kafka_errors(monkeypatch, caplog):
+    install_fake_kafka(monkeypatch)
+    source = KafkaEventSource(_options())
+    source.connect()
+    source._consumer.close = lambda: (_ for _ in ()).throw(KafkaException("close down"))  # type: ignore[method-assign]
+    source.close()
+    assert "Kafka consumer close failed" in caplog.text
+
+    source = KafkaEventSource(_options())
+    source.connect()
+    source._consumer.close = lambda: (_ for _ in ()).throw(RuntimeError("bug"))  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="bug"):
+        source.close()
+
+
+def test_reconnect_only_absorbs_kafka_close_errors(monkeypatch):
+    install_fake_kafka(monkeypatch)
+    source = KafkaEventSource(_options())
+    source.connect()
+    source._consumer.close = lambda: (_ for _ in ()).throw(KafkaException("close down"))  # type: ignore[method-assign]
+    source.connect()
+
+    source._consumer.close = lambda: (_ for _ in ()).throw(RuntimeError("bug"))  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="bug"):
+        source.connect()
+
+
+def _capture_consumers(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+    import confluent_kafka
+
+    created: list[Any] = []
+    original = confluent_kafka.Consumer
+
+    def _consumer(config: dict[str, Any]) -> Any:
+        consumer = original(config)
+        created.append(consumer)
+        return consumer
+
+    monkeypatch.setattr(confluent_kafka, "Consumer", _consumer)
+    return created
