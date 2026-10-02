@@ -74,6 +74,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   is still deleted on the first receive.
 - S3 SQS health adds `sqs_lag=stale` or `sqs_lag=unavailable` to its
   detail when the queue depth lookup fails.
+- Quality and Experiments error banners use an alert live region.
 
 ## [0.8.4] - 2026-09-25
 
